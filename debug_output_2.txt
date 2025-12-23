@@ -1,0 +1,586 @@
+DEBUG: Execution Result: TRUE
+DEBUG: Execution Reason: Ensemble Consensus (1.00)
+DEBUG: Execution Log: 
+F<unknown>:265: SyntaxWarning: invalid escape sequence '\w'
+/Users/jacobmcmillan/Empire/Orion/src/orion/unusualwhales/api/stock/__init__.py:265: SyntaxWarning: invalid escape sequence '\w'
+  `^(?<symbol>[\w]*)(?<expiry>(\d{2})(\d{2})(\d{2}))(?<type>[PC])(?<strike>\d{8})$`
+
+=================================== FAILURES ===================================
+____________________________ test_full_system_flow _____________________________
+
+    @pytest.mark.asyncio
+    async def test_full_system_flow():
+        """
+        Grand Unified E2E Test.
+        Verifies the vertical slice:
+        Ingest (Bronze) -> Silver -> Feature Engine -> Rules -> Candidates -> Signal Engine (Solver) -> Execution -> Order
+        """
+    
+        # 1. Setup In-Memory DB & Patching
+        test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False, poolclass=StaticPool)
+        test_session_factory = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
+    
+        # Patch Global DB
+        import orion.storage.db
+        orion.storage.db.engine = test_engine
+        orion.storage.db.async_session_factory = test_session_factory
+    
+        # CRITICAL: Patch consumers that use "from orion.storage.db import async_session_factory"
+        # to avoid stale references since we are not reloading everything.
+        import orion.core.solver_router
+        orion.core.solver_router.async_session_factory = test_session_factory
+    
+        import orion.execution.execution_engine
+        orion.execution.execution_engine.async_session_factory = test_session_factory
+    
+        import orion.processing.persistence
+        orion.processing.persistence.async_session_factory = test_session_factory
+    
+        # Create Tables
+        from orion.storage.db import Base
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    
+        # 2. Seed Data: Active Solver
+        solver_config = SolverConfig(
+            version_id="e2e_solver",
+            base_strategy_name="E2EStrat",
+            universe={"ticker_allowlist": ["SPY"]},
+            entry_logic={"rules": [{"rule_name": "AlwaysTrueRule", "params": {}}], "combination_method": "OR"},
+            exit_logic={"take_profit_pct": 0.01},
+            risk_per_trade_bps=50
+        )
+    
+        async with test_session_factory() as session:
+            session.add(Solver(
+                solver_id="e2e_solver",
+                family_name="E2E",
+                config=solver_config.model_dump(mode='json'),
+                is_active=True,
+                stage="paper"
+            ))
+            session.add(SolverMetrics(id="m_1", solver_id="e2e_solver", sharpe_ratio=2.0, info_ratio=2.0, num_trades=10, oos_expect_bp=10.0))
+    
+            # Seed System Health (Required for ExecutionEngine)
+            from orion.storage.models import SystemStatus
+            session.add(SystemStatus(key="global_health", status="HEALTHY", details="E2E Test", last_updated_utc=datetime.now(timezone.utc)))
+    
+            await session.commit()
+    
+        # 3. Step 1: Ingestion (Bronze Event)
+        now = datetime.now(timezone.utc)
+        raw_event = BronzeEvent(
+            event_id="evt_1",
+            source="UW",
+            event_type="UW_FLOW",
+            ticker="SPY",
+            event_ts_utc=now,
+            received_ts_utc=now,
+            payload={
+                "ticker": "SPY",
+                "premium": 100000,
+                "aggressor": "ASK",
+                "trade_type": "SWEEP", # Matches logic for flow?
+                "put_call": "CALL",
+                "strike": 500.0,
+                "price": 1.0,
+                "size": 100,
+                "expiry": (now + timedelta(days=30)).isoformat()
+            },
+            schema_version="v1"
+        )
+    
+        async with test_session_factory() as session:
+            # Ingest
+            unique = await ingest_bronze_events(session, [raw_event], run_id="e2e_run", trace_id="e2e_trace")
+            await persist_bronze_events(session, unique)
+            await persist_silver_from_bronze(session, unique) # Creates SilverFlow
+            await session.commit()
+    
+        # 4. Step 2: Processing (Features & Rules)
+        # Feature Engine
+        fe = FeatureEngine()
+    
+        from orion.storage.models_silver import SilverOptionFlow
+        async with test_session_factory() as session:
+            silver_flows = (await session.execute(pytest.importorskip("sqlalchemy").select(SilverOptionFlow))).scalars().all()
+    
+        assert len(silver_flows) == 1
+    
+        # Process (Pass Bronze Events)
+        signals = fe.process_uw_flow_events(unique) # Returns SilverSignal objects
+        assert len(signals) > 0
+    
+        # Rule Engine
+        with patch("orion.processing.rule_engine.RuleEngine.process_signals") as mock_rules:
+            # Return a dummy Candidate linked to our signal
+            cand = CandidateTrade(
+                candidate_id="cand_1",
+                ticker="SPY",
+                timestamp_utc=now,
+                rule_id="AlwaysTrueRule",
+                direction="LONG",
+                confidence=1.0,
+                evidence={"signal_id": signals[0].signal_id}
+            )
+            mock_rules.return_value = [cand]
+    
+            re = RuleEngine()
+            candidates = re.process_signals(signals)
+    
+        # PERSIST CANDIDATES (Required for FKs and overall flow)
+        from orion.processing.persistence import persist_candidates
+        async with test_session_factory() as session:
+            await persist_candidates(session, candidates)
+            await session.commit()
+    
+        # 5. Step 3: Signal Engine (Decide & Route)
+        se = SignalEngine()
+    
+        # We need to context switch to Execution here?
+        # SignalEngine.decide() uses SolverRouter internally.
+        # We check if it picks our "e2e_solver".
+    
+        # Mocking context for router if needed, but SignalEngine should build it.
+        # SignalEngine.decide(candidate) -> StrategyDecision
+    
+        decision = await se.decide(candidates[0])
+    
+        assert decision.decision in ["EXECUTE", "SKIP"]
+        assert decision.strategy_version_id == "e2e_solver"
+        # model_version is None unless ML model is used and populated
+        assert decision.model_version is None or decision.model_version == "e2e_solver"
+    
+        # Save Decision (usually done by main loop)
+        # But Execution needs it passed or persisted?
+        async with test_session_factory() as session:
+            session.add(decision)
+            await session.commit()
+    
+        # ExecutionEngine.execute_order takes (decision, candidate) objects.
+    
+        # 6. Step 4: Execution
+        # Mock Alpaca
+        with patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConn, \
+             patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket:
+    
+            mock_conn = MockConn.return_value
+            mock_market = MockMarket.return_value
+            mock_market.get_latest_price.return_value = 500.0
+    
+            ee = ExecutionEngine()
+            ee.connector = mock_conn
+            ee.market_connector = mock_market
+            ee.risk_manager = MagicMock(spec=RiskManager) # Trust risk for now or mock permissive
+            ee.risk_manager.check_order.return_value = True
+            ee.risk_manager.calculate_size.return_value = 10
+            ee.risk_manager.ticker_exposures = {} # Mock exposure dict
+            ee.risk_manager.config = MagicMock()
+            ee.risk_manager.config.enable_shorting = True # Ensure shorting check passes if needed
+    
+            await ee.execute_order(decision, candidates[0])
+    
+            # Verify call to Alpaca (only if EXECUTE)
+            if decision.decision == "EXECUTE":
+                mock_conn.submit_limit_order.assert_called()
+    
+            print(f"DEBUG: Execution Result: {decision.executed_successfully}")
+            print(f"DEBUG: Execution Reason: {decision.reason}")
+            print(f"DEBUG: Execution Log: {getattr(decision, 'execution_log', '')}")
+    
+            assert decision.executed_successfully == "TRUE"
+    
+        # 7. Step 5: Persistence Verification
+        # Check that OrderRecord was created
+        # Check that OrderRecord was created
+        from orion.storage.models_execution import OrderRecord
+        from sqlalchemy import select
+        async with test_session_factory() as session:
+            orders = (await session.execute(select(OrderRecord))).scalars().all()
+>           assert len(orders) == 1
+E           assert 0 == 1
+E            +  where 0 = len([])
+
+tests/e2e/test_full_system_flow.py:211: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    orion.execution.execution_engine:execution_engine.py:603 Failed to upsert trade journal on order persist: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(builtins.TypeError) Object of type MagicMock is not JSON serializable
+[SQL: INSERT INTO orders (id, created_at_utc, decision_id, candidate_id, ticker, side, qty, limit_price, client_order_id, broker_order_id, status, error_message, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: [{'raw_json': <MagicMock name='AlpacaTradingConnector().submit_limit_order().model_dump()' id='4942302384'>, 'ticker': 'SPY', 'candidate_id': 'cand_1', ... (274 characters truncated) ... ck name='AlpacaTradingConnector().submit_limit_order().status' id='4942132528'>", 'id': '16a61197-74dd-4cc7-8b3c-c7dc980c0e26', 'error_message': None}]]
+ERROR    orion.execution.execution_engine:execution_engine.py:610 Failed to persist order record: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(builtins.TypeError) Object of type MagicMock is not JSON serializable
+[SQL: INSERT INTO orders (id, created_at_utc, decision_id, candidate_id, ticker, side, qty, limit_price, client_order_id, broker_order_id, status, error_message, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: [{'raw_json': <MagicMock name='AlpacaTradingConnector().submit_limit_order().model_dump()' id='4942302384'>, 'ticker': 'SPY', 'candidate_id': 'cand_1', ... (274 characters truncated) ... ck name='AlpacaTradingConnector().submit_limit_order().status' id='4942132528'>", 'id': '16a61197-74dd-4cc7-8b3c-c7dc980c0e26', 'error_message': None}]] (Background on this error at: https://sqlalche.me/e/20/7s2a)
+
+--------- coverage: platform darwin, python 3.12.11-final-0 ----------
+Name                                                                                                                                       Stmts   Miss  Cover
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+src/alpaca/__init__.py                                                                                                                         1      0   100%
+src/alpaca/broker/__init__.py                                                                                                                  5      5     0%
+src/alpaca/broker/client.py                                                                                                                  578    578     0%
+src/alpaca/broker/enums.py                                                                                                                   243    243     0%
+src/alpaca/broker/models/__init__.py                                                                                                           7      7     0%
+src/alpaca/broker/models/accounts.py                                                                                                         115    115     0%
+src/alpaca/broker/models/cip.py                                                                                                               99     99     0%
+src/alpaca/broker/models/documents.py                                                                                                         64     64     0%
+src/alpaca/broker/models/funding.py                                                                                                           46     46     0%
+src/alpaca/broker/models/journals.py                                                                                                          26     26     0%
+src/alpaca/broker/models/rebalancing.py                                                                                                       47     47     0%
+src/alpaca/broker/models/trading.py                                                                                                            4      4     0%
+src/alpaca/broker/requests.py                                                                                                                370    370     0%
+src/alpaca/common/__init__.py                                                                                                                  6      0   100%
+src/alpaca/common/constants.py                                                                                                                 8      0   100%
+src/alpaca/common/enums.py                                                                                                                    37      0   100%
+src/alpaca/common/exceptions.py                                                                                                               29     14    52%
+src/alpaca/common/models.py                                                                                                                    8      1    88%
+src/alpaca/common/requests.py                                                                                                                 35     28    20%
+src/alpaca/common/rest.py                                                                                                                    153    117    24%
+src/alpaca/common/types.py                                                                                                                     4      0   100%
+src/alpaca/common/utils.py                                                                                                                    21     14    33%
+src/alpaca/data/__init__.py                                                                                                                    5      0   100%
+src/alpaca/data/enums.py                                                                                                                      65      0   100%
+src/alpaca/data/historical/__init__.py                                                                                                         6      0   100%
+src/alpaca/data/historical/corporate_actions.py                                                                                               23     23     0%
+src/alpaca/data/historical/crypto.py                                                                                                          58     37    36%
+src/alpaca/data/historical/news.py                                                                                                            14      5    64%
+src/alpaca/data/historical/option.py                                                                                                          51     31    39%
+src/alpaca/data/historical/screener.py                                                                                                        19      9    53%
+src/alpaca/data/historical/stock.py                                                                                                           50     30    40%
+src/alpaca/data/historical/utils.py                                                                                                            8      3    62%
+src/alpaca/data/live/__init__.py                                                                                                               5      5     0%
+src/alpaca/data/live/crypto.py                                                                                                                35     35     0%
+src/alpaca/data/live/news.py                                                                                                                  11     11     0%
+src/alpaca/data/live/option.py                                                                                                                17     17     0%
+src/alpaca/data/live/stock.py                                                                                                                 41     41     0%
+src/alpaca/data/live/websocket.py                                                                                                            206    206     0%
+src/alpaca/data/mappings.py                                                                                                                    9      0   100%
+src/alpaca/data/models/__init__.py                                                                                                             7      0   100%
+src/alpaca/data/models/bars.py                                                                                                                30     10    67%
+src/alpaca/data/models/base.py                                                                                                                28     15    46%
+src/alpaca/data/models/corporate_actions.py                                                                                                  175    175     0%
+src/alpaca/data/models/news.py                                                                                                                34      9    74%
+src/alpaca/data/models/orderbooks.py                                                                                                          20      4    80%
+src/alpaca/data/models/quotes.py                                                                                                              29      7    76%
+src/alpaca/data/models/screener.py                                                                                                            21      0   100%
+src/alpaca/data/models/snapshots.py                                                                                                           48     21    56%
+src/alpaca/data/models/trades.py                                                                                                              66     13    80%
+src/alpaca/data/requests.py                                                                                                                  115      5    96%
+src/alpaca/data/timeframe.py                                                                                                                  55     23    58%
+src/alpaca/trading/__init__.py                                                                                                                 5      0   100%
+src/alpaca/trading/client.py                                                                                                                 193    149    23%
+src/alpaca/trading/enums.py                                                                                                                  202      2    99%
+src/alpaca/trading/models.py                                                                                                                 259     16    94%
+src/alpaca/trading/requests.py                                                                                                               211     79    63%
+src/alpaca/trading/stream.py                                                                                                                 118     90    24%
+src/orion/__init__.py                                                                                                                          0      0   100%
+src/orion/analysis/__init__.py                                                                                                                 0      0   100%
+src/orion/analysis/cross_validation.py                                                                                                        36     36     0%
+src/orion/analysis/metrics.py                                                                                                                 44     44     0%
+src/orion/analysis/regime.py                                                                                                                  47     19    60%
+src/orion/api/__init__.py                                                                                                                      0      0   100%
+src/orion/api/auth.py                                                                                                                          8      8     0%
+src/orion/api/deps.py                                                                                                                          6      6     0%
+src/orion/api/main.py                                                                                                                        189    189     0%
+src/orion/api/schemas.py                                                                                                                      50     50     0%
+src/orion/audit_gold.py                                                                                                                       26     26     0%
+src/orion/audit_silver.py                                                                                                                     23     23     0%
+src/orion/check_pgvector.py                                                                                                                   19     19     0%
+src/orion/config.py                                                                                                                           43      0   100%
+src/orion/connectors/__init__.py                                                                                                               5      0   100%
+src/orion/connectors/alpaca_market_connector.py                                                                                               89     70    21%
+src/orion/connectors/alpaca_trading_connector.py                                                                                              40     27    32%
+src/orion/connectors/base.py                                                                                                                   8      8     0%
+src/orion/connectors/redpanda_producer.py                                                                                                     41     24    41%
+src/orion/connectors/uw_alerts_connector.py                                                                                                   94     75    20%
+src/orion/connectors/uw_darkpool_connector.py                                                                                                103     84    18%
+src/orion/connectors/uw_flow_connector.py                                                                                                    167    139    17%
+src/orion/connectors/uw_socket_connector.py                                                                                                   71     71     0%
+src/orion/core/__init__.py                                                                                                                     0      0   100%
+src/orion/core/circuit_breaker.py                                                                                                             55     55     0%
+src/orion/core/errors.py                                                                                                                      43      4    91%
+src/orion/core/evaluation_harness.py                                                                                                          63     63     0%
+src/orion/core/feature_registry.py                                                                                                            17      1    94%
+src/orion/core/health_monitor.py                                                                                                              56     56     0%
+src/orion/core/id_utils.py                                                                                                                    10     10     0%
+src/orion/core/logging_config.py                                                                                                              27     27     0%
+src/orion/core/meta_logging.py                                                                                                                 7      7     0%
+src/orion/core/model_registry.py                                                                                                              38     38     0%
+src/orion/core/offline_gym.py                                                                                                                  5      5     0%
+src/orion/core/promotion_rules.py                                                                                                             36     13    64%
+src/orion/core/rule_registry.py                                                                                                               11     11     0%
+src/orion/core/solver_dsl.py                                                                                                                  82     82     0%
+src/orion/core/solver_executor.py                                                                                                             56     28    50%
+src/orion/core/solver_router.py                                                                                                              120     52    57%
+src/orion/core/solver_schema.py                                                                                                              100      4    96%
+src/orion/core/solver_validation.py                                                                                                           15     15     0%
+src/orion/core/timekeeping.py                                                                                                                 28      5    82%
+src/orion/core/universe_manager.py                                                                                                            46     46     0%
+src/orion/execution/execution_engine.py                                                                                                      316    201    36%
+src/orion/execution/risk_manager.py                                                                                                          255    224    12%
+src/orion/main_execution.py                                                                                                                  142    142     0%
+src/orion/main_ingest.py                                                                                                                     282    282     0%
+src/orion/main_rollups.py                                                                                                                     21     21     0%
+src/orion/paper_live_harness.py                                                                                                               90     90     0%
+src/orion/processing/deduper.py                                                                                                               27      4    85%
+src/orion/processing/feature_engine.py                                                                                                       271    182    33%
+src/orion/processing/ingest_pipeline.py                                                                                                       37      9    76%
+src/orion/processing/normalizer.py                                                                                                            64     35    45%
+src/orion/processing/persistence.py                                                                                                           78     32    59%
+src/orion/processing/rule_engine.py                                                                                                           29     10    66%
+src/orion/processing/rules/base.py                                                                                                            43     31    28%
+src/orion/processing/rules/flow_rules.py                                                                                                      62     47    24%
+src/orion/processing/rules/rsi_rule.py                                                                                                        18     11    39%
+src/orion/processing/signal_engine.py                                                                                                         82     19    77%
+src/orion/query_events.py                                                                                                                     23     23     0%
+src/orion/rag_search.py                                                                                                                       18     18     0%
+src/orion/run_agent.py                                                                                                                        54     54     0%
+src/orion/shared/utils.py                                                                                                                     24     16    33%
+src/orion/storage/__init__.py                                                                                                                  0      0   100%
+src/orion/storage/db.py                                                                                                                       27      3    89%
+src/orion/storage/lakehouse.py                                                                                                                46     46     0%
+src/orion/storage/models.py                                                                                                                   33      1    97%
+src/orion/storage/models_audit.py                                                                                                             16      0   100%
+src/orion/storage/models_dlq.py                                                                                                               26      1    96%
+src/orion/storage/models_execution.py                                                                                                         44      0   100%
+src/orion/storage/models_gold.py                                                                                                              98      0   100%
+src/orion/storage/models_rag.py                                                                                                               14      0   100%
+src/orion/storage/models_risk.py                                                                                                              19      0   100%
+src/orion/storage/models_signals.py                                                                                                           22      0   100%
+src/orion/storage/models_silver.py                                                                                                            82      0   100%
+src/orion/storage/models_solvers.py                                                                                                          112      4    96%
+src/orion/storage/models_trade_journal.py                                                                                                     25      0   100%
+src/orion/storage/watermarks.py                                                                                                               29     29     0%
+src/orion/unusualwhales/__init__.py                                                                                                            3      0   100%
+src/orion/unusualwhales/__version__.py                                                                                                         1      1     0%
+src/orion/unusualwhales/api/__init__.py                                                                                                        2      0   100%
+src/orion/unusualwhales/api/alerts/__init__.py                                                                                                 9      2    78%
+src/orion/unusualwhales/api/alerts/get_alerts.py                                                                                              35     22    37%
+src/orion/unusualwhales/api/alerts/get_configurations.py                                                                                      30     17    43%
+src/orion/unusualwhales/api/congress/__init__.py                                                                                              15      4    73%
+src/orion/unusualwhales/api/congress/get_late_reports.py                                                                                      45     30    33%
+src/orion/unusualwhales/api/congress/get_reports.py                                                                                           45     30    33%
+src/orion/unusualwhales/api/congress/get_trades.py                                                                                            45     30    33%
+src/orion/unusualwhales/api/congress/get_trades_by_member.py                                                                                  46     31    33%
+src/orion/unusualwhales/api/contract/__init__.py                                                                                               6      1    83%
+src/orion/unusualwhales/api/contract/get_price_history.py                                                                                     44     29    34%
+src/orion/unusualwhales/api/darkpool/__init__.py                                                                                               9      2    78%
+src/orion/unusualwhales/api/darkpool/get_trades_by_date.py                                                                                    45     30    33%
+src/orion/unusualwhales/api/darkpool/get_trades_by_ticker.py                                                                                  45     30    33%
+src/orion/unusualwhales/api/earnings/__init__.py                                                                                              12      3    75%
+src/orion/unusualwhales/api/earnings/get_afterhours.py                                                                                        44     29    34%
+src/orion/unusualwhales/api/earnings/get_premarket.py                                                                                         44     29    34%
+src/orion/unusualwhales/api/earnings/get_ticker_earnings.py                                                                                   41     26    37%
+src/orion/unusualwhales/api/endpoints.py                                                                                                      70     17    76%
+src/orion/unusualwhales/api/etfs/__init__.py                                                                                                  15      4    73%
+src/orion/unusualwhales/api/etfs/get_holdings.py                                                                                              34     20    41%
+src/orion/unusualwhales/api/etfs/get_info.py                                                                                                  41     26    37%
+src/orion/unusualwhales/api/etfs/get_sector_country_weights.py                                                                                41     26    37%
+src/orion/unusualwhales/api/etfs/get_ticker_exposure.py                                                                                       34     20    41%
+src/orion/unusualwhales/api/flow/__init__.py                                                                                                  24      7    71%
+src/orion/unusualwhales/api/flow/get_contract_flow.py                                                                                         51     35    31%
+src/orion/unusualwhales/api/flow/get_flow_by_expiry.py                                                                                        34     20    41%
+src/orion/unusualwhales/api/flow/get_flow_by_strike.py                                                                                        41     26    37%
+src/orion/unusualwhales/api/flow/get_full_tape.py                                                                                             28     17    39%
+src/orion/unusualwhales/api/flow/get_order_flow.py                                                                                            49     33    33%
+src/orion/unusualwhales/api/flow/get_ticker_order_flow.py                                                                                     81     64    21%
+src/orion/unusualwhales/api/flow/get_unusual_flow_alerts.py                                                                                   44     29    34%
+src/orion/unusualwhales/api/group_flow/__init__.py                                                                                             9      2    78%
+src/orion/unusualwhales/api/group_flow/get_greek_flow.py                                                                                      36     22    39%
+src/orion/unusualwhales/api/group_flow/get_greek_flow_by_expiry.py                                                                            36     22    39%
+src/orion/unusualwhales/api/institutions/__init__.py                                                                                          21      6    71%
+src/orion/unusualwhales/api/institutions/get_activity.py                                                                                      30     17    43%
+src/orion/unusualwhales/api/institutions/get_holdings.py                                                                                      30     17    43%
+src/orion/unusualwhales/api/institutions/get_institutions_list.py                                                                             30     17    43%
+src/orion/unusualwhales/api/institutions/get_latest_filings.py                                                                                30     17    43%
+src/orion/unusualwhales/api/institutions/get_ownership.py                                                                                     30     17    43%
+src/orion/unusualwhales/api/institutions/get_sector_exposure.py                                                                               30     17    43%
+src/orion/unusualwhales/api/market/__init__.py                                                                                                36     11    69%
+src/orion/unusualwhales/api/market/get_economic_calendar.py                                                                                   37     23    38%
+src/orion/unusualwhales/api/market/get_fda_calendar.py                                                                                        37     23    38%
+src/orion/unusualwhales/api/market/get_holidays.py                                                                                            37     23    38%
+src/orion/unusualwhales/api/market/get_imbalances.py                                                                                          37     23    38%
+src/orion/unusualwhales/api/market/get_insider_trades.py                                                                                      44     29    34%
+src/orion/unusualwhales/api/market/get_market_options_volume.py                                                                               44     29    34%
+src/orion/unusualwhales/api/market/get_market_tide.py                                                                                         46     31    33%
+src/orion/unusualwhales/api/market/get_market_tide_by_etf.py                                                                                  44     29    34%
+src/orion/unusualwhales/api/market/get_open_interest_change.py                                                                                43     28    35%
+src/orion/unusualwhales/api/market/get_sector_stats.py                                                                                        37     23    38%
+src/orion/unusualwhales/api/market/get_spike.py                                                                                               44     29    34%
+src/orion/unusualwhales/api/net_flow/__init__.py                                                                                               6      1    83%
+src/orion/unusualwhales/api/net_flow/get_expiry.py                                                                                            37     24    35%
+src/orion/unusualwhales/api/news/__init__.py                                                                                                   6      1    83%
+src/orion/unusualwhales/api/news/get_headlines.py                                                                                             30     17    43%
+src/orion/unusualwhales/api/politician_portfolios/__init__.py                                                                                 15      4    73%
+src/orion/unusualwhales/api/politician_portfolios/get_holders_by_ticker.py                                                                    30     17    43%
+src/orion/unusualwhales/api/politician_portfolios/get_politicians_list.py                                                                     30     17    43%
+src/orion/unusualwhales/api/politician_portfolios/get_portfolio.py                                                                            30     17    43%
+src/orion/unusualwhales/api/politician_portfolios/get_recent_trades.py                                                                        36     22    39%
+src/orion/unusualwhales/api/screener/__init__.py                                                                                              12      3    75%
+src/orion/unusualwhales/api/screener/get_analyst_ratings.py                                                                                   60     42    30%
+src/orion/unusualwhales/api/screener/get_option_contracts.py                                                                                 106     86    19%
+src/orion/unusualwhales/api/screener/get_stocks.py                                                                                           124    105    15%
+src/orion/unusualwhales/api/seasonality/__init__.py                                                                                           15      4    73%
+src/orion/unusualwhales/api/seasonality/get_market_average_returns_by_month.py                                                                37     23    38%
+src/orion/unusualwhales/api/seasonality/get_monthly_average_returns.py                                                                        41     26    37%
+src/orion/unusualwhales/api/seasonality/get_monthly_top_performers.py                                                                         59     41    31%
+src/orion/unusualwhales/api/seasonality/get_price_changes_by_month_and_year.py                                                                41     26    37%
+src/orion/unusualwhales/api/shorts/__init__.py                                                                                                18      5    72%
+src/orion/unusualwhales/api/shorts/get_ftds.py                                                                                                36     22    39%
+src/orion/unusualwhales/api/shorts/get_interest_float.py                                                                                      30     17    43%
+src/orion/unusualwhales/api/shorts/get_short_data.py                                                                                          30     17    43%
+src/orion/unusualwhales/api/shorts/get_volume_and_ratio.py                                                                                    30     17    43%
+src/orion/unusualwhales/api/shorts/get_volumes_by_exchange.py                                                                                 30     17    43%
+src/orion/unusualwhales/api/stock/__init__.py                                                                                                 75     24    68%
+src/orion/unusualwhales/api/stock/get_atm_option_contracts_for_expiries.py                                                                    44     29    34%
+src/orion/unusualwhales/api/stock/get_candles.py                                                                                              47     31    34%
+src/orion/unusualwhales/api/stock/get_daily_expiry_breakdown.py                                                                               44     29    34%
+src/orion/unusualwhales/api/stock/get_greek_exposure.py                                                                                       45     30    33%
+src/orion/unusualwhales/api/stock/get_greek_exposure_by_expiry.py                                                                             44     29    34%
+src/orion/unusualwhales/api/stock/get_greek_exposure_by_strike.py                                                                             44     29    34%
+src/orion/unusualwhales/api/stock/get_greek_exposure_by_strike_expiry.py                                                                      45     30    33%
+src/orion/unusualwhales/api/stock/get_greeks_by_strike_expiry.py                                                                              45     30    33%
+src/orion/unusualwhales/api/stock/get_info.py                                                                                                 45     29    36%
+src/orion/unusualwhales/api/stock/get_insider_trades.py                                                                                       41     26    37%
+src/orion/unusualwhales/api/stock/get_max_pain.py                                                                                             41     26    37%
+src/orion/unusualwhales/api/stock/get_net_premium_ticks.py                                                                                    44     29    34%
+src/orion/unusualwhales/api/stock/get_open_interest_change.py                                                                                 43     28    35%
+src/orion/unusualwhales/api/stock/get_option_chains.py                                                                                        44     29    34%
+src/orion/unusualwhales/api/stock/get_option_contracts.py                                                                                     51     36    29%
+src/orion/unusualwhales/api/stock/get_option_volume_by_price_level.py                                                                         44     29    34%
+src/orion/unusualwhales/api/stock/get_options_volume.py                                                                                       44     29    34%
+src/orion/unusualwhales/api/stock/get_risk_reversal_skew.py                                                                                   47     32    32%
+src/orion/unusualwhales/api/stock/get_sector_tickers.py                                                                                       42     26    38%
+src/orion/unusualwhales/api/stock/get_spot_exposures.py                                                                                       44     29    34%
+src/orion/unusualwhales/api/stock/get_spot_exposures_by_strike.py                                                                             44     29    34%
+src/orion/unusualwhales/api/stock/get_volatility_term_structure.py                                                                            44     29    34%
+src/orion/unusualwhales/api/stock/get_volume_by_price_level.py                                                                                44     29    34%
+src/orion/unusualwhales/api/stock/get_volume_open_interest_by_expiry.py                                                                       44     29    34%
+src/orion/unusualwhales/client.py                                                                                                             65     35    46%
+src/orion/unusualwhales/errors.py                                                                                                              6      3    50%
+src/orion/unusualwhales/models/__init__.py                                                                                                   120      0   100%
+src/orion/unusualwhales/models/analalyst_rating_results.py                                                                                    45     27    40%
+src/orion/unusualwhales/models/analyst_action.py                                                                                               9      1    89%
+src/orion/unusualwhales/models/analyst_field_action.py                                                                                         9      1    89%
+src/orion/unusualwhales/models/analyst_field_recommendation.py                                                                                 7      1    86%
+src/orion/unusualwhales/models/analyst_rating.py                                                                                              98     68    31%
+src/orion/unusualwhales/models/analyst_recommendation.py                                                                                       7      1    86%
+src/orion/unusualwhales/models/analyst_sector.py                                                                                              14      1    93%
+src/orion/unusualwhales/models/candle_data.py                                                                                                 81     54    33%
+src/orion/unusualwhales/models/candle_data_results.py                                                                                         45     27    40%
+src/orion/unusualwhales/models/candle_size.py                                                                                                 11      1    91%
+src/orion/unusualwhales/models/congressional_trade_report.py                                                                                  87     59    32%
+src/orion/unusualwhales/models/congressional_trade_report_results.py                                                                          45     27    40%
+src/orion/unusualwhales/models/country_sector_exposure.py                                                                                     60     41    32%
+src/orion/unusualwhales/models/daily_market_tide.py                                                                                           50     29    42%
+src/orion/unusualwhales/models/daily_market_tide_response.py                                                                                  45     27    40%
+src/orion/unusualwhales/models/darkpool_trade.py                                                                                             139    101    27%
+src/orion/unusualwhales/models/darkpool_trade_response.py                                                                                     45     27    40%
+src/orion/unusualwhales/models/earnings.py                                                                                                   125     89    29%
+src/orion/unusualwhales/models/earnings_results.py                                                                                            45     27    40%
+src/orion/unusualwhales/models/economic_calendar.py                                                                                           66     42    36%
+src/orion/unusualwhales/models/economic_type.py                                                                                                7      1    86%
+src/orion/unusualwhales/models/error_message.py                                                                                               50     29    42%
+src/orion/unusualwhales/models/error_message_stating_that_the_requested_element_was_not_found_causing_an_empty_result_to_be_generated.py      28     12    57%
+src/orion/unusualwhales/models/etf_countries_item.py                                                                                          40     21    48%
+src/orion/unusualwhales/models/etf_info.py                                                                                                    46     27    41%
+src/orion/unusualwhales/models/etf_info_data.py                                                                                              100     69    31%
+src/orion/unusualwhales/models/etf_sectors_item.py                                                                                            40     21    48%
+src/orion/unusualwhales/models/expiry_breakdown.py                                                                                            50     29    42%
+src/orion/unusualwhales/models/expiry_breakdown_result.py                                                                                     45     27    40%
+src/orion/unusualwhales/models/fda_calendar.py                                                                                                70     45    36%
+src/orion/unusualwhales/models/flow_alert.py                                                                                                 151    110    27%
+src/orion/unusualwhales/models/flow_alert_results.py                                                                                          45     27    40%
+src/orion/unusualwhales/models/flow_alert_rule.py                                                                                             14      1    93%
+src/orion/unusualwhales/models/flow_per_expiry.py                                                                                            145    105    28%
+src/orion/unusualwhales/models/flow_per_expiry_results.py                                                                                     45     27    40%
+src/orion/unusualwhales/models/flow_per_strike.py                                                                                            145    105    28%
+src/orion/unusualwhales/models/flow_per_strike_results.py                                                                                     45     27    40%
+src/orion/unusualwhales/models/greek_exposure.py                                                                                              75     49    35%
+src/orion/unusualwhales/models/greek_exposure_by_strike.py                                                                                    75     49    35%
+src/orion/unusualwhales/models/greek_exposure_by_strike_and_expiry.py                                                                         80     53    34%
+src/orion/unusualwhales/models/greek_exposure_by_strike_and_expiry_results.py                                                                 45     27    40%
+src/orion/unusualwhales/models/greek_exposure_by_strike_results.py                                                                            45     27    40%
+src/orion/unusualwhales/models/greek_exposure_results.py                                                                                      45     27    40%
+src/orion/unusualwhales/models/greeks.py                                                                                                     130     93    28%
+src/orion/unusualwhales/models/historical_risk_reversal_skew.py                                                                               45     25    44%
+src/orion/unusualwhales/models/historical_risk_reversal_skew_results.py                                                                       45     27    40%
+src/orion/unusualwhales/models/holdings.py                                                                                                   131     94    28%
+src/orion/unusualwhales/models/holdings_response.py                                                                                           41     23    44%
+src/orion/unusualwhales/models/imbalances_volume.py                                                                                           73     48    34%
+src/orion/unusualwhales/models/implied_volatility_term_structure.py                                                                           60     37    38%
+src/orion/unusualwhales/models/implied_volatility_term_structure_results.py                                                                   45     27    40%
+src/orion/unusualwhales/models/insider_statistic.py                                                                                           55     33    40%
+src/orion/unusualwhales/models/insider_statistics.py                                                                                          45     27    40%
+src/orion/unusualwhales/models/insider_trades_member_type.py                                                                                   7      1    86%
+src/orion/unusualwhales/models/insider_trades_transaction_type.py                                                                             12      1    92%
+src/orion/unusualwhales/models/market_general_imbalance_event.py                                                                               6      1    83%
+src/orion/unusualwhales/models/market_general_imbalance_side.py                                                                                6      1    83%
+src/orion/unusualwhales/models/market_general_imbalance_type.py                                                                                8      1    88%
+src/orion/unusualwhales/models/market_general_market_time.py                                                                                   7      1    86%
+src/orion/unusualwhales/models/market_general_sector.py                                                                                       15      1    93%
+src/orion/unusualwhales/models/market_holidays.py                                                                                             47     27    43%
+src/orion/unusualwhales/models/market_options_volume.py                                                                                       55     33    40%
+src/orion/unusualwhales/models/market_sector_ticker_results.py                                                                                37     19    49%
+src/orion/unusualwhales/models/max_pain.py                                                                                                    49     30    39%
+src/orion/unusualwhales/models/max_pain_results.py                                                                                            45     27    40%
+src/orion/unusualwhales/models/net_prem_tick.py                                                                                               55     33    40%
+src/orion/unusualwhales/models/net_prem_tick_results.py                                                                                       45     27    40%
+src/orion/unusualwhales/models/off_lit_price_level.py                                                                                         45     25    44%
+src/orion/unusualwhales/models/off_lit_price_level_results.py                                                                                 45     27    40%
+src/orion/unusualwhales/models/oi_change.py                                                                                                  145    105    28%
+src/orion/unusualwhales/models/oi_change_results.py                                                                                           45     27    40%
+src/orion/unusualwhales/models/option_chain_contract.py                                                                                      140    101    28%
+src/orion/unusualwhales/models/option_chain_contract_results.py                                                                               45     27    40%
+src/orion/unusualwhales/models/option_chains_results.py                                                                                       37     19    49%
+src/orion/unusualwhales/models/option_contract.py                                                                                            135     97    28%
+src/orion/unusualwhales/models/option_contract_results.py                                                                                     45     27    40%
+src/orion/unusualwhales/models/option_contract_screener_item.py                                                                              189    140    26%
+src/orion/unusualwhales/models/option_contract_screener_results.py                                                                            45     27    40%
+src/orion/unusualwhales/models/option_contract_type.py                                                                                         6      1    83%
+src/orion/unusualwhales/models/option_price_level.py                                                                                          45     25    44%
+src/orion/unusualwhales/models/option_price_level_results.py                                                                                  45     27    40%
+src/orion/unusualwhales/models/option_type.py                                                                                                  6      1    83%
+src/orion/unusualwhales/models/order_direction.py                                                                                              6      1    83%
+src/orion/unusualwhales/models/screener_contract_order_by_field.py                                                                            30      1    97%
+src/orion/unusualwhales/models/screener_order_by_field.py                                                                                     39      1    97%
+src/orion/unusualwhales/models/seasonality_market.py                                                                                          75     49    35%
+src/orion/unusualwhales/models/seasonality_market_results.py                                                                                  45     27    40%
+src/orion/unusualwhales/models/seasonality_monthly.py                                                                                         70     45    36%
+src/orion/unusualwhales/models/seasonality_monthly_results.py                                                                                 41     23    44%
+src/orion/unusualwhales/models/seasonality_performance_order_by.py                                                                            13      1    92%
+src/orion/unusualwhales/models/seasonality_performers.py                                                                                      91     62    32%
+src/orion/unusualwhales/models/seasonality_performers_results.py                                                                              45     27    40%
+src/orion/unusualwhales/models/seasonality_year_month.py                                                                                      55     33    40%
+src/orion/unusualwhales/models/seasonality_year_month_results.py                                                                              55     33    40%
+src/orion/unusualwhales/models/sector.py                                                                                                      15      1    93%
+src/orion/unusualwhales/models/sector_etf.py                                                                                                 145    105    28%
+src/orion/unusualwhales/models/sector_etf_results.py                                                                                          44     26    41%
+src/orion/unusualwhales/models/side.py                                                                                                         8      1    88%
+src/orion/unusualwhales/models/single_issue_type.py                                                                                            8      1    88%
+src/orion/unusualwhales/models/single_month_number.py                                                                                         16      1    94%
+src/orion/unusualwhales/models/single_sector.py                                                                                               15      1    93%
+src/orion/unusualwhales/models/single_trade_external_hour_sold_code.py                                                                         7      1    86%
+src/orion/unusualwhales/models/single_trade_sale_cond_code.py                                                                                  8      1    88%
+src/orion/unusualwhales/models/single_trade_settlement.py                                                                                      8      1    88%
+src/orion/unusualwhales/models/single_trade_trade_code.py                                                                                      7      1    86%
+src/orion/unusualwhales/models/spike_value.py                                                                                                 40     21    48%
+src/orion/unusualwhales/models/spot_gex_exposures_per_1_min.py                                                                                80     53    34%
+src/orion/unusualwhales/models/spot_gex_exposures_per_1_min_results.py                                                                        45     27    40%
+src/orion/unusualwhales/models/spot_greek_exposures_by_strike.py                                                                             105     73    30%
+src/orion/unusualwhales/models/spot_greek_exposures_by_strike_results.py                                                                      45     27    40%
+src/orion/unusualwhales/models/stock_earnings_time.py                                                                                          7      1    86%
+src/orion/unusualwhales/models/stock_issue_type.py                                                                                             8      1    88%
+src/orion/unusualwhales/models/stock_screener_response.py                                                                                    280    214    24%
+src/orion/unusualwhales/models/stock_screener_response_results.py                                                                             45     27    40%
+src/orion/unusualwhales/models/ticker_info.py                                                                                                115     81    30%
+src/orion/unusualwhales/models/ticker_info_results.py                                                                                         41     23    44%
+src/orion/unusualwhales/models/ticker_options_volume.py                                                                                      135     97    28%
+src/orion/unusualwhales/models/volume_oi_per_expiry.py                                                                                        45     25    44%
+src/orion/unusualwhales/models/volume_oi_per_expiry_results.py                                                                                45     27    40%
+src/orion/unusualwhales/types.py                                                                                                              23      2    91%
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+TOTAL                                                                                                                                      19189  12324    36%
+
+=========================== short test summary info ============================
+FAILED tests/e2e/test_full_system_flow.py::test_full_system_flow - assert 0 == 1
+1 failed in 2.00s

@@ -1,0 +1,14 @@
+{
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5440,
+            "driver": "PostgreSQL",
+            "name": "Orion Local",
+            "database": "orion_db",
+            "username": "orion"
+        }
+    ]
+}

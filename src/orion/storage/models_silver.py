@@ -1,0 +1,158 @@
+import enum
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Column, DateTime, Float, Index, Integer, String
+
+# from sqlalchemy.dialects.postgresql import JSONB, UUID
+from orion.storage.db import Base
+
+
+class SignalType(str, enum.Enum):
+    OHLCV_1M = "OHLCV_1M"
+    FLOW_AGG_5M = "FLOW_AGG_5M"
+
+
+class SilverSignal(Base):
+    __tablename__ = "silver_signals"
+
+    # Composite PK: ticker + timestamp + type (+ version/run_id explicitly or implicitly)
+    # We'll use a synthetic ID but enforce uniqueness on the business key
+    signal_id = Column(String, primary_key=True)  # Deterministic ID
+
+    ticker = Column(String, nullable=False, index=True)
+    signal_ts_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    signal_type = Column(String, nullable=False)  # Enum as string
+
+    # Store all calculated features here (open, close, rsi, vwap, etc.)
+    features = Column(JSON, nullable=False)
+
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (Index("ix_silver_ticker_time", "ticker", "signal_ts_utc"),)
+
+
+class SilverOptionFlow(Base):
+    """
+    PRD 6.2: UW Options Flow Schema
+    Silver layer for normalized options flow events.
+    """
+
+    __tablename__ = "silver_uw_flow"
+
+    # Primary Key: event_id from bronze/provider
+    event_id = Column(String, primary_key=True)
+    source_event_id = Column(String, nullable=True)
+
+    ticker = Column(String, nullable=False, index=True)
+    flow_ts_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # Contract Details
+    put_call = Column(String(1), nullable=False)  # 'C' or 'P'
+    expiry = Column(String, nullable=False)  # YYYY-MM-DD
+    strike = Column(Float, nullable=False)
+
+    # Pricing & Size
+    option_price = Column(Float, nullable=False)
+    size_contracts = Column(Integer, nullable=False)  # Contracts are discrete
+    premium_usd = Column(Float, nullable=False)
+
+    # Market Context
+    bid = Column(Float, nullable=True)
+    ask = Column(Float, nullable=True)
+    underlying_price = Column(Float, nullable=True)
+
+    # Flags/Meta
+    aggressor = Column(String, nullable=True)  # ASK, BID, MID
+    is_sweep = Column(
+        String, nullable=True
+    )  # Stored as boolean or 'true'/'false' string? Using String to match likely JSON source or cast to Boolean in normalizer.
+    # SQLAlchemy Boolean is better. Let's stick closer to SQL.
+    # But for speed/simplicity with potentially mixed inputs, we might default.
+    # Let's use Boolean if normalizer guarantees it.
+
+    # Use JSON for flags to handle variations? Or explicit columns as per PRD "minimum"?
+    # PRD lists specifics. Let's do explicit columns for PRD specified fields.
+    flags_json = Column(JSON, nullable=True)  # is_sweep, is_block, etc.
+
+    volume_contract = Column(Float, nullable=True)
+    open_interest = Column(Float, nullable=True)
+    ingest = Column(JSON, nullable=False, default=dict)
+
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (Index("ix_silver_flow_ticker_time", "ticker", "flow_ts_utc"),)
+
+
+class SilverDarkPool(Base):
+    """
+    PRD 6.2: UW Dark Pool Schema
+    """
+
+    __tablename__ = "silver_uw_darkpool"
+
+    event_id = Column(String, primary_key=True)
+    source_event_id = Column(String, nullable=True)
+    ticker = Column(String, nullable=False, index=True)
+    dark_ts_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    trade_price = Column(Float, nullable=False)
+    size_shares = Column(Float, nullable=False)
+    venue = Column(String, nullable=True)
+    conditions = Column(String, nullable=True)  # Comma-sep string or JSON
+    ingest = Column(JSON, nullable=False, default=dict)
+
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SilverAlpacaBar(Base):
+    """
+    PRD 6.2: Alpaca 1m Bars
+    """
+
+    __tablename__ = "silver_alpaca_bars"
+
+    # Composite PK: ticker + time
+    ticker = Column(String, primary_key=True)
+    bar_start_ts_utc = Column(DateTime(timezone=True), primary_key=True)
+
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    vwap = Column(Float, nullable=True)
+    ingest = Column(JSON, nullable=False, default=dict)
+
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SilverUWAlert(Base):
+    """
+    PRD 6.2: UW Flow Alerts (minimum)
+    """
+
+    __tablename__ = "silver_uw_alerts"
+
+    event_id = Column(String, primary_key=True)
+    source_event_id = Column(String, nullable=True)
+    ticker = Column(String, nullable=False, index=True)
+    alert_ts_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    put_call = Column(String(1), nullable=True)
+    expiry = Column(String, nullable=True)
+    strike = Column(Float, nullable=True)
+
+    option_price = Column(Float, nullable=True)
+    size_contracts = Column(Integer, nullable=True)
+    premium_usd = Column(Float, nullable=True)
+
+    volume_contract = Column(Float, nullable=True)
+    open_interest = Column(Float, nullable=True)
+
+    flags_json = Column(JSON, nullable=True)
+    alert_tags = Column(JSON, nullable=True)
+    ingest = Column(JSON, nullable=False, default=dict)
+
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (Index("ix_silver_alerts_ticker_time", "ticker", "alert_ts_utc"),)

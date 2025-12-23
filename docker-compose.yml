@@ -1,0 +1,166 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: orion_timescaledb
+    environment:
+      - POSTGRES_USER=orion
+      - POSTGRES_PASSWORD=orion_password
+      - POSTGRES_DB=orion_db
+    ports:
+      - "5440:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U orion -d orion_db" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: orion_minio
+    ports:
+      - "9005:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minio_admin
+      - MINIO_ROOT_PASSWORD=minio_password
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c " /usr/bin/mc alias set orion http://minio:9000 minio_admin minio_password; /usr/bin/mc mb orion/lakehouse --ignore-existing; /usr/bin/mc anonymous set public orion/lakehouse; exit 0; "
+
+  ingestion:
+    build: .
+    container_name: orion_ingestion
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - REDPANDA_BROKERS=redpanda:29092
+      - UW_API_KEY=${UW_API_KEY}
+      - UW_BASE_URL=${UW_BASE_URL}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_PAPER=${ALPACA_PAPER}
+      - ORION_RUN_ID=docker_persistent
+    command: [ "python", "-m", "orion.main_ingest" ]
+
+  execution:
+    build: .
+    container_name: orion_execution
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ingestion:
+        # Execution depends on Ingestion populating data
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_PAPER=${ALPACA_PAPER}
+      - ORION_RUN_ID=docker_persistent_exec
+    command: [ "python", "-m", "orion.main_execution" ]
+
+  meta-search:
+    build: .
+    container_name: orion_meta_search
+    profiles: [ "tools" ]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: [ "python", "-m", "orion.main_meta", "--base-solver", "v1_legacy" ]
+
+  indexer:
+    build: .
+    container_name: orion_indexer
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: [ "python", "-m", "orion.rag.indexer", "--daemon", "--interval", "600" ]
+    # 600s = 10 minutes interval
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: orion_redpanda
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --overprovisioned
+      - --node-id 0
+      - --check=false
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr localhost:8082
+    ports:
+      - "9092:9092"
+      - "8081:8081"
+      - "8082:8082"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: [ "CMD-SHELL", "rpk cluster health | grep -E 'Healthy|OK'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mcp-server:
+    build: ../Shared-MCP-Server
+    container_name: orion_mcp_server
+    restart: unless-stopped
+    ports:
+      - "8090:8001"
+    environment:
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8001
+      - MCP_TRANSPORT=sse
+      - UW_API_KEY=${UW_API_KEY}
+      - APCA_API_KEY_ID=${ALPACA_API_KEY}
+      - APCA_API_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - APCA_API_BASE_URL=https://paper-api.alpaca.markets
+    # No healthcheck exposed by default, rely on TCP
+
+
+volumes:
+  timescaledb_data:
+  minio_data:
+  redpanda_data:

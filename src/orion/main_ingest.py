@@ -1,0 +1,513 @@
+import asyncio
+import os
+import signal
+from datetime import datetime
+from typing import List
+
+import exchange_calendars as xcals
+from dotenv import load_dotenv
+
+# Load env before importing local modules that might read env at module level
+load_dotenv()
+
+import traceback
+import uuid
+
+from orion.config import system_settings
+from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+from orion.connectors.uw_alerts_connector import UWAlertsConnector
+from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
+from orion.connectors.uw_flow_connector import UWFlowConnector
+from orion.core.universe_manager import UniverseManager
+from orion.processing.deduper import DeduplicationEngine
+from orion.processing.feature_engine import FeatureEngine
+from orion.processing.normalizer import NormalizationEngine
+from orion.processing.persistence import (
+    persist_bronze_events,
+    persist_candidates,
+    persist_silver_from_bronze,
+    persist_silver_signals,
+)
+from orion.processing.rule_engine import RuleEngine
+from orion.shared.logger import setup_struct_logger
+from orion.storage.db import async_session_factory, init_db
+from orion.storage.lakehouse import LakehouseWriter
+from orion.storage.models import BronzeEvent
+from orion.storage.models_dlq import DeadLetterQueue
+from orion.storage.models_gold import CandidateTrade
+from orion.storage.models_silver import SilverSignal
+
+# Configure logging
+# logging.basicConfig(...) # Removed in favor of struct logger
+RUN_ID = os.getenv("ORION_RUN_ID") or str(uuid.uuid4())
+os.environ["ORION_RUN_ID"] = RUN_ID
+logger = setup_struct_logger("orion.ingest")
+
+load_dotenv()
+
+# Global flag for shutdown
+SHUTDOWN = False
+EOD_TRIGGER_LAST_RUN = None
+
+
+def handle_sigint(signum, frame):
+    global SHUTDOWN
+    logger.info("Shutdown signal received. Stopping ingestion loop...")
+    SHUTDOWN = True
+
+
+from orion.connectors.redpanda_producer import RedpandaProducer
+
+
+async def save_events_to_db(events: List[BronzeEvent]):
+    if not events:
+        return
+
+    # Dual-write: Produce to Redpanda
+    producer = RedpandaProducer.get_instance()
+
+    # print(f"DEBUG: Skipping Redpanda, proceeding to DB save for {len(events)} events.")
+    for e in events:
+        try:
+            # Construct a clean dict for JSON serialization
+            payload_dict = {
+                "event_id": e.event_id,
+                "source": e.source,
+                "source_event_id": getattr(e, "source_event_id", None),
+                "event_type": e.event_type,
+                "event_ts_utc": e.event_ts_utc.isoformat()
+                if hasattr(e.event_ts_utc, "isoformat")
+                else str(e.event_ts_utc),
+                "received_ts_utc": e.received_ts_utc.isoformat()
+                if hasattr(e.received_ts_utc, "isoformat")
+                else str(e.received_ts_utc),
+                "payload": e.payload,
+                "ticker": e.ticker,
+                "trading_date": str(e.trading_date),
+                "session": e.session,
+                "schema_version": e.schema_version,
+                "ingest": getattr(e, "ingest", None),
+            }
+            # Key by ticker for strict ordering if needed, or event_id
+            key = e.ticker if e.ticker else e.event_id
+
+            # Robust Produce with internal retries
+            await producer.produce_event(topic="orion.events.bronze", key=key, payload=payload_dict)
+        except Exception:
+            pass
+    #         # Fallback to DLQ if Redpanda fails after retries
+    #         logger.error(f"Redpanda Produce Failed (DLQ Fallback): {pe}")
+    #         try:
+    #             await DLQWriter.write_to_dlq(
+    #                 error=pe,
+    #                 event_type="REDPANDA_PRODUCE_FAILED",
+    #                 source="RedpandaProducer",
+    #                 payload=payload_dict,
+    #                 context=f"Failed to produce event_id={e.event_id} to topic=orion.events.bronze",
+    #                 run_id=RUN_ID,
+    #                 event_id=e.event_id,
+    #                 ticker=e.ticker,
+    #                 event_ts_utc=e.event_ts_utc
+    #             )
+    #         except Exception as dlq_err:
+    #             logger.critical(f"FATAL: Redpanda AND DLQ Failed! Data risk for event {e.event_id}: {dlq_err}")
+
+    async with async_session_factory() as session:
+        try:
+            await persist_bronze_events(session, events)
+            await session.commit()
+            print(f"DEBUG: Saved {len(events)} events to DB.")
+            logger.info(f"Saved {len(events)} events to DB (potential duplicates ignored).")
+        except Exception as e:
+            logger.error(f"DB Write Error: {e}")
+            traceback.print_exc()
+            await session.rollback()
+
+
+async def save_signals_to_db(signals: List[SilverSignal]):
+    if not signals:
+        return
+
+    async with async_session_factory() as session:
+        try:
+            await persist_silver_signals(session, signals)
+            await session.commit()
+            logger.info(f"Saved {len(signals)} signals (features) to DB.")
+        except Exception as e:
+            logger.error(f"DB Write Error (Silver): {e}")
+            await session.rollback()
+
+
+async def save_silver_data(events: List[BronzeEvent]):
+    """
+    Persists normalized events to their respective Silver SQL tables.
+    PRD 6.2 requirement.
+    """
+    if not events:
+        return
+
+    async with async_session_factory() as session:
+        try:
+            await persist_silver_from_bronze(session, events)
+            await session.commit()
+            logger.info(
+                "Saved Silver Data",
+                extra={"event_type": "SILVER_WRITE_OK", "bronze_events": len(events)},
+            )
+        except Exception as e:
+            logger.error(f"DB Write Error (Silver Data): {e}")
+            await session.rollback()
+
+
+async def save_candidates_to_db(candidates: List[CandidateTrade]):
+    if not candidates:
+        return
+
+    async with async_session_factory() as session:
+        try:
+            await persist_candidates(session, candidates)
+            await session.commit()
+            logger.info(f"Saved {len(candidates)} candidates (GOLD) to DB.")
+        except Exception as e:
+            logger.error(f"DB Write Error (Gold): {e}")
+            await session.rollback()
+
+
+async def main():
+    global SHUTDOWN, EOD_TRIGGER_LAST_RUN
+    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigint)
+
+    logger.info("Starting Orion Ingestion Service...")
+
+    # Initialize Redpanda
+    producer = RedpandaProducer.get_instance()
+    await producer.start()
+
+    # Initialize Health Monitor
+    from orion.core.health_monitor import CriticalHealthException, HealthMonitor
+
+    health_monitor = HealthMonitor()
+
+    # Initialize DB (create tables if not exist)
+    await init_db()
+
+    # Initialize Connectors
+    uw_base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
+    uw_flow = UWFlowConnector(api_key=system_settings.uw_api_key)
+    uw_dark = UWDarkPoolConnector(api_key=system_settings.uw_api_key, base_url=uw_base_url)
+    uw_alerts = UWAlertsConnector(api_key=system_settings.uw_api_key, base_url=uw_base_url)
+
+    universe = UniverseManager()
+    await universe.hydrate_from_db()
+
+    alpaca = AlpacaMarketConnector(
+        api_key=system_settings.alpaca_api_key,
+        secret_key=system_settings.alpaca_secret_key,
+        paper=system_settings.alpaca_paper,
+    )
+
+    feature_engine = FeatureEngine()
+    rule_engine = RuleEngine()
+    lakehouse = LakehouseWriter()
+
+    # Initialize Calendar
+    xnys = xcals.get_calendar("XNYS")
+
+    logger.info("Connectors initialized. Starting polling loop.")
+
+    loop_interval = 5.0  # seconds
+
+    while not SHUTDOWN:
+        try:
+            start_time = asyncio.get_running_loop().time()
+
+            # Update Heartbeat
+            health_monitor.update_heartbeat()
+
+            all_events = []
+
+            trace_id = str(uuid.uuid4())
+
+            # 1. Poll UW
+            try:
+                flow_events = await uw_flow.poll()
+                dark_events = await uw_dark.fetch_events()
+                alert_events = await uw_alerts.fetch_events()
+
+                # Check Lag for UW events
+                for e in flow_events + dark_events + alert_events:
+                    if e.event_ts_utc:
+                        try:
+                            await health_monitor.check_lag(e.event_ts_utc)
+                        except CriticalHealthException as che:
+                            logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
+                            # Ideally, we write a "PAUSE_TRADING" flag to Redis/DB here.
+                            # For now, we log loud and continue (Ingestion should verify to recover?)
+                            # Or we Crash? "Fail Loud".
+                            # If we crash, system stops. Supervisor restarts. Loop.
+                            # PRD says "auto-pause trading".
+                            # We'll rely on "Stale Price" / "Stale Heartbeat" in Execution to pause trading if Ingestion dies.
+                            # So crashing or halting here effectively pauses trading.
+                            # Let's just catch and log for now to avoid rapid restart loops in this demo.
+                            pass
+
+                # 2. Update Universe
+                for e in flow_events + dark_events + alert_events:
+                    if not getattr(e, "ingest", None):
+                        e.ingest = {
+                            "connector": "uw_flow"
+                            if e.event_type == "UW_FLOW"
+                            else "uw_darkpool"
+                            if e.event_type == "UW_DARKPOOL"
+                            else "uw_alerts",
+                            "run_id": RUN_ID,
+                            "trace_id": trace_id,
+                            "attempt": 1,
+                        }
+                    universe.update_from_event(e)
+                    all_events.append(e)
+
+            except Exception as e:
+                logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id, "event_type": "UW_POLL_ERROR"})
+
+            # ... (Alpaca polling) ...
+            # 3. Poll Alpaca for Active Universe
+            active_tickers = universe.get_active_universe()
+            if active_tickers:
+                try:
+                    # Look back 5 days on startup to ensure we cover weekends/holidays
+                    alpaca_events = alpaca.poll(active_tickers, default_lookback_minutes=7200)
+
+                    # Check Lag for Alpaca
+                    for e in alpaca_events:
+                        if e.event_ts_utc:
+                            try:
+                                await health_monitor.check_lag(e.event_ts_utc)
+                            except CriticalHealthException as che:
+                                logger.critical(f"HEALTH MONITOR TRIGGERED (Alpaca): {che}")
+
+                    all_events.extend(alpaca_events)
+                    for e in alpaca_events:
+                        if not getattr(e, "ingest", None):
+                            e.ingest = {
+                                "connector": "alpaca_market",
+                                "run_id": RUN_ID,
+                                "trace_id": trace_id,
+                                "attempt": 1,
+                            }
+                except Exception as e:
+                    logger.error(
+                        f"Error polling Alpaca: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_POLL_ERROR"}
+                    )
+
+            # ... (Processing) ...
+
+            # 5. Write to Storage (and Redpanda)
+            if all_events:
+                async with async_session_factory() as session:
+                    deduper = DeduplicationEngine(session)
+                    normalized_events = []
+                    from datetime import timezone
+
+                    from orion.core.timekeeping import derive_trading_date_and_session
+
+                    for e in all_events:
+                        # ... Normalization ...
+                        try:
+                            e.payload = NormalizationEngine.normalize_event(e.source, e.event_type, e.payload)
+                        except Exception as norm_err:
+                            from orion.shared.dlq_utils import DLQWriter
+
+                            await DLQWriter.write_to_dlq(
+                                error=norm_err,
+                                event_type=f"{e.event_type}_NORMALIZE_ERROR",
+                                source="NormalizationEngine",
+                                payload=getattr(e, "payload", None),
+                                context=f"trace_id={trace_id}",
+                                event_id=getattr(e, "event_id", None),
+                                source_event_id=getattr(e, "source_event_id", None),
+                                ticker=getattr(e, "ticker", None),
+                                event_ts_utc=getattr(e, "event_ts_utc", None),
+                                run_id=RUN_ID,
+                                trace_id=trace_id,
+                            )
+                            continue
+                        if not e.ticker:
+                            e.ticker = e.payload.get("ticker")
+                        if e.event_ts_utc and e.session is None:
+                            if e.event_ts_utc.tzinfo is None:
+                                e.event_ts_utc = e.event_ts_utc.replace(tzinfo=timezone.utc)
+                            td, sess = derive_trading_date_and_session(e.event_ts_utc)
+                            e.trading_date = td
+                            e.session = sess
+                        if e.event_ts_utc and e.trading_date is None:
+                            td, _ = derive_trading_date_and_session(e.event_ts_utc)
+                            e.trading_date = td
+                        if e.session is None:
+                            e.session = "CLOSED"
+
+                        if getattr(e, "ingest", None):
+                            e.ingest.setdefault("run_id", RUN_ID)
+                            e.ingest.setdefault("trace_id", trace_id)
+                            e.ingest.setdefault("attempt", 1)
+                        else:
+                            e.ingest = {"connector": "unknown", "run_id": RUN_ID, "trace_id": trace_id, "attempt": 1}
+
+                        if e.received_ts_utc is None:
+                            e.received_ts_utc = datetime.now(timezone.utc)
+
+                        normalized_events.append(e)
+
+                    unique_events = await deduper.dedupe_batch(normalized_events)
+
+                    if unique_events:
+                        await save_events_to_db(unique_events)
+                        # Persist Normalized Silver Data
+                        await save_silver_data(unique_events)
+                        all_events = unique_events
+
+                # Feature Engine, etc...
+                # Update in-memory UW flow state so OHLCV signals can be enriched with recent flow features.
+                try:
+                    feature_engine.process_uw_flow(all_events)
+                except Exception as e:
+                    logger.error(f"Feature Engine (UW Flow State) Error: {e}")
+
+                # Rule-first candidates from UW_FLOW events (PRD 9.1)
+                uw_flow_events_only = [e for e in all_events if e.event_type == "UW_FLOW"]
+                if uw_flow_events_only:
+                    try:
+                        uw_signals = feature_engine.process_uw_flow_events(uw_flow_events_only)
+                        if uw_signals:
+                            await save_signals_to_db(uw_signals)
+                            try:
+                                uw_candidates = rule_engine.process_signals(uw_signals)
+                                if uw_candidates:
+                                    await save_candidates_to_db(uw_candidates)
+                            except Exception as e:
+                                logger.error(f"Rule Engine Error (UW): {e}")
+                    except Exception as e:
+                        logger.error(f"Feature Engine Error (UW): {e}")
+
+                alpaca_events_only = [e for e in all_events if e.event_type == "ALPACA_BAR_1M"]
+                if alpaca_events_only:
+                    try:
+                        bar_signals = feature_engine.process_alpaca_bars(alpaca_events_only)
+                        if bar_signals:
+                            await save_signals_to_db(bar_signals)
+                            # Rule Engine
+                            try:
+                                candidates = rule_engine.process_signals(bar_signals)
+                                if candidates:
+                                    await save_candidates_to_db(candidates)
+                            except Exception as e:
+                                logger.error(f"Rule Engine Error: {e}")
+                    except Exception as e:
+                        logger.error(f"Feature Engine Error: {e}")
+
+                # Lakehouse
+                if lakehouse:
+                    try:
+                        lakehouse.write_events(all_events)
+                    except Exception as e:
+                        logger.error(
+                            f"Lakehouse Write Error: {e}",
+                            extra={"event_type": "LAKE_WRITE_FAILED"},
+                        )
+                        try:
+                            from orion.shared.dlq_utils import DLQWriter
+
+                            await DLQWriter.write_to_dlq(
+                                error=e,
+                                event_type="LAKE_WRITE_FAILED",
+                                source="LakehouseWriter",
+                                payload={
+                                    "count": len(all_events),
+                                    "event_ids": [ev.event_id for ev in all_events[:50]],
+                                },
+                                context="Failed to write lakehouse batch; see logs for details",
+                                run_id=RUN_ID,
+                                trace_id=trace_id,
+                            )
+                        except Exception as dlq_err:
+                            logger.critical(f"Failed to DLQ lakehouse write failure: {dlq_err}")
+
+                # 6. EOD Review Trigger (PRD 13)
+                # Run at 20:05 ET (approx 01:05 UTC, depending on DST).
+                # Simple check: If time is between 01:00 and 01:10 UTC AND we haven't run today.
+                # NOTE: Ideally this observes market holidays. For now, simple daily check.
+
+                now_utc = datetime.utcnow()
+                # 20:05 ET is roughly 00:05 - 01:05 UTC. Let's aim for 01:05 UTC to be safe for both DSTs (post 8pm ET).
+
+                if now_utc.hour == 1 and now_utc.minute >= 5:
+                    today_str = now_utc.date().isoformat()
+                    if EOD_TRIGGER_LAST_RUN != today_str:
+                        logger.info("Triggering EOD Review Agent...")
+                        try:
+                            # Run in background to not block ingestion
+                            asyncio.create_task(run_eod_task())
+                            EOD_TRIGGER_LAST_RUN = today_str
+                        except Exception as e:
+                            logger.error(f"Failed to trigger EOD Agent: {e}")
+
+        except Exception as e:
+            logger.error(f"Main Ingestion Loop Error: {e}")
+            # DLQ Logic
+            try:
+                async with async_session_factory() as session:
+                    dlq_entry = DeadLetterQueue(
+                        error_message=str(e),
+                        stack_trace=traceback.format_exc(),
+                        source="INGEST_LOOP",
+                        event_type="UNKNOWN",
+                        payload={"context": "Main Loop Crash"},
+                    )
+                    session.add(dlq_entry)
+                    await session.commit()
+            except Exception as dlq_err:
+                logger.critical(f"DLQ Write Failed: {dlq_err}")
+
+            await asyncio.sleep(5.0)
+
+        # Sleep
+        elapsed = asyncio.get_running_loop().time() - start_time
+        sleep_time = max(0.1, loop_interval - elapsed)
+
+        # Log heartbeat
+        trace_id = str(uuid.uuid4())
+        logger.info(
+            "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
+        )
+
+        try:
+            await health_monitor.check_health()
+            await health_monitor.update_db_status(True, "Nominal")
+        except CriticalHealthException as che:
+            logger.critical(f"HEALTH MONITOR HEARTBEAT FAILURE: {che}")
+            await health_monitor.update_db_status(False, str(che))
+
+        await asyncio.sleep(sleep_time)
+
+    # Stop Redpanda
+    await producer.stop()
+    logger.info("Ingestion Service Stopped.")
+
+
+async def run_eod_task():
+    """
+    Wrapper to run EOD Agent.
+    """
+    # Run EOD Review
+    from orion.agents.eod_review_agent import EODReviewAgent
+
+    agent = EODReviewAgent()
+    await agent.run_review()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

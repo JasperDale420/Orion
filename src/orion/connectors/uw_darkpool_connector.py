@@ -1,0 +1,195 @@
+import hashlib
+import logging
+import time
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
+
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from orion.shared.utils import parse_timestamptz
+from orion.storage.models import BronzeEvent
+from orion.unusualwhales.api.darkpool import get_trades_by_date
+from orion.unusualwhales.client import UnusualWhalesClient
+
+logger = logging.getLogger(__name__)
+
+
+class UWDarkPoolConnector:
+    """
+    Connects to Unusual Whales API to poll for Dark Pool prints.
+    """
+
+    def __init__(self, api_key: str, base_url: str):
+        self.client = UnusualWhalesClient(base_url=base_url, token=api_key)
+        self.last_seen_id: Optional[str] = None
+        self.last_poll_ts: Optional[datetime] = None
+        self._watermark_loaded: bool = False
+        self._watermark_key: str = "uw_darkpool"
+
+    def _generate_event_id(self, event_data: dict) -> str:
+        """
+        Generates a deterministic event ID.
+        Prefer source event ID if available, otherwise hash content.
+        """
+        # Dark pool prints usually have an 'id' field?
+        # Let's check the endpoint response structure if possible, but assuming standard flow.
+        # If 'id' or 'id_' exists, use it.
+        source_id = event_data.get("id") or event_data.get("id_")
+        if source_id:
+            return hashlib.sha256(f"UW_DARKPOOL_{source_id}".encode("utf-8")).hexdigest()
+
+        # Fallback: Hash content
+        # Use stable subset: ticker, price, size, timestamp
+        raw_str = f"UW_DARKPOOL_{event_data.get('ticker')}_{event_data.get('price')}_{event_data.get('size')}_{event_data.get('timestamp')}"
+        return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
+        """
+        Fetches latest dark pool prints.
+        """
+        # Enforce Rate Limit
+        time.sleep(0.6)
+        try:
+            await self._ensure_watermark_loaded()
+
+            now = datetime.now(timezone.utc)
+            poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
+            fetch_start = (
+                poll_start_ts if self.last_poll_ts is None else (poll_start_ts - timedelta(seconds=overlap_seconds))
+            )
+
+            start_date = fetch_start.astimezone(timezone.utc).date()
+            end_date = now.astimezone(timezone.utc).date()
+
+            all_raw: list[dict] = []
+            cursor = start_date
+            while cursor <= end_date:
+                all_raw.extend(await self._fetch_raw_for_date(cursor.strftime("%Y-%m-%d")))
+                cursor = cursor + timedelta(days=1)
+
+            events: List[BronzeEvent] = []
+            seen_event_ids: set[str] = set()
+
+            for item in all_raw:
+                try:
+                    event_id = self._generate_event_id(item)
+                    if event_id in seen_event_ids:
+                        continue
+                    seen_event_ids.add(event_id)
+                    source_event_id = item.get("id") or item.get("id_")
+
+                    ts_str = item.get("executed_at") or item.get("timestamp") or item.get("date")
+                    if not ts_str:
+                        raise ValueError("Missing executed_at/timestamp/date in UW darkpool payload")
+                    events_ts = parse_timestamptz(ts_str, strict=True)
+
+                    if events_ts < fetch_start:
+                        continue
+
+                    events.append(
+                        BronzeEvent(
+                            event_id=event_id,
+                            source="UW",
+                            source_event_id=str(source_event_id) if source_event_id is not None else None,
+                            event_type="UW_DARKPOOL",
+                            ticker=item.get("ticker"),
+                            event_ts_utc=events_ts,
+                            payload=item,
+                            session="REG",
+                        )
+                    )
+                except Exception as e:
+                    from orion.shared.dlq_utils import DLQWriter
+
+                    await DLQWriter.write_to_dlq(
+                        error=e,
+                        event_type="UW_DARKPOOL_PARSE_ERROR",
+                        source="UWDarkPoolConnector",
+                        payload=item,
+                        context="Failed to parse raw event in fetch loop",
+                        source_event_id=str(item.get("id") or item.get("id_"))
+                        if (item.get("id") or item.get("id_")) is not None
+                        else None,
+                        ticker=item.get("ticker"),
+                        event_ts_utc=parse_timestamptz(
+                            item.get("executed_at") or item.get("timestamp") or item.get("date"), strict=False
+                        ),
+                    )
+                    continue
+
+            if events:
+                candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
+                if self.last_poll_ts is None or candidate > self.last_poll_ts:
+                    self.last_poll_ts = candidate
+                    await self._persist_watermark(self.last_poll_ts)
+            elif self.last_poll_ts is None:
+                self.last_poll_ts = now
+                await self._persist_watermark(self.last_poll_ts)
+
+            return events
+
+        except Exception as e:
+            logger.error(f"Error fetching UW Dark Pool prints: {e}")
+            raise
+
+    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
+        """
+        PRDv2 7.2: Polling interface shim (fetch_since).
+        UW darkpool endpoint is date-based; we filter client-side using timestamps.
+        """
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        self.last_poll_ts = ts
+        return await self.fetch_events(lookback_seconds=0, overlap_seconds=overlap_seconds)
+
+    async def _ensure_watermark_loaded(self) -> None:
+        if self._watermark_loaded:
+            return
+        from orion.storage.db import async_session_factory
+        from orion.storage.watermarks import get_watermark
+
+        async with async_session_factory() as session:
+            wm = await get_watermark(session, key=self._watermark_key)
+            if wm is not None:
+                self.last_poll_ts = wm
+        self._watermark_loaded = True
+
+    async def _persist_watermark(self, ts: datetime) -> None:
+        from orion.storage.db import async_session_factory
+        from orion.storage.watermarks import upsert_watermark
+
+        async with async_session_factory() as session:
+            await upsert_watermark(session, key=self._watermark_key, last_seen_ts_utc=ts)
+
+    async def _fetch_raw_for_date(self, date_str: str) -> list[dict]:
+        import asyncio
+
+        try:
+            response = await asyncio.to_thread(
+                get_trades_by_date.sync,
+                client=self.client,
+                date=date_str,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch UW Dark Pool for {date_str}: {e}")
+            return []
+
+        if not response:
+            return []
+
+        # Handle Object Response (DarkpoolTradeResponse)
+        if hasattr(response, "data") and isinstance(response.data, list):
+            # Convert list of DarkpoolTrade objects to list of dicts
+            return [item.to_dict() for item in response.data]
+
+        data = response
+        if isinstance(response, dict) and "data" in response:
+            data = response["data"]
+
+        if isinstance(data, list):
+            # Ensure items are dicts (if list of dicts)
+            return data
+
+        logger.warning(f"Unexpected response format from UW Dark Pool: {type(data)}")
+        return []

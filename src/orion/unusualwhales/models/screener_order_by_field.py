@@ -1,0 +1,42 @@
+from enum import Enum
+
+
+class ScreenerOrderByField(str, Enum):
+    CALL_OI_CHANGE = "call_oi_change"
+    CALL_OI_CHANGE_PERC = "call_oi_change_perc"
+    CALL_OPEN_INTEREST = "call_open_interest"
+    CALL_PREMIUM = "call_premium"
+    CALL_VOLUME = "call_volume"
+    IMPLIED_MOVE = "implied_move"
+    IMPLIED_MOVE_PERC = "implied_move_perc"
+    IV30D = "iv30d"
+    IV30D_1D = "iv30d_1d"
+    IV30D_1M = "iv30d_1m"
+    IV30D_1W = "iv30d_1w"
+    IV_RANK = "iv_rank"
+    MARKETCAP = "marketcap"
+    NET_CALL_PREMIUM = "net_call_premium"
+    NET_PREMIUM = "net_premium"
+    NET_PUT_PREMIUM = "net_put_premium"
+    NEXT_DIVIDEND_DATE = "next_dividend_date"
+    NEXT_EARNINGS_DATE = "next_earnings_date"
+    PERC_CALL_VOL_ASK = "perc_call_vol_ask"
+    PERC_CALL_VOL_BID = "perc_call_vol_bid"
+    PERC_CHANGE = "perc_change"
+    PERC_PUT_VOL_ASK = "perc_put_vol_ask"
+    PERC_PUT_VOL_BID = "perc_put_vol_bid"
+    PREMIUM = "premium"
+    PUT_CALL_RATIO = "put_call_ratio"
+    PUT_OI_CHANGE = "put_oi_change"
+    PUT_OI_CHANGE_PERC = "put_oi_change_perc"
+    PUT_OPEN_INTEREST = "put_open_interest"
+    PUT_PREMIUM = "put_premium"
+    PUT_VOLUME = "put_volume"
+    TOTAL_OI_CHANGE = "total_oi_change"
+    TOTAL_OI_CHANGE_PERC = "total_oi_change_perc"
+    TOTAL_OPEN_INTEREST = "total_open_interest"
+    VOLATILITY = "volatility"
+    VOLUME = "volume"
+
+    def __str__(self) -> str:
+        return str(self.value)
