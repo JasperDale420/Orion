@@ -30,7 +30,7 @@ async def test_drawdown_kill_switch_opens_circuit_breaker():
     rm.positions["SPY"] = {"qty": 10.0, "avg_entry": 100.0}
 
     # Sell 10 @ 90 => realized pnl = (90-100)*10 = -100 => 10% drawdown
-    await rm.process_fill("SPY", qty=10.0, price=90.0, side="sell")
+    await rm.process_fill("SPY", qty=10.0, price=90.0, side="sell", fill_id="mock_dd_1")
 
     assert await cb.is_open() is True
 

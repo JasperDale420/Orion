@@ -99,7 +99,7 @@ class LabelingJob:
                 select(CandidateTrade)
                 .outerjoin(CandidateLabel, CandidateTrade.candidate_id == CandidateLabel.candidate_id)
                 .where(CandidateTrade.timestamp_utc < cutoff_time)
-                .where(CandidateLabel.candidate_id == None)
+                .where(CandidateLabel.candidate_id is None)
                 .limit(50)
             )
 

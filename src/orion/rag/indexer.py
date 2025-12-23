@@ -212,7 +212,7 @@ class IndexerService:
         async with async_session_factory() as session:
             stmt = (
                 select(Solver)
-                .where((Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active == True)))
+                .where((Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active)))
                 .limit(limit)
             )
             result = await session.execute(stmt)

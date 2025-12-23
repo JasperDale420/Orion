@@ -19,14 +19,6 @@ from orion.storage.models_trade_journal import TradeJournalEntry
 # Configure Logger
 logger = setup_struct_logger("orion.execution")
 
-SHUTDOWN = False
-
-
-def handle_sigint(signum, frame):
-    global SHUTDOWN
-    logger.info("Shutdown signal received. Stopping execution loop...")
-    SHUTDOWN = True
-
 
 async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
     """
@@ -159,9 +151,16 @@ async def update_decision_status(decision_id: str, status: str):
 
 
 async def main():
-    global SHUTDOWN
-    signal.signal(signal.SIGINT, handle_sigint)
-    signal.signal(signal.SIGTERM, handle_sigint)
+    # Graceful Shutdown Setup
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler():
+        logger.info("Shutdown signal received. Stopping execution loop...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
 
     logger.info("Starting Orion Execution Service (V1 Deterministic)...")
 
@@ -178,8 +177,8 @@ async def main():
 
     logger.info("Engines Initialized. Entering Service Loop.")
 
-    while not SHUTDOWN:
-        start_time = asyncio.get_running_loop().time()
+    while not shutdown_event.is_set():
+        start_time = loop.time()
 
         try:
             # 1.5 Poll Fills (Real-time Risk Updates)
@@ -262,9 +261,16 @@ async def main():
 
         # Optional: Position Manager check would go here (Phase 2)
 
-        elapsed = asyncio.get_running_loop().time() - start_time
+        elapsed = loop.time() - start_time
         sleep_time = max(0.1, 1.0 - elapsed)
-        await asyncio.sleep(sleep_time)
+
+        # Smart Sleep: Wait for sleep_time OR shutdown_event
+        # If shutdown triggered during sleep, we exit immediately after
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
+            break  # Shutdown set
+        except asyncio.TimeoutError:
+            pass  # Sleep done, continue loop
 
     logger.info("Execution Service Stopped.")
 

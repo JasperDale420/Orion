@@ -31,9 +31,11 @@ class MockAsyncSession:
 @pytest.fixture
 def engine():
     print("\n[DEBUG] FIXTURE START")
-    with patch("orion.execution.execution_engine.system_settings"), patch(
-        "orion.execution.execution_engine.AlpacaTradingConnector"
-    ), patch("orion.execution.execution_engine.AlpacaMarketConnector"):
+    with (
+        patch("orion.execution.execution_engine.system_settings"),
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
+    ):
         print("[DEBUG] Initializing ExecutionEngine")
         ee = ExecutionEngine()
         print("[DEBUG] ExecutionEngine Initialized")
@@ -80,9 +82,11 @@ if __name__ == "__main__":
 
     # Setup Engine manually because fixture
     print("\n[DEBUG] MAIN START")
-    with patch("orion.execution.execution_engine.system_settings"), patch(
-        "orion.execution.execution_engine.AlpacaTradingConnector"
-    ) as MockConnector, patch("orion.execution.execution_engine.AlpacaMarketConnector"):
+    with (
+        patch("orion.execution.execution_engine.system_settings"),
+        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConnector,
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
+    ):
         ee = ExecutionEngine()
         ee.connector = MockConnector.return_value
         asyncio.run(test_dedupe_fills_new(ee))

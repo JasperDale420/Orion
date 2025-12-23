@@ -53,8 +53,9 @@ async def test_stale_heartbeat_blocks_trade():
     from unittest.mock import patch
 
     # 3. Attempt Execution
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector"), patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()
         engine.connector = True

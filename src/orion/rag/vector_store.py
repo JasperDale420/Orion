@@ -49,7 +49,7 @@ class VectorStore:
         bb = list(b)
         if len(aa) != len(bb) or not aa:
             return float("-inf")
-        dot = sum(x * y for x, y in zip(aa, bb))
+        dot = sum(x * y for x, y in zip(aa, bb, strict=False))
         na = math.sqrt(sum(x * x for x in aa))
         nb = math.sqrt(sum(y * y for y in bb))
         if na == 0 or nb == 0:

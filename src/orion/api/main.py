@@ -83,7 +83,7 @@ async def list_solvers(
     """
     stmt = select(Solver).offset(skip).limit(limit)
     if active_only:
-        stmt = stmt.where((Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active == True)))
+        stmt = stmt.where((Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active)))
 
     # Order by creation desc
     stmt = stmt.order_by(desc(Solver.created_at_utc))

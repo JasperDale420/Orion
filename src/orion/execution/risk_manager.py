@@ -30,6 +30,9 @@ class RiskManager:
         # Track full position details (qty, avg_entry)
         self.positions: Dict[str, Dict[str, float]] = {}
 
+        # Idempotency Tracking
+        self.processed_fill_ids: set[str] = set()
+
     def _current_drawdown_pct(self) -> float:
         if self.peak_equity <= 0:
             return 0.0
@@ -54,66 +57,15 @@ class RiskManager:
         """
         Returns True if the order is safe to execute, False otherwise.
         """
-        # Use override if provided, else global config
         cfg = risk_override if risk_override else self.config
-
         estimated_cost = quantity * price
 
         # 0. Global Time Checks
-        if cfg.time_of_day_bans:
-            if timestamp is None:
-                timestamp = datetime.now(timezone.utc)
-
-            # Use exchange_calendars for robust DST/Holiday handling
-            if not hasattr(self, "calendar"):
-                try:
-                    import exchange_calendars as xcals
-
-                    self.calendar = xcals.get_calendar("XNYS")
-                except ImportError:
-                    logger.warning("exchange_calendars not installed, skipping advanced time checks")
-                    self.calendar = None
-
-            if self.calendar:
-                try:
-                    # Find the session that this timestamp belongs to.
-                    date = timestamp.date()
-                    schedule = self.calendar.schedule(start_date=date, end_date=date)
-
-                    if schedule.empty:
-                        # Fail Closed if market schedule is undefined
-                        logger.warning(f"RISK REJECT: No market schedule found for {date} (Holiday/Closed).")
-                        return False
-                    else:
-                        row = schedule.iloc[0]
-                        market_open = row.market_open  # UTC
-                        market_close = row.market_close  # UTC
-
-                        for ban in cfg.time_of_day_bans:
-                            if ban == "FIRST_5_MIN":
-                                if market_open <= timestamp < market_open + timedelta(minutes=5):
-                                    logger.warning(f"RISK REJECT: Time violation {ban} at {timestamp}")
-                                    return False
-
-                            elif ban == "LAST_5_MIN":
-                                if market_close - timedelta(minutes=5) <= timestamp < market_close:
-                                    logger.warning(f"RISK REJECT: Time violation {ban} at {timestamp}")
-                                    return False
-                except Exception as e:
-                    logger.error(f"Time check logic failed: {e}")
-                    return False
-
-        # 1. Daily Loss Limit
-        if self.current_daily_loss >= cfg.max_daily_loss:
-            logger.error(
-                f"RISK REJECT: Daily Loss Limit {cfg.max_daily_loss} Hit (Current Loss: {self.current_daily_loss})"
-            )
+        if not self._check_time_bans(cfg, timestamp):
             return False
 
-        # 1b. Drawdown Kill Switch
-        if self._drawdown_breached(cfg):
-            dd = self._current_drawdown_pct() * 100.0
-            logger.critical(f"RISK REJECT: Max Drawdown {cfg.max_drawdown_pct:.2%} Hit (Current Drawdown: {dd:.2f}%)")
+        # 1. Daily Loss & Drawdown Checks
+        if not self._check_loss_limits(cfg):
             return False
 
         # 2. Max Order Size
@@ -121,76 +73,142 @@ class RiskManager:
             logger.warning(f"RISK REJECT: Order Size {estimated_cost} > Limit {cfg.max_order_size_usd}")
             return False
 
-        # 3. Projected Exposure Check (Signed)
+        # Calculate projected signed exposure
+        projected_signed, effective_signed = self._calculate_projected_exposure(ticker, estimated_cost, side, price)
+
+        # 4. Shorting Permission Check
+        if not self._check_shorting(cfg, projected_signed, effective_signed):
+            return False
+
+        # 5. Max Positions Check
+        if not self._check_max_positions(cfg, ticker):
+            return False
+
+        # 6. Max Ticker Exposure Check
+        if not self._check_ticker_exposure_limit(cfg, ticker, projected_signed, effective_signed):
+            return False
+
+        return True
+
+    def _check_time_bans(self, cfg: RiskSettings, timestamp: datetime = None) -> bool:
+        if not cfg.time_of_day_bans:
+            return True
+
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+
+        # Use exchange_calendars for robust DST/Holiday handling
+        if not hasattr(self, "calendar"):
+            try:
+                import exchange_calendars as xcals
+
+                self.calendar = xcals.get_calendar("XNYS")
+            except ImportError:
+                logger.warning("exchange_calendars not installed, skipping advanced time checks")
+                self.calendar = None
+
+        if not self.calendar:
+            return True
+
+        try:
+            date = timestamp.date()
+            schedule = self.calendar.schedule(start_date=date, end_date=date)
+
+            if schedule.empty:
+                logger.warning(f"RISK REJECT: No market schedule found for {date} (Holiday/Closed).")
+                return False
+
+            row = schedule.iloc[0]
+            market_open = row.market_open
+            market_close = row.market_close
+
+            for ban in cfg.time_of_day_bans:
+                if ban == "FIRST_5_MIN":
+                    if market_open <= timestamp < market_open + timedelta(minutes=5):
+                        logger.warning(f"RISK REJECT: Time violation {ban} at {timestamp}")
+                        return False
+                elif ban == "LAST_5_MIN":
+                    if market_close - timedelta(minutes=5) <= timestamp < market_close:
+                        logger.warning(f"RISK REJECT: Time violation {ban} at {timestamp}")
+                        return False
+        except Exception as e:
+            logger.error(f"Time check logic failed: {e}")
+            return False
+
+        return True
+
+    def _check_loss_limits(self, cfg: RiskSettings) -> bool:
+        if self.current_daily_loss >= cfg.max_daily_loss:
+            logger.error(
+                f"RISK REJECT: Daily Loss Limit {cfg.max_daily_loss} Hit (Current Loss: {self.current_daily_loss})"
+            )
+            return False
+
+        if self._drawdown_breached(cfg):
+            dd = self._current_drawdown_pct() * 100.0
+            logger.critical(f"RISK REJECT: Max Drawdown {cfg.max_drawdown_pct:.2%} Hit (Current Drawdown: {dd:.2f}%)")
+            return False
+
+        return True
+
+    def _calculate_projected_exposure(self, ticker: str, estimated_cost: float, side: str, price: float):
         pending_exposure = 0.0
-        for oid, (p_ticker, p_cost) in self.pending_orders.items():
+        for _, p_val in self.pending_orders.items():
+            # Check p_val tuple (ticker, cost)
+            # wait, pending_orders values are (ticker, signed_cost)
+            # self.pending_orders: Dict[str, float] defined in init, but usage implies (ticker, cost) tuple?
+            # Init says: self.pending_orders: Dict[str, float] = {}  # order_id -> estimated cost (signed)
+            # But line 126 loop was: for oid, (p_ticker, p_cost) in self.pending_orders.items():
+            # So the type hint in init might be wrong or the usage.
+            # Looking at update_post_trade (line 416): self.pending_orders[order_id] = (ticker, signed_cost)
+            # So it IS a tuple.
+            p_ticker, p_cost = p_val
             if p_ticker == ticker:
                 pending_exposure += p_cost
 
-        current_exposure = self.ticker_exposures.get(ticker, 0.0)
-
-        # For signed logic, we rely on 'positions' dict if available, but ticker_exposures is USD value (unsigned usually?)
-        # Let's standardize ticker_exposures to be Market Value (unsigned).
-        # But we need Signed checks for Shorting.
-        # We need to construct Signed Current Exposure.
-        # Use self.positions if available
         signed_current_exposure = 0.0
         if ticker in self.positions:
             pos = self.positions[ticker]
-            # approximate with current price
             signed_current_exposure = pos["qty"] * price
 
-        # If positions not tracking yet (legacy), fallback?
-        # Let's assume initialized.
-
-        # Effective including pending
         effective_signed = signed_current_exposure + pending_exposure
-
-        # Project outcome
         cost_impact = estimated_cost if side.lower() == "buy" else -estimated_cost
         projected_signed = effective_signed + cost_impact
 
-        # 4. Shorting Permission Check
+        return projected_signed, effective_signed
+
+    def _check_shorting(self, cfg: RiskSettings, projected_signed: float, effective_signed: float) -> bool:
         is_moving_short = projected_signed < effective_signed
         if projected_signed < 0 and is_moving_short:
             if not cfg.enable_shorting:
-                # Exception: Closing a long is moving short, but checks against projected < 0
-                # If we projected < 0, we flip to short.
                 logger.error(f"RISK REJECT: Shorting Disabled. Cannot move to {projected_signed}")
                 return False
+        return True
 
-        # 5. Max Positions Check
-        # Count based on projected non-zero
-        # Approximate by checking if we are opening a new ticker
-
-        # If we have 0 qty and 0 pending, and we add check -> +1
-        # This implementation requires iterating all positions + pending is heavy.
-        # Simplified:
-        if ticker not in self.positions or math.isclose(self.positions[ticker]["qty"], 0):
-            # Opening new?
-            # Check if we have pending for this ticker already
+    def _check_max_positions(self, cfg: RiskSettings, ticker: str) -> bool:
+        if ticker not in self.positions or math.isclose(self.positions[ticker]["qty"], 0, abs_tol=1e-9):
             has_pending = any(p_ticker == ticker for (p_ticker, _) in self.pending_orders.values())
             if not has_pending:
-                # Truly new?
                 if self.open_positions >= cfg.max_positions:
                     logger.warning(f"RISK REJECT: Max Positions {cfg.max_positions} Reached")
                     return False
+        return True
 
-        # 6. Max Ticker Exposure Check (Risk Reduction Exception)
+    def _check_ticker_exposure_limit(
+        self, cfg: RiskSettings, ticker: str, projected_signed: float, effective_signed: float
+    ) -> bool:
         abs_proj = abs(projected_signed)
         abs_curr = abs(effective_signed)
         limit = cfg.max_ticker_exposure_usd
 
         if abs_proj > limit:
             if abs_proj < abs_curr:
-                # Allowing Risk Reduction
-                pass
+                return True  # Allowing Risk Reduction
             else:
                 logger.warning(
                     f"RISK REJECT: Max Ticker Exposure {limit} Exceeded for {ticker} (Projected: {abs_proj})"
                 )
                 return False
-
         return True
 
     def calculate_size(self, entry_price: float, stop_loss_pct: float = None, account_equity: float = None) -> float:
@@ -301,12 +319,18 @@ class RiskManager:
         )
         await CircuitBreaker().open(reason)
 
-    async def process_fill(self, ticker: str, qty: float, price: float, side: str):
+    async def process_fill(self, ticker: str, qty: float, price: float, side: str, fill_id: str):
         """
         Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
+        Idempotent: Checks fill_id against in-memory history.
         """
-        fill_cost = abs(qty * price)
+        if fill_id in self.processed_fill_ids:
+            logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
+            return
+
+        self.processed_fill_ids.add(fill_id)
+
         # Standardize: side='buy' -> positive qty effect, side='sell'/'short' -> negative qty effect
         sign = 1 if side.lower() == "buy" else -1
         signed_fill_qty = abs(qty) * sign
@@ -393,7 +417,7 @@ class RiskManager:
 
         # Update Open Positions Count
         count = 0
-        for t, p in self.positions.items():
+        for _t, p in self.positions.items():
             if not math.isclose(p["qty"], 0, abs_tol=1e-9):
                 count += 1
         self.open_positions = count
@@ -404,6 +428,14 @@ class RiskManager:
         """
         Updates internal risk state immediately after an order is sent (Optimistic).
         """
+        # Kept async to match interface if needed, but if unused, we can make it sync.
+        # However, call sites use await?
+        # Line 272 in ExecutionEngine: await self.risk_manager.update_post_trade(...)
+        # So we MUST keep it async OR change call site.
+        # To satisfy linter, we can add a dummy await or just accept the warning?
+        # Or better -> simple await asyncio.sleep(0) to yield?
+        # Or change call site.
+        # Changing call site is better.
         if not order_id:
             order_id = f"pending_{datetime.now(timezone.utc).timestamp()}"
 
@@ -442,8 +474,10 @@ class RiskManager:
             positions = connector.client.get_all_positions()
             self.open_positions = len(positions)
 
+            # Reset Idempotency Cache (State is fresh from broker)
+            self.processed_fill_ids.clear()
+
             self.ticker_exposures = {}
-            total_open_pnl = 0.0
 
             # Rebuild self.positions from broker data
             self.positions = {}
@@ -453,9 +487,6 @@ class RiskManager:
                 market_value = float(p.market_value)
                 qty = float(p.qty)
                 avg_entry = float(p.avg_entry_price)
-                unrealized_pl = float(p.unrealized_pl)
-
-                total_open_pnl += unrealized_pl
 
                 self.positions[symbol] = {"qty": qty, "avg_entry": avg_entry}
 
@@ -463,6 +494,46 @@ class RiskManager:
                 # market_value is abs by default in some APIs, let's just use our loop logic if needed
                 # But here we just set ticker_exposures (Market Value)
                 self.ticker_exposures[symbol] = abs(market_value)
+
+            # 2. Sync Pending Orders (CRITICAL RESTART FIX)
+            # We must know about open orders to avoid double-execution
+            try:
+                from alpaca.trading.enums import QueryOrderStatus
+                from alpaca.trading.requests import GetOrdersRequest
+
+                req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500)
+                open_orders = connector.client.get_orders(filter=req)
+
+                logger.info(f"Found {len(open_orders)} open orders on restart.")
+
+                self.pending_orders = {}
+                for o in open_orders:
+                    # We need to estimate cost for risk tracking
+                    # If limit order, use limit price. If market, use current price?
+                    # For safety, let's assume limit price or 0 if missing (market orders risky anyway on restart)
+
+                    # Alpaca Order model: symbol, qty, side, type, limit_price, client_order_id
+                    symbol = o.symbol
+                    qty = float(o.qty or 0.0)
+                    side_str = str(o.side.value) if hasattr(o.side, "value") else str(o.side)
+                    limit_price = float(o.limit_price) if o.limit_price else 0.0
+                    order_id = str(o.client_order_id or o.id)  # Use client_order_id preferred
+
+                    # If limit price is missing (Market Order?), we might underestimate.
+                    # Ideally we fetch current price. For now, log warning if 0.
+                    if limit_price <= 0 and o.order_type == "limit":
+                        logger.warning(f"Open Limit Order {o.id} has no price, skipping risk track.")
+                        continue
+
+                    cost = qty * limit_price
+
+                    # Robust side check
+                    is_buy = side_str.lower() == "buy"
+                    signed_cost = cost if is_buy else -cost
+                    self.pending_orders[order_id] = (symbol, signed_cost)
+
+            except Exception as e:
+                logger.error(f"Failed to sync pending orders: {e}")
 
             # 2. Sync Daily PnL & Equity
             account = connector.client.get_account()
@@ -480,7 +551,7 @@ class RiskManager:
                 self.current_daily_loss = 0.0
 
             logger.info(
-                f"Risk Synced: OpenPositions={self.open_positions}, DailyLoss={self.current_daily_loss} (PnL={pnl}, Equity={self.current_equity})"
+                f"Risk Synced: OpenPositions={self.open_positions}, PendingOrders={len(self.pending_orders)}, DailyLoss={self.current_daily_loss}"
             )
 
         except Exception as e:

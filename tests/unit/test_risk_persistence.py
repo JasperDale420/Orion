@@ -25,20 +25,20 @@ async def test_risk_persistence():
     await rm1.initialize()
 
     # Verify defaults
-    assert rm1.current_daily_loss == 0.0
+    assert rm1.current_daily_loss == pytest.approx(0.0)
 
     # Simulate a loss
     # Simulate a loss
     rm1.current_daily_loss = 500.0
     # Create 2 positions
-    await rm1.process_fill("T1", 10, 100.0, "buy")
-    await rm1.process_fill("T2", 10, 100.0, "buy")
+    await rm1.process_fill("T1", 10, 100.0, "buy", fill_id="persist_1")
+    await rm1.process_fill("T2", 10, 100.0, "buy", fill_id="persist_2")
 
     # 3. R2: New Instance, load state
     rm2 = RiskManager()
     await rm2.initialize()
 
-    assert rm2.current_daily_loss == 500.0
+    assert rm2.current_daily_loss == pytest.approx(500.0)
     assert rm2.open_positions == 2
 
     # 4. Simulate Post Trade Update -> Use process_fill for persistence
@@ -47,7 +47,7 @@ async def test_risk_persistence():
     rm2.positions["T2"] = {"qty": 10.0, "avg_entry": 100.0}
 
     # Buy 10 AAPL @ 150 (Cost 1500). Exposure +1500.
-    await rm2.process_fill("AAPL", 10, 150.0, "buy")
+    await rm2.process_fill("AAPL", 10, 150.0, "buy", fill_id="persist_3")
 
     # Check R3
     rm3 = RiskManager()

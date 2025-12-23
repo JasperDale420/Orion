@@ -171,9 +171,9 @@ class SignalEngine:
                 )
 
                 decision_record.execution_params = {
-                    "limit_price": candidate.execution_params.get("limit_price")
-                    if candidate.execution_params
-                    else None,
+                    "limit_price": (
+                        candidate.execution_params.get("limit_price") if candidate.execution_params else None
+                    ),
                     "stop_loss_pct": sl_pct,
                     "take_profit_pct": tp_pct,
                     "order_type": "LIMIT",

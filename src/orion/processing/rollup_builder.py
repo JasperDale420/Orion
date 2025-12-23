@@ -81,19 +81,6 @@ class RollupBuilder:
         df["dollar_vol"] = df["vwap"] * df["volume"]
 
         for period_name, freq in periods.items():
-            agg_dict = {
-                "open": "first",
-                "high": "max",
-                "low": "min",
-                "close": "last",
-                "volume": "sum",
-                # VWAP Aggregation: (sum(price*vol) / sum(vol))
-                # For simplicity in V1, we approximate simply or recalculate if we had dollar_vol
-                # Better: Weighted Average logic.
-                # Let's use simple close price avg if volume is missing, else weighted.
-                # Actually, standard approach: we need (vwap * vol) to sum up dollar volume
-            }
-
             # Update agg dict for custom vwap
             # We can't do custom funcs easily in resample().agg without lambda, which can be slow or tricky with named columns
             # Strategy: Resample dollar_vol and volume, then divide.
@@ -130,7 +117,7 @@ class RollupBuilder:
                 # Use Postgres ON CONFLICT (upsert)?
                 # For this implementation, we will try to fetch or merge.
 
-                rollup = await self.session.merge(
+                await self.session.merge(
                     GoldTickerRollup(
                         ticker=ticker,
                         period=period_name,

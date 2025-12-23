@@ -123,13 +123,13 @@ async def main():
     logger.info("Running Strategist Cycle...")
 
     # Patch Everything
-    with patch("orion.run_agent.init_db", new=AsyncMock()) as mock_init, patch(
-        "orion.run_agent.async_session_factory", side_effect=mock_session_factory
-    ), patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockTradingConnector, patch(
-        "orion.connectors.alpaca_market_connector.AlpacaMarketConnector"
-    ) as MockMarketConnector, patch(
-        "orion.run_agent.StrategistAgent"
-    ) as MockStrategist:
+    with (
+        patch("orion.run_agent.init_db", new=AsyncMock()),
+        patch("orion.run_agent.async_session_factory", side_effect=mock_session_factory),
+        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockTradingConnector,
+        patch("orion.connectors.alpaca_market_connector.AlpacaMarketConnector") as MockMarketConnector,
+        patch("orion.run_agent.StrategistAgent") as MockStrategist,
+    ):
         # Mock Trading Connector (Limit Order)
         trade_instance = MockTradingConnector.return_value
         # Mock Account for Risk Sync (Equity > 0)

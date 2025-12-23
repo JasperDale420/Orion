@@ -4,7 +4,9 @@ from orion.execution.risk_manager import RiskManager
 
 def test_risk_manager_defaults():
     rm = RiskManager()
-    assert rm.config.max_daily_loss == 1000.0
+    from orion.config import risk_settings
+
+    assert rm.config.max_daily_loss == risk_settings.max_daily_loss
     assert rm.check_order("AAPL", 10, 150.0, "buy") is True
 
 
@@ -21,7 +23,8 @@ def test_risk_manager_blocks_daily_loss_limit():
     rm = RiskManager(config)
 
     # Simulate a loss
-    rm.update_metrics(realized_pnl=-600.0)
+    # Simulate a loss
+    rm.current_daily_loss = 600.0
 
     assert rm.check_order("AMD", 10, 100.0, "buy") is False
 
@@ -32,7 +35,10 @@ def test_check_order_max_positions_allow_existing():
 
     # Setup: 2 positions exist, one is AAPL
     rm.open_positions = 2
+    rm.open_positions = 2
     rm.ticker_exposures = {"AAPL": 5000.0, "MSFT": 5000.0}
+    rm.positions["AAPL"] = {"qty": 50, "avg_entry": 100.0}
+    rm.positions["MSFT"] = {"qty": 50, "avg_entry": 100.0}
 
     # Adding to AAPL should be allowed (not a new position)
     assert rm.check_order("AAPL", 1, 100.0, "BUY") is True
@@ -47,6 +53,7 @@ def test_check_order_ticker_exposure_limit():
 
     # Pre-seed exposure
     rm.ticker_exposures = {"AAPL": 8000.0}
+    rm.positions["AAPL"] = {"qty": 80, "avg_entry": 100.0}
 
     # Case 1: Add 1000 -> 9000 (OK)
     assert rm.check_order("AAPL", 10, 100.0, "BUY") is True
@@ -61,6 +68,8 @@ def test_check_order_max_positions_logic():
 
     # 2 positions exist
     rm.ticker_exposures = {"AAPL": 1000, "MSFT": 1000}
+    rm.positions["AAPL"] = {"qty": 10, "avg_entry": 100.0}
+    rm.positions["MSFT"] = {"qty": 10, "avg_entry": 100.0}
     rm.open_positions = 2
 
     # Try buying new ticker
@@ -75,6 +84,8 @@ def test_risk_manager_blocks_max_positions():
     rm = RiskManager(config)
 
     rm.open_positions = 2
+    rm.positions["A"] = {"qty": 1}
+    rm.positions["B"] = {"qty": 1}
     assert rm.check_order("NVDA", 1, 100.0, "buy") is False
 
 
@@ -88,6 +99,7 @@ def test_check_order_allow_risk_reduction_at_limit():
 
     # Pre-seed exposure ABOVE limit
     rm.ticker_exposures = {"AAPL": 12000.0}
+    rm.positions["AAPL"] = {"qty": 120, "avg_entry": 100.0}
 
     # Case 1: Buy more? -> FAIL
     assert rm.check_order("AAPL", 10, 100.0, "BUY") is False
@@ -108,6 +120,7 @@ def test_check_order_flip_long_to_short():
 
     # Start Long
     rm.ticker_exposures = {"TSLA": 5000.0}
+    rm.positions["TSLA"] = {"qty": 50, "avg_entry": 100.0}
 
     # Sell 8000 (Flip to -3000)
     # | -3000 | < 10000 -> PASS
@@ -128,6 +141,7 @@ def test_check_order_flip_short_to_long():
 
     # Start Short
     rm.ticker_exposures = {"TSLA": -5000.0}
+    rm.positions["TSLA"] = {"qty": -50, "avg_entry": 100.0}
 
     # Buy 8000 (Flip to +3000) -> PASS
     assert rm.check_order("TSLA", 80, 100.0, "BUY") is True

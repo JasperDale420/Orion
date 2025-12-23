@@ -120,9 +120,11 @@ class SolverPipeline:
 
         trace = {
             "stage": "model_inference_deterministic",
-            "model_version": solver.model.model_version
-            if (solver.model and hasattr(solver.model, "model_version"))
-            else "rules_only",
+            "model_version": (
+                solver.model.model_version
+                if (solver.model and hasattr(solver.model, "model_version"))
+                else "rules_only"
+            ),
             "p_take_raw": p_take,
             "features_used_count": len(features),
             "feature_keys": list(features.keys()),

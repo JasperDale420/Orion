@@ -113,11 +113,12 @@ async def test_main_ingest_dlq_fallback():
     mock_producer.produce_event.side_effect = Exception("Kafka Down")
 
     # Patch the RedpandaProducer imported in main_ingest to handle potential stale references due to reloads
-    with patch("orion.main_ingest.RedpandaProducer.get_instance", return_value=mock_producer), patch(
-        "orion.shared.dlq_utils.DLQWriter.write_to_dlq", new_callable=AsyncMock
-    ) as mock_dlq, patch("orion.main_ingest.persist_bronze_events", new_callable=AsyncMock), patch(
-        "orion.main_ingest.async_session_factory"
-    ) as mock_session_factory:
+    with (
+        patch("orion.main_ingest.RedpandaProducer.get_instance", return_value=mock_producer),
+        patch("orion.shared.dlq_utils.DLQWriter.write_to_dlq", new_callable=AsyncMock) as mock_dlq,
+        patch("orion.main_ingest.persist_bronze_events", new_callable=AsyncMock),
+        patch("orion.main_ingest.async_session_factory") as mock_session_factory,
+    ):
         # Mock session context manager
         mock_session = AsyncMock()
         mock_session_factory.return_value.__aenter__.return_value = mock_session

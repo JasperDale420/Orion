@@ -25,31 +25,32 @@ def mock_solver_config():
 async def test_propose_edits(mock_solver_config):
     # Mock Response
     mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(
-                content=json.dumps(
+    mock_msg = MagicMock(
+        content=json.dumps(
+            {
+                "variants": [
                     {
-                        "variants": [
+                        "ops": [
                             {
-                                "ops": [
-                                    {
-                                        "op": "modify_param",
-                                        "param_name": "exit_logic.take_profit_atr_multiple",
-                                        "new_value": 2.5,
-                                        "reasoning": "Increase profit target",
-                                    }
-                                ],
-                                "rationale": "More aggressive",
+                                "op": "modify_param",
+                                "param_name": "exit_logic.take_profit_atr_multiple",
+                                "new_value": 2.5,
+                                "reasoning": "Increase profit target",
                             }
-                        ]
+                        ],
+                        "rationale": "More aggressive",
                     }
-                )
-            )
+                ]
+            }
         )
-    ]
+    )
+    mock_msg.tool_calls = None
+    mock_response.choices = [MagicMock(message=mock_msg)]
 
-    with patch("orion.agents.meta_agent.acompletion", new_callable=AsyncMock) as mock_acompletion:
+    with (
+        patch("orion.agents.meta_agent.acompletion", new_callable=AsyncMock) as mock_acompletion,
+        patch("orion.config.agent_settings.model_name", "deepseek-chat"),
+    ):
         mock_acompletion.return_value = mock_response
 
         agent = MetaAgent()
@@ -58,7 +59,6 @@ async def test_propose_edits(mock_solver_config):
         # Verify call args
         mock_acompletion.assert_called_once()
         call_kwargs = mock_acompletion.call_args.kwargs
-        assert call_kwargs["provider"] == "deepseek"
         assert call_kwargs["model"] == "deepseek-chat"
 
         # Verify output

@@ -36,9 +36,10 @@ async def test_uw_flow_connector_poll_updates_db_heartbeat():
             mock_session.commit = AsyncMock()
 
             # Mock Watermark functions to avoid interference with session.execute mock
-            with patch("orion.storage.watermarks.get_watermark", new_callable=AsyncMock) as mock_get_wm, patch(
-                "orion.storage.watermarks.upsert_watermark", new_callable=AsyncMock
-            ) as mock_upsert_wm:
+            with (
+                patch("orion.storage.watermarks.get_watermark", new_callable=AsyncMock) as mock_get_wm,
+                patch("orion.storage.watermarks.upsert_watermark", new_callable=AsyncMock),
+            ):
                 mock_get_wm.return_value = None
 
                 connector = UWFlowConnector(api_key="test_key")

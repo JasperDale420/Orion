@@ -326,7 +326,7 @@ class MetaSearchAgent:
         FR 5.7.2: Picks up pending EOD/Human edits and evaluates them.
         """
         async with async_session_factory() as session:
-            stmt = select(SolverEdits).where(SolverEdits.reward == None)
+            stmt = select(SolverEdits).where(SolverEdits.reward is None)
             result = await session.execute(stmt)
             pending_edits = result.scalars().all()
 

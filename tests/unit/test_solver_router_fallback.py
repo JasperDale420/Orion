@@ -72,9 +72,11 @@ async def test_select_solvers_fallback():
 
     # 4. Run Test
     # Patch session factory inside solver_router
-    with patch("orion.core.solver_router.async_session_factory", test_session_factory), patch(
-        "orion.config.system_settings"
-    ) as mock_settings, patch("orion.core.solver_schema.FeatureRegistry.validate_id", return_value=True):
+    with (
+        patch("orion.core.solver_router.async_session_factory", test_session_factory),
+        patch("orion.config.system_settings") as mock_settings,
+        patch("orion.core.solver_schema.FeatureRegistry.validate_id", return_value=True),
+    ):
         # Configure Baseline Setting
         mock_settings.baseline_solver_id = "baseline_v1"
 

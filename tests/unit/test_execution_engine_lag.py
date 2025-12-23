@@ -10,10 +10,11 @@ from orion.storage.models_gold import CandidateTrade, StrategyDecision
 @pytest.fixture
 def engine():
     # Patch credentials and Connectors to avoid real init
-    with patch.object(system_settings, "alpaca_api_key", "test_key"), patch.object(
-        system_settings, "alpaca_secret_key", "test_secret"
-    ), patch("orion.execution.execution_engine.AlpacaTradingConnector"), patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
+    with (
+        patch.object(system_settings, "alpaca_api_key", "test_key"),
+        patch.object(system_settings, "alpaca_secret_key", "test_secret"),
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         return ExecutionEngine()
 

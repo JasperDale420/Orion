@@ -105,7 +105,7 @@ class BacktestEngine:
         for train_idx, test_idx in splitter.split(events_times=t1_series, test_times=t0_series):
             # Select Train/Test Candidates
             # candidates is list.
-            train_cands = [candidates[i] for i in train_idx]
+            [candidates[i] for i in train_idx]
             test_cands = [candidates[i] for i in test_idx]
 
             # Run Simulation on TEST set (OOS for this fold)

@@ -128,7 +128,7 @@ async def test_execution_loop_flow():
 
             # DEBUG DB CONTENT
             async with test_session_factory() as session:
-                all_c = (await session.execute(select(CandidateTrade))).scalars().all()
+                (await session.execute(select(CandidateTrade))).scalars().all()
 
                 metrics = (await session.execute(select(SolverMetrics))).scalars().all()
 
@@ -140,9 +140,11 @@ async def test_execution_loop_flow():
             # 4. Policy Decision (Now SignalEngine)
             target_candidate = pending[0]
             # Need to mock stage within SignalEngine too if it reads it there
-            with patch("orion.config.system_settings.orion_stage", "paper"), patch(
-                "orion.core.feature_registry.FeatureRegistry.validate_id", return_value=True
-            ), patch("orion.core.solver_router.async_session_factory", test_session_factory):
+            with (
+                patch("orion.config.system_settings.orion_stage", "paper"),
+                patch("orion.core.feature_registry.FeatureRegistry.validate_id", return_value=True),
+                patch("orion.core.solver_router.async_session_factory", test_session_factory),
+            ):
                 signal_engine = SignalEngine()
 
                 # Mock FeatureEngine to prevent real DB calls/computation failures
@@ -178,9 +180,10 @@ async def test_execution_loop_flow():
     # 6. Execution Engine (Mocked)
     # Note: ExecutionEngine class typically imports connectors at top level.
     # We need to patch them.
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConnector, patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
-    ) as MockMarket:
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConnector,
+        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,
+    ):
         mock_conn = MockConnector.return_value
         mock_market = MockMarket.return_value
         mock_market.get_latest_price.return_value = 100.0

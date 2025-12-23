@@ -21,8 +21,9 @@ async def test_indexer_service_methods():
         MockStoreClass.return_value = mock_store
 
         # Mock DB Session
-        with patch("orion.rag.indexer.async_session_factory") as mock_session_factory, patch(
-            "orion.rag.indexer.init_db", new_callable=AsyncMock
+        with (
+            patch("orion.rag.indexer.async_session_factory") as mock_session_factory,
+            patch("orion.rag.indexer.init_db", new_callable=AsyncMock),
         ):
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__.return_value = mock_session

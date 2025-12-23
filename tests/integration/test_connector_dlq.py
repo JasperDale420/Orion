@@ -37,8 +37,9 @@ async def cleanup_dlq():
 
     # Patch the global engine/session factory
     # We must patch before creating tables so models are bound if needed (though Base is unbound)
-    with patch.object(orion.storage.db, "engine", test_engine), patch.object(
-        orion.storage.db, "async_session_factory", test_session_factory
+    with (
+        patch.object(orion.storage.db, "engine", test_engine),
+        patch.object(orion.storage.db, "async_session_factory", test_session_factory),
     ):
         # Create Tables
         async with test_engine.begin() as conn:

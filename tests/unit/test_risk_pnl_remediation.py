@@ -16,14 +16,14 @@ async def test_risk_manager_process_fill_opens_position():
     rm.current_equity = 10000.0
 
     # Buy 10 AAPL @ 100
-    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy")
+    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy", fill_id="pnl_1")
 
     assert "AAPL" in rm.positions
     assert rm.positions["AAPL"]["qty"] == 10.0
     assert rm.positions["AAPL"]["avg_entry"] == 100.0
     assert rm.open_positions == 1
-    assert rm.ticker_exposures["AAPL"] == 1000.0  # 10 * 100
-    assert rm.current_equity == 10000.0  # No PnL yet
+    assert rm.ticker_exposures["AAPL"] == pytest.approx(1000.0)  # 10 * 100
+    assert rm.current_equity == pytest.approx(10000.0)  # No PnL yet
 
 
 @pytest.mark.asyncio
@@ -32,15 +32,17 @@ async def test_risk_manager_process_fill_adds_to_position():
     rm.current_equity = 10000.0
 
     # Buy 10 @ 100
-    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy")
+    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy", fill_id="pnl_2")
 
     # Buy 10 @ 110
-    await rm.process_fill("AAPL", qty=10.0, price=110.0, side="buy")
+    await rm.process_fill("AAPL", qty=10.0, price=110.0, side="buy", fill_id="pnl_3")
 
     # Avg Entry should be (1000 + 1100) / 20 = 105
     assert rm.positions["AAPL"]["qty"] == 20.0
-    assert rm.positions["AAPL"]["avg_entry"] == 105.0
-    assert rm.ticker_exposures["AAPL"] == 2200.0  # 20 * 110 (Mark to Market at fill price? Or just cost?)
+    assert rm.positions["AAPL"]["avg_entry"] == pytest.approx(105.0)
+    assert rm.ticker_exposures["AAPL"] == pytest.approx(
+        2200.0
+    )  # 20 * 110 (Mark to Market at fill price? Or just cost?)
     # Implementation used MTM: 'abs(new_qty * price)'
     # Note: This updates exposure to current price, perfect.
 
@@ -51,15 +53,15 @@ async def test_risk_manager_process_fill_closes_position_profit():
     rm.current_equity = 10000.0
 
     # Long 10 @ 100
-    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy")
+    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy", fill_id="pnl_4")
 
     # Sell 5 @ 120 (Profit 20 * 5 = 100)
-    await rm.process_fill("AAPL", qty=5.0, price=120.0, side="sell")
+    await rm.process_fill("AAPL", qty=5.0, price=120.0, side="sell", fill_id="pnl_5")
 
     assert rm.positions["AAPL"]["qty"] == 5.0
-    assert rm.positions["AAPL"]["avg_entry"] == 100.0  # Unchanged
-    assert rm.current_equity == 10100.0  # +100 Profit
-    assert rm.current_daily_loss == 0.0
+    assert rm.positions["AAPL"]["avg_entry"] == pytest.approx(100.0)  # Unchanged
+    assert rm.current_equity == pytest.approx(10100.0)  # +100 Profit
+    assert rm.current_daily_loss == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -68,13 +70,13 @@ async def test_risk_manager_process_fill_closes_position_loss():
     rm.current_equity = 10000.0
 
     # Long 10 @ 100
-    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy")
+    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy", fill_id="pnl_6")
 
     # Sell 5 @ 80 (Loss 20 * 5 = 100)
-    await rm.process_fill("AAPL", qty=5.0, price=80.0, side="sell")
+    await rm.process_fill("AAPL", qty=5.0, price=80.0, side="sell", fill_id="pnl_7")
 
     assert rm.positions["AAPL"]["qty"] == 5.0
-    assert rm.current_equity == 9900.0  # -100 Loss
+    assert rm.current_equity == pytest.approx(9900.0)  # -100 Loss
 
     # Daily Loss Logic
     # If starting equity undefined, it assumes loss adds up.
@@ -88,7 +90,7 @@ async def test_risk_manager_process_fill_closes_position_loss():
 
     # Since starting_equity was NOT set in init, the fallback logic ran:
     # "if realized_pnl < 0: self.current_daily_loss += abs(realized_pnl)"
-    assert rm.current_daily_loss == 100.0
+    assert rm.current_daily_loss == pytest.approx(100.0)
 
 
 @pytest.mark.asyncio
@@ -97,16 +99,16 @@ async def test_risk_manager_process_fill_short_flip():
     rm.current_equity = 10000.0
 
     # Long 10 @ 100
-    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy")
+    await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy", fill_id="pnl_8")
 
     # Sell 20 @ 110
     # 1. Close 10 @ 110 -> Profit (10*10) = 100.
     # 2. Open Short 10 @ 110.
-    await rm.process_fill("AAPL", qty=20.0, price=110.0, side="sell")
+    await rm.process_fill("AAPL", qty=20.0, price=110.0, side="sell", fill_id="pnl_9")
 
     assert rm.positions["AAPL"]["qty"] == -10.0  # Short 10
-    assert rm.positions["AAPL"]["avg_entry"] == 110.0  # New Entry
-    assert rm.current_equity == 10100.0  # Realized Profit from the closing leg
+    assert rm.positions["AAPL"]["avg_entry"] == pytest.approx(110.0)  # New Entry
+    assert rm.current_equity == pytest.approx(10100.0)  # Realized Profit from the closing leg
     assert rm.open_positions == 1
 
 
@@ -131,7 +133,7 @@ async def test_execution_engine_polling_integration():
 
     mock_connector.get_recent_fills.return_value = [mock_fill]
 
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector") as mock_cls:
+    with patch("orion.execution.execution_engine.AlpacaTradingConnector"):
         # We need to bypass __init__ connecting?
         # Or just assign connector after init.
         # ExecutionEngine tries to init connector if keys exist.
@@ -141,9 +143,10 @@ async def test_execution_engine_polling_integration():
             mock_settings.alpaca_secret_key = "test"
             mock_settings.alpaca_paper = True
 
-            with patch("orion.execution.execution_engine.AlpacaMarketConnector"), patch(
-                "orion.execution.execution_engine.logger"
-            ) as mock_logger:
+            with (
+                patch("orion.execution.execution_engine.AlpacaMarketConnector"),
+                patch("orion.execution.execution_engine.logger") as mock_logger,
+            ):
                 engine = ExecutionEngine()
                 engine.connector = mock_connector
                 engine._persist_fill_record = AsyncMock()
@@ -164,7 +167,9 @@ async def test_execution_engine_polling_integration():
 
                 # Use call_args explicitly to verify types
                 # process_fill(ticker, qty, price, side)
-                engine.risk_manager.process_fill.assert_awaited_once_with("AAPL", 10.0, 150.0, "buy")
+                engine.risk_manager.process_fill.assert_awaited_once_with(
+                    "AAPL", 10.0, 150.0, "buy", fill_id="order_123"
+                )
 
                 # Verify deduplication
                 await engine.poll_fills()

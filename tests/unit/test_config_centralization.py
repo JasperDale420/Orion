@@ -58,7 +58,7 @@ async def test_eod_review_uses_config():
             agent.proposal_builder = MagicMock()
 
             # We mock os.makedirs and open to check paths
-            with patch("os.makedirs") as mock_makedirs, patch("builtins.open", new_callable=MagicMock) as mock_open:
+            with patch("os.makedirs") as mock_makedirs, patch("builtins.open", new_callable=MagicMock):
                 await agent.run_review(target_date=None)
 
                 # Verify makedirs called with correct path

@@ -45,9 +45,7 @@ class ExecutionEngine:
             self.market_connector = AlpacaMarketConnector(api_key=api_key, secret_key=secret_key)
 
             # Sync Risk State
-            # Moved to async initialize() to prevent blocking constructor
             # self.risk_manager.sync_with_broker(self.connector)
-            pass
 
         from collections import deque
 
@@ -104,177 +102,134 @@ class ExecutionEngine:
 
     async def execute_order(self, decision: StrategyDecision, candidate: CandidateTrade):
         if not self.connector:
-            logger.warning(
-                "No connector available. Skipping execution.",
-                extra={"event_type": "EXECUTION_SKIPPED", "reason": "No Connector"},
-            )
+            logger.warning("No connector available. Skipping execution.")
             return
 
         action = decision.decision.upper()
         if action != "EXECUTE":
-            logger.info(
-                f"Decision for {candidate.ticker} was {action}",
-                extra={"event_type": "EXECUTION_SKIPPED", "ticker": candidate.ticker, "action": action},
-            )
+            logger.info(f"Decision for {candidate.ticker} was {action}")
             return
 
-        # --- SYSTEM HEALTH CHECK (Slice H) ---
+        # 1. Pre-Flight Checks (Health, Lag, Shorting)
+        if not await self._pre_flight_checks(decision, candidate):
+            return
+
+        # 2. Price Discovery
+        current_price = self._get_execution_price(decision, candidate)
+        if current_price <= 0:
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Price Fetch Failed"
+            return
+
+        # 3. Sizing & Risk Check
+        side, qty, limit_price = self._calculate_order_params(decision, candidate, current_price)
+        if qty <= 0:
+            return  # Decision updated in helper
+
+        # 4. Check Risk Manager
+        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, str(side)):
+            logger.error(f"Execution BLOCKED by RiskManager for {candidate.ticker}")
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Risk Rejection"
+            return
+
+        # 5. Circuit Breaker
+        if self._check_circuit_breaker():
+            decision.executed_successfully = "FALSE"
+            decision.reason = "High Error Rate"
+            return
+
+        # 6. Execution
+        await self._submit_order(decision, candidate, side, qty, limit_price)
+
+    async def _pre_flight_checks(self, decision: StrategyDecision, candidate: CandidateTrade) -> bool:
+        """System Health, Data Lag, Shorting Checks"""
+        # System Health
         if not await self._check_system_health():
             msg = "EXECUTION BLOCKED: System Status is UNHEALTHY."
-            logger.critical(
-                msg, extra={"event_type": "EXECUTION_BLOCKED", "reason": "System Unhealthy", "ticker": candidate.ticker}
-            )
+            logger.critical(msg, extra={"event_type": "EXECUTION_BLOCKED", "ticker": candidate.ticker})
             decision.executed_successfully = "FALSE"
             decision.execution_log = msg
-            return
-        # ---------------------------
-
-        # --- RISK & SIZING PREP ---
-        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
+            return False
 
         # Shorting Guard
-        current_exposure = self.risk_manager.ticker_exposures.get(candidate.ticker, 0.0)
-        is_short_opening = side == OrderSide.SELL and current_exposure <= 0
+        exposure = self.risk_manager.ticker_exposures.get(candidate.ticker, 0.0)
+        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
+        is_short_opening = side == OrderSide.SELL and exposure <= 0
 
         if is_short_opening and not self.risk_manager.config.enable_shorting:
-            logger.warning(
-                "Execution BLOCKED: Shorting is disabled",
-                extra={"event_type": "EXECUTION_BLOCKED", "reason": "Shorting Disabled", "ticker": candidate.ticker},
-            )
+            logger.warning("Execution BLOCKED: Shorting is disabled")
             decision.executed_successfully = "FALSE"
             decision.reason = "Shorting Disabled"
-            return
+            return False
 
-        # --- DATA LAG CHECK (Slice I) ---
-        from datetime import datetime, timezone
-
+        # Data Lag
         now_utc = datetime.now(timezone.utc)
         cand_ts = (
             candidate.timestamp_utc.replace(tzinfo=timezone.utc)
             if candidate.timestamp_utc.tzinfo is None
             else candidate.timestamp_utc
         )
+        lag = (now_utc - cand_ts).total_seconds()
 
-        lag_seconds = (now_utc - cand_ts).total_seconds()
-
-        if lag_seconds > system_settings.max_data_lag_seconds:
-            msg = f"EXECUTION BLOCKED: Data Lag {lag_seconds:.1f}s > {system_settings.max_data_lag_seconds}s"
-            logger.critical(
-                msg,
-                extra={
-                    "event_type": "EXECUTION_BLOCKED",
-                    "reason": "Data Lag",
-                    "ticker": candidate.ticker,
-                    "lag_seconds": lag_seconds,
-                },
-            )
+        if lag > system_settings.max_data_lag_seconds:
+            logger.critical(f"EXECUTION BLOCKED: Data Lag {lag:.1f}s")
             decision.executed_successfully = "FALSE"
             decision.reason = "Data Lag"
-            return
-        # --------------------------------
+            return False
 
-        # Fetch real-time price
-        current_price = 0.0
+        return True
+
+    def _get_execution_price(self, decision: StrategyDecision, candidate: CandidateTrade) -> float:
         try:
-            # Basic check if market connector works
-            current_price = self.market_connector.get_latest_price(candidate.ticker)
-        except Exception as e:
-            logger.error(
-                "Price fetch failed",
-                extra={"event_type": "PRICE_FETCH_ERROR", "ticker": candidate.ticker, "error": str(e)},
-            )
+            price = self.market_connector.get_latest_price(candidate.ticker)
+            if price > 0:
+                return price
+        except Exception:
+            pass
 
-        if current_price <= 0:
-            # Fallback to execution params limit price if available, or abort
-            ep = decision.execution_params or {}
-            if ep.get("limit_price"):
-                current_price = float(ep["limit_price"])
-            else:
-                logger.error(
-                    "Execution BLOCKED: Could not fetch valid price",
-                    extra={"event_type": "EXECUTION_BLOCKED", "ticker": candidate.ticker, "reason": "Invalid Price"},
-                )
-                decision.executed_successfully = "FALSE"
-                decision.reason = "Price Fetch Failed"
-                return
+        # Fallback
+        ep = decision.execution_params or {}
+        return float(ep.get("limit_price", 0.0))
 
-        # Calculate Position Size via RiskManager
+    def _calculate_order_params(self, decision: StrategyDecision, candidate: CandidateTrade, current_price: float):
+        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
         qty = self.risk_manager.calculate_size(entry_price=current_price)
 
         if qty <= 0:
-            logger.warning(
-                f"Calculated quantity is 0 for {candidate.ticker} @ {current_price}",
-                extra={"event_type": "EXECUTION_SKIPPED", "ticker": candidate.ticker, "reason": "Size 0"},
-            )
+            logger.warning(f"Calculated quantity is 0 for {candidate.ticker}")
             decision.executed_successfully = "SKIPPED"
             decision.reason = "Size 0"
-            return
+            return side, 0.0, 0.0
 
-        estimated_cost = qty * current_price
-
-        # Risk Check
-        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side):
-            logger.error(
-                f"Execution BLOCKED by RiskManager for {candidate.ticker}",
-                extra={
-                    "event_type": "EXECUTION_BLOCKED",
-                    "reason": "RiskManager Rejection",
-                    "ticker": candidate.ticker,
-                },
-            )
-            decision.executed_successfully = "FALSE"
-            decision.reason = "Risk Rejection"
-            return
-        # ------------------
-
-        # --- LIMIT PRICE CALCULATION ---
         entry_buffer_bps = 10
-
         if side == OrderSide.BUY:
             limit_price = current_price * (1 + entry_buffer_bps / 10000.0)
         else:
             limit_price = current_price * (1 - entry_buffer_bps / 10000.0)
 
-        limit_price = round(limit_price, 2)
+        return side, float(qty), round(limit_price, 2)
 
-        # --- EXECUTION HEALTH CHECK ---
+    def _check_circuit_breaker(self) -> bool:
         if len(self.order_history) > 0:
             failures = self.order_history.count(False)
-            total = len(self.order_history)
-            rate = failures / total
+            rate = failures / len(self.order_history)
             if rate > 0.03:
-                msg = f"EXECUTION BLOCKED: Error Rate {rate:.1%} > 3% (Last {total} orders). Halt Trading."
-                logger.critical(msg, extra={"event_type": "CIRCUIT_BREAKER_TRIPPED", "error_rate": rate})
-                decision.executed_successfully = "FALSE"
-                decision.reason = "High Error Rate"
-                return
-        # ----------------------------------------
+                logger.critical(f"EXECUTION BLOCKED: Error Rate {rate:.1%} > 3%")
+                return True
+        return False
 
-        logger.info(
-            f"EXECUTION TRIGGERED: {side} {qty} {candidate.ticker} @ Limit {limit_price}",
-            extra={
-                "event_type": "EXECUTION_TRIGGERED",
-                "ticker": candidate.ticker,
-                "side": str(side),
-                "qty": qty,
-                "limit_price": limit_price,
-            },
-        )
+    async def _submit_order(self, decision, candidate, side, qty, limit_price):
+        logger.info(f"EXECUTION TRIGGERED: {side} {qty} {candidate.ticker} @ {limit_price}")
 
-        # Generate Client Order ID for consistent tracking
         client_order_id = str(uuid.uuid4())
         decision.execution_params = decision.execution_params or {}
         decision.execution_params["client_order_id"] = client_order_id
 
-        # Optimistic Risk Update (Reserve Exposure)
-        # We do this BEFORE submission to prevent race conditions in concurrent checks
+        # Optimistic Risk Update
         if hasattr(self.risk_manager, "update_post_trade"):
             await self.risk_manager.update_post_trade(
-                ticker=candidate.ticker,
-                qty=qty,
-                price=limit_price,  # Use limit price as cost estimate
-                side=candidate.direction,  # LONG/SHORT
-                order_id=client_order_id,
+                ticker=candidate.ticker, qty=qty, price=limit_price, side=candidate.direction, order_id=client_order_id
             )
 
         try:
@@ -296,19 +251,10 @@ class ExecutionEngine:
                 broker_order=order,
                 error_message=None,
             )
-            logger.info(
-                "Execution Successful",
-                extra={
-                    "event_type": "EXECUTION_SUCCESS",
-                    "ticker": candidate.ticker,
-                    "client_order_id": client_order_id,
-                },
-            )
+            logger.info(f"Execution Successful {client_order_id}")
             decision.executed_successfully = "TRUE"
             self._record_result(True)
-
         except Exception as e:
-            # Rollback Pending Exposure on Failure
             if hasattr(self.risk_manager, "remove_pending_order"):
                 self.risk_manager.remove_pending_order(client_order_id)
 
@@ -322,15 +268,7 @@ class ExecutionEngine:
                 broker_order=None,
                 error_message=str(e),
             )
-            logger.error(
-                f"Execution Failed: {e}",
-                extra={
-                    "event_type": "EXECUTION_FAILED",
-                    "ticker": candidate.ticker,
-                    "error_details": str(e),
-                    "error_code": ErrorCode.EXECUTION_FAILED.value,
-                },
-            )
+            logger.error(f"Execution Failed: {e}")
             decision.executed_successfully = "FALSE"
             decision.reason = f"Broker Error: {e}"
             self._record_result(False)
@@ -437,7 +375,7 @@ class ExecutionEngine:
                     price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
                     side = str(fill.side)
 
-                    await self.risk_manager.process_fill(ticker, qty, price, side)
+                    await self.risk_manager.process_fill(ticker, qty, price, side, order_id)
 
                     # Remove Pending Order (avoid double count)
                     client_oid = getattr(fill, "client_order_id", None)

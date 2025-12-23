@@ -23,9 +23,10 @@ async def test_execution_enforces_limit_order(mock_env):
     # Setup
     # Patch TradingConnector in the module (top-level import)
     # Patch MarketConnector in its source (local import)
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockTrading, patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
-    ) as MockMarket:
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
+    ):
         engine = ExecutionEngine()
         engine._check_system_health = AsyncMock(return_value=True)
 
@@ -77,8 +78,9 @@ async def test_execution_enforces_limit_order(mock_env):
 async def test_execution_blocks_shorting(mock_env):
     from orion.execution.execution_engine import ExecutionEngine
 
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector"), patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()
         engine._check_system_health = AsyncMock(return_value=True)
@@ -116,8 +118,9 @@ async def test_execution_allows_closing_short_disabled(mock_env):
     """If we already hold a position (LONG), selling is just closing, not shorting."""
     from orion.execution.execution_engine import ExecutionEngine
 
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector"), patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()
         engine._check_system_health = AsyncMock(return_value=True)

@@ -51,7 +51,7 @@ class SolverRouter:
             try:
                 # PRDv2 §4.1/§11: Gate selection by status='active' (with legacy is_active fallback).
                 stmt = select(Solver).where(
-                    (Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active == True))
+                    (Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active))
                 )
                 result = await session.execute(stmt)
                 active_solvers = result.scalars().all()

@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 import orion.main_ingest as main_app
@@ -9,55 +10,79 @@ import pytest
 async def test_ingest_service_smoke_run():
     """Run the main loop for a short time and ensure it shuts down cleanly."""
 
-    # Mock mocks
-    with patch("orion.main_ingest.RedpandaProducer") as MockProducerCls, patch(
-        "orion.main_ingest.async_session_factory"
-    ) as MockDbFactory, patch("orion.main_ingest.init_db", new_callable=AsyncMock), patch(
-        "orion.core.health_monitor.HealthMonitor"
-    ) as MockHealthMonitorCls, patch(
-        "orion.core.health_monitor.HealthMonitor"
-    ) as MockHealthMonitorCls, patch(
-        "orion.main_ingest.UWFlowConnector"
-    ) as MockUWFlow, patch(
-        "orion.main_ingest.UWDarkPoolConnector"
-    ) as MockUWDark, patch(
-        "orion.main_ingest.UWAlertsConnector"
-    ) as MockUWAlerts, patch(
-        "orion.main_ingest.UniverseManager"
-    ) as MockUniverse, patch(
-        "orion.main_ingest.AlpacaMarketConnector"
-    ) as MockAlpaca, patch(
-        "orion.main_ingest.FeatureEngine"
-    ) as MockFeatureEngine, patch(
-        "orion.main_ingest.RuleEngine"
-    ) as MockRuleEngine, patch(
-        "orion.main_ingest.LakehouseWriter"
-    ) as MockLakehouse, patch(
-        "orion.main_ingest.DeduplicationEngine"
-    ) as MockDeduper, patch(
-        "orion.main_ingest.NormalizationEngine"
-    ) as MockNormalizer, patch(
-        "orion.main_ingest.asyncio.sleep", new_callable=AsyncMock
-    ) as mock_sleep:
-        # Setup Mocks
+    with ExitStack() as stack:
+        # 1. Setup Class/Factory mocks
+        MockProducerCls = stack.enter_context(patch("orion.main_ingest.RedpandaProducer"))
+        stack.enter_context(patch("orion.main_ingest.async_session_factory"))
+        stack.enter_context(patch("orion.main_ingest.init_db", new_callable=AsyncMock))
+        MockHealthMonitorCls = stack.enter_context(patch("orion.core.health_monitor.HealthMonitor"))
+
+        # 2. Setup Connector Mocks
+        MockUWFlow = stack.enter_context(patch("orion.main_ingest.UWFlowConnector"))
+        MockUWDark = stack.enter_context(patch("orion.main_ingest.UWDarkPoolConnector"))
+        MockUWAlerts = stack.enter_context(patch("orion.main_ingest.UWAlertsConnector"))
+        MockUniverse = stack.enter_context(patch("orion.main_ingest.UniverseManager"))
+        stack.enter_context(patch("orion.main_ingest.AlpacaMarketConnector"))
+
+        # 3. Setup Processing/Logic Mocks
+        stack.enter_context(patch("orion.main_ingest.FeatureEngine"))
+        stack.enter_context(patch("orion.main_ingest.RuleEngine"))
+        stack.enter_context(patch("orion.main_ingest.LakehouseWriter"))
+        MockDeduper = stack.enter_context(patch("orion.main_ingest.DeduplicationEngine"))
+        stack.enter_context(patch("orion.main_ingest.NormalizationEngine"))
+
+        # 4. Setup Persistence Mocks (CRITICAL: Must be AsyncMock)
+        stack.enter_context(patch("orion.main_ingest.persist_bronze_events", new_callable=AsyncMock))
+        stack.enter_context(patch("orion.main_ingest.persist_silver_from_bronze", new_callable=AsyncMock))
+        stack.enter_context(patch("orion.main_ingest.persist_silver_signals", new_callable=AsyncMock))
+        stack.enter_context(patch("orion.main_ingest.persist_candidates", new_callable=AsyncMock))
+
+        # 5. Setup Asyncio Sleep
+        stack.enter_context(patch("orion.main_ingest.asyncio.sleep", new_callable=AsyncMock))
+
+        # --- Configure Mocks ---
+
+        # Producer
         mock_producer = MockProducerCls.get_instance.return_value
         mock_producer.start = AsyncMock()
         mock_producer.stop = AsyncMock()
         mock_producer.produce_event = AsyncMock()
+        mock_producer.produce_event.return_value = None
 
-        # Shutdown controller
-        # We start main(), wait 0.5s, then set SHUTDOWN=True
+        # Connectors (Async Polls)
+        # Note: We must ensure the INSTANCES returned by the constructors have async methods
+        MockUWFlow.return_value.poll = AsyncMock(return_value=[])
+        MockUWDark.return_value.fetch_events = AsyncMock(return_value=[])
+        MockUWAlerts.return_value.fetch_events = AsyncMock(return_value=[])
+
+        # Health Monitor
+        MockHealthMonitorCls.return_value.check_lag = AsyncMock()
+        MockHealthMonitorCls.return_value.check_health = AsyncMock()
+        MockHealthMonitorCls.return_value.update_db_status = AsyncMock()
+        MockUWAlerts.return_value.fetch_events = AsyncMock(return_value=[])
+
+        # Universe Manager
+        MockUniverse.return_value.hydrate_from_db = AsyncMock()
+        # Deduplication
+        MockDeduper.return_value.dedupe_batch = AsyncMock(return_value=[])
+
+        # Feature Engine (Sync? Check usage. If sync, MagicMock is fine. If async, need fix)
+        # main_ingest.py: "e.enrichment = feature_engine.process_event(...)" -> Sync.
+        # But wait, "enriched = await feature_engine.process_uw_flow(events)"?
+        # Let's mock it as AsyncMock just in case, or leave as MagicMock if validation says sync.
+        # Previous errors were unrelated.
+
+        # --- Run Test Logic ---
 
         main_app.SHUTDOWN = False
-
         task = asyncio.create_task(main_app.main())
 
-        await asyncio.sleep(0.5)
+        # Allow main loop to tick
+        await asyncio.sleep(0.1)
 
-        # Signal shutdown
+        # Trigger Shutdown
         main_app.SHUTDOWN = True
 
-        # Wait for finish (with timeout)
         try:
             await asyncio.wait_for(task, timeout=2.0)
         except asyncio.TimeoutError:
@@ -73,30 +98,6 @@ async def test_ingest_service_smoke_run():
             if exc:
                 raise exc
 
-        # Verify startup calls
+        # Assertions
         mock_producer.start.assert_called_once()
         mock_producer.stop.assert_called_once()
-
-        # Verify loop ran at least once (by checking a poll call usually, but mocked connector calls)
-        # UW polls?
-        # orion.main_ingest has local instances: uw_flow, uw_dark... wait.
-        # main imports CLASSES but creates instances LOCALLY?
-        # No, main_ingest code:
-        # from orion.connectors.uw_flow_connector import UWFlowConnector
-        # ...
-        # But where are they instantiated?
-        # Ah, looking at Step 6 file content:
-        # It imports classes.
-        # It does NOT instantiate them globally?
-        # Wait, lines 206 "flow_events = uw_flow.poll()"
-        # Where is 'uw_flow' defined?
-        # Missing lines in main_ingest.py view?
-        # "Unexpected" missing lines? I saw "Lines 1-326".
-        # Let's check lines 192 or something.
-        # "(rest of init)"
-        # I only skimmed it.
-        # If they are created in `main`, mocks need to target where they are instantiated.
-        # If they are global, I need to patch globals.
-
-        # Assuming they are instantiated in main() or global variables in module.
-        pass

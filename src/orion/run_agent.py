@@ -39,7 +39,7 @@ async def run_strategist_cycle():
                 stmt = (
                     select(CandidateTrade)
                     .outerjoin(StrategyDecision, CandidateTrade.candidate_id == StrategyDecision.candidate_id)
-                    .where(StrategyDecision.decision_id == None)
+                    .where(StrategyDecision.decision_id is None)
                     .order_by(CandidateTrade.timestamp_utc.desc())
                     .limit(5)
                 )

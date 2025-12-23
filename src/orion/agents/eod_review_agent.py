@@ -225,7 +225,7 @@ class EODReviewAgent(BaseAgent):
         b_total = float(len(b))
         c_total = float(len(c))
         psi = 0.0
-        for bc, cc in zip(b_counts, c_counts):
+        for bc, cc in zip(b_counts, c_counts, strict=False):
             bp = max(bc / b_total, eps)
             cp = max(cc / c_total, eps)
             psi += (cp - bp) * math.log(cp / bp)
@@ -412,9 +412,9 @@ class EODReviewAgent(BaseAgent):
             "fills_count": len(fills),
             "linked_fills_count": len([r for r in slippage_rows if r["linked_order"]]),
             "unlinked_fills_count": len([r for r in slippage_rows if not r["linked_order"]]),
-            "mean_adverse_slippage_bps": (sum(slippage_bps_vals) / len(slippage_bps_vals))
-            if slippage_bps_vals
-            else None,
+            "mean_adverse_slippage_bps": (
+                (sum(slippage_bps_vals) / len(slippage_bps_vals)) if slippage_bps_vals else None
+            ),
             "worst_adverse_slippage_bps": max(slippage_bps_vals) if slippage_bps_vals else None,
         }
 
@@ -439,9 +439,9 @@ class EODReviewAgent(BaseAgent):
             "fills_count": len(baseline_fills),
             "linked_fills_count": len([r for r in baseline_slippage_rows if r["linked_order"]]),
             "unlinked_fills_count": len([r for r in baseline_slippage_rows if not r["linked_order"]]),
-            "mean_adverse_slippage_bps": (sum(baseline_bps_vals) / len(baseline_bps_vals))
-            if baseline_bps_vals
-            else None,
+            "mean_adverse_slippage_bps": (
+                (sum(baseline_bps_vals) / len(baseline_bps_vals)) if baseline_bps_vals else None
+            ),
             "worst_adverse_slippage_bps": max(baseline_bps_vals) if baseline_bps_vals else None,
         }
 

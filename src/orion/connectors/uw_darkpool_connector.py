@@ -108,9 +108,11 @@ class UWDarkPoolConnector:
                         source="UWDarkPoolConnector",
                         payload=item,
                         context="Failed to parse raw event in fetch loop",
-                        source_event_id=str(item.get("id") or item.get("id_"))
-                        if (item.get("id") or item.get("id_")) is not None
-                        else None,
+                        source_event_id=(
+                            str(item.get("id") or item.get("id_"))
+                            if (item.get("id") or item.get("id_")) is not None
+                            else None
+                        ),
                         ticker=item.get("ticker"),
                         event_ts_utc=parse_timestamptz(
                             item.get("executed_at") or item.get("timestamp") or item.get("date"), strict=False

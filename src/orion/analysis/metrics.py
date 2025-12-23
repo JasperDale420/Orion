@@ -97,7 +97,6 @@ def compute_deflated_sharpe_ratio(
     # For V1, let's assume standard deviation of SRs across trials is 0.5 (conservative).
     std_sr_trials = np.sqrt(var_sr) if var_sr else 0.5
 
-    euler_gamma = 0.5772156649
     if n_trials > 1:
         expected_max_sr = std_sr_trials * np.sqrt(2 * np.log(n_trials))
     else:
@@ -132,7 +131,6 @@ def compute_bootstrap_p_value(returns: np.ndarray, n_samples: int = 1000) -> flo
     if len(returns) < 5:
         return 1.0  # Not enough data
 
-    means = []
     # Vectorized bootstrap?
     # For n=1000 and T ~1000, loops might be slow.
     # np.random.choice with (n_samples, len(returns))

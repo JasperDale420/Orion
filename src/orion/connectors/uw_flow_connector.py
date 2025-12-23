@@ -325,9 +325,9 @@ class UWFlowConnector:
                     context="Failed to parse raw event in poll loop",
                     source_event_id=str(raw.get("id")) if raw.get("id") is not None else None,
                     ticker=raw.get("ticker"),
-                    event_ts_utc=parse_timestamptz(raw.get("timestamp"), strict=False)
-                    if raw.get("timestamp")
-                    else None,
+                    event_ts_utc=(
+                        parse_timestamptz(raw.get("timestamp"), strict=False) if raw.get("timestamp") else None
+                    ),
                 )
                 continue
 

@@ -192,9 +192,10 @@ async def test_full_system_flow():
 
     # 6. Step 4: Execution
     # Mock Alpaca
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConn, patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
-    ) as MockMarket:
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConn,
+        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,
+    ):
         mock_conn = MockConn.return_value
         mock_market = MockMarket.return_value
         mock_market.get_latest_price.return_value = 500.0

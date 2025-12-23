@@ -101,9 +101,9 @@ async def test_meta_search_regeneration_flow():
 
 @pytest.mark.asyncio
 async def test_solver_router_live_context():
-    router = SolverRouter()
+    SolverRouter()
 
-    ctx = LiveContext(ticker="TSLA", regime="high_vol", time_of_day_utc=datetime.utcnow(), current_stage="paper")
+    LiveContext(ticker="TSLA", regime="high_vol", time_of_day_utc=datetime.utcnow(), current_stage="paper")
 
     # Needs Solvers in DB
     # ... setup solvers ...

@@ -14,9 +14,10 @@ from orion.storage.models_gold import CandidateTrade
 @pytest.mark.asyncio
 async def test_signal_engine_regime_integration():
     # Real import of SignalEngine but mocking its dependencies through patch
-    with patch("orion.processing.signal_engine.SolverRouter") as MockRouter, patch(
-        "orion.processing.signal_engine.RegimeDetector"
-    ) as MockDetector:
+    with (
+        patch("orion.processing.signal_engine.SolverRouter") as MockRouter,
+        patch("orion.processing.signal_engine.RegimeDetector") as MockDetector,
+    ):
         mock_router = AsyncMock()
         MockRouter.return_value = mock_router
 

@@ -14,14 +14,14 @@ def test_risk_manager_shorting_disabled():
     # Sell 1000 USD
     allowed = rm.check_order("AAPL", 10, 100.0, "SELL")
 
-    assert allowed == False
+    assert allowed is False
 
     # Case 2: Sell to Close Long (Allowed)
     rm.ticker_exposures["AAPL"] = 2000.0  # Long 2000
     rm.positions["AAPL"] = {"qty": 20.0, "avg_entry": 100.0}
     allowed_close = rm.check_order("AAPL", 10, 100.0, "SELL")
 
-    assert allowed_close == True
+    assert allowed_close is True
 
 
 def test_risk_manager_shorting_flip():
@@ -36,7 +36,7 @@ def test_risk_manager_shorting_flip():
     # This flips from Long -> Short. Should be blocked if shorting disabled.
     allowed_flip = rm.check_order("AMD", 100, 10.0, "SELL")  # 100 * 10 = 1000
 
-    assert allowed_flip == False
+    assert allowed_flip is False
 
 
 def test_risk_manager_shorting_enabled():
@@ -48,4 +48,4 @@ def test_risk_manager_shorting_enabled():
 
     # Sell to Open (Net -1000)
     allowed = rm.check_order("NVDA", 10, 100.0, "SELL")
-    assert allowed == True
+    assert allowed is True

@@ -26,7 +26,7 @@ async def test_backtest_engine_solver_config():
     from orion.processing.backtest_engine import BacktestEngine
 
     # Create Solver Config with specific risk
-    sc = SolverConfig(
+    SolverConfig(
         version_id="test_v1",
         # base_strategy_name="test", # Removed
         entry_logic={"rules": []},
@@ -34,7 +34,7 @@ async def test_backtest_engine_solver_config():
         risk=SolverRiskConfig(risk_per_trade_bps=50, max_open_positions=1),
     )
 
-    engine = BacktestEngine()
+    BacktestEngine()
 
     # Mock _simulate to inspect the constructed RiskManager (hard to inspect local var)
     # But we can check if it runs without error
@@ -116,7 +116,6 @@ async def test_solver_router_filtering():
         assert selected is None
 
         # Now try Paper Context
-        paper_context = {"stage": "paper", "ticker": "AAPL"}
         # Configure metrics query result (returns same mock list or tailored mock)
         # We need a metric object that passes rules
         mock_metric = MagicMock()
@@ -173,10 +172,8 @@ def test_meta_search_mutation():
     if edits:
         # Check first edit
         e = edits[0]
-        has_risk_mod = False
         for op in e.ops:
             if op.op == EditOpType.MODIFY_RISK:
-                has_risk_mod = True
                 assert op.param_name == "risk_per_trade_bps"
                 # _mutate_risk logic: current * 1.1 (int)
                 # 100 * 1.1 = 110

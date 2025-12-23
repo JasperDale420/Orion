@@ -49,8 +49,9 @@ async def test_circuit_breaker_blocks_trade():
     from unittest.mock import patch
 
     # 3. Attempt Execution
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector"), patch(
-        "orion.execution.execution_engine.AlpacaMarketConnector"
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()
         # Mock Connector to bypass "No connector" check
@@ -83,14 +84,9 @@ async def test_circuit_breaker_blocks_trade():
 
     # 4. Assert Blocked
     assert decision.executed_successfully == "FALSE"
-    # We don't have execution_log on model, but we might have 'reason' set if we modified code to look at decision attributes.
-    # In my patch I didn't set 'reason' specifically for health check, I set execution_log which fails if model lacks it.
-    # Uh oh. My patch assumed decision has execution_log?
-    # Let me check my patch content.
-    # "decision.execution_log = msg" -> This will fail if model doesn't handle dynamic attributes or if SQLA fails.
-    # SQLA objects accept arbitrary attributes usually? No, depends on mapping.
-    # I should check if decision.executed_successfully is explicitly "FALSE".
-    # And if I can, I'll check logs via pytest caplog.
+    assert decision.executed_successfully == "FALSE"
+    # Note: 'execution_log' might not be available on model if not added in schema.
+    # We rely on 'executed_successfully' being set to "FALSE" by circuit breaker.
 
     print(f"\nSUCCESS: Trade blocked. Status: {decision.executed_successfully}")
 

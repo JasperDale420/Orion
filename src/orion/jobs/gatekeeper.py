@@ -49,7 +49,6 @@ class Gatekeeper:
                     # - If Research -> check 'test' metrics
                     # - If Shadow/Paper/Live -> check 'live' metrics (or shadow replay)
 
-                    target_tag = "test" if solver.stage == "research" else "live"
                     # Shadow might log to 'shadow' tag? Let's assume 'test' for research and 'live' for everything else implies real-time data flow.
                     # But wait, Shadow doesn't trade. It logs 'shadow'?
                     # Let's fallback to checking latest metric of ANY appropriate tag.
@@ -175,9 +174,9 @@ class Gatekeeper:
                             "num_trades": metrics.num_trades,
                             "profit_factor": metrics.profit_factor,
                             "max_dd_pct": metrics.max_dd_pct,
-                            "evaluated_at_utc": metrics.evaluated_at_utc.isoformat()
-                            if metrics.evaluated_at_utc
-                            else None,
+                            "evaluated_at_utc": (
+                                metrics.evaluated_at_utc.isoformat() if metrics.evaluated_at_utc else None
+                            ),
                             "metrics_json": metrics.metrics_json,
                         },
                         status="PENDING",

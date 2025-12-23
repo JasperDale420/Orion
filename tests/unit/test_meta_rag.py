@@ -22,9 +22,11 @@ async def test_meta_search_rag_integration():
     mock_meta_agent.propose_edits.return_value = []  # Return empty to trigger fallback (or just return empty to stop)
 
     # Patch modules
-    with patch("orion.rag.vector_store.VectorStore", return_value=mock_vector_store), patch(
-        "orion.agents.meta_agent.MetaAgent", return_value=mock_meta_agent
-    ), patch("orion.agents.meta_search_agent.async_session_factory") as mock_session_factory:
+    with (
+        patch("orion.rag.vector_store.VectorStore", return_value=mock_vector_store),
+        patch("orion.agents.meta_agent.MetaAgent", return_value=mock_meta_agent),
+        patch("orion.agents.meta_search_agent.async_session_factory") as mock_session_factory,
+    ):
         # Setup Mock DB Session
         mock_session = AsyncMock()
         mock_session_factory.return_value.__aenter__.return_value = mock_session

@@ -14,11 +14,12 @@ async def test_signal_engine_no_v1_fallback():
     It must NOT use legacy confidence-based fallback.
     """
     # Patch dependencies to avoid DB init
-    with patch("orion.processing.signal_engine.SolverRouter") as MockRouter, patch(
-        "orion.processing.signal_engine.RegimeDetector"
-    ) as MockRegime, patch("orion.processing.signal_engine.SolverPipeline") as MockPipeline, patch(
-        "orion.processing.signal_engine.FeatureEngine"
-    ) as MockFeatureEngine:
+    with (
+        patch("orion.processing.signal_engine.SolverRouter") as MockRouter,
+        patch("orion.processing.signal_engine.RegimeDetector") as MockRegime,
+        patch("orion.processing.signal_engine.SolverPipeline"),
+        patch("orion.processing.signal_engine.FeatureEngine") as MockFeatureEngine,
+    ):
         engine = SignalEngine()
 
         # Configure Mocks

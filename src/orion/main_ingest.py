@@ -45,15 +45,9 @@ logger = setup_struct_logger("orion.ingest")
 
 load_dotenv()
 
-# Global flag for shutdown
-SHUTDOWN = False
+# Global flag for EOD tracking
+# SHUTDOWN removed in favor of asyncio.Event in main()
 EOD_TRIGGER_LAST_RUN = None
-
-
-def handle_sigint(signum, frame):
-    global SHUTDOWN
-    logger.info("Shutdown signal received. Stopping ingestion loop...")
-    SHUTDOWN = True
 
 
 from orion.connectors.redpanda_producer import RedpandaProducer
@@ -75,12 +69,12 @@ async def save_events_to_db(events: List[BronzeEvent]):
                 "source": e.source,
                 "source_event_id": getattr(e, "source_event_id", None),
                 "event_type": e.event_type,
-                "event_ts_utc": e.event_ts_utc.isoformat()
-                if hasattr(e.event_ts_utc, "isoformat")
-                else str(e.event_ts_utc),
-                "received_ts_utc": e.received_ts_utc.isoformat()
-                if hasattr(e.received_ts_utc, "isoformat")
-                else str(e.received_ts_utc),
+                "event_ts_utc": (
+                    e.event_ts_utc.isoformat() if hasattr(e.event_ts_utc, "isoformat") else str(e.event_ts_utc)
+                ),
+                "received_ts_utc": (
+                    e.received_ts_utc.isoformat() if hasattr(e.received_ts_utc, "isoformat") else str(e.received_ts_utc)
+                ),
                 "payload": e.payload,
                 "ticker": e.ticker,
                 "trading_date": str(e.trading_date),
@@ -93,24 +87,25 @@ async def save_events_to_db(events: List[BronzeEvent]):
 
             # Robust Produce with internal retries
             await producer.produce_event(topic="orion.events.bronze", key=key, payload=payload_dict)
-        except Exception:
-            pass
-    #         # Fallback to DLQ if Redpanda fails after retries
-    #         logger.error(f"Redpanda Produce Failed (DLQ Fallback): {pe}")
-    #         try:
-    #             await DLQWriter.write_to_dlq(
-    #                 error=pe,
-    #                 event_type="REDPANDA_PRODUCE_FAILED",
-    #                 source="RedpandaProducer",
-    #                 payload=payload_dict,
-    #                 context=f"Failed to produce event_id={e.event_id} to topic=orion.events.bronze",
-    #                 run_id=RUN_ID,
-    #                 event_id=e.event_id,
-    #                 ticker=e.ticker,
-    #                 event_ts_utc=e.event_ts_utc
-    #             )
-    #         except Exception as dlq_err:
-    #             logger.critical(f"FATAL: Redpanda AND DLQ Failed! Data risk for event {e.event_id}: {dlq_err}")
+        except Exception as prod_err:
+            # Fallback to DLQ if Redpanda fails after retries
+            logger.error(f"Redpanda Produce Failed (DLQ Fallback): {prod_err}")
+            try:
+                from orion.shared.dlq_utils import DLQWriter
+
+                await DLQWriter.write_to_dlq(
+                    error=prod_err,
+                    event_type="REDPANDA_PRODUCE_FAILED",
+                    source="RedpandaProducer",
+                    payload=payload_dict,
+                    context=f"Failed to produce event_id={e.event_id} to topic=orion.events.bronze",
+                    run_id=RUN_ID,
+                    event_id=e.event_id,
+                    ticker=e.ticker,
+                    event_ts_utc=e.event_ts_utc,
+                )
+            except Exception as dlq_err:
+                logger.critical(f"FATAL: Redpanda AND DLQ Failed! Data risk for event {e.event_id}: {dlq_err}")
 
     async with async_session_factory() as session:
         try:
@@ -174,9 +169,18 @@ async def save_candidates_to_db(candidates: List[CandidateTrade]):
 
 
 async def main():
-    global SHUTDOWN, EOD_TRIGGER_LAST_RUN
-    signal.signal(signal.SIGINT, handle_sigint)
-    signal.signal(signal.SIGTERM, handle_sigint)
+    global EOD_TRIGGER_LAST_RUN
+
+    # Graceful Shutdown
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler():
+        logger.info("Shutdown signal received. Stopping ingestion loop...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
 
     logger.info("Starting Orion Ingestion Service...")
 
@@ -212,13 +216,13 @@ async def main():
     lakehouse = LakehouseWriter()
 
     # Initialize Calendar
-    xnys = xcals.get_calendar("XNYS")
+    xcals.get_calendar("XNYS")
 
     logger.info("Connectors initialized. Starting polling loop.")
 
     loop_interval = 5.0  # seconds
 
-    while not SHUTDOWN:
+    while not shutdown_event.is_set():
         try:
             start_time = asyncio.get_running_loop().time()
 
@@ -256,11 +260,13 @@ async def main():
                 for e in flow_events + dark_events + alert_events:
                     if not getattr(e, "ingest", None):
                         e.ingest = {
-                            "connector": "uw_flow"
-                            if e.event_type == "UW_FLOW"
-                            else "uw_darkpool"
-                            if e.event_type == "UW_DARKPOOL"
-                            else "uw_alerts",
+                            "connector": (
+                                "uw_flow"
+                                if e.event_type == "UW_FLOW"
+                                else "uw_darkpool"
+                                if e.event_type == "UW_DARKPOOL"
+                                else "uw_alerts"
+                            ),
                             "run_id": RUN_ID,
                             "trace_id": trace_id,
                             "attempt": 1,
@@ -488,7 +494,11 @@ async def main():
             logger.critical(f"HEALTH MONITOR HEARTBEAT FAILURE: {che}")
             await health_monitor.update_db_status(False, str(che))
 
-        await asyncio.sleep(sleep_time)
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
+            break
+        except asyncio.TimeoutError:
+            pass
 
     # Stop Redpanda
     await producer.stop()
