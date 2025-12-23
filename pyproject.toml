@@ -55,7 +55,7 @@ mypy = "^1.7.1"
 types-requests = "^2.31.0.10"
 aiosqlite = "^0.22.0"
 bandit = "^1.7.5"
-detect-secrets = "^1.4.0"
+detect-secrets = "^1.5.0"
 pre-commit = "^3.5.0"
 
 [tool.pytest.ini_options]
