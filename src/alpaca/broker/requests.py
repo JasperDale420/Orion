@@ -10,6 +10,7 @@ from alpaca.broker.enums import (
     AccountType,
     BankAccountType,
     CalendarSubType,
+    CIPProvider,
     DocumentType,
     DriftBandSubType,
     FeePaymentMethod,
@@ -36,6 +37,13 @@ from alpaca.broker.models.accounts import (
     Disclosures,
     Identity,
     TrustedContact,
+)
+from alpaca.broker.models.cip import (
+    CIPDocument,
+    CIPIdentity,
+    CIPKYCInfo,
+    CIPPhoto,
+    CIPWatchlist,
 )
 from alpaca.broker.models.documents import W8BenDocument
 from alpaca.common.enums import Sort, SupportedCurrencies
@@ -463,6 +471,25 @@ class UploadDocumentRequest(NonEmptyRequest):
             raise ValueError("Error please use the UploadW8BenDocument class for uploading W8BEN documents")
 
         return values
+
+
+class UploadCIPInfoRequest(NonEmptyRequest):
+    """
+    Attributes:
+        provider_name (List[CIPProvider]): List of KYC providers this information came from
+        kyc (Optional[CIPKYCInfo]): KYC info for this Account if any
+        document (Optional[CIPDocument]): Any CIP documents uploaded for this Account
+        photo (Optional[CIPPhoto]): Any photos attached for CIP
+        identity (Optional[CIPIdentity]): Any CIP Identity information
+        watchlist (Optional[CIPWatchlist]): Any CIP watchlist information
+    """
+
+    provider_name: List[CIPProvider]
+    kyc: Optional[CIPKYCInfo] = None
+    document: Optional[CIPDocument] = None
+    photo: Optional[CIPPhoto] = None
+    identity: Optional[CIPIdentity] = None
+    watchlist: Optional[CIPWatchlist] = None
 
 
 # ############################## Banking and Transfers ################################# #
