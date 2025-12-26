@@ -46,6 +46,50 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_record)
 
 
+class HumanReadableFormatter(logging.Formatter):
+    """
+    Formatter that outputs human-readable logs for development.
+    Palette's touch: Making logs a joy to read since 2024.
+    """
+
+    COLORS = {
+        "DEBUG": "\033[90m",  # Gray
+        "INFO": "\033[92m",  # Green
+        "WARNING": "\033[93m",  # Yellow
+        "ERROR": "\033[91m",  # Red
+        "CRITICAL": "\033[1;91m",  # Bold Red
+        "RESET": "\033[0m",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = datetime.datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        color = self.COLORS.get(record.levelname, self.COLORS["RESET"])
+        reset = self.COLORS["RESET"]
+
+        # Basic message
+        msg = f"{color}[{ts}] [{record.levelname:<5}] [{record.name}]{reset} {record.getMessage()}"
+
+        # Extras
+        standard_attrs = set(logging.makeLogRecord({}).__dict__.keys())
+        extras = []
+        for k, v in record.__dict__.items():
+            if k in standard_attrs:
+                continue
+            # Skip run_id in dev mode if it's just clutter, but maybe keep it if needed.
+            # Let's keep it but at the end.
+            extras.append(f"{k}={v}")
+
+        if extras:
+            msg += f" \033[90m({', '.join(extras)})\033[0m"
+
+        if record.exc_info:
+            # Nice traceback
+            tb = "".join(traceback.format_exception(*record.exc_info))
+            msg += f"\n{color}{tb}{reset}"
+
+        return msg
+
+
 class _RunIdFilter(logging.Filter):
     def __init__(self, run_id: Optional[str]):
         super().__init__()
@@ -77,7 +121,14 @@ def setup_struct_logger(name: str, level: int = logging.INFO) -> logging.Logger:
         logger.handlers.clear()
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter())
+
+    # Check for human-readable mode
+    log_format = os.getenv("ORION_LOG_FORMAT", "json").lower()
+    if log_format in ("human", "dev", "text"):
+        handler.setFormatter(HumanReadableFormatter())
+    else:
+        handler.setFormatter(JSONFormatter())
+
     logger.addHandler(handler)
     logger.addFilter(_RunIdFilter(run_id))
 
