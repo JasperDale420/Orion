@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import StaticPool
 
+from orion.config import system_settings
+
 _DEFAULT_DB_URL = "postgresql+asyncpg://orion:orion_password@localhost:5432/orion_db"
 DB_URL = os.getenv("DB_URL", _DEFAULT_DB_URL)
 
@@ -20,7 +22,7 @@ def _make_engine(url: str, *, echo: bool) -> AsyncEngine:
     return create_async_engine(url, echo=echo)
 
 
-engine: AsyncEngine = _make_engine(DB_URL, echo=True)
+engine: AsyncEngine = _make_engine(DB_URL, echo=system_settings.db_echo)
 _sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
@@ -34,7 +36,7 @@ def configure_db(db_url: str, *, echo: bool | None = None) -> None:
     Primarily intended for tests to ensure deterministic DB_URL usage.
     """
     global engine, _sessionmaker
-    engine = _make_engine(db_url, echo=bool(echo) if echo is not None else True)
+    engine = _make_engine(db_url, echo=bool(echo) if echo is not None else system_settings.db_echo)
     _sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
