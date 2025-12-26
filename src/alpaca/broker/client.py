@@ -14,6 +14,7 @@ from alpaca.broker.models import (
     Bank,
     BaseModel,
     BatchJournalResponse,
+    CIPInfo,
     Journal,
     Order,
     Portfolio,
@@ -49,6 +50,7 @@ from alpaca.broker.requests import (
     OrderRequest,
     UpdateAccountRequest,
     UpdatePortfolioRequest,
+    UploadCIPInfoRequest,
     UploadDocumentRequest,
 )
 from alpaca.common import RawData
@@ -497,7 +499,7 @@ class BrokerClient(RESTClient):
     def get_cip_data_for_account_by_id(
         self,
         account_id: Union[UUID, str],
-    ) -> None:
+    ) -> Union[CIPInfo, RawData]:
         """
         Get CIP Info for an account.
 
@@ -508,17 +510,37 @@ class BrokerClient(RESTClient):
             CIPInfo: The CIP info for the Account
         """
         account_id = validate_uuid_id_param(account_id)
-        # TODO: can't verify the CIP routes in sandbox they always return 404.
-        #  Need to ask broker team how we'll even test this
-        pass
+
+        response = self.get(f"/accounts/{account_id}/cip")
+
+        if self._use_raw_data:
+            return response
+
+        return CIPInfo(**response)
 
     def upload_cip_data_for_account_by_id(
         self,
         account_id: Union[UUID, str],
-    ):
-        # TODO: can't verify the CIP routes in sandbox they always return 404.
-        #  Need to ask broker team how we'll even test this
-        pass
+        cip_data: UploadCIPInfoRequest,
+    ) -> Union[CIPInfo, RawData]:
+        """
+        Upload CIP Info for an account.
+
+        Args:
+            account_id (Union[UUID, str]): The Account id you wish to upload CIPInfo for
+            cip_data (UploadCIPInfoRequest): The CIP info to upload
+
+        Returns:
+            CIPInfo: The CIP info for the Account
+        """
+        account_id = validate_uuid_id_param(account_id)
+
+        response = self.post(f"/accounts/{account_id}/cip", cip_data.to_request_fields())
+
+        if self._use_raw_data:
+            return response
+
+        return CIPInfo(**response)
 
     # ############################## ACCOUNT ACTIVITIES ################################# #
 
