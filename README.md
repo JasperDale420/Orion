@@ -151,6 +151,7 @@ Configuration is managed via `pydantic-settings` in `src/orion/config.py`. All s
 ## Error Handling & Logging
 
 *   **Structured Logging**: Uses `structlog` (via `orion.shared.logger`) for JSON-formatted logs.
+    *   **Dev Mode**: Set `ORION_LOG_FORMAT=human` for colorized, readable logs during local development.
 *   **Dead Letter Queue (DLQ)**: Failed ingestion events are captured in the `dead_letter_queue` table in Postgres for replay/inspection.
 *   **APIs**: Response errors from Alpaca/UW are logged with backoff/retry via `tenacity`.
 
