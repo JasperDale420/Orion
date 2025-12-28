@@ -1,26 +1,25 @@
 from orion.config import RiskSettings as RiskConfig
-from orion.execution.risk_manager import RiskManager
 
 
-def test_risk_manager_defaults():
-    rm = RiskManager()
+def test_risk_manager_defaults(risk_manager_factory):
+    rm = risk_manager_factory()
     from orion.config import risk_settings
 
     assert rm.config.max_daily_loss == risk_settings.max_daily_loss
     assert rm.check_order("AAPL", 10, 150.0, "buy") is True
 
 
-def test_risk_manager_blocks_excessive_order_size():
+def test_risk_manager_blocks_excessive_order_size(risk_manager_factory):
     config = RiskConfig(max_order_size_usd=5000.0)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # 10 * 600 = 6000 > 5000
     assert rm.check_order("TSLA", 10, 600.0, "buy") is False
 
 
-def test_risk_manager_blocks_daily_loss_limit():
+def test_risk_manager_blocks_daily_loss_limit(risk_manager_factory):
     config = RiskConfig(max_daily_loss=500.0)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # Simulate a loss
     # Simulate a loss
@@ -29,9 +28,9 @@ def test_risk_manager_blocks_daily_loss_limit():
     assert rm.check_order("AMD", 10, 100.0, "buy") is False
 
 
-def test_check_order_max_positions_allow_existing():
+def test_check_order_max_positions_allow_existing(risk_manager_factory):
     config = RiskConfig(max_positions=2)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # Setup: 2 positions exist, one is AAPL
     rm.open_positions = 2
@@ -47,9 +46,9 @@ def test_check_order_max_positions_allow_existing():
     assert rm.check_order("NVDA", 1, 100.0, "BUY") is False
 
 
-def test_check_order_ticker_exposure_limit():
+def test_check_order_ticker_exposure_limit(risk_manager_factory):
     config = RiskConfig(max_ticker_exposure_usd=10000.0)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # Pre-seed exposure
     rm.ticker_exposures = {"AAPL": 8000.0}
@@ -62,9 +61,9 @@ def test_check_order_ticker_exposure_limit():
     assert rm.check_order("AAPL", 30, 100.0, "BUY") is False
 
 
-def test_check_order_max_positions_logic():
+def test_check_order_max_positions_logic(risk_manager_factory):
     config = RiskConfig(max_positions=2)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # 2 positions exist
     rm.ticker_exposures = {"AAPL": 1000, "MSFT": 1000}
@@ -79,9 +78,9 @@ def test_check_order_max_positions_logic():
     assert rm.check_order("AAPL", 1, 100, "BUY") is True
 
 
-def test_risk_manager_blocks_max_positions():
+def test_risk_manager_blocks_max_positions(risk_manager_factory):
     config = RiskConfig(max_positions=2)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     rm.open_positions = 2
     rm.positions["A"] = {"qty": 1}
@@ -89,13 +88,13 @@ def test_risk_manager_blocks_max_positions():
     assert rm.check_order("NVDA", 1, 100.0, "buy") is False
 
 
-def test_check_order_allow_risk_reduction_at_limit():
+def test_check_order_allow_risk_reduction_at_limit(risk_manager_factory):
     """
     If we are already over the exposure limit (e.g. gap up),
     we should be allowed to SELL to reduce risk.
     """
     config = RiskConfig(max_ticker_exposure_usd=10000.0)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # Pre-seed exposure ABOVE limit
     rm.ticker_exposures = {"AAPL": 12000.0}
@@ -110,13 +109,13 @@ def test_check_order_allow_risk_reduction_at_limit():
     assert rm.check_order("AAPL", 10, 100.0, "SELL") is True
 
 
-def test_check_order_flip_long_to_short():
+def test_check_order_flip_long_to_short(risk_manager_factory):
     """
     Test flipping from Net Long to Net Short.
     Start Long 5000. Sell 8000 -> Net Short -3000.
     """
     config = RiskConfig(max_ticker_exposure_usd=10000.0, enable_shorting=True, max_order_size_usd=50000.0)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # Start Long
     rm.ticker_exposures = {"TSLA": 5000.0}
@@ -131,13 +130,13 @@ def test_check_order_flip_long_to_short():
     assert rm.check_order("TSLA", 200, 100.0, "SELL") is False
 
 
-def test_check_order_flip_short_to_long():
+def test_check_order_flip_short_to_long(risk_manager_factory):
     """
     Test flipping from Net Short to Net Long.
     Start Short -5000. Buy 8000 -> Net Long +3000.
     """
     config = RiskConfig(max_ticker_exposure_usd=10000.0, enable_shorting=True, max_order_size_usd=50000.0)
-    rm = RiskManager(config)
+    rm = risk_manager_factory(config)
 
     # Start Short
     rm.ticker_exposures = {"TSLA": -5000.0}

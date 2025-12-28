@@ -12,9 +12,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from orion.storage.db import async_session_factory
-from orion.storage.models import BronzeEvent
-from orion.storage.models_silver import SilverAlpacaBar, SilverSignal
+from orion.storage.db import async_session_factory  # noqa: E402
+from orion.storage.models import BronzeEvent  # noqa: E402
+from orion.storage.models_silver import SilverAlpacaBar, SilverSignal  # noqa: E402
 
 
 async def check_ingestion():

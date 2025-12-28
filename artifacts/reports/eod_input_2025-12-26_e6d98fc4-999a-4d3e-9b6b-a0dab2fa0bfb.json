@@ -1,0 +1,155 @@
+{
+  "date": "2025-12-26",
+  "decisions": {
+    "executed_count": 0,
+    "sample": [],
+    "skipped_count": 0,
+    "total": 0
+  },
+  "dlq": {
+    "sample": [],
+    "total": 0
+  },
+  "drift_metrics": {
+    "backtest_vs_live_deltas": {
+      "available": false,
+      "reason": "Backtest regression outputs are not persisted in a queryable table in this codebase yet."
+    },
+    "degradation_vs_rolling_baseline": {
+      "baseline_realized_pnl_count": 0,
+      "baseline_realized_pnl_sum": null,
+      "today_realized_pnl_count": 0,
+      "today_realized_pnl_sum": null,
+      "window_utc": {
+        "end": "2025-12-26T00:00:00+00:00",
+        "start": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    "execution_slippage": {
+      "mean_adverse_slippage_bps_delta": null,
+      "rolling_baseline": {
+        "fills_count": 0,
+        "linked_fills_count": 0,
+        "mean_adverse_slippage_bps": null,
+        "unlinked_fills_count": 0,
+        "window_utc": {
+          "end": "2025-12-26T00:00:00+00:00",
+          "start": "2025-12-06T00:00:00+00:00"
+        },
+        "worst_adverse_slippage_bps": null
+      },
+      "today": {
+        "fills_count": 0,
+        "linked_fills_count": 0,
+        "mean_adverse_slippage_bps": null,
+        "unlinked_fills_count": 0,
+        "worst_adverse_slippage_bps": null
+      }
+    },
+    "feature_distribution_shift": {
+      "close": {
+        "baseline_n": 70444,
+        "current_n": 0,
+        "psi": null
+      },
+      "flow_count_15m": {
+        "baseline_n": 63629,
+        "current_n": 0,
+        "psi": null
+      },
+      "flow_net_premium_15m": {
+        "baseline_n": 63629,
+        "current_n": 0,
+        "psi": null
+      },
+      "volume": {
+        "baseline_n": 70444,
+        "current_n": 0,
+        "psi": null
+      },
+      "vwap": {
+        "baseline_n": 0,
+        "current_n": 0,
+        "psi": null
+      }
+    }
+  },
+  "errors_incidents": {
+    "dlq_events": {
+      "count": 0
+    },
+    "ingestion": {
+      "sources": {
+        "ALPACA:ALPACA_BAR_1M": {
+          "count": 2122,
+          "lag_max_s": 108008.785477,
+          "lag_p50_s": 102907.80219,
+          "lag_p95_s": 107767.939916,
+          "max_gap_s": 0.724997
+        },
+        "UW:UW_ALERT": {
+          "count": 50,
+          "lag_max_s": 108406.683548,
+          "lag_p50_s": 108057.682587,
+          "lag_p95_s": 108362.683426,
+          "max_gap_s": 5.6e-05
+        },
+        "UW:UW_DARKPOOL": {
+          "count": 95,
+          "lag_max_s": 94690.681633,
+          "lag_p50_s": 94010.680014,
+          "lag_p95_s": 94630.681469,
+          "max_gap_s": 9.5e-05
+        },
+        "UW:UW_FLOW": {
+          "count": 50,
+          "lag_max_s": 108071.844031,
+          "lag_p50_s": 108003.205011,
+          "lag_p95_s": 108063.836018,
+          "max_gap_s": 0.0
+        }
+      }
+    }
+  },
+  "fills": {
+    "sample": [],
+    "total": 0
+  },
+  "orders": {
+    "sample": [],
+    "total": 0
+  },
+  "performance_metrics": {
+    "by_model": {},
+    "by_regime": {},
+    "by_rule": {},
+    "by_session": {},
+    "by_ticker": {}
+  },
+  "regime_summary": {
+    "available": false,
+    "computed": 0,
+    "method": "intraday_realized_vol_1m",
+    "tickers": 0
+  },
+  "run_id": "e6d98fc4-999a-4d3e-9b6b-a0dab2fa0bfb",
+  "signals_live": {
+    "sample": [],
+    "total": 0
+  },
+  "slippage_summary": {
+    "fills_count": 0,
+    "linked_fills_count": 0,
+    "mean_adverse_slippage_bps": null,
+    "unlinked_fills_count": 0,
+    "worst_adverse_slippage_bps": null
+  },
+  "trade_journal": {
+    "sample": [],
+    "total": 0
+  },
+  "window_utc": {
+    "end": "2025-12-27T00:00:00+00:00",
+    "start": "2025-12-26T00:00:00+00:00"
+  }
+}

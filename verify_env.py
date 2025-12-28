@@ -12,6 +12,6 @@ if key:
 else:
     print("UW_API_KEY NOT FOUND in environment.")
 
-from orion.config import system_settings
+from orion.config import system_settings  # noqa: E402
 
 print(f"Config SystemSettings Key: {str(system_settings.uw_api_key)[:4]}...")

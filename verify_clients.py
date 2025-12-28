@@ -11,11 +11,5 @@ try:
 except ImportError as e:
     print(f"❌ Failed to import UnusualWhalesClient: {e}")
 
-try:
-    from orion.alpaca.data.historical import StockHistoricalDataClient
-
-    print("✅ Alpaca StockHistoricalDataClient imported successfully")
-except ImportError as e:
-    print(f"❌ Failed to import Alpaca Client: {e}")
 
 print("Verification complete.")

@@ -40,7 +40,7 @@ class ExecutionEngine:
             self.connector = None
             self.market_connector = None
         else:
-            self.connector = AlpacaTradingConnector(api_key=api_key, secret_key=secret_key, paper=paper)
+            self.connector = AlpacaTradingConnector(settings=system_settings)
             # Use same keys for market data
             self.market_connector = AlpacaMarketConnector(api_key=api_key, secret_key=secret_key)
 
@@ -344,9 +344,6 @@ class ExecutionEngine:
 
         try:
             # Poll for fills in the last X minutes (e.g. 5 mins) to catch anything missed
-            # Efficient implementation would track last_poll_ts
-            from datetime import datetime, timedelta, timezone
-
             # Use last_poll_ts or default to 5 min ago
             now = datetime.now(timezone.utc)
             lookback = getattr(self, "last_fill_poll_ts", now - timedelta(minutes=5))
@@ -358,38 +355,37 @@ class ExecutionEngine:
             if fills:
                 logger.info(f"Found {len(fills)} new fills during polling.")
                 for fill in fills:
-                    # Fill object has: symbol, qty, filled_avg_price, side?
-                    # Alpaca Order object: symbol, filled_qty, filled_avg_price, side.
-                    # We need to guard against processing the same fill twice?
-                    # RiskManager.process_fill updates state. Double counting is BAD.
-                    # We need to deduplicate based on Order ID or Client Order ID.
-                    # RiskManager doesn't track Order IDs yet.
-                    # We should track processed_order_ids in ExecutionEngine or RiskManager.
-
-                    order_id = str(fill.id)
-                    if await self._is_fill_processed(order_id):
-                        continue
-
-                    ticker = fill.symbol
-                    qty = float(fill.filled_qty)
-                    price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
-                    side = str(fill.side)
-
-                    await self.risk_manager.process_fill(ticker, qty, price, side, order_id)
-
-                    # Remove Pending Order (avoid double count)
-                    client_oid = getattr(fill, "client_order_id", None)
-                    if client_oid and hasattr(self.risk_manager, "remove_pending_order"):
-                        self.risk_manager.remove_pending_order(client_oid)
-
-                    await self._mark_fill_processed(order_id, client_oid, ticker, qty)
-                    await self._persist_fill_record(fill)
+                    await self._process_single_fill(fill)
 
             self.last_fill_poll_ts = now
             await self._maybe_snapshot_positions()
 
         except Exception as e:
             logger.error(f"Failed to poll fills: {e}")
+
+    async def _process_single_fill(self, fill: Any) -> None:
+        """Processes a single fill event, updating risk state and persisting."""
+        try:
+            order_id = str(fill.id)
+            if await self._is_fill_processed(order_id):
+                return
+
+            ticker = fill.symbol
+            qty = float(fill.filled_qty)
+            price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
+            side = str(fill.side)
+
+            await self.risk_manager.process_fill(ticker, qty, price, side, fill_id=order_id)
+
+            # Remove Pending Order (avoid double count)
+            client_oid = getattr(fill, "client_order_id", None)
+            if client_oid and hasattr(self.risk_manager, "remove_pending_order"):
+                self.risk_manager.remove_pending_order(client_oid)
+
+            await self._mark_fill_processed(order_id, client_oid, ticker, qty)
+            await self._persist_fill_record(fill)
+        except Exception as e:
+            logger.error(f"Failed to process fill {getattr(fill, 'id', 'unknown')}: {e}")
 
     async def _maybe_snapshot_positions(self, min_interval_seconds: int = 60) -> None:
         """
@@ -420,40 +416,11 @@ class ExecutionEngine:
         try:
             from orion.storage.models_execution import PositionSnapshot
 
-            rows: list[PositionSnapshot] = []
+            rows = []
             for p in positions:
-                symbol = getattr(p, "symbol", None)
-                if not symbol:
-                    continue
-
-                def _maybe_float(v):
-                    try:
-                        return float(v) if v is not None else None
-                    except Exception:
-                        return None
-
-                qty = _maybe_float(getattr(p, "qty", None)) or 0.0
-                avg_entry = _maybe_float(getattr(p, "avg_entry_price", None))
-                market_value = _maybe_float(getattr(p, "market_value", None))
-                unrealized_pl = _maybe_float(getattr(p, "unrealized_pl", None))
-
-                if hasattr(p, "model_dump"):
-                    raw = p.model_dump(mode="json")
-                else:
-                    raw = getattr(p, "__dict__", None) or {"repr": repr(p)}
-
-                rows.append(
-                    PositionSnapshot(
-                        id=str(uuid.uuid4()),
-                        snapshot_ts_utc=now,
-                        ticker=str(symbol),
-                        qty=float(qty),
-                        avg_entry_price=avg_entry,
-                        market_value=market_value,
-                        unrealized_pl=unrealized_pl,
-                        raw_json=raw,
-                    )
-                )
+                snapshot = self._create_position_snapshot(p, now, PositionSnapshot)
+                if snapshot:
+                    rows.append(snapshot)
 
             async with async_session_factory() as session:
                 session.add_all(rows)
@@ -466,6 +433,39 @@ class ExecutionEngine:
                 "Failed to persist positions snapshot",
                 extra={"event_type": "POSITIONS_SNAPSHOT_PERSIST_ERROR", "error": str(e)},
             )
+
+    def _create_position_snapshot(self, p: Any, now: datetime, model_class: Any) -> Any | None:
+        """Helper to create a PositionSnapshot model from an Alpaca position."""
+        symbol = getattr(p, "symbol", None)
+        if not symbol:
+            return None
+
+        def _maybe_float(v):
+            try:
+                return float(v) if v is not None else None
+            except Exception:
+                return None
+
+        qty = _maybe_float(getattr(p, "qty", None)) or 0.0
+        avg_entry = _maybe_float(getattr(p, "avg_entry_price", None))
+        market_value = _maybe_float(getattr(p, "market_value", None))
+        unrealized_pl = _maybe_float(getattr(p, "unrealized_pl", None))
+
+        if hasattr(p, "model_dump"):
+            raw = p.model_dump(mode="json")
+        else:
+            raw = getattr(p, "__dict__", None) or {"repr": repr(p)}
+
+        return model_class(
+            id=str(uuid.uuid4()),
+            snapshot_ts_utc=now,
+            ticker=str(symbol),
+            qty=float(qty),
+            avg_entry_price=avg_entry,
+            market_value=market_value,
+            unrealized_pl=unrealized_pl,
+            raw_json=raw,
+        )
 
     async def _is_fill_processed(self, order_id: str) -> bool:
         from orion.storage.models_risk import ProcessedFill

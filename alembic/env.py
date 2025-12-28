@@ -20,12 +20,12 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-import os
-import sys
+import os  # noqa: E402
+import sys  # noqa: E402
 
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
-from orion.storage.models import Base
+from orion.storage.models import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

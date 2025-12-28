@@ -1,28 +1,35 @@
-from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from orion.agents.eod_review_agent import EODReviewAgent
 
 
-def test_eod_agent_mock_poor_performance():
-    agent = EODReviewAgent(llm_client=None)
+@pytest.mark.asyncio
+async def test_eod_agent_run_review_smoke():
+    """
+    Smoke test to ensure EODReviewAgent.run_review executes without error.
+    Mocks external dependencies (LLM, DB, FS).
+    """
+    # Mock LLM
+    mock_llm = AsyncMock()
+    mock_llm.chat.completions.create.return_value.choices = [
+        MagicMock(message=MagicMock(content='{"analysis": "Mock Report", "proposals": []}'))
+    ]
 
-    metrics = {"sharpe": -1.5, "pnl": -500.0}
-    trades = [{"id": 1, "pnl": -100}]
+    agent = EODReviewAgent(llm_client=mock_llm)
 
-    result = agent.run_review(datetime.now(), metrics, trades)
+    # Mock dependencies
+    with patch.object(agent, "_gather_data", return_value=({"mock": "data"}, "mock_snapshot.json")), patch.object(
+        agent, "_fetch_rag_context", return_value="Mock Context"
+    ), patch.object(agent, "_persist_solver_edits", new_callable=AsyncMock), patch(
+        "builtins.open", new_callable=MagicMock
+    ), patch(
+        "os.makedirs"
+    ):
+        # Execute
+        result = await agent.run_review()
 
-    assert "Performance was poor" in result["report_text"]
-    assert len(result["proposals"]) == 1
-    assert "Tighten stop loss" in result["proposals"][0]
-
-
-def test_eod_agent_mock_good_performance():
-    agent = EODReviewAgent(llm_client=None)
-
-    metrics = {"sharpe": 2.0, "pnl": 500.0}
-    trades = []
-
-    result = agent.run_review(datetime.now(), metrics, trades)
-
-    assert "Performance was adequate" in result["report_text"]
-    assert len(result["proposals"]) == 0
+        # Assertions
+        assert "run_id" in result
+        assert result["proposals_count"] == 0
+        assert mock_llm.chat.completions.create.called

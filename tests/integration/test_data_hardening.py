@@ -58,7 +58,7 @@ async def test_pagination_logic():
     ]
     batch_2 = [
         CandidateTrade(
-            candidate_id=f"c_{5000+i}",
+            candidate_id=f"c_{5000 + i}",
             ticker="AAPL",
             timestamp_utc=datetime.utcnow(),
             rule_id="rule1",

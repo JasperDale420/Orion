@@ -61,9 +61,9 @@ def upgrade() -> None:
     # - features_window → gold_feature_windows
     # Use SQL views for compatibility; safe for sqlite/postgres.
     if insp.has_table("gold_feature_events"):
-        op.execute(sa.text("CREATE VIEW IF NOT EXISTS features_event AS " "SELECT * FROM gold_feature_events"))
+        op.execute(sa.text("CREATE VIEW IF NOT EXISTS features_event AS SELECT * FROM gold_feature_events"))
     if insp.has_table("gold_feature_windows"):
-        op.execute(sa.text("CREATE VIEW IF NOT EXISTS features_window AS " "SELECT * FROM gold_feature_windows"))
+        op.execute(sa.text("CREATE VIEW IF NOT EXISTS features_window AS SELECT * FROM gold_feature_windows"))
 
 
 def downgrade() -> None:

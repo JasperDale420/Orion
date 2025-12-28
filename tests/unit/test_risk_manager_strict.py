@@ -1,5 +1,4 @@
 from orion.config import RiskSettings
-from orion.execution.risk_manager import RiskManager
 
 
 def get_strict_config():
@@ -12,16 +11,16 @@ def get_strict_config():
     )
 
 
-def test_risk_blocks_short_when_disabled():
-    rm = RiskManager(config=get_strict_config())
+def test_risk_blocks_short_when_disabled(risk_manager_factory):
+    rm = risk_manager_factory(config=get_strict_config())
 
     # 1. Try to Sell SPY (Current Exposure = 0) -> Should Block
     allowed = rm.check_order("SPY", 10, 400.0, "sell")
     assert allowed is False, "Should block short opening"
 
 
-def test_risk_allows_closing_long():
-    rm = RiskManager(config=get_strict_config())
+def test_risk_allows_closing_long(risk_manager_factory):
+    rm = risk_manager_factory(config=get_strict_config())
 
     # Simulate holding SPY
     rm.ticker_exposures["SPY"] = 4000.0
@@ -32,10 +31,10 @@ def test_risk_allows_closing_long():
     assert allowed is True, "Should allow closing long"
 
 
-def test_risk_allows_short_when_enabled():
+def test_risk_allows_short_when_enabled(risk_manager_factory):
     cfg = get_strict_config()
     cfg.enable_shorting = True
-    rm = RiskManager(config=cfg)
+    rm = risk_manager_factory(config=cfg)
 
     # 3. Try to Sell SPY (Exposure 0) -> Should Allow
     allowed = rm.check_order("SPY", 10, 400.0, "sell")

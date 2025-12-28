@@ -550,9 +550,12 @@ class FeatureEngine:
 
         # PERSISTENCE
         try:
-            await self.persist_features(ticker, ts, features, feature_set_id)
+            # Background persistence to avoid blocking compute loop
+            import asyncio
+
+            asyncio.create_task(self.persist_features(ticker, ts, features, feature_set_id))
         except Exception as e:
-            logger.warning(f"Persistence in compute failed: {e}")
+            logger.warning(f"Persistence task creation failed: {e}")
 
         return features
 

@@ -1,7 +1,7 @@
 import asyncio
 import os
 import signal
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 import exchange_calendars as xcals
@@ -218,20 +218,77 @@ async def main():
     # Initialize Calendar
     xcals.get_calendar("XNYS")
 
+    # Timezone for Market Hours logic (ET)
+    import pytz
+
+    eastern = pytz.timezone("America/New_York")
+
     logger.info("Connectors initialized. Starting polling loop.")
 
-    loop_interval = 5.0  # seconds
+    # USER REQUEST: Expand polling time to every 5 minutes (300 seconds)
+    loop_interval = 300.0  # seconds
 
     while not shutdown_event.is_set():
         try:
             start_time = asyncio.get_running_loop().time()
+            all_events = []
+            trace_id = str(uuid.uuid4())
+
+            # --- Overnight Sleep Logic ---
+            # Active Window: Mon-Fri, 04:00 ET to 20:00 ET.
+            now_utc = datetime.now(timezone.utc)
+            now_et = now_utc.astimezone(eastern)
+
+            # Check if we are in active hours
+            is_weekday = now_et.weekday() < 5  # 0=Mon, 4=Fri
+            is_active_time = 4 <= now_et.hour < 20
+
+            if not (is_weekday and is_active_time):
+                # Calculate sleep duration until next 04:00 ET
+                # If it's a weekday but after 20:00, next wake is tomorrow 04:00.
+                # If it's Friday after 20:00 or Sat/Sun, next wake is Monday 04:00.
+
+                # Start with next day 4am
+                next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+                # If we are currently before 4am on a weekday, safe to just wait until today 4am?
+                # Actually, if now_et.hour < 4 and it is a weekday, we just need to wait until today 4am.
+                if is_weekday and now_et.hour < 4:
+                    next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
+
+                # Adjust for weekend
+                # If next_wake is Sat (5) -> add 2 days -> Mon (0)
+                # If next_wake is Sun (6) -> add 1 day -> Mon (0)
+                while next_wake.weekday() >= 5:
+                    next_wake += timedelta(days=1)
+
+                sleep_seconds = (next_wake - now_et).total_seconds()
+
+                # Safety clamp: Ensure we don't sleep negative or crazy amounts,
+                # though logic above should cover it.
+                if sleep_seconds > 0:
+                    logger.info(
+                        f"Outside active hours (04:00-20:00 ET). Sleeping until {next_wake} ET ({sleep_seconds / 3600:.1f} hours).",
+                        extra={"event_type": "SLEEP_OVERNIGHT", "next_wake_et": next_wake.isoformat()},
+                    )
+
+                    # We await in chunks to allow for shutdown signals
+                    chunk = 60.0  # Check shutdown every minute
+                    while sleep_seconds > 0 and not shutdown_event.is_set():
+                        wait = min(chunk, sleep_seconds)
+                        await asyncio.sleep(wait)
+                        sleep_seconds -= wait
+                        health_monitor.update_heartbeat()  # Keep heartbeat alive so we don't look dead
+
+                    if shutdown_event.is_set():
+                        break
+
+                    # Refresh start_time after waking up so we don't calc weird elapsed times
+                    # Continue to start of loop
+                    continue
 
             # Update Heartbeat
             health_monitor.update_heartbeat()
-
-            all_events = []
-
-            trace_id = str(uuid.uuid4())
 
             # 1. Poll UW
             try:
@@ -314,7 +371,6 @@ async def main():
                 async with async_session_factory() as session:
                     deduper = DeduplicationEngine(session)
                     normalized_events = []
-                    from datetime import timezone
 
                     from orion.core.timekeeping import derive_trading_date_and_session
 

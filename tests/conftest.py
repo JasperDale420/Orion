@@ -22,8 +22,8 @@ if str(SRC_ROOT) not in sys.path:
 # --- 2. Import-Time Mocking ---
 # Global mock for pandas_ta (missing dep)
 try:
-    pass
-except Exception:
+    import pandas_ta  # noqa: F401
+except ImportError:
     sys.modules["pandas_ta"] = MagicMock()
 
 import asyncio
@@ -102,3 +102,14 @@ async def setup_test_db(monkeypatch):
     # Restore (mostly to be polite, though strictly not needed in a test process)
     if old_engine:
         monkeypatch.setattr(db, "engine", old_engine)
+
+
+@pytest.fixture
+def risk_manager_factory():
+    """Factory fixture to create RiskManager instances with custom config."""
+    from orion.execution.risk_manager import RiskManager
+
+    def _create(config=None):
+        return RiskManager(config=config)
+
+    return _create

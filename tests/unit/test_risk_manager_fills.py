@@ -1,10 +1,9 @@
 import pytest
-from orion.execution.risk_manager import RiskManager
 
 
 @pytest.mark.asyncio
-async def test_process_fill_long_profit():
-    rm = RiskManager()
+async def test_process_fill_long_profit(risk_manager_factory):
+    rm = risk_manager_factory()
     rm.current_equity = 10000.0
     rm.current_daily_loss = 0.0
 
@@ -25,8 +24,8 @@ async def test_process_fill_long_profit():
 
 
 @pytest.mark.asyncio
-async def test_process_fill_long_loss():
-    rm = RiskManager()
+async def test_process_fill_long_loss(risk_manager_factory):
+    rm = risk_manager_factory()
     rm.current_equity = 10000.0
     rm.current_daily_loss = 0.0
 
@@ -41,8 +40,8 @@ async def test_process_fill_long_loss():
 
 
 @pytest.mark.asyncio
-async def test_process_fill_short_profit():
-    rm = RiskManager()
+async def test_process_fill_short_profit(risk_manager_factory):
+    rm = risk_manager_factory()
     rm.current_equity = 10000.0
 
     # Short 10 @ 100 (Sell to open)
@@ -60,8 +59,8 @@ async def test_process_fill_short_profit():
 
 
 @pytest.mark.asyncio
-async def test_process_fill_flip():
-    rm = RiskManager()
+async def test_process_fill_flip(risk_manager_factory):
+    rm = risk_manager_factory()
     rm.current_equity = 10000.0
 
     # Long 10 @ 100
@@ -79,8 +78,8 @@ async def test_process_fill_flip():
 
 
 @pytest.mark.asyncio
-async def test_process_fill_averaging_up():
-    rm = RiskManager()
+async def test_process_fill_averaging_up(risk_manager_factory):
+    rm = risk_manager_factory()
 
     # Buy 10 @ 100
     await rm.process_fill("AAPL", 10, 100.0, "buy", fill_id="mock_9")
