@@ -508,9 +508,35 @@ class CreateACHRelationshipRequest(NonEmptyRequest):
 
     account_owner_name: str
     bank_account_type: BankAccountType
-    bank_account_number: str  # TODO: Validate bank account number format.
-    bank_routing_number: str  # TODO: Validate bank routing number format.
+    bank_account_number: str
+    bank_routing_number: str
     nickname: Optional[str] = None
+
+    @field_validator("bank_account_number")
+    def validate_bank_account_number(cls, value: str) -> str:
+        """
+        Validates that the bank account number is numeric and has a length between 4 and 17 digits.
+        """
+        if not value.isdigit():
+            raise ValueError("Bank account number must be numeric.")
+
+        if not (4 <= len(value) <= 17):
+            raise ValueError("Bank account number must be between 4 and 17 digits.")
+
+        return value
+
+    @field_validator("bank_routing_number")
+    def validate_bank_routing_number(cls, value: str) -> str:
+        """
+        Validates that the bank routing number is numeric and has exactly 9 digits.
+        """
+        if not value.isdigit():
+            raise ValueError("Bank routing number must be numeric.")
+
+        if len(value) != 9:
+            raise ValueError("Bank routing number must be 9 digits.")
+
+        return value
 
 
 class CreatePlaidRelationshipRequest(NonEmptyRequest):
