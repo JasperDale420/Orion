@@ -88,7 +88,9 @@ class LakehouseWriter:
 
         # Let's group by date to be safe
         # Ensure event_ts_utc is datetime
-        df["date"] = df["event_ts_utc"].apply(lambda x: x.strftime("%Y-%m-%d"))
+        # OPTIMIZATION: Use vectorized .dt.date.astype(str) instead of .apply(strftime)
+        # This is approx 4-5x faster for large datasets.
+        df["date"] = df["event_ts_utc"].dt.date.astype(str)
 
         for date_str, group_df in df.groupby("date"):
             # Construct path
