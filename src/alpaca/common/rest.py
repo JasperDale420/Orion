@@ -5,7 +5,7 @@ from collections import defaultdict
 from itertools import chain
 from typing import Any, Dict, Iterator, List, Optional, Type, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from requests import Session
 from requests.exceptions import HTTPError
 
@@ -270,24 +270,26 @@ class RESTClient(ABC):
         """
         return self._request("DELETE", path, data)
 
-    # TODO: Refactor to be able to handle both parsing to types and parsing to collections of types (parse_as_obj)
-    def response_wrapper(self, model: Type[BaseModel], raw_data: RawData, **kwargs) -> Union[BaseModel, RawData]:
+    def response_wrapper(self, model: Any, raw_data: RawData, **kwargs) -> Union[BaseModel, List[BaseModel], RawData]:
         """To allow the user to get raw response from the api, we wrap all
         functions with this method, checking if the user has set raw_data
         bool. if they didn't, we wrap the response with a BaseModel object.
 
         Args:
-            model (Type[BaseModel]): Class that response will be wrapped in
+            model (Any): Class that response will be wrapped in. Can be a Type[BaseModel] or a List[Type[BaseModel]]
             raw_data (RawData): The raw data from API in dictionary
             kwargs : Any constructor parameters necessary for the base model
 
         Returns:
-            Union[BaseModel, RawData]: either raw or parsed data
+            Union[BaseModel, List[BaseModel], RawData]: either raw or parsed data
         """
         if self._use_raw_data:
             return raw_data
-        else:
-            return model(raw_data=raw_data, **kwargs)
+
+        if kwargs and isinstance(raw_data, dict):
+            raw_data = {**raw_data, **kwargs}
+
+        return TypeAdapter(model).validate_python(raw_data)
 
     @staticmethod
     def _validate_pagination(
