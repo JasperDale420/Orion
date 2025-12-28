@@ -207,7 +207,7 @@ class TradingClient(RESTClient):
 
         return TypeAdapter(List[CancelOrderResponse]).validate_python(response)
 
-    def cancel_order_by_id(self, order_id: Union[UUID, str]) -> None:
+    def cancel_order_by_id(self, order_id: Union[UUID, str]) -> Union[CancelOrderResponse, RawData]:
         """
         Cancels a specific order by its order id.
 
@@ -215,13 +215,16 @@ class TradingClient(RESTClient):
             order_id (Union[UUID, str]): The unique uuid identifier of the order being cancelled.
 
         Returns:
-            None
+            CancelOrderResponse: The cancel status of the order.
         """
         order_id = validate_uuid_id_param(order_id, "order_id")
 
-        # TODO: Should ideally return some information about the order's cancel status. (Issue #78).
-        # TODO: Currently no way to retrieve status details for empty responses with base REST implementation
-        self.delete(f"/orders/{order_id}")
+        response = self.delete(f"/orders/{order_id}", return_response=True)
+
+        if self._use_raw_data:
+            return response
+
+        return CancelOrderResponse(id=order_id, status=response.status_code)
 
     # ############################## POSITIONS ################################# #
 

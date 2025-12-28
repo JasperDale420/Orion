@@ -88,6 +88,7 @@ class RESTClient(ABC):
         data: Optional[Union[dict, str]] = None,
         base_url: Optional[Union[BaseURL, str]] = None,
         api_version: Optional[str] = None,
+        return_response: bool = False,
     ) -> HTTPResult:
         """Prepares and submits HTTP requests to given API endpoint and returns response.
         Handles retrying if 429 (Rate Limit) error arises.
@@ -99,6 +100,7 @@ class RESTClient(ABC):
              of values to be converted to appropriate format based on `method`. Defaults to None.
             base_url (Optional[Union[BaseURL, str]]): The base URL of the API. Defaults to None.
             api_version (Optional[str]): The API version. Defaults to None.
+            return_response (bool): Whether to return the requests.Response object. Defaults to False.
 
         Returns:
             HTTPResult: The response from the API
@@ -127,7 +129,7 @@ class RESTClient(ABC):
 
         while retry >= 0:
             try:
-                return self._one_request(method, url, opts, retry)
+                return self._one_request(method, url, opts, retry, return_response=return_response)
             except RetryException:
                 time.sleep(self._retry_wait)
                 retry -= 1
@@ -170,7 +172,7 @@ class RESTClient(ABC):
 
         return headers
 
-    def _one_request(self, method: str, url: str, opts: dict, retry: int) -> dict:
+    def _one_request(self, method: str, url: str, opts: dict, retry: int, return_response: bool = False) -> dict:
         """Perform one request, possibly raising RetryException in the case
         the response is 429. Otherwise, if error text contain "code" string,
         then it decodes to json object and returns APIError.
@@ -181,6 +183,7 @@ class RESTClient(ABC):
             url (str): The API endpoint URL
             opts (dict): Contains optional parameters including headers and parameters
             retry (int): The number of times to retry in case of RetryException
+            return_response (bool): Whether to return the requests.Response object. Defaults to False.
 
         Raises:
             RetryException: Raised if request produces 429 error and retry limit has not been reached
@@ -202,6 +205,9 @@ class RESTClient(ABC):
             error = response.text
 
             raise APIError(error, http_error)
+
+        if return_response:
+            return response
 
         if response.text != "":
             return response.json()
@@ -258,17 +264,18 @@ class RESTClient(ABC):
         """
         return self._request("PATCH", path, data)
 
-    def delete(self, path, data: Optional[Union[dict, str]] = None) -> dict:
+    def delete(self, path, data: Optional[Union[dict, str]] = None, return_response: bool = False) -> dict:
         """Performs a single DELETE request
 
         Args:
             path (str): The API endpoint path
             data (Union[dict, str], optional): The payload if any. Defaults to None.
+            return_response (bool): Whether to return the requests.Response object. Defaults to False.
 
         Returns:
             dict: The response
         """
-        return self._request("DELETE", path, data)
+        return self._request("DELETE", path, data, return_response=return_response)
 
     # TODO: Refactor to be able to handle both parsing to types and parsing to collections of types (parse_as_obj)
     def response_wrapper(self, model: Type[BaseModel], raw_data: RawData, **kwargs) -> Union[BaseModel, RawData]:
