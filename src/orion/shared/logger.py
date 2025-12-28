@@ -46,6 +46,40 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_record)
 
 
+class HumanFormatter(logging.Formatter):
+    """
+    Formatter that outputs human-readable strings for development.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = datetime.datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
+        level = record.levelname
+        service = record.name
+        message = record.getMessage()
+
+        # Build basic log line
+        log_line = f"[{ts}] [{level}] [{service}] {message}"
+
+        # Add extras
+        standard_attrs = set(logging.makeLogRecord({}).__dict__.keys())
+        extras = []
+        for k, v in record.__dict__.items():
+            if k in standard_attrs:
+                continue
+            # Skip internal or redundant keys if needed, for now print all
+            extras.append(f"{k}={v}")
+
+        if extras:
+            log_line += " | " + " ".join(extras)
+
+        # Add exception info if present
+        if record.exc_info:
+            exc_text = self.formatException(record.exc_info)
+            log_line += f"\n{exc_text}"
+
+        return log_line
+
+
 class _RunIdFilter(logging.Filter):
     def __init__(self, run_id: Optional[str]):
         super().__init__()
@@ -77,7 +111,14 @@ def setup_struct_logger(name: str, level: int = logging.INFO) -> logging.Logger:
         logger.handlers.clear()
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter())
+
+    # Check for human readable format preference
+    log_format = os.getenv("ORION_LOG_FORMAT", "").lower()
+    if log_format in ("human", "dev", "text"):
+        handler.setFormatter(HumanFormatter())
+    else:
+        handler.setFormatter(JSONFormatter())
+
     logger.addHandler(handler)
     logger.addFilter(_RunIdFilter(run_id))
 
