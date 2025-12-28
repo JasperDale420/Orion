@@ -35,6 +35,7 @@ class SystemSettings(BaseSettings):
     orion_stage: str = Field(default="paper", validation_alias="ORION_STAGE")
     artifacts_dir: str = Field(default="artifacts", validation_alias="ORION_ARTIFACTS_DIR")
     baseline_solver_id: Optional[str] = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
+    db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
 
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
