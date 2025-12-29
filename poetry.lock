@@ -298,6 +298,26 @@ typing-extensions = ">=4.12"
 tz = ["tzdata"]
 
 [[package]]
+name = "alpaca-py"
+version = "0.32.0"
+description = "The Official Python SDK for Alpaca APIs"
+optional = false
+python-versions = "<4.0.0,>=3.8.0"
+groups = ["main"]
+files = [
+    {file = "alpaca_py-0.32.0-py3-none-any.whl", hash = "sha256:1fe954141a38cc846df2356da44d2458d2dfc30b91318064dd1eea84fbf05805"},
+    {file = "alpaca_py-0.32.0.tar.gz", hash = "sha256:712a76138d0ba138ddf5ad88f51d93d2823f2b1e7fd522005bdc3077f79a4697"},
+]
+
+[package.dependencies]
+msgpack = ">=1.0.3,<2.0.0"
+pandas = ">=1.5.3"
+pydantic = ">=2.0.3,<3.0.0"
+requests = ">=2.30.0,<3.0.0"
+sseclient-py = ">=1.7.2,<2.0.0"
+websockets = ">=10.4"
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 description = "Document parameters, class attributes, return types, and variables inline, with Annotated."
@@ -4583,4 +4603,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "380724d360f37c583f41f4e61a2072ce9d4f8a14a5c157bb02542feb4d179f92"
+content-hash = "4e67c655a5d9a84c8592e9baafcd4f11efb526e626deff7c7b89b91b8478644f"
