@@ -63,7 +63,24 @@ async def audit_middleware(request: Request, call_next: Any) -> Response:
     return response
 
 
-@app.get("/health")
+@app.get("/", tags=["System"])
+async def root():
+    """
+    Root endpoint providing API information and status.
+    """
+    return {
+        "app": "Orion Admin API",
+        "version": "1.0.0",
+        "status": "operational",
+        "timestamp_utc": datetime.now(timezone.utc),
+        "links": {
+            "docs": "/docs",
+            "health": "/health",
+        },
+    }
+
+
+@app.get("/health", tags=["System"])
 async def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 
