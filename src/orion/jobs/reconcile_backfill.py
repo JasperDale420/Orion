@@ -2,15 +2,16 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func, select
+
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SilverAlpacaBar
-from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
 
-async def run_reconciliation(lookback_days: int = 7):
+async def run_reconciliation(lookback_days: int = 7) -> None:
     """
     PRD 17.3: Reconciliation Job.
     Checks for missing bars between Bronze (Raw) and Silver (Normalized) layers.
@@ -53,35 +54,23 @@ async def run_reconciliation(lookback_days: int = 7):
         )
 
         try:
-            res_bronze = await session.execute(stmt_bronze)
-            bronze_counts = {}  # (ticker, date_str) -> count
-            for row in res_bronze.all():
-                key = (row.ticker, str(row.event_date))
-                bronze_counts[key] = row.count
+            result_bronze = await session.execute(stmt_bronze)
+            bronze_rows = result_bronze.all()
+            bronze_counts = {(r.ticker, str(r.event_date)): r.count for r in bronze_rows}
 
-            res_silver = await session.execute(stmt_silver)
-            silver_counts = {}
-            for row in res_silver.all():
-                key = (row.ticker, str(row.bar_date))
-                silver_counts[key] = row.count
+            result_silver = await session.execute(stmt_silver)
+            silver_rows = result_silver.all()
+            silver_counts = {(r.ticker, str(r.bar_date)): r.count for r in silver_rows}
 
-            # Compare
+            # Compare Bronze vs Silver
             discrepancies = 0
-
-            # Check Bronze -> Silver (Missing in Silver?)
             for key, b_count in bronze_counts.items():
+                ticker, date_str = key
                 s_count = silver_counts.get(key, 0)
-                if s_count != b_count:
-                    ticker, date_str = key
-                    logger.error(
-                        f"DATA GAP: {ticker} on {date_str}. Bronze={b_count}, Silver={s_count}. "
-                        f"Missing {b_count - s_count} bars."
-                    )
+                if b_count != s_count:
+                    logger.warning(f"DATA GAP: {ticker} on {date_str} - Bronze: {b_count}, Silver: {s_count}")
                     discrepancies += 1
-                    # TODO: Trigger Backfill Service here
-                    # await backfill_service.trigger(ticker, date_str)
 
-            # Check Silver without Bronze? (Phantom data - unlikely but possible if manual insert)
             for key, s_count in silver_counts.items():
                 if key not in bronze_counts:
                     ticker, date_str = key

@@ -1,7 +1,7 @@
 import hashlib
 from abc import ABC, abstractmethod
-from datetime import timezone
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
@@ -23,7 +23,11 @@ class TradingRule(ABC):
         pass
 
     def _create_candidate(
-        self, signal: SilverSignal, direction: str, confidence: float = 1.0, evidence_extras: dict = None
+        self,
+        signal: SilverSignal,
+        direction: str,
+        confidence: float = 1.0,
+        evidence_extras: dict[Any, Any] | None = None,
     ) -> CandidateTrade:
         """
         Helper to create a deterministic candidate object.
@@ -34,13 +38,13 @@ class TradingRule(ABC):
         else:
             ts = ts.astimezone(timezone.utc)
 
-        def _rollup_id(*, ticker: str, period: str, ts_utc) -> str:
+        def _rollup_id(*, ticker: str, period: str, ts_utc: datetime) -> str:
             return f"{ticker}|{period}|{ts_utc.isoformat()}"
 
-        def _floor_to_minute(dt):
+        def _floor_to_minute(dt: datetime) -> datetime:
             return dt.replace(second=0, microsecond=0)
 
-        def _floor_to_5min(dt):
+        def _floor_to_5min(dt: datetime) -> datetime:
             minute = (dt.minute // 5) * 5
             return dt.replace(minute=minute, second=0, microsecond=0)
 

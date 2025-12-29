@@ -10,9 +10,9 @@ import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from orion.core.errors import ErrorCode, ProviderError
+from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
-
-from ..storage.models import BronzeEvent
+from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
 
@@ -155,21 +155,23 @@ class UWFlowConnector:
     async def _ensure_watermark_loaded(self) -> None:
         if self._watermark_loaded:
             return
-        from orion.storage.db import async_session_factory
         from orion.storage.watermarks import get_watermark
 
-        async with async_session_factory() as session:
-            wm = await get_watermark(session, key=self._watermark_key)
-            if wm is not None:
-                self.last_poll_ts = wm
+        async def fetch_watermark(session: Any) -> None:
+            return await get_watermark(session, key=self._watermark_key)
+
+        wm = await db_query(fetch_watermark)
+        if wm is not None:
+            self.last_poll_ts = wm
         self._watermark_loaded = True
 
     async def _persist_watermark(self, ts: datetime) -> None:
-        from orion.storage.db import async_session_factory
         from orion.storage.watermarks import upsert_watermark
 
-        async with async_session_factory() as session:
+        async def update_watermark(session: Any) -> None:
             await upsert_watermark(session, key=self._watermark_key, last_seen_ts_utc=ts)
+
+        await db_write(update_watermark)
 
     def _fetch_raw_events_sync(self, start_ts: datetime, end_ts: datetime) -> List[Dict[str, Any]]:
         """
@@ -195,7 +197,7 @@ class UWFlowConnector:
     async def fetch_raw_events(self, start_ts: datetime, end_ts: datetime) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(self._fetch_raw_events_sync, start_ts, end_ts)
 
-    async def send_heartbeat_async(self):
+    async def send_heartbeat_async(self) -> None:
         """
         Upserts heartbeat to SystemStatus table.
         PRD 8.1 / 15.4: Ingestion heartbeat to DB.

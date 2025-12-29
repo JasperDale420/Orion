@@ -40,3 +40,20 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
         logger.warning(f"Failed to parse timestamp '{ts_input}': {e}. Defaulting to now.")
 
     return now
+
+
+def ensure_utc(dt: datetime | None) -> datetime | None:
+    """
+    Ensure datetime has UTC timezone.
+
+    Args:
+        dt: Datetime that may or may not have timezone info
+
+    Returns:
+        Datetime with UTC timezone, or None if input is None
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)

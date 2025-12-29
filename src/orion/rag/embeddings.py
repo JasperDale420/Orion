@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingClient:
-    def __init__(self):
+    def __init__(self) -> None:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             logger.warning("OPENAI_API_KEY not found. Vector embeddings will be disabled (keyword-only search).")

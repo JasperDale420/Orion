@@ -1,8 +1,11 @@
+from typing import Any
+
 import numpy as np
+import numpy.typing as npt
 import scipy.stats as stats
 
 
-def compute_sharpe_ratio(returns: np.ndarray, annualized: bool = True, periods_per_year: int = 252) -> float:
+def compute_sharpe_ratio(returns: npt.NDArray[Any], annualized: bool = True, periods_per_year: int = 252) -> float:
     """
     Computes standard Sharpe Ratio.
     Args:
@@ -27,7 +30,7 @@ def compute_sharpe_ratio(returns: np.ndarray, annualized: bool = True, periods_p
 
 
 def compute_deflated_sharpe_ratio(
-    estimated_sr: float, sample_len: int, skew: float, kurtosis: float, n_trials: int, var_sr: float = None
+    estimated_sr: float, sample_len: int, skew: float, kurtosis: float, n_trials: int, var_sr: float | None = None
 ) -> float:
     """
     Computes the Deflated Sharpe Ratio (DSR).
@@ -115,7 +118,7 @@ def compute_deflated_sharpe_ratio(
     return float(dsr_prob)
 
 
-def compute_smart_sharpe(returns: np.ndarray, periods_per_year: int = 252) -> float:
+def compute_smart_sharpe(returns: npt.NDArray[Any], periods_per_year: int = 252) -> float:
     """
     Computes Sharpe penalized for autocorrelation.
     Auto-correlation inflates Sharpe.
@@ -123,7 +126,7 @@ def compute_smart_sharpe(returns: np.ndarray, periods_per_year: int = 252) -> fl
     # ... Implementation optional for V1, stick to Deflated above ...
 
 
-def compute_bootstrap_p_value(returns: np.ndarray, n_samples: int = 1000) -> float:
+def compute_bootstrap_p_value(returns: npt.NDArray[Any], n_samples: int = 1000) -> float:
     """
     Computes a simple bootstrap p-value for the hypothesis that the mean return > 0.
     p_value = Proportion of bootstrap samples where mean(sample) <= 0.

@@ -1,13 +1,14 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import pandas as pd
-from orion.processing.label_engine import TripleBarrierLabeling
-from orion.storage.db import async_session_factory
-from orion.storage.models_gold import CandidateLabel, CandidateTrade, GoldTickerRollup
 from sqlalchemy import select
+
+from orion.processing.label_engine import TripleBarrierLabeling
+from orion.storage.models import CandidateTrade, GoldTickerRollup
+from orion.storage.models_gold import CandidateLabel
 
 logger = logging.getLogger("orion.jobs.label_job")
 
@@ -17,7 +18,7 @@ class LabelingJob:
     Periodic job to label older candidates once their outcome is known.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.labeler = TripleBarrierLabeling(upper_barrier=0.015, lower_barrier=0.010, time_barrier_bars=60)
         self.forward_horizons_min = self._parse_forward_horizons()
 
@@ -81,11 +82,12 @@ class LabelingJob:
                 out[f"{h}m"] = None
         return out
 
-    async def run_once(self):
+    async def run_once(self) -> None:
         """
         Process batch of unlabeled candidates.
         """
-        async with async_session_factory() as session:
+
+        async def _process_and_save(session: Any) -> None:
             # 1. potential candidates: > 60 mins old, not in candidate_labels
             # Simplified for v1: Just grab some recent candidates and check if label exists
             # Ideally: Left join where label is null

@@ -2,7 +2,7 @@ import asyncio
 import os
 import signal
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import Any, List
 
 import exchange_calendars as xcals
 from dotenv import load_dotenv
@@ -29,7 +29,9 @@ from orion.processing.persistence import (
     persist_silver_signals,
 )
 from orion.processing.rule_engine import RuleEngine
+from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
+from orion.shared.utils import ensure_utc
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.lakehouse import LakehouseWriter
 from orion.storage.models import BronzeEvent
@@ -43,6 +45,14 @@ RUN_ID = os.getenv("ORION_RUN_ID") or str(uuid.uuid4())
 os.environ["ORION_RUN_ID"] = RUN_ID
 logger = setup_struct_logger("orion.ingest")
 
+# Initialize metrics
+try:
+    from orion.shared.metrics import init_metrics
+
+    _metrics = init_metrics()
+except ImportError:
+    _metrics = None
+
 load_dotenv()
 
 # Global flag for EOD tracking
@@ -51,9 +61,11 @@ EOD_TRIGGER_LAST_RUN = None
 
 
 from orion.connectors.redpanda_producer import RedpandaProducer
+from orion.shared.decorators import db_retry
 
 
-async def save_events_to_db(events: List[BronzeEvent]):
+@db_retry
+async def save_events_to_db(events: List[BronzeEvent]) -> None:
     if not events:
         return
 
@@ -107,33 +119,35 @@ async def save_events_to_db(events: List[BronzeEvent]):
             except Exception as dlq_err:
                 logger.critical(f"FATAL: Redpanda AND DLQ Failed! Data risk for event {e.event_id}: {dlq_err}")
 
-    async with async_session_factory() as session:
-        try:
-            await persist_bronze_events(session, events)
-            await session.commit()
-            print(f"DEBUG: Saved {len(events)} events to DB.")
-            logger.info(f"Saved {len(events)} events to DB (potential duplicates ignored).")
-        except Exception as e:
-            logger.error(f"DB Write Error: {e}")
-            traceback.print_exc()
-            await session.rollback()
+    # DB write with retry
+    async def persist_events(session: Any) -> None:
+        await persist_bronze_events(session, events)
+
+    try:
+        await db_write(persist_events)
+        logger.info(f"Saved {len(events)} events to Bronze DB.")
+    except Exception as e:
+        logger.error(f"DB Write Error: {e}")
+        traceback.print_exc()
 
 
-async def save_signals_to_db(signals: List[SilverSignal]):
+@db_retry
+async def save_signals_to_db(signals: List[SilverSignal]) -> None:
     if not signals:
         return
 
-    async with async_session_factory() as session:
-        try:
-            await persist_silver_signals(session, signals)
-            await session.commit()
-            logger.info(f"Saved {len(signals)} signals (features) to DB.")
-        except Exception as e:
-            logger.error(f"DB Write Error (Silver): {e}")
-            await session.rollback()
+    async def persist_signals(session: Any) -> None:
+        await persist_silver_signals(session, signals)
+
+    try:
+        await db_write(persist_signals)
+        logger.info(f"Saved {len(signals)} signals (features) to DB.")
+    except Exception as e:
+        logger.error(f"DB Write Error (Silver): {e}")
 
 
-async def save_silver_data(events: List[BronzeEvent]):
+@db_retry
+async def save_silver_data(events: List[BronzeEvent]) -> None:
     """
     Persists normalized events to their respective Silver SQL tables.
     PRD 6.2 requirement.
@@ -141,41 +155,53 @@ async def save_silver_data(events: List[BronzeEvent]):
     if not events:
         return
 
-    async with async_session_factory() as session:
-        try:
-            await persist_silver_from_bronze(session, events)
-            await session.commit()
-            logger.info(
-                "Saved Silver Data",
-                extra={"event_type": "SILVER_WRITE_OK", "bronze_events": len(events)},
-            )
-        except Exception as e:
-            logger.error(f"DB Write Error (Silver Data): {e}")
-            await session.rollback()
+    async def persist_silver(session: Any) -> None:
+        await persist_silver_from_bronze(session, events)
+
+    try:
+        await db_write(persist_silver)
+        logger.info(
+            "Saved Silver Data",
+            extra={"event_type": "SILVER_WRITE_OK", "bronze_events": len(events)},
+        )
+    except Exception as e:
+        logger.error(f"DB Write Error (Silver Data): {e}")
 
 
-async def save_candidates_to_db(candidates: List[CandidateTrade]):
+@db_retry
+async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
     if not candidates:
         return
 
-    async with async_session_factory() as session:
-        try:
-            await persist_candidates(session, candidates)
-            await session.commit()
-            logger.info(f"Saved {len(candidates)} candidates (GOLD) to DB.")
-        except Exception as e:
-            logger.error(f"DB Write Error (Gold): {e}")
-            await session.rollback()
+    async def persist_cands(session: Any) -> None:
+        await persist_candidates(session, candidates)
+
+    try:
+        await db_write(persist_cands)
+        logger.info(f"Saved {len(candidates)} candidates (GOLD) to DB.")
+    except Exception as e:
+        logger.error(f"DB Write Error (Gold): {e}")
+        return
+
+    # Push to queue for execution service
+    try:
+        from orion.shared.candidate_queue import CandidateQueue
+
+        queue = await CandidateQueue.get_instance()
+        for c in candidates:
+            await queue.push(c.candidate_id)
+    except Exception as e:
+        logger.error(f"Failed to push candidates to queue: {e}")
 
 
-async def main():
+async def main() -> None:
     global EOD_TRIGGER_LAST_RUN
 
     # Graceful Shutdown
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
-    def _signal_handler():
+    def _signal_handler() -> None:
         logger.info("Shutdown signal received. Stopping ingestion loop...")
         shutdown_event.set()
 
@@ -297,10 +323,10 @@ async def main():
                 alert_events = await uw_alerts.fetch_events()
 
                 # Check Lag for UW events
-                for e in flow_events + dark_events + alert_events:
-                    if e.event_ts_utc:
+                for evt in flow_events + dark_events + alert_events:
+                    if evt.event_ts_utc:
                         try:
-                            await health_monitor.check_lag(e.event_ts_utc)
+                            await health_monitor.check_lag(evt.event_ts_utc)
                         except CriticalHealthException as che:
                             logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
                             # Ideally, we write a "PAUSE_TRADING" flag to Redis/DB here.
@@ -314,22 +340,22 @@ async def main():
                             pass
 
                 # 2. Update Universe
-                for e in flow_events + dark_events + alert_events:
-                    if not getattr(e, "ingest", None):
-                        e.ingest = {
+                for evt in flow_events + dark_events + alert_events:
+                    if not getattr(evt, "ingest", None):
+                        evt.ingest = {
                             "connector": (
                                 "uw_flow"
-                                if e.event_type == "UW_FLOW"
+                                if evt.event_type == "UW_FLOW"
                                 else "uw_darkpool"
-                                if e.event_type == "UW_DARKPOOL"
+                                if evt.event_type == "UW_DARKPOOL"
                                 else "uw_alerts"
                             ),
                             "run_id": RUN_ID,
                             "trace_id": trace_id,
                             "attempt": 1,
                         }
-                    universe.update_from_event(e)
-                    all_events.append(e)
+                    universe.update_from_event(evt)
+                    all_events.append(evt)
 
             except Exception as e:
                 logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id, "event_type": "UW_POLL_ERROR"})
@@ -343,17 +369,17 @@ async def main():
                     alpaca_events = alpaca.poll(active_tickers, default_lookback_minutes=7200)
 
                     # Check Lag for Alpaca
-                    for e in alpaca_events:
-                        if e.event_ts_utc:
+                    for evt in alpaca_events:
+                        if evt.event_ts_utc:
                             try:
-                                await health_monitor.check_lag(e.event_ts_utc)
+                                await health_monitor.check_lag(evt.event_ts_utc)
                             except CriticalHealthException as che:
                                 logger.critical(f"HEALTH MONITOR TRIGGERED (Alpaca): {che}")
 
                     all_events.extend(alpaca_events)
-                    for e in alpaca_events:
-                        if not getattr(e, "ingest", None):
-                            e.ingest = {
+                    for evt in alpaca_events:
+                        if not getattr(evt, "ingest", None):
+                            evt.ingest = {
                                 "connector": "alpaca_market",
                                 "run_id": RUN_ID,
                                 "trace_id": trace_id,
@@ -374,52 +400,51 @@ async def main():
 
                     from orion.core.timekeeping import derive_trading_date_and_session
 
-                    for e in all_events:
+                    for evt in all_events:
                         # ... Normalization ...
                         try:
-                            e.payload = NormalizationEngine.normalize_event(e.source, e.event_type, e.payload)
+                            evt.payload = NormalizationEngine.normalize_event(evt.source, evt.event_type, evt.payload)
                         except Exception as norm_err:
                             from orion.shared.dlq_utils import DLQWriter
 
                             await DLQWriter.write_to_dlq(
                                 error=norm_err,
-                                event_type=f"{e.event_type}_NORMALIZE_ERROR",
+                                event_type=f"{evt.event_type}_NORMALIZE_ERROR",
                                 source="NormalizationEngine",
-                                payload=getattr(e, "payload", None),
+                                payload=getattr(evt, "payload", None),
                                 context=f"trace_id={trace_id}",
-                                event_id=getattr(e, "event_id", None),
-                                source_event_id=getattr(e, "source_event_id", None),
-                                ticker=getattr(e, "ticker", None),
-                                event_ts_utc=getattr(e, "event_ts_utc", None),
+                                event_id=getattr(evt, "event_id", None),
+                                source_event_id=getattr(evt, "source_event_id", None),
+                                ticker=getattr(evt, "ticker", None),
+                                event_ts_utc=getattr(evt, "event_ts_utc", None),
                                 run_id=RUN_ID,
                                 trace_id=trace_id,
                             )
                             continue
-                        if not e.ticker:
-                            e.ticker = e.payload.get("ticker")
-                        if e.event_ts_utc and e.session is None:
-                            if e.event_ts_utc.tzinfo is None:
-                                e.event_ts_utc = e.event_ts_utc.replace(tzinfo=timezone.utc)
-                            td, sess = derive_trading_date_and_session(e.event_ts_utc)
-                            e.trading_date = td
-                            e.session = sess
-                        if e.event_ts_utc and e.trading_date is None:
-                            td, _ = derive_trading_date_and_session(e.event_ts_utc)
-                            e.trading_date = td
-                        if e.session is None:
-                            e.session = "CLOSED"
+                        if not evt.ticker:
+                            evt.ticker = evt.payload.get("ticker")
+                        if evt.event_ts_utc and evt.session is None:
+                            evt.event_ts_utc = ensure_utc(evt.event_ts_utc)
+                            td, sess = derive_trading_date_and_session(evt.event_ts_utc)
+                            evt.trading_date = td
+                            evt.session = sess
+                        if evt.event_ts_utc and evt.trading_date is None:
+                            td, _ = derive_trading_date_and_session(evt.event_ts_utc)
+                            evt.trading_date = td
+                        if evt.session is None:
+                            evt.session = "CLOSED"
 
-                        if getattr(e, "ingest", None):
-                            e.ingest.setdefault("run_id", RUN_ID)
-                            e.ingest.setdefault("trace_id", trace_id)
-                            e.ingest.setdefault("attempt", 1)
+                        if getattr(evt, "ingest", None):
+                            evt.ingest.setdefault("run_id", RUN_ID)
+                            evt.ingest.setdefault("trace_id", trace_id)
+                            evt.ingest.setdefault("attempt", 1)
                         else:
-                            e.ingest = {"connector": "unknown", "run_id": RUN_ID, "trace_id": trace_id, "attempt": 1}
+                            evt.ingest = {"connector": "unknown", "run_id": RUN_ID, "trace_id": trace_id, "attempt": 1}
 
-                        if e.received_ts_utc is None:
-                            e.received_ts_utc = datetime.now(timezone.utc)
+                        if evt.received_ts_utc is None:
+                            evt.received_ts_utc = datetime.now(timezone.utc)
 
-                        normalized_events.append(e)
+                        normalized_events.append(evt)
 
                     unique_events = await deduper.dedupe_batch(normalized_events)
 
@@ -428,6 +453,11 @@ async def main():
                         # Persist Normalized Silver Data
                         await save_silver_data(unique_events)
                         all_events = unique_events
+
+                        # Metrics: track events by source
+                        if _metrics:
+                            for evt in unique_events:
+                                _metrics.ingest_events_total.labels(source=evt.source).inc()
 
                 # Feature Engine, etc...
                 # Update in-memory UW flow state so OHLCV signals can be enriched with recent flow features.
@@ -447,6 +477,9 @@ async def main():
                                 uw_candidates = rule_engine.process_signals(uw_signals)
                                 if uw_candidates:
                                     await save_candidates_to_db(uw_candidates)
+                                    # Metrics: track candidates
+                                    if _metrics:
+                                        _metrics.ingest_candidates_total.inc(len(uw_candidates))
                             except Exception as e:
                                 logger.error(f"Rule Engine Error (UW): {e}")
                     except Exception as e:
@@ -463,6 +496,9 @@ async def main():
                                 candidates = rule_engine.process_signals(bar_signals)
                                 if candidates:
                                     await save_candidates_to_db(candidates)
+                                    # Metrics: track candidates
+                                    if _metrics:
+                                        _metrics.ingest_candidates_total.inc(len(candidates))
                             except Exception as e:
                                 logger.error(f"Rule Engine Error: {e}")
                     except Exception as e:
@@ -537,6 +573,10 @@ async def main():
         elapsed = asyncio.get_running_loop().time() - start_time
         sleep_time = max(0.1, loop_interval - elapsed)
 
+        # Metrics: track loop duration
+        if _metrics:
+            _metrics.ingest_loop_duration_seconds.observe(elapsed)
+
         # Log heartbeat
         trace_id = str(uuid.uuid4())
         logger.info(
@@ -561,7 +601,7 @@ async def main():
     logger.info("Ingestion Service Stopped.")
 
 
-async def run_eod_task():
+async def run_eod_task() -> None:
     """
     Wrapper to run EOD Agent.
     """

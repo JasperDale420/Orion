@@ -28,6 +28,7 @@ from orion.processing.persistence import (
     persist_silver_signals,
 )
 from orion.processing.rule_engine import RuleEngine
+from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.lakehouse import LakehouseWriter
@@ -355,41 +356,47 @@ class IngestionService:
                 logger.error(f"Redpanda Produce Failed: {e_prod}")
                 # Add DLQ logic here if needed, omitted for brevity as DB write is primary
 
-        async with async_session_factory() as session:
+        async def persist_bronze(session: Any) -> None:
             try:
                 await persist_bronze_events(session, events)
-                await session.commit()
                 logger.info(f"Saved {len(events)} events to DB.")
             except Exception as e:
                 logger.error(f"DB Write Error: {e}")
-                await session.rollback()
+                raise
+
+        await db_write(persist_bronze)
 
     async def _save_silver_data(self, events: List[BronzeEvent]) -> None:
-        async with async_session_factory() as session:
+        async def persist_silver(session: Any) -> None:
             try:
                 await persist_silver_from_bronze(session, events)
-                await session.commit()
             except Exception as e:
                 logger.error(f"Silver Write Error: {e}")
-                await session.rollback()
+                raise
+
+        await db_write(persist_silver)
 
     async def _save_signals(self, signals: List[SilverSignal]) -> None:
-        async with async_session_factory() as session:
+        async def persist_signals_op(session: Any) -> None:
             try:
                 await persist_silver_signals(session, signals)
-                await session.commit()
+                logger.info(f"Saved {len(signals)} signals to DB.")
             except Exception as e:
                 logger.error(f"Signal Write Error: {e}")
-                await session.rollback()
+                raise
+
+        await db_write(persist_signals_op)
 
     async def _save_candidates(self, candidates: List[CandidateTrade]) -> None:
-        async with async_session_factory() as session:
+        async def persist_candidates_op(session: Any) -> None:
             try:
                 await persist_candidates(session, candidates)
-                await session.commit()
+                logger.info(f"Saved {len(candidates)} candidates to DB.")
             except Exception as e:
                 logger.error(f"Candidate Write Error: {e}")
-                await session.rollback()
+                raise
+
+        await db_write(persist_candidates_op)
 
     async def _send_to_dlq(
         self,
@@ -423,20 +430,18 @@ class IngestionService:
             logger.critical(f"DLQ Failure: {e}")
 
     async def _persist_loop_crash(self, e: Exception) -> None:
-        try:
-            async with async_session_factory() as session:
-                session.add(
-                    DeadLetterQueue(
-                        error_message=str(e),
-                        stack_trace=traceback.format_exc(),
-                        source="INGEST_LOOP_CRASH",
-                        event_type="CRITICAL",
-                        payload={"run_id": self.run_id},
-                    )
+        async def persist_crash_op(session: Any) -> None:
+            session.add(
+                DeadLetterQueue(
+                    error_message=str(e),
+                    stack_trace=traceback.format_exc(),
+                    source="INGEST_LOOP_CRASH",
+                    event_type="CRITICAL",
+                    payload={"run_id": self.run_id},
                 )
-                await session.commit()
-        except Exception:
-            pass
+            )
+
+        await db_write(persist_crash_op)
 
     def _to_dict(self, e: BronzeEvent) -> dict[str, Any]:
         return {

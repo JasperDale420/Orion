@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import AsyncGenerator, Protocol, runtime_checkable
+from typing import Any, AsyncGenerator, Protocol, runtime_checkable
 
 from orion.storage.models import BronzeEvent
 
@@ -13,11 +13,9 @@ class PollingConnector(Protocol):
     without changing downstream normalization/dedupe/storage code.
     """
 
-    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> list[BronzeEvent]:
-        ...
+    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> list[BronzeEvent]: ...
 
 
 @runtime_checkable
 class StreamingConnector(Protocol):
-    async def stream(self, *args, **kwargs) -> AsyncGenerator[BronzeEvent, None]:
-        ...
+    async def stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[BronzeEvent, None]: ...

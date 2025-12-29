@@ -20,7 +20,7 @@ class SolverRiskConfig(BaseModel):
     session_filter: Optional[List[str]] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def check_global_limits(self):
+    def check_global_limits(self) -> "SolverRiskConfig":
         # Global Hard Limits
         MAX_SYSTEM_BPS = risk_settings.max_system_bps
         MAX_GLOBAL_POSITIONS = risk_settings.max_positions

@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+
 from orion.analysis.cross_validation import PurgedKFold
 from orion.analysis.metrics import compute_bootstrap_p_value, compute_deflated_sharpe_ratio, compute_sharpe_ratio
 from orion.execution.risk_manager import RiskManager
@@ -25,16 +26,16 @@ class BacktestEngine:
         self.risk_manager = RiskManager()
 
         # State
-        self.trades: List[Dict] = []
-        self.equity_curve: List[Dict] = []
-        self.skipped_trades: List[Dict] = []
+        self.trades: List[Dict[str, Any]] = []
+        self.equity_curve: List[Dict[str, Any]] = []
+        self.skipped_trades: List[Dict[str, Any]] = []
 
     def run(
         self,
         candidates: List[CandidateTrade],
         price_data: Dict[str, pd.DataFrame],
         labeler: Optional[TripleBarrierLabeling] = None,
-    ):
+    ) -> None:
         """
         Executes a simple sequential backtest (In-Sample or Out-of-Sample).
         This resets logic and runs strict simulation.
@@ -180,12 +181,18 @@ class BacktestEngine:
         }
         return result
 
-    def _reset(self):
+    def _reset(self) -> None:
         self.trades = []
         self.equity_curve = []
         self.skipped_trades = []
 
-    def _simulate(self, candidates, price_data, labeler, solver_config=None):
+    def _simulate(
+        self,
+        candidates: List[CandidateTrade],
+        price_data: Dict[str, pd.DataFrame],
+        labeler: Optional[TripleBarrierLabeling],
+        solver_config: Any = None,
+    ) -> None:
         current_equity = self.initial_capital
 
         # Initialize Risk Manager with Solver Config if available
@@ -271,7 +278,7 @@ class BacktestEngine:
 
             self.equity_curve.append({"ts": row["barrier_hit_ts"], "equity": current_equity})
 
-    def get_metrics(self, n_trials: int = 1) -> Dict:
+    def get_metrics(self, n_trials: int = 1) -> Dict[str, Any]:
         """
         Returns performance metrics including robust stats.
         """

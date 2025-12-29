@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,10 +26,10 @@ class Solver(Base):
     parent_solver_id: Mapped[str | None] = mapped_column(String, ForeignKey("solvers.solver_id"), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)  # human|llm_eod_agent|meta_agent
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
-    definition_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    definition_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # The DNA
-    config: Mapped[dict] = mapped_column(JSON, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
     # Metadata
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -48,7 +49,7 @@ class Solver(Base):
     stability_score: Mapped[float] = mapped_column(Float, default=0.0)
     oos_expect_bp: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Solver(id={self.solver_id}, family={self.family_name}, active={self.is_active})>"
 
 
@@ -77,7 +78,7 @@ class MetaExperiment(Base):
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     objective: Mapped[str | None] = mapped_column(String, nullable=True)
     base_solver_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    config_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    config_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     summary: Mapped[str | None] = mapped_column(String, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -86,7 +87,7 @@ class MetaExperiment(Base):
     def prd_id(self) -> str:
         return self.id or self.experiment_id
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<MetaExperiment(id={self.experiment_id}, status={self.status})>"
 
 
@@ -117,7 +118,7 @@ class SolverMetrics(Base):
 
     stability_score: Mapped[float] = mapped_column(Float, default=0.0)
 
-    metrics_json: Mapped[dict] = mapped_column(JSON, default={})
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default={})
 
     evaluated_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -145,7 +146,7 @@ class SolverRun(Base):
     max_drawdown_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     expect_return_bp: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    metrics_json: Mapped[dict] = mapped_column(JSON, default={})
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default={})
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -164,7 +165,7 @@ class SolverEdits(Base):
     new_solver_id: Mapped[str] = mapped_column(String, ForeignKey("solvers.solver_id"))
 
     # The JSON blob of ops
-    edit_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    edit_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
     generated_by: Mapped[str] = mapped_column(String)  # meta_agent / llm_eod_agent
 
@@ -190,7 +191,7 @@ class PromotionRecommendation(Base):
     recommended_stage: Mapped[str] = mapped_column(String)
 
     reason: Mapped[str] = mapped_column(String)
-    metrics_snapshot: Mapped[dict] = mapped_column(JSON, nullable=True)
+    metrics_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=True)
 
     status: Mapped[str] = mapped_column(String, default="PENDING")  # PENDING, APPROVED, REJECTED
 
@@ -198,5 +199,5 @@ class PromotionRecommendation(Base):
     reviewed_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by: Mapped[str] = mapped_column(String, nullable=True)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<PromotionRecommendation(id={self.id}, solver={self.solver_id}, status={self.status})>"

@@ -39,7 +39,7 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_record)
 
 
-def setup_logging(level: str = "INFO"):
+def setup_logging(level: str = "INFO") -> None:
     """
     Configures the root logger to use JSON formatting.
     """

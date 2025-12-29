@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import Any, Dict, List
 
 from orion.processing.rules.base import TradingRule
 from orion.storage.models_gold import CandidateTrade
@@ -13,7 +13,7 @@ class RuleEngine:
     Orchestrates the execution of trading rules.
     """
 
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict[Any, Any] | None = None):
         from orion.processing.rules.flow_rules import BearishPutPressureRule, BullishSweepRule
 
         cfg = config or {}
@@ -22,7 +22,7 @@ class RuleEngine:
         # Extract rule-specific configs
         # Prioritize 'rule_overrides', fallback to root keys (legacy), ensure defaults
 
-        def get_rule_cfg(rule_id):
+        def get_rule_cfg(rule_id: str) -> Dict[str, Any]:
             return overrides.get(rule_id) or cfg.get(rule_id, {})
 
         bull_cfg = get_rule_cfg("rule_bullish_sweep_v1")

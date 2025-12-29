@@ -8,9 +8,11 @@ try:
 except ImportError:
     ta = None
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import dateutil.parser
+
+from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SignalType, SilverSignal
@@ -26,7 +28,7 @@ class FeatureEngine:
     - Basic Technical Indicators (SMA, RSI)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # In-memory buffer for ongoing aggregation (not used for simple 1m passthrough,
         # but needed if preserving state for rolling windows if we process row-by-row)
         # For V1, we will process batches statelessly or rely on looking up past data (future V2).
@@ -37,44 +39,49 @@ class FeatureEngine:
         self.history: Dict[str, pd.DataFrame] = {}  # ticker -> DataFrame(OHLCV)
         self.max_history_len = 100  # Keep last 100 bars for calculation context
 
-        self.flow_history: Dict[str, List[Dict]] = {}
+        self.flow_history: Dict[str, List[Dict[str, Any]]] = {}
         self.flow_max_age_seconds = 900  # 15 minutes window
 
-    async def hydrate_history(self):
+    async def hydrate_history(self) -> None:
         """
         Hydrates in-memory history from SilverAlpacaBar to avoid cold-start issues.
         """
 
         from orion.config import system_settings
-        from orion.storage.db import async_session_factory
+
+        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
 
         tickers = system_settings.static_watchlist
         logger.info(f"Hydrating FeatureEngine history for {len(tickers)} tickers...")
 
         try:
-            async with async_session_factory() as session:
-                for ticker in tickers:
-                    await self._hydrate_single_ticker(session, ticker)
+            for ticker in tickers:
+                await self._hydrate_single_ticker(ticker)
 
             logger.info("FeatureEngine hydration complete.")
 
         except Exception as e:
             logger.error(f"Failed to hydrate FeatureEngine: {e}")
 
-    async def _hydrate_single_ticker(self, session, ticker: str):
-        from orion.storage.models_silver import SilverAlpacaBar
+    async def _hydrate_single_ticker(self, ticker: str) -> None:
         from sqlalchemy import select
 
+        from orion.storage.models_silver import SilverAlpacaBar
+
         try:
-            # Fetch last N bars
-            stmt = (
-                select(SilverAlpacaBar)
-                .where(SilverAlpacaBar.ticker == ticker)
-                .order_by(SilverAlpacaBar.bar_start_ts_utc.desc())
-                .limit(self.max_history_len)
-            )
-            result = await session.execute(stmt)
-            bars = result.scalars().all()
+
+            async def fetch_bars(session: Any) -> List[Any]:
+                # Fetch last N bars
+                stmt = (
+                    select(SilverAlpacaBar)
+                    .where(SilverAlpacaBar.ticker == ticker)
+                    .order_by(SilverAlpacaBar.bar_start_ts_utc.desc())
+                    .limit(self.max_history_len)
+                )
+                result = await session.execute(stmt)
+                return result.scalars().all()
+
+            bars = await db_query(fetch_bars)
 
             if not bars:
                 return
@@ -112,20 +119,22 @@ class FeatureEngine:
 
     async def persist_features(
         self, ticker: str, ts: datetime, features: Dict[str, float], feature_set_id: str = "v1_legacy"
-    ):
+    ) -> None:
         """
         Writes computed features to the GoldFeatureEvent table.
         """
-        from orion.storage.db import async_session_factory
-        from orion.storage.models_gold import GoldFeatureEvent
+        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
         from sqlalchemy.dialects.postgresql import insert
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         # Ensure ID/PK uniqueness
         if not ticker or not ts:
             return
 
         try:
-            async with async_session_factory() as session:
+
+            async def insert_feature(session: Any) -> None:
                 stmt = insert(GoldFeatureEvent).values(
                     ticker=ticker, event_ts_utc=ts, feature_set_id=feature_set_id, features=features
                 )
@@ -133,20 +142,21 @@ class FeatureEngine:
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["ticker", "event_ts_utc", "feature_set_id"], set_={"features": features}
                 )
-
                 await session.execute(stmt)
-                await session.commit()
+
+            await db_write(insert_feature)
 
         except Exception as e:
             logger.error(f"Failed to persist features for {ticker} at {ts}: {e}")
 
-    async def persist_signal_batch(self, signals: List[SilverSignal], feature_set_id: str = "v1_legacy"):
+    async def persist_signal_batch(self, signals: List[SilverSignal], feature_set_id: str = "v1_legacy") -> None:
         """
         Batch write features to Gold store.
         """
-        from orion.storage.db import async_session_factory
-        from orion.storage.models_gold import GoldFeatureEvent
+        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
         from sqlalchemy.dialects.postgresql import insert
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         if not signals:
             return
@@ -171,7 +181,8 @@ class FeatureEngine:
         total = len(rows)
 
         try:
-            async with async_session_factory() as session:
+
+            async def insert_chunks(session: Any) -> None:
                 for i in range(0, total, chunk_size):
                     chunk = rows[i : i + chunk_size]
                     stmt = insert(GoldFeatureEvent).values(chunk)
@@ -180,8 +191,9 @@ class FeatureEngine:
                         set_={"features": stmt.excluded.features},
                     )
                     await session.execute(stmt)
-                await session.commit()
-                logger.info(f"Persisted {total} feature events to Gold Store.")
+
+            await db_write(insert_chunks)
+            logger.info(f"Persisted {total} feature events to Gold Store.")
         except Exception as e:
             logger.error(f"Failed to batch persist features: {e}")
 
@@ -191,13 +203,15 @@ class FeatureEngine:
         """
         Hydrates SilverSignals from Gold Feature store.
         """
-        from orion.storage.db import async_session_factory
-        from orion.storage.models_gold import GoldFeatureEvent
+        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
         from sqlalchemy import and_, select
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         signals = []
         try:
-            async with async_session_factory() as session:
+
+            async def fetch_gold_features(session: Any) -> List[Any]:
                 stmt = (
                     select(GoldFeatureEvent)
                     .where(
@@ -212,34 +226,31 @@ class FeatureEngine:
                 )
 
                 result = await session.execute(stmt)
-                rows = result.scalars().all()
+                return result.scalars().all()
 
-                for r in rows:
-                    # Reconstruct SilverSignal
-                    # Note: We lose 'signal_id' and 'signal_type' specific nuances unless we inferred them or stored them.
-                    # GoldFeatureEvent is purely features.
-                    # We can regenerate generic ID and assume type based on feature contents or usage?
-                    # For V1 Analysis, we assume generic OHLCV type mapping.
+            rows = await db_query(fetch_gold_features)
 
-                    sig_id = self._generate_id(r.ticker, r.event_ts_utc, "GOLD_HYDRATED")
+            for r in rows:
+                # Reconstruct SilverSignal
+                sig_id = self._generate_id(r.ticker, r.event_ts_utc, "GOLD_HYDRATED")
 
-                    # We assume these are 1M bars usually
-                    signals.append(
-                        SilverSignal(
-                            signal_id=sig_id,
-                            ticker=r.ticker,
-                            signal_ts_utc=r.event_ts_utc,
-                            signal_type="GOLD_FEATURE",  # Distinct type? Or map to OHLCV_1M?
-                            features=r.features,
-                        )
+                # We assume these are 1M bars usually
+                signals.append(
+                    SilverSignal(
+                        signal_id=sig_id,
+                        ticker=r.ticker,
+                        signal_ts_utc=r.event_ts_utc,
+                        signal_type="GOLD_FEATURE",
+                        features=r.features,
                     )
+                )
 
         except Exception as e:
             logger.error(f"Failed to fetch features from Gold: {e}")
 
         return signals
 
-    def process_uw_flow(self, events: List[BronzeEvent]):
+    def process_uw_flow(self, events: List[BronzeEvent]) -> None:
         """
         Updates in-memory flow state from UW events.
         """
@@ -289,7 +300,7 @@ class FeatureEngine:
             signals.append(sig)
         return signals
 
-    def _extract_flow_features(self, event: BronzeEvent) -> Optional[Dict]:
+    def _extract_flow_features(self, event: BronzeEvent) -> Optional[Dict[str, Any]]:
         p = event.payload
         features = p.copy()
         features["event_id"] = event.event_id
@@ -328,7 +339,7 @@ class FeatureEngine:
 
         return features
 
-    def _calc_dte(self, features: Dict, current_ts: datetime):
+    def _calc_dte(self, features: Dict[str, Any], current_ts: datetime) -> None:
         expiry_raw = features.get("expiry")
         if not expiry_raw:
             return
@@ -418,7 +429,7 @@ class FeatureEngine:
         df.set_index("ts", inplace=True)
         return df
 
-    def _parse_event_to_row(self, e: BronzeEvent) -> Optional[Dict]:
+    def _parse_event_to_row(self, e: BronzeEvent) -> Optional[Dict[str, Any]]:
         p = e.payload or {}
         raw_ts = p.get("bar_start_ts_utc") or p.get("t") or p.get("timestamp") or e.event_ts_utc
 
@@ -440,7 +451,7 @@ class FeatureEngine:
             "vwap": p.get("vw") or p.get("vwap"),
         }
 
-    def _update_history(self, ticker: str, new_df: pd.DataFrame):
+    def _update_history(self, ticker: str, new_df: pd.DataFrame) -> None:
         if ticker not in self.history:
             self.history[ticker] = new_df
         else:
@@ -453,7 +464,7 @@ class FeatureEngine:
         if len(self.history[ticker]) > self.max_history_len:
             self.history[ticker] = self.history[ticker].iloc[-self.max_history_len :]
 
-    def _compute_indicators_on_history(self, ticker: str):
+    def _compute_indicators_on_history(self, ticker: str) -> None:
         df = self.history[ticker]
         try:
             if len(df) >= 14:
@@ -465,7 +476,7 @@ class FeatureEngine:
         except Exception as e:
             logger.error(f"Indicator calculation failed for {ticker}: {e}")
 
-    def _generate_signals_for_new_data(self, ticker: str, new_timestamps) -> List[SilverSignal]:
+    def _generate_signals_for_new_data(self, ticker: str, new_timestamps: Any) -> List[SilverSignal]:
         signals = []
         df = self.history[ticker]
         new_ts_set = set(new_timestamps)
@@ -493,7 +504,7 @@ class FeatureEngine:
             )
         return signals
 
-    def _to_pydatetime(self, ts) -> datetime:
+    def _to_pydatetime(self, ts: Any) -> datetime:
         try:
             ts_pydt = ts.to_pydatetime()
             if ts_pydt.tzinfo is None:
@@ -502,11 +513,11 @@ class FeatureEngine:
         except Exception:
             return ts
 
-    def _generate_id(self, ticker, ts, sig_type):
+    def _generate_id(self, ticker: str, ts: Any, sig_type: Any) -> str:
         raw = f"{ticker}_{ts.isoformat()}_{sig_type}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    async def compute(self, candidate, context=None, feature_set_id: str = "v1_legacy") -> Dict[str, float]:
+    async def compute(self, candidate: Any, context: Any = None, feature_set_id: str = "v1_legacy") -> Dict[str, float]:
         """
         Computes features for a single candidate event on demand.
         Required by SolverPipeline (VS3).

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,7 +24,7 @@ class DeadLetterQueue(Base):
     run_id: Mapped[str | None] = mapped_column(String, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    payload: Mapped[dict] = mapped_column(JSON, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str] = mapped_column(String, nullable=False)
     stack_trace: Mapped[str] = mapped_column(String, nullable=True)
     timestamp_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -32,5 +33,5 @@ class DeadLetterQueue(Base):
 
     __table_args__ = (Index("ix_dlq_status_retry", "status", "retry_count"),)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<DeadLetterQueue(id={self.id}, error={self.error_message[:20]})>"

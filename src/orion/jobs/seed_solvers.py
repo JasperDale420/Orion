@@ -2,14 +2,16 @@ import asyncio
 import hashlib
 import json
 from datetime import datetime
+from typing import Any
 
 from orion.core.solver_schema import ExitLogic, SolverConfig
 from orion.core.solver_validation import ensure_solver_definition_json
-from orion.storage.db import async_session_factory, init_db
-from orion.storage.models_solvers import Solver
+from orion.shared.db_utils import db_write
+from orion.storage.db import init_db
+from orion.storage.models import Solver
 
 
-async def seed_default_solver():
+async def seed_default_solver() -> None:
     print("Initializing DB...")
     await init_db()
 
@@ -62,7 +64,7 @@ async def seed_default_solver():
 
     print(f"Generated Solver ID: {version_id}")
 
-    async with async_session_factory() as session:
+    async def _seed_solver_transaction(session: Any) -> None:
         # Check if exists
         existing = await session.get(Solver, version_id)
         if existing:
@@ -79,9 +81,9 @@ async def seed_default_solver():
                 definition_json=ensure_solver_definition_json(solver_config.model_dump(mode="json"), None),
             )
             session.add(new_solver)
-
-        await session.commit()
         print("Default Solver Seeded and Activated.")
+
+    await db_write(_seed_solver_transaction)
 
 
 if __name__ == "__main__":

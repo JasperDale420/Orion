@@ -1,7 +1,7 @@
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import desc, select
@@ -13,10 +13,10 @@ from orion.api.auth import require_api_key
 from orion.api.deps import get_db
 from orion.api.schemas import ExperimentResponse, PromotionRecommendationResponse, SolverMetricsResponse, SolverResponse
 from orion.rag.vector_store import VectorStore
+from orion.shared.db_utils import db_write
 
 # Setup logger (FastAPI usually handles its own, but we can hook in ours)
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 from orion.storage.models_audit import AuditLog
 from orion.storage.models_gold import CandidateTrade, GoldTickerRollup
@@ -33,26 +33,27 @@ app = FastAPI(
 
 
 @app.middleware("http")
-async def audit_middleware(request: Request, call_next):
+async def audit_middleware(request: Request, call_next: Any) -> Response:
     trace_id = request.headers.get("x-trace-id") or str(uuid.uuid4())
     request.state.trace_id = trace_id
     response: Response = await call_next(request)
 
-    try:
-        async with async_session_factory() as session:
-            session.add(
-                AuditLog(
-                    id=str(uuid.uuid4()),
-                    run_id=os.getenv("ORION_RUN_ID"),
-                    trace_id=trace_id,
-                    method=request.method,
-                    path=request.url.path,
-                    status_code=response.status_code,
-                    client_host=request.client.host if request.client else None,
-                    query_params=dict(request.query_params),
-                )
+    async def save_audit_log(session: Any) -> None:
+        session.add(
+            AuditLog(
+                id=str(uuid.uuid4()),
+                run_id=os.getenv("ORION_RUN_ID"),
+                trace_id=trace_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                client_host=request.client.host if request.client else None,
+                query_params=dict(request.query_params),
             )
-            await session.commit()
+        )
+
+    try:
+        await db_write(save_audit_log)
     except Exception as e:
         logger.error(
             "Failed to write audit log", extra={"event_type": "AUDIT_LOG_ERROR", "trace_id": trace_id, "error": str(e)}
@@ -63,7 +64,7 @@ async def audit_middleware(request: Request, call_next):
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 
 
@@ -77,7 +78,7 @@ async def list_solvers(
     active_only: bool = False,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> List[Solver]:
     """
     List registered solvers with pagination.
     """
@@ -93,7 +94,7 @@ async def list_solvers(
 
 
 @app.get("/solvers/{solver_id}", response_model=SolverResponse)
-async def get_solver(solver_id: str, db: AsyncSession = Depends(get_db), _: None = Depends(require_api_key)):
+async def get_solver(solver_id: str, db: AsyncSession = Depends(get_db), _: None = Depends(require_api_key)) -> Solver:
     """
     Get a specific solver by ID (DNA).
     """
@@ -115,7 +116,7 @@ async def list_metrics(
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> List[SolverMetrics]:
     """
     Get performance metrics, optionally filtered by solver.
     """
@@ -138,7 +139,7 @@ async def list_experiments(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> List[MetaExperiment]:
     """
     List meta-search experiments.
     """
@@ -154,7 +155,7 @@ async def list_promotion_recommendations(
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> List[PromotionRecommendation]:
     stmt = select(PromotionRecommendation).order_by(desc(PromotionRecommendation.created_at_utc)).limit(limit)
     if status:
         stmt = stmt.where(PromotionRecommendation.status == status)
@@ -170,7 +171,7 @@ async def approve_promotion_recommendation(
     reviewed_by: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> PromotionRecommendation:
     stmt = select(PromotionRecommendation).where(PromotionRecommendation.id == recommendation_id)
     res = await db.execute(stmt)
     rec = res.scalars().first()
@@ -208,7 +209,7 @@ async def reject_promotion_recommendation(
     reviewed_by: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> PromotionRecommendation:
     stmt = select(PromotionRecommendation).where(PromotionRecommendation.id == recommendation_id)
     res = await db.execute(stmt)
     rec = res.scalars().first()
@@ -244,7 +245,7 @@ async def search(
         None, ge=0, description="Filter docs with metadata.premium_usd <= this (where supported)"
     ),
     _: None = Depends(require_api_key),
-):
+) -> List[Dict[str, Any]]:
     trace_id = str(uuid.uuid4())
     logger.info("RAG search request", extra={"event_type": "RAG_SEARCH", "trace_id": trace_id, "ticker": ticker})
 
@@ -294,7 +295,7 @@ async def get_event(
     event_id: str,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> Dict[str, Any]:
     stmt = select(BronzeEvent).where(BronzeEvent.event_id == event_id)
     res = await db.execute(stmt)
     ev = res.scalars().first()
@@ -321,7 +322,7 @@ async def get_candidate(
     candidate_id: str,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> Dict[str, Any]:
     stmt = select(CandidateTrade).where(CandidateTrade.candidate_id == candidate_id)
     res = await db.execute(stmt)
     cand = res.scalars().first()
@@ -350,7 +351,7 @@ async def get_rollups(
     limit: int = Query(500, ge=1, le=5000),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> List[Dict[str, Any]]:
     from orion.shared.utils import parse_timestamptz
 
     start_dt = parse_timestamptz(start, strict=False) if start else None
@@ -389,7 +390,7 @@ async def get_rollup(
     timestamp_utc: str,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> Dict[str, Any]:
     from orion.shared.utils import parse_timestamptz
 
     ts = parse_timestamptz(timestamp_utc, strict=True)
@@ -425,7 +426,7 @@ async def get_flows(
     limit: int = Query(200, ge=1, le=5000),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-):
+) -> List[Dict[str, Any]]:
     from orion.shared.utils import parse_timestamptz
 
     start_dt = parse_timestamptz(start, strict=False) if start else None

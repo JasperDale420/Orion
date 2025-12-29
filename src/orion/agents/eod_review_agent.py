@@ -6,20 +6,21 @@ import os
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from sqlalchemy import select
-from zoneinfo import ZoneInfo
 
 load_dotenv()
 
 from openai import AsyncOpenAI
+
 from orion.agents.base import BaseAgent
 from orion.agents.proposal_builder import ProposalBuilder
 from orion.core.id_utils import deterministic_solver_id
 from orion.rag.vector_store import VectorStore
+from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import StrategyDecision
 from orion.storage.models_silver import SilverSignal
@@ -130,7 +131,7 @@ class EODReviewAgent(BaseAgent):
         if not proposals:
             return
 
-        async with async_session_factory() as session:
+        async def save_edits(session: Any) -> None:
             for p in proposals:
                 if p.get("type") != "solver_edit":
                     continue
@@ -157,7 +158,8 @@ class EODReviewAgent(BaseAgent):
                         reward=None,
                     )
                 )
-            await session.commit()
+
+        await db_write(save_edits)
 
     def _day_bounds_utc(self, date: datetime.date) -> Tuple[datetime, datetime]:
         start_ts = datetime.combine(date, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -259,18 +261,13 @@ class EODReviewAgent(BaseAgent):
 
         start_ts, end_ts = self._day_bounds_utc(date)
 
-        async with async_session_factory() as session:
+        async def fetch_all_data(session: Any) -> Dict[str, Any]:
             # Decisions for the day
             stmt = select(StrategyDecision).where(
                 StrategyDecision.timestamp_utc >= start_ts, StrategyDecision.timestamp_utc < end_ts
             )
             result = await session.execute(stmt)
             decisions = result.scalars().all()
-
-            total_decisions = len(decisions)
-            # Naive execution count
-            executed_decisions = [d for d in decisions if d.decision == "EXECUTE"]
-            skipped_count = len([d for d in decisions if d.decision == "SKIP"])
 
             # Signals live
             sig_stmt = select(SignalLive).where(SignalLive.timestamp_utc >= start_ts, SignalLive.timestamp_utc < end_ts)
@@ -358,8 +355,6 @@ class EODReviewAgent(BaseAgent):
 
             # Volatility regime from bars (intraday realized vol)
             tickers_for_regime = {s.ticker for s in sigs if s.ticker} | {t.ticker for t in trade_journal if t.ticker}
-            regime_map: Dict[str, str] = {}
-            regime_stats: Dict[str, Any] = {"tickers": len(tickers_for_regime), "method": "intraday_realized_vol_1m"}
 
             if tickers_for_regime:
                 bars_stmt = select(SilverAlpacaBar).where(
@@ -370,6 +365,46 @@ class EODReviewAgent(BaseAgent):
                 bars = (await session.execute(bars_stmt)).scalars().all()
             else:
                 bars = []
+
+            return {
+                "decisions": decisions,
+                "sigs": sigs,
+                "trade_journal": trade_journal,
+                "orders": orders,
+                "fills": fills,
+                "baseline_orders": baseline_orders,
+                "baseline_fills": baseline_fills,
+                "baseline_trade_journal": baseline_trade_journal,
+                "dlq_rows": dlq_rows,
+                "bronze_rows": bronze_rows,
+                "silver_today": silver_today,
+                "silver_baseline": silver_baseline,
+                "bars": bars,
+                "baseline_start": baseline_start,
+            }
+
+        data = await db_query(fetch_all_data)
+
+        # Extract data from the returned dictionary
+        decisions = data["decisions"]
+        sigs = data["sigs"]
+        trade_journal = data["trade_journal"]
+        orders = data["orders"]
+        fills = data["fills"]
+        baseline_orders = data["baseline_orders"]
+        baseline_fills = data["baseline_fills"]
+        baseline_trade_journal = data["baseline_trade_journal"]
+        dlq_rows = data["dlq_rows"]
+        bronze_rows = data["bronze_rows"]
+        silver_today = data["silver_today"]
+        silver_baseline = data["silver_baseline"]
+        bars = data["bars"]
+        baseline_start = data["baseline_start"]
+
+        total_decisions = len(decisions)
+        # Naive execution count
+        executed_decisions = [d for d in decisions if d.decision == "EXECUTE"]
+        skipped_count = len([d for d in decisions if d.decision == "SKIP"])
 
         # --- slippage joins ---
         baseline_orders_by_broker: Dict[str, OrderRecord] = {}
@@ -449,6 +484,8 @@ class EODReviewAgent(BaseAgent):
         # Compute intraday realized vol per ticker using 1m closes.
         vol_by_ticker: Dict[str, float] = {}
         closes_by_ticker: Dict[str, List[float]] = {}
+        regime_map: Dict[str, str] = {}
+        regime_stats: Dict[str, Any] = {}
         for b in bars:
             if b.ticker and b.close is not None:
                 closes_by_ticker.setdefault(b.ticker, []).append(float(b.close))
@@ -538,9 +575,9 @@ class EODReviewAgent(BaseAgent):
                 }
             )
 
-        def _agg(rows: List[dict], key: str) -> Dict[str, Any]:
+        def _agg(rows: List[dict[str, Any]], key: str) -> Dict[str, Any]:
             out: Dict[str, Any] = {}
-            groups: Dict[str, List[dict]] = {}
+            groups: Dict[str, List[dict[str, Any]]] = {}
             for r in rows:
                 k = r.get(key) or "UNKNOWN"
                 groups.setdefault(str(k), []).append(r)

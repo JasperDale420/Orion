@@ -2,12 +2,14 @@ import hashlib
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
+from orion.storage.watermarks import get_watermark, upsert_watermark
 from orion.unusualwhales.api.darkpool import get_trades_by_date
 from orion.unusualwhales.client import UnusualWhalesClient
 
@@ -26,7 +28,7 @@ class UWDarkPoolConnector:
         self._watermark_loaded: bool = False
         self._watermark_key: str = "uw_darkpool"
 
-    def _generate_event_id(self, event_data: dict) -> str:
+    def _generate_event_id(self, event_data: dict[str, Any]) -> str:
         """
         Generates a deterministic event ID.
         Prefer source event ID if available, otherwise hash content.
@@ -62,7 +64,7 @@ class UWDarkPoolConnector:
             start_date = fetch_start.astimezone(timezone.utc).date()
             end_date = now.astimezone(timezone.utc).date()
 
-            all_raw: list[dict] = []
+            all_raw: list[dict[str, Any]] = []
             cursor = start_date
             while cursor <= end_date:
                 all_raw.extend(await self._fetch_raw_for_date(cursor.strftime("%Y-%m-%d")))
@@ -148,23 +150,22 @@ class UWDarkPoolConnector:
     async def _ensure_watermark_loaded(self) -> None:
         if self._watermark_loaded:
             return
-        from orion.storage.db import async_session_factory
-        from orion.storage.watermarks import get_watermark
 
-        async with async_session_factory() as session:
-            wm = await get_watermark(session, key=self._watermark_key)
-            if wm is not None:
-                self.last_poll_ts = wm
+        async def fetch_watermark(session: Any) -> None:
+            return await get_watermark(session, key=self._watermark_key)
+
+        wm = await db_query(fetch_watermark)
+        if wm is not None:
+            self.last_poll_ts = wm
         self._watermark_loaded = True
 
     async def _persist_watermark(self, ts: datetime) -> None:
-        from orion.storage.db import async_session_factory
-        from orion.storage.watermarks import upsert_watermark
-
-        async with async_session_factory() as session:
+        async def update_watermark(session: Any) -> None:
             await upsert_watermark(session, key=self._watermark_key, last_seen_ts_utc=ts)
 
-    async def _fetch_raw_for_date(self, date_str: str) -> list[dict]:
+        await db_write(update_watermark)
+
+    async def _fetch_raw_for_date(self, date_str: str) -> list[dict[str, Any]]:
         import asyncio
 
         try:

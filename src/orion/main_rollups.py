@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import signal
+from types import FrameType
+from typing import Optional
 
 from orion.jobs.rollup_job import RollupJob
 from orion.storage.db import init_db
@@ -10,7 +12,7 @@ logger = logging.getLogger("orion.main_rollups")
 SHUTDOWN = False
 
 
-def handle_sigint(_signum, _frame):
+def handle_sigint(_signum: int, _frame: Optional[FrameType]) -> None:
     global SHUTDOWN
     SHUTDOWN = True
 

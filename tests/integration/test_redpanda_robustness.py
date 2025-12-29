@@ -12,11 +12,11 @@ from orion.storage.models import BronzeEvent
 @pytest.fixture
 async def redpanda_producer():
     # Reset singleton
-    RedpandaProducer._instance = None
+    RedpandaProducer._reset_instance()
     producer = RedpandaProducer.get_instance()
     yield producer
     await producer.stop()
-    RedpandaProducer._instance = None
+    RedpandaProducer._reset_instance()
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_redpanda_idempotence_config():
     from orion.connectors.redpanda_producer import RedpandaProducer
 
     # Ensure fresh start
-    RedpandaProducer._instance = None
+    RedpandaProducer._reset_instance()
 
     with patch("orion.connectors.redpanda_producer.AIOKafkaProducer") as MockKafka:
         mock_instance = AsyncMock()
@@ -48,7 +48,7 @@ async def test_redpanda_idempotence_config():
         assert call_kwargs.get("enable_idempotence") is True, "Idempotence must be enabled"
         assert call_kwargs.get("acks") == "all", "Acks must be 'all'"
 
-    RedpandaProducer._instance = None
+    RedpandaProducer._reset_instance()
 
 
 @pytest.mark.asyncio
@@ -62,7 +62,7 @@ async def test_redpanda_retry_logic():
     importlib.reload(orion.connectors.redpanda_producer)
     from orion.connectors.redpanda_producer import RedpandaProducer
 
-    RedpandaProducer._instance = None
+    RedpandaProducer._reset_instance()
 
     with patch("orion.connectors.redpanda_producer.AIOKafkaProducer") as MockKafka:
         mock_kafka_instance = AsyncMock()

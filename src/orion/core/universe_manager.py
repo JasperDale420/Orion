@@ -19,7 +19,7 @@ class UniverseManager:
     Tracks state by source (Config, Alert, Activity) and applies TTL.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Map of ticker -> last_active_utc_timestamp (float seconds)
         # Note: We use system time here for TTL tracking.
         self.active_tickers: Dict[str, float] = {}
@@ -37,7 +37,7 @@ class UniverseManager:
         # These should remain active until the option expires.
         self.expiry_tickers: Dict[str, date] = {}
 
-    async def hydrate_from_db(self):
+    async def hydrate_from_db(self) -> None:
         """
         Hydrates the universe from the database, specifically looking for
         active alerts with future expiration dates.

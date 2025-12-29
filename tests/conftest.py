@@ -57,9 +57,12 @@ async def mock_redpanda_producer(monkeypatch):
     mock_instance.stop = AsyncMock()
     mock_instance.produce_event = AsyncMock()
 
-    # Patch the singleton / get_instance
-    monkeypatch.setattr(RedpandaProducer, "_instance", mock_instance)
-    monkeypatch.setattr(RedpandaProducer, "get_instance", lambda: mock_instance)
+    # Patch the singleton using AsyncSingleton's _instances dict
+    # AsyncSingleton uses _instances[cls] not _instance
+    async def mock_get_instance(*args, **kwargs):
+        return mock_instance
+
+    monkeypatch.setattr(RedpandaProducer, "get_instance", mock_get_instance)
 
     yield mock_instance
 

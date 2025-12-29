@@ -1,6 +1,7 @@
 import asyncio
 import signal
-from typing import List
+from datetime import datetime, timezone
+from typing import Any, List
 
 from dotenv import load_dotenv
 
@@ -10,8 +11,9 @@ from sqlalchemy import select
 
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
+from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import async_session_factory, init_db
+from orion.storage.db import init_db
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from orion.storage.models_signals import SignalLive
 from orion.storage.models_trade_journal import TradeJournalEntry
@@ -24,7 +26,8 @@ async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
     """
     Fetches CandidateTrades that have NOT been processed (no matching StrategyDecision).
     """
-    async with async_session_factory() as session:
+
+    async def query_candidates(session: Any) -> None:
         # Subquery to find processed IDs
         # (Naive approach for v1: Select candidates where candidate_id NOT IN (select candidate_id from strategy_decisions))
         # Better: Outer join?
@@ -41,8 +44,10 @@ async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
         result = await session.execute(stmt)
         return result.scalars().all()
 
+    return await db_query(query_candidates)
 
-async def save_decision(decision: StrategyDecision, candidate: CandidateTrade):
+
+async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -> None:
     # PRDv2 §11.2: EXECUTE decisions must carry expected_return, p_take, risk_score (for signals_live).
     if decision.decision == "EXECUTE":
         expected_return = None
@@ -54,15 +59,11 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade):
             decision.decision = "SKIP"
             decision.reason = "Missing required signal fields (expected_return/risk_score/p_take)"
 
-    async with async_session_factory() as session:
+    async def persist_decision(session: Any) -> None:
         session.add(decision)
-        try:
-            await session.commit()
-            logger.info(f"Policy Decision Saved: {decision.ticker} {decision.decision} ({decision.reason})")
-        except Exception as e:
-            logger.error(f"Failed to save decision: {e}")
-            await session.rollback()
-            return
+
+    await db_write(persist_decision)
+    logger.info(f"Policy Decision Saved: {decision.ticker} {decision.decision} ({decision.reason})")
 
     # PRD §11.2/§12.4: Persist signals_live + trade journal linkage for executable decisions.
     if decision.decision != "EXECUTE":
@@ -94,7 +95,7 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade):
             decision.reason = "Missing required signal fields (expected_return/risk_score/p_take)"
             return
 
-        async with async_session_factory() as session:
+        async def persist_signal_and_journal(session: Any) -> None:
             session.add(
                 SignalLive(
                     signal_id=signal_id,
@@ -119,43 +120,73 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade):
                     decision_trace_json=decision.decision_trace_json or {},
                 )
             )
+            # PRDv2 §12.4 Linkage to Trade Journal
             session.add(
                 TradeJournalEntry(
-                    decision_id=decision.decision_id,
+                    journal_id=f"journal_{candidate.candidate_id}",
                     signal_id=signal_id,
                     candidate_id=candidate.candidate_id,
-                    solver_id=decision.strategy_version_id,
                     ticker=candidate.ticker,
                     direction=candidate.direction,
-                    evidence=candidate.evidence or {},
-                    decision_trace_json=decision.decision_trace_json or {},
-                    raw_json={"execution_params": decision.execution_params or {}},
+                    entry_time=decision.timestamp_utc,
+                    entry_price=None,
+                    position_size=None,
+                    exit_time=None,
+                    exit_price=None,
+                    realized_pnl_usd=None,
+                    fees_usd=None,
+                    net_pnl_usd=None,
+                    trade_metadata={},
                 )
             )
-            await session.commit()
+
+        await db_write(persist_signal_and_journal)
     except Exception as e:
         logger.error(f"Failed to persist signals_live/trade journal: {e}")
 
 
-async def update_decision_status(decision_id: str, status: str):
-    async with async_session_factory() as session:
+async def get_pending_candidates() -> list:
+    """Get candidates not yet executed."""
+
+    async def fetch_candidates(session: Any) -> None:
+        result = await session.execute(
+            select(CandidateTrade).where(CandidateTrade.status == "pending").order_by(CandidateTrade.created_at_utc)
+        )
+        return result.scalars().all()
+
+    return await db_query(fetch_candidates)
+
+
+async def update_candidate_status(candidate_id: str, status: str) -> None:
+    """Update candidate execution status."""
+
+    async def update_status(session: Any) -> None:
+        result = await session.execute(select(CandidateTrade).where(CandidateTrade.candidate_id == candidate_id))
+        candidate = result.scalars().first()
+        if candidate:
+            candidate.status = status
+            candidate.updated_at_utc = datetime.now(timezone.utc)
+
+    await db_write(update_status)
+
+
+async def update_decision_status(decision_id: str, status: str) -> None:
+    async def update_status(session: Any) -> None:
         stmt = select(StrategyDecision).where(StrategyDecision.decision_id == decision_id)
         result = await session.execute(stmt)
         record = result.scalars().first()
         if record:
             record.executed_successfully = status
-            try:
-                await session.commit()
-            except Exception as e:
-                logger.error(f"Failed to update execution status: {e}")
+
+    await db_write(update_status)
 
 
-async def main():
+async def main() -> None:
     # Graceful Shutdown Setup
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
-    def _signal_handler():
+    def _signal_handler() -> None:
         logger.info("Shutdown signal received. Stopping execution loop...")
         shutdown_event.set()
 
@@ -212,13 +243,15 @@ async def main():
                 if decision.decision == "EXECUTE":
                     from orion.execution.signal_preflight import preflight_live_signal
 
-                    async with async_session_factory() as session:
-                        pre = await preflight_live_signal(
+                    async def run_preflight(session: Any, candidate: Any = candidate, decision: Any = decision) -> Any:
+                        return await preflight_live_signal(
                             session,
                             candidate=candidate,
                             decision=decision,
                             risk_manager=execution_engine.risk_manager,
                         )
+
+                    pre = await db_query(run_preflight)
                     if not pre.ok:
                         decision.decision = "SKIP"
                         decision.executed_successfully = "SKIPPED"

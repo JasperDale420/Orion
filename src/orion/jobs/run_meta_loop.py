@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def main():
+async def main() -> None:
     """
     Entry point for the Meta-Search Loop.
     1. Ingests proposals from EOD agent (proposals/ -> DB).

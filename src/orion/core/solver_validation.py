@@ -30,5 +30,5 @@ def ensure_solver_definition_json(
     return dsl.model_dump(mode="json")
 
 
-def solver_dsl_error_extra(exc: Exception) -> dict:
+def solver_dsl_error_extra(exc: Exception) -> dict[str, Any]:
     return {"error_code": ErrorCode.SOLVER_DSL_VALIDATION_FAILED.value, "error": str(exc), "cwd": os.getcwd()}

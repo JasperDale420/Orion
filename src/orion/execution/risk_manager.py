@@ -1,11 +1,25 @@
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from orion.config import RiskSettings, risk_settings
+from orion.shared.db_utils import db_write
+from orion.shared.decorators import db_retry
+
+if TYPE_CHECKING:
+    from orion.storage.models_execution import Position
 
 logger = logging.getLogger(__name__)
+
+# Initialize metrics
+_metrics: "Metrics | None" = None
+try:
+    from orion.shared.metrics import Metrics
+
+    _metrics = Metrics.get_instance()
+except ImportError:
+    pass
 
 
 class RiskManager:
@@ -13,7 +27,7 @@ class RiskManager:
     Enforces pre-trade risk controls to prevent catastrophic loss or specific rule violations.
     """
 
-    def __init__(self, config: RiskSettings = None):
+    def __init__(self, config: RiskSettings | None = None):
         if config is None:
             self.config = risk_settings
         else:
@@ -22,7 +36,7 @@ class RiskManager:
         self.current_daily_loss = 0.0
         self.open_positions = 0
         self.ticker_exposures: Dict[str, float] = {}  # ticker -> usd value
-        self.pending_orders: Dict[str, float] = {}  # order_id -> estimated cost (signed)
+        self.pending_orders: Dict[str, tuple[str, float]] = {}  # order_id -> (ticker, estimated cost signed)
         self.current_equity = 100000.0  # Default fallback, should be synced
         self.starting_equity = self.current_equity
         self.peak_equity = self.current_equity
@@ -51,8 +65,8 @@ class RiskManager:
         quantity: float,
         price: float,
         side: str,
-        timestamp: datetime = None,
-        risk_override: RiskSettings = None,
+        timestamp: datetime | None = None,
+        risk_override: RiskSettings | None = None,
     ) -> bool:
         """
         Returns True if the order is safe to execute, False otherwise.
@@ -90,7 +104,7 @@ class RiskManager:
 
         return True
 
-    def _check_time_bans(self, cfg: RiskSettings, timestamp: datetime = None) -> bool:
+    def _check_time_bans(self, cfg: RiskSettings, timestamp: datetime | None = None) -> bool:
         if not cfg.time_of_day_bans:
             return True
 
@@ -151,7 +165,9 @@ class RiskManager:
 
         return True
 
-    def _calculate_projected_exposure(self, ticker: str, estimated_cost: float, side: str, price: float):
+    def _calculate_projected_exposure(
+        self, ticker: str, estimated_cost: float, side: str, price: float
+    ) -> Tuple[float, float, float]:
         pending_exposure = 0.0
         for _, p_val in self.pending_orders.items():
             # Check p_val tuple (ticker, cost)
@@ -211,7 +227,9 @@ class RiskManager:
                 return False
         return True
 
-    def calculate_size(self, entry_price: float, stop_loss_pct: float = None, account_equity: float = None) -> float:
+    def calculate_size(
+        self, entry_price: float, stop_loss_pct: float | None = None, account_equity: float | None = None
+    ) -> float:
         """
         Calculates position size based on risk per trade.
         """
@@ -235,14 +253,48 @@ class RiskManager:
 
         return float(qty)
 
-    async def initialize(self):
+    @db_retry
+    async def upsert_position(self, position: "Position") -> None:
+        """
+        Persist position to DB.
+        """
+
+        async def save_position(session: Any) -> None:
+            from datetime import datetime, timezone
+
+            from sqlalchemy import select
+
+            from orion.storage.models_execution import Position as PositionModel
+
+            stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
+            result = await session.execute(stmt)
+            existing = result.scalars().first()
+
+            if existing:
+                existing.qty = position.qty
+                existing.avg_price = position.avg_price
+                existing.updated_at_utc = datetime.now(timezone.utc)
+            else:
+                session.add(
+                    PositionModel(
+                        ticker=position.ticker,
+                        qty=position.qty,
+                        avg_price=position.avg_price,
+                    )
+                )
+
+        await db_write(save_position)
+
+    @db_retry
+    async def initialize(self) -> None:
         """
         Loads risk state from DB (if exists) to survive restarts.
         """
         try:
+            from sqlalchemy import select
+
             from orion.storage.db import async_session_factory
             from orion.storage.models_risk import RiskState
-            from sqlalchemy import select
 
             async with async_session_factory() as session:
                 stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
@@ -273,34 +325,39 @@ class RiskManager:
         """
         await self._evaluate_drawdown_kill_switch()
 
-    async def _save_state(self):
+    @db_retry
+    async def _save_state(self) -> None:
         """
-        Persists current risk state to DB.
+        Persist current risk state to DB.
         """
-        try:
-            from orion.storage.db import async_session_factory
-            from orion.storage.models_risk import RiskState
+
+        async def save_risk_state(session: Any) -> None:
             from sqlalchemy import select
 
-            async with async_session_factory() as session:
-                stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
-                result = await session.execute(stmt)
-                state = result.scalars().first()
+            from orion.storage.models_risk import RiskState
 
-                if not state:
-                    state = RiskState(id="global_risk_v1")
-                    session.add(state)
+            stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
+            result = await session.execute(stmt)
+            state = result.scalars().first()
 
-                state.updated_at_utc = datetime.now(timezone.utc)
-                state.current_daily_loss = self.current_daily_loss
-                state.current_equity = self.current_equity
-                state.starting_equity = getattr(self, "starting_equity", self.current_equity)
-                state.peak_equity = getattr(self, "peak_equity", self.current_equity)
-                state.open_positions_count = self.open_positions
+            if not state:
+                state = RiskState(id="global_risk_v1")
+                session.add(state)
 
-                await session.commit()
-        except Exception as e:
-            logger.error(f"Failed to save Risk State: {e}")
+            state.updated_at_utc = datetime.now(timezone.utc)
+            state.current_daily_loss = self.current_daily_loss
+            state.current_equity = self.current_equity
+            state.starting_equity = getattr(self, "starting_equity", self.current_equity)
+            state.peak_equity = getattr(self, "peak_equity", self.current_equity)
+            state.open_positions_count = self.open_positions
+
+        await db_write(save_risk_state)
+        logger.info("Risk state persisted to DB")
+        # Metrics: track risk state
+        if _metrics:
+            _metrics.risk_equity.set(self.current_equity)
+            _metrics.risk_daily_loss.set(self.current_daily_loss)
+            _metrics.risk_open_positions.set(self.open_positions)
 
     async def _evaluate_drawdown_kill_switch(self) -> None:
         if self.current_equity > self.peak_equity:
@@ -319,7 +376,7 @@ class RiskManager:
         )
         await CircuitBreaker().open(reason)
 
-    async def process_fill(self, ticker: str, qty: float, price: float, side: str, fill_id: str):
+    async def process_fill(self, ticker: str, qty: float, price: float, side: str, fill_id: str) -> None:
         """
         Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
@@ -424,7 +481,13 @@ class RiskManager:
 
         await self._save_state()
 
-    async def update_post_trade(self, ticker: str, qty: float, price: float, side: str, order_id: str = None):
+        # Metrics: track ticker exposure
+        if _metrics:
+            _metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
+
+    async def update_post_trade(
+        self, ticker: str, qty: float, price: float, side: str, order_id: Optional[str] = None
+    ) -> None:
         """
         Updates internal risk state immediately after an order is sent (Optimistic).
         """
@@ -447,20 +510,22 @@ class RiskManager:
         # Track pending exposure
         self.pending_orders[order_id] = (ticker, signed_cost)
 
-    def remove_pending_order(self, order_id: str):
+    def remove_pending_order(self, order_id: str) -> None:
         """
         Removes a pending order from risk tracking (e.g. after Fill or Cancel).
         """
         if order_id in self.pending_orders:
             del self.pending_orders[order_id]
 
-    def update_metrics(self, realized_pnl: float = 0.0, open_positions_count: int = None, open_pnl: float = 0.0):
+    def update_metrics(
+        self, realized_pnl: float = 0.0, open_positions_count: Optional[int] = None, open_pnl: float = 0.0
+    ) -> None:
         """
         Legacy sync method.
         """
         pass
 
-    def sync_with_broker(self, connector):
+    def sync_with_broker(self, connector: Any) -> None:
         """
         Syncs risk state with the broker to handle restarts.
         """
