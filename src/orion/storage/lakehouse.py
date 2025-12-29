@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import os
 import uuid
@@ -92,29 +93,41 @@ class LakehouseWriter:
         # This is approx 4-5x faster for large datasets.
         df["date"] = df["event_ts_utc"].dt.date.astype(str)
 
-        for date_str, group_df in df.groupby("date"):
-            # Construct path
-            # s3://{bucket}/v1/{source}/{event_type}/date={YYYY-MM-DD}/{timestamp}_{uuid}.parquet
+        def _write_parquet(path: str, content_df: pd.DataFrame):
+            try:
+                with self.fs.open(path, "wb") as f:
+                    content_df.to_parquet(f, engine="pyarrow", index=False)
+                logger.info(f"Wrote {len(content_df)} events to {path}")
+            except Exception as e:
+                logger.error(f"Failed to write to {path}: {e}")
+                raise e
 
-            # We can only write if source and event_type are uniform per group?
-            # Or we include them in path?
-            # Typically lakehouse is source/type/date.
-            # If batch has mixed types, we must group by source/type too.
+        # OPTIMIZATION: Parallelize S3 writes using ThreadPoolExecutor.
+        # This significantly reduces latency when writing multiple partitions/files.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
+            for date_str, group_df in df.groupby("date"):
+                # Construct path
+                # s3://{bucket}/v1/{source}/{event_type}/date={YYYY-MM-DD}/{timestamp}_{uuid}.parquet
 
-            for (source, event_type), sub_group in group_df.groupby(["source", "event_type"]):
-                # Create unique filename
-                filename = f"{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
-                path = f"s3://{self.bucket}/v1/{source}/{event_type}/date={date_str}/{filename}"
+                # We can only write if source and event_type are uniform per group?
+                # Or we include them in path?
+                # Typically lakehouse is source/type/date.
+                # If batch has mixed types, we must group by source/type too.
 
-                # Write to S3
-                # We drop the partition columns from the file content usually, but keeping them is fine too.
-                # Dropping 'date' as it's in the path.
-                content_df = sub_group.drop(columns=["date"])
+                for (source, event_type), sub_group in group_df.groupby(["source", "event_type"]):
+                    # Create unique filename
+                    filename = f"{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
+                    path = f"s3://{self.bucket}/v1/{source}/{event_type}/date={date_str}/{filename}"
 
-                try:
-                    with self.fs.open(path, "wb") as f:
-                        content_df.to_parquet(f, engine="pyarrow", index=False)
-                    logger.info(f"Wrote {len(sub_group)} events to {path}")
-                except Exception as e:
-                    logger.error(f"Failed to write to {path}: {e}")
-                    raise e
+                    # Write to S3
+                    # We drop the partition columns from the file content usually, but keeping them is fine too.
+                    # Dropping 'date' as it's in the path.
+                    content_df = sub_group.drop(columns=["date"])
+
+                    # Submit task immediately
+                    futures.append(executor.submit(_write_parquet, path, content_df))
+
+            # Wait for all tasks to complete and raise exception if any failed
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
