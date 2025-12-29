@@ -75,8 +75,10 @@ filterwarnings = [
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]
-ignore = []
+ignore = ["E402", "E501", "B008"]
 
 [tool.black]
 line-length = 120

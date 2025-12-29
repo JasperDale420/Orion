@@ -1,8 +1,9 @@
 import time
-import pandas as pd
-from datetime import datetime, timezone
 import uuid
-import logging
+from datetime import datetime, timezone
+
+import pandas as pd
+
 
 # Mock BronzeEvent class to avoid importing the whole sqlalchemy model if not needed,
 # or we can just use a dict or simple class since the LakehouseWriter converts it to dict anyway.
@@ -21,6 +22,7 @@ class MockBronzeEvent:
         self.schema_version = "v1"
         self.payload = {"foo": "bar"}
         self.ingest = {}
+
 
 def reproduce():
     # Setup
@@ -116,6 +118,7 @@ def reproduce():
     if not match2:
         print("Sample Opt 2 mismatch:")
         print(df[["date_apply", "date_opt2"]].head())
+
 
 if __name__ == "__main__":
     reproduce()

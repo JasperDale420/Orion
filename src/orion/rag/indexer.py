@@ -227,7 +227,7 @@ class IndexerService:
 
                     cfg_blob = s.definition_json or s.config
                     cfg_str = json.dumps(cfg_blob, indent=2) if isinstance(cfg_blob, dict) else str(cfg_blob)
-                except:
+                except Exception:
                     cfg_str = str(s.definition_json or s.config)
 
                 text_rep = (

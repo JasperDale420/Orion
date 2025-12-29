@@ -132,7 +132,7 @@ class NormalizationEngine:
         if isinstance(ts_val, str):
             try:
                 bar_ts = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
-            except:
+            except Exception:
                 pass
 
         return {

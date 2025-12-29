@@ -61,7 +61,7 @@ class SolverPipeline:
             logger.error(f"Feature computation failed for solver {solver.version_id}: {e}")
             raise FeatureComputationError(
                 f"Feature Key Generation Failed: {e}", code=ErrorCode.FEATURE_COMPUTATION_FAILED
-            )
+            ) from e
 
         # 3. Model Inference
         p_take = 0.0
@@ -97,7 +97,7 @@ class SolverPipeline:
 
                     # CRITICAL FIX: Fail Fast. Do not fallback.
                     logger.error(f"Model inference failed for {uri}: {e}")
-                    raise ModelInferenceError(f"Inference Failed: {e}", code=ErrorCode.MODEL_INFERENCE_FAILED)
+                    raise ModelInferenceError(f"Inference Failed: {e}", code=ErrorCode.MODEL_INFERENCE_FAILED) from e
             else:
                 from orion.core.errors import ErrorCode, ModelInferenceError
 

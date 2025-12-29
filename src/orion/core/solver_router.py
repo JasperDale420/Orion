@@ -4,7 +4,7 @@ from typing import List
 
 from sqlalchemy import select
 
-from orion.core.solver_schema import SolverConfig
+from orion.core.solver_schema import LiveContext, SolverConfig
 from orion.storage.db import async_session_factory  # Async session logic
 from orion.storage.models_solvers import Solver, SolverMetrics
 

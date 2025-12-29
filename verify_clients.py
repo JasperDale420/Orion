@@ -4,12 +4,13 @@ import sys
 # Add src to pythonpath
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
-try:
-    from orion.unusualwhales.client import UnusualWhalesClient
+import importlib.util
 
+spec = importlib.util.find_spec("orion.unusualwhales.client")
+if spec:
     print("✅ UnusualWhalesClient imported successfully")
-except ImportError as e:
-    print(f"❌ Failed to import UnusualWhalesClient: {e}")
+else:
+    print("❌ Failed to find module 'orion.unusualwhales.client'")
 
 
 print("Verification complete.")

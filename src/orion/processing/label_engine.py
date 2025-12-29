@@ -39,7 +39,7 @@ class TripleBarrierLabeling:
                 # Try to map to nearest future timestamp or skip
                 try:
                     start_ts = prices.index[prices.index.get_indexer([start_ts], method="bfill")[0]]
-                except:
+                except Exception:
                     continue
 
             # Entry Price

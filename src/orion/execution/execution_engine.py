@@ -25,7 +25,6 @@ class ExecutionEngine:
         # Load keys from SystemSettings
         api_key = system_settings.alpaca_api_key
         secret_key = system_settings.alpaca_secret_key
-        paper = system_settings.alpaca_paper
 
         # Initialize Risk Manager (autoloads RiskConfig from env)
         from orion.execution.risk_manager import RiskManager
