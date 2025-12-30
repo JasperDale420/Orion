@@ -69,6 +69,34 @@ class SolverRouter:
                 if not active_solvers:
                     return []
 
+                # P2 Audit Fix: Batch-fetch all solver metrics upfront to eliminate N+1 queries
+                solver_ids = [s.solver_id for s in active_solvers]
+                from sqlalchemy import func
+
+                # Subquery: get latest evaluated_at_utc per solver_id
+                latest_subq = (
+                    select(
+                        SolverMetrics.solver_id,
+                        func.max(SolverMetrics.evaluated_at_utc).label("max_eval")
+                    )
+                    .where(SolverMetrics.solver_id.in_(solver_ids))
+                    .group_by(SolverMetrics.solver_id)
+                    .subquery()
+                )
+
+                # Main query: join to get full metrics rows
+                stmt_metrics = (
+                    select(SolverMetrics)
+                    .join(
+                        latest_subq,
+                        (SolverMetrics.solver_id == latest_subq.c.solver_id)
+                        & (SolverMetrics.evaluated_at_utc == latest_subq.c.max_eval)
+                    )
+                )
+                metrics_result = await session.execute(stmt_metrics)
+                all_metrics = metrics_result.scalars().all()
+                metrics_by_solver: dict[str, SolverMetrics] = {m.solver_id: m for m in all_metrics}
+
                 ranked_candidates: list[tuple[SelectedSolver, float]] = []
                 target_ticker = context.ticker
 
@@ -99,15 +127,8 @@ class SolverRouter:
                     if solver_stage_val < target_stage_val:
                         continue
 
-                    # Pull latest solver_metrics for ranking/constraints (PRD FR 5.6.1).
-                    stmt_m = (
-                        select(SolverMetrics)
-                        .where(SolverMetrics.solver_id == s.solver_id)
-                        .order_by(SolverMetrics.evaluated_at_utc.desc())
-                        .limit(1)
-                    )
-                    m_res = await session.execute(stmt_m)
-                    latest_metrics = m_res.scalars().first()
+                    # P2 Audit Fix: Use pre-fetched metrics from batch query
+                    latest_metrics = metrics_by_solver.get(s.solver_id)
 
                     # Initialize raw metric values (to track None vs 0.0)
                     max_dd_pct_raw = None

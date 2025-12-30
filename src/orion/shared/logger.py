@@ -43,6 +43,10 @@ class JSONFormatter(logging.Formatter):
             if env_run_id:
                 log_record["run_id"] = env_run_id
 
+        # P2 Audit: Add correlation_id for request-level tracing
+        if "correlation_id" not in log_record and "trace_id" in record.__dict__:
+            log_record["correlation_id"] = record.__dict__["trace_id"]
+
         return json.dumps(log_record)
 
 
