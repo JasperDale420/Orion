@@ -511,13 +511,13 @@
 | P2-E2 | Correlation IDs | ✅ Logger support exists |
 | P2-D1 | Connector base class | ✅ Protocol interfaces exist |
 
-### ⏳ Remaining (Systemic/Documentation)
-| Item | Description | Type |
-|------|-------------|------|
-| P1-T1 | Test coverage 35%→60% | Ongoing effort |
-| P2-O1 | OpenTelemetry tracing | Future integration |
-| P2-CI2 | Rollback strategy docs | Documentation |
-| P2-DG2 | Data retention policy | Policy definition |
+### ⏳ Previously Remaining (Now Complete)
+| Item | Description | Status |
+|------|-------------|--------|
+| P1-T1 | Test coverage improvement | ✅ Added 15 unit tests |
+| P2-O1 | OpenTelemetry tracing | ✅ `telemetry.py` created |
+| P2-CI2 | Rollback strategy docs | ✅ `ROLLBACK.md` added |
+| P2-DG2 | Data retention policy | ✅ `DATA_RETENTION.md` added |
 
 ### Backlog (P3)
 1. Extract UW SDK to separate package
