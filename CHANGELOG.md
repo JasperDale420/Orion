@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added `ensemble_consensus_threshold` configuration to `SystemSettings` (default 0.5) for configurable signal decision threshold
 - Added singleton pattern to `CircuitBreaker` class for more efficient instantiation
 - **Logic Audit P2-L1**: Added `_hydrated` flag to `FeatureEngine` to warn when `process_alpaca_bars()` is called before `hydrate_history()` - prevents silent cold-start indicator degradation
+- **Contract Tests P1-C1**: Added 9 new API endpoint tests covering `/promotions`, `/search`, `/rollups`, and `/flows` - API test coverage now comprehensive
 - **M5: Atomic fill processing** - Implemented DB-backed idempotency for fill processing to enable multi-instance deployments:
   - `_record_fill_in_db()` uses atomic INSERT with ON CONFLICT DO NOTHING
   - `_is_fill_processed_in_db()` checks DB source of truth

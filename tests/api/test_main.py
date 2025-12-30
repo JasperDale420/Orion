@@ -3,7 +3,7 @@ Tests for the Orion Admin API endpoints.
 Uses httpx.AsyncClient with FastAPI dependency overrides.
 """
 
-from typing import Any, Generator
+from typing import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -171,3 +171,156 @@ class TestCandidatesEndpoint:
             response = await client.get("/candidates/nonexistent-candidate")
 
         assert response.status_code == 404
+
+
+class TestPromotionsEndpoints:
+    """Tests for /promotions/recommendations endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_list_promotion_recommendations_empty(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """List promotion recommendations should return empty list when none exist."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/promotions")
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+    @pytest.mark.asyncio
+    async def test_approve_promotion_not_found(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Approve promotion should return 404 for non-existent recommendation."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/promotions/nonexistent/approve",
+                params={"reviewed_by": "test_user"},
+            )
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_reject_promotion_not_found(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Reject promotion should return 404 for non-existent recommendation."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/promotions/nonexistent/reject",
+                params={"reviewed_by": "test_user"},
+            )
+
+        assert response.status_code == 404
+
+
+class TestSearchEndpoint:
+    """Tests for /search endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_search_requires_query(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Search should return 422 when query parameter is missing."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/search")
+
+        assert response.status_code == 422
+
+
+class TestRollupsEndpoints:
+    """Tests for /rollups endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_get_rollups_requires_ticker(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Get rollups should return 422 when ticker is missing."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/rollups")
+
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_get_rollups_with_ticker(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Get rollups should return data for valid ticker."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/rollups", params={"ticker": "AAPL"})
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_get_rollup_not_found(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Get specific rollup should return 404 when not found."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/rollups/AAPL/5m/2025-01-01T00:00:00")
+
+        assert response.status_code == 404
+
+
+class TestFlowsEndpoint:
+    """Tests for /flows endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_get_flows_empty(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Get flows should return empty list when no flows exist."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/flows")
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+    @pytest.mark.asyncio
+    async def test_get_flows_with_filters(
+        self,
+        override_deps: None,
+        mock_audit_logging: None,
+    ) -> None:
+        """Get flows should accept filter parameters."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/flows", params={"ticker": "TSLA", "min_premium_usd": 10000}
+            )
+
+        assert response.status_code == 200
+
