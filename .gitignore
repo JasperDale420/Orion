@@ -26,6 +26,10 @@ coverage.xml
 .ruff_cache/
 .mypy_cache/
 
+# Debug/Output files
+*.txt
+coverage.json
+
 # Distribution / Packaging
 dist/
 build/
