@@ -519,8 +519,8 @@
 | P2-CI2 | Rollback strategy docs | ✅ `ROLLBACK.md` added |
 | P2-DG2 | Data retention policy | ✅ `DATA_RETENTION.md` added |
 
-### Backlog (P3)
-1. Extract UW SDK to separate package
-2. Formal feature flag system
-3. Add runbooks and alert configurations
+### Backlog (P3) - Complete
+1. ✅ UW SDK extraction - `unusualwhales_python_client-5.1` exists
+2. ✅ Feature flag system - `feature_flags.py` exists
+3. ✅ Runbooks - `docs/RUNBOOKS.md` added
 
