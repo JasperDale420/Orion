@@ -1,0 +1,517 @@
+# Orion Comprehensive 22-Point Audit
+**Generated**: 2025-12-30  
+**Status**: Complete
+
+---
+
+## Executive Summary
+
+| Category | Status | P0 | P1 | P2 | P3 |
+|----------|--------|-----|-----|-----|-----|
+| 1. Logic | ✅ | 0 | 2 | 3 | 1 |
+| 2. Contract Tests | ⚠️ | 0 | 1 | 2 | 0 |
+| 3. Module Boundaries | ✅ | 0 | 0 | 2 | 1 |
+| 4. Architecture | ✅ | 0 | 0 | 1 | 2 |
+| 5. Performance | ⚠️ | 0 | 1 | 2 | 2 |
+| 6. Memory | ✅ | 0 | 0 | 2 | 1 |
+| 7. Concurrency | ✅ | 0 | 1 | 1 | 0 |
+| 8. App Security | ⚠️ | 0 | 1 | 2 | 3 |
+| 9. Dependency Health | ✅ | 0 | 1 | 1 | 0 |
+| 10. Supply Chain | ⚠️ | 0 | 1 | 2 | 0 |
+| 11. Resilience | ⚠️ | 0 | 2 | 2 | 1 |
+| 12. Test Coverage | ⚠️ | 0 | 2 | 3 | 0 |
+| 13. Testing Quality | ✅ | 0 | 0 | 2 | 1 |
+| 14. Observability | ⚠️ | 0 | 1 | 3 | 0 |
+| 15. Error Taxonomy | ✅ | 0 | 0 | 2 | 0 |
+| 16. Configuration | ✅ | 0 | 0 | 1 | 1 |
+| 17. Documentation | ✅ | 0 | 0 | 2 | 2 |
+| 18. Code Duplication | ✅ | 0 | 0 | 1 | 2 |
+| 19. Dead Code | ⚠️ | 0 | 0 | 3 | 2 |
+| 20. CI/CD | ✅ | 0 | 1 | 1 | 1 |
+| 21. Data Governance | ⚠️ | 0 | 1 | 2 | 0 |
+| 22. DevEx | ✅ | 0 | 0 | 1 | 1 |
+
+**Legend**: ✅ Good | ⚠️ Needs Attention | ❌ Critical
+
+---
+
+## 1. Logic Audit
+
+### Findings
+
+**P1-L1: Division by Zero in Ensemble Consensus**
+- **File**: [signal_engine.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/processing/signal_engine.py#L165)
+- **Issue**: `consensus_score = weighted_vote / total_weight if total_weight > 0 else 0.0` - protected but prior loop can have `weight <= 0.0` causing all solvers to be skipped
+- **Status**: ✅ Already guarded with `valid_solver_found` check
+
+**P1-L2: Fallback Solver Validation**
+- **File**: [solver_router.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/core/solver_router.py#L219-267)
+- **Issue**: Baseline solver failure raises RuntimeError - could crash system
+- **Status**: ✅ Fail-fast is correct for safety-critical code
+
+**P2-L1: Feature Engine Cold Start**
+- **File**: [feature_engine.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py)
+- **Issue**: `hydrate_history` required before processing but not enforced
+- **Recommendation**: Add initialization check in `process_alpaca_bars`
+
+**P2-L2: Regime Cache Invalidation**
+- **File**: [signal_engine.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/processing/signal_engine.py#L52-63)
+- **Issue**: Regime transition clears all history for ticker, could lose valid data
+- **Status**: ✅ Intentional design per M1 remediation comment
+
+**P2-L3: Risk Check Order**
+- **File**: [risk_manager.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/execution/risk_manager.py)
+- **Issue**: Multiple risk checks run sequentially; first failure returns immediately
+- **Status**: ✅ Correct fail-fast behavior
+
+**P3-L1: Stage Alias Hardcoded**
+- **File**: [solver_router.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/core/solver_router.py#L30-33)
+- **Issue**: `STAGE_ALIASES` is hardcoded; consider config-driven
+- **Status**: Acceptable for now, noted for future
+
+---
+
+## 2. Contract Tests Audit
+
+### Findings
+
+**P1-C1: API Endpoints Untested**
+- **Files**: `src/orion/api/main.py` (0% coverage)
+- **Issue**: All FastAPI endpoints have no test coverage
+- **Recommendation**: Add integration tests using TestClient
+
+**P2-C1: Pydantic Schema Validation**
+- **Status**: ✅ Using Pydantic v2 with strict validation
+- **Files**: `config.py`, `solver_schema.py`, `api/schemas.py`
+
+**P2-C2: Missing Contract Tests for Connectors**
+- **Issue**: UW and Alpaca connector responses not validated against contracts
+- **Recommendation**: Add response schema tests
+
+---
+
+## 3. Module Boundaries Audit
+
+### Findings
+
+**P2-M1: Circular Import Prevention**
+- **Status**: ✅ Lazy imports used in `signal_engine.py` and `solver_router.py`
+- **Pattern**: `from orion.config import system_settings` inside methods
+
+**P2-M2: Core Module Coupling**
+- **Issue**: `processing/` depends on `core/` and `storage/` - appropriate layering
+- **Status**: ✅ Clean dependency direction
+
+**P3-M1: Unusualwhales Module Size**
+- **Directory**: `src/orion/unusualwhales/` (229 children)
+- **Observation**: Large generated SDK - consider extraction to separate package
+
+---
+
+## 4. Architecture Audit
+
+### Findings
+
+**P2-A1: Vertical Slice Implementation**
+- **Status**: ✅ Follows vertical slice architecture
+- **Evidence**: Complete slices for ingestion, execution, meta-search
+
+**P3-A1: Lakehouse Layer Organization**  
+- **Status**: ✅ Bronze/Silver/Gold layers correctly implemented
+- **Files**: Storage models organized by layer
+
+**P3-A2: Event-Driven Design**
+- **Status**: ✅ Redpanda integration for event streaming
+- **Note**: Producer uses fire-and-forget per README (known gap)
+
+---
+
+## 5. Performance Audit
+
+### Findings
+
+**P1-P1: N+1 Query in Solver Router**
+- **File**: [solver_router.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/core/solver_router.py#L103-110)
+- **Issue**: Individual query per solver for metrics
+- **Recommendation**: Batch query metrics for all active solvers
+
+**P2-P1: Feature History Unbounded**
+- **File**: [feature_engine.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py)
+- **Issue**: `self.history` dict grows per ticker without pruning
+- **Recommendation**: Add TTL-based eviction
+
+**P2-P2: DataFrame Operations**
+- **File**: [feature_engine.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py)
+- **Status**: Uses pandas efficiently with column operations
+
+**P3-P1: Indicator Computation**
+- **Status**: pandas_ta used for vectorized operations
+
+**P3-P2: DB Connection Pooling**
+- **Status**: ✅ SQLAlchemy async pooling configured in `storage/db.py`
+
+---
+
+## 6. Memory Audit
+
+### Findings
+
+**P2-M1: BoundedSet for Fill Tracking**
+- **File**: [risk_manager.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/execution/risk_manager.py#L26-46)
+- **Status**: ✅ Memory-bounded set implementation with LRU eviction
+
+**P2-M2: History DataFrame Growth**
+- **File**: [feature_engine.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py)
+- **Issue**: Per-ticker DataFrames grow unbounded
+- **Recommendation**: Implement rolling window retention
+
+**P3-M1: Flow History Dict**
+- **Status**: Per-ticker dicts; memory proportional to active universe
+
+---
+
+## 7. Concurrency & Parallelism Audit
+
+### Findings
+
+**P1-C1: Async Session Safety**
+- **File**: [db.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/storage/db.py)
+- **Status**: ✅ Uses async session factory correctly
+
+**P2-C1: No Concurrent Fill Processing**
+- **File**: [execution_engine.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/execution/execution_engine.py)
+- **Status**: Sequential fill processing per poll cycle - acceptable for throughput
+
+**Design Notes**:
+- Uses `asyncio` exclusively (no threading/multiprocessing)
+- Semaphores not currently used
+- No race condition concerns identified
+
+---
+
+## 8. App Security Audit
+
+### Findings
+
+**P1-S1: API Key in Environment**
+- **Status**: ✅ Using `pydantic-settings` for secret management
+- **Files**: `.env.example` documents required secrets
+
+**P2-S1: Hardcoded Test Secrets**
+- **Files**: Multiple test files contain dummy API keys
+- **Status**: ✅ In `.secrets.baseline` - verified as test fixtures
+
+**P2-S2: SQL Injection Prevention**
+- **Status**: ✅ Using SQLAlchemy ORM with parameterized queries
+
+**P3-S1: HTTPS Enforcement**
+- **Docker**: Services on internal network; Alpaca/UW use HTTPS
+
+**P3-S2: Input Validation**
+- **Status**: ✅ Pydantic models validate all inputs
+
+**P3-S3: Bandit Findings**
+- **Count**: 8 low-severity, 0 high/medium
+- **Details**: Primarily assert statements and random usage
+
+---
+
+## 9. Dependency Health Audit
+
+### Findings
+
+**P1-D1: Dependabot Configured**
+- **File**: [.github/dependabot.yml](file:///Users/jacobmcmillan/Empire/Orion/.github/dependabot.yml)
+- **Status**: ✅ Weekly updates for pip
+
+**P2-D1: Python Version**
+- **Status**: ✅ Python 3.12+ specified in `pyproject.toml`
+
+**Dependencies Summary** (from `pyproject.toml`):
+- Core: requests, pydantic, sqlalchemy, asyncpg, tenacity
+- ML: pandas, numpy, scipy, openai
+- Streaming: aiokafka, websockets
+- Dev: pytest, ruff, mypy, bandit
+
+---
+
+## 10. Supply Chain Security Audit
+
+### Findings
+
+**P1-SC1: No SBOM Generation**
+- **Issue**: No software bill of materials generated
+- **Recommendation**: Add `cyclonedx-py` to CI pipeline
+
+**P2-SC1: Secrets Scanning**
+- **Status**: ✅ `detect-secrets` in pre-commit with baseline
+
+**P2-SC2: No Artifact Signing**
+- **Issue**: Docker images not signed
+- **Recommendation**: Consider Cosign for production
+
+---
+
+## 11. Resilience & Failure-Modes Audit
+
+### Findings
+
+**P1-R1: Missing Circuit Breaker Usage**
+- **File**: [circuit_breaker.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/core/circuit_breaker.py)
+- **Status**: ✅ Implemented, 96% coverage
+- **Issue**: Not integrated with UW/Alpaca connectors
+
+**P1-R2: Retry Configuration**
+- **Status**: ✅ `tenacity` configured per README
+- **File**: Connectors use exponential backoff
+
+**P2-R1: Idempotency for Fill Processing**
+- **File**: [risk_manager.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/execution/risk_manager.py#L403-417)
+- **Status**: ✅ DB-level fill ID deduplication
+
+**P2-R2: DLQ Implementation**
+- **Status**: ✅ `dead_letter_queue` table for failed events
+
+**P3-R1: Backpressure Handling**
+- **Issue**: No explicit backpressure in ingestion pipeline
+- **Observation**: Rate limits handled via polling intervals
+
+---
+
+## 12. Test Coverage Audit
+
+### Findings
+
+**P1-T1: Overall Coverage Low**
+- **Current**: ~35% (per README)
+- **Target**: 60%+ for trading systems
+- **Critical Gaps**:
+  - `api/main.py`: 0%
+  - `connectors/alpaca_*.py`: 0-20%
+  - `execution/`: <50%
+
+**P1-T2: Execution Engine Coverage**
+- **File**: `execution_engine.py`
+- **Status**: Critical path needs integration tests
+
+**P2-T1: Agent Coverage**
+- **Files**: `agents/*.py` at 50-70%
+- **Status**: Good for LLM-integration code
+
+**P2-T2: Core Logic Coverage**
+- **Files**: `solver_router.py` (81%), `signal_engine.py`, `feature_engine.py`
+- **Status**: Better coverage on core decision logic
+
+**P2-T3: Connector Coverage**
+- **Issue**: Minimal mocking of external APIs
+
+---
+
+## 13. Testing Quality Audit
+
+### Findings
+
+**P2-Q1: Test Architecture**
+- **Status**: ✅ Clean separation: unit/integration/e2e
+- **Framework**: pytest with pytest-asyncio
+
+**P2-Q2: Mocking Strategy**
+- **File**: [TESTING.md](file:///Users/jacobmcmillan/Empire/Orion/TESTING.md)
+- **Status**: ✅ Documented mocking patterns
+
+**P3-Q1: Fixture Reuse**
+- **File**: `tests/conftest.py`
+- **Status**: ✅ Shared fixtures for async operations
+
+---
+
+## 14. Observability Audit
+
+### Findings
+
+**P1-O1: Structured Logging**
+- **Status**: ✅ JSON formatter in `logging_config.py`
+- **Pattern**: `extra` dict for structured fields
+
+**P2-O1: No Distributed Tracing**
+- **Issue**: No OpenTelemetry integration
+- **Recommendation**: Add trace propagation for request flows
+
+**P2-O2: Metrics Collection**
+- **File**: `shared/metrics.py`
+- **Status**: ✅ Prometheus metrics via `prometheus-client`
+
+**P2-O3: No Alert Rules**
+- **Issue**: No runbooks or alert configurations
+- **Recommendation**: Define SLOs and alert thresholds
+
+---
+
+## 15. Error Taxonomy & Logging Audit
+
+### Findings
+
+**P2-E1: Error Codes Defined**
+- **File**: [errors.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/core/errors.py)
+- **Status**: ✅ Enum-based error codes
+
+**P2-E2: Correlation IDs**
+- **Issue**: No request-level correlation IDs
+- **Recommendation**: Add `run_id` propagation to all logs
+
+**Status**: Error handling follows "fail-loud" principle per guidelines
+
+---
+
+## 16. Configuration Audit
+
+### Findings
+
+**P2-C1: Centralized Settings**
+- **File**: [config.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/config.py)
+- **Status**: ✅ `pydantic-settings` with env prefix
+
+**P3-C1: Feature Flags**
+- **Status**: Via environment variables (e.g., `ORION_STAGE`)
+- **Recommendation**: Consider formal feature flag system for A/B testing
+
+---
+
+## 17. Documentation Audit
+
+### Findings
+
+**P2-D1: README Comprehensive**
+- **File**: [README.md](file:///Users/jacobmcmillan/Empire/Orion/README.md)
+- **Status**: ✅ Setup, architecture, and usage documented
+
+**P2-D2: API Documentation**
+- **Issue**: No OpenAPI docs exposure
+- **Status**: FastAPI auto-generates at `/docs`
+
+**P3-D1: Inline Comments**
+- **Status**: Key functions have docstrings
+
+**P3-D2: PRD Available**
+- **Files**: `PRD.md`, `PRDv2.md` for system design
+
+---
+
+## 18. Code Duplication Audit
+
+### Findings
+
+**P2-D1: Connector Pattern Repetition**
+- **Files**: `uw_*_connector.py` files share similar structure
+- **Recommendation**: Extract base class pattern
+
+**P3-D1: Event ID Generation**
+- **Status**: Similar hash-based ID generation across connectors
+- **Note**: Intentional for deterministic deduplication
+
+**P3-D2: Watermark Loading**
+- **Status**: Pattern repeated in connectors; consider mixin
+
+---
+
+## 19. Dead Code Audit
+
+### Findings
+
+**P2-DC1: Unused Imports**
+- **Status**: ✅ Ruff configured; no current issues
+
+**P2-DC2: Root-Level Debug Scripts**
+- **Files**: `debug_import.py`, `probe_pagination.py`, `reproduce_lakehouse_perf.py`, `verify_*.py`
+- **Recommendation**: Move to `scripts/` or remove
+
+**P2-DC3: Offline Gym Stub**
+- **File**: [offline_gym.py](file:///Users/jacobmcmillan/Empire/Orion/src/orion/core/offline_gym.py)
+- **Status**: 0% coverage, stub implementation
+- **Recommendation**: Complete or remove
+
+**P3-DC1: Audit Scripts**
+- **Files**: `audit_gold.py`, `audit_silver.py`
+- **Status**: 0% coverage; likely one-time scripts
+
+**P3-DC2: Legacy Log Files**
+- **Files**: `*.log`, `*.txt` files in root
+- **Recommendation**: Add to `.gitignore`
+
+---
+
+## 20. CI/CD & Release Engineering Audit
+
+### Findings
+
+**P1-CI1: GitHub Actions Pipeline**
+- **File**: [ci.yml](file:///Users/jacobmcmillan/Empire/Orion/.github/workflows/ci.yml)
+- **Status**: ✅ Multi-Python matrix (3.11, 3.12)
+
+**P2-CI1: SonarQube Integration**
+- **Status**: ✅ Configured with coverage upload
+
+**P2-CI2: No Rollback Strategy**
+- **Issue**: No documented rollback for deployments
+- **Recommendation**: Document Docker version pinning strategy
+
+**P3-CI1: Makefile Targets**
+- **Status**: ✅ `test`, `test-unit`, `test-integration`, `lint`
+
+---
+
+## 21. Data Governance & Privacy Audit
+
+### Findings
+
+**P1-DG1: Audit Logging**
+- **Table**: `audit_logs` (per Alembic migrations)
+- **Status**: ✅ DB-level audit trail
+
+**P2-DG1: No Data Classification**
+- **Issue**: No explicit PII/sensitive data markers
+- **Observation**: Financial data (positions, orders) should be classified
+
+**P2-DG2: Retention Policy**
+- **Issue**: No automated data retention/pruning
+- **Recommendation**: Define retention for Bronze/Silver/Gold layers
+
+---
+
+## 22. DevEx / Repo Ergonomics Audit
+
+### Findings
+
+**P2-DX1: One-Command Bootstrap**
+- **Status**: ✅ `docker-compose up -d --build`
+- **Dev setup**: `pip install .[dev] && pre-commit install`
+
+**P3-DX1: Pre-commit Hooks**
+- **File**: [.pre-commit-config.yaml](file:///Users/jacobmcmillan/Empire/Orion/.pre-commit-config.yaml)
+- **Status**: ✅ ruff, black, mypy, bandit, detect-secrets
+
+**P3-DX2: .env.example**
+- **Status**: ✅ Template provided
+
+---
+
+## Remediation Summary
+
+### Immediate Actions (P1)
+1. Add API endpoint tests
+2. Integrate circuit breaker with connectors
+3. Improve test coverage to 50%+
+4. Add SBOM generation to CI
+
+### Short-term (P2)
+1. Add OpenTelemetry tracing
+2. Batch solver metrics queries
+3. Implement feature history pruning
+4. Clean up root-level debug scripts
+5. Define data retention policy
+
+### Backlog (P3)
+1. Extract UW SDK to separate package
+2. Formal feature flag system
+3. Complete or remove `offline_gym.py`
+4. Add runbooks and alert configurations
