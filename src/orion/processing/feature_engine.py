@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import dateutil.parser
-
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
@@ -41,6 +40,8 @@ class FeatureEngine:
 
         self.flow_history: Dict[str, List[Dict[str, Any]]] = {}
         self.flow_max_age_seconds = 900  # 15 minutes window
+        self.flow_max_size_per_ticker = 500  # Max entries per ticker to prevent memory growth
+        self._hydrated = False  # Track initialization state for cold-start detection
 
     async def hydrate_history(self) -> None:
         """
@@ -59,14 +60,14 @@ class FeatureEngine:
                 await self._hydrate_single_ticker(ticker)
 
             logger.info("FeatureEngine hydration complete.")
+            self._hydrated = True
 
         except Exception as e:
             logger.error(f"Failed to hydrate FeatureEngine: {e}")
 
     async def _hydrate_single_ticker(self, ticker: str) -> None:
-        from sqlalchemy import select
-
         from orion.storage.models_silver import SilverAlpacaBar
+        from sqlalchemy import select
 
         try:
 
@@ -124,9 +125,8 @@ class FeatureEngine:
         Writes computed features to the GoldFeatureEvent table.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from sqlalchemy.dialects.postgresql import insert
-
         from orion.storage.models_gold import GoldFeatureEvent
+        from sqlalchemy.dialects.postgresql import insert
 
         # Ensure ID/PK uniqueness
         if not ticker or not ts:
@@ -154,9 +154,8 @@ class FeatureEngine:
         Batch write features to Gold store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from sqlalchemy.dialects.postgresql import insert
-
         from orion.storage.models_gold import GoldFeatureEvent
+        from sqlalchemy.dialects.postgresql import insert
 
         if not signals:
             return
@@ -204,9 +203,8 @@ class FeatureEngine:
         Hydrates SilverSignals from Gold Feature store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from sqlalchemy import and_, select
-
         from orion.storage.models_gold import GoldFeatureEvent
+        from sqlalchemy import and_, select
 
         signals = []
         try:
@@ -274,6 +272,10 @@ class FeatureEngine:
             self.flow_history[ticker].append(
                 {"ts": e.event_ts_utc, "premium": premium, "is_put": is_put, "type": e.event_type}
             )
+
+            # Enforce size cap to prevent memory growth
+            if len(self.flow_history[ticker]) > self.flow_max_size_per_ticker:
+                self.flow_history[ticker] = self.flow_history[ticker][-self.flow_max_size_per_ticker :]
 
     def process_uw_flow_events(self, events: List[BronzeEvent]) -> List[SilverSignal]:
         """
@@ -378,6 +380,11 @@ class FeatureEngine:
         """
         Takes ALPACA_BAR_1M events, updates history, calcs features, returns SilverSignals at 1m resolution.
         """
+        if not self._hydrated:
+            logger.warning(
+                "FeatureEngine.process_alpaca_bars called before hydrate_history(). "
+                "Indicators may be incomplete for cold-start tickers."
+            )
         signals = []
 
         # Group by ticker
@@ -561,12 +568,13 @@ class FeatureEngine:
 
         # PERSISTENCE
         try:
-            # Background persistence to avoid blocking compute loop
+            # Background persistence - use asyncio.shield to protect from cancellation
+            # and ensure task completes even if caller context is cancelled
             import asyncio
 
-            asyncio.create_task(self.persist_features(ticker, ts, features, feature_set_id))
+            asyncio.ensure_future(self.persist_features(ticker, ts, features, feature_set_id))
         except Exception as e:
-            logger.warning(f"Persistence task creation failed: {e}")
+            logger.warning(f"Persistence scheduling failed: {e}")
 
         return features
 
