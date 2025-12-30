@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Logic Audit P2-L1**: Added `_hydrated` flag to `FeatureEngine` to warn when `process_alpaca_bars()` is called before `hydrate_history()` - prevents silent cold-start indicator degradation
 - **Contract Tests P1-C1**: Added 9 new API endpoint tests covering `/promotions`, `/search`, `/rollups`, and `/flows` - API test coverage now comprehensive
 - **Dead Code P2-DC2**: Updated `.gitignore` to exclude debug output files (`*.txt`, `coverage.json`) and removed 8 tracked debug files from repository
+- **Resilience P1-R1**: Added circuit breaker integration to `uw_socket_connector.py` - all UW connectors now check breaker before polling/connecting
 - **M5: Atomic fill processing** - Implemented DB-backed idempotency for fill processing to enable multi-instance deployments:
   - `_record_fill_in_db()` uses atomic INSERT with ON CONFLICT DO NOTHING
   - `_is_fill_processed_in_db()` checks DB source of truth
