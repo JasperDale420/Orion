@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Contract Tests P1-C1**: Added 9 new API endpoint tests covering `/promotions`, `/search`, `/rollups`, and `/flows` - API test coverage now comprehensive
 - **Dead Code P2-DC2**: Updated `.gitignore` to exclude debug output files (`*.txt`, `coverage.json`) and removed 8 tracked debug files from repository
 - **Resilience P1-R1**: Added circuit breaker integration to `uw_socket_connector.py` - all UW connectors now check breaker before polling/connecting
+- **Test Coverage P1-T1**: Added 15 unit tests for `feature_flags.py` (11 tests) and `api/auth.py` (4 tests) - addresses 0% coverage modules
 - **M5: Atomic fill processing** - Implemented DB-backed idempotency for fill processing to enable multi-instance deployments:
   - `_record_fill_in_db()` uses atomic INSERT with ON CONFLICT DO NOTHING
   - `_is_fill_processed_in_db()` checks DB source of truth
