@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict
 
 from openai import AsyncOpenAI
+
 from orion.agents.base import BaseAgent
 from orion.rag.vector_store import VectorStore
 from orion.storage.models_gold import CandidateTrade
@@ -17,7 +18,7 @@ class StrategistAgent(BaseAgent):
     augmented by RAG (historical context).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(name="Strategist", model="gpt-4-turbo")  # Or gpt-3.5-turbo if prefer cheaper
         api_key = os.getenv("OPENAI_API_KEY")
         self.client = AsyncOpenAI(api_key=api_key)

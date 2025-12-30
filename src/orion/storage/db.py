@@ -49,7 +49,7 @@ def async_session_factory() -> AsyncSession:
     return _sessionmaker()
 
 
-async def init_db():
+async def init_db() -> None:
     # Ensure all models are imported so Base.metadata is complete for create_all().
     from orion.storage import (  # noqa: F401
         models,

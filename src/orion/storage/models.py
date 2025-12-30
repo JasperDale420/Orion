@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import JSON, Date, DateTime, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -19,8 +20,8 @@ class BronzeEvent(Base):
     schema_version: Mapped[str] = mapped_column(String, default="v1")
     event_ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     received_ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    ingest: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    ingest: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     # Indexes for common queries
     __table_args__ = (
@@ -28,7 +29,7 @@ class BronzeEvent(Base):
         Index("idx_bronze_events_source_type", "source", "event_type"),
     )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<BronzeEvent(id={self.event_id}, source={self.source}, type={self.event_type})>"
 
 

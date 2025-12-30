@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List
+from typing import Any, List
+
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverAlpacaBar, SilverDarkPool, SilverOptionFlow, SilverSignal, SilverUWAlert
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]) -> None:
@@ -42,7 +43,7 @@ async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]
         await session.execute(stmt)
 
 
-def _required_event_ts_utc(e: BronzeEvent, payload: dict, payload_key: str) -> datetime:
+def _required_event_ts_utc(e: BronzeEvent, payload: dict[str, Any], payload_key: str) -> datetime:
     if getattr(e, "event_ts_utc", None) is not None:
         return e.event_ts_utc
 

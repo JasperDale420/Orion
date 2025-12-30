@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select
 
+from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import async_session_factory
 from orion.storage.models import SystemStatus
 
 logger = setup_struct_logger("orion.core.circuit_breaker")
@@ -17,7 +18,7 @@ class CircuitBreaker:
 
     KEY = "GLOBAL_CIRCUIT_BREAKER"
 
-    def __init__(self):
+    def __init__(self) -> None:
         # We don't hold state in memory to ensure all services see the DB state.
         pass
 
@@ -25,8 +26,8 @@ class CircuitBreaker:
         """
         Trips the circuit breaker (Stops Trading).
         """
-        async with async_session_factory() as session:
-            # Upsert
+
+        async def set_breaker(session: Any) -> None:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
             result = await session.execute(stmt)
             status_record = result.scalars().first()
@@ -43,14 +44,15 @@ class CircuitBreaker:
                 )
                 session.add(status_record)
 
-            await session.commit()
-            logger.critical(f"CIRCUIT BREAKER OPENED: {reason}")
+        await db_write(set_breaker)
+        logger.critical(f"CIRCUIT BREAKER OPENED: {reason}")
 
     async def close(self) -> None:
         """
         Resets the circuit breaker (Resumes Trading).
         """
-        async with async_session_factory() as session:
+
+        async def reset_breaker(session: Any) -> None:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
             result = await session.execute(stmt)
             status_record = result.scalars().first()
@@ -59,33 +61,37 @@ class CircuitBreaker:
                 status_record.status = "CLOSED"
                 status_record.details = "Reset by system/operator"
                 status_record.last_updated_utc = datetime.now(timezone.utc)
-                await session.commit()
-                logger.info("Circuit Breaker CLOSED (Reset). System Nominal.")
+
+        await db_write(reset_breaker)
+        logger.info("Circuit Breaker CLOSED (Reset). System Nominal.")
 
     async def is_open(self) -> bool:
         """
         Checks if trading should be halted.
         Returns True if OPEN (Halted).
         """
-        async with async_session_factory() as session:
+
+        async def check_status(session: Any) -> None:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
             result = await session.execute(stmt)
             status_record = result.scalars().first()
+            return status_record is not None and status_record.status == "OPEN"
 
-            if status_record and status_record.status == "OPEN":
-                return True
-            return False
+        return await db_query(check_status)
 
-    async def get_state(self) -> dict:
-        async with async_session_factory() as session:
+    async def get_state(self) -> dict[str, Any]:
+        """Get current circuit breaker state."""
+
+        async def fetch_state(session: Any) -> None:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
             result = await session.execute(stmt)
             status_record = result.scalars().first()
+            if not status_record:
+                return {"status": "CLOSED", "reason": "No record", "last_updated": None}
+            return {
+                "status": status_record.status,
+                "reason": status_record.details,
+                "last_updated": status_record.last_updated_utc,
+            }
 
-            if status_record:
-                return {
-                    "status": status_record.status,
-                    "reason": status_record.details,
-                    "last_updated": status_record.last_updated_utc,
-                }
-            return {"status": "CLOSED", "reason": "No record", "last_updated": None}
+        return await db_query(fetch_state)

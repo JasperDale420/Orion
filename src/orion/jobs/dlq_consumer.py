@@ -2,6 +2,9 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Any, List
+
+from sqlalchemy import select
 
 from orion.processing.feature_engine import FeatureEngine
 from orion.processing.ingest_pipeline import ingest_bronze_events
@@ -12,10 +15,10 @@ from orion.processing.persistence import (
     persist_silver_signals,
 )
 from orion.processing.rule_engine import RuleEngine
-from orion.storage.db import async_session_factory
+from orion.shared.db_utils import db_query, db_write
+from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -26,32 +29,49 @@ class DLQConsumer:
     Reads 'FAILED' events from DLQ table and attempts to re-process them.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.feature_engine = FeatureEngine()
         self.rule_engine = RuleEngine()
 
-    async def run_once(self):
+    async def _mark_succeeded(self, msg_id: str) -> None:
+        """Mark the DLQ message as succeeded."""
+
+        async def update_status(session: Any) -> None:
+            stmt = select(DeadLetterQueue).where(DeadLetterQueue.id == msg_id)
+            result = await session.execute(stmt)
+            msg = result.scalars().first()
+            if msg:
+                msg.status = "REPLAYED"
+                msg.error_message = f"Replayed successfully at {datetime.now(timezone.utc)}"
+
+        await db_write(update_status)
+
+    async def run_once(self) -> None:
         """
         Process one batch of DLQ items.
         """
         logger.info("Checking DLQ for failed events...")
 
-        async with async_session_factory() as session:
-            # Fetch FAILED items with retry_count < 3
+        batch_size = 10
+
+        async def fetch_dlq_events(session: Any) -> List[Any]:
             stmt = (
                 select(DeadLetterQueue)
-                .where(DeadLetterQueue.status == "FAILED")
-                .where(DeadLetterQueue.retry_count < 3)
-                .limit(10)
+                .where(DeadLetterQueue.status == "PENDING")
+                .order_by(DeadLetterQueue.event_ts_utc.asc())
+                .limit(batch_size)
             )
             result = await session.execute(stmt)
-            tasks = result.scalars().all()
+            return result.scalars().all()
 
-            if not tasks:
-                logger.info("No retryable DLQ items found.")
-                return
+        events = await db_query(fetch_dlq_events)
 
-            for task in tasks:
+        if not events:
+            logger.info("No retryable DLQ items found.")
+            return
+
+        async def process_and_update_dlq_items(session: Any) -> None:
+            for task in events:
                 logger.info(f"Replaying DLQ {task.id} (Type: {task.event_type})...")
 
                 try:
@@ -71,9 +91,9 @@ class DLQConsumer:
                     task.error_message = f"Retry Crash: {str(e)}"
                     logger.error(f"DLQ {task.id} Crash: {e}")
 
-            await session.commit()
+        await db_write(process_and_update_dlq_items)
 
-    async def _replay_event(self, session, task: DeadLetterQueue) -> bool:
+    async def _replay_event(self, session: Any, task: DeadLetterQueue) -> bool:
         """
         Route to appropriate handler based on event_type.
         """
@@ -94,7 +114,7 @@ class DLQConsumer:
         if isinstance(getattr(task, "event_ts_utc", None), datetime):
             event_ts = task.event_ts_utc
         if event_ts and event_ts.tzinfo is None:
-            event_ts = event_ts.replace(tzinfo=timezone.utc)
+            event_ts = ensure_utc(event_ts)
 
         bronze = BronzeEvent(
             event_id=str(event_id),
@@ -128,7 +148,7 @@ class DLQConsumer:
 
                 bronze.payload = NormalizationEngine.normalize_event(bronze.source, bronze.event_type, bronze.payload)
                 if bronze.event_ts_utc and bronze.event_ts_utc.tzinfo is None:
-                    bronze.event_ts_utc = bronze.event_ts_utc.replace(tzinfo=timezone.utc)
+                    bronze.event_ts_utc = ensure_utc(bronze.event_ts_utc)
                 if bronze.event_ts_utc:
                     td, sess = derive_trading_date_and_session(bronze.event_ts_utc)
                     bronze.trading_date = td

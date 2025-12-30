@@ -1,3 +1,7 @@
+from datetime import date
+from typing import Any, Dict
+
+
 class OfflineGym:
     """
     Placeholder for the V2 Offline Simulation Environment.
@@ -8,10 +12,10 @@ class OfflineGym:
     4. Calculate Reward (PnL, Sharpe)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
-    def run_simulation(self, solver_config: dict, start_date, end_date):
+    def run_simulation(self, solver_config: Dict[str, Any], start_date: date, end_date: date) -> Dict[str, float]:
         """
         No-Op implementation for scaffolding.
         Returns empty metrics.

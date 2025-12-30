@@ -42,3 +42,39 @@ async def test_compute_features_deterministic():
     )
     features_missing = await engine.compute(candidate_missing)
     assert not features_missing  # Should be empty
+
+
+def test_process_alpaca_bars_cold_start_warning(caplog):
+    """Test that a warning is logged when process_alpaca_bars is called without hydration."""
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    engine = FeatureEngine()
+
+    # Process without calling hydrate_history - should trigger warning
+    result = engine.process_alpaca_bars([])
+
+    assert "hydrate_history" in caplog.text
+    assert result == []  # Should still work, just with warning
+
+
+@pytest.mark.asyncio
+async def test_process_alpaca_bars_no_warning_after_hydration(caplog):
+    """Test that no warning is logged after hydrate_history is called."""
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    engine = FeatureEngine()
+
+    # Simulate successful hydration by directly setting the flag
+    # This avoids needing to mock the full DB layer
+    engine._hydrated = True
+
+    # Clear the log before processing
+    caplog.clear()
+
+    # Process after hydration - should not trigger warning
+    result = engine.process_alpaca_bars([])
+
+    assert "hydrate_history" not in caplog.text
+    assert result == []

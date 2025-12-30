@@ -11,7 +11,7 @@ class RSIOversoldRule(TradingRule):
     If RSI_14 < 30, generate LONG candidate.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(rule_id="rsi_oversold_v1")
         self.rsi_threshold = 30.0
 

@@ -13,7 +13,7 @@ class SolverPipeline:
     Encapsulates Rule Matching -> Feature Gen -> Model Inference -> Policy.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # In a real implementation, we would load FeatureEngine and ModelRegistry here
         pass
 

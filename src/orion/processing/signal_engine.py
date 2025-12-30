@@ -23,15 +23,17 @@ class SignalEngine:
     Output: StrategyDecision (Signal)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Initialize Router
         self.router = SolverRouter()
         self.regime_detector = RegimeDetector()
         self.pipeline = SolverPipeline()
         # Initialize Singleton Feature Engine
         self.feature_engine = FeatureEngine()
+        # Track previous regime per ticker for cache invalidation
+        self._previous_regime: dict[str, str] = {}
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """
         Initializes sub-components (FeatureEngine hydration).
         """
@@ -45,6 +47,23 @@ class SignalEngine:
 
         # 0. Detect Regime
         current_regime = await self.regime_detector.get_current_regime_for_ticker(candidate.ticker)
+        current_regime_str = current_regime.value if current_regime else "UNKNOWN"
+
+        # Clear feature cache on regime transition (M1 remediation)
+        previous_regime = self._previous_regime.get(candidate.ticker)
+        if previous_regime and previous_regime != current_regime_str:
+            logger.info(
+                f"Regime transition detected for {candidate.ticker}: {previous_regime} -> {current_regime_str}. "
+                f"Clearing feature cache to avoid stale indicators."
+            )
+            # Clear cache for this ticker
+            if candidate.ticker in self.feature_engine.history:
+                del self.feature_engine.history[candidate.ticker]
+            if candidate.ticker in self.feature_engine.flow_history:
+                del self.feature_engine.flow_history[candidate.ticker]
+
+        # Update regime tracker
+        self._previous_regime[candidate.ticker] = current_regime_str
 
         # 1. Select Solvers via Router (Ensemble)
         from orion.config import system_settings
@@ -53,7 +72,7 @@ class SignalEngine:
 
         context = LiveContext(
             ticker=candidate.ticker,
-            regime=current_regime.value if current_regime else "UNKNOWN",
+            regime=current_regime_str,
             time_of_day_utc=candidate.timestamp_utc,
             current_stage=stage_env,
         )

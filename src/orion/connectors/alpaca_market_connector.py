@@ -1,13 +1,14 @@
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class AlpacaMarketConnector:
         self.client = StockHistoricalDataClient(api_key=api_key, secret_key=secret_key, url_override=base_url)
         self.last_seen_ts = {}  # {ticker: timestamp}
 
-    def _generate_event_id(self, ticker: str, bar_data: dict) -> str:
+    def _generate_event_id(self, ticker: str, bar_data: dict[str, Any]) -> str:
         """
         Generates a deterministic event ID based on event content.
         """
@@ -113,8 +114,7 @@ class AlpacaMarketConnector:
                     raise ValueError(f"No timestamp found in bar: {payload.keys()}")
 
             # Ensure UTC
-            if event_ts.tzinfo is None:
-                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            event_ts = ensure_utc(event_ts)
 
             # Update watermark
             last_ts = self.last_seen_ts.get(ticker)

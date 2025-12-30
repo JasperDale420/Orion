@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from sqlalchemy import func
@@ -18,7 +18,7 @@ class HealthMonitor:
     Tracks ingestion lag and heartbeats. Raises exception if thresholds breached.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.last_heartbeat_ts: float = time.time()
         self.max_lag_seconds: float = 0.0
 
@@ -29,10 +29,10 @@ class HealthMonitor:
         # Metrics
         self.metrics: Dict[str, Any] = {}
 
-    def update_heartbeat(self):
+    def update_heartbeat(self) -> None:
         self.last_heartbeat_ts = time.time()
 
-    async def check_lag(self, event_ts_utc: datetime):
+    async def check_lag(self, event_ts_utc: datetime) -> None:
         """
         Check lag for a specific event timestamp.
         """
@@ -41,7 +41,7 @@ class HealthMonitor:
 
         # Simple lag check: Now - EventTS
         # Ensure UTC comparison
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)  # Force naive UTC for comparison
         if event_ts_utc.tzinfo:
             # naive comparison if one is aware and other is not is tricky
             # Let's assume event_ts_utc is naive UTC or convert
@@ -62,7 +62,7 @@ class HealthMonitor:
 
             raise CriticalHealthException(msg)
 
-    async def check_health(self):
+    async def check_health(self) -> None:
         """
         Called periodically (e.g. at end of polling loop).
         """
@@ -84,25 +84,26 @@ class HealthMonitor:
 
         self.max_lag_seconds = 0.0  # Reset for next batch
 
-    async def update_db_status(self, is_healthy: bool, details: str = ""):
+    async def update_db_status(self, is_healthy: bool, details: str = "") -> None:
         """
         Persists the current health status to the DB.
         """
         from sqlalchemy.dialects.postgresql import insert
 
-        from orion.storage.db import async_session_factory
+        from orion.shared.db_utils import db_write
         from orion.storage.models import SystemStatus
 
         status_str = "HEALTHY" if is_healthy else "UNHEALTHY"
 
+        async def update_health_status(session: Any) -> None:
+            stmt = insert(SystemStatus).values(key="global_health", status=status_str, details=details)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["key"],
+                set_={"status": status_str, "details": details, "last_updated_utc": func.now()},
+            )
+            await session.execute(stmt)
+
         try:
-            async with async_session_factory() as session:
-                stmt = insert(SystemStatus).values(key="global_health", status=status_str, details=details)
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["key"],
-                    set_={"status": status_str, "details": details, "last_updated_utc": func.now()},
-                )
-                await session.execute(stmt)
-                await session.commit()
+            await db_write(update_health_status)
         except Exception as e:
             logger.error(f"Failed to update SystemStatus in DB: {e}")

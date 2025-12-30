@@ -9,7 +9,7 @@ from orion.rag.vector_store import VectorStore
 logging.basicConfig(level=logging.INFO)
 
 
-async def search_demo():
+async def search_demo() -> None:
     store = VectorStore()
 
     query = "Show me oversized RSI trades for QQQ"

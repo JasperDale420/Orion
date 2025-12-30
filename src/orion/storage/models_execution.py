@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,7 +31,7 @@ class OrderRecord(Base):
     status: Mapped[str | None] = mapped_column(String, nullable=True)
 
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
-    raw_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class FillRecord(Base):
@@ -50,7 +51,7 @@ class FillRecord(Base):
     side: Mapped[str | None] = mapped_column(String, nullable=True)
 
     filled_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    raw_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (Index("ux_fills_broker_order_id", "broker_order_id", unique=True),)
 
@@ -73,6 +74,6 @@ class PositionSnapshot(Base):
     market_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     unrealized_pl: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    raw_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (Index("ix_positions_snapshots_ts_ticker", "snapshot_ts_utc", "ticker"),)

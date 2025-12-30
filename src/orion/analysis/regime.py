@@ -26,9 +26,19 @@ class RegimeDetector:
     PRD 5.6.1: Required for Solver Router context.
     """
 
-    def __init__(self, vol_window: int = 20, trend_window: int = 50):
+    def __init__(
+        self,
+        vol_window: int = 20,
+        trend_window: int = 50,
+        vol_threshold: float = 0.015,  # L2: configurable volatility threshold
+        trend_threshold: float = 0.01,  # L2: configurable trend threshold (1%)
+        max_bars: int = 60,  # L3: configurable bar fetch limit
+    ):
         self.vol_window = vol_window
         self.trend_window = trend_window
+        self.vol_threshold = vol_threshold
+        self.trend_threshold = trend_threshold
+        self.max_bars = max_bars
 
     def detect_regime(self, prices: pd.DataFrame) -> MarketRegime:
         """
@@ -46,18 +56,27 @@ class RegimeDetector:
         # Realized Vol (last N periods)
         realized_vol = log_rets.rolling(window=self.vol_window).std().iloc[-1]
 
-        # Determine Vol State (Thresholds are arbitrary for V1, should be config)
-        # Using placeholder check - assumes daily data or similar scale implies high vol > 1.5%
-        is_high_vol = realized_vol > 0.015
+        # Validate volatility calculation (use epsilon for floating point comparison)
+        if pd.isna(realized_vol) or abs(realized_vol) < 1e-10:
+            logger.warning(
+                f"Invalid volatility for regime detection: {realized_vol} (likely insufficient data or flat prices)"
+            )
+            return MarketRegime.UNKNOWN
+
+        # Determine Vol State (L2: using configurable threshold)
+        is_high_vol = realized_vol > self.vol_threshold
 
         # 2. Trend
         if len(data) >= self.trend_window:
             ma_short = data.rolling(window=20).mean().iloc[-1]
             ma_long = data.rolling(window=50).mean().iloc[-1]
 
-            if ma_short > ma_long * 1.01:
+            # Validate moving averages before comparison
+            if pd.isna(ma_short) or pd.isna(ma_long):
+                logger.debug("Insufficient data for trend calculation (NaN moving averages)")
+            elif ma_short > ma_long * (1 + self.trend_threshold):
                 return MarketRegime.TRENDING_UP
-            elif ma_short < ma_long * 0.99:
+            elif ma_short < ma_long * (1 - self.trend_threshold):
                 return MarketRegime.TRENDING_DOWN
 
         if is_high_vol:
@@ -70,13 +89,13 @@ class RegimeDetector:
         Fetches recent daily bars from GoldTickerRollup and detects regime.
         """
         async with async_session_factory() as session:
-            # Fetch last 60 daily bars (enough for 50 trend)
+            # L3: Use configurable max_bars (enough for trend window + buffer)
             stmt = (
                 select(GoldTickerRollup)
                 .where(GoldTickerRollup.ticker == ticker)
                 .where(GoldTickerRollup.period == "1d")
                 .order_by(GoldTickerRollup.timestamp_utc.desc())
-                .limit(60)
+                .limit(self.max_bars)
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()
@@ -85,8 +104,11 @@ class RegimeDetector:
                 return MarketRegime.UNKNOWN
 
             # Sort ascending for pandas
-            rows = sorted(rows, key=lambda x: x.timestamp_utc)
+            # Create DataFrame for regime detection
+            df = pd.DataFrame([{"close": float(r.close), "timestamp": r.timestamp_utc} for r in rows])
 
-            df = pd.DataFrame([{"close": r.close, "timestamp": r.timestamp_utc} for r in rows])
+            # Explicitly set timezone awareness for pandas (M2 remediation)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+            df.set_index("timestamp", inplace=True)
 
             return self.detect_regime(df)

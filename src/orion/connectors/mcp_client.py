@@ -19,7 +19,7 @@ class MCPClient:
         self.session_id: Optional[str] = None
         self.tools: List[Dict[str, Any]] = []
 
-    async def connect(self):
+    async def connect(self) -> None:
         """
         Establishes connection to fetch tools.
         Note: True SSE persistence is complex; for this client we mainly need to know

@@ -1,18 +1,20 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 from dotenv import load_dotenv
+from sqlalchemy import select
+
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.models import BronzeEvent
-from sqlalchemy import select
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("orion.recon.bar_scan")
 
 
-async def scan_ticker_gaps(session, ticker: str, start_ts: datetime, end_ts: datetime):
+async def scan_ticker_gaps(session: Any, ticker: str, start_ts: datetime, end_ts: datetime) -> None:
     """
     Checks for missing 1m bars for a ticker between start_ts and end_ts.
     PRD 9.2: Bar gap scan.
@@ -63,7 +65,7 @@ async def scan_ticker_gaps(session, ticker: str, start_ts: datetime, end_ts: dat
         logger.info(f"{ticker}: Clean. {expected_count} bars verified.")
 
 
-async def main():
+async def main() -> None:
     await init_db()
 
     # Scan last 24h? Or just 'Today'?

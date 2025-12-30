@@ -2,16 +2,19 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, List, Optional, Tuple
 
 from alpaca.trading.enums import OrderSide, TimeInForce
+from sqlalchemy import select
+
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
 from orion.core.errors import ErrorCode
-from orion.storage.db import async_session_factory
+from orion.shared.db_utils import db_query, db_write
+from orion.shared.decorators import db_retry
+from orion.shared.utils import ensure_utc
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ class ExecutionEngine:
     Translates Agent decisions into broker orders.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Load keys from SystemSettings
         api_key = system_settings.alpaca_api_key
         secret_key = system_settings.alpaca_secret_key
@@ -51,7 +54,7 @@ class ExecutionEngine:
         self.order_history = deque(maxlen=20)
         self.last_positions_snapshot_ts: datetime | None = None
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """
         Loads the last 20 execution attempts and initializes RiskManager state.
         """
@@ -68,7 +71,8 @@ class ExecutionEngine:
                 await self.risk_manager.evaluate_drawdown_kill_switch()
 
         try:
-            async with async_session_factory() as session:
+
+            async def fetch_recent_decisions(session: Any) -> List[Any]:
                 stmt = (
                     select(StrategyDecision)
                     .where(StrategyDecision.decision == "EXECUTE")
@@ -76,14 +80,16 @@ class ExecutionEngine:
                     .limit(20)
                 )
                 result = await session.execute(stmt)
-                recent_decisions = result.scalars().all()
+                return result.scalars().all()
 
-                # We want to append them in chronological order (oldest first)
-                for d in reversed(recent_decisions):
-                    if d.executed_successfully == "TRUE":
-                        self.order_history.append(True)
-                    elif d.executed_successfully == "FALSE":
-                        self.order_history.append(False)
+            recent_decisions = await db_query(fetch_recent_decisions)
+
+            # We want to append them in chronological order (oldest first)
+            for d in reversed(recent_decisions):
+                if d.executed_successfully == "TRUE":
+                    self.order_history.append(True)
+                elif d.executed_successfully == "FALSE":
+                    self.order_history.append(False)
 
             logger.info(
                 "ExecutionEngine initialized",
@@ -99,7 +105,7 @@ class ExecutionEngine:
                 },
             )
 
-    async def execute_order(self, decision: StrategyDecision, candidate: CandidateTrade):
+    async def execute_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
         if not self.connector:
             logger.warning("No connector available. Skipping execution.")
             return
@@ -191,7 +197,9 @@ class ExecutionEngine:
         ep = decision.execution_params or {}
         return float(ep.get("limit_price", 0.0))
 
-    def _calculate_order_params(self, decision: StrategyDecision, candidate: CandidateTrade, current_price: float):
+    def _calculate_order_params(
+        self, decision: StrategyDecision, candidate: CandidateTrade, current_price: float
+    ) -> Tuple[Any, float, float]:
         side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
         qty = self.risk_manager.calculate_size(entry_price=current_price)
 
@@ -218,7 +226,7 @@ class ExecutionEngine:
                 return True
         return False
 
-    async def _submit_order(self, decision, candidate, side, qty, limit_price):
+    async def _submit_order(self, decision: Any, candidate: Any, side: Any, qty: float, limit_price: float) -> None:
         logger.info(f"EXECUTION TRIGGERED: {side} {qty} {candidate.ticker} @ {limit_price}")
 
         client_order_id = str(uuid.uuid4())
@@ -279,53 +287,51 @@ class ExecutionEngine:
         from orion.storage.models import SystemStatus
 
         try:
-            async with async_session_factory() as session:
+
+            async def fetch_health_status(session: Any) -> Any:
                 stmt = select(SystemStatus).where(SystemStatus.key == "global_health")
                 result = await session.execute(stmt)
-                status_record = result.scalars().first()
+                return result.scalars().first()
 
-                if not status_record:
-                    # If no record exists, assume Healthy (start up) or Unhealthy?
-                    # PRD says "Fail Closed". If we don't know, we don't trade.
-                    logger.warning(
-                        "System Health Record missing. Defaulting to UNHEALTHY (Fail Closed).",
-                        extra={"event_type": "HEALTH_CHECK_WARNING", "details": "Record Missing"},
-                    )
-                    return False
+            status_record = await db_query(fetch_health_status)
 
-                if status_record.status != "HEALTHY":
+            if not status_record:
+                # If no record exists, assume Healthy (start up) or Unhealthy?
+                # PRD says "Fail Closed". If we don't know, we don't trade.
+                logger.warning(
+                    "System Health Record missing. Defaulting to UNHEALTHY (Fail Closed).",
+                    extra={"event_type": "HEALTH_CHECK_WARNING", "details": "Record Missing"},
+                )
+                return False
+
+            if status_record.status != "HEALTHY":
+                logger.error(
+                    f"System Health Check Failed: {status_record.status}",
+                    extra={
+                        "event_type": "HEALTH_CHECK_FAILED",
+                        "status": status_record.status,
+                        "details": status_record.details,
+                    },
+                )
+                return False
+
+            # Optional: Check 'last_updated_utc' staleness?
+            # If ingestion died hard, it might check 'Healthy' but be 1 hour old.
+            # PRD 9.1 says "UW ingestion heartbeat missing > 60s".
+            # If record is > 60s old, Ingestion is dead.
+            now = datetime.now(timezone.utc)
+            if status_record.last_updated_utc:
+                last_updated = ensure_utc(status_record.last_updated_utc)
+
+                age = (now - last_updated).total_seconds()
+                if age > system_settings.ingestion_heartbeat_max_age:
                     logger.error(
-                        f"System Health Check Failed: {status_record.status}",
-                        extra={
-                            "event_type": "HEALTH_CHECK_FAILED",
-                            "status": status_record.status,
-                            "details": status_record.details,
-                        },
+                        f"System Health Record STALE ({age:.1f}s). Ingestion likely dead.",
+                        extra={"event_type": "HEALTH_CHECK_FAILED", "reason": "Stale", "age_seconds": age},
                     )
                     return False
 
-                # Optional: Check 'last_updated_utc' staleness?
-                # If ingestion died hard, it might check 'Healthy' but be 1 hour old.
-                # PRD 9.1 says "UW ingestion heartbeat missing > 60s".
-                # If record is > 60s old, Ingestion is dead.
-                from datetime import datetime, timezone
-
-                now = datetime.now(timezone.utc)
-                if status_record.last_updated_utc:
-                    last_updated = status_record.last_updated_utc
-                    # Robustness: Handle naive datetimes (common in SQLite tests or misconfig)
-                    if last_updated.tzinfo is None:
-                        last_updated = last_updated.replace(tzinfo=timezone.utc)
-
-                    age = (now - last_updated).total_seconds()
-                    if age > system_settings.ingestion_heartbeat_max_age:
-                        logger.error(
-                            f"System Health Record STALE ({age:.1f}s). Ingestion likely dead.",
-                            extra={"event_type": "HEALTH_CHECK_FAILED", "reason": "Stale", "age_seconds": age},
-                        )
-                        return False
-
-                return True
+            return True
         except Exception as e:
             logger.error(
                 f"Failed to check System Health: {e}",
@@ -333,7 +339,7 @@ class ExecutionEngine:
             )
             return False  # Fail Closed
 
-    async def poll_fills(self):
+    async def poll_fills(self) -> None:
         """
         Polls broker for recent fills and updates RiskManager.
         Should be called periodically by the main execution loop.
@@ -386,6 +392,7 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Failed to process fill {getattr(fill, 'id', 'unknown')}: {e}")
 
+    @db_retry
     async def _maybe_snapshot_positions(self, min_interval_seconds: int = 60) -> None:
         """
         PRDv2 12.4: Persist positions snapshots (Alpaca source-of-truth) once trading is enabled.
@@ -421,9 +428,10 @@ class ExecutionEngine:
                 if snapshot:
                     rows.append(snapshot)
 
-            async with async_session_factory() as session:
+            async def save_snapshots(session: Any) -> None:
                 session.add_all(rows)
-                await session.commit()
+
+            await db_write(save_snapshots)
 
             self.last_positions_snapshot_ts = now
             logger.info("Positions snapshot persisted", extra={"event_type": "POSITIONS_SNAPSHOT", "count": len(rows)})
@@ -439,7 +447,7 @@ class ExecutionEngine:
         if not symbol:
             return None
 
-        def _maybe_float(v):
+        def _maybe_float(v: Any) -> Optional[float]:
             try:
                 return float(v) if v is not None else None
             except Exception:
@@ -470,37 +478,66 @@ class ExecutionEngine:
         from orion.storage.models_risk import ProcessedFill
 
         try:
-            async with async_session_factory() as session:
+
+            async def check_fill(session: Any) -> bool:
                 stmt = select(ProcessedFill).where(ProcessedFill.fill_id == order_id)
                 result = await session.execute(stmt)
                 return result.scalars().first() is not None
+
+            return await db_query(check_fill)
         except Exception as e:
             logger.error(f"Failed to check processed fills for {order_id}: {e}")
-            return False  # Fail Open? No, Fail Safe -> Duplicate fill is dangerous.
-            # If DB fail, we might re-process. Better valid DB.
-            # Actually duplicate fill adds risk. Better to assume processed if DB error?
-            # No, if DB error we probably can't trade anyway.
-            return False
+            return False  # Fail Safe - assume not processed to avoid skipping fills
 
-    async def _mark_fill_processed(self, order_id: str, client_oid: str = None, ticker: str = None, qty: float = None):
-        from datetime import datetime
+    @db_retry
+    async def _persist_order(self, order_payload: dict) -> None:
+        """
+        Save order submission details to DB.
+        """
 
-        from orion.storage.models_risk import ProcessedFill
+        async def save_order(session: Any) -> None:
+            from datetime import datetime, timezone
+
+            from orion.storage.models_execution import OrderSubmission
+
+            order_record = OrderSubmission(
+                order_id=order_payload.get("order_id"),
+                ticker=order_payload.get("ticker"),
+                qty=order_payload.get("qty"),
+                side=order_payload.get("side"),
+                order_type=order_payload.get("order_type"),
+                limit_price=order_payload.get("limit_price"),
+                stop_price=order_payload.get("stop_price"),
+                time_in_force=order_payload.get("time_in_force"),
+                submitted_at_utc=datetime.now(timezone.utc),
+                broker_response=order_payload,
+            )
+            session.add(order_record)
+
+        await db_write(save_order)
+
+    @db_retry
+    async def _mark_fill_processed(
+        self, order_id: str, client_oid: Optional[str] = None, ticker: Optional[str] = None, qty: Optional[float] = None
+    ) -> None:
+        async def mark_fill(session: Any) -> None:
+            from orion.storage.models_risk import ProcessedFill
+
+            pf = ProcessedFill(
+                fill_id=order_id,
+                client_order_id=client_oid,
+                ticker=ticker,
+                qty=qty,
+                processed_at_utc=datetime.now(timezone.utc),
+            )
+            session.add(pf)
 
         try:
-            async with async_session_factory() as session:
-                pf = ProcessedFill(
-                    fill_id=order_id,
-                    client_order_id=client_oid,
-                    ticker=ticker,
-                    qty=qty,
-                    processed_at_utc=datetime.now(timezone.utc),
-                )
-                session.add(pf)
-                await session.commit()
+            await db_write(mark_fill)
         except Exception as e:
             logger.error(f"Failed to mark fill {order_id} as processed: {e}")
 
+    @db_retry
     async def _persist_order_record(
         self,
         *,
@@ -513,7 +550,7 @@ class ExecutionEngine:
         broker_order: Any | None,
         error_message: str | None,
     ) -> None:
-        try:
+        async def save_order_and_journal(session: Any) -> None:
             from orion.storage.models_execution import OrderRecord
 
             broker_order_id = None
@@ -524,57 +561,59 @@ class ExecutionEngine:
                 status = str(getattr(broker_order, "status", None) or "")
                 raw = broker_order.model_dump(mode="json") if hasattr(broker_order, "model_dump") else {}
 
-            async with async_session_factory() as session:
-                session.add(
-                    OrderRecord(
-                        id=str(uuid.uuid4()),
+            session.add(
+                OrderRecord(
+                    id=str(uuid.uuid4()),
+                    decision_id=decision.decision_id,
+                    candidate_id=candidate.candidate_id,
+                    ticker=candidate.ticker,
+                    side=side,
+                    qty=float(qty),
+                    limit_price=float(limit_price) if limit_price is not None else None,
+                    client_order_id=client_order_id,
+                    broker_order_id=broker_order_id or None,
+                    status=status or None,
+                    error_message=error_message,
+                    raw_json=raw,
+                )
+            )
+
+            # PRD §12.4: Ensure a trade journal entry exists and links to order ids.
+            try:
+                from orion.storage.models_trade_journal import TradeJournalEntry
+
+                await session.merge(
+                    TradeJournalEntry(
                         decision_id=decision.decision_id,
+                        signal_id=f"sig_{candidate.candidate_id}",
                         candidate_id=candidate.candidate_id,
+                        solver_id=decision.strategy_version_id,
                         ticker=candidate.ticker,
-                        side=side,
-                        qty=float(qty),
-                        limit_price=float(limit_price) if limit_price is not None else None,
+                        direction=candidate.direction,
+                        evidence=candidate.evidence or {},
+                        decision_trace_json=decision.decision_trace_json or {},
                         client_order_id=client_order_id,
                         broker_order_id=broker_order_id or None,
-                        status=status or None,
-                        error_message=error_message,
-                        raw_json=raw,
+                        raw_json={"order_status": status or None, "order_error": error_message},
                     )
                 )
+            except Exception as e:
+                logger.error(
+                    "Failed to upsert trade journal on order persist",
+                    extra={"event_type": "TRADE_JOURNAL_UPSERT_ERROR", "error": str(e)},
+                )
 
-                # PRD §12.4: Ensure a trade journal entry exists and links to order ids.
-                try:
-                    from orion.storage.models_trade_journal import TradeJournalEntry
-
-                    await session.merge(
-                        TradeJournalEntry(
-                            decision_id=decision.decision_id,
-                            signal_id=f"sig_{candidate.candidate_id}",
-                            candidate_id=candidate.candidate_id,
-                            solver_id=decision.strategy_version_id,
-                            ticker=candidate.ticker,
-                            direction=candidate.direction,
-                            evidence=candidate.evidence or {},
-                            decision_trace_json=decision.decision_trace_json or {},
-                            client_order_id=client_order_id,
-                            broker_order_id=broker_order_id or None,
-                            raw_json={"order_status": status or None, "order_error": error_message},
-                        )
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Failed to upsert trade journal on order persist",
-                        extra={"event_type": "TRADE_JOURNAL_UPSERT_ERROR", "error": str(e)},
-                    )
-
-                await session.commit()
+        try:
+            await db_write(save_order_and_journal)
         except Exception as e:
             logger.error("Failed to persist order record", extra={"event_type": "ORDER_PERSIST_ERROR", "error": str(e)})
 
+    @db_retry
     async def _persist_fill_record(self, fill: Any) -> None:
-        try:
-            from orion.storage.models_execution import FillRecord
+        async def save_fill_and_update_journal(session: Any) -> None:
             from sqlalchemy.dialects.postgresql import insert
+
+            from orion.storage.models_execution import FillRecord
 
             broker_order_id = str(getattr(fill, "id", ""))
             ticker = getattr(fill, "symbol", None) or ""
@@ -597,33 +636,30 @@ class ExecutionEngine:
                 "raw_json": raw,
             }
 
-            async with async_session_factory() as session:
-                stmt = insert(FillRecord).values(values)
-                stmt = stmt.on_conflict_do_nothing(index_elements=["broker_order_id"])
-                await session.execute(stmt)
+            stmt = insert(FillRecord).values(values)
+            stmt = stmt.on_conflict_do_nothing(index_elements=["broker_order_id"])
+            await session.execute(stmt)
 
-                # PRD §12.4: Update trade journal fill pointers by broker_order_id.
-                try:
-                    from orion.storage.models_trade_journal import TradeJournalEntry
-                    from sqlalchemy import select
+            # PRD §12.4: Update trade journal fill pointers by broker_order_id.
+            try:
+                from orion.storage.models_trade_journal import TradeJournalEntry
 
-                    tj_stmt = (
-                        select(TradeJournalEntry).where(TradeJournalEntry.broker_order_id == broker_order_id).limit(1)
-                    )
-                    existing = (await session.execute(tj_stmt)).scalars().first()
-                    if existing:
-                        existing.filled_qty = qty
-                        existing.filled_avg_price = price or None
-                        existing.filled_at_utc = filled_at
-                except Exception as e:
-                    logger.error(
-                        "Failed to update trade journal on fill persist",
-                        extra={"event_type": "TRADE_JOURNAL_FILL_UPDATE_ERROR", "error": str(e)},
-                    )
+                tj_stmt = select(TradeJournalEntry).where(TradeJournalEntry.broker_order_id == broker_order_id).limit(1)
+                existing = (await session.execute(tj_stmt)).scalars().first()
+                if existing:
+                    existing.filled_qty = qty
+                    existing.filled_avg_price = price or None
+                    existing.filled_at_utc = filled_at
+            except Exception as e:
+                logger.error(
+                    "Failed to update trade journal on fill persist",
+                    extra={"event_type": "TRADE_JOURNAL_FILL_UPDATE_ERROR", "error": str(e)},
+                )
 
-                await session.commit()
+        try:
+            await db_write(save_fill_and_update_journal)
         except Exception as e:
             logger.error("Failed to persist fill record", extra={"event_type": "FILL_PERSIST_ERROR", "error": str(e)})
 
-    def _record_result(self, success: bool):
+    def _record_result(self, success: bool) -> None:
         self.order_history.append(success)

@@ -30,7 +30,7 @@ class DLQWriter:
         event_ts_utc: Optional[datetime] = None,
         run_id: Optional[str] = None,
         trace_id: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Asynchronously writes an error entry to the DLQ table.
         Safe to call from anywhere; catches its own exceptions to prevent cascading failures.

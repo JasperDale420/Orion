@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
+
 from orion.agents.base import BaseAgent
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdit
@@ -23,7 +24,7 @@ class MetaAgent(BaseAgent):
     Integrated with any-llm for Deepseek support.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         from orion.config import agent_settings
 
         super().__init__(name="MetaAgent", model=agent_settings.model_name)
@@ -111,6 +112,9 @@ class MetaAgent(BaseAgent):
                 from litellm import acompletion as acompletion_fn
 
             for _ in range(5):  # Max turns
+                if acompletion_fn is None:
+                    logger.error("acompletion_fn is None, cannot proceed with LLM call")
+                    return []
                 response = await acompletion_fn(
                     model=self.model,
                     messages=messages,

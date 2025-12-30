@@ -4,25 +4,22 @@ from typing import Any, Dict, Optional
 
 import joblib
 
+from orion.shared.patterns import AsyncSingleton
+
 logger = logging.getLogger(__name__)
 
 
-class ModelRegistry:
+class ModelRegistry(AsyncSingleton):
     """
     Singleton registry for loading and caching ML models.
     Supports local file paths (joblib/pickle).
     """
 
-    _instance = None
-    _cache: Dict[str, Any] = {}
+    def __init__(self) -> None:
+        super().__init__()
+        self._cache: Dict[str, Any] = {}
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(ModelRegistry, cls).__new__(cls)
-        return cls._instance
-
-    @classmethod
-    def get(cls, model_uri: str) -> Optional[Any]:
+    def get(self, model_uri: str) -> Optional[Any]:
         """
         Retrieves a model from the registry. Uses LRU-like caching.
 
@@ -40,8 +37,8 @@ class ModelRegistry:
             path = model_uri
 
         # Check Cache
-        if path in cls._cache:
-            return cls._cache[path]
+        if path in self._cache:
+            return self._cache[path]
 
         # Load
         try:
@@ -56,11 +53,11 @@ class ModelRegistry:
             model = joblib.load(path)
 
             # Update Cache (Simple unbounded for now, or naive check)
-            if len(cls._cache) > 20:
+            if len(self._cache) > 20:
                 # Evict one
-                cls._cache.pop(next(iter(cls._cache)))
+                self._cache.pop(next(iter(self._cache)))
 
-            cls._cache[path] = model
+            self._cache[path] = model
             logger.info(f"Loaded model from {path}")
             return model
 
@@ -68,6 +65,5 @@ class ModelRegistry:
             logger.error(f"Failed to load model from {path}: {e}")
             return None
 
-    @classmethod
-    def clear_cache(cls):
-        cls._cache.clear()
+    def clear_cache(self) -> None:
+        self._cache.clear()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -27,8 +28,8 @@ class TradeJournalEntry(Base):
     ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)
     direction: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    decision_trace_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    decision_trace_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     client_order_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     broker_order_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
@@ -40,6 +41,6 @@ class TradeJournalEntry(Base):
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    raw_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (Index("ix_trade_journal_ticker_created", "ticker", "created_at_utc"),)

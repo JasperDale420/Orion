@@ -1,12 +1,14 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import select
 
 from orion.core.promotion_rules import DEFAULT_PROMOTION_CONFIG, evaluate_stage_transition
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory
 from orion.storage.models_solvers import PromotionRecommendation, Solver, SolverMetrics
-from sqlalchemy import select
 
 logger = setup_struct_logger("orion.gatekeeper")
 
@@ -17,7 +19,7 @@ class Gatekeeper:
     Prioritizes safety (Demotion) over speed (Promotion).
     """
 
-    async def run_once(self):
+    async def run_once(self) -> None:
         """
         Single execution pass:
         1. Fetch all active or candidate Solvers.
@@ -89,7 +91,7 @@ class Gatekeeper:
                 logger.error(f"Gatekeeper Run Failed: {e}")
                 await session.rollback()
 
-    async def _handle_demotion(self, session, solver: Solver, metrics: SolverMetrics):
+    async def _handle_demotion(self, session: Any, solver: Solver, metrics: SolverMetrics) -> None:
         old_stage = solver.stage
 
         # Demotion Logic:
@@ -143,7 +145,7 @@ class Gatekeeper:
         )
         # We could notify here (e.g. valid 'incident')
 
-    async def _handle_promotion(self, session, solver: Solver, metrics: SolverMetrics):
+    async def _handle_promotion(self, session: Any, solver: Solver, metrics: SolverMetrics) -> None:
         old_stage = solver.stage
         stage_order = ["research", "shadow", "paper", "limited_live", "scaled_live"]
 

@@ -42,7 +42,7 @@ class UWWebsocketConnector:
 
         return hashlib.sha256(unique_str.encode()).hexdigest()
 
-    async def _authenticate(self, ws):
+    async def _authenticate(self, ws: Any) -> None:
         """
         Sends auth message if required by protocol.
         """
@@ -53,7 +53,7 @@ class UWWebsocketConnector:
         await ws.send(json.dumps(auth_msg))
         logger.info("Sent Websocket Auth")
 
-    async def stream(self, channels: List[str] = None) -> AsyncGenerator[BronzeEvent, None]:
+    async def stream(self, channels: List[str] | None = None) -> AsyncGenerator[BronzeEvent, None]:
         """
         Yields BronzeEvents from the websocket stream.
         Handles reconnection automatically via explicit loop.

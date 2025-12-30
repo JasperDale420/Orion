@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from typing import Any, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Configure Env BEFORE imports
@@ -16,40 +17,40 @@ GLOBAL_DB_STATE = []
 
 
 class MockResult:
-    def __init__(self, data):
+    def __init__(self, data: List[Any]) -> None:
         self._data = data
 
-    def scalars(self):
+    def scalars(self) -> "MockResult":
         return self
 
-    def all(self):
+    def all(self) -> List[Any]:
         return self._data
 
-    def scalar_one_or_none(self):
+    def scalar_one_or_none(self) -> Optional[Any]:
         return self._data[0] if self._data else None
 
 
 class MockAsyncSession:
-    def __init__(self):
+    def __init__(self) -> None:
         self.store = []
         self.committed = []
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "MockAsyncSession":
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         pass
 
-    def add(self, obj):
+    def add(self, obj: Any) -> None:
         self.store.append(obj)
 
-    async def commit(self):
+    async def commit(self) -> None:
         global GLOBAL_DB_STATE
         GLOBAL_DB_STATE.extend(self.store)
         self.committed.extend(self.store)
         self.store = []
 
-    async def execute(self, stmt):
+    async def execute(self, stmt: Any) -> MockResult:
         str_stmt = str(stmt)
         global GLOBAL_DB_STATE
 
@@ -69,7 +70,7 @@ class MockAsyncSession:
         return MockResult([])
 
 
-def mock_session_factory():
+def mock_session_factory() -> MockAsyncSession:
     return MockAsyncSession()
 
 
@@ -82,7 +83,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("smoke_test")
 
 
-async def seed_candidate():
+async def seed_candidate() -> str:
     test_id = "smoke_test_" + uuid.uuid4().hex[:8]
 
     candidate = CandidateTrade(
@@ -100,7 +101,7 @@ async def seed_candidate():
     return test_id
 
 
-async def verify_execution(candidate_id):
+async def verify_execution(candidate_id: str) -> None:
     decisions = [o for o in GLOBAL_DB_STATE if isinstance(o, StrategyDecision) and o.candidate_id == candidate_id]
 
     if decisions:
@@ -114,7 +115,7 @@ async def verify_execution(candidate_id):
         logger.error("VERIFICATION FAIL: No StrategyDecision found for candidate.")
 
 
-async def main():
+async def main() -> None:
     logger.info("Starting Paper Live Harness Smoke Test (MOCKED DB)...")
 
     # Seed Data

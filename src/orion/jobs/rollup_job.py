@@ -6,7 +6,7 @@ from typing import Iterable
 from orion.config import system_settings
 from orion.processing.rollup_builder import RollupBuilder
 from orion.storage.db import async_session_factory
-from orion.storage.watermarks import get_watermark, upsert_watermark
+from orion.storage.models import get_watermark, upsert_watermark
 
 logger = logging.getLogger("orion.jobs.rollup_job")
 
@@ -35,6 +35,7 @@ class RollupJob:
 
     async def run_once(self) -> None:
         now = datetime.now(timezone.utc)
+        # The RollupBuilder needs a session to read data, but upsert_watermark can use db_write
         async with async_session_factory() as session:
             builder = RollupBuilder(session)
 

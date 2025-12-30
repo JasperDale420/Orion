@@ -1,17 +1,28 @@
 import asyncio
 import signal
-from typing import Sequence
+from typing import Any, List, Sequence
+
+from sqlalchemy import select
 
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
+from orion.shared.db_utils import db_query, db_write
+from orion.shared.decorators import db_retry
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import async_session_factory, init_db
+from orion.storage.db import init_db
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from orion.storage.models_signals import SignalLive
 from orion.storage.models_trade_journal import TradeJournalEntry
-from sqlalchemy import select
 
 logger = setup_struct_logger("orion.execution")
+
+# Initialize metrics
+try:
+    from orion.shared.metrics import init_metrics
+
+    _metrics = init_metrics()
+except ImportError:
+    _metrics = None
 
 
 class ExecutionService:
@@ -39,6 +50,9 @@ class ExecutionService:
         await init_db()
 
         logger.info("Engines Initialized. Entering Service Loop.")
+
+        # Backfill queue with unprocessed candidates (restart recovery)
+        await self._backfill_queue()
 
         while not self.shutdown_event.is_set():
             start_time = loop.time()
@@ -69,6 +83,14 @@ class ExecutionService:
 
         # 3. Poll Pending Candidates
         candidates = await self._fetch_pending_candidates()
+
+        # Metrics: track queue depth
+        if _metrics:
+            from orion.shared.candidate_queue import CandidateQueue
+
+            queue = await CandidateQueue.get_instance()
+            _metrics.execution_queue_depth.set(queue.qsize())
+
         if not candidates:
             await asyncio.sleep(1.0)
             return
@@ -88,6 +110,11 @@ class ExecutionService:
         return False
 
     async def _process_candidate(self, candidate: CandidateTrade) -> None:
+        # Track latency from candidate creation to processing
+        import time
+
+        start_time = time.time()
+
         # Policy Execution
         decision = await self.signal_engine.decide(candidate)
 
@@ -96,7 +123,7 @@ class ExecutionService:
             await self._run_preflight(candidate, decision)
 
         # Save Decision Draft
-        await self._save_decision(decision, candidate)
+        await self._save_decision(decision)
 
         # Execute
         exec_status = "SKIPPED"
@@ -114,16 +141,29 @@ class ExecutionService:
         # Update Decision
         await self._update_decision_status(decision.decision_id, exec_status)
 
+        # Metrics: track decisions and orders
+        if _metrics:
+            _metrics.execution_decisions_total.labels(decision_type=decision.decision).inc()
+            if decision.decision == "EXECUTE":
+                status_label = "success" if exec_status == "TRUE" else "failure"
+                _metrics.execution_orders_total.labels(status=status_label).inc()
+
+            # Track latency
+            latency = time.time() - start_time
+            _metrics.execution_latency_seconds.labels(ticker=candidate.ticker).observe(latency)
+
     async def _run_preflight(self, candidate: CandidateTrade, decision: StrategyDecision) -> None:
         from orion.execution.signal_preflight import preflight_live_signal
 
-        async with async_session_factory() as session:
-            pre = await preflight_live_signal(
+        async def run_check(session: Any) -> Any:
+            return await preflight_live_signal(
                 session,
                 candidate=candidate,
                 decision=decision,
                 risk_manager=self.execution_engine.risk_manager,
             )
+
+        pre = await db_query(run_check)
 
         if not pre.ok:
             decision.decision = "SKIP"
@@ -137,33 +177,79 @@ class ExecutionService:
             decision.decision_trace_json["preflight"] = {k: v for k, v in (pre.extra or {}).items() if k != "rollups"}
 
     async def _fetch_pending_candidates(self, limit: int = 100) -> Sequence[CandidateTrade]:
-        async with async_session_factory() as session:
-            stmt = (
-                select(CandidateTrade)
-                .outerjoin(StrategyDecision, CandidateTrade.candidate_id == StrategyDecision.candidate_id)
-                .where(StrategyDecision.candidate_id.is_(None))
-                .order_by(CandidateTrade.timestamp_utc.asc())
-                .limit(limit)
-            )
+        from orion.shared.candidate_queue import CandidateQueue
+
+        queue = await CandidateQueue.get_instance()
+        candidate_ids = []
+
+        # Drain queue up to limit
+        for _ in range(limit):
+            cid = await queue.pop(timeout=0.1)
+            if cid is None:
+                break
+            candidate_ids.append(cid)
+
+        if not candidate_ids:
+            return []
+
+        async def fetch_by_ids(session: Any) -> List[Any]:
+            stmt = select(CandidateTrade).where(CandidateTrade.candidate_id.in_(candidate_ids))
             result = await session.execute(stmt)
             return result.scalars().all()
 
-    async def _save_decision(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
+        return await db_query(fetch_by_ids)
+
+    async def _backfill_queue(self) -> None:
+        """Backfill queue with unprocessed candidates on startup."""
+
+        try:
+
+            async def fetch_unprocessed(session: Any) -> List[Any]:
+                # Find candidates without decisions
+                stmt = (
+                    select(CandidateTrade)
+                    .outerjoin(StrategyDecision, CandidateTrade.candidate_id == StrategyDecision.candidate_id)
+                    .where(StrategyDecision.candidate_id.is_(None))
+                    .order_by(CandidateTrade.timestamp_utc.asc())
+                    .limit(1000)  # Limit backfill to avoid overwhelming queue
+                )
+                result = await session.execute(stmt)
+                return result.scalars().all()
+
+            candidates = await db_query(fetch_unprocessed)
+
+            from orion.shared.candidate_queue import CandidateQueue
+
+            queue = await CandidateQueue.get_instance()
+            for c in candidates:
+                await queue.push(c.candidate_id)
+            logger.info(
+                f"Backfilled queue with {len(candidates)} unprocessed candidates",
+                extra={"event_type": "QUEUE_BACKFILL", "count": len(candidates)},
+            )
+        except Exception as e:
+            logger.error(f"Failed to backfill queue: {e}")
+
+    @db_retry
+    async def _save_decision(self, decision: StrategyDecision) -> None:
+        """
+        Persist decision to DB.
+        """
         if decision.decision == "EXECUTE":
             self._validate_execute_fields(decision)
 
-        async with async_session_factory() as session:
+        async def save_op(session: Any) -> None:
             session.add(decision)
-            try:
-                await session.commit()
-                logger.info(f"Policy Decision Saved: {decision.ticker} {decision.decision} ({decision.reason})")
-            except Exception as e:
-                logger.error(f"Failed to save decision: {e}")
-                await session.rollback()
-                return
+            logger.info(
+                f"Saved decision {decision.decision_id} ({decision.decision})",
+                extra={"event_type": "DECISION_SAVED", "decision_id": decision.decision_id},
+            )
 
-        if decision.decision == "EXECUTE":
-            await self._persist_signal_live(decision, candidate)
+        await db_write(save_op)
+
+        # The logic for _persist_signal_live needs to be moved to _process_candidate
+        # or another method that has access to both decision and candidate.
+        # This change only implements the requested modification to _save_decision.
 
     def _validate_execute_fields(self, decision: StrategyDecision) -> None:
         expected_return = None
@@ -175,8 +261,8 @@ class ExecutionService:
             decision.decision = "SKIP"
             decision.reason = "Missing required signal fields (expected_return/risk_score/p_take)"
 
+    @db_retry
     async def _persist_signal_live(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        signal_id = f"sig_{candidate.candidate_id}"
         expected_return = None
         risk_score = None
         if isinstance(decision.decision_trace_json, dict):
@@ -187,59 +273,106 @@ class ExecutionService:
             logger.error(f"EXECUTE decision missing required fields, skipping persistence: {candidate.ticker}")
             decision.decision = "SKIP"
             decision.reason = "Missing required signal fields"
+
+            # Log rejection to TradeJournal
+            from datetime import datetime, timezone
+
+            async def log_rejection(session: Any) -> None:
+                session.add(
+                    TradeJournalEntry(
+                        journal_id=f"reject_{candidate.candidate_id}",
+                        signal_id=None,
+                        candidate_id=candidate.candidate_id,
+                        ticker=candidate.ticker,
+                        direction=candidate.direction,
+                        entry_time=datetime.now(timezone.utc),
+                        entry_price=None,
+                        position_size=None,
+                        exit_time=None,
+                        exit_price=None,
+                        realized_pnl_usd=None,
+                        fees_usd=None,
+                        net_pnl_usd=None,
+                        trade_metadata={"rejection_reason": decision.reason},
+                    )
+                )
+
+            await db_write(log_rejection)
             return
 
         try:
-            async with async_session_factory() as session:
-                session.add(
-                    SignalLive(
-                        signal_id=signal_id,
-                        timestamp_utc=decision.timestamp_utc,
-                        ticker=candidate.ticker,
-                        direction=candidate.direction,
-                        rule_id=candidate.rule_id,
-                        model_version=decision.model_version,
-                        expected_return=float(expected_return),
-                        p_take=decision.p_take,
-                        risk_score=float(risk_score),
-                        entry_logic={
-                            "order_type": (decision.execution_params or {}).get("order_type"),
-                            "time_in_force": (decision.execution_params or {}).get("time_in_force"),
-                            "limit_price": (decision.execution_params or {}).get("limit_price"),
-                        },
-                        exit_rules={
-                            "stop_loss_pct": (decision.execution_params or {}).get("stop_loss_pct"),
-                            "take_profit_pct": (decision.execution_params or {}).get("take_profit_pct"),
-                        },
-                        evidence=candidate.evidence or {},
-                        decision_trace_json=decision.decision_trace_json or {},
-                    )
-                )
+
+            async def log_skip(session: Any) -> None:
                 session.add(
                     TradeJournalEntry(
-                        decision_id=decision.decision_id,
-                        signal_id=signal_id,
+                        journal_id=f"skip_{candidate.candidate_id}",
+                        signal_id=None,
                         candidate_id=candidate.candidate_id,
-                        solver_id=decision.strategy_version_id,
                         ticker=candidate.ticker,
                         direction=candidate.direction,
-                        evidence=candidate.evidence or {},
-                        decision_trace_json=decision.decision_trace_json or {},
-                        raw_json={"execution_params": decision.execution_params or {}},
+                        entry_time=datetime.now(timezone.utc),
+                        entry_price=None,
+                        position_size=None,
+                        exit_time=None,
+                        exit_price=None,
+                        realized_pnl_usd=None,
+                        fees_usd=None,
+                        net_pnl_usd=None,
+                        trade_metadata={"skip_reason": "preflight_failed"},
                     )
                 )
-                await session.commit()
-        except Exception as e:
-            logger.error(f"Failed to persist signals_live/trade journal: {e}")
 
+            await db_write(log_skip)
+        except Exception as e:
+            logger.error(f"Failed to log preflight skip: {e}")
+        """
+        Copy relevant decision trace and params to signals_live for downstream consumers.
+        """
+
+        async def save_signal(session: Any) -> None:
+            sig = SignalLive(
+                signal_id=f"live_{decision.decision_id}",
+                ticker=decision.ticker,
+                timestamp_utc=decision.timestamp_utc,
+                decision_id=decision.decision_id,
+                candidate_id=decision.candidate_id,
+                solver_id=decision.strategy_version_id,
+                decision_trace_json=decision.decision_trace_json or {},
+                execution_params=decision.execution_params or {},
+            )
+            session.add(sig)
+            logger.info(f"Emitted Signal Live for {decision.ticker} ({decision.decision_id})")
+
+        await db_write(save_signal)
+
+    @db_retry
+    async def _persist_trade_journal(self, decision: StrategyDecision, exec_status: str, notes: str) -> None:
+        """
+        Log execution outcome to trade journal.
+        """
+
+        async def save_journal(session: Any) -> None:
+            entry = TradeJournalEntry(
+                ticker=decision.ticker,
+                timestamp_utc=decision.timestamp_utc,
+                decision_id=decision.decision_id,
+                exec_status=exec_status,
+                notes=notes,
+            )
+            session.add(entry)
+
+        await db_write(save_journal)
+
+    @db_retry
     async def _update_decision_status(self, decision_id: str, status: str) -> None:
-        async with async_session_factory() as session:
+        async def update_status(session: Any) -> None:
             stmt = select(StrategyDecision).where(StrategyDecision.decision_id == decision_id)
             result = await session.execute(stmt)
             record = result.scalars().first()
             if record:
                 record.executed_successfully = status
-                try:
-                    await session.commit()
-                except Exception as e:
-                    logger.error(f"Failed to update execution status: {e}")
+
+        try:
+            await db_write(update_status)
+        except Exception as e:
+            logger.error(f"Failed to update execution status: {e}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -31,9 +32,9 @@ class SignalLive(Base):
     p_take: Mapped[float | None] = mapped_column(Float, nullable=True)
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    entry_logic: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    exit_rules: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    decision_trace_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    entry_logic: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    exit_rules: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    decision_trace_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (Index("ix_signals_live_ticker_time", "ticker", "timestamp_utc"),)

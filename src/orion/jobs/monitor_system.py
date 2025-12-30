@@ -1,12 +1,14 @@
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
+from sqlalchemy import func, select
+
+from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import async_session_factory
 from orion.storage.models import SystemStatus
 from orion.storage.models_dlq import DeadLetterQueue
-from sqlalchemy import func, select
 
 logger = setup_struct_logger("orion.monitor")
 
@@ -15,7 +17,7 @@ HEARTBEAT_LAG_THRESHOLD_SECONDS = int(os.getenv("MONITOR_LAG_THRESHOLD", 300))  
 DLQ_LOOKBACK_MINUTES = int(os.getenv("MONITOR_DLQ_LOOKBACK", 5))  # Check last 5 mins
 
 
-async def check_heartbeats(session):
+async def check_heartbeats(session: Any) -> None:
     """
     Checks SystemStatus table for stale heartbeats.
     """
@@ -54,7 +56,7 @@ async def check_heartbeats(session):
             )
 
 
-async def check_dlq(session):
+async def check_dlq(session: Any) -> None:
     """
     Checks DeadLetterQueue for recent failures.
     """
@@ -102,7 +104,7 @@ async def check_dlq(session):
         logger.info("DLQ OK", extra={"event_type": "DLQ_OK", "lookback_minutes": DLQ_LOOKBACK_MINUTES})
 
 
-async def run_monitor_loop():
+async def run_monitor_loop() -> None:
     """
     Main monitoring loop.
     """
@@ -110,9 +112,12 @@ async def run_monitor_loop():
 
     while True:
         try:
-            async with async_session_factory() as session:
+
+            async def monitor_tasks(session: Any) -> None:
                 await check_heartbeats(session)
                 await check_dlq(session)
+
+            await db_write(monitor_tasks)
 
         except Exception as e:
             logger.error(f"Monitor Loop Failed: {e}", exc_info=True)

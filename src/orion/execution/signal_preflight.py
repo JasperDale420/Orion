@@ -4,17 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from orion.config import system_settings
-from orion.core.circuit_breaker import CircuitBreaker
-from orion.storage.models_gold import CandidateTrade, GoldTickerRollup, StrategyDecision
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
-def _ensure_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+from orion.config import system_settings
+from orion.core.circuit_breaker import CircuitBreaker
+from orion.shared.utils import ensure_utc as _ensure_utc
+from orion.storage.models_gold import CandidateTrade, GoldTickerRollup, StrategyDecision
 
 
 def _parse_rollup_id(rollup_id: str) -> tuple[str, str, datetime] | None:

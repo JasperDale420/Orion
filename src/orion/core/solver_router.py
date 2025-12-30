@@ -27,8 +27,18 @@ class SolverRouter:
     PRDv2 Addendum 5.6.1.
     """
 
-    def __init__(self):
+    # Stage aliases: canonical stage name -> normalized stage for comparison
+    STAGE_ALIASES = {
+        "live": "limited_live",  # "live" is an alias for min viable live
+    }
+
+    def __init__(self) -> None:
         pass
+
+    @classmethod
+    def _normalize_stage(cls, stage: str) -> str:
+        """Normalize stage name using defined aliases for consistent comparison."""
+        return cls.STAGE_ALIASES.get(stage, stage)
 
     async def select_solvers(self, context: "LiveContext", top_k: int = 3) -> List[SelectedSolver]:
         """
@@ -79,16 +89,12 @@ class SolverRouter:
                     # Create rank map: research=0, shadow=1, paper=2, limited_live=3, scaled_live=4
                     stage_rank = {s: i for i, s in enumerate(STAGE_ORDER)}
 
-                    # Alias "live" to "limited_live" (min viable live) for context checking
-                    if target_stage == "live":
-                        target_stage_val = stage_rank.get("limited_live", 3)
-                    else:
-                        target_stage_val = stage_rank.get(target_stage, 2)
+                    # Normalize stages using centralized helper (M7 remediation)
+                    normalized_target = self._normalize_stage(target_stage)
+                    target_stage_val = stage_rank.get(normalized_target, 2)
 
-                    s_stage = s.stage
-                    if s_stage == "live":
-                        s_stage = "limited_live"
-                    solver_stage_val = stage_rank.get(s_stage, 0)
+                    normalized_solver = self._normalize_stage(s.stage)
+                    solver_stage_val = stage_rank.get(normalized_solver, 0)
 
                     if solver_stage_val < target_stage_val:
                         continue
@@ -102,6 +108,12 @@ class SolverRouter:
                     )
                     m_res = await session.execute(stmt_m)
                     latest_metrics = m_res.scalars().first()
+
+                    # Initialize raw metric values (to track None vs 0.0)
+                    max_dd_pct_raw = None
+                    info_ratio_raw = None
+                    oos_expect_bp_raw = None
+
                     if latest_metrics is None:
                         # PRDv2 §11.2 requires expected_return/risk_score for live signals; require metrics for paper/live routing.
                         if (
@@ -114,13 +126,26 @@ class SolverRouter:
                         info_ratio = 0.0
                         oos_expect_bp = 0.0
                     else:
+                        # Extract metrics with explicit null handling
+                        # Use None to distinguish "missing" from "legitimately zero"
                         latest_metrics_score = float(latest_metrics.info_ratio or 0.0)
-                        max_dd_pct = float(latest_metrics.max_dd_pct or 0.0)
-                        info_ratio = float(latest_metrics.info_ratio or 0.0)
-                        oos_expect_bp = float(latest_metrics.oos_expect_bp or 0.0)
+                        max_dd_pct_raw = latest_metrics.max_dd_pct
+                        info_ratio_raw = latest_metrics.info_ratio
+                        oos_expect_bp_raw = latest_metrics.oos_expect_bp
 
-                    if target_stage in ["paper", "limited_live", "scaled_live", "live"] and oos_expect_bp == 0.0:
-                        continue
+                        # Convert after null check
+                        max_dd_pct = float(max_dd_pct_raw) if max_dd_pct_raw is not None else 0.0
+                        info_ratio = float(info_ratio_raw) if info_ratio_raw is not None else 0.0
+                        oos_expect_bp = float(oos_expect_bp_raw) if oos_expect_bp_raw is not None else 0.0
+
+                    # Filter on NULL metrics (not zero) for paper/live stages
+                    if target_stage in ["paper", "limited_live", "scaled_live", "live"]:
+                        if oos_expect_bp_raw is None:
+                            logger.debug(
+                                f"Solver {s.solver_id} missing oos_expect_bp (NULL), skipping for {target_stage}"
+                            )
+                            continue
+                        # Allow legitimate 0.0 expected return if it's an explicit metric value
 
                     # Basic drawdown constraint (PRD: subject to max drawdown constraints).
                     if max_dd_pct > 25.0:
@@ -149,7 +174,8 @@ class SolverRouter:
                         # Strict Regime Compliance
                         if required_regime:
                             if not current_regime or current_regime == "UNKNOWN":
-                                logger.debug(
+                                # L5: Use warning level - affects live trading decisions
+                                logger.warning(
                                     f"Solver {s.solver_id} requires regime {required_regime} but current is UNKNOWN. Skipping."
                                 )
                                 continue
@@ -191,9 +217,18 @@ class SolverRouter:
                             fallback_solver = res_fb.scalars().first()
 
                         if fallback_solver:
+                            # Strict validation for baseline - must be valid for system safety
                             try:
                                 fb_cfg_blob = fallback_solver.definition_json or fallback_solver.config
+                                if not fb_cfg_blob:
+                                    raise ValueError(f"Baseline solver {fallback_id} has no config")
+
                                 fb_cfg = SolverConfig(**fb_cfg_blob)
+
+                                # Validate critical fields
+                                if not fb_cfg.version_id:
+                                    raise ValueError(f"Baseline solver {fallback_id} missing version_id")
+
                                 # Best-effort metrics: if missing, keep deterministic safe defaults.
                                 stmt_fb_m = (
                                     select(SolverMetrics)
@@ -204,6 +239,7 @@ class SolverRouter:
                                 fb_m = (await session.execute(stmt_fb_m)).scalars().first()
                                 fb_ir = float(getattr(fb_m, "info_ratio", 0.0) or 0.0)
                                 fb_expect = float(getattr(fb_m, "oos_expect_bp", 0.0) or 0.0)
+
                                 from orion.core.errors import ErrorCode
 
                                 logger.warning(
@@ -221,7 +257,13 @@ class SolverRouter:
                                     )
                                 ]
                             except Exception as e:
-                                logger.error(f"Fallback solver {fallback_id} config invalid: {e}")
+                                logger.error(
+                                    f"Fallback solver {fallback_id} config invalid: {e}",
+                                    exc_info=True,
+                                )
+                                raise RuntimeError(
+                                    f"CRITICAL: Cannot load baseline solver {fallback_id}, system unsafe to trade"
+                                ) from e
 
                     return []
 

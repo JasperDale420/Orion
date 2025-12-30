@@ -30,7 +30,7 @@ class SolverDSLModel(BaseModel):
     thresholds: Dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_model_ref(self):
+    def _validate_model_ref(self) -> "SolverDSLModel":
         # If a model is requested, require at least one reference.
         if self.type != "none" and not (self.model_version or self.model_uri):
             raise ValueError("model.type=meta_classifier requires model_version or model_uri")
@@ -46,7 +46,7 @@ class SolverDSLRisk(BaseModel):
     session_filter: List[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate_risk_bounds(self):
+    def _validate_risk_bounds(self) -> "SolverDSLRisk":
         # Normalize pct->bps if provided.
         if self.risk_per_trade_bps is None and self.risk_per_trade_pct is not None:
             self.risk_per_trade_bps = int(round(float(self.risk_per_trade_pct) * 10000.0))

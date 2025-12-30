@@ -49,7 +49,7 @@ class SystemSettings(BaseSettings):
 
 
 class MetaSearchSettings(BaseSettings):
-    scoring_weights: dict = {"sharpe": 0.4, "profit_factor": 0.3, "info_ratio": 0.2, "stability": 0.1}
+    scoring_weights: dict[str, float] = {"sharpe": 0.4, "profit_factor": 0.3, "info_ratio": 0.2, "stability": 0.1}
     model_config = SettingsConfigDict(env_prefix="ORION_META_")
 
 

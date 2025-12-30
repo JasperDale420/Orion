@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -27,4 +28,4 @@ class AuditLog(Base):
 
     # Minimal context
     client_host: Mapped[str | None] = mapped_column(String, nullable=True)
-    query_params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    query_params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

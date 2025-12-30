@@ -9,7 +9,7 @@ from orion.shared.logger import setup_struct_logger
 logger = setup_struct_logger("orion.meta")
 
 
-async def main():
+async def main() -> None:
     parser = argparse.ArgumentParser(description="Orion Meta-Search Agent CLI")
     parser.add_argument("--base-solver", type=str, required=True, help="Solver ID to evolve (e.g., 'v1_legacy')")
     parser.add_argument("--experiment-name", type=str, default="Manual Evolution", help="Experiment Name")

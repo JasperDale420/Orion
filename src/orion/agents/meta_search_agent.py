@@ -3,25 +3,26 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+from pydantic import ValidationError
+from sqlalchemy import select
+
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
 from orion.core.solver_schema import EditOp, EditOpType, EvaluationTask, SolverConfig, SolverEdit
 from orion.core.solver_validation import ensure_solver_definition_json, solver_dsl_error_extra
+from orion.shared.db_utils import db_query, db_write
 from orion.storage.db import async_session_factory
 from orion.storage.models_solvers import (
-    MetaExperiment,
     PromotionRecommendation,
     Solver,
     SolverEdits,
     SolverMetrics,
     SolverRun,
 )
-from pydantic import ValidationError
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -32,20 +33,20 @@ class MetaSearchAgent:
     Generates variants of solvers, evaluates them, and tracks experiments.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         from orion.agents.meta_agent import MetaAgent
 
         self.meta_agent = MetaAgent()
 
+        self.vector_store: "VectorStore | None" = None
         try:
             from orion.rag.vector_store import VectorStore
 
             self.vector_store = VectorStore()
         except Exception as e:
             logger.warning(f"Failed to initialize VectorStore: {e}. RAG features disabled.")
-            self.vector_store = None
 
-    def _calculate_composite_score(self, metrics: SolverMetrics, weights: Optional[dict] = None) -> float:
+    def _calculate_composite_score(self, metrics: SolverMetrics, weights: Optional[dict[str, float]] = None) -> float:
         """
         Computes a weighted score based on PRD requirements:
         (Sharpe, Profit Factor, Info Ratio, Stability)
@@ -72,7 +73,7 @@ class MetaSearchAgent:
 
         return score
 
-    async def run_evolution_cycle(self, base_solver_id: str, experiment_name: str = "Evolution"):
+    async def run_evolution_cycle(self, base_solver_id: str, experiment_name: str = "Evolution") -> None:
         """
         Runs a single generation of evolution.
         """
@@ -123,23 +124,19 @@ class MetaSearchAgent:
                 base_score = base_solver.sharpe_ratio or 0.0
 
             # Create Experiment Record
-            exp_id = str(uuid.uuid4())
             objective = "maximize composite_score(sharpe,profit_factor,info_ratio,stability) with drawdown penalty"
-            experiment = MetaExperiment(
-                experiment_id=exp_id,
+            experiment = await self._log_experiment(
                 description=experiment_name,
                 status="running",
-                start_time_utc=datetime.now(timezone.utc),
-                # PRD §4.4 fields (staged)
-                id=exp_id,
                 name=experiment_name,
                 objective=objective,
                 base_solver_ids=[str(base_solver_id)],
                 config_json={"objective": objective, "weights": meta_settings.scoring_weights},
-                started_at=datetime.now(timezone.utc),
             )
-            session.add(experiment)
-            await session.commit()
+            # Re-fetch experiment from session to ensure it's tracked if needed later in the same session
+            # Or, if _log_experiment returns the managed object, this step is not needed.
+            # Assuming _log_experiment returns the managed object.
+            # If not, we'd need: experiment = await session.get(MetaExperiment, experiment.experiment_id)
 
             try:
                 # 2. Generate Variants (SolverEdits)
@@ -205,7 +202,7 @@ class MetaSearchAgent:
                     # Persist Edit (FR 4.5)
                     sql_edit = SolverEdits(
                         id=str(uuid.uuid4()),
-                        experiment_id=exp_id,
+                        experiment_id=experiment.experiment_id,
                         base_solver_id=edit_record.base_solver_id,
                         new_solver_id=edit_record.new_solver_id,
                         edit_json=edit_record.model_dump(mode="json"),
@@ -216,7 +213,7 @@ class MetaSearchAgent:
                     # Create Solver Record (Inactive Candidate)
                     new_solver = Solver(
                         solver_id=new_config.version_id,
-                        family_name=f"{base_solver.family_name}_gen_{exp_id[:4]}",
+                        family_name=f"{base_solver.family_name}_gen_{experiment.experiment_id[:4]}",
                         config=new_config.model_dump(mode="json"),
                         is_active=False,
                         status="candidate",
@@ -263,124 +260,234 @@ class MetaSearchAgent:
                 experiment.status = "failed"
                 await session.rollback()
 
-    async def ingest_proposals(self, proposals_dir: str = "proposals"):
+    async def ingest_proposals(self, proposals_dir: str = "proposals") -> None:
         """
         Scans directory for YAML proposals (from EOD Agent) and persists them to DB.
         """
         if not os.path.exists(proposals_dir):
             return
 
-        async with async_session_factory() as session:
-            for filename in os.listdir(proposals_dir):
-                if not filename.endswith(".yaml"):
+        # Collect all valid proposals first (file I/O outside transaction)
+        proposals_to_ingest = []
+
+        for filename in os.listdir(proposals_dir):
+            if not filename.endswith(".yaml"):
+                continue
+
+            path = os.path.join(proposals_dir, filename)
+            try:
+                with open(path, "r") as f:
+                    artifact = yaml.safe_load(f)
+
+                meta = artifact.get("meta", {})
+                proposal = artifact.get("proposal", {})
+
+                if meta.get("status") != "PROPOSED":
                     continue
 
-                path = os.path.join(proposals_dir, filename)
-                try:
-                    with open(path, "r") as f:
-                        artifact = yaml.safe_load(f)
+                if proposal.get("type") != "solver_edit":
+                    continue
 
-                    meta = artifact.get("meta", {})
-                    proposal = artifact.get("proposal", {})
+                base_id = proposal.get("target_solver_id")
+                ops_data = proposal.get("ops", [])
+                edit_id = str(uuid.uuid4())
 
-                    if meta.get("status") != "PROPOSED":
-                        continue
+                new_solver_id = deterministic_solver_id(
+                    base_solver_id=str(base_id),
+                    edit_ops={"ops": ops_data},
+                    prefix="eod",
+                )
 
-                    if proposal.get("type") != "solver_edit":
-                        continue
+                proposals_to_ingest.append(
+                    {
+                        "edit_id": edit_id,
+                        "base_id": base_id,
+                        "new_solver_id": new_solver_id,
+                        "ops_data": ops_data,
+                        "filename": filename,
+                        "path": path,
+                    }
+                )
 
-                    base_id = proposal.get("target_solver_id")
-                    ops_data = proposal.get("ops", [])
-                    edit_id = str(uuid.uuid4())
+            except Exception as e:
+                logger.error(f"Failed to parse {filename}: {e}")
 
-                    new_solver_id = deterministic_solver_id(
-                        base_solver_id=str(base_id),
-                        edit_ops={"ops": ops_data},
-                        prefix="eod",
-                    )
+        if not proposals_to_ingest:
+            return
 
-                    sql_edit = SolverEdits(
-                        id=edit_id,
-                        experiment_id=None,
-                        base_solver_id=base_id,
-                        new_solver_id=new_solver_id,
-                        edit_json={"ops": ops_data},
-                        generated_by="llm_eod_agent",
-                        reward=None,
-                    )
+        # Persist to DB in single transaction
+        async def save_proposals(session: Any) -> None:
+            for prop in proposals_to_ingest:
+                sql_edit = SolverEdits(
+                    id=prop["edit_id"],
+                    experiment_id=None,
+                    base_solver_id=prop["base_id"],
+                    new_solver_id=prop["new_solver_id"],
+                    edit_json={"ops": prop["ops_data"]},
+                    generated_by="llm_eod_agent",
+                    reward=None,
+                )
+                session.add(sql_edit)
+                logger.info(f"Ingested proposal {prop['filename']} as Edit {prop['edit_id']}")
 
-                    session.add(sql_edit)
-                    logger.info(f"Ingested proposal {filename} as Edit {edit_id}")
+        await db_write(save_proposals)
 
-                    processed_dir = os.path.join(proposals_dir, "processed")
-                    os.makedirs(processed_dir, exist_ok=True)
-                    os.rename(path, os.path.join(processed_dir, filename))
+        # Move processed files (file I/O outside transaction)
+        processed_dir = os.path.join(proposals_dir, "processed")
+        os.makedirs(processed_dir, exist_ok=True)
+        for prop in proposals_to_ingest:
+            try:
+                os.rename(prop["path"], os.path.join(processed_dir, prop["filename"]))
+            except Exception as e:
+                logger.error(f"Failed to move {prop['filename']}: {e}")
 
-                except Exception as e:
-                    logger.error(f"Failed to ingest {filename}: {e}")
+    async def _load_context(self, query: str, top_k: int = 5) -> dict[str, Any]:
+        """
+        Searches the RAG index and DB for relevant context.
+        Returns a dict with 'docs' and 'recent_metrics'.
+        """
+        # Vector search
+        docs = await self.store.search(query, top_k=top_k)
 
-            await session.commit()
+        # Fetch recent solver metrics
+        async def fetch_recent_metrics(session: Any) -> List[Any]:
+            from orion.storage.models import SolverMetrics
 
-    async def process_pending_edits(self):
+            stmt = select(SolverMetrics).order_by(SolverMetrics.evaluated_at_utc.desc()).limit(10)
+            result = await session.execute(stmt)
+            return result.scalars().all()
+
+        metrics = await db_query(fetch_recent_metrics)
+
+        return {"docs": docs, "recent_metrics": metrics}
+
+    async def process_pending_edits(self) -> None:
         """
         FR 5.7.2: Picks up pending EOD/Human edits and evaluates them.
         """
-        async with async_session_factory() as session:
+
+        # First, fetch all pending edits (read-only query)
+        async def fetch_pending(session: Any) -> List[Any]:
             stmt = select(SolverEdits).where(SolverEdits.reward is None)
             result = await session.execute(stmt)
-            pending_edits = result.scalars().all()
+            return result.scalars().all()
 
-            if not pending_edits:
-                return
+        pending_edits = await db_query(fetch_pending)
 
-            logger.info(f"Processing {len(pending_edits)} pending edits...")
+        if not pending_edits:
+            return
 
-            for edit in pending_edits:
-                try:
-                    # 1. Load Base
+        logger.info(f"Processing {len(pending_edits)} pending edits...")
+
+        # Process each edit and collect results
+        for edit in pending_edits:
+            try:
+                # Load base solver (read-only)
+                async def fetch_base_solver(session: Any, edit: Any = edit) -> Any:
                     stmt_b = select(Solver).where(Solver.solver_id == edit.base_solver_id)
                     res_b = await session.execute(stmt_b)
-                    base_solver = res_b.scalars().first()
+                    return res_b.scalars().first()
 
-                    if not base_solver:
-                        logger.error(f"Base solver {edit.base_solver_id} not found for edit {edit.id}")
-                        continue
+                base_solver = await db_query(fetch_base_solver)
 
-                    base_config = SolverConfig(**base_solver.config)
+                if not base_solver:
+                    logger.error(f"Base solver {edit.base_solver_id} not found for edit {edit.id}")
 
-                    # 2. Reconstruct SolverEdit object
-                    raw_ops = edit.edit_json.get("ops", [])
-                    ops_objs = []
-                    for op_dict in raw_ops:
-                        ops_objs.append(EditOp(**op_dict))
+                    # Mark as invalid
+                    async def mark_invalid(session: Any, edit: Any = edit) -> None:
+                        stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
+                        result = await session.execute(stmt)
+                        edit_obj = result.scalars().first()
+                        if edit_obj:
+                            edit_obj.reward = -999.0
 
-                    solver_edit_obj = SolverEdit(
-                        base_solver_id=edit.base_solver_id,
-                        new_solver_id=edit.new_solver_id,
-                        generated_by=edit.generated_by,
-                        ops=ops_objs,
+                    await db_write(mark_invalid)
+                    continue
+
+                base_config = SolverConfig(**base_solver.config)
+
+                # Reconstruct SolverEdit object
+                raw_ops = edit.edit_json.get("ops", [])
+                ops_objs = []
+                for op_dict in raw_ops:
+                    ops_objs.append(EditOp(**op_dict))
+
+                solver_edit_obj = SolverEdit(
+                    base_solver_id=edit.base_solver_id,
+                    new_solver_id=edit.new_solver_id,
+                    generated_by=edit.generated_by,
+                    ops=ops_objs,
+                )
+
+                # Apply Edit & VALIDATE
+                try:
+                    new_config = self.apply_edit(base_config, solver_edit_obj)
+                except (ValueError, ValidationError) as ve:
+                    logger.error(f"Edit {edit.id} Invalid: {ve}")
+
+                    async def mark_invalid_edit(session: Any, edit: Any = edit) -> None:
+                        stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
+                        result = await session.execute(stmt)
+                        edit_obj = result.scalars().first()
+                        if edit_obj:
+                            edit_obj.reward = -999.0
+
+                    await db_write(mark_invalid_edit)
+                    continue
+
+                try:
+                    ensure_solver_definition_json(new_config.model_dump(mode="json"), None)
+                except Exception as dsl_err:
+                    logger.error(
+                        f"Edit {edit.id} DSL validation failed: {dsl_err}",
+                        extra=solver_dsl_error_extra(dsl_err),
                     )
 
-                    # 3. Apply Edit & VALIDATE
-                    try:
-                        new_config = self.apply_edit(base_config, solver_edit_obj)
-                    except (ValueError, ValidationError) as ve:
-                        logger.error(f"Edit {edit.id} Invalid: {ve}")
-                        # Mark as invalid manually? Or just leave reward None?
-                        # Set reward to very negative to indicate failure/rejection
-                        edit.reward = -999.0
-                        continue
-                    try:
-                        ensure_solver_definition_json(new_config.model_dump(mode="json"), None)
-                    except Exception as dsl_err:
-                        logger.error(
-                            f"Edit {edit.id} DSL validation failed: {dsl_err}",
-                            extra=solver_dsl_error_extra(dsl_err),
-                        )
-                        edit.reward = -999.0
-                        continue
+                    async def mark_dsl_failed(session: Any, edit: Any = edit) -> None:
+                        stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
+                        result = await session.execute(stmt)
+                        edit_obj = result.scalars().first()
+                        if edit_obj:
+                            edit_obj.reward = -999.0
 
-                    # 4. Create Solver
+                    await db_write(mark_dsl_failed)
+                    continue
+
+                # Evaluate (this creates solver_run and metrics)
+                solver_run, metrics = await self.evaluate_variant(new_config.version_id, new_config)
+
+                # Calculate scores
+                new_score = self._calculate_composite_score(metrics)
+
+                # Fetch base metrics for comparison
+                async def fetch_base_metrics(session: Any, base_solver: Any = base_solver) -> Any:
+                    stmt_m = (
+                        select(SolverMetrics)
+                        .where(SolverMetrics.solver_id == base_solver.solver_id)
+                        .order_by(SolverMetrics.evaluated_at_utc.desc())
+                        .limit(1)
+                    )
+                    res_m = await session.execute(stmt_m)
+                    return res_m.scalars().first()
+
+                base_metrics = await db_query(fetch_base_metrics)
+
+                base_score = (
+                    self._calculate_composite_score(base_metrics) if base_metrics else (base_solver.sharpe_ratio or 0.0)
+                )
+
+                # Save everything in one transaction
+                async def save_evaluation_results(
+                    session,
+                    new_config=new_config,
+                    base_solver=base_solver,
+                    edit=edit,
+                    solver_run=solver_run,
+                    metrics=metrics,
+                    new_score=new_score,
+                    base_score=base_score,
+                ) -> None:
+                    # Create new solver
                     new_solver = Solver(
                         solver_id=new_config.version_id,
                         family_name=f"{base_solver.family_name}_eod_{edit.id[:4]}",
@@ -392,40 +499,23 @@ class MetaSearchAgent:
                         definition_json=ensure_solver_definition_json(new_config.model_dump(mode="json"), None),
                     )
                     session.add(new_solver)
-
-                    # 5. Evaluate
-                    solver_run, metrics = await self.evaluate_variant(new_solver.solver_id, new_config)
                     session.add(solver_run)
                     session.add(metrics)
 
-                    # 6. Update Reward using Composite
-                    new_score = self._calculate_composite_score(metrics)
+                    # Update edit reward
+                    stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
+                    result = await session.execute(stmt)
+                    edit_obj = result.scalars().first()
+                    if edit_obj:
+                        edit_obj.reward = new_score - base_score
+                        edit_obj.evaluated_at_utc = datetime.now(timezone.utc)
 
-                    # We need a base score baseline.
-                    stmt_m = (
-                        select(SolverMetrics)
-                        .where(SolverMetrics.solver_id == base_solver.solver_id)
-                        .order_by(SolverMetrics.evaluated_at_utc.desc())
-                        .limit(1)
-                    )
-                    res_m = await session.execute(stmt_m)
-                    base_metrics = res_m.scalars().first()
+                await db_write(save_evaluation_results)
 
-                    base_score = (
-                        self._calculate_composite_score(base_metrics)
-                        if base_metrics
-                        else (base_solver.sharpe_ratio or 0.0)
-                    )
+                logger.info(f"Processed Edit {edit.id}: Reward={new_score - base_score:.4f}")
 
-                    edit.reward = new_score - base_score
-                    edit.evaluated_at_utc = datetime.now(timezone.utc)
-
-                    logger.info(f"Processed Edit {edit.id}: Reward={edit.reward:.4f}")
-
-                except Exception as e:
-                    logger.error(f"Failed to process edit {edit.id}: {e}")
-
-            await session.commit()
+            except Exception as e:
+                logger.error(f"Failed to process edit {edit.id}: {e}")
 
     def _generate_heuristic_variants(
         self, base: SolverConfig, base_metrics: Solver, count: int = 3, generated_by: str = "heuristic_fallback"
@@ -761,17 +851,17 @@ class MetaSearchAgent:
 
         return solver_run, metrics
 
-    async def _fetch_silver_events(self, task: EvaluationTask):
-        import pandas as pd
+    async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
+        from sqlalchemy import and_, select
+
         from orion.storage.models import BronzeEvent
         from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
-        from sqlalchemy import and_, select
 
         alpaca_events = []
         flow_events = []
         price_data = {}
 
-        async with async_session_factory() as session:
+        async def fetch_bars_and_flow(session: Any) -> None:
             stmt_bars = (
                 select(SilverAlpacaBar)
                 .where(
@@ -799,17 +889,10 @@ class MetaSearchAgent:
                     "c": b.close,
                     "v": b.volume,
                     "vw": b.vwap,
-                    "bar_start_ts_utc": b.bar_start_ts_utc,
+                    "t": b.bar_start_ts_utc,
+                    "n": b.trade_count,
                 }
-                be = BronzeEvent(
-                    event_id=f"silver_bar_{b.ticker}_{b.bar_start_ts_utc}",
-                    event_type="ALPACA_BAR_1M",
-                    source="BACKTEST",
-                    event_ts_utc=b.bar_start_ts_utc,
-                    payload=payload,
-                    ticker=b.ticker,
-                )
-                alpaca_events.append(be)
+                alpaca_events.append(payload)
 
                 if b.ticker not in data_by_ticker:
                     data_by_ticker[b.ticker] = []
@@ -824,9 +907,15 @@ class MetaSearchAgent:
                     }
                 )
 
-            for t, rows in data_by_ticker.items():
-                df = pd.DataFrame(rows).set_index("timestamp").sort_index()
-                price_data[t] = df
+            # Build price_data DataFrames from collected bars
+            import pandas as pd
+
+            for ticker, bar_list in data_by_ticker.items():
+                if bar_list:
+                    df = pd.DataFrame(bar_list)
+                    df.set_index("timestamp", inplace=True)
+                    df.sort_index(inplace=True)
+                    price_data[ticker] = df
 
             stmt_flow = select(SilverOptionFlow).where(
                 and_(
@@ -872,7 +961,7 @@ class MetaSearchAgent:
 
         return alpaca_events, flow_events, price_data
 
-    async def scan_for_promotions(self):
+    async def scan_for_promotions(self) -> None:
         from orion.core.promotion_rules import STAGE_ORDER, evaluate_stage_transition
 
         async with async_session_factory() as session:

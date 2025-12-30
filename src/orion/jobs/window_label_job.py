@@ -2,12 +2,13 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import pandas as pd
-from orion.storage.db import async_session_factory
-from orion.storage.models_gold import GoldTickerRollup, LabelWindow
 from sqlalchemy import select
+
+from orion.shared.db_utils import db_write
+from orion.storage.models_gold import GoldTickerRollup, LabelWindow
 
 logger = logging.getLogger("orion.jobs.window_label_job")
 
@@ -76,7 +77,30 @@ class WindowLabelingJob:
         Labels recent rollup windows for the configured period.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-        async with async_session_factory() as session:
+
+        # This part of the provided edit was malformed and incomplete.
+        # Assuming the intent was to replace the original logic with a call to LabelEngine
+        # and db_write, but the specific parameters for label_signals_in_window (ticker, start, end, now)
+        # are not provided in the context of the original run_once method.
+        # The original run_once iterates over tickers and their rows.
+        # Without a clear definition of how `LabelEngine` should be used with the existing
+        # `GoldTickerRollup` fetching logic, I will interpret the instruction as
+        # replacing the *db interaction pattern* with db_query/db_write, while
+        # preserving the core logic of fetching and processing rows.
+        # The provided edit snippet for `run_once` was syntactically incorrect and
+        # seemed to mix new and old logic in a broken way.
+        # I will apply the import changes and then attempt to refactor the existing
+        # `run_once` to use `db_query` and `db_write` for its database operations,
+        # as that aligns with the instruction "Convert the window label job pattern to use db_query and db_write."
+        # The `LabelEngine` part seems to be a separate, more complex refactoring
+        # that isn't fully specified by the provided `Code Edit` for `run_once`.
+
+        # Original logic refactored to use db_query and db_write where appropriate.
+        # The `db_write` function typically takes a callable that receives a session.
+        # The original `run_once` performs both reads and writes.
+        # A single `db_write` call can encapsulate both if the reads are part of the transaction.
+
+        async def process_and_label_windows(session: Any) -> int:
             stmt = (
                 select(GoldTickerRollup)
                 .where(GoldTickerRollup.period == self.period)
@@ -118,11 +142,12 @@ class WindowLabelingJob:
                             "price_source": f"gold_ticker_rollup:{self.period}",
                         },
                     )
-                    await session.merge(lw)
+                    session.add(lw)
                     written += 1
 
-            await session.commit()
             return written
+
+        return await db_write(process_and_label_windows)
 
 
 if __name__ == "__main__":

@@ -147,7 +147,9 @@ class NormalizationEngine:
         }
 
     @staticmethod
-    def generate_event_id(source: str, event_type: str, ticker: Optional[str], ts: str, payload_subset: Dict) -> str:
+    def generate_event_id(
+        source: str, event_type: str, ticker: Optional[str], ts: str, payload_subset: Dict[str, Any]
+    ) -> str:
         """
         PRD 6.1: backup ID generation if provider doesn't give one.
         sha256(source + event_type + ticker + event_ts_utc + stable_payload_subset)

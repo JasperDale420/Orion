@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, List, Optional
 
 import urllib3.exceptions
 from alpaca.trading.client import TradingClient
@@ -38,7 +38,7 @@ class AlpacaTradingConnector:
         self.client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=is_paper)
         self._log_account_info()
 
-    def _log_account_info(self):
+    def _log_account_info(self) -> None:
         try:
             acct = self.client.get_account()
             logger.info(f"Alpaca Trading Connected. Buying Power: {acct.buying_power} (Currency: {acct.currency})")
@@ -48,7 +48,7 @@ class AlpacaTradingConnector:
 
     def submit_market_order(
         self, symbol: str, qty: float, side: OrderSide, time_in_force: TimeInForce = TimeInForce.DAY
-    ):
+    ) -> Any:
         """
         Submits a market order.
         """
@@ -71,7 +71,7 @@ class AlpacaTradingConnector:
         limit_price: float,
         time_in_force: TimeInForce = TimeInForce.DAY,
         client_order_id: Optional[str] = None,
-    ):
+    ) -> Any:
         """
         Submits a limit order with retry logic.
         """
@@ -105,7 +105,7 @@ class AlpacaTradingConnector:
             raise
 
     @network_retry
-    def get_recent_fills(self, since: Optional[datetime] = None, limit: int = 50):
+    def get_recent_fills(self, since: Optional[datetime] = None, limit: int = 50) -> List[Any]:
         """
         Fetches recently closed orders (potential fills) to reconcile state.
         """
