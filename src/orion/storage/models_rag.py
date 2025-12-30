@@ -25,3 +25,7 @@ class VectorDocument(Base):
     metadata_json = Column(JSON, nullable=False, default={})
 
     created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+# Alias for legacy imports
+RagDocument = VectorDocument

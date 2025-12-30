@@ -243,6 +243,16 @@ class UWFlowConnector:
         Polls for new events (Async).
         PRD 7.1: request events after (last_seen_ts - overlap_margin).
         """
+        # P1 Audit Fix: Check circuit breaker before polling
+        from orion.core.circuit_breaker import CircuitBreaker
+
+        if await CircuitBreaker().is_open():
+            logger.warning(
+                "Circuit breaker OPEN, skipping UW flow poll",
+                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_FLOW"},
+            )
+            return []
+
         await self._ensure_watermark_loaded()
         await self.send_heartbeat_async()
 

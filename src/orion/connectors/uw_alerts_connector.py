@@ -1,6 +1,6 @@
+import asyncio
 import hashlib
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -46,8 +46,18 @@ class UWAlertsConnector:
         """
         Fetches latest flow alerts.
         """
-        # Enforce Rate Limit
-        time.sleep(0.6)
+        # P1 Audit Fix: Check circuit breaker before polling
+        from orion.core.circuit_breaker import CircuitBreaker
+
+        if await CircuitBreaker().is_open():
+            logger.warning(
+                "Circuit breaker OPEN, skipping UW alerts fetch",
+                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_ALERTS"},
+            )
+            return []
+
+        # Enforce Rate Limit (async-safe)
+        await asyncio.sleep(0.6)
         try:
             await self._ensure_watermark_loaded()
 

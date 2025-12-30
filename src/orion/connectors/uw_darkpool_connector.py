@@ -1,6 +1,6 @@
+import asyncio
 import hashlib
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -50,8 +50,18 @@ class UWDarkPoolConnector:
         """
         Fetches latest dark pool prints.
         """
-        # Enforce Rate Limit
-        time.sleep(0.6)
+        # P1 Audit Fix: Check circuit breaker before polling
+        from orion.core.circuit_breaker import CircuitBreaker
+
+        if await CircuitBreaker().is_open():
+            logger.warning(
+                "Circuit breaker OPEN, skipping UW darkpool fetch",
+                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_DARKPOOL"},
+            )
+            return []
+
+        # Enforce Rate Limit (async-safe)
+        await asyncio.sleep(0.6)
         try:
             await self._ensure_watermark_loaded()
 
