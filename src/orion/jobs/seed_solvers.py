@@ -8,7 +8,7 @@ from orion.core.solver_schema import ExitLogic, SolverConfig
 from orion.core.solver_validation import ensure_solver_definition_json
 from orion.shared.db_utils import db_write
 from orion.storage.db import init_db
-from orion.storage.models import Solver
+from orion.storage.models_solvers import Solver
 
 
 async def seed_default_solver() -> None:
@@ -77,6 +77,7 @@ async def seed_default_solver() -> None:
                 family_name="Momentum_V1",
                 config=solver_config.model_dump(),
                 is_active=True,
+                stage="research",  # Start in research for refinement loop
                 created_at_utc=datetime.utcnow(),
                 definition_json=ensure_solver_definition_json(solver_config.model_dump(mode="json"), None),
             )

@@ -478,13 +478,36 @@ async def main() -> None:
                             await save_signals_to_db(uw_signals)
                             # Persist to Gold layer for model training (PRD 6.3)
                             await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
+
+                            # === ML SCORING PATH (Pure ML, no rule pre-filter) ===
+                            # Score all flow events directly with ML
+                            try:
+                                from orion.ml.flow_processor import MLFlowProcessor
+
+                                # Convert events to flow dicts for ML scoring
+                                flow_dicts = [e.payload for e in uw_flow_events_only if e.payload]
+
+                                if flow_dicts:
+                                    ml_processor = MLFlowProcessor(score_threshold=0.5)
+                                    ml_candidates = ml_processor.process_flows(flow_dicts)
+
+                                    if ml_candidates:
+                                        await save_candidates_to_db(ml_candidates)
+                                        logger.info(
+                                            f"ML Scorer generated {len(ml_candidates)} candidates from {len(flow_dicts)} flows",
+                                            extra={"event": "ml_candidates", "count": len(ml_candidates)},
+                                        )
+                                        if _metrics:
+                                            _metrics.ingest_candidates_total.inc(len(ml_candidates))
+                            except Exception as ml_err:
+                                logger.warning(f"ML Scoring path error (non-fatal): {ml_err}")
+
+                            # === LEGACY RULE ENGINE PATH (kept for comparison) ===
                             try:
                                 uw_candidates = rule_engine.process_signals(uw_signals)
                                 if uw_candidates:
-                                    await save_candidates_to_db(uw_candidates)
-                                    # Metrics: track candidates
-                                    if _metrics:
-                                        _metrics.ingest_candidates_total.inc(len(uw_candidates))
+                                    # Note: These may duplicate ML candidates, dedup happens at execution
+                                    logger.debug(f"Rule engine generated {len(uw_candidates)} candidates")
                             except Exception as e:
                                 logger.error(f"Rule Engine Error (UW): {e}")
                     except Exception as e:

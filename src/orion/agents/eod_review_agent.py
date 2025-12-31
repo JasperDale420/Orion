@@ -843,6 +843,29 @@ class EODReviewAgent(BaseAgent):
             logger.warning(f"RAG fetch failed: {e}")
             return ""
 
+    async def _fetch_trading_book_context(self, performance_issues: str) -> str:
+        """
+        Fetch insights from TradingRAG (indexed trading books).
+
+        Provides theoretical/best-practice guidance for performance issues.
+        """
+        try:
+            from orion.clients.trading_rag import get_rag_client
+
+            rag = get_rag_client()
+
+            # Build query based on performance issues
+            query = f"Trading strategy improvements for: {performance_issues}"
+
+            result = await rag.answer(query, top_k=3)
+
+            if result.get("answer"):
+                return f"## Trading Book Insights\n{result['answer']}\n"
+            return ""
+        except Exception as e:
+            logger.debug(f"TradingRAG context fetch failed (non-fatal): {e}")
+            return ""
+
     async def _generate_analysis(self, data: Dict[str, Any], rag_context: str) -> Dict[str, Any]:
         system_prompt = """You are the Orion EOD Review Agent - analyzing today's trading performance.
 
