@@ -1,0 +1,108 @@
+"""
+UW Max Pain Connector.
+
+Fetches max pain strike levels by expiry from Unusual Whales API.
+"""
+
+import asyncio
+import logging
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
+
+import requests
+from sqlalchemy import text
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from orion.shared.db_utils import db_write
+
+logger = logging.getLogger(__name__)
+
+
+class UWMaxPainConnector:
+    """Fetches max pain strikes from UW API."""
+
+    BASE_URL = "https://api.unusualwhales.com"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.headers = {"Authorization": f"Bearer {api_key}"}
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    def _fetch_max_pain(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Fetch max pain for a ticker."""
+        url = f"{self.BASE_URL}/api/stock/{ticker}/max-pain"
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.warning(f"Failed to fetch max pain for {ticker}: {e}")
+            return None
+
+    async def fetch_and_store(self, tickers: List[str]) -> int:
+        """Fetch max pain for multiple tickers and store."""
+        stored = 0
+        today = date.today()
+
+        for ticker in tickers:
+            data = await asyncio.to_thread(self._fetch_max_pain, ticker)
+            if not data or "data" not in data:
+                continue
+
+            expiries = data["data"]
+            if not expiries:
+                continue
+
+            for exp_data in expiries:
+                expiry_str = exp_data.get("expiry")
+                max_pain = exp_data.get("max_pain")
+                price = exp_data.get("price")
+
+                if not expiry_str or max_pain is None:
+                    continue
+
+                try:
+                    expiry = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+                except Exception:
+                    continue
+
+                distance_pct = None
+                if price and float(price) > 0:
+                    distance_pct = ((float(max_pain) - float(price)) / float(price)) * 100
+
+                record = {
+                    "ticker": ticker,
+                    "expiry": expiry,
+                    "date": today,
+                    "max_pain_strike": float(max_pain),
+                    "current_price": float(price) if price else None,
+                    "distance_to_max_pain_pct": distance_pct,
+                }
+
+                await self._persist_max_pain(record)
+                stored += 1
+
+            await asyncio.sleep(0.5)  # Rate limit
+
+        return stored
+
+    async def _persist_max_pain(self, record: Dict[str, Any]) -> None:
+        """Persist max pain to database."""
+
+        async def write(session: Any) -> None:
+            stmt = text(
+                """
+                INSERT INTO silver_max_pain (
+                    ticker, expiry, date, max_pain_strike, current_price, distance_to_max_pain_pct
+                ) VALUES (
+                    :ticker, :expiry, :date, :max_pain_strike, :current_price, :distance_to_max_pain_pct
+                )
+                ON CONFLICT (ticker, expiry, date) DO UPDATE SET
+                    max_pain_strike = EXCLUDED.max_pain_strike,
+                    current_price = EXCLUDED.current_price,
+                    distance_to_max_pain_pct = EXCLUDED.distance_to_max_pain_pct
+            """
+            )
+            await session.execute(stmt, record)
+
+        await db_write(write)

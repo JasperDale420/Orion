@@ -1,6 +1,7 @@
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from orion.api.main import app
+
 
 @pytest.mark.asyncio
 async def test_root_endpoint():
@@ -16,6 +17,7 @@ async def test_root_endpoint():
     assert "timestamp_utc" in data
     assert data["links"]["docs"] == "/docs"
     assert data["links"]["health"] == "/health"
+
 
 @pytest.mark.asyncio
 async def test_health_endpoint():

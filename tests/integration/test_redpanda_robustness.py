@@ -13,7 +13,7 @@ from orion.storage.models import BronzeEvent
 async def redpanda_producer():
     # Reset singleton
     RedpandaProducer._reset_instance()
-    producer = RedpandaProducer.get_instance()
+    producer = await RedpandaProducer.get_instance()
     yield producer
     await producer.stop()
     RedpandaProducer._reset_instance()
@@ -38,7 +38,7 @@ async def test_redpanda_idempotence_config():
         mock_instance = AsyncMock()
         MockKafka.return_value = mock_instance
 
-        producer = RedpandaProducer.get_instance()
+        producer = await RedpandaProducer.get_instance()
         await producer.start()
 
         # Check constructor args
@@ -81,7 +81,7 @@ async def test_redpanda_retry_logic():
             None,  # Success on retry
         ]
 
-        producer = RedpandaProducer.get_instance()
+        producer = await RedpandaProducer.get_instance()
         producer.client = mock_kafka_instance  # Inject mock client
 
         # Test
@@ -114,7 +114,7 @@ async def test_main_ingest_dlq_fallback():
 
     # Patch the RedpandaProducer imported in main_ingest to handle potential stale references due to reloads
     with (
-        patch("orion.main_ingest.RedpandaProducer.get_instance", return_value=mock_producer),
+        patch("orion.main_ingest.RedpandaProducer.get_instance", new_callable=AsyncMock, return_value=mock_producer),
         patch("orion.shared.dlq_utils.DLQWriter.write_to_dlq", new_callable=AsyncMock) as mock_dlq,
         patch("orion.main_ingest.persist_bronze_events", new_callable=AsyncMock),
         patch("orion.main_ingest.async_session_factory") as mock_session_factory,

@@ -5,8 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Tuple
 
 from alpaca.trading.enums import OrderSide, TimeInForce
-from sqlalchemy import select
-
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
@@ -15,6 +13,7 @@ from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
 from orion.shared.utils import ensure_utc
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +278,127 @@ class ExecutionEngine:
             decision.executed_successfully = "FALSE"
             decision.reason = f"Broker Error: {e}"
             self._record_result(False)
+
+    async def close_position(
+        self,
+        ticker: str,
+        qty: float,
+        exit_signal: Any,
+        use_market_order: bool = False,
+    ) -> bool:
+        """
+        Close a position based on exit signal.
+
+        Args:
+            ticker: Symbol to close
+            qty: Quantity to close
+            exit_signal: ExitSignal from exit rule
+            use_market_order: If True, use market order; else limit with buffer
+
+        Returns:
+            True if order submitted successfully
+        """
+        if not self.connector:
+            logger.warning("No connector available. Cannot close position.")
+            return False
+
+        try:
+            # Get current price
+            current_price = self.market_connector.get_latest_price(ticker) if self.market_connector else 0.0
+
+            if current_price <= 0:
+                logger.error(f"Cannot close {ticker}: Failed to get current price")
+                return False
+
+            # Determine order params
+            side = OrderSide.SELL  # Closing a long position
+            client_order_id = str(uuid.uuid4())
+
+            if use_market_order or exit_signal.urgency == "IMMEDIATE":
+                # Market order for urgent exits
+                order = self.connector.submit_market_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    time_in_force=TimeInForce.DAY,
+                    client_order_id=client_order_id,
+                )
+                logger.info(
+                    f"EXIT MARKET ORDER: {ticker} x{qty} - Reason: {exit_signal.reason}",
+                    extra={
+                        "event_type": "EXIT_ORDER_SUBMITTED",
+                        "ticker": ticker,
+                        "qty": qty,
+                        "order_type": "MARKET",
+                        "rule_id": exit_signal.rule_id,
+                        "reason": exit_signal.reason,
+                    },
+                )
+            else:
+                # Limit order with small buffer below current price
+                exit_buffer_bps = 5  # 5 basis points buffer
+                limit_price = round(current_price * (1 - exit_buffer_bps / 10000.0), 2)
+
+                order = self.connector.submit_limit_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    limit_price=limit_price,
+                    time_in_force=TimeInForce.DAY,
+                    client_order_id=client_order_id,
+                )
+                logger.info(
+                    f"EXIT LIMIT ORDER: {ticker} x{qty} @ {limit_price} - Reason: {exit_signal.reason}",
+                    extra={
+                        "event_type": "EXIT_ORDER_SUBMITTED",
+                        "ticker": ticker,
+                        "qty": qty,
+                        "order_type": "LIMIT",
+                        "limit_price": limit_price,
+                        "rule_id": exit_signal.rule_id,
+                        "reason": exit_signal.reason,
+                    },
+                )
+
+            # Persist exit decision
+            await self._persist_exit_decision(ticker, exit_signal, client_order_id, order)
+            self._record_result(True)
+            return True
+
+        except Exception as e:
+            logger.error(
+                f"Failed to close position {ticker}: {e}",
+                extra={"event_type": "EXIT_ORDER_FAILED", "ticker": ticker, "error": str(e)},
+            )
+            self._record_result(False)
+            return False
+
+    async def _persist_exit_decision(self, ticker: str, exit_signal: Any, client_order_id: str, order: Any) -> None:
+        """Persist exit decision to database."""
+        try:
+
+            async def save_exit(session: Any) -> None:
+                from orion.storage.models_gold import ExitDecision
+
+                broker_order_id = str(getattr(order, "id", "")) if order else None
+
+                session.add(
+                    ExitDecision(
+                        exit_id=client_order_id,
+                        ticker=ticker,
+                        rule_id=exit_signal.rule_id,
+                        exit_reason=exit_signal.reason,
+                        urgency=exit_signal.urgency,
+                        confidence=exit_signal.confidence,
+                        details=exit_signal.details or {},
+                        broker_order_id=broker_order_id,
+                        exit_ts_utc=datetime.now(timezone.utc),
+                    )
+                )
+
+            await db_write(save_exit)
+        except Exception as e:
+            logger.error(f"Failed to persist exit decision: {e}")
 
     async def _check_system_health(self) -> bool:
         """
@@ -611,9 +731,8 @@ class ExecutionEngine:
     @db_retry
     async def _persist_fill_record(self, fill: Any) -> None:
         async def save_fill_and_update_journal(session: Any) -> None:
-            from sqlalchemy.dialects.postgresql import insert
-
             from orion.storage.models_execution import FillRecord
+            from sqlalchemy.dialects.postgresql import insert
 
             broker_order_id = str(getattr(fill, "id", ""))
             ticker = getattr(fill, "symbol", None) or ""

@@ -41,6 +41,7 @@ class SystemSettings(BaseSettings):
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
     ingestion_heartbeat_max_age: int = 70
     max_data_lag_seconds: int = 60
+    alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
     static_watchlist: List[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL"]
     require_rollups_for_signals_live: bool = True
@@ -55,6 +56,7 @@ class MetaSearchSettings(BaseSettings):
 
 class AgentSettings(BaseSettings):
     model_name: str = "gpt-5.2"
+    reasoning_level: str = Field(default="extra_high", validation_alias="ORION_REASONING_LEVEL")
     openai_api_key: Optional[str] = Field(default=None, validation_alias="OPENAI_API_KEY")
     model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")
 

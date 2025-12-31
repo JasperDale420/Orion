@@ -6,9 +6,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
-from pydantic import ValidationError
-from sqlalchemy import select
-
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
@@ -23,8 +20,14 @@ from orion.storage.models_solvers import (
     SolverMetrics,
     SolverRun,
 )
+from pydantic import ValidationError
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
+
+# Refinement loop configuration
+REFINEMENT_SCORE_THRESHOLD = 0.5  # Minimum composite score to promote to paper
+MAX_REFINEMENT_ITERATIONS = 3  # Max attempts to refine before giving up
 
 
 class MetaSearchAgent:
@@ -517,6 +520,134 @@ class MetaSearchAgent:
             except Exception as e:
                 logger.error(f"Failed to process edit {edit.id}: {e}")
 
+    async def refine_and_promote(
+        self,
+        solver_id: str,
+        config: SolverConfig,
+        base_solver_id: str,
+        max_iterations: int = MAX_REFINEMENT_ITERATIONS,
+    ) -> Optional[str]:
+        """
+        Iteratively refine a solver until it meets the promotion threshold.
+
+        1. Backtest the solver
+        2. If score < threshold, send results to MetaAgent for refinement
+        3. Apply refinement, loop back to step 1
+        4. If score >= threshold, promote to paper stage
+
+        Returns:
+            The final solver_id if promoted, None if gave up after max iterations.
+        """
+        current_config = config
+        current_solver_id = solver_id
+
+        for iteration in range(max_iterations):
+            logger.info(
+                f"Refinement iteration {iteration + 1}/{max_iterations} for {current_solver_id}",
+                extra={"event": "refinement_iteration", "solver_id": current_solver_id, "iteration": iteration + 1},
+            )
+
+            # 1. Backtest
+            solver_run, metrics = await self.evaluate_variant(current_solver_id, current_config)
+            score = self._calculate_composite_score(metrics)
+
+            logger.info(
+                f"Solver {current_solver_id} scored {score:.3f} (threshold: {REFINEMENT_SCORE_THRESHOLD})",
+                extra={
+                    "event": "refinement_score",
+                    "solver_id": current_solver_id,
+                    "score": score,
+                    "sharpe": metrics.sharpe_ratio,
+                    "profit_factor": metrics.profit_factor,
+                },
+            )
+
+            # 2. Check threshold
+            if score >= REFINEMENT_SCORE_THRESHOLD:
+                # Promote to paper!
+                await self._promote_to_paper(current_solver_id, current_config, metrics)
+                return current_solver_id
+
+            # 3. Score too low - ask MetaAgent for refinement
+            if iteration < max_iterations - 1:  # Don't refine on last iteration
+                refinement_context = (
+                    f"Solver {current_solver_id} scored {score:.3f}, below threshold {REFINEMENT_SCORE_THRESHOLD}.\n"
+                    f"Backtest Results:\n"
+                    f"- Sharpe: {metrics.sharpe_ratio:.3f}\n"
+                    f"- Profit Factor: {metrics.profit_factor:.3f}\n"
+                    f"- Max Drawdown: {metrics.max_dd_pct:.1f}%\n"
+                    f"- Win Rate: {(metrics.win_rate or 0) * 100:.1f}%\n"
+                    f"\nPlease propose refinements to improve performance."
+                )
+
+                try:
+                    edits = await self.meta_agent.propose_edits(current_config, refinement_context)
+
+                    if edits:
+                        # Apply first edit (best suggestion)
+                        new_config = self.apply_edit(current_config, edits[0])
+                        current_config = new_config
+                        current_solver_id = new_config.version_id
+                        logger.info(
+                            f"Applied refinement, new solver: {current_solver_id}",
+                            extra={"event": "refinement_applied", "new_solver_id": current_solver_id},
+                        )
+                    else:
+                        logger.warning("MetaAgent returned no refinements, stopping loop")
+                        break
+                except Exception as e:
+                    logger.error(f"Refinement failed: {e}")
+                    break
+
+        # Gave up - solver stays in research stage
+        logger.warning(
+            f"Solver {current_solver_id} did not meet threshold after {max_iterations} iterations",
+            extra={"event": "refinement_gave_up", "solver_id": current_solver_id, "final_score": score},
+        )
+        return None
+
+    async def _promote_to_paper(self, solver_id: str, config: SolverConfig, metrics: SolverMetrics) -> None:
+        """
+        Promote a solver from research to paper stage.
+        """
+
+        async def update_stage(session: Any) -> None:
+            stmt = select(Solver).where(Solver.solver_id == solver_id)
+            result = await session.execute(stmt)
+            solver = result.scalars().first()
+
+            if solver:
+                solver.stage = "paper"
+                solver.status = "active"
+                solver.is_active = True
+                session.add(metrics)
+                logger.info(
+                    f"Promoted solver {solver_id} to paper stage",
+                    extra={
+                        "event": "solver_promoted",
+                        "solver_id": solver_id,
+                        "new_stage": "paper",
+                        "score": self._calculate_composite_score(metrics),
+                    },
+                )
+            else:
+                # Solver doesn't exist yet - create it
+                new_solver = Solver(
+                    solver_id=solver_id,
+                    family_name="refined",
+                    config=config.model_dump(mode="json"),
+                    is_active=True,
+                    status="active",
+                    stage="paper",
+                    created_by="refinement_loop",
+                    definition_json=ensure_solver_definition_json(config.model_dump(mode="json"), None),
+                )
+                session.add(new_solver)
+                session.add(metrics)
+                logger.info(f"Created and promoted solver {solver_id} to paper stage")
+
+        await db_write(update_stage)
+
     def _generate_heuristic_variants(
         self, base: SolverConfig, base_metrics: Solver, count: int = 3, generated_by: str = "heuristic_fallback"
     ) -> List[SolverEdit]:
@@ -852,10 +983,9 @@ class MetaSearchAgent:
         return solver_run, metrics
 
     async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
-        from sqlalchemy import and_, select
-
         from orion.storage.models import BronzeEvent
         from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
+        from sqlalchemy import and_, select
 
         alpaca_events = []
         flow_events = []

@@ -43,6 +43,33 @@ class CandidateTrade(Base):
     )
 
 
+class ExitDecision(Base):
+    """Track exit decisions triggered by exit rules."""
+
+    __tablename__ = "exit_decisions"
+
+    exit_id = Column(String, primary_key=True)
+    ticker = Column(String, nullable=False, index=True)
+    candidate_id = Column(String, nullable=True, index=True)  # Links to entry
+
+    # Exit rule info
+    rule_id = Column(String, nullable=False)  # Which exit rule triggered
+    exit_reason = Column(String, nullable=False)
+    urgency = Column(String, nullable=True)  # IMMEDIATE, SOON, CONSIDER
+    confidence = Column(Float, nullable=True)
+    details = Column(JSON, nullable=True)
+
+    # Execution
+    broker_order_id = Column(String, nullable=True)
+    exit_ts_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    exit_price = Column(Float, nullable=True)
+
+    # P&L tracking
+    entry_price = Column(Float, nullable=True)
+    pnl_usd = Column(Float, nullable=True)
+    pnl_pct = Column(Float, nullable=True)
+
+
 class StrategyDecision(Base):
     __tablename__ = "strategy_decisions"
 

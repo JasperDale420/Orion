@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from orion.analysis.regime import RegimeDetector
+from orion.analysis.regime import MultiAxisRegimeDetector, RegimeDetector
 from orion.config import risk_settings
 from orion.core.errors import ErrorCode, FeatureComputationError, ModelInferenceError
 from orion.core.solver_executor import SolverPipeline
@@ -27,6 +27,7 @@ class SignalEngine:
         # Initialize Router
         self.router = SolverRouter()
         self.regime_detector = RegimeDetector()
+        self.multi_axis_detector = MultiAxisRegimeDetector()
         self.pipeline = SolverPipeline()
         # Initialize Singleton Feature Engine
         self.feature_engine = FeatureEngine()
@@ -45,9 +46,42 @@ class SignalEngine:
         Applies deterministic policy to a Candidate.
         """
 
-        # 0. Detect Regime
+        # 0. Detect Legacy Regime (for backwards compatibility)
         current_regime = await self.regime_detector.get_current_regime_for_ticker(candidate.ticker)
         current_regime_str = current_regime.value if current_regime else "UNKNOWN"
+
+        # 0b. Detect Multi-Axis Regime
+        from orion.analysis.regime_risk import RegimeRiskManager
+
+        risk_manager = RegimeRiskManager()
+
+        # Get multi-axis regime snapshot (synchronous detection based on time)
+        regime_snapshot = self.multi_axis_detector.detect(
+            ts=candidate.timestamp_utc,
+        )
+
+        # Check if regime allows trading
+        if not risk_manager.should_trade(regime_snapshot):
+            return StrategyDecision(
+                decision_id=f"regime_skip_{candidate.candidate_id}",
+                candidate_id=candidate.candidate_id,
+                timestamp_utc=candidate.timestamp_utc,
+                ticker=candidate.ticker,
+                strategy_version_id="REGIME_FILTER",
+                model_version=None,
+                decision="SKIP",
+                reason=f"Regime SHOCK/blocked: vol={regime_snapshot.vol.value}, vix={regime_snapshot.vix_regime.value}",
+                executed_successfully="SKIPPED",
+                execution_params={},
+                decision_trace_json={
+                    "regime_blocked": True,
+                    "vol_regime": regime_snapshot.vol.value,
+                    "vix_regime": regime_snapshot.vix_regime.value,
+                },
+            )
+
+        # Calculate regime risk multiplier for later sizing
+        regime_size_multiplier = risk_manager.calculate_combined_multiplier(regime_snapshot)
 
         # Clear feature cache on regime transition (M1 remediation)
         previous_regime = self._previous_regime.get(candidate.ticker)
@@ -207,6 +241,14 @@ class SignalEngine:
                     "primary_solver": primary.solver_id,
                     "expected_return_bp": expected_return_bp,
                     "risk_score": risk_score,
+                    "regime_snapshot": {
+                        "trend": regime_snapshot.trend.value,
+                        "vol": regime_snapshot.vol.value,
+                        "risk": regime_snapshot.risk.value,
+                        "session": regime_snapshot.session.value,
+                        "vix_regime": regime_snapshot.vix_regime.value,
+                    },
+                    "regime_size_multiplier": regime_size_multiplier,
                 }
             else:
                 decision_record.decision = "SKIP"

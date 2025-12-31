@@ -43,11 +43,12 @@ async def test_ingest_service_smoke_run():
         # --- Configure Mocks ---
 
         # Producer
-        mock_producer = MockProducerCls.get_instance.return_value
+        mock_producer = AsyncMock()
         mock_producer.start = AsyncMock()
         mock_producer.stop = AsyncMock()
         mock_producer.produce_event = AsyncMock()
         mock_producer.produce_event.return_value = None
+        MockProducerCls.get_instance = AsyncMock(return_value=mock_producer)
 
         # Connectors (Async Polls)
         # Note: We must ensure the INSTANCES returned by the constructors have async methods
