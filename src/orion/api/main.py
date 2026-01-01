@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -38,26 +39,42 @@ async def audit_middleware(request: Request, call_next: Any) -> Response:
     request.state.trace_id = trace_id
     response: Response = await call_next(request)
 
-    async def save_audit_log(session: Any) -> None:
-        session.add(
-            AuditLog(
-                id=str(uuid.uuid4()),
-                run_id=os.getenv("ORION_RUN_ID"),
-                trace_id=trace_id,
-                method=request.method,
-                path=request.url.path,
-                status_code=response.status_code,
-                client_host=request.client.host if request.client else None,
-                query_params=dict(request.query_params),
+    async def write_log_background() -> None:
+        async def _save_to_db(session: Any) -> None:
+            session.add(
+                AuditLog(
+                    id=str(uuid.uuid4()),
+                    run_id=os.getenv("ORION_RUN_ID"),
+                    trace_id=trace_id,
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=response.status_code,
+                    client_host=request.client.host if request.client else None,
+                    query_params=dict(request.query_params),
+                )
             )
-        )
 
-    try:
-        await db_write(save_audit_log)
-    except Exception as e:
-        logger.error(
-            "Failed to write audit log", extra={"event_type": "AUDIT_LOG_ERROR", "trace_id": trace_id, "error": str(e)}
-        )
+        try:
+            await db_write(_save_to_db)
+        except Exception as e:
+            logger.error(
+                "Failed to write audit log",
+                extra={"event_type": "AUDIT_LOG_ERROR", "trace_id": trace_id, "error": str(e)},
+            )
+
+    # Use BackgroundTask so we don't block the response
+    task = BackgroundTask(write_log_background)
+    if response.background:
+        # Chain if there's already a task
+        old_bg = response.background
+
+        async def chained() -> None:
+            await old_bg()
+            await task()
+
+        response.background = BackgroundTask(chained)
+    else:
+        response.background = task
 
     response.headers["x-trace-id"] = trace_id
     return response
