@@ -63,6 +63,17 @@ async def audit_middleware(request: Request, call_next: Any) -> Response:
     return response
 
 
+@app.get("/")
+async def root() -> Dict[str, str]:
+    return {
+        "message": "Welcome to Orion Admin API",
+        "docs_url": "/docs",
+        "redoc_url": "/redoc",
+        "health_check": "/health",
+        "version": app.version,
+    }
+
+
 @app.get("/health")
 async def health_check() -> Dict[str, str]:
     return {"status": "ok"}
