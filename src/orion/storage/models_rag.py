@@ -19,7 +19,7 @@ class VectorDocument(Base):
     # Text content and Embedding
     content = Column(Text, nullable=False)
     embedding = Column(JSON, nullable=False)  # raw embedding list (portable)
-    embedding_vec = Column(Vector(1536), nullable=True)  # server-side pgvector search
+    embedding_vec = Column(Vector(768), nullable=True)  # server-side pgvector (768 for nomic-embed-text)
 
     # Metadata for filtering
     metadata_json = Column(JSON, nullable=False, default={})

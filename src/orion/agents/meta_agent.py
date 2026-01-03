@@ -34,11 +34,55 @@ class MetaAgent(BaseAgent):
         """
         pass
 
+    async def _fetch_strategy_research(
+        self,
+        base_config: SolverConfig,
+        performance_context: str,
+    ) -> str:
+        """
+        Fetch relevant strategy research from TradingRAG.
+
+        Queries indexed trading books for insights related to the solver's
+        strategy type and performance issues.
+        """
+        try:
+            from orion.clients.trading_rag import get_rag_client
+
+            rag = get_rag_client()
+
+            # Build a research query based on solver config
+            rule_ids = ", ".join(base_config.rules) if base_config.rules else "momentum"
+            query = (
+                f"Best practices for {rule_ids} trading strategies. "
+                f"How to optimize exits and risk management for options trading."
+            )
+
+            # If performance context mentions issues, add to query
+            if "drawdown" in performance_context.lower():
+                query += " How to reduce drawdown in trading systems."
+            if "win rate" in performance_context.lower():
+                query += " How to improve win rate in trading."
+
+            result = await rag.answer(query, top_k=3)
+
+            if result.get("answer"):
+                return f"--- Strategy Research from Trading Books ---\n{result['answer']}\n"
+
+            return ""
+        except Exception as e:
+            logger.warning(f"TradingRAG research failed (non-fatal): {e}")
+            return ""
+
     async def propose_edits(self, base_config: SolverConfig, performance_context: str = "") -> List[SolverEdit]:
         """
         Generates a list of valid SolverEdit objects to mutate the base_config.
         Uses a ReAct loop to query MCP tools for market context before deciding.
+        Also queries TradingRAG for strategy research from indexed trading books.
         """
+        # 0. Fetch strategy research from TradingRAG
+        rag_context = await self._fetch_strategy_research(base_config, performance_context)
+        augmented_context = f"{performance_context}\n\n{rag_context}" if rag_context else performance_context
+
         # 1. Initialize MCP Client & Fetch Tools
         from orion.connectors.mcp_client import MCPClient
 
@@ -92,7 +136,7 @@ class MetaAgent(BaseAgent):
 
         user_prompt = (
             f"Base Config:\n{base_config.model_dump_json(indent=2)}\n\n"
-            f"Context:\n{performance_context}\n\n"
+            f"Context:\n{augmented_context}\n\n"
             "Step 1: Analyze the market using available tools (e.g. get_market_tide, get_volatility).\n"
             "Step 2: Propose 3 variants based on your findings."
         )
