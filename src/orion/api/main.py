@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -52,35 +53,41 @@ async def audit_middleware(request: Request, call_next: Any) -> Response:
             )
         )
 
-    try:
-        await db_write(save_audit_log)
-    except Exception as e:
-        logger.error(
-            "Failed to write audit log", extra={"event_type": "AUDIT_LOG_ERROR", "trace_id": trace_id, "error": str(e)}
-        )
+    async def save_audit_log_safe() -> None:
+        try:
+            await db_write(save_audit_log)
+        except Exception as e:
+            logger.error(
+                "Failed to write audit log",
+                extra={"event_type": "AUDIT_LOG_ERROR", "trace_id": trace_id, "error": str(e)},
+            )
+
+    # Offload audit log writing to background task to avoid blocking the response
+    if response.background:
+        original_bg = response.background
+
+        async def chained_background() -> None:
+            await original_bg()
+            await save_audit_log_safe()
+
+        response.background = BackgroundTask(chained_background)
+    else:
+        response.background = BackgroundTask(save_audit_log_safe)
 
     response.headers["x-trace-id"] = trace_id
     return response
 
 
-@app.get("/", tags=["System"])
-async def root():
-    """
-    Root endpoint providing API information and status.
-    """
+@app.get("/", include_in_schema=False)
+async def root() -> Dict[str, str]:
     return {
-        "app": "Orion Admin API",
-        "version": "1.0.0",
-        "status": "operational",
-        "timestamp_utc": datetime.now(timezone.utc),
-        "links": {
-            "docs": "/docs",
-            "health": "/health",
-        },
+        "message": "Welcome to Orion Admin API! 🚀",
+        "docs_url": "/docs",
+        "health_check": "/health",
     }
 
 
-@app.get("/health", tags=["System"])
+@app.get("/health")
 async def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 

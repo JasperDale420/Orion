@@ -1,0 +1,896 @@
+{
+  "date": "2026-01-03",
+  "decisions": {
+    "executed_count": 0,
+    "sample": [],
+    "skipped_count": 0,
+    "total": 0
+  },
+  "dlq": {
+    "sample": [],
+    "total": 0
+  },
+  "drift_metrics": {
+    "backtest_vs_live_deltas": {
+      "available": false,
+      "reason": "Backtest regression outputs are not persisted in a queryable table in this codebase yet."
+    },
+    "degradation_vs_rolling_baseline": {
+      "baseline_realized_pnl_count": 0,
+      "baseline_realized_pnl_sum": null,
+      "today_realized_pnl_count": 0,
+      "today_realized_pnl_sum": null,
+      "window_utc": {
+        "end": "2026-01-03T00:00:00+00:00",
+        "start": "2025-12-14T00:00:00+00:00"
+      }
+    },
+    "execution_slippage": {
+      "mean_adverse_slippage_bps_delta": null,
+      "rolling_baseline": {
+        "fills_count": 0,
+        "linked_fills_count": 0,
+        "mean_adverse_slippage_bps": null,
+        "unlinked_fills_count": 0,
+        "window_utc": {
+          "end": "2026-01-03T00:00:00+00:00",
+          "start": "2025-12-14T00:00:00+00:00"
+        },
+        "worst_adverse_slippage_bps": null
+      },
+      "today": {
+        "fills_count": 0,
+        "linked_fills_count": 0,
+        "mean_adverse_slippage_bps": null,
+        "unlinked_fills_count": 0,
+        "worst_adverse_slippage_bps": null
+      }
+    },
+    "feature_distribution_shift": {
+      "close": {
+        "baseline_n": 127256,
+        "current_n": 384,
+        "psi": 14.276253978246501
+      },
+      "flow_count_15m": {
+        "baseline_n": 105539,
+        "current_n": 0,
+        "psi": null
+      },
+      "flow_net_premium_15m": {
+        "baseline_n": 105539,
+        "current_n": 0,
+        "psi": null
+      },
+      "volume": {
+        "baseline_n": 128462,
+        "current_n": 384,
+        "psi": 13.590541954032386
+      },
+      "vwap": {
+        "baseline_n": 16693,
+        "current_n": 384,
+        "psi": 3.6429361770608404
+      }
+    }
+  },
+  "errors_incidents": {
+    "dlq_events": {
+      "count": 0
+    },
+    "ingestion": {
+      "sources": {
+        "ALPACA:ALPACA_BAR_1M": {
+          "count": 389,
+          "lag_max_s": 104.066722,
+          "lag_p50_s": 103.12619,
+          "lag_p95_s": 104.008721,
+          "max_gap_s": 60.28935
+        }
+      }
+    }
+  },
+  "fills": {
+    "sample": [],
+    "total": 0
+  },
+  "ml_insights": {
+    "insights": {
+      "0DTE_avoid_stop": {
+        "created_at": "2025-12-31T10:37:50.422314+00:00",
+        "degraded_features": [],
+        "emerging_patterns": [],
+        "holdout_auc": 0.25,
+        "insight_id": "d5a04c138542e1f7",
+        "positive_rate": 0.8571428571428571,
+        "sample_size": 56,
+        "top_features": [
+          {
+            "delta_vs_last_week": 3.761904761904762,
+            "feature": "premium_usd",
+            "importance": 100.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 0.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "put_call",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "dte",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.5,
+            "hit_rate": 0.8,
+            "sample_size": 25
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.62,
+            "hit_rate": 0.9032258064516129,
+            "sample_size": 31
+          }
+        ]
+      },
+      "0DTE_hit_target_50": {
+        "created_at": "2025-12-31T10:37:50.258596+00:00",
+        "degraded_features": [],
+        "emerging_patterns": [],
+        "holdout_auc": 0.14814814814814814,
+        "insight_id": "40794adc5a6e1feb",
+        "positive_rate": 0.21428571428571427,
+        "sample_size": 56,
+        "top_features": [
+          {
+            "delta_vs_last_week": 10000.0,
+            "feature": "premium_usd",
+            "importance": 100.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 0.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "put_call",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "dte",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.5,
+            "hit_rate": 0.2,
+            "sample_size": 25
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.62,
+            "hit_rate": 0.22580645161290322,
+            "sample_size": 31
+          }
+        ]
+      },
+      "POSITION_avoid_stop": {
+        "created_at": "2025-12-31T10:37:53.197751+00:00",
+        "degraded_features": [
+          "market_tide_30m (dropped 39%)"
+        ],
+        "emerging_patterns": [],
+        "holdout_auc": 0.7562500000000001,
+        "insight_id": "b021a4efc7a0534b",
+        "positive_rate": 0.925764192139738,
+        "sample_size": 687,
+        "top_features": [
+          {
+            "delta_vs_last_week": 6.0625,
+            "feature": "premium_usd",
+            "importance": 452.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "dte",
+            "importance": 283.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": -0.3931034482758621,
+            "feature": "market_tide_30m",
+            "importance": 88.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": 32.0,
+            "feature": "put_call",
+            "importance": 33.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 12.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.54,
+            "hit_rate": 0.7037037037037037,
+            "sample_size": 27
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.48,
+            "hit_rate": 0.7916666666666666,
+            "sample_size": 24
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 0.8367346938775511,
+            "sample_size": 147
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.72,
+            "hit_rate": 1.0,
+            "sample_size": 36
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 1.0,
+            "sample_size": 71
+          }
+        ]
+      },
+      "POSITION_hit_target_50": {
+        "created_at": "2025-12-31T10:37:52.699643+00:00",
+        "degraded_features": [],
+        "emerging_patterns": [],
+        "holdout_auc": 0.49876543209876545,
+        "insight_id": "347c9377e7c08b21",
+        "positive_rate": 0.018922852983988356,
+        "sample_size": 687,
+        "top_features": [
+          {
+            "delta_vs_last_week": 12.65625,
+            "feature": "premium_usd",
+            "importance": 437.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": 2.033333333333333,
+            "feature": "market_tide_30m",
+            "importance": 182.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": 141.0,
+            "feature": "dte",
+            "importance": 142.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "put_call",
+            "importance": 47.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 2.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.46,
+            "hit_rate": 0.17391304347826086,
+            "sample_size": 23
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.58,
+            "hit_rate": 0.10344827586206896,
+            "sample_size": 29
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 0.0,
+            "sample_size": 59
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 0.0,
+            "sample_size": 72
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.56,
+            "hit_rate": 0.03571428571428571,
+            "sample_size": 28
+          }
+        ]
+      },
+      "SHORT_SWING_avoid_stop": {
+        "created_at": "2025-12-31T10:37:50.849557+00:00",
+        "degraded_features": [],
+        "emerging_patterns": [],
+        "holdout_auc": 0.44155844155844154,
+        "insight_id": "f3d42d78e3b3f977",
+        "positive_rate": 0.6046511627906976,
+        "sample_size": 86,
+        "top_features": [
+          {
+            "delta_vs_last_week": 6.0,
+            "feature": "premium_usd",
+            "importance": 98.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "dte",
+            "importance": 31.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": 2.0,
+            "feature": "put_call",
+            "importance": 21.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 5.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_at_entry",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.72,
+            "hit_rate": 0.5,
+            "sample_size": 36
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 0.68,
+            "sample_size": 50
+          }
+        ]
+      },
+      "SHORT_SWING_hit_target_50": {
+        "created_at": "2025-12-31T10:37:50.636965+00:00",
+        "degraded_features": [],
+        "emerging_patterns": [],
+        "holdout_auc": 1.0,
+        "insight_id": "5601c7251b8c09d0",
+        "positive_rate": 0.08139534883720931,
+        "sample_size": 86,
+        "top_features": [
+          {
+            "delta_vs_last_week": 13500.0,
+            "feature": "premium_usd",
+            "importance": 135.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": 12.0,
+            "feature": "put_call",
+            "importance": 13.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "dte",
+            "importance": 9.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 1.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_at_entry",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.52,
+            "hit_rate": 0.15384615384615385,
+            "sample_size": 26
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.52,
+            "hit_rate": 0.038461538461538464,
+            "sample_size": 26
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.68,
+            "hit_rate": 0.058823529411764705,
+            "sample_size": 34
+          }
+        ]
+      },
+      "SWING_avoid_stop": {
+        "created_at": "2025-12-31T10:37:51.938892+00:00",
+        "degraded_features": [],
+        "emerging_patterns": [],
+        "holdout_auc": 0.5270270270270271,
+        "insight_id": "c8193aa113c03227",
+        "positive_rate": 0.6804511278195489,
+        "sample_size": 266,
+        "top_features": [
+          {
+            "delta_vs_last_week": 10.68,
+            "feature": "premium_usd",
+            "importance": 292.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": 10.571428571428571,
+            "feature": "dte",
+            "importance": 162.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": 1.6176470588235294,
+            "feature": "market_tide_30m",
+            "importance": 89.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "put_call",
+            "importance": 19.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 2.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.64,
+            "hit_rate": 0.90625,
+            "sample_size": 32
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.74,
+            "hit_rate": 0.4594594594594595,
+            "sample_size": 37
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.68,
+            "hit_rate": 0.8235294117647058,
+            "sample_size": 34
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.5,
+            "hit_rate": 0.8,
+            "sample_size": 25
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 0.58,
+            "sample_size": 50
+          }
+        ]
+      },
+      "SWING_hit_target_50": {
+        "created_at": "2025-12-31T10:37:51.419442+00:00",
+        "degraded_features": [],
+        "emerging_patterns": [],
+        "holdout_auc": 0.6358695652173912,
+        "insight_id": "a289a6574fcac471",
+        "positive_rate": 0.15037593984962405,
+        "sample_size": 266,
+        "top_features": [
+          {
+            "delta_vs_last_week": 5.951219512195122,
+            "feature": "premium_usd",
+            "importance": 285.0,
+            "rank": 1
+          },
+          {
+            "delta_vs_last_week": 125.0,
+            "feature": "dte",
+            "importance": 126.0,
+            "rank": 2
+          },
+          {
+            "delta_vs_last_week": 0.16216216216216217,
+            "feature": "market_tide_30m",
+            "importance": 86.0,
+            "rank": 3
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "put_call",
+            "importance": 39.0,
+            "rank": 4
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "market_tide_direction",
+            "importance": 25.0,
+            "rank": 5
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vix_regime_at_entry",
+            "importance": 0.0,
+            "rank": 6
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "trend_regime_at_entry",
+            "importance": 0.0,
+            "rank": 7
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "session_regime_at_entry",
+            "importance": 0.0,
+            "rank": 8
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "risk_regime_at_entry",
+            "importance": 0.0,
+            "rank": 9
+          },
+          {
+            "delta_vs_last_week": null,
+            "feature": "vol_regime_at_entry",
+            "importance": 0.0,
+            "rank": 10
+          }
+        ],
+        "top_rules": [
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 0.3076923076923077,
+            "sample_size": 52
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.8,
+            "hit_rate": 0.025,
+            "sample_size": 40
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 1.0,
+            "hit_rate": 0.057971014492753624,
+            "sample_size": 69
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.48,
+            "hit_rate": 0.20833333333333334,
+            "sample_size": 24
+          },
+          {
+            "condition": "iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry > avg",
+            "confidence": 0.54,
+            "hit_rate": 0.18518518518518517,
+            "sample_size": 27
+          }
+        ]
+      }
+    }
+  },
+  "orders": {
+    "sample": [],
+    "total": 0
+  },
+  "performance_metrics": {
+    "by_model": {},
+    "by_regime": {},
+    "by_rule": {},
+    "by_session": {},
+    "by_ticker": {}
+  },
+  "regime_summary": {
+    "available": false,
+    "computed": 0
+  },
+  "run_id": "3227c6b5-ab36-415d-8d98-94cedfe2449b",
+  "signals_live": {
+    "sample": [],
+    "total": 0
+  },
+  "slippage_summary": {
+    "fills_count": 0,
+    "linked_fills_count": 0,
+    "mean_adverse_slippage_bps": null,
+    "unlinked_fills_count": 0,
+    "worst_adverse_slippage_bps": null
+  },
+  "trade_journal": {
+    "sample": [],
+    "total": 0
+  },
+  "window_utc": {
+    "end": "2026-01-04T00:00:00+00:00",
+    "start": "2026-01-03T00:00:00+00:00"
+  }
+}
