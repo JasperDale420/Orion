@@ -1,0 +1,31 @@
+# Regime-Based Risk Multipliers
+# PRD Regime Upgrade Patch: Risk scaling per axis
+
+vol_multipliers:
+  low: 1.1
+  normal: 1.0
+  high: 0.6
+  shock: 0.0
+
+risk_multipliers:
+  risk_on: 1.0
+  neutral: 0.85
+  risk_off: 0.5
+
+vix_multipliers:
+  low: 1.1
+  normal: 1.0
+  elevated: 0.7
+  extreme: 0.3
+
+session_multipliers:
+  premarket: 0.5
+  opening: 0.8
+  midday: 1.0
+  power_hour: 0.9
+  close: 0.5
+
+# Confidence thresholds
+min_confidence_to_trade: 0.4
+confidence_penalty_high_vol: 0.15
+confidence_penalty_risk_off: 0.1

@@ -70,7 +70,7 @@ class IngestionService:
             paper=system_settings.alpaca_paper,
         )
 
-        self.producer = RedpandaProducer.get_instance()
+        self.producer: RedpandaProducer | None = None
 
         # Timezone settings
         self.eastern = pytz.timezone("America/New_York")
@@ -83,7 +83,17 @@ class IngestionService:
     async def initialize(self) -> None:
         """Initialize resources that require async execution."""
         logger.info("Initializing Ingestion Service...")
+        self.producer = await RedpandaProducer.get_instance()
         await self.producer.start()
+
+        if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
+            try:
+                from orion.core.circuit_breaker import CircuitBreaker
+
+                await CircuitBreaker().close()
+            except Exception as cb_err:
+                logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+
         await init_db()
         await self.universe.hydrate_from_db()
         logger.info("Ingestion Service Initialized.")
@@ -102,8 +112,8 @@ class IngestionService:
         await self.initialize()
         self._handle_shutdown_signals()
 
-        logger.info("Starting Polling Loop. Interval: 300s")
-        loop_interval = 300.0
+        logger.info("Starting Polling Loop. Interval: 60s")
+        loop_interval = 60.0
 
         while not self.shutdown_event.is_set():
             start_time = asyncio.get_running_loop().time()
@@ -128,7 +138,8 @@ class IngestionService:
         await self.stop()
 
     async def stop(self) -> None:
-        await self.producer.stop()
+        if self.producer:
+            await self.producer.stop()
         logger.info("Ingestion Service Stopped.")
 
     async def _run_cycle(self) -> None:
@@ -188,9 +199,10 @@ class IngestionService:
 
     async def _poll_uw(self, trace_id: str) -> List[BronzeEvent]:
         try:
-            flow = await self.uw_flow.poll()
-            dark = await self.uw_dark.fetch_events()
-            alert = await self.uw_alerts.fetch_events()
+            # lookback_seconds only applies on cold start (no watermark); after first poll, watermarks take over
+            flow = await self.uw_flow.poll(lookback_seconds=300)
+            dark = await self.uw_dark.fetch_events(lookback_seconds=300)
+            alert = await self.uw_alerts.fetch_events(lookback_seconds=300)
             events = flow + dark + alert
 
             for e in events:
@@ -207,9 +219,13 @@ class IngestionService:
 
     async def _poll_alpaca(self, tickers: List[str], trace_id: str) -> List[BronzeEvent]:
         try:
-            events = self.alpaca.poll(tickers, default_lookback_minutes=7200)
+            events = self.alpaca.poll(tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes)
+            if events:
+                newest = max((e.event_ts_utc for e in events if e.event_ts_utc), default=None)
+                if newest:
+                    await self.health_monitor.check_lag(newest)
+
             for e in events:
-                await self._check_lag(e)
                 self._tag_ingest_metadata(e, trace_id, "alpaca_market")
             return events
         except Exception as e:
@@ -351,6 +367,8 @@ class IngestionService:
             try:
                 key = e.ticker if e.ticker else e.event_id
                 payload = self._to_dict(e)
+                if not self.producer:
+                    self.producer = await RedpandaProducer.get_instance()
                 await self.producer.produce_event(topic="orion.events.bronze", key=key, payload=payload)
             except Exception as e_prod:
                 logger.error(f"Redpanda Produce Failed: {e_prod}")

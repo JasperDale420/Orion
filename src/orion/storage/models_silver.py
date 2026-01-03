@@ -76,6 +76,23 @@ class SilverOptionFlow(Base):
 
     volume_contract = Column(Float, nullable=True)
     open_interest = Column(Float, nullable=True)
+
+    # Additional UW fields (added to capture more raw data)
+    iv = Column(Float, nullable=True)  # Implied volatility
+    volume_oi_ratio = Column(Float, nullable=True)  # Volume / Open Interest
+    trade_count = Column(Integer, nullable=True)  # Number of trades in flow
+    alert_rule = Column(String, nullable=True)  # UW alert type (RepeatedHits, etc.)
+    option_chain = Column(String, nullable=True)  # Full OCC symbol
+
+    # ML Feature Fields (added for feature engineering)
+    ask_volume = Column(Integer, nullable=True)  # Volume at ask (buyer pressure)
+    bid_volume = Column(Integer, nullable=True)  # Volume at bid (seller pressure)
+    delta_diff = Column(Float, nullable=True)  # Delta change
+    iv_change = Column(Float, nullable=True)  # IV momentum
+    multi_leg_vol_ratio = Column(Float, nullable=True)  # Spread indicator
+    alert_name = Column(String, nullable=True)  # Alert classification (e.g., "High Conviction Puts 1-14d")
+    noti_type = Column(String, nullable=True)  # Notification type (flow_alerts, etc.)
+
     ingest = Column(JSON, nullable=False, default=dict)
 
     created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

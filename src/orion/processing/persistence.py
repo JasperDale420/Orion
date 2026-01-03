@@ -3,13 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, List
 
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverAlpacaBar, SilverDarkPool, SilverOptionFlow, SilverSignal, SilverUWAlert
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]) -> None:
@@ -87,6 +86,20 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "flags_json": p.get("flags_json"),
                     "volume_contract": p.get("volume_contract"),
                     "open_interest": p.get("open_interest"),
+                    # New UW fields
+                    "iv": p.get("iv"),
+                    "volume_oi_ratio": p.get("volume_oi_ratio"),
+                    "trade_count": p.get("trade_count"),
+                    "alert_rule": p.get("alert_rule"),
+                    "option_chain": p.get("option_chain"),
+                    # ML Feature Fields
+                    "ask_volume": p.get("ask_volume"),
+                    "bid_volume": p.get("bid_volume"),
+                    "delta_diff": p.get("delta_diff"),
+                    "iv_change": p.get("iv_change"),
+                    "multi_leg_vol_ratio": p.get("multi_leg_vol_ratio"),
+                    "alert_name": p.get("alert_name"),
+                    "noti_type": p.get("noti_type"),
                     "ingest": getattr(e, "ingest", None) or {},
                 }
             )

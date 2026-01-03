@@ -21,7 +21,6 @@ from orion.connectors.uw_flow_connector import UWFlowConnector
 from orion.core.universe_manager import UniverseManager
 from orion.processing.deduper import DeduplicationEngine
 from orion.processing.feature_engine import FeatureEngine
-from orion.processing.normalizer import NormalizationEngine
 from orion.processing.persistence import (
     persist_bronze_events,
     persist_candidates,
@@ -47,9 +46,9 @@ logger = setup_struct_logger("orion.ingest")
 
 # Initialize metrics
 try:
-    from orion.shared.metrics import init_metrics
+    from orion.shared.metrics import Metrics, init_metrics
 
-    _metrics = init_metrics()
+    _metrics: Metrics | None = None
 except ImportError:
     _metrics = None
 
@@ -70,7 +69,7 @@ async def save_events_to_db(events: List[BronzeEvent]) -> None:
         return
 
     # Dual-write: Produce to Redpanda
-    producer = RedpandaProducer.get_instance()
+    producer = await RedpandaProducer.get_instance()
 
     # print(f"DEBUG: Skipping Redpanda, proceeding to DB save for {len(events)} events.")
     for e in events:
@@ -196,6 +195,7 @@ async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
 
 async def main() -> None:
     global EOD_TRIGGER_LAST_RUN
+    global _metrics
 
     # Graceful Shutdown
     loop = asyncio.get_running_loop()
@@ -210,8 +210,24 @@ async def main() -> None:
 
     logger.info("Starting Orion Ingestion Service...")
 
+    # Initialize metrics once the event loop is running
+    if _metrics is None and "init_metrics" in globals():
+        try:
+            _metrics = await init_metrics()  # type: ignore[arg-type]
+        except Exception as metric_err:
+            logger.warning(f"Metrics initialization failed: {metric_err}")
+
+    # Optionally reset circuit breaker on start (useful after dev crashes / stale lag)
+    if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
+        try:
+            from orion.core.circuit_breaker import CircuitBreaker
+
+            await CircuitBreaker().close()
+        except Exception as cb_err:
+            logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+
     # Initialize Redpanda
-    producer = RedpandaProducer.get_instance()
+    producer = await RedpandaProducer.get_instance()
     await producer.start()
 
     # Initialize Health Monitor
@@ -251,8 +267,8 @@ async def main() -> None:
 
     logger.info("Connectors initialized. Starting polling loop.")
 
-    # USER REQUEST: Expand polling time to every 5 minutes (300 seconds)
-    loop_interval = 300.0  # seconds
+    # USER REQUEST: Poll every 1 minute (60 seconds) for more responsive ingestion
+    loop_interval = 60.0  # seconds
 
     while not shutdown_event.is_set():
         try:
@@ -318,26 +334,21 @@ async def main() -> None:
 
             # 1. Poll UW
             try:
-                flow_events = await uw_flow.poll()
-                dark_events = await uw_dark.fetch_events()
-                alert_events = await uw_alerts.fetch_events()
+                # lookback_seconds only applies on cold start (no watermark); after first poll, watermarks take over
+                flow_events = await uw_flow.poll(lookback_seconds=300)
+                dark_events = await uw_dark.fetch_events(lookback_seconds=300)
+                alert_events = await uw_alerts.fetch_events(lookback_seconds=300)
 
-                # Check Lag for UW events
-                for evt in flow_events + dark_events + alert_events:
-                    if evt.event_ts_utc:
-                        try:
-                            await health_monitor.check_lag(evt.event_ts_utc)
-                        except CriticalHealthException as che:
-                            logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
-                            # Ideally, we write a "PAUSE_TRADING" flag to Redis/DB here.
-                            # For now, we log loud and continue (Ingestion should verify to recover?)
-                            # Or we Crash? "Fail Loud".
-                            # If we crash, system stops. Supervisor restarts. Loop.
-                            # PRD says "auto-pause trading".
-                            # We'll rely on "Stale Price" / "Stale Heartbeat" in Execution to pause trading if Ingestion dies.
-                            # So crashing or halting here effectively pauses trading.
-                            # Let's just catch and log for now to avoid rapid restart loops in this demo.
-                            pass
+                # Check Lag for UW based on freshest event only (avoid tripping breaker due to old records in a batch)
+                uw_events = flow_events + dark_events + alert_events
+                newest = max((e.event_ts_utc for e in uw_events if e.event_ts_utc), default=None)
+                if newest:
+                    try:
+                        await health_monitor.check_lag(newest)
+                    except CriticalHealthException as che:
+                        logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
+                        # Keep running; breaker state is handled via DB and observed by other services.
+                        pass
 
                 # 2. Update Universe
                 for evt in flow_events + dark_events + alert_events:
@@ -365,14 +376,16 @@ async def main() -> None:
             active_tickers = universe.get_active_universe()
             if active_tickers:
                 try:
-                    # Look back 5 days on startup to ensure we cover weekends/holidays
-                    alpaca_events = alpaca.poll(active_tickers, default_lookback_minutes=7200)
+                    alpaca_events = alpaca.poll(
+                        active_tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
+                    )
 
-                    # Check Lag for Alpaca
-                    for evt in alpaca_events:
-                        if evt.event_ts_utc:
+                    # Check Lag for Alpaca based on freshest event only (avoid tripping breaker on backfill batches)
+                    if alpaca_events:
+                        newest = max((e.event_ts_utc for e in alpaca_events if e.event_ts_utc), default=None)
+                        if newest:
                             try:
-                                await health_monitor.check_lag(evt.event_ts_utc)
+                                await health_monitor.check_lag(newest)
                             except CriticalHealthException as che:
                                 logger.critical(f"HEALTH MONITOR TRIGGERED (Alpaca): {che}")
 
@@ -396,33 +409,21 @@ async def main() -> None:
             if all_events:
                 async with async_session_factory() as session:
                     deduper = DeduplicationEngine(session)
-                    normalized_events = []
+                    processed_events = []
 
                     from orion.core.timekeeping import derive_trading_date_and_session
 
                     for evt in all_events:
-                        # ... Normalization ...
-                        try:
-                            evt.payload = NormalizationEngine.normalize_event(evt.source, evt.event_type, evt.payload)
-                        except Exception as norm_err:
-                            from orion.shared.dlq_utils import DLQWriter
+                        # Store raw payload in bronze - DO NOT normalize here
+                        # Normalization happens in save_silver_data()
+                        raw_payload = evt.payload  # Keep raw for bronze
 
-                            await DLQWriter.write_to_dlq(
-                                error=norm_err,
-                                event_type=f"{evt.event_type}_NORMALIZE_ERROR",
-                                source="NormalizationEngine",
-                                payload=getattr(evt, "payload", None),
-                                context=f"trace_id={trace_id}",
-                                event_id=getattr(evt, "event_id", None),
-                                source_event_id=getattr(evt, "source_event_id", None),
-                                ticker=getattr(evt, "ticker", None),
-                                event_ts_utc=getattr(evt, "event_ts_utc", None),
-                                run_id=RUN_ID,
-                                trace_id=trace_id,
-                            )
-                            continue
+                        # Extract ticker from raw payload if not set
                         if not evt.ticker:
-                            evt.ticker = evt.payload.get("ticker")
+                            evt.ticker = (
+                                raw_payload.get("ticker") or raw_payload.get("underlying") or raw_payload.get("symbol")
+                            )
+
                         if evt.event_ts_utc and evt.session is None:
                             evt.event_ts_utc = ensure_utc(evt.event_ts_utc)
                             td, sess = derive_trading_date_and_session(evt.event_ts_utc)
@@ -444,13 +445,15 @@ async def main() -> None:
                         if evt.received_ts_utc is None:
                             evt.received_ts_utc = datetime.now(timezone.utc)
 
-                        normalized_events.append(evt)
+                        # Keep raw payload for bronze storage
+                        evt.payload = raw_payload
+                        processed_events.append(evt)
 
-                    unique_events = await deduper.dedupe_batch(normalized_events)
+                    unique_events = await deduper.dedupe_batch(processed_events)
 
                     if unique_events:
                         await save_events_to_db(unique_events)
-                        # Persist Normalized Silver Data
+                        # Persist Normalized Silver Data (normalizer runs here)
                         await save_silver_data(unique_events)
                         all_events = unique_events
 
@@ -473,6 +476,8 @@ async def main() -> None:
                         uw_signals = feature_engine.process_uw_flow_events(uw_flow_events_only)
                         if uw_signals:
                             await save_signals_to_db(uw_signals)
+                            # Persist to Gold layer for model training (PRD 6.3)
+                            await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
                             try:
                                 uw_candidates = rule_engine.process_signals(uw_signals)
                                 if uw_candidates:
@@ -491,6 +496,8 @@ async def main() -> None:
                         bar_signals = feature_engine.process_alpaca_bars(alpaca_events_only)
                         if bar_signals:
                             await save_signals_to_db(bar_signals)
+                            # Persist to Gold layer for model training (PRD 6.3)
+                            await feature_engine.persist_signal_batch(bar_signals, "v1_legacy")
                             # Rule Engine
                             try:
                                 candidates = rule_engine.process_signals(bar_signals)

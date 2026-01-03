@@ -11,9 +11,13 @@ Orion is a scalable, real-time trading backend that ingests market data from **U
     *   **Gold Layer**: Feature-enriched signals and candidate trades (`GoldSignal`, `CandidateTrade`).
 *   **Event Streaming**: Integrated with Redpanda (Kafka-compatible) for event propagation.
 *   **Feature Engineering**: On-the-fly calculation of technical indicators (RSI, SMA, Volatility) and flow-based features.
+*   **Multi-Axis Regime Detection**: VIX-aware regime system with 5 axes (Trend, Vol, Risk, Session, VIX).
+*   **ML Feature Enrichment**: GEX, Market Tide, Max Pain, IV Rank data for 60+ label columns.
+*   **Pattern Mining**: LightGBM-based rule extraction from price target outcomes.
 *   **Strategy Engine**:
     *   **Solver Abstraction**: Modular strategy configuration (`SolverConfig`) combining Entry/Exit logic, Risk parameters, and Universe definition.
     *   **Meta-Search**: Automated strategy optimization (LLM-driven proposals and heuristic mutation).
+    *   **Regime-Aware Risk**: Position sizing multipliers based on market regime.
 *   **Execution**: Alpaca API integration for order placement and position management.
 *   **Observability**: Structured JSON logging and Dead Letter Queue (DLQ) for failed events.
 *   **CI/CD**: Github Actions pipeline for automated testing.
@@ -62,19 +66,26 @@ Orion uses a smart tracking system for options:
 
 ```text
 ├── src/orion
-│   ├── agents/          # LLM Agents (EOD Review, Meta-Search)
-│   ├── api/             # HTTP API definitions
-│   ├── config.py        # Pydantic configuration models
-│   ├── connectors/      # API Clients (Alpaca, UW, Redpanda)
-│   ├── core/            # Core Domain Logic (Solver, Universe, Router)
-│   ├── execution/       # Order Management & Position Tracking
-│   ├── main_ingest.py   # Ingestion Entry Point
-│   ├── main_execution.py # Execution Entry Point
-│   ├── processing/      # ETL, Features, Normalization
-│   └── storage/         # SQLAlchemy Models (Gold/Silver/Bronze)
-├── tests/               # Pytest Suite (Unit, Integration)
-├── docker-compose.yml   # Infrastructure (Timescale, MinIO)
-└── pyproject.toml       # Dependencies & Tool Config
+│   ├── agents/              # LLM Agents (EOD Review, Meta-Search)
+│   ├── analysis/            # Regime detection, risk management
+│   ├── api/                 # HTTP API definitions
+│   ├── config.py            # Pydantic configuration models
+│   ├── connectors/          # API Clients (Alpaca, UW, VIX, Redpanda)
+│   ├── core/                # Core Domain Logic (Solver, Universe, Router)
+│   ├── execution/           # Order Management & Position Tracking
+│   ├── ml/                  # Machine Learning (Pattern Mining, LightGBM)
+│   ├── main_ingest.py       # Ingestion Entry Point
+│   ├── main_execution.py    # Execution Entry Point
+│   ├── main_eod.py          # EOD Agent Entry Point
+│   ├── main_feature_enrichment.py  # UW Feature Polling
+│   ├── main_price_target_labeler.py  # ML Label Generation
+│   ├── main_pattern_miner.py  # Pattern Mining
+│   ├── processing/          # ETL, Features, Normalization, Rules
+│   └── storage/             # SQLAlchemy Models (Gold/Silver/Bronze/ML)
+├── config/                  # YAML configs (regime_risk.yaml, etc.)
+├── tests/                   # Pytest Suite (Unit, Integration)
+├── docker-compose.yml       # Infrastructure + Services
+└── pyproject.toml           # Dependencies & Tool Config
 ```
 
 ## Setup & Installation

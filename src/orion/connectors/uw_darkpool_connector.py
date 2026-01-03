@@ -99,13 +99,22 @@ class UWDarkPoolConnector:
                     if events_ts < fetch_start:
                         continue
 
+                    ticker = item.get("ticker") or item.get("symbol")
+                    if not ticker:
+                        # Skip events without a ticker - required by silver schema
+                        logger.warning(
+                            f"Skipping UW darkpool without ticker: id={item.get('id') or item.get('id_')}",
+                            extra={"event_type": "UW_DARKPOOL_MISSING_TICKER"},
+                        )
+                        continue
+
                     events.append(
                         BronzeEvent(
                             event_id=event_id,
                             source="UW",
                             source_event_id=str(source_event_id) if source_event_id is not None else None,
                             event_type="UW_DARKPOOL",
-                            ticker=item.get("ticker"),
+                            ticker=ticker,
                             event_ts_utc=events_ts,
                             payload=item,
                             session="REG",

@@ -1,20 +1,19 @@
-import json
 import logging
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
-
 from orion.agents.base import BaseAgent
+from orion.agents.codex_client import (
+    build_chat_prompt,
+    extract_json_from_response,
+    run_codex_completion,
+)
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdit
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-# Optional dependency hook.
-# Tests patch `orion.agents.meta_agent.acompletion`; keep a module-level name for patchability.
-acompletion = None
 
 
 class MetaAgent(BaseAgent):
@@ -28,9 +27,6 @@ class MetaAgent(BaseAgent):
         from orion.config import agent_settings
 
         super().__init__(name="MetaAgent", model=agent_settings.model_name)
-        self.api_key = agent_settings.openai_api_key
-        if not self.api_key:
-            logger.warning("OPENAI_API_KEY not found. Helper might fail.")
 
     async def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -101,60 +97,28 @@ class MetaAgent(BaseAgent):
             "Step 2: Propose 3 variants based on your findings."
         )
 
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-
-        # 3. Execution Loop (Max 5 turns)
+        # 3. Execute via Codex CLI
+        # Codex handles tool calling internally, so we just send the prompt
         final_json_response = None
 
         try:
-            acompletion_fn = acompletion
-            if acompletion_fn is None:
-                from litellm import acompletion as acompletion_fn
+            from orion.config import agent_settings
 
-            for _ in range(5):  # Max turns
-                if acompletion_fn is None:
-                    logger.error("acompletion_fn is None, cannot proceed with LLM call")
-                    return []
-                response = await acompletion_fn(
-                    model=self.model,
-                    messages=messages,
-                    tools=openai_tools if openai_tools else None,
-                    tool_choice="auto" if openai_tools else None,
-                    api_key=self.api_key,
-                )
+            full_prompt = build_chat_prompt(system_prompt, user_prompt)
 
-                msg = response.choices[0].message
-                messages.append(msg)
-
-                if msg.tool_calls:
-                    # Execute Tools
-                    for tc in msg.tool_calls:
-                        func_name = tc.function.name
-                        args = json.loads(tc.function.arguments)
-                        logger.info(f"MetaAgent Calling Tool: {func_name} args={args}")
-
-                        tool_result = await mcp.call_tool(func_name, args)
-
-                        messages.append(
-                            {"tool_call_id": tc.id, "role": "tool", "name": func_name, "content": str(tool_result)}
-                        )
-                else:
-                    # Final response (presumably JSON)
-                    final_json_response = msg.content
-                    break
+            final_json_response = await run_codex_completion(
+                prompt=full_prompt,
+                model=agent_settings.model_name,
+                reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
+                timeout_seconds=600,  # Longer timeout for complex strategy analysis
+            )
 
             if not final_json_response:
-                logger.warning("MetaAgent exhausted turns without final JSON.")
+                logger.warning("MetaAgent received empty response from codex.")
                 return []
 
             # 4. Parse Final JSON
-            # Clean potential markdown fences
-            if "```json" in final_json_response:
-                final_json_response = final_json_response.split("```json")[1].split("```")[0].strip()
-            elif "```" in final_json_response:
-                final_json_response = final_json_response.split("```")[1].split("```")[0].strip()
-
-            data = json.loads(final_json_response)
+            data = extract_json_from_response(final_json_response)
 
             variants = []
             for v_data in data.get("variants", []):

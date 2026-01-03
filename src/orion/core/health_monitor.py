@@ -5,6 +5,8 @@ from typing import Any, Dict
 
 from sqlalchemy import func
 
+from orion.config import system_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +26,7 @@ class HealthMonitor:
 
         # Thresholds (PRD 9.1)
         self.HEARTBEAT_THRESHOLD_SEC = 60.0
-        self.LAG_THRESHOLD_SEC = 60.0
+        self.LAG_THRESHOLD_SEC = float(system_settings.max_data_lag_seconds)
 
         # Metrics
         self.metrics: Dict[str, Any] = {}
@@ -54,11 +56,15 @@ class HealthMonitor:
             msg = f"CRITICAL: Event Lag {lag:.2f}s > Threshold {self.LAG_THRESHOLD_SEC}s"
             logger.error(msg)
 
-            # Trigger Circuit Breaker
-            from orion.core.circuit_breaker import CircuitBreaker
+            # In dev/backfill scenarios, laggy events can be expected (e.g., when polling with overlap/backfill).
+            # Only trip the global circuit breaker if explicitly enabled.
+            import os
 
-            cb = CircuitBreaker()
-            await cb.open(msg)
+            if os.getenv("ORION_TRIP_CIRCUIT_BREAKER_ON_LAG", "false").lower() == "true":
+                from orion.core.circuit_breaker import CircuitBreaker
+
+                cb = CircuitBreaker()
+                await cb.open(msg)
 
             raise CriticalHealthException(msg)
 
