@@ -43,3 +43,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Artifacts (generated reports)
+artifacts/

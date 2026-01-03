@@ -1,1 +1,0 @@
-Error: codex CLI not found in PATH. Please install codex: https://github.com/openai/codex
