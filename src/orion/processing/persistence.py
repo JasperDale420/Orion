@@ -104,6 +104,10 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                 }
             )
         elif e.event_type == "ALPACA_BAR_1M":
+            # Data quality: skip bars with invalid close values
+            bar_close = p.get("close")
+            if not bar_close or bar_close <= 0:
+                continue
             bar_rows.append(
                 {
                     "ticker": getattr(e, "ticker", None) or p.get("ticker"),
@@ -111,7 +115,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "open": p.get("open"),
                     "high": p.get("high"),
                     "low": p.get("low"),
-                    "close": p.get("close"),
+                    "close": bar_close,
                     "volume": p.get("volume"),
                     "vwap": p.get("vwap"),
                     "ingest": getattr(e, "ingest", None) or {},

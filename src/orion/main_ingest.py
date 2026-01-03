@@ -57,6 +57,7 @@ load_dotenv()
 # Global flag for EOD tracking
 # SHUTDOWN removed in favor of asyncio.Event in main()
 EOD_TRIGGER_LAST_RUN = None
+QUALITY_CHECK_LOOP_COUNT = 0  # Track loop iterations for hourly quality check
 
 
 from orion.connectors.redpanda_producer import RedpandaProducer
@@ -195,6 +196,7 @@ async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
 
 async def main() -> None:
     global EOD_TRIGGER_LAST_RUN
+    global QUALITY_CHECK_LOOP_COUNT
     global _metrics
 
     # Graceful Shutdown
@@ -478,24 +480,19 @@ async def main() -> None:
                             await save_signals_to_db(uw_signals)
                             # Persist to Gold layer for model training (PRD 6.3)
                             await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
-<<<<<<< HEAD
 
                             # === ML SCORING PATH (Pure ML, no rule pre-filter) ===
-                            # Score all flow events directly with ML
                             try:
                                 from orion.ml.flow_processor import MLFlowProcessor
 
-                                # Convert events to flow dicts for ML scoring
                                 flow_dicts = [e.payload for e in uw_flow_events_only if e.payload]
-
                                 if flow_dicts:
                                     ml_processor = MLFlowProcessor(score_threshold=0.5)
                                     ml_candidates = ml_processor.process_flows(flow_dicts)
-
                                     if ml_candidates:
                                         await save_candidates_to_db(ml_candidates)
                                         logger.info(
-                                            f"ML Scorer generated {len(ml_candidates)} candidates from {len(flow_dicts)} flows",
+                                            f"ML Scorer generated {len(ml_candidates)} candidates",
                                             extra={"event": "ml_candidates", "count": len(ml_candidates)},
                                         )
                                         if _metrics:
@@ -503,9 +500,7 @@ async def main() -> None:
                             except Exception as ml_err:
                                 logger.warning(f"ML Scoring path error (non-fatal): {ml_err}")
 
-                            # === LEGACY RULE ENGINE PATH (kept for comparison) ===
-=======
->>>>>>> origin/master
+                            # === LEGACY RULE ENGINE PATH ===
                             try:
                                 uw_candidates = rule_engine.process_signals(uw_signals)
                                 if uw_candidates:
@@ -582,6 +577,17 @@ async def main() -> None:
                             EOD_TRIGGER_LAST_RUN = today_str
                         except Exception as e:
                             logger.error(f"Failed to trigger EOD Agent: {e}")
+
+                # 7. Data Quality Check (runs every ~60 loops / 1 hour)
+                QUALITY_CHECK_LOOP_COUNT += 1
+                if QUALITY_CHECK_LOOP_COUNT >= 60:
+                    QUALITY_CHECK_LOOP_COUNT = 0
+                    try:
+                        from orion.jobs.data_quality_checker import run_quality_checks
+                        asyncio.create_task(run_quality_checks())
+                        logger.info("Triggered hourly data quality check")
+                    except Exception as e:
+                        logger.error(f"Failed to run data quality check: {e}")
 
         except Exception as e:
             logger.error(f"Main Ingestion Loop Error: {e}")
