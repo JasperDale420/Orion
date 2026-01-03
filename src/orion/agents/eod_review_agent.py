@@ -843,6 +843,7 @@ class EODReviewAgent(BaseAgent):
             logger.warning(f"RAG fetch failed: {e}")
             return ""
 
+<<<<<<< HEAD
     async def _fetch_trading_book_context(self, performance_issues: str) -> str:
         """
         Fetch insights from TradingRAG (indexed trading books).
@@ -869,6 +870,11 @@ class EODReviewAgent(BaseAgent):
     async def _generate_analysis(self, data: Dict[str, Any], rag_context: str) -> Dict[str, Any]:
         system_prompt = """You are the Orion EOD Review Agent - analyzing today's trading performance.
 
+=======
+    async def _generate_analysis(self, data: Dict[str, Any], rag_context: str) -> Dict[str, Any]:
+        system_prompt = """You are the Orion EOD Review Agent - analyzing today's trading performance.
+
+>>>>>>> origin/master
 ## Your Data Sources
 1. **ML Pattern Insights** (in `ml_insights`): Pre-computed rules from LightGBM models showing what conditions predict success
    - Models per bucket: 0DTE, SHORT_SWING, SWING, POSITION

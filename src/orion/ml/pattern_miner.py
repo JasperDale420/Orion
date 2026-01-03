@@ -36,8 +36,11 @@ FEATURE_COLUMNS = [
     "premium_usd",
     "dte",
     "vix_at_entry",
+<<<<<<< HEAD
     # Darkpool feature (1h lookback from entry)
     "darkpool_volume_1h",
+=======
+>>>>>>> origin/master
     # NOTE: Removed outcome features that cause data leakage:
     # - max_return_pct, max_drawdown_pct, time_to_max_seconds
     # - holding_period_seconds, return_at_1h/2h/4h, first_exit_type

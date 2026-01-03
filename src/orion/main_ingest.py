@@ -478,6 +478,7 @@ async def main() -> None:
                             await save_signals_to_db(uw_signals)
                             # Persist to Gold layer for model training (PRD 6.3)
                             await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
+<<<<<<< HEAD
 
                             # === ML SCORING PATH (Pure ML, no rule pre-filter) ===
                             # Score all flow events directly with ML
@@ -503,6 +504,8 @@ async def main() -> None:
                                 logger.warning(f"ML Scoring path error (non-fatal): {ml_err}")
 
                             # === LEGACY RULE ENGINE PATH (kept for comparison) ===
+=======
+>>>>>>> origin/master
                             try:
                                 uw_candidates = rule_engine.process_signals(uw_signals)
                                 if uw_candidates:
