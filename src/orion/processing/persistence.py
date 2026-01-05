@@ -138,8 +138,8 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "flags_json": p.get("flags_json") if p.get("flags_json") != "null" else None,
                     "volume_contract": _safe_int(p.get("volume_contract") or p.get("volume")),
                     "open_interest": _safe_int(p.get("open_interest")),
-                    # New UW fields - check both field names (UW uses implied_volatility)
-                    "iv": _safe_float(p.get("iv") or p.get("implied_volatility")),
+                    # New UW fields - UW flow_alerts uses iv_start/iv_end instead of iv
+                    "iv": _safe_float(p.get("iv") or p.get("implied_volatility") or p.get("iv_start")),
                     "volume_oi_ratio": _safe_float(p.get("volume_oi_ratio")),
                     "trade_count": _safe_int(p.get("trade_count")),
                     "alert_rule": p.get("alert_rule"),
