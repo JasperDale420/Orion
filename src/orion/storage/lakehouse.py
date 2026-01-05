@@ -89,11 +89,7 @@ class LakehouseWriter:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for date_str, group_df in df.groupby("date"):
                 for (source, event_type), sub_group in group_df.groupby(["source", "event_type"]):
-                    tasks.append(
-                        executor.submit(
-                            self._write_partition, source, event_type, date_str, sub_group
-                        )
-                    )
+                    tasks.append(executor.submit(self._write_partition, source, event_type, date_str, sub_group))
 
             # Wait for all tasks to complete and raise any exceptions
             for task in as_completed(tasks):

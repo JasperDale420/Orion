@@ -2,11 +2,10 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
-
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SilverAlpacaBar
+from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 

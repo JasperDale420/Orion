@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
+from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
 

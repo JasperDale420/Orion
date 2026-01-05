@@ -148,6 +148,19 @@ See `TESTING.md` for detailed instructions.
 pytest
 ```
 
+### ML Feature Validation
+Validate that all 130+ ML features are correctly calculated:
+```bash
+# Run all validations (sanity checks + data source audit)
+docker-compose run --rm ingestion python -m orion.jobs.validate_features --all
+
+# Spot-check a single record
+docker-compose run --rm ingestion python -m orion.jobs.validate_features --spot-check <EVENT_ID>
+
+# Backfill missing features for historical labels
+docker-compose run --rm ingestion python -m orion.jobs.backfill_ml_features --batch-size 100
+```
+
 ## Configuration
 
 Configuration is managed via `pydantic-settings` in `src/orion/config.py`. All settings can be overridden by environment variables.

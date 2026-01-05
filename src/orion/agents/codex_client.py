@@ -28,22 +28,38 @@ async def run_codex_completion(
     timeout_seconds: int = 300,
 ) -> str:
     """
-    Run codex CLI in headless mode and return the response.
+    Run LLM completion using DeepSeek API (preferred) or codex CLI (fallback).
 
     Args:
         prompt: The full prompt to send (system + user combined).
-        model: Model to use (default: gpt-5.2).
+        model: Model to use (default: gpt-5.2 for codex, deepseek-reasoner for DeepSeek).
         reasoning_level: Reasoning intensity (extra_high for complex analysis).
         timeout_seconds: Max time to wait for completion.
-        json_output: If True, instruct codex to output JSON.
 
     Returns:
-        The raw text response from codex.
+        The raw text response from LLM.
 
     Raises:
-        CodexClientError: If codex is not installed or execution fails.
+        CodexClientError: If both DeepSeek and codex fail.
     """
-    # Verify codex is available
+    import os
+
+    # Try DeepSeek API first if configured
+    deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
+    deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-reasoner")
+
+    if deepseek_api_key and deepseek_api_key != "your-deepseek-api-key-here":  # pragma: allowlist secret
+        try:
+            return await _run_deepseek_completion(
+                prompt=prompt,
+                model=deepseek_model,
+                api_key=deepseek_api_key,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as e:
+            logger.warning(f"DeepSeek failed, falling back to codex: {e}")
+
+    # Fallback to codex CLI
     codex_path = shutil.which("codex")
     if not codex_path:
         raise CodexClientError("codex CLI not found in PATH. Please install codex: https://github.com/openai/codex")
@@ -118,6 +134,57 @@ async def run_codex_completion(
             extra={"event": "codex_exec_timeout", "timeout_seconds": timeout_seconds},
         )
         raise CodexClientError(f"Codex timed out after {timeout_seconds} seconds") from err
+
+
+async def _run_deepseek_completion(
+    prompt: str,
+    model: str,
+    api_key: str,
+    timeout_seconds: int = 300,
+) -> str:
+    """Run completion using DeepSeek API."""
+    import aiohttp
+
+    logger.info(
+        "Running DeepSeek completion",
+        extra={
+            "event": "deepseek_start",
+            "model": model,
+            "prompt_length": len(prompt),
+        },
+    )
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 4096,
+            },
+            timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+        ) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise CodexClientError(f"DeepSeek API error {resp.status}: {error_text}")
+
+            data = await resp.json()
+            response = data["choices"][0]["message"]["content"]
+
+            logger.info(
+                "DeepSeek completion successful",
+                extra={
+                    "event": "deepseek_success",
+                    "response_length": len(response),
+                },
+            )
+
+            return response
 
 
 def extract_json_from_response(response: str) -> dict:

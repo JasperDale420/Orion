@@ -584,6 +584,7 @@ async def main() -> None:
                     QUALITY_CHECK_LOOP_COUNT = 0
                     try:
                         from orion.jobs.data_quality_checker import run_quality_checks
+
                         asyncio.create_task(run_quality_checks())
                         logger.info("Triggered hourly data quality check")
                     except Exception as e:

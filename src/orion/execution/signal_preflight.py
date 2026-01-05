@@ -4,13 +4,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from orion.config import system_settings
 from orion.core.circuit_breaker import CircuitBreaker
 from orion.shared.utils import ensure_utc as _ensure_utc
 from orion.storage.models_gold import CandidateTrade, GoldTickerRollup, StrategyDecision
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _parse_rollup_id(rollup_id: str) -> tuple[str, str, datetime] | None:

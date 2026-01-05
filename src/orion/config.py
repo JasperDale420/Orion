@@ -43,7 +43,7 @@ class SystemSettings(BaseSettings):
     max_data_lag_seconds: int = 60
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
-    static_watchlist: List[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL"]
+    static_watchlist: List[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL", "VIXY"]
     require_rollups_for_signals_live: bool = True
 
     model_config = SettingsConfigDict(env_prefix="ORION_")

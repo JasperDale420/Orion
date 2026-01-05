@@ -54,28 +54,38 @@ class UWGreekExposureConnector:
                 continue
 
             # Handle list response (multiple expiries) or single dict
+            # API returns: call_gamma, put_gamma, call_vanna, put_vanna, call_charm, put_charm
+            # GEX = call_gamma + put_gamma (net gamma exposure)
+            # VEX = call_vanna + put_vanna (net vanna exposure)
+            # CEX = call_charm + put_charm (net charm exposure)
             if isinstance(exposure_data, list):
-                # Sum up all expiries for aggregate GEX
-                total_gex_oi = sum(float(e.get("gex_per_one_percent_move_oi") or 0) for e in exposure_data)
-                total_gex_vol = sum(float(e.get("gex_per_one_percent_move_volume") or 0) for e in exposure_data)
-                total_vex_oi = sum(float(e.get("vex_per_one_percent_move_oi") or 0) for e in exposure_data)
-                total_vex_vol = sum(float(e.get("vex_per_one_percent_move_volume") or 0) for e in exposure_data)
-                total_cex_oi = sum(float(e.get("cex_per_one_percent_move_oi") or 0) for e in exposure_data)
-                total_cex_vol = sum(float(e.get("cex_per_one_percent_move_volume") or 0) for e in exposure_data)
+                # Sum up all dates for aggregate exposure
+                total_gex_oi = sum(
+                    float(e.get("call_gamma") or 0) + float(e.get("put_gamma") or 0) for e in exposure_data
+                )
+                total_gex_vol = 0  # Not in this API response format
+                total_vex_oi = sum(
+                    float(e.get("call_vanna") or 0) + float(e.get("put_vanna") or 0) for e in exposure_data
+                )
+                total_vex_vol = 0
+                total_cex_oi = sum(
+                    float(e.get("call_charm") or 0) + float(e.get("put_charm") or 0) for e in exposure_data
+                )
+                total_cex_vol = 0
                 call_delta = sum(float(e.get("call_delta") or 0) for e in exposure_data)
                 put_delta = sum(float(e.get("put_delta") or 0) for e in exposure_data)
-                spot = float(exposure_data[0].get("spot_price") or 0) if exposure_data else 0
+                spot = 0  # Not in this response format
             else:
                 # Single dict response
-                total_gex_oi = float(exposure_data.get("gex_per_one_percent_move_oi") or 0)
-                total_gex_vol = float(exposure_data.get("gex_per_one_percent_move_volume") or 0)
-                total_vex_oi = float(exposure_data.get("vex_per_one_percent_move_oi") or 0)
-                total_vex_vol = float(exposure_data.get("vex_per_one_percent_move_volume") or 0)
-                total_cex_oi = float(exposure_data.get("cex_per_one_percent_move_oi") or 0)
-                total_cex_vol = float(exposure_data.get("cex_per_one_percent_move_volume") or 0)
+                total_gex_oi = float(exposure_data.get("call_gamma") or 0) + float(exposure_data.get("put_gamma") or 0)
+                total_gex_vol = 0
+                total_vex_oi = float(exposure_data.get("call_vanna") or 0) + float(exposure_data.get("put_vanna") or 0)
+                total_vex_vol = 0
+                total_cex_oi = float(exposure_data.get("call_charm") or 0) + float(exposure_data.get("put_charm") or 0)
+                total_cex_vol = 0
                 call_delta = float(exposure_data.get("call_delta") or 0)
                 put_delta = float(exposure_data.get("put_delta") or 0)
-                spot = float(exposure_data.get("spot_price") or 0)
+                spot = 0
 
             record = {
                 "ticker": ticker,

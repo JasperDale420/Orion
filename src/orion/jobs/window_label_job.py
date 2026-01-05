@@ -5,10 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import pandas as pd
-from sqlalchemy import select
-
 from orion.shared.db_utils import db_write
 from orion.storage.models_gold import GoldTickerRollup, LabelWindow
+from sqlalchemy import select
 
 logger = logging.getLogger("orion.jobs.window_label_job")
 

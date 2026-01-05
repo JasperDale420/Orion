@@ -7,9 +7,8 @@ Provides helpers to reduce boilerplate for database operations.
 import logging
 from typing import Awaitable, Callable, TypeVar
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from orion.storage.db import async_session_factory
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 

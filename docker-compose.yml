@@ -183,6 +183,22 @@ services:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
     command: [ "python", "-m", "orion.main_pattern_miner" ]
 
+  nightly-backfill:
+    build: .
+    container_name: orion_nightly_backfill
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      price_target_labeler:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ORION_RUN_ID=docker_nightly_backfill
+    command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
+
   indexer:
     build: .
     container_name: orion_indexer

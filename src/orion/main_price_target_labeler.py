@@ -5,6 +5,7 @@ Tracks option prices over time with comprehensive metrics for ML exit optimizati
 """
 
 import asyncio
+import math
 import os
 import signal
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from dotenv import load_dotenv
+from scipy.stats import norm
 
 load_dotenv()
 
@@ -28,6 +30,254 @@ logger = setup_struct_logger("orion.price_target")
 
 BATCH_SIZE = 50
 POLL_INTERVAL_SECONDS = 60
+RISK_FREE_RATE = 0.05  # Risk-free rate for Black-Scholes
+
+# Static sector mapping for reliable feature calculation (avoids unreliable API calls)
+SECTOR_MAPPING: Dict[str, str] = {
+    # Technology
+    "AAPL": "Technology",
+    "MSFT": "Technology",
+    "GOOGL": "Technology",
+    "GOOG": "Technology",
+    "META": "Technology",
+    "NVDA": "Technology",
+    "AMD": "Technology",
+    "INTC": "Technology",
+    "CRM": "Technology",
+    "ADBE": "Technology",
+    "ORCL": "Technology",
+    "IBM": "Technology",
+    "CSCO": "Technology",
+    "AVGO": "Technology",
+    "QCOM": "Technology",
+    "MU": "Technology",
+    "AMAT": "Technology",
+    "LRCX": "Technology",
+    "KLAC": "Technology",
+    "MRVL": "Technology",
+    "ARM": "Technology",
+    "ANET": "Technology",
+    "PANW": "Technology",
+    "PLTR": "Technology",
+    "SNOW": "Technology",
+    "DDOG": "Technology",
+    "NET": "Technology",
+    "CRWD": "Technology",
+    "ZS": "Technology",
+    "ASML": "Technology",
+    "TSM": "Technology",
+    "SMCI": "Technology",
+    "MSTR": "Technology",
+    "DELL": "Technology",
+    "NOW": "Technology",
+    "MDB": "Technology",
+    "ON": "Technology",
+    "MCHP": "Technology",
+    "SNPS": "Technology",
+    "STX": "Technology",
+    # Consumer Discretionary
+    "AMZN": "Consumer Discretionary",
+    "TSLA": "Consumer Discretionary",
+    "HD": "Consumer Discretionary",
+    "NKE": "Consumer Discretionary",
+    "MCD": "Consumer Discretionary",
+    "SBUX": "Consumer Discretionary",
+    "LULU": "Consumer Discretionary",
+    "BABA": "Consumer Discretionary",
+    "PDD": "Consumer Discretionary",
+    "RIVN": "Consumer Discretionary",
+    "NIO": "Consumer Discretionary",
+    "UBER": "Consumer Discretionary",
+    "TGT": "Consumer Discretionary",
+    "JD": "Consumer Discretionary",
+    "GM": "Consumer Discretionary",
+    "F": "Consumer Discretionary",
+    "LCID": "Consumer Discretionary",
+    "CVNA": "Consumer Discretionary",
+    # Consumer Staples
+    "COST": "Consumer Staples",
+    "WMT": "Consumer Staples",
+    "KO": "Consumer Staples",
+    "PEP": "Consumer Staples",
+    # Communication Services
+    "DIS": "Communication Services",
+    "NFLX": "Communication Services",
+    "ROKU": "Communication Services",
+    "T": "Communication Services",
+    "VZ": "Communication Services",
+    "TMUS": "Communication Services",
+    "CMCSA": "Communication Services",
+    "SPOT": "Communication Services",
+    # Financial Services
+    "JPM": "Financial Services",
+    "BAC": "Financial Services",
+    "WFC": "Financial Services",
+    "GS": "Financial Services",
+    "MS": "Financial Services",
+    "V": "Financial Services",
+    "MA": "Financial Services",
+    "AXP": "Financial Services",
+    "C": "Financial Services",
+    "PYPL": "Financial Services",
+    "SQ": "Financial Services",
+    "COIN": "Financial Services",
+    "HOOD": "Financial Services",
+    "SOFI": "Financial Services",
+    "BRKB": "Financial Services",
+    "COF": "Financial Services",
+    "KKR": "Financial Services",
+    "AFRM": "Financial Services",
+    # Healthcare
+    "UNH": "Healthcare",
+    "JNJ": "Healthcare",
+    "PFE": "Healthcare",
+    "MRK": "Healthcare",
+    "ABBV": "Healthcare",
+    "LLY": "Healthcare",
+    "TMO": "Healthcare",
+    "ABT": "Healthcare",
+    "NVO": "Healthcare",
+    "MRNA": "Healthcare",
+    "ISRG": "Healthcare",
+    "DXCM": "Healthcare",
+    # Energy
+    "XOM": "Energy",
+    "CVX": "Energy",
+    "COP": "Energy",
+    "OXY": "Energy",
+    "SLB": "Energy",
+    "HAL": "Energy",
+    "DVN": "Energy",
+    "EOG": "Energy",
+    "VLO": "Energy",
+    "BKR": "Energy",
+    "ET": "Energy",
+    "PBR": "Energy",
+    "OKLO": "Energy",
+    # Industrials
+    "CAT": "Industrials",
+    "BA": "Industrials",
+    "RTX": "Industrials",
+    "LMT": "Industrials",
+    "GE": "Industrials",
+    "DE": "Industrials",
+    "HON": "Industrials",
+    "UPS": "Industrials",
+    "UAL": "Industrials",
+    "RKLB": "Industrials",
+    # Materials
+    "NEM": "Materials",
+    "FCX": "Materials",
+    "AA": "Materials",
+    "PAAS": "Materials",
+    "HL": "Materials",
+    "AG": "Materials",
+    "BMNR": "Materials",
+    # ETFs
+    "SPY": "ETF",
+    "QQQ": "ETF",
+    "IWM": "ETF",
+    "DIA": "ETF",
+    "XLF": "ETF",
+    "XLE": "ETF",
+    "XLK": "ETF",
+    "XLV": "ETF",
+    "XLI": "ETF",
+    "XLU": "ETF",
+    "UVXY": "ETF",
+    "VIXY": "ETF",
+    "VXX": "ETF",
+    "TLT": "ETF",
+    "GLD": "ETF",
+    "SLV": "ETF",
+    "EEM": "ETF",
+    "EWZ": "ETF",
+    "FXI": "ETF",
+    "ARKK": "ETF",
+    "GDX": "ETF",
+    "IBIT": "ETF",
+    "SQQQ": "ETF",
+    "TQQQ": "ETF",
+    "SPXU": "ETF",
+    "UPRO": "ETF",
+    "SMH": "ETF",
+    "SOXL": "ETF",
+    # Index
+    "SPX": "Index",
+    "SPXW": "Index",
+    "NDX": "Index",
+    "RUT": "Index",
+    "VIX": "Index",
+}
+
+
+def calculate_black_scholes_delta(
+    S: float, K: float, T: float, r: float, sigma: float, option_type: str
+) -> Optional[float]:
+    """Calculate option delta using Black-Scholes model.
+
+    Args:
+        S: Current underlying price
+        K: Strike price
+        T: Time to expiry in years
+        r: Risk-free rate
+        sigma: Implied volatility (as decimal, e.g., 0.30 for 30%)
+        option_type: 'C' for call, 'P' for put
+
+    Returns:
+        Delta value or None if calculation fails
+    """
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return None
+    try:
+        d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+        if option_type == "C":
+            return float(norm.cdf(d1))
+        else:
+            return float(norm.cdf(d1) - 1)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> Optional[float]:
+    """Calculate option gamma using Black-Scholes model.
+
+    Args:
+        S: Current underlying price
+        K: Strike price
+        T: Time to expiry in years
+        r: Risk-free rate
+        sigma: Implied volatility (as decimal)
+
+    Returns:
+        Gamma value or None if calculation fails
+    """
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return None
+    try:
+        d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+        return float(norm.pdf(d1) / (S * sigma * math.sqrt(T)))
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def calculate_iv_rank_from_history(current_iv: float, iv_history: List[float]) -> Optional[float]:
+    """Calculate IV rank as percentile within historical IV range.
+
+    Args:
+        current_iv: Current IV value
+        iv_history: List of historical IV values
+
+    Returns:
+        IV rank (0-100) or None if insufficient data
+    """
+    if not iv_history or len(iv_history) < 2:
+        return None
+    min_iv = min(iv_history)
+    max_iv = max(iv_history)
+    if max_iv == min_iv:
+        return 50.0  # No range, default to middle
+    return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100))
 
 
 def parse_expiry(expiry_str: Optional[str]) -> Optional[datetime]:
@@ -215,31 +465,59 @@ async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], en
 
 
 async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
-    """Get IV rank at entry time."""
+    """Get IV rank at entry time by calculating from flow IV history.
+
+    Calculates IV rank as percentile: (current - min) / (max - min) * 100
+    using historical IV data from silver_uw_flow for the same ticker.
+    """
 
     async def query(session: Any) -> Optional[float]:
+        # Get current IV and historical IVs for this ticker (last 30 days)
         stmt = text(
             """
-            SELECT iv_rank FROM silver_iv_rank
-            WHERE ticker = :ticker AND ts_utc <= :entry_ts
-            ORDER BY ts_utc DESC LIMIT 1
+            WITH iv_history AS (
+                SELECT iv
+                FROM silver_uw_flow
+                WHERE ticker = :ticker
+                AND flow_ts_utc BETWEEN :start_ts AND :entry_ts
+                AND iv IS NOT NULL AND iv > 0
+            )
+            SELECT
+                (SELECT iv FROM silver_uw_flow
+                 WHERE ticker = :ticker AND flow_ts_utc <= :entry_ts
+                 AND iv IS NOT NULL AND iv > 0
+                 ORDER BY flow_ts_utc DESC LIMIT 1) as current_iv,
+                MIN(iv) as min_iv,
+                MAX(iv) as max_iv
+            FROM iv_history
         """
         )
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
+        start_ts = entry_ts - timedelta(days=30)
+        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
         row = result.fetchone()
-        return row[0] if row else None
+        if row and row[0] and row[1] is not None and row[2] is not None:
+            current_iv, min_iv, max_iv = row[0], row[1], row[2]
+            if max_iv > min_iv:
+                return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100))
+            return 50.0  # No range, return middle
+        return None
 
     return await db_query(query)
 
 
 async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
-    """Get regime snapshot at entry time from VIX data + market tide."""
+    """Get regime snapshot at entry time from VIX/VIXY data + market tide.
+
+    Uses VIXY bar data from silver_alpaca_bars as VIX proxy when
+    silver_vix_data table is empty.
+    """
     from orion.analysis.regime import MultiAxisRegimeDetector
 
     detector = MultiAxisRegimeDetector()
 
-    # Get VIX data
+    # Try silver_vix_data first, then fallback to VIXY bars
     async def query_vix(session: Any) -> Dict[str, Any]:
+        # First try the VIX table
         stmt = text(
             """
             SELECT vix, vix_1d_change, vix_regime
@@ -250,7 +528,36 @@ async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
         )
         result = await session.execute(stmt, {"entry_ts": entry_ts})
         row = result.fetchone()
-        return {"vix": row[0], "vix_1d_change": row[1], "vix_regime": row[2]} if row else {}
+        if row and row[0]:
+            return {"vix": row[0], "vix_1d_change": row[1], "vix_regime": row[2]}
+
+        # Fallback: Use VIXY from silver_alpaca_bars as proxy
+        stmt = text(
+            """
+            SELECT close,
+                   close - LAG(close) OVER (ORDER BY bar_start_ts_utc) as change_1d
+            FROM silver_alpaca_bars
+            WHERE ticker = 'VIXY' AND bar_start_ts_utc <= :entry_ts
+            ORDER BY bar_start_ts_utc DESC LIMIT 1
+        """
+        )
+        result = await session.execute(stmt, {"entry_ts": entry_ts})
+        row = result.fetchone()
+        if row and row[0]:
+            vix_proxy = float(row[0])
+            vix_change = float(row[1]) if row[1] else 0.0
+            # Map VIXY price to VIX regime
+            if vix_proxy > 30:
+                regime = "EXTREME"
+            elif vix_proxy > 20:
+                regime = "ELEVATED"
+            elif vix_proxy > 12:
+                regime = "NORMAL"
+            else:
+                regime = "LOW"
+            return {"vix": vix_proxy, "vix_1d_change": vix_change, "vix_regime": regime}
+
+        return {}
 
     # Get market tide sum for risk scoring
     async def query_tide(session: Any) -> Optional[float]:
@@ -350,29 +657,88 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
 
 
 async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
-    """Get volume, OI, and IV from flow data."""
+    """Get volume, OI, IV from flow data and calculate delta/gamma via Black-Scholes.
 
-    async def query(session: Any) -> Dict[str, Optional[float]]:
+    Fetches underlying price, strike, IV, expiry, and put/call from flow data,
+    then calculates proper delta/gamma using Black-Scholes model.
+    """
+
+    async def query(session: Any) -> Dict[str, Any]:
         stmt = text(
             """
-            SELECT volume_contract, open_interest, iv, delta_diff
-            FROM silver_uw_flow
-            WHERE event_id = :event_id
+            SELECT
+                f.volume_contract, f.open_interest, f.iv, f.underlying_price,
+                f.strike, f.put_call, f.expiry, f.flow_ts_utc
+            FROM silver_uw_flow f
+            WHERE f.event_id = :event_id
         """
         )
         result = await session.execute(stmt, {"event_id": event_id})
         row = result.fetchone()
         if row:
             return {
-                "delta": row[3],  # delta_diff (closest to delta we have)
-                "gamma": None,  # Not available in flow data
-                "volume": row[0],  # volume_contract
+                "volume": row[0],
                 "open_interest": row[1],
                 "iv": row[2],
+                "underlying_price": row[3],
+                "strike": row[4],
+                "put_call": row[5],
+                "expiry": row[6],
+                "flow_ts": row[7],
             }
+        return {}
+
+    flow_data = await db_query(query)
+
+    if not flow_data:
         return {"delta": None, "gamma": None, "volume": None, "open_interest": None, "iv": None}
 
-    return await db_query(query)
+    # Extract values for Black-Scholes calculation
+    S = float(flow_data.get("underlying_price") or 0)
+    K = float(flow_data.get("strike") or 0)
+    iv = flow_data.get("iv")
+    sigma = float(iv) if iv else 0
+    put_call = flow_data.get("put_call", "C")
+    expiry = flow_data.get("expiry")
+    flow_ts = flow_data.get("flow_ts")
+
+    # Calculate time to expiry in years
+    T = 0.0
+    if expiry and flow_ts:
+        # Handle both string and datetime expiry
+        if isinstance(expiry, str):
+            try:
+                expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
+            except ValueError:
+                expiry_dt = None
+        else:
+            expiry_dt = expiry
+        if expiry_dt:
+            if hasattr(expiry_dt, "date"):
+                expiry_date = expiry_dt.date()
+            else:
+                expiry_date = expiry_dt
+            if hasattr(flow_ts, "date"):
+                flow_date = flow_ts.date()
+            else:
+                flow_date = flow_ts
+            days_to_expiry = (expiry_date - flow_date).days
+            T = max(days_to_expiry / 365.0, 1 / 365.0)  # At least 1 day
+
+    # Calculate delta and gamma using Black-Scholes
+    delta = None
+    gamma = None
+    if S > 0 and K > 0 and sigma > 0 and T > 0:
+        delta = calculate_black_scholes_delta(S, K, T, RISK_FREE_RATE, sigma, put_call)
+        gamma = calculate_black_scholes_gamma(S, K, T, RISK_FREE_RATE, sigma)
+
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "volume": flow_data.get("volume"),
+        "open_interest": flow_data.get("open_interest"),
+        "iv": flow_data.get("iv"),
+    }
 
 
 async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> Optional[float]:
@@ -695,7 +1061,6 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
 
     # 2-5: DB lookups
     entry_date = entry_ts.date()
-    prior_day = entry_date - timedelta(days=1)
     five_days_ago = entry_date - timedelta(days=5)
 
     async def query(session: Any) -> Dict[str, Any]:
@@ -714,20 +1079,19 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
         today_row = today_result.fetchone()
 
         today_open = today_row[0] if today_row else None
-        today_vwap = today_row[1] if today_row else None
 
-        # Get prior day close
+        # Get prior trading day close (handles holidays/weekends)
         prior_stmt = text(
             """
-            SELECT close
+            SELECT close, bar_start_ts_utc
             FROM silver_alpaca_bars
             WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) = :prior_day
+            AND DATE(bar_start_ts_utc) < :entry_date
             ORDER BY bar_start_ts_utc DESC
             LIMIT 1
         """
         )
-        prior_result = await session.execute(prior_stmt, {"ticker": ticker, "prior_day": prior_day})
+        prior_result = await session.execute(prior_stmt, {"ticker": ticker, "entry_date": entry_date})
         prior_row = prior_result.fetchone()
         prior_close = prior_row[0] if prior_row else None
 
@@ -735,10 +1099,23 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
         if today_open and prior_close and prior_close > 0:
             result["overnight_gap_pct"] = ((today_open - prior_close) / prior_close) * 100
 
-        # VWAP distance
-        if today_vwap and today_open and today_vwap > 0:
-            # Use today's open as proxy for current price in this calculation
-            result["vwap_distance_pct"] = ((today_open - today_vwap) / today_vwap) * 100
+        # VWAP distance - use bar closest to entry time
+        vwap_stmt = text(
+            """
+            SELECT close, vwap
+            FROM silver_alpaca_bars
+            WHERE ticker = :ticker
+            AND bar_start_ts_utc <= :entry_ts
+            ORDER BY bar_start_ts_utc DESC
+            LIMIT 1
+        """
+        )
+        vwap_result = await session.execute(vwap_stmt, {"ticker": ticker, "entry_ts": entry_ts})
+        vwap_row = vwap_result.fetchone()
+        if vwap_row and vwap_row[0] and vwap_row[1] and vwap_row[1] > 0:
+            current_price = vwap_row[0]
+            current_vwap = vwap_row[1]
+            result["vwap_distance_pct"] = ((current_price - current_vwap) / current_vwap) * 100
 
         # 5-day price change (POSITION)
         five_day_stmt = text(
@@ -1199,10 +1576,22 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
 
 
 async def get_sector_info(ticker: str) -> Dict[str, Optional[str]]:
-    """Get sector from UW ticker info."""
-    info = await get_ticker_info(ticker)
-    # Note: UW only provides sector, not industry
-    return {"sector": info.get("sector"), "industry": None}
+    """Get sector from static mapping (reliable) or fallback to UW API.
+
+    Uses static SECTOR_MAPPING for common tickers to ensure reliability.
+    Falls back to UW API for less common tickers.
+    """
+    # Check static mapping first (reliable, no API calls)
+    sector = SECTOR_MAPPING.get(ticker)
+    if sector:
+        return {"sector": sector, "industry": None}
+
+    # Fallback to UW API for unknown tickers
+    try:
+        info = await get_ticker_info(ticker)
+        return {"sector": info.get("sector"), "industry": None}
+    except Exception:
+        return {"sector": "Other", "industry": None}
 
 
 async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
@@ -2063,12 +2452,7 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
                 p3 = await get_p3_features(ticker, option_chain, expiry, entry_ts)
                 sector_corr = await get_sector_correlation_features(ticker, entry_ts)
 
-                # Calculate IV/HV ratio (need IV from record)
-                iv_at_entry = None  # Would need to query from record
-                hv_30d = p2.get("hv_30d")
-                iv_vs_hv = None  # Can't calculate without iv_at_entry from record
-
-                # Build update dict
+                # Build update dict (iv_vs_hv computed in p2 features)
                 updates = {
                     "rvol_1h": rvol.get("rvol_1h"),
                     "rvol_daily": rvol.get("rvol_daily"),
@@ -2097,8 +2481,10 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
                     "spy_return_1h": sector_corr.get("spy_return_1h"),
                 }
 
-                # Update record
-                async def update_record(session: Any) -> None:
+                # Update record - bind loop variables to avoid B023
+                event_id = record["event_id"]
+
+                async def update_record(session: Any, upd: Dict[str, Any] = updates, eid: str = event_id) -> None:
                     update_stmt = text(
                         """
                         UPDATE price_target_labels SET
@@ -2130,7 +2516,7 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
                         WHERE event_id = :event_id
                     """
                     )
-                    await session.execute(update_stmt, {**updates, "event_id": record["event_id"]})
+                    await session.execute(update_stmt, {**upd, "event_id": eid})
 
                 await db_write(update_record)
                 total_updated += 1

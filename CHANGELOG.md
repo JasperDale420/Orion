@@ -41,6 +41,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - 4 new connectors: GEX/Vanna, Market Tide, Max Pain, IV Rank
   - `feature_enrichment` service polls endpoints at configured intervals
   - 7 new entry feature columns in `price_target_labels` (GEX, Tide, Max Pain, IV Rank)
+- **ML Feature Validation System**: Comprehensive audit tooling for all 130+ features
+  - `src/orion/jobs/validate_features.py` - 3 validation modes (spot-check, sanity, audit-sources)
+  - `FEATURE_SOURCE_MAPPING` documents all 60+ features and their source tables
+  - Data source audit covers all 8 silver tables with gap detection
+  - 7 automated sanity checks (Greeks ranges, time features, volume constraints)
+- **Enhanced Backfill Job**: `backfill_ml_features.py` now populates 50+ features
+  - Darkpool metrics (9 window sizes: 15m, 30m, 1h, 4h, 1d, 3d, 1w, 2w, 4w)
+  - RVOL metrics (5 windows: 30m, 1h, daily, 3d, weekly)
+  - Flow aggression (ask_side_ratio, sweep_ratio_1h, same_ticker_premium_1h)
+  - Regime features (trend, vol, risk, session, VIX regimes)
+  - Market tide and institutional flow
 
 ### Changed
 - Reduced ingestion polling interval from 5 minutes to 1 minute for more responsive data capture
@@ -79,6 +90,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `ExecutionService._save_decision()` now handles full signal persistence (SignalLive + TradeJournalEntry) for EXECUTE decisions
 
 ### Fixed
+- Fixed `overnight_gap_pct` calculation to correctly find prior trading day close (handles weekends/holidays)
+- Fixed `vwap_distance_pct` calculation to use bar closest to entry timestamp instead of day's open
 - Fixed `_calculate_projected_exposure` return type annotation from `Tuple[float, float, float]` to `Tuple[float, float]` to match actual 2-value return in `risk_manager.py`
 - Fixed `check_status` inner function return type from `None` to `bool` in `circuit_breaker.py`
 - Fixed `fetch_state` inner function return type from `None` to `dict[str, Any]` in `circuit_breaker.py`

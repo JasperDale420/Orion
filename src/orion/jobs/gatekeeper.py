@@ -3,12 +3,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
-
 from orion.core.promotion_rules import DEFAULT_PROMOTION_CONFIG, evaluate_stage_transition
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory
 from orion.storage.models_solvers import PromotionRecommendation, Solver, SolverMetrics
+from sqlalchemy import select
 
 logger = setup_struct_logger("orion.gatekeeper")
 

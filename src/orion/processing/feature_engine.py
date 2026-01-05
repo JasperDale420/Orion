@@ -160,17 +160,17 @@ class FeatureEngine:
         if not signals:
             return
 
-        # Dedupe or group?
-        rows = []
+        # Dedupe: keep last occurrence of each (ticker, event_ts_utc, feature_set_id)
+        rows_dict = {}
         for s in signals:
-            rows.append(
-                {
-                    "ticker": s.ticker,
-                    "event_ts_utc": s.signal_ts_utc,
-                    "feature_set_id": feature_set_id,
-                    "features": s.features,
-                }
-            )
+            key = (s.ticker, s.signal_ts_utc, feature_set_id)
+            rows_dict[key] = {
+                "ticker": s.ticker,
+                "event_ts_utc": s.signal_ts_utc,
+                "feature_set_id": feature_set_id,
+                "features": s.features,
+            }
+        rows = list(rows_dict.values())
 
         # Bulk insert with upsert
         # Sqlalchemy bulk operations can be tricky with upsert across varying sets?
