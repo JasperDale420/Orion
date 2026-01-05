@@ -13,7 +13,7 @@ import requests
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from orion.shared.db_utils import db_write
+from orion.shared.db_utils import db_query, db_write
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,13 @@ class UWMaxPainConnector:
             if not expiries:
                 continue
 
+            # Get current price from database (more reliable than API)
+            current_price = await self._get_current_price(ticker)
+
             for exp_data in expiries:
                 expiry_str = exp_data.get("expiry")
                 max_pain = exp_data.get("max_pain")
-                price = exp_data.get("price")
+                price = exp_data.get("price") or current_price
 
                 if not expiry_str or max_pain is None:
                     continue
@@ -85,6 +88,20 @@ class UWMaxPainConnector:
             await asyncio.sleep(0.5)  # Rate limit
 
         return stored
+
+    async def _get_current_price(self, ticker: str) -> Optional[float]:
+        """Get latest price from silver_alpaca_bars."""
+        async def query(session: Any) -> Optional[float]:
+            stmt = text("""
+                SELECT close FROM silver_alpaca_bars
+                WHERE ticker = :ticker
+                ORDER BY bar_start_ts_utc DESC LIMIT 1
+            """)
+            result = await session.execute(stmt, {"ticker": ticker})
+            row = result.fetchone()
+            return float(row[0]) if row else None
+
+        return await db_query(query)
 
     async def _persist_max_pain(self, record: Dict[str, Any]) -> None:
         """Persist max pain to database."""
