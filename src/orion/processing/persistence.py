@@ -54,6 +54,26 @@ def _required_event_ts_utc(e: BronzeEvent, payload: dict[str, Any], payload_key:
     return parse_timestamptz(raw, strict=True)
 
 
+def _safe_float(val: Any) -> float | None:
+    """Safely convert a value to float, returning None if conversion fails."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(val: Any) -> int | None:
+    """Safely convert a value to int, returning None if conversion fails."""
+    if val is None:
+        return None
+    try:
+        return int(float(val))  # Handle "10.0" -> 10
+    except (ValueError, TypeError):
+        return None
+
+
 async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeEvent]) -> None:
     if not events:
         return
@@ -66,6 +86,11 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
     for e in events:
         p = e.payload or {}
         if e.event_type == "UW_FLOW":
+            # Data quality: skip flow records with missing required fields
+            # UW API uses 'price' for option price
+            option_price = _safe_float(p.get("price") or p.get("option_price"))
+            if option_price is None:
+                continue
             flow_rows.append(
                 {
                     "event_id": e.event_id,
@@ -74,30 +99,32 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "flow_ts_utc": _required_event_ts_utc(e, p, "flow_ts_utc"),
                     "put_call": p.get("put_call"),
                     "expiry": p.get("expiry"),
-                    "strike": p.get("strike"),
-                    "option_price": p.get("option_price"),
-                    "size_contracts": p.get("size_contracts"),
-                    "premium_usd": p.get("premium_usd"),
-                    "bid": p.get("bid"),
-                    "ask": p.get("ask"),
-                    "underlying_price": p.get("underlying_price"),
+                    "strike": _safe_float(p.get("strike")),
+                    "option_price": option_price,
+                    # UW API uses total_size or size for contracts, premium or total_premium
+                    "size_contracts": _safe_int(p.get("size_contracts") or p.get("total_size")),
+                    "premium_usd": _safe_float(p.get("premium_usd") or p.get("premium") or p.get("total_premium")),
+                    "bid": _safe_float(p.get("bid")),
+                    "ask": _safe_float(p.get("ask")),
+                    "underlying_price": _safe_float(p.get("underlying_price")),
                     "aggressor": p.get("aggressor"),
-                    "is_sweep": p.get("is_sweep"),
-                    "flags_json": p.get("flags_json"),
-                    "volume_contract": p.get("volume_contract"),
-                    "open_interest": p.get("open_interest"),
+                    # UW uses has_sweep boolean - convert to str for VARCHAR column
+                    "is_sweep": str(p.get("is_sweep") or p.get("has_sweep") or ""),
+                    "flags_json": p.get("flags_json") if p.get("flags_json") != "null" else None,
+                    "volume_contract": _safe_int(p.get("volume_contract") or p.get("volume")),
+                    "open_interest": _safe_int(p.get("open_interest")),
                     # New UW fields
-                    "iv": p.get("iv"),
-                    "volume_oi_ratio": p.get("volume_oi_ratio"),
-                    "trade_count": p.get("trade_count"),
+                    "iv": _safe_float(p.get("iv")),
+                    "volume_oi_ratio": _safe_float(p.get("volume_oi_ratio")),
+                    "trade_count": _safe_int(p.get("trade_count")),
                     "alert_rule": p.get("alert_rule"),
                     "option_chain": p.get("option_chain"),
                     # ML Feature Fields
-                    "ask_volume": p.get("ask_volume"),
-                    "bid_volume": p.get("bid_volume"),
-                    "delta_diff": p.get("delta_diff"),
-                    "iv_change": p.get("iv_change"),
-                    "multi_leg_vol_ratio": p.get("multi_leg_vol_ratio"),
+                    "ask_volume": _safe_int(p.get("ask_volume")),
+                    "bid_volume": _safe_int(p.get("bid_volume")),
+                    "delta_diff": _safe_float(p.get("delta_diff")),
+                    "iv_change": _safe_float(p.get("iv_change")),
+                    "multi_leg_vol_ratio": _safe_float(p.get("multi_leg_vol_ratio")),
                     "alert_name": p.get("alert_name"),
                     "noti_type": p.get("noti_type"),
                     "ingest": getattr(e, "ingest", None) or {},
@@ -122,14 +149,18 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                 }
             )
         elif e.event_type == "UW_DARKPOOL":
+            # Data quality: skip darkpool records with invalid trade_price
+            trade_price = _safe_float(p.get("trade_price") or p.get("price"))
+            if trade_price is None:
+                continue
             dark_rows.append(
                 {
                     "event_id": e.event_id,
                     "source_event_id": getattr(e, "source_event_id", None),
                     "ticker": getattr(e, "ticker", None) or p.get("ticker"),
                     "dark_ts_utc": _required_event_ts_utc(e, p, "dark_ts_utc"),
-                    "trade_price": p.get("trade_price"),
-                    "size_shares": p.get("size_shares"),
+                    "trade_price": trade_price,
+                    "size_shares": _safe_int(p.get("size_shares") or p.get("size")),
                     "venue": p.get("venue"),
                     "conditions": p.get("conditions"),
                     "ingest": getattr(e, "ingest", None) or {},
