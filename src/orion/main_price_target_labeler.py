@@ -317,23 +317,48 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
     Criteria:
     - Sweeps (ASK/BID) >= $50k premium
     - Non-sweeps (ASK/BID) >= $100k premium (institutional)
+    - DTE-aware minimum age filter:
+      - 0DTE: 15 minutes (fast-moving, need quick labels)
+      - 1-3 DTE (SHORT_SWING): 30 minutes
+      - 4-14 DTE (SWING): 1 hour
+      - 15+ DTE (POSITION): 2 hours
     """
 
     async def query(session: Any) -> List[Any]:
         stmt = text(
             """
-            SELECT f.*
-            FROM silver_uw_flow f
-            LEFT JOIN price_target_labels p ON f.event_id = p.event_id
-            WHERE p.event_id IS NULL
-            AND f.option_chain IS NOT NULL
-            AND f.option_price > 0
-            AND f.aggressor IN ('ASK', 'BID')
-            AND (
-                (f.is_sweep = 'true' AND f.premium_usd >= 50000)
-                OR (f.is_sweep != 'true' AND f.premium_usd >= 100000)
+            WITH flow_with_dte AS (
+                SELECT f.*,
+                    CASE
+                        WHEN f.expiry IS NOT NULL THEN
+                            (f.expiry::date - DATE(f.flow_ts_utc))
+                        ELSE NULL
+                    END as dte
+                FROM silver_uw_flow f
+                LEFT JOIN price_target_labels p ON f.event_id = p.event_id
+                WHERE p.event_id IS NULL
+                AND f.option_chain IS NOT NULL
+                AND f.option_price > 0
+                AND f.aggressor IN ('ASK', 'BID')
+                AND (
+                    (f.is_sweep = 'true' AND f.premium_usd >= 50000)
+                    OR (f.is_sweep != 'true' AND f.premium_usd >= 100000)
+                )
             )
-            ORDER BY f.flow_ts_utc ASC
+            SELECT * FROM flow_with_dte
+            WHERE (
+                -- 0DTE: 15 minute minimum age
+                (dte = 0 AND flow_ts_utc < NOW() - INTERVAL '15 minutes')
+                -- 1-3 DTE (SHORT_SWING): 30 minute minimum age
+                OR (dte BETWEEN 1 AND 3 AND flow_ts_utc < NOW() - INTERVAL '30 minutes')
+                -- 4-14 DTE (SWING): 1 hour minimum age
+                OR (dte BETWEEN 4 AND 14 AND flow_ts_utc < NOW() - INTERVAL '1 hour')
+                -- 15+ DTE (POSITION): 2 hour minimum age
+                OR (dte >= 15 AND flow_ts_utc < NOW() - INTERVAL '2 hours')
+                -- Unknown DTE: use 30 minute default
+                OR (dte IS NULL AND flow_ts_utc < NOW() - INTERVAL '30 minutes')
+            )
+            ORDER BY flow_ts_utc ASC
             LIMIT :limit
         """
         )
