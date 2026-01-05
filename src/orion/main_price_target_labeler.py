@@ -1422,70 +1422,78 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
                 pass
 
         # SPY return in last hour (market context)
-        spy_return_stmt = text(
+        try:
+            spy_return_stmt = text(
+                """
+                SELECT
+                    (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :entry_ts ORDER BY bar_start_ts_utc DESC LIMIT 1) as current_close,
+                    (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :lookback_1h ORDER BY bar_start_ts_utc DESC LIMIT 1) as prior_close
             """
-            SELECT
-                (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :entry_ts ORDER BY bar_start_ts_utc DESC LIMIT 1) as current_close,
-                (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :lookback_1h ORDER BY bar_start_ts_utc DESC LIMIT 1) as prior_close
-        """
-        )
-        spy_result = await session.execute(spy_return_stmt, {"entry_ts": entry_ts, "lookback_1h": lookback_1h})
-        spy_row = spy_result.fetchone()
-        if spy_row and spy_row[0] and spy_row[1] and spy_row[1] > 0:
-            result["spy_return_1h"] = ((spy_row[0] - spy_row[1]) / spy_row[1]) * 100
+            )
+            spy_result = await session.execute(spy_return_stmt, {"entry_ts": entry_ts, "lookback_1h": lookback_1h})
+            spy_row = spy_result.fetchone()
+            if spy_row and spy_row[0] and spy_row[1] and spy_row[1] > 0:
+                result["spy_return_1h"] = ((spy_row[0] - spy_row[1]) / spy_row[1]) * 100
+        except Exception:
+            # SPY data may not exist for pre-market times - skip this feature
+            pass
 
         # 5-day correlation with SPY
         # Get daily returns for ticker and SPY
-        ticker_returns_stmt = text(
+        try:
+            ticker_returns_stmt = text(
+                """
+                SELECT DATE(bar_start_ts_utc) as d,
+                       (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
+                       LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
+                FROM silver_alpaca_bars
+                WHERE ticker = :ticker
+                AND DATE(bar_start_ts_utc) >= :lookback_5d
+                AND DATE(bar_start_ts_utc) < :entry_date
+                GROUP BY DATE(bar_start_ts_utc)
+                ORDER BY d
             """
-            SELECT DATE(bar_start_ts_utc) as d,
-                   (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
-                   LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) >= :lookback_5d
-            AND DATE(bar_start_ts_utc) < :entry_date
-            GROUP BY DATE(bar_start_ts_utc)
-            ORDER BY d
-        """
-        )
-        spy_returns_stmt = text(
+            )
+            spy_returns_stmt = text(
+                """
+                SELECT DATE(bar_start_ts_utc) as d,
+                       (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
+                       LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
+                FROM silver_alpaca_bars
+                WHERE ticker = 'SPY'
+                AND DATE(bar_start_ts_utc) >= :lookback_5d
+                AND DATE(bar_start_ts_utc) < :entry_date
+                GROUP BY DATE(bar_start_ts_utc)
+                ORDER BY d
             """
-            SELECT DATE(bar_start_ts_utc) as d,
-                   (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
-                   LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
-            FROM silver_alpaca_bars
-            WHERE ticker = 'SPY'
-            AND DATE(bar_start_ts_utc) >= :lookback_5d
-            AND DATE(bar_start_ts_utc) < :entry_date
-            GROUP BY DATE(bar_start_ts_utc)
-            ORDER BY d
-        """
-        )
-        ticker_result = await session.execute(
-            ticker_returns_stmt, {"ticker": ticker, "lookback_5d": lookback_5d, "entry_date": entry_date}
-        )
-        spy_result = await session.execute(spy_returns_stmt, {"lookback_5d": lookback_5d, "entry_date": entry_date})
+            )
+            ticker_result = await session.execute(
+                ticker_returns_stmt, {"ticker": ticker, "lookback_5d": lookback_5d, "entry_date": entry_date}
+            )
+            spy_result = await session.execute(spy_returns_stmt, {"lookback_5d": lookback_5d, "entry_date": entry_date})
 
-        ticker_returns = [r[1] for r in ticker_result.fetchall() if r[1] is not None]
-        spy_returns = [r[1] for r in spy_result.fetchall() if r[1] is not None]
+            ticker_returns = [r[1] for r in ticker_result.fetchall() if r[1] is not None]
+            spy_returns = [r[1] for r in spy_result.fetchall() if r[1] is not None]
 
-        # Calculate correlation if we have enough data points
-        if len(ticker_returns) >= 3 and len(spy_returns) >= 3:
-            # Simple Pearson correlation
-            n = min(len(ticker_returns), len(spy_returns))
-            t_ret = ticker_returns[:n]
-            s_ret = spy_returns[:n]
+            # Calculate correlation if we have enough data points
+            if len(ticker_returns) >= 3 and len(spy_returns) >= 3:
+                # Simple Pearson correlation
+                n = min(len(ticker_returns), len(spy_returns))
+                t_ret = ticker_returns[:n]
+                s_ret = spy_returns[:n]
 
-            t_mean = sum(t_ret) / n
-            s_mean = sum(s_ret) / n
+                t_mean = sum(t_ret) / n
+                s_mean = sum(s_ret) / n
 
-            numerator = sum((t - t_mean) * (s - s_mean) for t, s in zip(t_ret, s_ret))
-            t_var = sum((t - t_mean) ** 2 for t in t_ret)
-            s_var = sum((s - s_mean) ** 2 for s in s_ret)
+                numerator = sum((t - t_mean) * (s - s_mean) for t, s in zip(t_ret, s_ret))
+                t_var = sum((t - t_mean) ** 2 for t in t_ret)
+                s_var = sum((s - s_mean) ** 2 for s in s_ret)
 
-            if t_var > 0 and s_var > 0:
-                result["spy_correlation_5d"] = numerator / ((t_var * s_var) ** 0.5)
+                if t_var > 0 and s_var > 0:
+                    result["spy_correlation_5d"] = numerator / ((t_var * s_var) ** 0.5)
+        except Exception:
+            # Correlation data may be incomplete - skip this feature
+            pass
 
         return result
 
@@ -1780,10 +1788,19 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             "return_at_1h",
             "return_at_2h",
             "return_at_4h",
+            # 0DTE checkpoints
+            "price_at_5m",
+            "return_at_5m",
+            "price_at_10m",
+            "return_at_10m",
             "price_at_15m",
             "return_at_15m",
             "price_at_30m",
             "return_at_30m",
+            # EOD checkpoint
+            "price_at_eod",
+            "return_at_eod",
+            # Longer term checkpoints
             "price_at_8h",
             "return_at_8h",
             "price_at_1d",
@@ -1875,6 +1892,19 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
         label["is_post_earnings"] = None
         label["sector"] = None
         label["industry"] = None
+        # P2 ML features - set to None for early return (no subsequent prices)
+        label["oi_change_1d"] = None
+        label["oi_change_pct"] = None
+        label["iv_vs_hv_ratio"] = None
+        label["high_52w_distance_pct"] = None
+        label["is_spread_leg"] = None
+        label["same_expiry_trades_1h"] = None
+        # Sector correlation features
+        sector_corr = await get_sector_correlation_features(ticker, entry_ts)
+        label["sector_net_premium_1h"] = sector_corr.get("sector_net_premium_1h")
+        label["sector_flow_direction"] = sector_corr.get("sector_flow_direction")
+        label["spy_correlation_5d"] = sector_corr.get("spy_correlation_5d")
+        label["spy_return_1h"] = sector_corr.get("spy_return_1h")
         return label
 
     # Track core metrics
