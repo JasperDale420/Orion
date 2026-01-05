@@ -74,6 +74,30 @@ def _safe_int(val: Any) -> int | None:
         return None
 
 
+def _infer_aggressor(payload: dict) -> str | None:
+    """Infer aggressor from UW API total_bid_side_prem vs total_ask_side_prem.
+    
+    - ASK: More premium on ask side (buyer aggressor, bullish)
+    - BID: More premium on bid side (seller aggressor, bearish)
+    - MID: Equal or no data
+    """
+    ask_prem = _safe_float(payload.get("total_ask_side_prem"))
+    bid_prem = _safe_float(payload.get("total_bid_side_prem"))
+    
+    if ask_prem is None and bid_prem is None:
+        return payload.get("aggressor")  # Fallback to explicit field if present
+    
+    ask_prem = ask_prem or 0.0
+    bid_prem = bid_prem or 0.0
+    
+    if ask_prem > bid_prem:
+        return "ASK"
+    elif bid_prem > ask_prem:
+        return "BID"
+    else:
+        return "MID"
+
+
 async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeEvent]) -> None:
     if not events:
         return
@@ -107,7 +131,8 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "bid": _safe_float(p.get("bid")),
                     "ask": _safe_float(p.get("ask")),
                     "underlying_price": _safe_float(p.get("underlying_price")),
-                    "aggressor": p.get("aggressor"),
+                    # Infer aggressor from UW API total_bid_side_prem vs total_ask_side_prem
+                    "aggressor": _infer_aggressor(p),
                     # UW uses has_sweep boolean - convert to str for VARCHAR column
                     "is_sweep": str(p.get("is_sweep") or p.get("has_sweep") or ""),
                     "flags_json": p.get("flags_json") if p.get("flags_json") != "null" else None,
