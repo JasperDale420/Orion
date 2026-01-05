@@ -90,7 +90,15 @@ async def root() -> Dict[str, Any]:
         "timestamp_utc": datetime.now(timezone.utc),
         "links": {
             "docs": "/docs",
+            "redoc": "/redoc",
             "health": "/health",
+            "solvers": "/solvers",
+            "experiments": "/experiments",
+            "metrics": "/metrics",
+            "promotions": "/promotions",
+            "search": "/search",
+            "rollups": "/rollups",
+            "flows": "/flows",
         },
     }
 

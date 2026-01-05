@@ -1,17 +1,41 @@
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient, ASGITransport
 from orion.api.main import app
 
-
 @pytest.mark.asyncio
-async def test_root_endpoint_returns_friendly_message():
+async def test_root_endpoint_ux():
     """
-    Test that the root endpoint returns a friendly welcome message.
+    Test that the root endpoint provides helpful developer links.
     """
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/")
 
     assert response.status_code == 200
-    json_resp = response.json()
-    assert "Welcome to Orion Admin API! 🚀" in json_resp["message"]
-    assert json_resp["docs_url"] == "/docs"
+    data = response.json()
+
+    # Check basic structure
+    assert "app" in data
+    assert "links" in data
+
+    links = data["links"]
+
+    # Verify presence of key developer links
+    assert links["docs"] == "/docs"
+    assert links["redoc"] == "/redoc"
+    assert links["health"] == "/health"
+
+    # Verify resource links are present (HATEOAS-lite)
+    expected_resources = [
+        "solvers",
+        "experiments",
+        "metrics",
+        "promotions",
+        "search",
+        "rollups",
+        "flows"
+    ]
+
+    for resource in expected_resources:
+        assert resource in links
+        assert links[resource] == f"/{resource}"
