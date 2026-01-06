@@ -11,7 +11,6 @@ Buckets and their time horizons:
 - POSITION: Days to weeks (1d, 2d, 3d, 1w)
 """
 
-import logging
 import os
 import pickle
 from dataclasses import dataclass
@@ -19,8 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
 
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
@@ -55,12 +54,17 @@ BUCKET_CHECKPOINTS = {
         ("eod", 6.5, "End of day"),
         ("1d", 24.0, "1 day"),
         ("2d", 48.0, "2 days"),
+        ("1w", 168.0, "1 week"),
+        ("2w", 336.0, "2 weeks"),
     ],
     "POSITION": [
         ("1d", 24.0, "1 day"),
         ("2d", 48.0, "2 days"),
         ("3d", 72.0, "3 days"),
         ("1w", 168.0, "1 week"),
+        ("2w", 336.0, "2 weeks"),
+        ("3w", 504.0, "3 weeks"),
+        ("4w", 672.0, "4 weeks"),
     ],
 }
 
@@ -109,7 +113,7 @@ class ExitPrediction:
 class BucketExitClassifier:
     """
     Bucket-specific exit classifier.
-    
+
     Each bucket has its own model trained on appropriate time horizons.
     Falls back to heuristic when no model is available.
     """
@@ -156,7 +160,7 @@ class BucketExitClassifier:
     def predict(self, features: ExitFeatures) -> ExitPrediction:
         """
         Predict whether to exit given current position state.
-        
+
         Uses bucket-specific model if available, else heuristic.
         """
         bucket = features.bucket
@@ -210,7 +214,7 @@ class BucketExitClassifier:
     def _heuristic_predict(self, features: ExitFeatures) -> ExitPrediction:
         """
         Bucket-aware heuristic exit logic.
-        
+
         Different buckets have different time and return sensitivities.
         """
         reasons = []
@@ -322,7 +326,7 @@ class BucketExitClassifier:
 async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Build training dataset for a specific bucket.
-    
+
     Uses bucket-appropriate checkpoints from price_target_labels.
     """
     checkpoints = BUCKET_CHECKPOINTS.get(bucket, [])
@@ -332,7 +336,7 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
 
     # Build column list for query
     return_cols = ", ".join([f"return_at_{cp[0]}" for cp in checkpoints])
-    
+
     # Determine trade_type filter
     trade_type_map = {
         "0DTE": "0DTE",
@@ -349,10 +353,10 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
             iv_rank_at_entry, vix_at_entry,
             trend_regime_at_entry, vol_regime_at_entry,
             gex_at_entry, market_tide_30m,
-            
+
             -- Returns at bucket-specific checkpoints
             {return_cols},
-            
+
             -- Outcome
             max_return_pct, max_drawdown_pct
         FROM price_target_labels
@@ -362,6 +366,7 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
 
     async def run_query(session: Any) -> List[Any]:
         from sqlalchemy import text
+
         result = await session.execute(text(query))
         return result.mappings().all()
 
@@ -456,9 +461,7 @@ async def train_bucket_exit_classifier(bucket: str) -> Optional[Dict[str, Any]]:
         )
 
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
     # Train model
     model = LGBMClassifier(
@@ -515,7 +518,7 @@ async def train_all_exit_classifiers() -> Dict[str, Any]:
                 "auc": result.get("auc"),
                 "samples": result.get("sample_size"),
             }
-    
+
     logger.info(
         f"Exit classifier training complete: {len(results)}/{len(BUCKET_CHECKPOINTS)} models trained",
         extra={"event": "all_exit_training_complete", "results": results},

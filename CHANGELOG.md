@@ -46,8 +46,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Bucket-Specific Exit Classifiers**: ML-based exit timing for each trade bucket
   - 0DTE: Checkpoints at 5m, 10m, 15m, 30m, 1h, EOD (AUC=0.935)
   - SHORT_SWING: Checkpoints at 30m, 1h, 2h, 4h, 8h, EOD (AUC=0.896)
-  - SWING: Checkpoints at 1h, 4h, 8h, EOD, 1d, 2d (AUC=0.904)
-  - POSITION: Checkpoints at 1d, 2d, 3d, 1w (AUC=0.929)
+  - SWING: Checkpoints at 1h, 4h, 8h, EOD, 1d, 2d, 1w, 2w (AUC=0.904)
+  - POSITION: Checkpoints at 1d, 2d, 3d, 1w, 2w, 3w, 4w (AUC=0.955)
+  - DB columns added: price_at_2w/3w/4w, return_at_2w/3w/4w
   - Bucket-aware heuristic fallbacks with tuned take-profit/stop-loss thresholds
   - Training target: "Did exiting at checkpoint capture ≥80% of max return?"
 

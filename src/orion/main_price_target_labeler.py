@@ -1924,6 +1924,13 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             "return_at_3d",
             "price_at_1w",
             "return_at_1w",
+            # POSITION extended checkpoints
+            "price_at_2w",
+            "return_at_2w",
+            "price_at_3w",
+            "return_at_3w",
+            "price_at_4w",
+            "return_at_4w",
             "opposing_flow_count",
             "opposing_premium_total",
             "sentiment_shift_ts",
@@ -2151,6 +2158,15 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     return_3d = ((price_3d - entry_price) / entry_price * 100) if price_3d else None
     return_1w = ((price_1w - entry_price) / entry_price * 100) if price_1w else None
 
+    # POSITION extended checkpoints (2w, 3w, 4w) - for longer holding periods
+    price_2w = get_price_at_offset_days(prices, entry_ts, 14)
+    price_3w = get_price_at_offset_days(prices, entry_ts, 21)
+    price_4w = get_price_at_offset_days(prices, entry_ts, 28)
+
+    return_2w = ((price_2w - entry_price) / entry_price * 100) if price_2w else None
+    return_3w = ((price_3w - entry_price) / entry_price * 100) if price_3w else None
+    return_4w = ((price_4w - entry_price) / entry_price * 100) if price_4w else None
+
     # SWING EOD checkpoint - price at end of entry day (4pm ET = 20:00 UTC)
     eod_ts = entry_ts.replace(hour=20, minute=0, second=0, microsecond=0)
     price_eod = (
@@ -2223,6 +2239,13 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             "return_at_3d": return_3d,
             "price_at_1w": price_1w,
             "return_at_1w": return_1w,
+            # POSITION extended checkpoints (2w/3w/4w)
+            "price_at_2w": price_2w,
+            "return_at_2w": return_2w,
+            "price_at_3w": price_3w,
+            "return_at_3w": return_3w,
+            "price_at_4w": price_4w,
+            "return_at_4w": return_4w,
             # SWING EOD checkpoint
             "price_at_eod": price_eod,
             "return_at_eod": return_eod,
