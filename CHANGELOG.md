@@ -49,6 +49,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - SWING: Checkpoints at 1h, 4h, 8h, EOD, 1d, 2d, 1w, 2w (AUC=0.904)
   - POSITION: Checkpoints at 1d, 2d, 3d, 1w, 2w, 3w, 4w (AUC=0.955)
   - DB columns added: price_at_2w/3w/4w, return_at_2w/3w/4w
+  - **Greeks at all checkpoints**: delta, gamma, theta, vega, IV fetched from Alpaca
+  - **Time decay features**: DTE, theta_decay_pct, time_value_pct at each checkpoint
   - Bucket-aware heuristic fallbacks with tuned take-profit/stop-loss thresholds
   - Training target: "Did exiting at checkpoint capture ≥80% of max return?"
 

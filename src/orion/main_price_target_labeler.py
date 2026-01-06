@@ -1833,6 +1833,101 @@ def calculate_volatility(prices: List[float]) -> Optional[float]:
         return None
 
 
+# Checkpoint definitions for Greeks fetching
+# (suffix, minutes_offset, hours_offset, days_offset)
+CHECKPOINT_OFFSETS = {
+    "5m": timedelta(minutes=5),
+    "10m": timedelta(minutes=10),
+    "15m": timedelta(minutes=15),
+    "30m": timedelta(minutes=30),
+    "1h": timedelta(hours=1),
+    "2h": timedelta(hours=2),
+    "4h": timedelta(hours=4),
+    "8h": timedelta(hours=8),
+    "eod": timedelta(hours=6, minutes=30),  # ~6.5h trading day
+    "1d": timedelta(days=1),
+    "2d": timedelta(days=2),
+    "3d": timedelta(days=3),
+    "1w": timedelta(days=7),
+    "2w": timedelta(days=14),
+    "3w": timedelta(days=21),
+    "4w": timedelta(days=28),
+}
+
+
+async def get_checkpoint_greeks(
+    option_chain: str,
+    entry_ts: datetime,
+    entry_price: float,
+    expiry: Optional[datetime],
+    dte: Optional[int],
+) -> Dict[str, Dict[str, Optional[float]]]:
+    """Fetch Greeks at each checkpoint from Alpaca.
+
+    Since Alpaca only provides current Greeks, this only populates
+    for checkpoints that are near 'now' (within 5 minutes).
+    Historical checkpoints remain NULL and populate going forward.
+
+    Returns:
+        Dict mapping checkpoint suffix to Greeks + decay features
+    """
+    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+
+    now = datetime.now(timezone.utc)
+    results: Dict[str, Dict[str, Optional[float]]] = {}
+
+    for cp_suffix, offset in CHECKPOINT_OFFSETS.items():
+        checkpoint_ts = entry_ts + offset
+
+        # Initialize with NULLs
+        cp_data: Dict[str, Optional[float]] = {
+            "delta": None,
+            "gamma": None,
+            "theta": None,
+            "vega": None,
+            "iv": None,
+            "dte": None,
+            "theta_decay_pct": None,
+            "time_value_pct": None,
+        }
+
+        # Only fetch Greeks if checkpoint is within 5 minutes of now (real-time labeling)
+        time_to_checkpoint = abs((now - checkpoint_ts).total_seconds())
+        if time_to_checkpoint < 300:  # 5 minutes
+            try:
+                greeks = await get_option_greeks(option_chain)
+                cp_data["delta"] = greeks.get("delta")
+                cp_data["gamma"] = greeks.get("gamma")
+                cp_data["theta"] = greeks.get("theta")
+                cp_data["vega"] = greeks.get("vega")
+                cp_data["iv"] = greeks.get("implied_volatility")
+            except Exception as e:
+                logger.debug(f"Error fetching Greeks at {cp_suffix}: {e}")
+
+        # Calculate time decay features (can be calculated without API)
+        if expiry and dte is not None:
+            # DTE at checkpoint
+            cp_date = checkpoint_ts.date() if hasattr(checkpoint_ts, "date") else checkpoint_ts
+            if isinstance(expiry, datetime):
+                expiry_date = expiry.date()
+            else:
+                expiry_date = expiry
+            dte_at_cp = (expiry_date - cp_date).days if cp_date else None
+            cp_data["dte"] = dte_at_cp if dte_at_cp and dte_at_cp >= 0 else 0
+
+            # Theta decay percentage (rough estimate: theta * days / entry_price)
+            # Only calculate if we have entry theta
+            if cp_data.get("theta") and entry_price and entry_price > 0:
+                days_held = offset.total_seconds() / 86400  # Convert to days
+                # Theta is daily decay, so cumulative decay ≈ theta * days
+                theta_decay = abs(cp_data["theta"]) * days_held
+                cp_data["theta_decay_pct"] = (theta_decay / entry_price) * 100
+
+        results[cp_suffix] = cp_data
+
+    return results
+
+
 async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     """Label a single entry with comprehensive price target tracking."""
     option_chain = entry.option_chain
@@ -2429,6 +2524,29 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     # New ML features - Earnings (placeholder for now)
     earnings_info = await get_earnings_proximity(ticker, entry_ts)
     label.update(earnings_info)
+
+    # Checkpoint Greeks - fetch live Greeks from Alpaca at each checkpoint
+    # Only populates for checkpoints near "now" (within 5 minutes)
+    # Historical labels will have NULLs and populate going forward
+    try:
+        checkpoint_greeks = await get_checkpoint_greeks(
+            option_chain=option_chain,
+            entry_ts=entry_ts,
+            entry_price=entry_price,
+            expiry=expiry,
+            dte=dte,
+        )
+        for cp_suffix, cp_data in checkpoint_greeks.items():
+            label[f"delta_at_{cp_suffix}"] = cp_data.get("delta")
+            label[f"gamma_at_{cp_suffix}"] = cp_data.get("gamma")
+            label[f"theta_at_{cp_suffix}"] = cp_data.get("theta")
+            label[f"vega_at_{cp_suffix}"] = cp_data.get("vega")
+            label[f"iv_at_{cp_suffix}"] = cp_data.get("iv")
+            label[f"dte_at_{cp_suffix}"] = cp_data.get("dte")
+            label[f"theta_decay_pct_at_{cp_suffix}"] = cp_data.get("theta_decay_pct")
+            label[f"time_value_pct_at_{cp_suffix}"] = cp_data.get("time_value_pct")
+    except Exception as e:
+        logger.debug(f"Error fetching checkpoint Greeks: {e}")
 
     return label
 
