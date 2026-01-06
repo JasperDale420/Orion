@@ -62,8 +62,9 @@ CATEGORICAL_COLUMNS = [
     "market_tide_direction",
 ]
 
-# Target definitions
+# Target definitions - 4 targets for diverse signal dimensions
 TARGETS = {
+    # Original targets
     "hit_target_50": """
         CASE WHEN hit_50_pct_ts IS NOT NULL
              AND (hit_stop_20_pct_ts IS NULL OR hit_50_pct_ts < hit_stop_20_pct_ts)
@@ -71,6 +72,19 @@ TARGETS = {
     """,
     "avoid_stop": """
         CASE WHEN hit_stop_20_pct_ts IS NULL THEN 1 ELSE 0 END
+    """,
+    # New targets
+    "hit_target_100": """
+        CASE WHEN hit_100_pct_ts IS NOT NULL
+             AND (hit_stop_20_pct_ts IS NULL OR hit_100_pct_ts < hit_stop_20_pct_ts)
+        THEN 1 ELSE 0 END
+    """,
+    "quick_winner": """
+        CASE WHEN hit_50_pct_ts IS NOT NULL
+             AND time_to_50_pct_seconds IS NOT NULL
+             AND time_to_50_pct_seconds < 3600
+             AND (hit_stop_20_pct_ts IS NULL OR hit_50_pct_ts < hit_stop_20_pct_ts)
+        THEN 1 ELSE 0 END
     """,
 }
 

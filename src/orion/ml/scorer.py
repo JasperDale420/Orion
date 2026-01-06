@@ -33,6 +33,9 @@ TRADE_BUCKETS = {
 # Target for scoring (predict hitting 50% profit target)
 DEFAULT_TARGET = "hit_target_50"
 
+# All available targets (matches pattern_miner.py TARGETS)
+ALL_TARGETS = ["hit_target_50", "avoid_stop", "hit_target_100", "quick_winner"]
+
 
 def get_trade_bucket(dte: Optional[int]) -> str:
     """Classify a flow into trade bucket based on DTE."""
@@ -259,6 +262,96 @@ class MLScorer:
     def get_loaded_models(self) -> List[str]:
         """Return list of loaded model types."""
         return list(self.models.keys())
+
+
+class MultiTargetScorer:
+    """
+    Scores flow events across all available targets.
+    
+    Provides comprehensive scoring:
+    - hit_target_50: Probability of 50% profit before 20% stop
+    - avoid_stop: Probability of avoiding 20% stop entirely
+    - hit_target_100: Probability of 100% profit (high conviction runner)
+    - quick_winner: Probability of 50% profit within 1 hour (fast exit)
+    """
+
+    def __init__(self) -> None:
+        self.scorers: Dict[str, MLScorer] = {}
+        for target in ALL_TARGETS:
+            self.scorers[target] = MLScorer(target=target)
+        
+        logger.info(
+            f"MultiTargetScorer initialized with {len(self.scorers)} targets",
+            extra={"event": "multi_scorer_init", "targets": ALL_TARGETS},
+        )
+
+    def score_all(self, flow: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Score a flow event across all targets.
+        
+        Returns:
+            Dict mapping target name to probability [0, 1].
+            Example: {"hit_target_50": 0.72, "avoid_stop": 0.85, ...}
+        """
+        scores = {}
+        for target, scorer in self.scorers.items():
+            scores[target] = scorer.score(flow)
+        return scores
+
+    def get_composite_score(self, flow: Dict[str, Any], weights: Optional[Dict[str, float]] = None) -> float:
+        """
+        Calculate a weighted composite score across all targets.
+        
+        Default weights favor profit targets over risk avoidance.
+        """
+        default_weights = {
+            "hit_target_50": 0.35,
+            "avoid_stop": 0.25,
+            "hit_target_100": 0.25,
+            "quick_winner": 0.15,
+        }
+        w = weights or default_weights
+        
+        scores = self.score_all(flow)
+        composite = sum(scores.get(t, 0) * w.get(t, 0) for t in ALL_TARGETS)
+        return composite
+
+    def get_trade_signal(self, flow: Dict[str, Any], thresholds: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """
+        Generate a comprehensive trade signal with all target scores.
+        
+        Returns:
+            Dict with scores, composite score, and recommendation.
+        """
+        default_thresholds = {
+            "hit_target_50": 0.55,
+            "avoid_stop": 0.60,
+            "hit_target_100": 0.50,
+            "quick_winner": 0.45,
+        }
+        t = thresholds or default_thresholds
+        
+        scores = self.score_all(flow)
+        composite = self.get_composite_score(flow)
+        
+        # Determine recommendation
+        passing_targets = [target for target, score in scores.items() if score >= t.get(target, 0.5)]
+        
+        if len(passing_targets) >= 3:
+            recommendation = "STRONG_BUY"
+        elif len(passing_targets) >= 2:
+            recommendation = "BUY"
+        elif scores.get("avoid_stop", 0) < 0.4:
+            recommendation = "AVOID"  # High risk of stop-out
+        else:
+            recommendation = "NEUTRAL"
+        
+        return {
+            "scores": scores,
+            "composite_score": composite,
+            "passing_targets": passing_targets,
+            "recommendation": recommendation,
+        }
 
 
 # Singleton instance

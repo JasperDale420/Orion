@@ -30,12 +30,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - New `WeeklyDataAggregator` class aggregates EOD reports, trade data, and ML insights
   - `run_weekly_evolution()` method analyzes execution quality, ML drift, and generates mutations
   - Execution quality analysis: fill rate, rejection rate, health classification
-  - ML drift detection: tracks AUC trends, identifies degrading/improving model buckets
+  - ML drift detection: tracks AUC trends across model buckets
   - Automated solver mutation proposals based on top-performing features
   - New `main_meta_weekly.py` CLI with `--dry-run` and `--scheduled` modes
   - Scheduled Friday 5:30 PM EST via `meta-weekly` docker-compose service
 
-### Added
+- **Expanded ML Targets**: 4 targets for multi-dimensional trade scoring
+  - `hit_target_50`: 50% profit before 20% stop (original)
+  - `avoid_stop`: Avoid 20% stop entirely (original)
+  - `hit_target_100`: High conviction runner - 100% profit before stop
+  - `quick_winner`: Fast exit - 50% profit within 1 hour
+  - New `MultiTargetScorer` class with `score_all()`, `get_composite_score()`, and `get_trade_signal()`
+  - 4 buckets × 4 targets = 16 models (up from 8)
+
 - **ML Model Persistence Pipeline**: End-to-end wiring of ML models for live trading
   - `pattern_miner.py` now saves trained models to `/app/models/{bucket}_{target}.pkl`
   - Models saved with metadata (feature names, creation timestamp, model type)
