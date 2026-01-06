@@ -274,6 +274,8 @@ class PositionMonitor:
         Returns:
             List of execution results
         """
+        from orion.ml.performance_tracker import log_exit_prediction, log_outcome
+
         results = []
 
         for pos, prediction in exit_signals:
@@ -287,6 +289,18 @@ class PositionMonitor:
                 "order_id": None,
                 "error": None,
             }
+
+            # Log exit prediction for performance tracking
+            try:
+                await log_exit_prediction(
+                    symbol=pos.symbol,
+                    option_chain=pos.option_symbol or "",
+                    bucket=pos.bucket,
+                    prediction_score=prediction.confidence,
+                    position_id=pos.decision_id,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to log exit prediction: {e}")
 
             if dry_run:
                 logger.info(
@@ -312,6 +326,21 @@ class PositionMonitor:
                                 "order_id": str(order.id),
                             },
                         )
+
+                        # Log outcome for performance tracking
+                        # hit_target = True if we exited with profit
+                        hit_target = pos.unrealized_pnl_pct >= 50
+                        hit_stop = pos.unrealized_pnl_pct <= -20
+                        try:
+                            await log_outcome(
+                                position_id=pos.decision_id or pos.symbol,
+                                actual_return_pct=pos.unrealized_pnl_pct,
+                                hit_target=hit_target,
+                                hit_stop=hit_stop,
+                            )
+                        except Exception as e:
+                            logger.debug(f"Failed to log outcome: {e}")
+
                 except Exception as e:
                     logger.error(f"Exit execution failed for {pos.symbol}: {e}")
                     result["error"] = str(e)

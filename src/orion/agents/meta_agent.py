@@ -81,7 +81,30 @@ class MetaAgent(BaseAgent):
         """
         # 0. Fetch strategy research from TradingRAG
         rag_context = await self._fetch_strategy_research(base_config, performance_context)
-        augmented_context = f"{performance_context}\n\n{rag_context}" if rag_context else performance_context
+
+        # 0b. Fetch weekly ML performance metrics
+        ml_performance_context = ""
+        try:
+            from orion.ml.performance_tracker import get_weekly_performance
+
+            weekly_perf = await get_weekly_performance()
+            if weekly_perf:
+                ml_lines = ["--- ML Model Performance (Weekly) ---"]
+                for key, data in weekly_perf.items():
+                    acc = data.get("accuracy_pct", 0) or 0
+                    avg_ret = data.get("avg_return", 0) or 0
+                    ml_lines.append(f"{key}: accuracy={acc:.1f}%, avg_return={avg_ret:.2f}%")
+                    if acc < 55:
+                        ml_lines.append(f"  ⚠️ LOW ACCURACY - model may need retraining")
+                ml_performance_context = "\n".join(ml_lines)
+        except Exception as e:
+            logger.debug(f"Failed to fetch ML performance: {e}")
+
+        augmented_context = performance_context
+        if rag_context:
+            augmented_context += f"\n\n{rag_context}"
+        if ml_performance_context:
+            augmented_context += f"\n\n{ml_performance_context}"
 
         # 1. Initialize MCP Client & Fetch Tools
         from orion.connectors.mcp_client import MCPClient

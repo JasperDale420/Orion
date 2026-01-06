@@ -780,6 +780,28 @@ class EODReviewAgent(BaseAgent):
         except Exception as e:
             logger.warning(f"Failed to fetch ML insights: {e}")
 
+        # Add ML prediction accuracy metrics
+        try:
+            from orion.ml.performance_tracker import get_daily_accuracy
+
+            ml_accuracy = await get_daily_accuracy()
+            payload["ml_prediction_accuracy"] = {
+                "total_predictions": ml_accuracy.get("total", 0),
+                "correct": ml_accuracy.get("correct", 0),
+                "incorrect": ml_accuracy.get("incorrect", 0),
+                "accuracy_pct": ml_accuracy.get("accuracy_pct"),
+                "avg_return_high_score": ml_accuracy.get("avg_return_high_score"),
+                "avg_return_low_score": ml_accuracy.get("avg_return_low_score"),
+                "edge_bps": (
+                    (ml_accuracy.get("avg_return_high_score", 0) - ml_accuracy.get("avg_return_low_score", 0)) * 100
+                    if ml_accuracy.get("avg_return_high_score") is not None
+                    and ml_accuracy.get("avg_return_low_score") is not None
+                    else None
+                ),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to fetch ML accuracy: {e}")
+
         input_snapshot_path = os.path.join(reports_dir, f"eod_input_{date}_{run_id}.json")
         with open(input_snapshot_path, "w") as f:
             json.dump(payload, f, indent=2, sort_keys=True, default=str)
