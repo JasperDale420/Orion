@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Tuple
 
 from alpaca.trading.enums import OrderSide, TimeInForce
-from orion.config import system_settings
+from orion.config import system_settings, risk_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+from orion.connectors.alpaca_options_connector import AlpacaOptionsConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
 from orion.core.errors import ErrorCode
 from orion.shared.db_utils import db_query, db_write
@@ -39,9 +40,11 @@ class ExecutionEngine:
                 extra={"event_type": "EXECUTION_INIT_WARNING", "error_code": ErrorCode.PROVIDER_AUTH_FAILED.value},
             )
             self.connector = None
+            self.options_connector = None
             self.market_connector = None
         else:
             self.connector = AlpacaTradingConnector(settings=system_settings)
+            self.options_connector = AlpacaOptionsConnector(settings=system_settings)
             # Use same keys for market data
             self.market_connector = AlpacaMarketConnector(api_key=api_key, secret_key=secret_key)
 
@@ -114,6 +117,16 @@ class ExecutionEngine:
             logger.info(f"Decision for {candidate.ticker} was {action}")
             return
 
+        # Check if this is an options trade
+        is_options_trade = bool(candidate.option_symbol)
+        
+        if is_options_trade:
+            await self._execute_options_order(decision, candidate)
+        else:
+            await self._execute_equity_order(decision, candidate)
+
+    async def _execute_equity_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
+        """Execute a standard equity order."""
         # 1. Pre-Flight Checks (Health, Lag, Shorting)
         if not await self._pre_flight_checks(decision, candidate):
             return
@@ -145,6 +158,59 @@ class ExecutionEngine:
 
         # 6. Execution
         await self._submit_order(decision, candidate, side, qty, limit_price)
+
+    async def _execute_options_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
+        """Execute an options order."""
+        if not self.options_connector:
+            logger.warning("No options connector available. Skipping options execution.")
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Options Connector Missing"
+            return
+        
+        # 1. Pre-Flight Checks
+        if not await self._pre_flight_checks(decision, candidate):
+            return
+        
+        # 2. DTE Check
+        if candidate.expiration_date:
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            dte = (candidate.expiration_date - now).days
+            if dte < risk_settings.min_dte:
+                logger.warning(f"OPTIONS BLOCKED: DTE {dte} < min {risk_settings.min_dte}")
+                decision.executed_successfully = "FALSE"
+                decision.reason = f"DTE Too Low ({dte} days)"
+                return
+        
+        # 3. Get current option price
+        quote = await self.options_connector.get_option_quote(candidate.option_symbol)
+        option_price = quote.get("mid") or quote.get("ask") or candidate.premium
+        
+        if not option_price or option_price <= 0:
+            logger.error(f"Cannot get option price for {candidate.option_symbol}")
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Option Price Fetch Failed"
+            return
+        
+        # 4. Calculate contracts based on max premium
+        max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
+        num_contracts = self.options_connector.calculate_option_contracts(max_premium, option_price)
+        
+        if num_contracts <= 0:
+            logger.warning(f"OPTIONS: Calculated 0 contracts for {candidate.option_symbol}")
+            decision.executed_successfully = "SKIPPED"
+            decision.reason = "Size 0 Contracts"
+            return
+        
+        # 5. Circuit Breaker
+        if self._check_circuit_breaker():
+            decision.executed_successfully = "FALSE"
+            decision.reason = "High Error Rate"
+            return
+        
+        # 6. Submit options order
+        await self._submit_options_order(decision, candidate, num_contracts, option_price)
+
 
     async def _pre_flight_checks(self, decision: StrategyDecision, candidate: CandidateTrade) -> bool:
         """System Health, Data Lag, Shorting Checks"""
@@ -278,6 +344,69 @@ class ExecutionEngine:
             decision.executed_successfully = "FALSE"
             decision.reason = f"Broker Error: {e}"
             self._record_result(False)
+
+    async def _submit_options_order(
+        self, decision: Any, candidate: Any, num_contracts: int, option_price: float
+    ) -> None:
+        """Submit an options order."""
+        logger.info(
+            f"OPTIONS EXECUTION TRIGGERED: BUY {num_contracts} {candidate.option_symbol} @ {option_price}"
+        )
+
+        client_order_id = str(uuid.uuid4())
+        decision.execution_params = decision.execution_params or {}
+        decision.execution_params["client_order_id"] = client_order_id
+        decision.execution_params["order_type"] = "OPTIONS"
+        decision.execution_params["contracts"] = num_contracts
+
+        # Determine side from direction
+        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
+
+        try:
+            order = self.options_connector.submit_option_order(
+                option_symbol=candidate.option_symbol,
+                qty=num_contracts,
+                side=side,
+                order_type="limit",
+                limit_price=option_price,
+                client_order_id=client_order_id,
+            )
+            
+            await self._persist_order_record(
+                decision=decision,
+                candidate=candidate,
+                client_order_id=client_order_id,
+                side=str(side.value),
+                qty=num_contracts,
+                limit_price=option_price,
+                broker_order=order,
+                error_message=None,
+            )
+            
+            premium_paid = num_contracts * option_price * 100
+            logger.info(
+                f"OPTIONS Execution Successful {client_order_id} | "
+                f"Premium: ${premium_paid:.2f}"
+            )
+            decision.executed_successfully = "TRUE"
+            self._record_result(True)
+            
+        except Exception as e:
+            await self._persist_order_record(
+                decision=decision,
+                candidate=candidate,
+                client_order_id=client_order_id,
+                side=str(side.value),
+                qty=num_contracts,
+                limit_price=option_price,
+                broker_order=None,
+                error_message=str(e),
+            )
+            logger.error(f"OPTIONS Execution Failed: {e}")
+            decision.executed_successfully = "FALSE"
+            decision.reason = f"Options Broker Error: {e}"
+            self._record_result(False)
+
 
     async def close_position(
         self,

@@ -21,7 +21,13 @@ class RiskSettings(BaseSettings):
 
     max_system_bps: int = 500
 
+    # Options-specific settings
+    max_option_premium_pct: float = 0.02  # Max 2% of equity per option trade
+    min_dte: int = 3  # Minimum days to expiration
+    max_option_positions: int = 3  # Max simultaneous option positions
+
     model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
+
 
 
 class SystemSettings(BaseSettings):

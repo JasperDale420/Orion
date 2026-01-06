@@ -18,6 +18,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Disabled rollup requirement for testing via `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false`
 
 ### Added
+- **Options Trading Pipeline**: Trade options contracts instead of equities based on UW flow signals
+  - New `CandidateTrade` fields: `option_symbol`, `strike_price`, `expiration_date`, `option_type`, `underlying_price`, `premium`
+  - New `AlpacaOptionsConnector` with `submit_option_order()`, `get_option_quote()`, OCC symbol generation
+  - `ExecutionEngine` routes to options path when `candidate.option_symbol` is present
+  - Premium-based sizing: max 2% of equity per options trade (`max_option_premium_pct`)
+  - DTE minimum check (3 days by default) prevents trading very short-dated options
+  - New risk settings: `max_option_premium_pct`, `min_dte`, `max_option_positions`
+
+### Added
 - **ML Model Persistence Pipeline**: End-to-end wiring of ML models for live trading
   - `pattern_miner.py` now saves trained models to `/app/models/{bucket}_{target}.pkl`
   - Models saved with metadata (feature names, creation timestamp, model type)
