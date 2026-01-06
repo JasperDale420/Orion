@@ -46,7 +46,7 @@ class SystemSettings(BaseSettings):
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
     ingestion_heartbeat_max_age: int = 70
-    max_data_lag_seconds: int = 60
+    max_data_lag_seconds: int = 90  # Alpaca 1m bars are naturally 60-80s behind
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
     static_watchlist: List[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL", "VIXY"]
