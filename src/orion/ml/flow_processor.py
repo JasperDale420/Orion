@@ -78,7 +78,7 @@ class MLFlowProcessor:
         return candidates
 
     def _flow_to_candidate(self, flow: Dict[str, Any], score: float) -> Optional[CandidateTrade]:
-        """Convert a high-scoring flow to a CandidateTrade."""
+        """Convert a high-scoring flow to a CandidateTrade with options contract details."""
         ticker = flow.get("ticker")
         if not ticker:
             return None
@@ -109,6 +109,29 @@ class MLFlowProcessor:
 
         candidate_id = f"ml_{uuid.uuid4().hex[:12]}"
 
+        # Extract options contract details
+        strike_price = float(flow.get("strike") or 0) if flow.get("strike") else None
+        option_price = float(flow.get("option_price") or 0) if flow.get("option_price") else None
+        underlying_price = float(flow.get("underlying_price") or 0) if flow.get("underlying_price") else None
+        premium_usd = float(flow.get("premium_usd") or 0) if flow.get("premium_usd") else None
+        
+        # Parse expiration date
+        expiration_date = None
+        expiry_str = flow.get("expiry")
+        if expiry_str:
+            try:
+                expiration_date = datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                logger.warning(f"Failed to parse expiry date: {expiry_str}")
+        
+        # Option type: CALL or PUT
+        option_type = "CALL" if put_call == "C" else "PUT"
+        
+        # Get OCC symbol - use option_chain if available, otherwise generate
+        option_symbol = flow.get("option_chain")
+        if not option_symbol and strike_price and expiration_date:
+            option_symbol = self._generate_occ_symbol(ticker, expiration_date, option_type, strike_price)
+
         return CandidateTrade(
             candidate_id=candidate_id,
             ticker=ticker,
@@ -116,19 +139,44 @@ class MLFlowProcessor:
             direction=direction.value,  # Store as string
             rule_id="ml_score",  # ML-based, not rule-based
             confidence=score,
-            source="ML_SCORER",
+            source="UW",  # Changed from ML_SCORER to UW for SolverRouter
+            # Options contract details
+            option_symbol=option_symbol,
+            strike_price=strike_price,
+            expiration_date=expiration_date,
+            option_type=option_type,
+            underlying_price=underlying_price,
+            premium=option_price,  # Per-contract premium
             evidence={
                 "ml_score": score,
-                "premium_usd": float(flow.get("premium_usd") or 0),
+                "premium_usd": premium_usd or 0,
                 "is_sweep": str(flow.get("is_sweep", "")).lower() == "true",
                 "aggressor": aggressor,
                 "put_call": put_call,
                 "dte": int(flow.get("dte") or 0) if flow.get("dte") else None,
                 "matched_rules": matched_rules,
-                "underlying_price": float(flow.get("underlying_price") or 0),
-                "option_price": float(flow.get("option_price") or 0),
+                "underlying_price": underlying_price or 0,
+                "option_price": option_price or 0,
+                "strike": strike_price,
+                "expiry": expiry_str,
             },
         )
+
+    def _generate_occ_symbol(
+        self, ticker: str, expiration_date: datetime, option_type: str, strike_price: float
+    ) -> str:
+        """
+        Generate OCC-format option symbol.
+        
+        Format: SYMBOL + YYMMDD + C/P + STRIKE*1000 (8 digits, zero-padded)
+        Example: AAPL240419C00190000 = AAPL April 19, 2024 $190 Call
+        """
+        date_str = expiration_date.strftime("%y%m%d")
+        opt_type = "C" if option_type.upper() == "CALL" else "P"
+        strike_int = int(strike_price * 1000)
+        strike_str = f"{strike_int:08d}"
+        return f"{ticker.upper()}{date_str}{opt_type}{strike_str}"
+
 
     def _get_rule_tags(self, flow: Dict[str, Any], score: float) -> List[str]:
         """
