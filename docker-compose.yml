@@ -154,6 +154,8 @@ services:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_RUN_ID=docker_persistent_eod
       - ORION_REASONING_LEVEL=extra_high
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-reasoner}
     command: [ "python", "-m", "orion.main_eod" ]
 
   meta-search:
