@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, List
 
@@ -9,6 +10,8 @@ from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverAlpacaBar, SilverDarkPool, SilverOptionFlow, SilverSignal, SilverUWAlert
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 
 async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]) -> None:
@@ -76,26 +79,64 @@ def _safe_int(val: Any) -> int | None:
 
 def _infer_aggressor(payload: dict) -> str | None:
     """Infer aggressor from UW API total_bid_side_prem vs total_ask_side_prem.
-    
+
     - ASK: More premium on ask side (buyer aggressor, bullish)
     - BID: More premium on bid side (seller aggressor, bearish)
     - MID: Equal or no data
     """
     ask_prem = _safe_float(payload.get("total_ask_side_prem"))
     bid_prem = _safe_float(payload.get("total_bid_side_prem"))
-    
+
     if ask_prem is None and bid_prem is None:
         return payload.get("aggressor")  # Fallback to explicit field if present
-    
+
     ask_prem = ask_prem or 0.0
     bid_prem = bid_prem or 0.0
-    
+
     if ask_prem > bid_prem:
         return "ASK"
     elif bid_prem > ask_prem:
         return "BID"
     else:
         return "MID"
+
+
+async def _enrich_flows_with_greeks(flow_rows: List[dict]) -> None:
+    """Enrich flow records with Alpaca Greeks.
+
+    Fetches Greeks in batch for efficiency and updates flow_rows in place.
+    """
+    if not flow_rows:
+        return
+
+    try:
+        from orion.connectors.alpaca_option_greeks_connector import get_connector
+
+        connector = get_connector()
+
+        # Collect option symbols for batch fetch
+        symbols = [r.get("option_chain") for r in flow_rows if r.get("option_chain")]
+        if not symbols:
+            return
+
+        # Batch fetch Greeks (max 100 per request)
+        greeks_map = await connector.get_greeks_batch(symbols[:100])
+
+        # Enrich flow rows with Greeks
+        for row in flow_rows:
+            option_chain = row.get("option_chain")
+            if option_chain and option_chain in greeks_map:
+                greeks = greeks_map[option_chain]
+                row["delta_alpaca"] = greeks.get("delta")
+                row["gamma_alpaca"] = greeks.get("gamma")
+                row["theta_alpaca"] = greeks.get("theta")
+                row["vega_alpaca"] = greeks.get("vega")
+                row["rho_alpaca"] = greeks.get("rho")
+                row["iv_alpaca"] = greeks.get("implied_volatility")
+
+        logger.debug(f"Enriched {len(greeks_map)} flows with Alpaca Greeks")
+    except Exception as e:
+        logger.warning(f"Failed to enrich flows with Greeks: {e}")
 
 
 async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeEvent]) -> None:
@@ -215,6 +256,8 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
     BATCH_SIZE = 1000
 
     if flow_rows:
+        # Enrich flow records with Alpaca Greeks before persisting
+        await _enrich_flows_with_greeks(flow_rows)
         for i in range(0, len(flow_rows), BATCH_SIZE):
             batch = flow_rows[i : i + BATCH_SIZE]
             stmt = insert(SilverOptionFlow).values(batch)

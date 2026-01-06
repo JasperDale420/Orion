@@ -93,6 +93,14 @@ class SilverOptionFlow(Base):
     alert_name = Column(String, nullable=True)  # Alert classification (e.g., "High Conviction Puts 1-14d")
     noti_type = Column(String, nullable=True)  # Notification type (flow_alerts, etc.)
 
+    # Alpaca Greeks (captured at ingestion for point-in-time fidelity)
+    delta_alpaca = Column(Float, nullable=True)
+    gamma_alpaca = Column(Float, nullable=True)
+    theta_alpaca = Column(Float, nullable=True)
+    vega_alpaca = Column(Float, nullable=True)
+    rho_alpaca = Column(Float, nullable=True)
+    iv_alpaca = Column(Float, nullable=True)
+
     ingest = Column(JSON, nullable=False, default=dict)
 
     created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

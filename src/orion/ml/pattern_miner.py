@@ -6,8 +6,11 @@ human-readable rules for the EOD agent.
 """
 
 import hashlib
+import os
+import pickle
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -23,6 +26,10 @@ from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.pattern_miner")
+
+# Model output directory - models are saved here for MLScorer to load
+MODEL_DIR = Path(os.getenv("ORION_MODEL_DIR", "/app/models"))
+
 
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
 # These features are known at trade entry and don't reveal the outcome
@@ -230,6 +237,43 @@ def train_model(
     )
 
     return model, train_auc, holdout_auc
+
+
+def save_model(model: Any, model_type: str, feature_names: List[str]) -> Optional[Path]:
+    """
+    Save trained model to disk for MLScorer to load.
+
+    Args:
+        model: Trained LightGBM model
+        model_type: Model identifier (e.g., "SWING_hit_target_50")
+        feature_names: List of feature names used for training
+
+    Returns:
+        Path to saved model, or None if save failed
+    """
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    model_path = MODEL_DIR / f"{model_type}.pkl"
+
+    try:
+        # Save model with metadata
+        model_data = {
+            "model": model,
+            "feature_names": feature_names,
+            "model_type": model_type,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(model_path, "wb") as f:
+            pickle.dump(model_data, f)
+
+        logger.info(
+            f"Saved model to {model_path}",
+            extra={"event": "model_saved", "model_type": model_type, "path": str(model_path)},
+        )
+        return model_path
+    except Exception as e:
+        logger.error(f"Failed to save model {model_type}: {e}")
+        return None
 
 
 def extract_feature_importance(
@@ -448,7 +492,16 @@ async def run_pattern_mining(
         logger.error(f"Model training failed for {model_type}: {e}")
         return None
 
-    # 4. Extract patterns
+    # 4. Save model to disk for MLScorer (only save if AUC is acceptable)
+    if holdout_auc >= 0.55:
+        save_model(model, model_type, feature_names)
+    else:
+        logger.warning(
+            f"Skipping model save for {model_type}: AUC {holdout_auc:.3f} below threshold",
+            extra={"event": "model_save_skipped", "model_type": model_type, "auc": holdout_auc},
+        )
+
+    # 5. Extract patterns
     top_features = extract_feature_importance(model, feature_names, top_k=10)
     top_rules = extract_tree_rules(model, feature_names, X, y, top_k=5)
 

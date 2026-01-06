@@ -53,6 +53,14 @@ class UWIVRankConnector:
             if not iv_data:
                 continue
 
+            # Handle both list and dict responses from UW API
+            if isinstance(iv_data, list):
+                iv_data = iv_data[0] if iv_data else {}
+
+            if not isinstance(iv_data, dict):
+                logger.warning(f"Unexpected iv_data type for {ticker}: {type(iv_data)}")
+                continue
+
             record = {
                 "ticker": ticker,
                 "ts_utc": now,

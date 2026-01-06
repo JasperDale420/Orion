@@ -17,11 +17,13 @@ load_dotenv()
 
 from sqlalchemy import text
 
+from orion.analysis.regime import MultiAxisRegimeDetector
 from orion.connectors.uw_greek_exposure_connector import UWGreekExposureConnector
 from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
 from orion.connectors.uw_max_pain_connector import UWMaxPainConnector
-from orion.shared.db_utils import db_query
+from orion.connectors.vix_proxy_connector import VIXProxyConnector
+from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -32,6 +34,8 @@ MARKET_TIDE_INTERVAL = 60  # Every minute
 GREEK_EXPOSURE_INTERVAL = 300  # Every 5 minutes
 MAX_PAIN_INTERVAL = 3600  # Every hour
 IV_RANK_INTERVAL = 900  # Every 15 minutes
+REGIME_SNAPSHOT_INTERVAL = 300  # Every 5 minutes
+VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
 
 
 async def get_active_tickers(limit: int = 20) -> List[str]:
@@ -59,6 +63,126 @@ async def get_active_tickers(limit: int = 20) -> List[str]:
         return ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
 
 
+async def get_latest_vix_data() -> dict:
+    """Get latest VIX data from silver_vix_data."""
+
+    async def query(session: Any) -> dict:
+        stmt = text(
+            """
+            SELECT vix, vvix, vix_1d_change, vix_regime
+            FROM silver_vix_data
+            ORDER BY ts_utc DESC
+            LIMIT 1
+        """
+        )
+        result = await session.execute(stmt)
+        row = result.fetchone()
+        if row:
+            return {
+                "vix": row[0],
+                "vvix": row[1],
+                "vix_1d_change": row[2],
+                "vix_regime": row[3],
+            }
+        return {}
+
+    try:
+        return await db_query(query)
+    except Exception:
+        return {}
+
+
+async def get_latest_market_tide() -> float | None:
+    """Get latest market tide net premium (calls - puts)."""
+
+    async def query(session: Any) -> float | None:
+        stmt = text(
+            """
+            SELECT net_call_premium - net_put_premium as net_premium
+            FROM silver_market_tide
+            ORDER BY ts_utc DESC
+            LIMIT 1
+        """
+        )
+        result = await session.execute(stmt)
+        row = result.fetchone()
+        return row[0] if row else None
+
+    try:
+        return await db_query(query)
+    except Exception:
+        return None
+
+
+async def get_spy_cumulative_return() -> float:
+    """Get SPY cumulative return over past 20 bars (approximate trend)."""
+
+    async def query(session: Any) -> float:
+        stmt = text(
+            """
+            SELECT
+                (LAST_VALUE(close) OVER (ORDER BY bar_start_ts_utc) -
+                 FIRST_VALUE(close) OVER (ORDER BY bar_start_ts_utc)) /
+                NULLIF(FIRST_VALUE(close) OVER (ORDER BY bar_start_ts_utc), 0) as cum_return
+            FROM silver_alpaca_bars
+            WHERE ticker = 'SPY'
+            ORDER BY bar_start_ts_utc DESC
+            LIMIT 20
+        """
+        )
+        result = await session.execute(stmt)
+        row = result.fetchone()
+        return float(row[0]) if row and row[0] else 0.0
+
+    try:
+        return await db_query(query)
+    except Exception:
+        return 0.0
+
+
+async def persist_regime_snapshot(
+    ts: datetime,
+    snapshot: Any,
+    ticker: str = "SPY",
+) -> None:
+    """Persist regime snapshot to silver_regime_history."""
+    import json
+
+    async def write(session: Any) -> None:
+        stmt = text(
+            """
+            INSERT INTO silver_regime_history (
+                ts_utc, ticker, trend_regime, vol_regime, risk_regime,
+                session_regime, vix_regime, vix_level, realized_vol,
+                trend_strength, risk_score, confidence_json
+            ) VALUES (
+                :ts_utc, :ticker, :trend_regime, :vol_regime, :risk_regime,
+                :session_regime, :vix_regime, :vix_level, :realized_vol,
+                :trend_strength, :risk_score, :confidence_json
+            )
+        """
+        )
+        await session.execute(
+            stmt,
+            {
+                "ts_utc": ts,
+                "ticker": ticker,
+                "trend_regime": snapshot.trend.value if snapshot.trend else None,
+                "vol_regime": snapshot.vol.value if snapshot.vol else None,
+                "risk_regime": snapshot.risk.value if snapshot.risk else None,
+                "session_regime": snapshot.session.value if snapshot.session else None,
+                "vix_regime": snapshot.vix_regime.value if snapshot.vix_regime else None,
+                "vix_level": snapshot.vix_level,
+                "realized_vol": snapshot.realized_vol,
+                "trend_strength": snapshot.trend_strength,
+                "risk_score": snapshot.risk_score,
+                "confidence_json": json.dumps(snapshot.confidence) if snapshot.confidence else None,
+            },
+        )
+
+    await db_write(write)
+
+
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
     await init_db()
@@ -73,11 +197,15 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     tide_connector = UWMarketTideConnector(api_key)
     max_pain_connector = UWMaxPainConnector(api_key)
     iv_connector = UWIVRankConnector(api_key)
+    regime_detector = MultiAxisRegimeDetector()
+    vix_connector = VIXProxyConnector()  # Uses VIXY bars from silver_alpaca_bars
 
     last_tide = datetime.min.replace(tzinfo=timezone.utc)
     last_greek = datetime.min.replace(tzinfo=timezone.utc)
     last_max_pain = datetime.min.replace(tzinfo=timezone.utc)
     last_iv = datetime.min.replace(tzinfo=timezone.utc)
+    last_regime = datetime.min.replace(tzinfo=timezone.utc)
+    last_vix = datetime.min.replace(tzinfo=timezone.utc)
 
     logger.info("Feature Enrichment Service started")
 
@@ -109,6 +237,41 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 count = await iv_connector.fetch_and_store(tickers)
                 logger.info(f"IV Rank: stored {count} records")
                 last_iv = now
+
+            # VIX Data - every hour
+            if (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
+                try:
+                    count = await vix_connector.fetch_and_store()
+                    logger.info(f"VIX Proxy: stored {count} records")
+                    last_vix = now
+                except Exception as e:
+                    logger.error(f"VIX proxy fetch error: {e}", exc_info=True)
+
+            # Regime Snapshot - every 5 minutes
+            if (now - last_regime).total_seconds() >= REGIME_SNAPSHOT_INTERVAL:
+                try:
+                    vix_data = await get_latest_vix_data()
+                    market_tide_net = await get_latest_market_tide()
+                    cum_ret = await get_spy_cumulative_return()
+
+                    snapshot = regime_detector.detect(
+                        ts=now,
+                        cum_ret=cum_ret,
+                        realized_vol=0.015,  # Default; could compute from bars
+                        vix=vix_data.get("vix"),
+                        vix_1d_change=vix_data.get("vix_1d_change"),
+                        market_tide_net=market_tide_net,
+                    )
+
+                    await persist_regime_snapshot(now, snapshot)
+                    logger.info(
+                        f"Regime Snapshot: trend={snapshot.trend.value}, "
+                        f"vol={snapshot.vol.value}, risk={snapshot.risk.value}, "
+                        f"session={snapshot.session.value}, vix={snapshot.vix_regime.value}"
+                    )
+                    last_regime = now
+                except Exception as e:
+                    logger.error(f"Regime snapshot error: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Feature enrichment error: {e}", exc_info=True)

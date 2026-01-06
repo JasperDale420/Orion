@@ -682,24 +682,41 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
 
 
 async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
-    """Get volume, OI, IV from flow data and calculate delta/gamma via Black-Scholes.
+    """Get Greeks from stored values or Alpaca API, with Black-Scholes fallback.
 
-    Fetches underlying price, strike, IV, expiry, and put/call from flow data,
-    then calculates proper delta/gamma using Black-Scholes model.
+    Priority:
+    1. Stored Greeks from silver_uw_flow (captured at ingestion time)
+    2. Alpaca API (for flows ingested before Greeks enrichment)
+    3. Black-Scholes fallback (if Alpaca unavailable)
     """
+    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+
+    result = {
+        "delta": None,
+        "gamma": None,
+        "theta": None,
+        "vega": None,
+        "rho": None,
+        "volume": None,
+        "open_interest": None,
+        "iv": None,
+        "iv_alpaca": None,
+    }
 
     async def query(session: Any) -> Dict[str, Any]:
         stmt = text(
             """
             SELECT
                 f.volume_contract, f.open_interest, f.iv, f.underlying_price,
-                f.strike, f.put_call, f.expiry, f.flow_ts_utc
+                f.strike, f.put_call, f.expiry, f.flow_ts_utc, f.option_chain,
+                f.delta_alpaca, f.gamma_alpaca, f.theta_alpaca, f.vega_alpaca,
+                f.rho_alpaca, f.iv_alpaca
             FROM silver_uw_flow f
             WHERE f.event_id = :event_id
         """
         )
-        result = await session.execute(stmt, {"event_id": event_id})
-        row = result.fetchone()
+        res = await session.execute(stmt, {"event_id": event_id})
+        row = res.fetchone()
         if row:
             return {
                 "volume": row[0],
@@ -710,15 +727,50 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
                 "put_call": row[5],
                 "expiry": row[6],
                 "flow_ts": row[7],
+                "option_chain": row[8],
+                "delta_stored": row[9],
+                "gamma_stored": row[10],
+                "theta_stored": row[11],
+                "vega_stored": row[12],
+                "rho_stored": row[13],
+                "iv_alpaca_stored": row[14],
             }
         return {}
 
     flow_data = await db_query(query)
 
     if not flow_data:
-        return {"delta": None, "gamma": None, "volume": None, "open_interest": None, "iv": None}
+        return result
 
-    # Extract values for Black-Scholes calculation
+    result["volume"] = flow_data.get("volume")
+    result["open_interest"] = flow_data.get("open_interest")
+    result["iv"] = flow_data.get("iv")
+
+    option_chain = flow_data.get("option_chain")
+
+    # Priority 1: Use stored Greeks from silver_uw_flow (captured at ingestion)
+    if flow_data.get("delta_stored") is not None:
+        result["delta"] = flow_data.get("delta_stored")
+        result["gamma"] = flow_data.get("gamma_stored")
+        result["theta"] = flow_data.get("theta_stored")
+        result["vega"] = flow_data.get("vega_stored")
+        result["rho"] = flow_data.get("rho_stored")
+        result["iv_alpaca"] = flow_data.get("iv_alpaca_stored")
+        return result
+
+    # Priority 2: Try Alpaca API (for flows ingested before Greeks enrichment)
+    if option_chain:
+        alpaca_greeks = await get_option_greeks(option_chain)
+        if alpaca_greeks.get("delta") is not None:
+            result["delta"] = alpaca_greeks.get("delta")
+            result["gamma"] = alpaca_greeks.get("gamma")
+            result["theta"] = alpaca_greeks.get("theta")
+            result["vega"] = alpaca_greeks.get("vega")
+            result["rho"] = alpaca_greeks.get("rho")
+            result["iv_alpaca"] = alpaca_greeks.get("implied_volatility")
+            return result
+
+    # Fallback to Black-Scholes if Alpaca unavailable
     S = float(flow_data.get("underlying_price") or 0)
     K = float(flow_data.get("strike") or 0)
     iv = flow_data.get("iv")
@@ -730,7 +782,6 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     # Calculate time to expiry in years
     T = 0.0
     if expiry and flow_ts:
-        # Handle both string and datetime expiry
         if isinstance(expiry, str):
             try:
                 expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
@@ -748,22 +799,14 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
             else:
                 flow_date = flow_ts
             days_to_expiry = (expiry_date - flow_date).days
-            T = max(days_to_expiry / 365.0, 1 / 365.0)  # At least 1 day
+            T = max(days_to_expiry / 365.0, 1 / 365.0)
 
     # Calculate delta and gamma using Black-Scholes
-    delta = None
-    gamma = None
     if S > 0 and K > 0 and sigma > 0 and T > 0:
-        delta = calculate_black_scholes_delta(S, K, T, RISK_FREE_RATE, sigma, put_call)
-        gamma = calculate_black_scholes_gamma(S, K, T, RISK_FREE_RATE, sigma)
+        result["delta"] = calculate_black_scholes_delta(S, K, T, RISK_FREE_RATE, sigma, put_call)
+        result["gamma"] = calculate_black_scholes_gamma(S, K, T, RISK_FREE_RATE, sigma)
 
-    return {
-        "delta": delta,
-        "gamma": gamma,
-        "volume": flow_data.get("volume"),
-        "open_interest": flow_data.get("open_interest"),
-        "iv": flow_data.get("iv"),
-    }
+    return result
 
 
 async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> Optional[float]:
@@ -1010,8 +1053,8 @@ async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Opti
             """
             SELECT
                 COUNT(*) as total_trades,
-                SUM(CASE WHEN aggressor = 'ask' THEN 1 ELSE 0 END) as ask_trades,
-                SUM(CASE WHEN is_sweep = 'true' THEN 1 ELSE 0 END) as sweep_trades,
+                SUM(CASE WHEN UPPER(aggressor) = 'ASK' THEN 1 ELSE 0 END) as ask_trades,
+                SUM(CASE WHEN LOWER(is_sweep) IN ('true', '1', 'yes') THEN 1 ELSE 0 END) as sweep_trades,
                 SUM(premium_usd) as total_premium
             FROM silver_uw_flow
             WHERE ticker = :ticker
@@ -1210,18 +1253,18 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         current_row = current_result.fetchone()
         current_oi = current_row[0] if current_row else None
 
-        # Get prior day OI
+        # Get prior OI (nearest flow before entry_ts for same option_chain)
         prior_oi_stmt = text(
             """
             SELECT open_interest
             FROM silver_uw_flow
             WHERE option_chain = :option_chain
-            AND DATE(flow_ts_utc) = :prior_date
+            AND flow_ts_utc < :entry_ts
             ORDER BY flow_ts_utc DESC
             LIMIT 1
         """
         )
-        prior_result = await session.execute(prior_oi_stmt, {"option_chain": option_chain, "prior_date": prior_date})
+        prior_result = await session.execute(prior_oi_stmt, {"option_chain": option_chain, "entry_ts": entry_ts})
         prior_row = prior_result.fetchone()
         prior_oi = prior_row[0] if prior_row else None
 
@@ -1258,14 +1301,32 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
                 hv = statistics.stdev(returns) * (252**0.5) * 100 if len(returns) > 1 else None
                 result["hv_30d"] = hv  # Store for reference
 
+        # Fetch IV from the flow data for this option_chain
+        iv_stmt = text(
+            """
+            SELECT iv
+            FROM silver_uw_flow
+            WHERE option_chain = :option_chain
+            AND DATE(flow_ts_utc) = :entry_date
+            ORDER BY flow_ts_utc DESC
+            LIMIT 1
+        """
+        )
+        iv_result = await session.execute(iv_stmt, {"option_chain": option_chain, "entry_date": entry_date})
+        iv_row = iv_result.fetchone()
+        iv_value = iv_row[0] if iv_row and iv_row[0] else None
+
+        # Calculate IV vs HV ratio
+        if iv_value and result.get("hv_30d") and result["hv_30d"] > 0:
+            # IV is typically in decimal (0.25 = 25%) or percentage form
+            # Normalize IV to percentage if it's in decimal form
+            iv_pct = iv_value * 100 if iv_value < 2 else iv_value
+            result["iv_vs_hv_ratio"] = iv_pct / result["hv_30d"]
+
         return result
 
     db_result = await db_query(query)
     result.update(db_result)
-
-    # Get IV from the entry (we already have iv_at_entry elsewhere)
-    # For IV vs HV ratio, we need to calculate it in the label function
-    # where iv_at_entry is available
 
     return result
 
@@ -1632,6 +1693,7 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
 
 async def _get_sector_from_db(ticker: str) -> Optional[str]:
     """Check silver_ticker_info for cached sector."""
+
     async def query(session: Any) -> Optional[str]:
         stmt = text("SELECT sector FROM silver_ticker_info WHERE ticker = :ticker")
         result = await session.execute(stmt, {"ticker": ticker})
@@ -1643,14 +1705,17 @@ async def _get_sector_from_db(ticker: str) -> Optional[str]:
 
 async def _persist_ticker_info(ticker: str, sector: str) -> None:
     """Persist ticker sector to silver_ticker_info."""
+
     async def write(session: Any) -> None:
-        stmt = text("""
+        stmt = text(
+            """
             INSERT INTO silver_ticker_info (ticker, sector, last_updated)
             VALUES (:ticker, :sector, NOW())
             ON CONFLICT (ticker) DO UPDATE SET
                 sector = EXCLUDED.sector,
                 last_updated = NOW()
-        """)
+        """
+        )
         await session.execute(stmt, {"ticker": ticker, "sector": sector})
 
     await db_write(write)
@@ -1932,6 +1997,10 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
         label["underlying_change_1h_pct"] = None
         label["delta_at_entry"] = None
         label["gamma_at_entry"] = None
+        label["theta_at_entry"] = None
+        label["vega_at_entry"] = None
+        label["rho_at_entry"] = None
+        label["iv_at_entry_alpaca"] = None
         label["volume_at_entry"] = None
         label["open_interest_at_entry"] = None
         time_features = get_entry_time_features(entry_ts)
@@ -2289,12 +2358,16 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     time_features = get_entry_time_features(entry_ts)
     label.update(time_features)
 
-    # New ML features - Greeks and volume from flow
+    # New ML features - Greeks and volume from flow (Alpaca API with Black-Scholes fallback)
     greeks_data = await get_flow_greeks(entry.event_id)
     label.update(
         {
             "delta_at_entry": greeks_data.get("delta"),
             "gamma_at_entry": greeks_data.get("gamma"),
+            "theta_at_entry": greeks_data.get("theta"),
+            "vega_at_entry": greeks_data.get("vega"),
+            "rho_at_entry": greeks_data.get("rho"),
+            "iv_at_entry_alpaca": greeks_data.get("iv_alpaca"),
             "volume_at_entry": greeks_data.get("volume"),
             "open_interest_at_entry": greeks_data.get("open_interest"),
         }
@@ -2376,7 +2449,8 @@ async def persist_labels(labels: List[Dict[str, Any]]) -> int:
                 session_regime_at_entry, vix_at_entry, vix_regime_at_entry,
                 iv_at_entry, iv_at_1h, iv_change_1h_pct,
                 underlying_at_entry, underlying_at_1h, underlying_change_1h_pct,
-                delta_at_entry, gamma_at_entry, volume_at_entry, open_interest_at_entry,
+                delta_at_entry, gamma_at_entry, theta_at_entry, vega_at_entry, rho_at_entry,
+                iv_at_entry_alpaca, volume_at_entry, open_interest_at_entry,
                 entry_hour, entry_session, entry_day_of_week,
                 days_to_earnings, is_post_earnings, sector, industry,
                 rvol_1h, rvol_daily, rvol_weekly, rvol_30m, rvol_3d, rvol_monthly,
@@ -2418,7 +2492,8 @@ async def persist_labels(labels: List[Dict[str, Any]]) -> int:
                 :session_regime_at_entry, :vix_at_entry, :vix_regime_at_entry,
                 :iv_at_entry, :iv_at_1h, :iv_change_1h_pct,
                 :underlying_at_entry, :underlying_at_1h, :underlying_change_1h_pct,
-                :delta_at_entry, :gamma_at_entry, :volume_at_entry, :open_interest_at_entry,
+                :delta_at_entry, :gamma_at_entry, :theta_at_entry, :vega_at_entry, :rho_at_entry,
+                :iv_at_entry_alpaca, :volume_at_entry, :open_interest_at_entry,
                 :entry_hour, :entry_session, :entry_day_of_week,
                 :days_to_earnings, :is_post_earnings, :sector, :industry,
                 :rvol_1h, :rvol_daily, :rvol_weekly, :rvol_30m, :rvol_3d, :rvol_monthly,

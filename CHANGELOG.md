@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **ML Model Persistence Pipeline**: End-to-end wiring of ML models for live trading
+  - `pattern_miner.py` now saves trained models to `/app/models/{bucket}_{target}.pkl`
+  - Models saved with metadata (feature names, creation timestamp, model type)
+  - Conditional save: only persists models with holdout AUC >= 0.55
+  - `scorer.py` rewritten to load bucket-specific models (0DTE, SHORT_SWING, SWING, POSITION)
+  - Automatic bucket classification based on DTE for flow scoring
+  - Graceful fallback to heuristic scorer when no model available
 - **EOD Agent Service**: New `eod-agent` docker service that runs daily after market close
   - `main_eod.py` entry point with `MarketSchedule` integration (waits for 16:30 ET)
   - Mounts `~/.codex` for credentials passthrough
