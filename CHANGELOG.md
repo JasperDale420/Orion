@@ -26,6 +26,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - DTE minimum check (3 days by default) prevents trading very short-dated options
   - New risk settings: `max_option_premium_pct`, `min_dte`, `max_option_positions`
 
+- **Weekly Meta Agent Evolution**: Friday EOD comprehensive analysis and solver evolution
+  - New `WeeklyDataAggregator` class aggregates EOD reports, trade data, and ML insights
+  - `run_weekly_evolution()` method analyzes execution quality, ML drift, and generates mutations
+  - Execution quality analysis: fill rate, rejection rate, health classification
+  - ML drift detection: tracks AUC trends, identifies degrading/improving model buckets
+  - Automated solver mutation proposals based on top-performing features
+  - New `main_meta_weekly.py` CLI with `--dry-run` and `--scheduled` modes
+  - Scheduled Friday 5:30 PM EST via `meta-weekly` docker-compose service
+
 ### Added
 - **ML Model Persistence Pipeline**: End-to-end wiring of ML models for live trading
   - `pattern_miner.py` now saves trained models to `/app/models/{bucket}_{target}.pkl`

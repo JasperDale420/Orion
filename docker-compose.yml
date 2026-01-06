@@ -173,6 +173,24 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     command: [ "python", "-m", "orion.main_meta", "--base-solver", "v1_legacy" ]
 
+  meta-weekly:
+    build: .
+    container_name: orion_meta_weekly
+    profiles: [ "scheduled" ]
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      eod-agent:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    command: [ "python", "-m", "orion.main_meta_weekly", "--scheduled" ]
+
   pattern-miner:
     build: .
     container_name: orion_pattern_miner
