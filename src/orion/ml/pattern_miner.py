@@ -567,12 +567,12 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
     """
     Run pattern mining for all bucket x target combinations.
 
-    Produces 4 buckets x 2 targets = 8 separate models.
+    Produces 4 buckets x 4 targets = 16 entry models + 4 exit models.
     """
     insights: Dict[str, PatternInsight] = {}
     alerts: List[str] = []
 
-    # Iterate over each bucket
+    # Train entry models: Iterate over each bucket x target
     for bucket_name, bucket_config in TRADE_BUCKET_CONFIGS.items():
         for target_name in TARGETS.keys():
             try:
@@ -597,6 +597,24 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
                 logger.error(f"Pattern mining failed for {model_type}: {e}", exc_info=True)
                 alerts.append(f"{model_type}: Mining failed - {str(e)[:50]}")
 
+    # Train exit models: Retrain exit classifiers for each bucket
+    try:
+        from orion.ml.exit_classifier import train_all_exit_classifiers
+
+        logger.info("Training exit classifiers for all buckets")
+        exit_results = await train_all_exit_classifiers()
+
+        for bucket, data in exit_results.items():
+            if data.get("auc", 0) < 0.55:
+                alerts.append(f"{bucket}_exit: Exit AUC low ({data.get('auc', 0):.2f})")
+            logger.info(
+                f"Exit classifier trained for {bucket}: AUC={data.get('auc', 0):.3f}",
+                extra={"bucket": bucket, "auc": data.get("auc")},
+            )
+    except Exception as e:
+        logger.error(f"Exit classifier training failed: {e}", exc_info=True)
+        alerts.append(f"exit_classifiers: Training failed - {str(e)[:50]}")
+
     summary = MLInsightsSummary(
         generated_at_utc=datetime.now(timezone.utc),
         insights=insights,
@@ -604,8 +622,9 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
     )
 
     logger.info(
-        f"All pattern mining complete: {len(insights)} models trained",
+        f"All pattern mining complete: {len(insights)} entry models + 4 exit models trained",
         extra={"models_count": len(insights), "alerts_count": len(alerts)},
     )
 
     return summary
+
