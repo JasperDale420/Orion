@@ -1857,19 +1857,20 @@ CHECKPOINT_OFFSETS = {
 
 async def get_checkpoint_greeks(
     option_chain: str,
+    ticker: str,
     entry_ts: datetime,
     entry_price: float,
     expiry: Optional[datetime],
     dte: Optional[int],
 ) -> Dict[str, Dict[str, Optional[float]]]:
-    """Fetch Greeks at each checkpoint from Alpaca.
+    """Fetch Greeks and underlying price at each checkpoint from Alpaca.
 
-    Since Alpaca only provides current Greeks, this only populates
+    Since Alpaca only provides current data, this only populates
     for checkpoints that are near 'now' (within 5 minutes).
     Historical checkpoints remain NULL and populate going forward.
 
     Returns:
-        Dict mapping checkpoint suffix to Greeks + decay features
+        Dict mapping checkpoint suffix to Greeks + decay features + underlying
     """
     from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
 
@@ -1889,9 +1890,10 @@ async def get_checkpoint_greeks(
             "dte": None,
             "theta_decay_pct": None,
             "time_value_pct": None,
+            "underlying": None,
         }
 
-        # Only fetch Greeks if checkpoint is within 5 minutes of now (real-time labeling)
+        # Only fetch live data if checkpoint is within 5 minutes of now (real-time labeling)
         time_to_checkpoint = abs((now - checkpoint_ts).total_seconds())
         if time_to_checkpoint < 300:  # 5 minutes
             try:
@@ -1901,8 +1903,12 @@ async def get_checkpoint_greeks(
                 cp_data["theta"] = greeks.get("theta")
                 cp_data["vega"] = greeks.get("vega")
                 cp_data["iv"] = greeks.get("implied_volatility")
+
+                # Fetch underlying price at checkpoint
+                underlying = await get_underlying_price_at_entry(ticker, checkpoint_ts)
+                cp_data["underlying"] = underlying
             except Exception as e:
-                logger.debug(f"Error fetching Greeks at {cp_suffix}: {e}")
+                logger.debug(f"Error fetching data at {cp_suffix}: {e}")
 
         # Calculate time decay features (can be calculated without API)
         if expiry and dte is not None:
@@ -2531,6 +2537,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     try:
         checkpoint_greeks = await get_checkpoint_greeks(
             option_chain=option_chain,
+            ticker=ticker,
             entry_ts=entry_ts,
             entry_price=entry_price,
             expiry=expiry,
@@ -2545,6 +2552,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             label[f"dte_at_{cp_suffix}"] = cp_data.get("dte")
             label[f"theta_decay_pct_at_{cp_suffix}"] = cp_data.get("theta_decay_pct")
             label[f"time_value_pct_at_{cp_suffix}"] = cp_data.get("time_value_pct")
+            label[f"underlying_at_{cp_suffix}"] = cp_data.get("underlying")
     except Exception as e:
         logger.debug(f"Error fetching checkpoint Greeks: {e}")
 
