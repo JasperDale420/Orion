@@ -123,3 +123,86 @@ class AlpacaTradingConnector:
         except Exception as e:
             logger.error(f"Failed to fetch recent fills: {e}")
             raise
+
+    @network_retry
+    def get_all_positions(self) -> List[Any]:
+        """
+        Get all open positions from Alpaca.
+        
+        Returns list of Position objects with:
+        - symbol, qty, market_value, unrealized_pl, unrealized_plpc
+        - avg_entry_price, current_price, side
+        """
+        try:
+            positions = self.client.get_all_positions()
+            logger.info(f"Fetched {len(positions)} open positions")
+            return positions
+        except Exception as e:
+            logger.error(f"Failed to fetch positions: {e}")
+            raise
+
+    @network_retry
+    def get_position(self, symbol: str) -> Optional[Any]:
+        """
+        Get position for a specific symbol.
+        
+        Returns None if no position exists.
+        """
+        try:
+            position = self.client.get_open_position(symbol)
+            return position
+        except Exception as e:
+            # 404 means no position - that's not an error
+            if "404" in str(e) or "not found" in str(e).lower():
+                return None
+            logger.error(f"Failed to fetch position for {symbol}: {e}")
+            raise
+
+    @network_retry
+    def close_position(self, symbol: str, qty: Optional[float] = None) -> Any:
+        """
+        Close a position (fully or partially).
+        
+        Args:
+            symbol: Ticker symbol to close
+            qty: Optional quantity to close. If None, closes entire position.
+            
+        Returns:
+            Order object for the closing order
+        """
+        try:
+            if qty is not None:
+                # Partial close - submit a sell order
+                position = self.get_position(symbol)
+                if not position:
+                    logger.warning(f"No position found for {symbol}")
+                    return None
+                    
+                side = OrderSide.SELL if float(position.qty) > 0 else OrderSide.BUY
+                order = self.submit_market_order(symbol, qty, side)
+                logger.info(f"Partial close: {side} {qty} {symbol}")
+                return order
+            else:
+                # Full close via Alpaca's close_position API
+                order = self.client.close_position(symbol)
+                logger.info(f"Position closed: {symbol} | Order ID: {order.id}")
+                return order
+        except Exception as e:
+            logger.error(f"Failed to close position for {symbol}: {e}")
+            raise
+
+    @network_retry
+    def close_all_positions(self) -> List[Any]:
+        """
+        Close all open positions.
+        
+        Returns list of closing orders.
+        """
+        try:
+            orders = self.client.close_all_positions()
+            logger.info(f"Closed all positions: {len(orders)} orders submitted")
+            return orders
+        except Exception as e:
+            logger.error(f"Failed to close all positions: {e}")
+            raise
+

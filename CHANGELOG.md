@@ -51,6 +51,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Bucket-aware heuristic fallbacks with tuned take-profit/stop-loss thresholds
   - Training target: "Did exiting at checkpoint capture ≥80% of max return?"
 
+- **Position Monitor & Exit Execution**: Automated position management
+  - `PositionMonitor` class syncs with Alpaca broker positions
+  - Tracks max return, max drawdown for trailing stop logic
+  - Evaluates ML exit classifier for each position
+  - `AlpacaTradingConnector` extended with `get_all_positions()`, `close_position()`
+  - `main_position_monitor.py` CLI with `--interval`, `--dry-run`, `--once` modes
+  - `position-monitor` docker-compose service (60s check interval)
+
 - **ML Model Persistence Pipeline**: End-to-end wiring of ML models for live trading
   - `pattern_miner.py` now saves trained models to `/app/models/{bucket}_{target}.pkl`
   - Models saved with metadata (feature names, creation timestamp, model type)

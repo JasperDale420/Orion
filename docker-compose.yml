@@ -139,6 +139,26 @@ services:
       - ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false
     command: [ "python", "-m", "orion.main_execution" ]
 
+  position-monitor:
+    build: .
+    container_name: orion_position_monitor
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      execution:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_PAPER=${ALPACA_PAPER}
+      - ORION_RUN_ID=docker_position_monitor
+      - ORION_MODEL_DIR=/app/models
+    command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
+
   eod-agent:
     build: .
     container_name: orion_eod_agent
