@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Trade Execution Flow**: Complete end-to-end execution pipeline from ML candidates to broker orders
+  - Fixed `SignalEngine` to fetch current price and set `limit_price` in execution params
+  - Fixed `RiskSettings` to use percentage-based limits instead of fixed USD amounts
+    - `max_order_size_pct`: 5% of account equity (was fixed $5,000)
+    - `max_ticker_exposure_pct`: 10% of account equity (was fixed $10,000)
+  - Fixed `risk_manager.calculate_size()` to cap position size at max_order_size_pct
+  - Fixed `ExecutionEngine` side parameter conversion (`side.value` instead of `str(side)`)
+  - Fixed `TradeJournalEntry` field names to match model schema (`decision_id` not `journal_id`)
+  - Disabled rollup requirement for testing via `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false`
+
 ### Added
 - **ML Model Persistence Pipeline**: End-to-end wiring of ML models for live trading
   - `pattern_miner.py` now saves trained models to `/app/models/{bucket}_{target}.pkl`

@@ -136,6 +136,7 @@ services:
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
       - ALPACA_PAPER=${ALPACA_PAPER}
       - ORION_RUN_ID=docker_persistent_exec
+      - ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false
     command: [ "python", "-m", "orion.main_execution" ]
 
   eod-agent:

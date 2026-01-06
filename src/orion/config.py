@@ -11,9 +11,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class RiskSettings(BaseSettings):
     max_daily_loss: float = 1000.0
     max_drawdown_pct: float = 0.05
-    max_order_size_usd: float = 5000.0
+    max_order_size_pct: float = 0.05  # 5% of account equity
     max_positions: int = 5
-    max_ticker_exposure_usd: float = 10000.0
+    max_ticker_exposure_pct: float = 0.10  # 10% of account equity
     risk_per_trade_pct: float = 0.01
     enable_shorting: bool = False
     default_stop_loss_pct: float = 0.02

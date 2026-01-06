@@ -82,9 +82,12 @@ class RiskManager:
         if not self._check_loss_limits(cfg):
             return False
 
-        # 2. Max Order Size
-        if estimated_cost > cfg.max_order_size_usd:
-            logger.warning(f"RISK REJECT: Order Size {estimated_cost} > Limit {cfg.max_order_size_usd}")
+        # 2. Max Order Size (percentage of equity)
+        max_order_size = self.current_equity * cfg.max_order_size_pct
+        if estimated_cost > max_order_size:
+            logger.warning(
+                f"RISK REJECT: Order Size ${estimated_cost:.2f} > Limit ${max_order_size:.2f} ({cfg.max_order_size_pct:.0%} of equity)"
+            )
             return False
 
         # Calculate projected signed exposure
@@ -215,14 +218,14 @@ class RiskManager:
     ) -> bool:
         abs_proj = abs(projected_signed)
         abs_curr = abs(effective_signed)
-        limit = cfg.max_ticker_exposure_usd
+        limit = self.current_equity * cfg.max_ticker_exposure_pct
 
         if abs_proj > limit:
             if abs_proj < abs_curr:
                 return True  # Allowing Risk Reduction
             else:
                 logger.warning(
-                    f"RISK REJECT: Max Ticker Exposure {limit} Exceeded for {ticker} (Projected: {abs_proj})"
+                    f"RISK REJECT: Max Ticker Exposure ${limit:.2f} ({cfg.max_ticker_exposure_pct:.0%} of equity) Exceeded for {ticker} (Projected: ${abs_proj:.2f})"
                 )
                 return False
         return True
@@ -232,6 +235,7 @@ class RiskManager:
     ) -> float:
         """
         Calculates position size based on risk per trade.
+        Caps at max_order_size_pct of account equity.
         """
         if entry_price <= 0:
             return 0.0
@@ -247,8 +251,14 @@ class RiskManager:
 
         qty = math.floor(risk_amt / stop_distance)
 
-        # Cap by Max Ticker Exposure
-        exposure_cap_qty = math.floor(self.config.max_ticker_exposure_usd / entry_price)
+        # Cap by Max Order Size (% of equity)
+        max_order_value = equity * self.config.max_order_size_pct
+        max_order_qty = math.floor(max_order_value / entry_price)
+        qty = min(qty, max_order_qty)
+
+        # Cap by Max Ticker Exposure (% of equity)
+        max_exposure = equity * self.config.max_ticker_exposure_pct
+        exposure_cap_qty = math.floor(max_exposure / entry_price)
         qty = min(qty, exposure_cap_qty)
 
         return float(qty)

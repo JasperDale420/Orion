@@ -33,6 +33,8 @@ class SignalEngine:
         self.feature_engine = FeatureEngine()
         # Track previous regime per ticker for cache invalidation
         self._previous_regime: dict[str, str] = {}
+        # Market connector for price discovery
+        self._market_connector = None
 
     async def initialize(self) -> None:
         """
@@ -40,6 +42,20 @@ class SignalEngine:
         """
         logger.info("Initializing SignalEngine...")
         await self.feature_engine.hydrate_history()
+
+        # Initialize market connector for price discovery
+        try:
+            from orion.config import system_settings
+            from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+
+            if system_settings.alpaca_api_key and system_settings.alpaca_secret_key:
+                self._market_connector = AlpacaMarketConnector(
+                    api_key=system_settings.alpaca_api_key,
+                    secret_key=system_settings.alpaca_secret_key,
+                )
+                logger.info("SignalEngine market connector initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize market connector: {e}")
 
     async def decide(self, candidate: CandidateTrade) -> StrategyDecision:
         """
@@ -223,10 +239,26 @@ class SignalEngine:
                     else 0.0
                 )
 
+                # Fetch current price for limit_price
+                limit_price = None
+                if candidate.execution_params:
+                    limit_price = candidate.execution_params.get("limit_price")
+
+                if limit_price is None and self._market_connector:
+                    try:
+                        current_price = self._market_connector.get_latest_price(candidate.ticker)
+                        if current_price and current_price > 0:
+                            # Add small buffer for limit order
+                            buffer_bps = 10
+                            if candidate.direction == "LONG":
+                                limit_price = round(current_price * (1 + buffer_bps / 10000.0), 2)
+                            else:
+                                limit_price = round(current_price * (1 - buffer_bps / 10000.0), 2)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch price for {candidate.ticker}: {e}")
+
                 decision_record.execution_params = {
-                    "limit_price": (
-                        candidate.execution_params.get("limit_price") if candidate.execution_params else None
-                    ),
+                    "limit_price": limit_price,
                     "stop_loss_pct": sl_pct,
                     "take_profit_pct": tp_pct,
                     "order_type": "LIMIT",

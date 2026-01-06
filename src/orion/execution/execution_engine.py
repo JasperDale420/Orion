@@ -131,7 +131,7 @@ class ExecutionEngine:
             return  # Decision updated in helper
 
         # 4. Check Risk Manager
-        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, str(side)):
+        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side.value):
             logger.error(f"Execution BLOCKED by RiskManager for {candidate.ticker}")
             decision.executed_successfully = "FALSE"
             decision.reason = "Risk Rejection"
