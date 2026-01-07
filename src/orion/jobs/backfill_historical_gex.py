@@ -28,7 +28,7 @@ BASE_URL = "https://api.unusualwhales.com"
 
 async def get_dates_needing_gex() -> List[date]:
     """Find trading dates where we have labels but no GEX data."""
-    
+
     async def query(session: Any) -> List[Any]:
         stmt = text("""
             SELECT DISTINCT DATE(entry_ts) as trading_date
@@ -38,9 +38,9 @@ async def get_dates_needing_gex() -> List[date]:
         """)
         result = await session.execute(stmt)
         return result.fetchall()
-    
+
     label_dates = await db_query(query)
-    
+
     async def query_gex_dates(session: Any) -> List[Any]:
         stmt = text("""
             SELECT DISTINCT DATE(ts_utc) as trading_date
@@ -48,25 +48,25 @@ async def get_dates_needing_gex() -> List[date]:
         """)
         result = await session.execute(stmt)
         return result.fetchall()
-    
+
     gex_dates = await db_query(query_gex_dates)
     gex_date_set = {row[0] for row in gex_dates}
-    
+
     missing_dates = []
     for row in label_dates:
         if row[0] not in gex_date_set:
             missing_dates.append(row[0])
-    
+
     return missing_dates
 
 
 async def get_tickers_for_date(trading_date: date) -> Set[str]:
     """Get unique underlying tickers from labels for a specific date."""
-    
+
     async def query(session: Any) -> List[Any]:
         start_ts = datetime.combine(trading_date, datetime.min.time()).replace(tzinfo=timezone.utc)
         end_ts = start_ts + timedelta(days=1)
-        
+
         stmt = text("""
             SELECT DISTINCT ticker
             FROM price_target_labels
@@ -76,9 +76,9 @@ async def get_tickers_for_date(trading_date: date) -> Set[str]:
         """)
         result = await session.execute(stmt, {"start_ts": start_ts, "end_ts": end_ts})
         return result.fetchall()
-    
+
     rows = await db_query(query)
-    
+
     # Extract underlying ticker from option symbol (e.g., "AAPL250117C00150000" -> "AAPL")
     tickers = set()
     for row in rows:
@@ -91,7 +91,7 @@ async def get_tickers_for_date(trading_date: date) -> Set[str]:
                 break
         if underlying:
             tickers.add(underlying)
-    
+
     return tickers
 
 
@@ -102,7 +102,7 @@ def fetch_gex_for_date(ticker: str, trading_date: date, api_key: str) -> Optiona
     url = f"{BASE_URL}/api/stock/{ticker}/greek-exposure"
     headers = {"Authorization": f"Bearer {api_key}"}
     params = {"date": date_str}
-    
+
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=30)
         resp.raise_for_status()
@@ -114,11 +114,11 @@ def fetch_gex_for_date(ticker: str, trading_date: date, api_key: str) -> Optiona
 
 async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) -> bool:
     """Store GEX data in silver_greek_exposure table."""
-    
+
     exposure_data = data.get("data")
     if not exposure_data:
         return False
-    
+
     # Handle list response (multiple dates) or single dict
     # API returns: call_gamma, put_gamma, call_vanna, put_vanna, call_charm, put_charm
     # GEX = call_gamma + put_gamma (net gamma exposure)
@@ -156,10 +156,10 @@ async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) 
         call_delta = float(exposure_data.get("call_delta") or 0)
         put_delta = float(exposure_data.get("put_delta") or 0)
         spot = 0
-    
+
     # Use midday timestamp for the historical record
     ts_utc = datetime.combine(trading_date, datetime.min.time()).replace(hour=12, tzinfo=timezone.utc)
-    
+
     async def write(session: Any) -> None:
         stmt = text("""
             INSERT INTO silver_greek_exposure (
@@ -188,7 +188,7 @@ async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) 
             "put_delta": put_delta,
             "spot_price": spot,
         })
-    
+
     await db_write(write)
     logger.info(f"Stored GEX for {ticker} on {trading_date}: gex_oi={total_gex_oi:.2f}")
     return True
@@ -196,52 +196,52 @@ async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) 
 
 async def run_backfill() -> Dict[str, Any]:
     """Run the historical GEX backfill."""
-    
+
     await init_db()
-    
+
     # Get API key from environment
     api_key = os.getenv("UW_API_KEY")
     if not api_key:
         logger.error("UW_API_KEY not set")
         return {"error": "UW_API_KEY not set", "dates_processed": 0}
-    
+
     # Get dates needing backfill
     missing_dates = await get_dates_needing_gex()
-    
+
     if not missing_dates:
         logger.info("No dates need GEX backfill")
         return {"dates_processed": 0, "tickers_fetched": 0, "success_count": 0}
-    
+
     logger.info(f"Found {len(missing_dates)} dates needing GEX backfill: {missing_dates}")
-    
+
     total_fetched = 0
     total_success = 0
-    
+
     for trading_date in missing_dates:
         tickers = await get_tickers_for_date(trading_date)
         logger.info(f"Processing {trading_date} with {len(tickers)} tickers")
-        
+
         for ticker in tickers:
             # Fetch from API (runs in thread pool)
             data = await asyncio.to_thread(fetch_gex_for_date, ticker, trading_date, api_key)
             total_fetched += 1
-            
+
             if data:
                 success = await store_gex_data(ticker, trading_date, data)
                 if success:
                     total_success += 1
-            
+
             # Rate limiting
             await asyncio.sleep(0.5)
-        
+
         logger.info(f"Completed {trading_date}: {total_success}/{total_fetched} successful")
-    
+
     summary = {
         "dates_processed": len(missing_dates),
         "tickers_fetched": total_fetched,
         "success_count": total_success,
     }
-    
+
     logger.info(f"Backfill complete: {summary}")
     return summary
 

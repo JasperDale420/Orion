@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+from pydantic import ValidationError
+from sqlalchemy import select
+
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
@@ -20,8 +23,6 @@ from orion.storage.models_solvers import (
     SolverMetrics,
     SolverRun,
 )
-from pydantic import ValidationError
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -983,9 +984,10 @@ class MetaSearchAgent:
         return solver_run, metrics
 
     async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
+        from sqlalchemy import and_, select
+
         from orion.storage.models import BronzeEvent
         from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
-        from sqlalchemy import and_, select
 
         alpaca_events = []
         flow_events = []
@@ -1438,7 +1440,7 @@ class MetaSearchAgent:
         if top_features:
             # Fetch active solvers to propose edits for
             async with async_session_factory() as session:
-                stmt = select(Solver).where((Solver.status == "active") | (Solver.is_active == True)).limit(5)
+                stmt = select(Solver).where((Solver.status == "active") | (Solver.is_active.is_(True))).limit(5)
                 result = await session.execute(stmt)
                 active_solvers = result.scalars().all()
 

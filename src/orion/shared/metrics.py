@@ -1,8 +1,9 @@
 import logging
 import os
 
-from orion.shared.patterns import AsyncSingleton
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
+
+from orion.shared.patterns import AsyncSingleton
 
 logger = logging.getLogger(__name__)
 

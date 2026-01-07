@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable, List
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from orion.processing.deduper import DeduplicationEngine
 from orion.processing.normalizer import NormalizationEngine
 from orion.storage.models import BronzeEvent
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def ingest_bronze_events(

@@ -6,10 +6,10 @@ import os
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from sqlalchemy import select
-from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -812,8 +812,9 @@ class EODReviewAgent(BaseAgent):
     async def _fetch_ml_insights(self) -> Optional[Dict[str, Any]]:
         """Fetch latest ML pattern insights for LLM context."""
         try:
-            from orion.shared.db_utils import db_query
             from sqlalchemy import text
+
+            from orion.shared.db_utils import db_query
 
             async def query(session: Any) -> List[Any]:
                 # Get most recent insight per model type

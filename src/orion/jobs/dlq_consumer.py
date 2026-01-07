@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, List
 
+from sqlalchemy import select
+
 from orion.processing.feature_engine import FeatureEngine
 from orion.processing.ingest_pipeline import ingest_bronze_events
 from orion.processing.persistence import (
@@ -17,7 +19,6 @@ from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 

@@ -272,8 +272,9 @@ class RiskManager:
         async def save_position(session: Any) -> None:
             from datetime import datetime, timezone
 
-            from orion.storage.models_execution import Position as PositionModel
             from sqlalchemy import select
+
+            from orion.storage.models_execution import Position as PositionModel
 
             stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
             result = await session.execute(stmt)
@@ -300,9 +301,10 @@ class RiskManager:
         Loads risk state from DB (if exists) to survive restarts.
         """
         try:
+            from sqlalchemy import select
+
             from orion.storage.db import async_session_factory
             from orion.storage.models_risk import RiskState
-            from sqlalchemy import select
 
             async with async_session_factory() as session:
                 stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
@@ -340,8 +342,9 @@ class RiskManager:
         """
 
         async def save_risk_state(session: Any) -> None:
-            from orion.storage.models_risk import RiskState
             from sqlalchemy import select
+
+            from orion.storage.models_risk import RiskState
 
             stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
             result = await session.execute(stmt)

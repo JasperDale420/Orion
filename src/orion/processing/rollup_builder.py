@@ -2,10 +2,11 @@ import logging
 from datetime import datetime, timezone
 
 import pandas as pd
-from orion.storage.models_gold import GoldTickerRollup
-from orion.storage.models_silver import SignalType, SilverSignal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
+from orion.storage.models_gold import GoldTickerRollup
+from orion.storage.models_silver import SignalType, SilverSignal
 
 logger = logging.getLogger(__name__)
 

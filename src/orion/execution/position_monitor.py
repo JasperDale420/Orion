@@ -6,7 +6,6 @@ and rule-based exit signals.
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -57,7 +56,7 @@ class TrackedPosition:
 class PositionMonitor:
     """
     Monitors open positions and evaluates exit signals.
-    
+
     Uses:
     - ML exit classifier (bucket-specific)
     - Heuristic fallbacks
@@ -72,7 +71,7 @@ class PositionMonitor:
     async def sync_positions(self, connector: Any) -> List[TrackedPosition]:
         """
         Sync tracked positions with broker positions.
-        
+
         Fetches current positions from Alpaca and updates tracking state.
         """
         try:
@@ -154,13 +153,13 @@ class PositionMonitor:
         Fetch entry context from recent strategy decisions.
         """
         query = """
-            SELECT 
+            SELECT
                 sd.decision_id,
                 ct.option_symbol,
                 ct.premium,
                 ct.option_type,
-                CASE 
-                    WHEN ct.expiration_date IS NOT NULL THEN 
+                CASE
+                    WHEN ct.expiration_date IS NOT NULL THEN
                         EXTRACT(DAY FROM ct.expiration_date - NOW())::int
                     ELSE NULL
                 END as dte
@@ -212,7 +211,7 @@ class PositionMonitor:
     def evaluate_exits(self) -> List[tuple[TrackedPosition, ExitPrediction]]:
         """
         Evaluate exit signals for all tracked positions.
-        
+
         Returns list of (position, prediction) tuples for positions
         that should be exited.
         """
@@ -258,19 +257,19 @@ class PositionMonitor:
         return exit_signals
 
     async def execute_exits(
-        self, 
-        connector: Any, 
+        self,
+        connector: Any,
         exit_signals: List[tuple[TrackedPosition, ExitPrediction]],
         dry_run: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Execute exit orders for positions with exit signals.
-        
+
         Args:
             connector: AlpacaTradingConnector
             exit_signals: List of (position, prediction) tuples
             dry_run: If True, log but don't execute
-            
+
         Returns:
             List of execution results
         """
@@ -350,17 +349,17 @@ class PositionMonitor:
         return results
 
     async def run_check(
-        self, 
-        connector: Any, 
+        self,
+        connector: Any,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
         """
         Run a full position check cycle.
-        
+
         1. Sync positions with broker
         2. Evaluate exit signals
         3. Execute exits
-        
+
         Returns summary of the check.
         """
         self._last_check_time = datetime.now(timezone.utc)
@@ -408,7 +407,7 @@ async def run_position_monitor_loop(
 ) -> None:
     """
     Run continuous position monitoring loop.
-    
+
     Args:
         check_interval_seconds: Seconds between position checks
         dry_run: If True, log but don't execute exits

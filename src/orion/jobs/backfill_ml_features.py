@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from sqlalchemy import text
+
 from orion.main_price_target_labeler import (
     get_gex_at_entry,
     get_max_pain_distance,
@@ -33,7 +35,6 @@ from orion.storage.db import init_db
 from orion.unusualwhales.api.stock import get_info
 from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
-from sqlalchemy import text
 
 logger = setup_struct_logger("orion.backfill.ml_features")
 

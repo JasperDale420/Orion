@@ -12,9 +12,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import select
+
 from orion.shared.db_utils import db_query
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 

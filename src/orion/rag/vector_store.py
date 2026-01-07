@@ -3,11 +3,12 @@ import math
 from datetime import datetime
 from typing import Any, Iterable, List
 
+from sqlalchemy import Float, cast, select
+
 from orion.rag.embeddings import EmbeddingClient
 from orion.shared.utils import parse_timestamptz
 from orion.storage.db import async_session_factory
 from orion.storage.models_rag import RagDocument
-from sqlalchemy import Float, cast, select
 
 logger = logging.getLogger(__name__)
 

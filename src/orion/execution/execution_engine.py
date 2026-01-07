@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Tuple
 
 from alpaca.trading.enums import OrderSide, TimeInForce
-from orion.config import system_settings, risk_settings
+from sqlalchemy import select
+
+from orion.config import risk_settings, system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_options_connector import AlpacaOptionsConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
@@ -14,7 +16,6 @@ from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
 from orion.shared.utils import ensure_utc
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ class ExecutionEngine:
 
         # Check if this is an options trade
         is_options_trade = bool(candidate.option_symbol)
-        
+
         if is_options_trade:
             await self._execute_options_order(decision, candidate)
         else:
@@ -166,11 +167,11 @@ class ExecutionEngine:
             decision.executed_successfully = "FALSE"
             decision.reason = "Options Connector Missing"
             return
-        
+
         # 1. Pre-Flight Checks
         if not await self._pre_flight_checks(decision, candidate):
             return
-        
+
         # 2. DTE Check
         if candidate.expiration_date:
             from datetime import timezone
@@ -181,33 +182,33 @@ class ExecutionEngine:
                 decision.executed_successfully = "FALSE"
                 decision.reason = f"DTE Too Low ({dte} days)"
                 return
-        
+
         # 3. Get current option price
         quote = await self.options_connector.get_option_quote(candidate.option_symbol)
         option_price = quote.get("mid") or quote.get("ask") or candidate.premium
-        
+
         if not option_price or option_price <= 0:
             logger.error(f"Cannot get option price for {candidate.option_symbol}")
             decision.executed_successfully = "FALSE"
             decision.reason = "Option Price Fetch Failed"
             return
-        
+
         # 4. Calculate contracts based on max premium
         max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
         num_contracts = self.options_connector.calculate_option_contracts(max_premium, option_price)
-        
+
         if num_contracts <= 0:
             logger.warning(f"OPTIONS: Calculated 0 contracts for {candidate.option_symbol}")
             decision.executed_successfully = "SKIPPED"
             decision.reason = "Size 0 Contracts"
             return
-        
+
         # 5. Circuit Breaker
         if self._check_circuit_breaker():
             decision.executed_successfully = "FALSE"
             decision.reason = "High Error Rate"
             return
-        
+
         # 6. Submit options order
         await self._submit_options_order(decision, candidate, num_contracts, option_price)
 
@@ -371,7 +372,7 @@ class ExecutionEngine:
                 limit_price=option_price,
                 client_order_id=client_order_id,
             )
-            
+
             await self._persist_order_record(
                 decision=decision,
                 candidate=candidate,
@@ -382,7 +383,7 @@ class ExecutionEngine:
                 broker_order=order,
                 error_message=None,
             )
-            
+
             premium_paid = num_contracts * option_price * 100
             logger.info(
                 f"OPTIONS Execution Successful {client_order_id} | "
@@ -390,7 +391,7 @@ class ExecutionEngine:
             )
             decision.executed_successfully = "TRUE"
             self._record_result(True)
-            
+
         except Exception as e:
             await self._persist_order_record(
                 decision=decision,
@@ -860,8 +861,9 @@ class ExecutionEngine:
     @db_retry
     async def _persist_fill_record(self, fill: Any) -> None:
         async def save_fill_and_update_journal(session: Any) -> None:
-            from orion.storage.models_execution import FillRecord
             from sqlalchemy.dialects.postgresql import insert
+
+            from orion.storage.models_execution import FillRecord
 
             broker_order_id = str(getattr(fill, "id", ""))
             ticker = getattr(fill, "symbol", None) or ""

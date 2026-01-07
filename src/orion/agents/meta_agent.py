@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
+
 from orion.agents.base import BaseAgent
 from orion.agents.codex_client import (
     build_chat_prompt,
@@ -95,7 +96,7 @@ class MetaAgent(BaseAgent):
                     avg_ret = data.get("avg_return", 0) or 0
                     ml_lines.append(f"{key}: accuracy={acc:.1f}%, avg_return={avg_ret:.2f}%")
                     if acc < 55:
-                        ml_lines.append(f"  ⚠️ LOW ACCURACY - model may need retraining")
+                        ml_lines.append("  ⚠️ LOW ACCURACY - model may need retraining")
                 ml_performance_context = "\n".join(ml_lines)
         except Exception as e:
             logger.debug(f"Failed to fetch ML performance: {e}")

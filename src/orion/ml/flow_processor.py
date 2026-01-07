@@ -114,7 +114,7 @@ class MLFlowProcessor:
         option_price = float(flow.get("option_price") or 0) if flow.get("option_price") else None
         underlying_price = float(flow.get("underlying_price") or 0) if flow.get("underlying_price") else None
         premium_usd = float(flow.get("premium_usd") or 0) if flow.get("premium_usd") else None
-        
+
         # Parse expiration date
         expiration_date = None
         expiry_str = flow.get("expiry")
@@ -123,10 +123,10 @@ class MLFlowProcessor:
                 expiration_date = datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             except ValueError:
                 logger.warning(f"Failed to parse expiry date: {expiry_str}")
-        
+
         # Option type: CALL or PUT
         option_type = "CALL" if put_call == "C" else "PUT"
-        
+
         # Get OCC symbol - use option_chain if available, otherwise generate
         option_symbol = flow.get("option_chain")
         if not option_symbol and strike_price and expiration_date:
@@ -167,7 +167,7 @@ class MLFlowProcessor:
     ) -> str:
         """
         Generate OCC-format option symbol.
-        
+
         Format: SYMBOL + YYMMDD + C/P + STRIKE*1000 (8 digits, zero-padded)
         Example: AAPL240419C00190000 = AAPL April 19, 2024 $190 Call
         """

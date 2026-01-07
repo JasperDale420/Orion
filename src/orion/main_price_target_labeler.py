@@ -1231,8 +1231,8 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         "iv_vs_hv_ratio": None,
     }
 
+
     entry_date = entry_ts.date()
-    prior_date = entry_date - timedelta(days=1)
     lookback_30d = entry_date - timedelta(days=30)
 
     async def query(session: Any) -> Dict[str, Optional[float]]:

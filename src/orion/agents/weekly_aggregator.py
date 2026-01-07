@@ -13,8 +13,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from orion.shared.db_utils import db_query
 from sqlalchemy import and_, func, select
+
+from orion.shared.db_utils import db_query
 
 logger = logging.getLogger(__name__)
 

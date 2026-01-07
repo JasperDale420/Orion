@@ -15,10 +15,11 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import text
+
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
-from sqlalchemy import text
 
 logger = setup_struct_logger("orion.backfill.exit_columns")
 

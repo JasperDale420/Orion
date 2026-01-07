@@ -128,7 +128,7 @@ class AlpacaTradingConnector:
     def get_all_positions(self) -> List[Any]:
         """
         Get all open positions from Alpaca.
-        
+
         Returns list of Position objects with:
         - symbol, qty, market_value, unrealized_pl, unrealized_plpc
         - avg_entry_price, current_price, side
@@ -145,7 +145,7 @@ class AlpacaTradingConnector:
     def get_position(self, symbol: str) -> Optional[Any]:
         """
         Get position for a specific symbol.
-        
+
         Returns None if no position exists.
         """
         try:
@@ -162,11 +162,11 @@ class AlpacaTradingConnector:
     def close_position(self, symbol: str, qty: Optional[float] = None) -> Any:
         """
         Close a position (fully or partially).
-        
+
         Args:
             symbol: Ticker symbol to close
             qty: Optional quantity to close. If None, closes entire position.
-            
+
         Returns:
             Order object for the closing order
         """
@@ -177,7 +177,7 @@ class AlpacaTradingConnector:
                 if not position:
                     logger.warning(f"No position found for {symbol}")
                     return None
-                    
+
                 side = OrderSide.SELL if float(position.qty) > 0 else OrderSide.BUY
                 order = self.submit_market_order(symbol, qty, side)
                 logger.info(f"Partial close: {side} {qty} {symbol}")
@@ -195,7 +195,7 @@ class AlpacaTradingConnector:
     def close_all_positions(self) -> List[Any]:
         """
         Close all open positions.
-        
+
         Returns list of closing orders.
         """
         try:

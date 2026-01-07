@@ -5,7 +5,6 @@ Logs ML predictions and outcomes for performance evaluation.
 """
 
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy import text
@@ -43,10 +42,10 @@ async def log_entry_prediction(
     def write(session: Any) -> None:
         session.execute(
             text("""
-                INSERT INTO ml_predictions 
-                (id, symbol, option_chain, bucket, model_type, prediction_score, 
+                INSERT INTO ml_predictions
+                (id, symbol, option_chain, bucket, model_type, prediction_score,
                  prediction_class, confidence, position_id)
-                VALUES (:id, :symbol, :option_chain, :bucket, 'entry_score', 
+                VALUES (:id, :symbol, :option_chain, :bucket, 'entry_score',
                         :score, :pred_class, :confidence, :position_id)
             """),
             {
@@ -84,10 +83,10 @@ async def log_exit_prediction(
     def write(session: Any) -> None:
         session.execute(
             text("""
-                INSERT INTO ml_predictions 
-                (id, symbol, option_chain, bucket, model_type, prediction_score, 
+                INSERT INTO ml_predictions
+                (id, symbol, option_chain, bucket, model_type, prediction_score,
                  prediction_class, position_id)
-                VALUES (:id, :symbol, :option_chain, :bucket, 'exit_score', 
+                VALUES (:id, :symbol, :option_chain, :bucket, 'exit_score',
                         :score, :pred_class, :position_id)
             """),
             {
@@ -138,9 +137,9 @@ async def log_outcome(
                     actual_return_pct = :return_pct,
                     hit_target = :hit_target,
                     hit_stop = :hit_stop,
-                    prediction_correct = CASE 
-                        WHEN model_type = 'entry_score' THEN 
-                            (prediction_class = 1 AND :hit_target) OR 
+                    prediction_correct = CASE
+                        WHEN model_type = 'entry_score' THEN
+                            (prediction_class = 1 AND :hit_target) OR
                             (prediction_class = 0 AND NOT :hit_target)
                         WHEN model_type = 'exit_score' THEN
                             (prediction_class = 1 AND :return_pct >= 0)
@@ -178,13 +177,13 @@ async def get_daily_accuracy(bucket: Optional[str] = None) -> Dict[str, Any]:
         bucket_filter = "AND bucket = :bucket" if bucket else ""
         result = session.execute(
             text(f"""
-                SELECT 
+                SELECT
                     COUNT(*) as total_predictions,
                     COUNT(CASE WHEN prediction_correct THEN 1 END) as correct,
                     COUNT(CASE WHEN prediction_correct = false THEN 1 END) as incorrect,
                     ROUND(
-                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric / 
-                        NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100, 
+                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric /
+                        NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100,
                     2) as accuracy_pct,
                     AVG(actual_return_pct) FILTER (WHERE prediction_class = 1) as avg_return_high_score,
                     AVG(actual_return_pct) FILTER (WHERE prediction_class = 0) as avg_return_low_score
@@ -224,14 +223,14 @@ async def get_weekly_performance() -> Dict[str, Any]:
     def query(session: Any) -> Any:
         return session.execute(
             text("""
-                SELECT 
+                SELECT
                     bucket,
                     model_type,
                     COUNT(*) as predictions,
                     COUNT(CASE WHEN prediction_correct THEN 1 END) as correct,
                     ROUND(
-                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric / 
-                        NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100, 
+                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric /
+                        NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100,
                     2) as accuracy_pct,
                     AVG(actual_return_pct) as avg_return
                 FROM ml_predictions
