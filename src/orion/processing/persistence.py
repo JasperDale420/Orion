@@ -230,7 +230,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "dark_ts_utc": _required_event_ts_utc(e, p, "dark_ts_utc"),
                     "trade_price": trade_price,
                     "size_shares": _safe_int(p.get("size_shares") or p.get("size")),
-                    "venue": p.get("venue"),
+                    "venue": p.get("venue") or p.get("market_center"),
                     "conditions": p.get("conditions"),
                     "ingest": getattr(e, "ingest", None) or {},
                     "created_at_utc": datetime.now(timezone.utc),
