@@ -194,6 +194,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "alert_name": p.get("alert_name"),
                     "noti_type": p.get("noti_type"),
                     "ingest": getattr(e, "ingest", None) or {},
+                    "created_at_utc": datetime.now(timezone.utc),
                 }
             )
         elif e.event_type == "ALPACA_BAR_1M":
@@ -212,6 +213,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "volume": p.get("volume"),
                     "vwap": p.get("vwap"),
                     "ingest": getattr(e, "ingest", None) or {},
+                    "created_at_utc": datetime.now(timezone.utc),
                 }
             )
         elif e.event_type == "UW_DARKPOOL":
@@ -230,6 +232,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "venue": p.get("venue"),
                     "conditions": p.get("conditions"),
                     "ingest": getattr(e, "ingest", None) or {},
+                    "created_at_utc": datetime.now(timezone.utc),
                 }
             )
         elif e.event_type == "UW_ALERT":
@@ -250,6 +253,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "flags_json": p.get("flags_json"),
                     "alert_tags": p.get("alert_tags"),
                     "ingest": getattr(e, "ingest", None) or {},
+                    "created_at_utc": datetime.now(timezone.utc),
                 }
             )
 
@@ -296,6 +300,7 @@ async def persist_silver_signals(session: AsyncSession, signals: List[SilverSign
                 "signal_ts_utc": s.signal_ts_utc,
                 "signal_type": s.signal_type,
                 "features": s.features,
+                "created_at_utc": datetime.now(timezone.utc),
             }
         )
 
@@ -324,7 +329,7 @@ async def persist_candidates(session: AsyncSession, candidates: List[CandidateTr
                 "source": c.source,
                 "execution_params": c.execution_params,
                 "evidence": c.evidence,
-                "created_at_utc": c.created_at_utc,
+                "created_at_utc": c.created_at_utc or datetime.now(timezone.utc),
             }
         )
 
