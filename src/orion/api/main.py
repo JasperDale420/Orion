@@ -8,7 +8,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from orion.api.auth import require_api_key
 from orion.api.deps import get_db
@@ -31,6 +31,27 @@ app = FastAPI(
     description="Operational visibility into Solvers, Experiments, and Metrics.",
     version="1.0.0",
 )
+
+
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": "Not Found",
+            "message": "Oops! The requested resource was not found.",
+            "suggestions": [
+                "/solvers",
+                "/metrics",
+                "/experiments",
+                "/promotions",
+                "/search",
+                "/rollups",
+                "/flows",
+            ],
+            "docs_url": "/docs",
+        },
+    )
 
 
 @app.middleware("http")
