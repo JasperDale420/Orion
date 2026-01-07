@@ -384,12 +384,29 @@ async def get_rollups(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
 ) -> List[Dict[str, Any]]:
+    """
+    Get aggregated market data rollups.
+    Optimized to fetch only necessary columns.
+    """
     from orion.shared.utils import parse_timestamptz
 
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
-    stmt = select(GoldTickerRollup).where(GoldTickerRollup.ticker == ticker, GoldTickerRollup.period == period)
+    # Select specific columns instead of hydrating full ORM objects for performance
+    stmt = select(
+        GoldTickerRollup.ticker,
+        GoldTickerRollup.period,
+        GoldTickerRollup.timestamp_utc,
+        GoldTickerRollup.open,
+        GoldTickerRollup.high,
+        GoldTickerRollup.low,
+        GoldTickerRollup.close,
+        GoldTickerRollup.volume,
+        GoldTickerRollup.vwap,
+        GoldTickerRollup.created_at_utc,
+    ).where(GoldTickerRollup.ticker == ticker, GoldTickerRollup.period == period)
+
     if start_dt is not None:
         stmt = stmt.where(GoldTickerRollup.timestamp_utc >= start_dt)
     if end_dt is not None:
@@ -397,21 +414,23 @@ async def get_rollups(
     stmt = stmt.order_by(GoldTickerRollup.timestamp_utc.asc()).limit(limit)
 
     res = await db.execute(stmt)
-    rows = res.scalars().all()
+    rows = res.all()
+
+    # Direct dict creation from row tuples
     return [
         {
-            "ticker": r.ticker,
-            "period": r.period,
-            "timestamp_utc": _dt_iso(r.timestamp_utc),
-            "open": r.open,
-            "high": r.high,
-            "low": r.low,
-            "close": r.close,
-            "volume": r.volume,
-            "vwap": r.vwap,
-            "created_at_utc": _dt_iso(getattr(r, "created_at_utc", None)),
+            "ticker": row.ticker,
+            "period": row.period,
+            "timestamp_utc": _dt_iso(row.timestamp_utc),
+            "open": row.open,
+            "high": row.high,
+            "low": row.low,
+            "close": row.close,
+            "volume": row.volume,
+            "vwap": row.vwap,
+            "created_at_utc": _dt_iso(row.created_at_utc),
         }
-        for r in rows
+        for row in rows
     ]
 
 
@@ -459,12 +478,39 @@ async def get_flows(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
 ) -> List[Dict[str, Any]]:
+    """
+    Get options flow data.
+    Optimized to fetch only necessary columns.
+    """
     from orion.shared.utils import parse_timestamptz
 
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
-    stmt = select(SilverOptionFlow).order_by(desc(SilverOptionFlow.flow_ts_utc)).limit(limit)
+    # Select specific columns
+    stmt = select(
+        SilverOptionFlow.event_id,
+        SilverOptionFlow.source_event_id,
+        SilverOptionFlow.ticker,
+        SilverOptionFlow.flow_ts_utc,
+        SilverOptionFlow.put_call,
+        SilverOptionFlow.expiry,
+        SilverOptionFlow.strike,
+        SilverOptionFlow.option_price,
+        SilverOptionFlow.size_contracts,
+        SilverOptionFlow.premium_usd,
+        SilverOptionFlow.bid,
+        SilverOptionFlow.ask,
+        SilverOptionFlow.underlying_price,
+        SilverOptionFlow.aggressor,
+        SilverOptionFlow.is_sweep,
+        SilverOptionFlow.flags_json,
+        SilverOptionFlow.volume_contract,
+        SilverOptionFlow.open_interest,
+        SilverOptionFlow.ingest,
+        SilverOptionFlow.created_at_utc,
+    ).order_by(desc(SilverOptionFlow.flow_ts_utc)).limit(limit)
+
     if ticker:
         stmt = stmt.where(SilverOptionFlow.ticker == ticker)
     if start_dt is not None:
@@ -475,29 +521,30 @@ async def get_flows(
         stmt = stmt.where(SilverOptionFlow.premium_usd >= float(min_premium_usd))
 
     res = await db.execute(stmt)
-    rows = res.scalars().all()
+    rows = res.all()
+
     return [
         {
-            "event_id": r.event_id,
-            "source_event_id": r.source_event_id,
-            "ticker": r.ticker,
-            "flow_ts_utc": _dt_iso(r.flow_ts_utc),
-            "put_call": r.put_call,
-            "expiry": r.expiry,
-            "strike": r.strike,
-            "option_price": r.option_price,
-            "size_contracts": r.size_contracts,
-            "premium_usd": r.premium_usd,
-            "bid": r.bid,
-            "ask": r.ask,
-            "underlying_price": r.underlying_price,
-            "aggressor": r.aggressor,
-            "is_sweep": r.is_sweep,
-            "flags_json": r.flags_json,
-            "volume_contract": r.volume_contract,
-            "open_interest": r.open_interest,
-            "ingest": r.ingest,
-            "created_at_utc": _dt_iso(getattr(r, "created_at_utc", None)),
+            "event_id": row.event_id,
+            "source_event_id": row.source_event_id,
+            "ticker": row.ticker,
+            "flow_ts_utc": _dt_iso(row.flow_ts_utc),
+            "put_call": row.put_call,
+            "expiry": row.expiry,
+            "strike": row.strike,
+            "option_price": row.option_price,
+            "size_contracts": row.size_contracts,
+            "premium_usd": row.premium_usd,
+            "bid": row.bid,
+            "ask": row.ask,
+            "underlying_price": row.underlying_price,
+            "aggressor": row.aggressor,
+            "is_sweep": row.is_sweep,
+            "flags_json": row.flags_json,
+            "volume_contract": row.volume_contract,
+            "open_interest": row.open_interest,
+            "ingest": row.ingest,
+            "created_at_utc": _dt_iso(row.created_at_utc),
         }
-        for r in rows
+        for row in rows
     ]
