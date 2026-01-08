@@ -269,8 +269,21 @@ async def main() -> None:
 
     logger.info("Connectors initialized. Starting polling loop.")
 
-    # USER REQUEST: Poll every 1 minute (60 seconds) for more responsive ingestion
-    loop_interval = 60.0  # seconds
+    # Adaptive polling intervals (API optimization)
+    # Core hours (9:30 AM - 4:00 PM ET): 5 min polling for real-time trading
+    # Extended hours (4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET): 15 min polling
+    CORE_HOURS_INTERVAL = 300.0  # 5 minutes
+    EXTENDED_HOURS_INTERVAL = 900.0  # 15 minutes
+
+    def get_polling_interval(now_et: datetime) -> float:
+        """Return appropriate polling interval based on market hours."""
+        hour = now_et.hour
+        minute = now_et.minute
+        # Core hours: 9:30 AM - 4:00 PM ET
+        if (hour == 9 and minute >= 30) or (10 <= hour < 16):
+            return CORE_HOURS_INTERVAL
+        # Extended hours: 4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET
+        return EXTENDED_HOURS_INTERVAL
 
     while not shutdown_event.is_set():
         try:
@@ -282,6 +295,9 @@ async def main() -> None:
             # Active Window: Mon-Fri, 04:00 ET to 20:00 ET.
             now_utc = datetime.now(timezone.utc)
             now_et = now_utc.astimezone(eastern)
+
+            # Determine adaptive polling interval
+            loop_interval = get_polling_interval(now_et)
 
             # Check if we are in active hours
             is_weekday = now_et.weekday() < 5  # 0=Mon, 4=Fri
