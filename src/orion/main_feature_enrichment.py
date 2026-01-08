@@ -30,7 +30,7 @@ from orion.storage.db import init_db
 logger = setup_struct_logger("orion.feature_enrichment")
 
 # Poll intervals
-MARKET_TIDE_INTERVAL = 60  # Every minute
+MARKET_TIDE_INTERVAL = 300  # Every 5 minutes (reduced from 60s to save API calls)
 GREEK_EXPOSURE_INTERVAL = 300  # Every 5 minutes
 MAX_PAIN_INTERVAL = 3600  # Every hour
 IV_RANK_INTERVAL = 900  # Every 15 minutes
