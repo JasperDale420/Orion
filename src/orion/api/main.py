@@ -501,3 +501,116 @@ async def get_flows(
         }
         for r in rows
     ]
+
+
+# --- Dashboard ---
+
+
+@app.get("/dashboard/summary", tags=["Dashboard"])
+async def get_dashboard_summary(
+    _: None = Depends(require_api_key),
+) -> Dict[str, Any]:
+    """
+    Get real-time portfolio P&L summary.
+
+    Returns current unrealized/realized P&L, drawdown, trade stats,
+    and equity curve data.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    return tracker.get_portfolio_summary()
+
+
+@app.get("/dashboard/positions", tags=["Dashboard"])
+async def get_dashboard_positions(
+    _: None = Depends(require_api_key),
+) -> List[Dict[str, Any]]:
+    """
+    Get all open positions with P&L details.
+
+    Returns positions sorted by absolute unrealized P&L.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    return tracker.get_position_details()
+
+
+@app.get("/dashboard/sectors", tags=["Dashboard"])
+async def get_dashboard_sectors(
+    _: None = Depends(require_api_key),
+) -> Dict[str, Dict[str, float]]:
+    """
+    Get sector-level P&L breakdown.
+
+    Returns market value and unrealized P&L per sector.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    return tracker.get_sector_breakdown()
+
+
+@app.get("/dashboard/alerts", tags=["Dashboard"])
+async def get_dashboard_alerts(
+    _: None = Depends(require_api_key),
+) -> List[Dict[str, Any]]:
+    """
+    Get active risk alerts.
+
+    Checks risk thresholds and returns any breaches or warnings.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    alerts = tracker.check_risk_alerts()
+    return [
+        {
+            "alert_type": a.alert_type,
+            "severity": a.severity,
+            "message": a.message,
+            "current_value": a.current_value,
+            "threshold": a.threshold,
+            "timestamp": a.timestamp.isoformat(),
+        }
+        for a in alerts
+    ]
+
+
+@app.post("/dashboard/equity", tags=["Dashboard"])
+async def set_dashboard_equity(
+    equity: float = Query(..., gt=0, description="Starting equity for the day"),
+    _: None = Depends(require_api_key),
+) -> Dict[str, Any]:
+    """
+    Set starting equity for P&L calculations.
+
+    Should be called at market open with account equity.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    tracker.set_starting_equity(equity)
+    return {
+        "status": "ok",
+        "starting_equity": equity,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/dashboard/reset", tags=["Dashboard"])
+async def reset_dashboard_daily(
+    _: None = Depends(require_api_key),
+) -> Dict[str, str]:
+    """
+    Reset daily P&L counters.
+
+    Call at start of trading day to reset realized P&L and trade counts.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    tracker.reset_daily()
+    return {"status": "ok", "message": "Daily counters reset"}
+
