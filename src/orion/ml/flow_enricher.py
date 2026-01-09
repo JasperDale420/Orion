@@ -439,9 +439,63 @@ async def _get_vix(entry_ts: datetime) -> Optional[float]:
 
 async def _get_flow_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     """Get additional flow metrics - sector, earnings, flow ratios."""
-    # These are more complex to compute in real-time
-    # Return defaults for now - can be enhanced
-    return {
+    from sqlalchemy import text
+
+    # Sector mapping (same as labeler)
+    TICKER_SECTORS = {
+        "AAPL": "Technology",
+        "MSFT": "Technology",
+        "GOOGL": "Technology",
+        "GOOG": "Technology",
+        "META": "Technology",
+        "AMZN": "Consumer Discretionary",
+        "TSLA": "Consumer Discretionary",
+        "NVDA": "Technology",
+        "AMD": "Technology",
+        "INTC": "Technology",
+        "NFLX": "Communication Services",
+        "CRM": "Technology",
+        "SPY": "ETF",
+        "QQQ": "ETF",
+        "IWM": "ETF",
+        "DIA": "ETF",
+        "XLF": "ETF",
+        "XLE": "ETF",
+        "XLK": "ETF",
+        "XLV": "ETF",
+        "JPM": "Financial Services",
+        "BAC": "Financial Services",
+        "GS": "Financial Services",
+        "V": "Financial Services",
+        "MA": "Financial Services",
+        "PYPL": "Financial Services",
+        "UNH": "Healthcare",
+        "JNJ": "Healthcare",
+        "PFE": "Healthcare",
+        "LLY": "Healthcare",
+        "XOM": "Energy",
+        "CVX": "Energy",
+        "COP": "Energy",
+        "OXY": "Energy",
+        "BA": "Industrials",
+        "CAT": "Industrials",
+        "RTX": "Industrials",
+        "LMT": "Industrials",
+        "COST": "Consumer Staples",
+        "WMT": "Consumer Staples",
+        "KO": "Consumer Staples",
+        "DIS": "Communication Services",
+        "T": "Communication Services",
+        "VZ": "Communication Services",
+    }
+
+    sector = TICKER_SECTORS.get(ticker)
+    industry = sector  # Use sector as industry fallback
+
+    # Query basic flow metrics from recent flows
+    result = {
+        "sector": sector,
+        "industry": industry,
         "rvol_1h": None,
         "rvol_daily": None,
         "oi_change_1d": None,
@@ -458,7 +512,70 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
         "days_to_earnings": None,
         "is_post_earnings": False,
         "earnings_in_dte_window": False,
-        "sector": None,
-        "industry": None,
         "sector_flow_direction": None,
     }
+
+    # Get flow ratios from recent 1h flow data
+    try:
+        start_ts = entry_ts - timedelta(hours=1)
+
+        async def query_flow_ratios(session: Any) -> Dict[str, Any]:
+            stmt = text(
+                """
+                SELECT
+                    COUNT(CASE WHEN aggressor = 'ASK' THEN 1 END)::float /
+                        NULLIF(COUNT(*), 0) as ask_ratio,
+                    COUNT(CASE WHEN is_sweep = 'true' THEN 1 END)::float /
+                        NULLIF(COUNT(*), 0) as sweep_ratio,
+                    COALESCE(SUM(premium_usd), 0) as total_premium
+                FROM silver_uw_flow
+                WHERE ticker = :ticker
+                AND flow_ts_utc > :start_ts AND flow_ts_utc <= :entry_ts
+            """
+            )
+            res = await session.execute(stmt, {"ticker": ticker, "start_ts": start_ts, "entry_ts": entry_ts})
+            row = res.fetchone()
+            if row:
+                return {
+                    "ask_side_ratio": row[0],
+                    "sweep_ratio_1h": row[1],
+                    "same_ticker_premium_1h": row[2],
+                }
+            return {}
+
+        flow_ratios = await db_query(query_flow_ratios)
+        result.update(flow_ratios)
+    except Exception as e:
+        logger.debug(f"Flow ratios lookup failed: {e}")
+
+    # Get SPY return for market context
+    try:
+        start_ts = entry_ts - timedelta(hours=1)
+
+        async def query_spy_return(session: Any) -> Optional[float]:
+            stmt = text(
+                """
+                WITH spy_prices AS (
+                    SELECT close, bar_start_ts_utc
+                    FROM silver_alpaca_bars
+                    WHERE ticker = 'SPY'
+                    AND bar_start_ts_utc BETWEEN :start_ts AND :entry_ts
+                    ORDER BY bar_start_ts_utc
+                )
+                SELECT
+                    (SELECT close FROM spy_prices ORDER BY bar_start_ts_utc DESC LIMIT 1) /
+                    NULLIF((SELECT close FROM spy_prices ORDER BY bar_start_ts_utc ASC LIMIT 1), 0) - 1
+                    as return_1h
+            """
+            )
+            res = await session.execute(stmt, {"start_ts": start_ts, "entry_ts": entry_ts})
+            row = res.fetchone()
+            return row[0] if row and row[0] else None
+
+        spy_ret = await db_query(query_spy_return)
+        if spy_ret is not None:
+            result["spy_return_1h"] = spy_ret
+    except Exception as e:
+        logger.debug(f"SPY return lookup failed: {e}")
+
+    return result

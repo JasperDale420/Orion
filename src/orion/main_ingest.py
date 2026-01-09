@@ -375,9 +375,7 @@ async def main() -> None:
                             "connector": (
                                 "uw_flow"
                                 if evt.event_type == "UW_FLOW"
-                                else "uw_darkpool"
-                                if evt.event_type == "UW_DARKPOOL"
-                                else "uw_alerts"
+                                else "uw_darkpool" if evt.event_type == "UW_DARKPOOL" else "uw_alerts"
                             ),
                             "run_id": RUN_ID,
                             "trace_id": trace_id,
@@ -501,7 +499,14 @@ async def main() -> None:
                             try:
                                 from orion.ml.flow_processor import MLFlowProcessor
 
-                                flow_dicts = [e.payload for e in uw_flow_events_only if e.payload]
+                                # Include event_id in flow dict for Greeks enrichment
+                                flow_dicts = []
+                                for e in uw_flow_events_only:
+                                    if e.payload:
+                                        flow_dict = dict(e.payload)
+                                        flow_dict["event_id"] = e.event_id  # Inject for Greeks lookup
+                                        flow_dicts.append(flow_dict)
+
                                 if flow_dicts:
                                     ml_processor = MLFlowProcessor(score_threshold=0.5)
                                     # Use enriched scoring for feature parity with training
