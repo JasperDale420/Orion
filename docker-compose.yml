@@ -118,6 +118,24 @@ services:
       - ORION_RUN_ID=docker_persistent
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
 
+  option_quote_tracker:
+    build: .
+    container_name: orion_option_quote_tracker
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ingestion:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ORION_RUN_ID=docker_persistent
+    command: [ "python", "-m", "orion.main_option_quote_tracker" ]
+
   execution:
     build: .
     container_name: orion_execution
