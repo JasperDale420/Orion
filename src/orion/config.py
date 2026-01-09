@@ -36,6 +36,12 @@ class RiskSettings(BaseSettings):
     max_sector_exposure_pct: float = 0.30  # Max 30% of portfolio in one sector
     enable_sector_checks: bool = True  # Toggle sector concentration checks
 
+    # 0DTE time-of-day wind-down
+    zero_dte_cutoff_minutes: int = 60  # Stop new 0DTE entries X minutes before close
+    zero_dte_reduce_size_after_minutes: int = 120  # Reduce size after X minutes before close
+    zero_dte_reduced_size_pct: float = 0.50  # Size reduction factor (50% of normal)
+    enable_zero_dte_winddown: bool = True  # Toggle 0DTE wind-down
+
     model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
 
 

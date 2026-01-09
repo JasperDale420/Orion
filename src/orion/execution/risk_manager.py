@@ -397,6 +397,97 @@ class RiskManager:
             return 0.0
         return self.sector_exposures.get(sector, 0.0) / self.current_equity
 
+    def check_zero_dte_winddown(
+        self, dte: int, timestamp: datetime | None = None, risk_override: RiskSettings | None = None
+    ) -> tuple[bool, str]:
+        """
+        Check if a 0DTE trade is allowed based on time-of-day wind-down rules.
+
+        Args:
+            dte: Days to expiration (0 for same-day expiry)
+            timestamp: Trade timestamp (defaults to now ET)
+            risk_override: Optional custom risk settings
+
+        Returns:
+            Tuple of (allowed, reason)
+        """
+        cfg = risk_override if risk_override else self.config
+
+        # Only applies to 0DTE trades
+        if dte != 0:
+            return (True, "Not 0DTE")
+
+        if not cfg.enable_zero_dte_winddown:
+            return (True, "Wind-down disabled")
+
+        # Get current time in ET
+        if timestamp is None:
+            from zoneinfo import ZoneInfo
+            timestamp = datetime.now(ZoneInfo("America/New_York"))
+        elif timestamp.tzinfo is None:
+            from zoneinfo import ZoneInfo
+            timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
+
+        # Market close is 4:00 PM ET
+        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+        minutes_to_close = (market_close - timestamp).total_seconds() / 60
+
+        # Check hard cutoff
+        if minutes_to_close <= cfg.zero_dte_cutoff_minutes:
+            logger.warning(
+                f"RISK REJECT: 0DTE blocked - only {minutes_to_close:.0f} min to close "
+                f"(cutoff: {cfg.zero_dte_cutoff_minutes} min)"
+            )
+            return (False, f"0DTE cutoff: {minutes_to_close:.0f} min to close")
+
+        # Check if in reduced size window
+        if minutes_to_close <= cfg.zero_dte_reduce_size_after_minutes:
+            logger.info(
+                f"0DTE size reduction active: {minutes_to_close:.0f} min to close "
+                f"(reduce after: {cfg.zero_dte_reduce_size_after_minutes} min)"
+            )
+            return (True, f"Reduce size: {cfg.zero_dte_reduced_size_pct:.0%}")
+
+        return (True, "Normal trading")
+
+    def get_zero_dte_size_multiplier(
+        self, dte: int, timestamp: datetime | None = None, risk_override: RiskSettings | None = None
+    ) -> float:
+        """
+        Get size multiplier for 0DTE trades based on time-of-day.
+
+        Args:
+            dte: Days to expiration
+            timestamp: Trade timestamp (defaults to now ET)
+            risk_override: Optional custom risk settings
+
+        Returns:
+            Multiplier (1.0 for full size, <1.0 for reduced)
+        """
+        cfg = risk_override if risk_override else self.config
+
+        if dte != 0 or not cfg.enable_zero_dte_winddown:
+            return 1.0
+
+        # Get current time in ET
+        if timestamp is None:
+            from zoneinfo import ZoneInfo
+            timestamp = datetime.now(ZoneInfo("America/New_York"))
+        elif timestamp.tzinfo is None:
+            from zoneinfo import ZoneInfo
+            timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
+
+        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+        minutes_to_close = (market_close - timestamp).total_seconds() / 60
+
+        if minutes_to_close <= cfg.zero_dte_cutoff_minutes:
+            return 0.0  # Blocked entirely
+
+        if minutes_to_close <= cfg.zero_dte_reduce_size_after_minutes:
+            return cfg.zero_dte_reduced_size_pct
+
+        return 1.0
+
     def calculate_size(
         self, entry_price: float, stop_loss_pct: float | None = None, account_equity: float | None = None
     ) -> float:
