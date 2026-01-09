@@ -321,9 +321,9 @@ async def _get_darkpool_volumes(ticker: str, entry_ts: datetime) -> Dict[str, Op
         async def query(session: Any, st: datetime = start_ts) -> Optional[float]:
             stmt = text(
                 """
-                SELECT COALESCE(SUM(volume), 0)
-                FROM silver_darkpool
-                WHERE ticker = :ticker AND ts_utc > :start_ts AND ts_utc <= :entry_ts
+                SELECT COALESCE(SUM(size_shares), 0)
+                FROM silver_uw_darkpool
+                WHERE ticker = :ticker AND dark_ts_utc > :start_ts AND dark_ts_utc <= :entry_ts
             """
             )
             result = await session.execute(stmt, {"ticker": ticker, "start_ts": st, "entry_ts": entry_ts})
