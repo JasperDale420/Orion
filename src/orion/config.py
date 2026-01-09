@@ -32,6 +32,10 @@ class RiskSettings(BaseSettings):
     max_position_delta: float = 100.0  # Per-position delta limit
     enable_greeks_checks: bool = True  # Toggle Greeks checks
 
+    # Sector concentration limits
+    max_sector_exposure_pct: float = 0.30  # Max 30% of portfolio in one sector
+    enable_sector_checks: bool = True  # Toggle sector concentration checks
+
     model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
 
 

@@ -52,6 +52,9 @@ class RiskManager:
         self.portfolio_gamma: float = 0.0
         self.position_greeks: Dict[str, Dict[str, float]] = {}  # ticker -> {delta, gamma, theta, vega}
 
+        # Sector exposure tracking
+        self.sector_exposures: Dict[str, float] = {}  # sector -> total USD exposure
+
     def _current_drawdown_pct(self) -> float:
         if self.peak_equity <= 0:
             return 0.0
@@ -329,6 +332,70 @@ class RiskManager:
             # Recalculate portfolio totals
             self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
             self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+
+    def check_sector_exposure(
+        self, sector: str, additional_exposure: float = 0.0, risk_override: RiskSettings | None = None
+    ) -> bool:
+        """
+        Check if a new position would breach sector concentration limits.
+
+        Args:
+            sector: Sector name (e.g., 'Technology', 'Healthcare')
+            additional_exposure: USD exposure of the proposed new position
+            risk_override: Optional custom risk settings
+
+        Returns:
+            True if sector exposure is within limits, False if it would breach
+        """
+        cfg = risk_override if risk_override else self.config
+
+        if not cfg.enable_sector_checks:
+            return True
+
+        if self.current_equity <= 0:
+            return True
+
+        current_sector_exposure = self.sector_exposures.get(sector, 0.0)
+        projected_exposure = current_sector_exposure + additional_exposure
+        exposure_pct = projected_exposure / self.current_equity
+
+        if exposure_pct > cfg.max_sector_exposure_pct:
+            logger.warning(
+                f"RISK REJECT: Sector {sector} exposure {exposure_pct:.1%} > limit {cfg.max_sector_exposure_pct:.1%}"
+            )
+            return False
+
+        return True
+
+    def update_sector_exposure(self, sector: str, exposure_change: float) -> None:
+        """
+        Update sector exposure after a trade.
+
+        Args:
+            sector: Sector name
+            exposure_change: USD exposure change (+/- for buy/sell)
+        """
+        if not sector:
+            return
+
+        current = self.sector_exposures.get(sector, 0.0)
+        new_exposure = max(0.0, current + exposure_change)
+
+        if new_exposure > 0:
+            self.sector_exposures[sector] = new_exposure
+        elif sector in self.sector_exposures:
+            del self.sector_exposures[sector]
+
+        logger.info(
+            f"Sector exposure updated: {sector} {current:.2f} -> {new_exposure:.2f}",
+            extra={"event": "sector_exposure_update", "sector": sector, "exposure": new_exposure},
+        )
+
+    def get_sector_exposure_pct(self, sector: str) -> float:
+        """Get sector exposure as percentage of portfolio."""
+        if self.current_equity <= 0:
+            return 0.0
+        return self.sector_exposures.get(sector, 0.0) / self.current_equity
 
     def calculate_size(
         self, entry_price: float, stop_loss_pct: float | None = None, account_equity: float | None = None
