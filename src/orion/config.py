@@ -26,8 +26,13 @@ class RiskSettings(BaseSettings):
     min_dte: int = 3  # Minimum days to expiration
     max_option_positions: int = 3  # Max simultaneous option positions
 
-    model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
+    # Portfolio-level Greeks limits (options risk)
+    max_portfolio_delta: float = 500.0  # Absolute delta exposure limit
+    max_portfolio_gamma: float = 100.0  # Absolute gamma exposure limit
+    max_position_delta: float = 100.0  # Per-position delta limit
+    enable_greeks_checks: bool = True  # Toggle Greeks checks
 
+    model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
 
 
 class SystemSettings(BaseSettings):

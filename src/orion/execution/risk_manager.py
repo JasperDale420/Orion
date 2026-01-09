@@ -47,6 +47,11 @@ class RiskManager:
         # Idempotency Tracking
         self.processed_fill_ids: set[str] = set()
 
+        # Greeks tracking for options risk (portfolio-level)
+        self.portfolio_delta: float = 0.0
+        self.portfolio_gamma: float = 0.0
+        self.position_greeks: Dict[str, Dict[str, float]] = {}  # ticker -> {delta, gamma, theta, vega}
+
     def _current_drawdown_pct(self) -> float:
         if self.peak_equity <= 0:
             return 0.0
@@ -103,6 +108,43 @@ class RiskManager:
 
         # 6. Max Ticker Exposure Check
         if not self._check_ticker_exposure_limit(cfg, ticker, projected_signed, effective_signed):
+            return False
+
+        return True
+
+    def check_options_order(
+        self,
+        ticker: str,
+        quantity: float,
+        price: float,
+        side: str,
+        delta: float,
+        gamma: float = 0.0,
+        timestamp: datetime | None = None,
+        risk_override: RiskSettings | None = None,
+    ) -> bool:
+        """
+        Returns True if the options order is safe to execute.
+        Validates both standard order checks AND Greeks limits.
+
+        Args:
+            ticker: Underlying or option symbol
+            quantity: Number of contracts
+            price: Option premium per contract
+            side: 'buy' or 'sell'
+            delta: Position delta (contracts * delta * 100)
+            gamma: Position gamma (contracts * gamma * 100)
+            timestamp: Order timestamp
+            risk_override: Optional override settings
+        """
+        cfg = risk_override if risk_override else self.config
+
+        # Run standard order checks first
+        if not self.check_order(ticker, quantity, price, side, timestamp, risk_override):
+            return False
+
+        # Then check Greeks limits
+        if not self._check_greeks_limits(cfg, ticker, delta):
             return False
 
         return True
@@ -230,6 +272,64 @@ class RiskManager:
                 return False
         return True
 
+    def _check_greeks_limits(self, cfg: RiskSettings, ticker: str, position_delta: float = 0.0) -> bool:
+        """Check portfolio-level Greeks limits for options trades."""
+        if not cfg.enable_greeks_checks:
+            return True
+
+        # Check per-position delta limit
+        if abs(position_delta) > cfg.max_position_delta:
+            logger.warning(
+                f"RISK REJECT: Position Delta {position_delta:.1f} > Limit {cfg.max_position_delta:.1f} for {ticker}"
+            )
+            return False
+
+        # Check portfolio-level delta limit
+        projected_portfolio_delta = self.portfolio_delta + position_delta
+        if abs(projected_portfolio_delta) > cfg.max_portfolio_delta:
+            logger.warning(
+                f"RISK REJECT: Portfolio Delta {projected_portfolio_delta:.1f} > Limit {cfg.max_portfolio_delta:.1f}"
+            )
+            return False
+
+        # Check portfolio-level gamma limit
+        if abs(self.portfolio_gamma) > cfg.max_portfolio_gamma:
+            logger.warning(
+                f"RISK REJECT: Portfolio Gamma {self.portfolio_gamma:.1f} > Limit {cfg.max_portfolio_gamma:.1f}"
+            )
+            return False
+
+        return True
+
+    def update_position_greeks(
+        self, ticker: str, delta: float, gamma: float, theta: float = 0.0, vega: float = 0.0
+    ) -> None:
+        """Update Greeks for a position and recalculate portfolio totals."""
+        # Update position Greeks
+        self.position_greeks[ticker] = {
+            "delta": delta,
+            "gamma": gamma,
+            "theta": theta,
+            "vega": vega,
+        }
+
+        # Recalculate portfolio totals
+        self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
+        self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+
+        logger.info(
+            f"Greeks Updated for {ticker}: delta={delta:.2f}, gamma={gamma:.4f} | "
+            f"Portfolio: delta={self.portfolio_delta:.2f}, gamma={self.portfolio_gamma:.4f}"
+        )
+
+    def clear_position_greeks(self, ticker: str) -> None:
+        """Clear Greeks for a closed position."""
+        if ticker in self.position_greeks:
+            del self.position_greeks[ticker]
+            # Recalculate portfolio totals
+            self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
+            self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+
     def calculate_size(
         self, entry_price: float, stop_loss_pct: float | None = None, account_equity: float | None = None
     ) -> float:
@@ -272,9 +372,8 @@ class RiskManager:
         async def save_position(session: Any) -> None:
             from datetime import datetime, timezone
 
-            from sqlalchemy import select
-
             from orion.storage.models_execution import Position as PositionModel
+            from sqlalchemy import select
 
             stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
             result = await session.execute(stmt)
@@ -301,10 +400,9 @@ class RiskManager:
         Loads risk state from DB (if exists) to survive restarts.
         """
         try:
-            from sqlalchemy import select
-
             from orion.storage.db import async_session_factory
             from orion.storage.models_risk import RiskState
+            from sqlalchemy import select
 
             async with async_session_factory() as session:
                 stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
@@ -342,9 +440,8 @@ class RiskManager:
         """
 
         async def save_risk_state(session: Any) -> None:
-            from sqlalchemy import select
-
             from orion.storage.models_risk import RiskState
+            from sqlalchemy import select
 
             stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
             result = await session.execute(stmt)

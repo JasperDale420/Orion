@@ -209,18 +209,24 @@ def train_model(
     X: Any,
     y: Any,
     test_size: float = 0.2,
+    use_walk_forward: bool = True,
+    n_splits: int = 5,
+    dates: Any = None,
 ) -> Tuple[Any, float, float]:
     """
-    Train LightGBM classifier.
+    Train LightGBM classifier using walk-forward or random validation.
+
+    Args:
+        X: Feature matrix
+        y: Target labels
+        test_size: Holdout size (only used if walk_forward=False)
+        use_walk_forward: If True, use time-series walk-forward CV
+        n_splits: Number of walk-forward folds
+        dates: Timestamps for ordering (required if use_walk_forward=True)
 
     Returns:
         Tuple of (model, train_auc, holdout_auc)
     """
-    import lightgbm as lgb
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import train_test_split
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
 
     # LightGBM parameters - fast and interpretable
     params = {
@@ -235,10 +241,25 @@ def train_model(
         "verbose": -1,
     }
 
+    if use_walk_forward and dates is not None:
+        # Walk-forward (expanding window) validation
+        return _train_walk_forward(X, y, dates, params, n_splits)
+    else:
+        # Fallback to random split (legacy behavior)
+        return _train_random_split(X, y, params, test_size)
+
+
+def _train_random_split(X: Any, y: Any, params: dict, test_size: float) -> Tuple[Any, float, float]:
+    """Train with random train/test split (legacy behavior)."""
+    import lightgbm as lgb
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import train_test_split
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
+
     model = lgb.LGBMClassifier(**params)
     model.fit(X_train, y_train)
 
-    # Evaluate
     train_pred = model.predict_proba(X_train)[:, 1]
     test_pred = model.predict_proba(X_test)[:, 1]
 
@@ -246,11 +267,81 @@ def train_model(
     holdout_auc = roc_auc_score(y_test, test_pred)
 
     logger.info(
-        f"Model trained: train_auc={train_auc:.3f}, holdout_auc={holdout_auc:.3f}",
-        extra={"event": "ml_model_train", "train_auc": train_auc, "holdout_auc": holdout_auc},
+        f"Model trained (random split): train_auc={train_auc:.3f}, holdout_auc={holdout_auc:.3f}",
+        extra={"event": "ml_model_train", "method": "random_split", "train_auc": train_auc, "holdout_auc": holdout_auc},
     )
 
     return model, train_auc, holdout_auc
+
+
+def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int = 5) -> Tuple[Any, float, float]:
+    """
+    Train with walk-forward (expanding window) validation.
+
+    This prevents look-ahead bias by always training on past data
+    and testing on future data.
+    """
+    import lightgbm as lgb
+    import numpy as np
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import TimeSeriesSplit
+
+    # Sort by date to ensure temporal ordering
+    sort_idx = np.argsort(dates)
+    x_sorted = X.iloc[sort_idx] if hasattr(X, "iloc") else X[sort_idx]
+    y_sorted = y.iloc[sort_idx] if hasattr(y, "iloc") else y[sort_idx]
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+
+    fold_aucs = []
+
+    for fold, (train_idx, test_idx) in enumerate(tscv.split(x_sorted)):
+        x_train, x_test = x_sorted.iloc[train_idx], x_sorted.iloc[test_idx]
+        y_train, y_test = y_sorted.iloc[train_idx], y_sorted.iloc[test_idx]
+
+        # Skip if either class is missing
+        if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
+            logger.warning(f"Fold {fold+1}: Skipped due to single class")
+            continue
+
+        model = lgb.LGBMClassifier(**params)
+        model.fit(x_train, y_train)
+
+        test_pred = model.predict_proba(x_test)[:, 1]
+        fold_auc = roc_auc_score(y_test, test_pred)
+        fold_aucs.append(fold_auc)
+
+        logger.debug(f"Fold {fold+1}/{n_splits}: AUC={fold_auc:.3f}")
+
+    if not fold_aucs:
+        logger.warning("Walk-forward CV failed: no valid folds")
+        return _train_random_split(X, y, params, 0.2)
+
+    avg_auc = np.mean(fold_aucs)
+    std_auc = np.std(fold_aucs)
+
+    # Final model: train on all data (for production use)
+    final_model = lgb.LGBMClassifier(**params)
+    final_model.fit(x_sorted, y_sorted)
+
+    # Use average CV AUC as holdout estimate
+    train_pred = final_model.predict_proba(x_sorted)[:, 1]
+    train_auc = roc_auc_score(y_sorted, train_pred)
+
+    logger.info(
+        f"Model trained (walk-forward): cv_auc={avg_auc:.3f}±{std_auc:.3f}, train_auc={train_auc:.3f}",
+        extra={
+            "event": "ml_model_train",
+            "method": "walk_forward",
+            "n_splits": n_splits,
+            "cv_auc": avg_auc,
+            "cv_std": std_auc,
+            "train_auc": train_auc,
+        },
+    )
+
+    # Return CV AUC as holdout estimate (more realistic than full-data train AUC)
+    return final_model, train_auc, avg_auc
 
 
 def save_model(model: Any, model_type: str, feature_names: List[str]) -> Optional[Path]:
@@ -499,9 +590,10 @@ async def run_pattern_mining(
         logger.warning(f"Target has no variance for {model_type}, skipping")
         return None
 
-    # 3. Train model
+    # 3. Train model with walk-forward CV
     try:
-        model, train_auc, holdout_auc = train_model(X, y)
+        dates = df["entry_ts"] if "entry_ts" in df.columns else None
+        model, train_auc, holdout_auc = train_model(X, y, dates=dates)
     except Exception as e:
         logger.error(f"Model training failed for {model_type}: {e}")
         return None
@@ -627,4 +719,3 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
     )
 
     return summary
-
