@@ -388,6 +388,36 @@ async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[D
     return await db_query(query)
 
 
+async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Optional[float]]:
+    """Get real option prices from silver_option_quotes (Alpaca API data).
+
+    Returns dict mapping checkpoint names to mid prices.
+    Falls back to None for checkpoints without real data.
+    """
+
+    async def query(session: Any) -> Dict[str, Optional[float]]:
+        stmt = text(
+            """
+            SELECT checkpoint, mid_price, last_trade_price
+            FROM silver_option_quotes
+            WHERE flow_event_id = :event_id
+        """
+        )
+        result = await session.execute(stmt, {"event_id": event_id})
+        prices: Dict[str, Optional[float]] = {}
+        for row in result.fetchall():
+            checkpoint = row[0]
+            # Prefer mid_price, fallback to last_trade
+            price = row[1] if row[1] is not None else row[2]
+            prices[checkpoint] = float(price) if price else None
+        return prices
+
+    try:
+        return await db_query(query)
+    except Exception:
+        return {}
+
+
 async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
     """Get opposing flow during holding period."""
     opposing_type = "P" if put_call == "C" else "C"
@@ -2227,31 +2257,45 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     time_to_stop = int((hit_stop_ts - entry_ts).total_seconds()) if hit_stop_ts else None
     holding_period = int((last_tracked_ts - entry_ts).total_seconds())
 
-    # Price at checkpoints (original 1h/2h/4h)
-    price_1h = get_price_at_offset(prices, entry_ts, 1)
-    price_2h = get_price_at_offset(prices, entry_ts, 2)
-    price_4h = get_price_at_offset(prices, entry_ts, 4)
+    # Price at checkpoints - prefer real Alpaca quotes when available
+    # Fetch real quotes from silver_option_quotes (populated by option_quote_tracker)
+    real_quotes = await get_real_checkpoint_prices(event_id)
+
+    # Helper to get price: prefer real quote, fallback to flow data
+    def _get_checkpoint_price(
+        checkpoint: str, flow_price_fn, *flow_args
+    ) -> Optional[float]:
+        """Get checkpoint price: real quote first, then flow fallback."""
+        real_price = real_quotes.get(checkpoint)
+        if real_price is not None:
+            return real_price
+        return flow_price_fn(*flow_args)
+
+    # Original hourly checkpoints (1h/2h/4h)
+    price_1h = _get_checkpoint_price("1h", get_price_at_offset, prices, entry_ts, 1)
+    price_2h = _get_checkpoint_price("2h", get_price_at_offset, prices, entry_ts, 2)
+    price_4h = _get_checkpoint_price("4h", get_price_at_offset, prices, entry_ts, 4)
 
     return_1h = ((price_1h - entry_price) / entry_price * 100) if price_1h else None
     return_2h = ((price_2h - entry_price) / entry_price * 100) if price_2h else None
     return_4h = ((price_4h - entry_price) / entry_price * 100) if price_4h else None
 
     # 0DTE checkpoints (5m, 10m, 15m, 30m) - ultra-short for 0DTE
-    price_5m = get_price_at_offset_minutes(prices, entry_ts, 5)
-    price_10m = get_price_at_offset_minutes(prices, entry_ts, 10)
-    price_15m = get_price_at_offset_minutes(prices, entry_ts, 15)
-    price_30m = get_price_at_offset_minutes(prices, entry_ts, 30)
+    price_5m = get_price_at_offset_minutes(prices, entry_ts, 5)  # No real quote yet
+    price_10m = get_price_at_offset_minutes(prices, entry_ts, 10)  # No real quote yet
+    price_15m = _get_checkpoint_price("15m", get_price_at_offset_minutes, prices, entry_ts, 15)
+    price_30m = _get_checkpoint_price("30m", get_price_at_offset_minutes, prices, entry_ts, 30)
     return_5m = ((price_5m - entry_price) / entry_price * 100) if price_5m else None
     return_10m = ((price_10m - entry_price) / entry_price * 100) if price_10m else None
     return_15m = ((price_15m - entry_price) / entry_price * 100) if price_15m else None
     return_30m = ((price_30m - entry_price) / entry_price * 100) if price_30m else None
 
     # SWING/POSITION checkpoints (8h, 1d, 2d, 3d, 1w)
-    price_8h = get_price_at_offset(prices, entry_ts, 8)
-    price_1d = get_price_at_offset_days(prices, entry_ts, 1)
-    price_2d = get_price_at_offset_days(prices, entry_ts, 2)
-    price_3d = get_price_at_offset_days(prices, entry_ts, 3)
-    price_1w = get_price_at_offset_days(prices, entry_ts, 7)
+    price_8h = _get_checkpoint_price("8h", get_price_at_offset, prices, entry_ts, 8)
+    price_1d = _get_checkpoint_price("1d", get_price_at_offset_days, prices, entry_ts, 1)
+    price_2d = get_price_at_offset_days(prices, entry_ts, 2)  # No real quote yet
+    price_3d = get_price_at_offset_days(prices, entry_ts, 3)  # No real quote yet
+    price_1w = get_price_at_offset_days(prices, entry_ts, 7)  # No real quote yet
 
     return_8h = ((price_8h - entry_price) / entry_price * 100) if price_8h else None
     return_1d = ((price_1d - entry_price) / entry_price * 100) if price_1d else None
