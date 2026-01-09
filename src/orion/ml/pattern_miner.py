@@ -43,8 +43,41 @@ FEATURE_COLUMNS = [
     "premium_usd",
     "dte",
     "vix_at_entry",
-    # Darkpool feature (1h lookback from entry)
+    # Darkpool features (at entry time)
     "darkpool_volume_1h",
+    "darkpool_30m",
+    "darkpool_4h",
+    "darkpool_1d",
+    # Options Greeks at entry (critical for options trading)
+    "delta_at_entry",
+    "gamma_at_entry",
+    "theta_at_entry",
+    "vega_at_entry",
+    "iv_at_entry",
+    "iv_vs_hv_ratio",
+    # Volume and OI
+    "volume_at_entry",
+    "open_interest_at_entry",
+    "rvol_1h",
+    "rvol_daily",
+    "oi_change_1d",
+    "oi_change_pct",
+    # Flow signals
+    "ask_side_ratio",
+    "sweep_ratio_1h",
+    "same_ticker_premium_1h",
+    "sector_net_premium_1h",
+    # Market context
+    "spy_correlation_5d",
+    "spy_return_1h",
+    "vwap_distance_pct",
+    "high_52w_distance_pct",
+    "overnight_gap_pct",
+    # Timing
+    "entry_hour",
+    "minutes_to_close",
+    # Earnings/Events
+    "days_to_earnings",
     # NOTE: Removed outcome features that cause data leakage:
     # - max_return_pct, max_drawdown_pct, time_to_max_seconds
     # - holding_period_seconds, return_at_1h/2h/4h, first_exit_type
@@ -53,16 +86,27 @@ FEATURE_COLUMNS = [
 
 CATEGORICAL_COLUMNS = [
     "put_call",
-    # NOTE: trade_type removed - it's used for filtering, not prediction
+    "aggressor",
+    "is_sweep",
+    "is_spread_leg",
+    "is_post_earnings",
+    "earnings_in_dte_window",
+    "entry_session",
+    "entry_day_of_week",
+    "sector",
+    "industry",
+    # Regimes
     "vol_regime_at_entry",
     "risk_regime_at_entry",
     "session_regime_at_entry",
     "trend_regime_at_entry",
     "vix_regime_at_entry",
     "market_tide_direction",
+    "sector_flow_direction",
 ]
 
 # Target definitions - 4 targets for diverse signal dimensions
+# Note: quick_winner has bucket-specific thresholds defined in TRADE_BUCKET_CONFIGS
 TARGETS = {
     # Original targets
     "hit_target_50": """
@@ -79,14 +123,20 @@ TARGETS = {
              AND (hit_stop_20_pct_ts IS NULL OR hit_100_pct_ts < hit_stop_20_pct_ts)
         THEN 1 ELSE 0 END
     """,
-    "quick_winner": """
+    # quick_winner is dynamically generated per bucket - see get_quick_winner_target()
+}
+
+
+def get_quick_winner_target(seconds_threshold: int) -> str:
+    """Generate quick_winner target SQL with bucket-specific time threshold."""
+    return f"""
         CASE WHEN hit_50_pct_ts IS NOT NULL
              AND time_to_50_pct_seconds IS NOT NULL
-             AND time_to_50_pct_seconds < 3600
+             AND time_to_50_pct_seconds < {seconds_threshold}
              AND (hit_stop_20_pct_ts IS NULL OR hit_50_pct_ts < hit_stop_20_pct_ts)
         THEN 1 ELSE 0 END
-    """,
-}
+    """
+
 
 # Trade bucket configurations with bucket-specific lookback windows
 TRADE_BUCKET_CONFIGS = {
@@ -94,24 +144,28 @@ TRADE_BUCKET_CONFIGS = {
         "filter": "trade_type = '0DTE'",
         "window_days": 10,  # Short lookback - fast-changing dynamics
         "min_samples": 50,
+        "quick_winner_seconds": 3600,  # 1 hour - fast moves expected
         "description": "Same-day expiry options",
     },
     "SHORT_SWING": {
         "filter": "trade_type = 'SHORT_SWING'",
         "window_days": 20,  # 1-3 DTE trades
         "min_samples": 50,
+        "quick_winner_seconds": 14400,  # 4 hours
         "description": "1-3 day expiry options",
     },
     "SWING": {
         "filter": "trade_type = 'SWING'",
         "window_days": 45,  # 3-14 DTE trades
         "min_samples": 30,
+        "quick_winner_seconds": 86400,  # 1 day
         "description": "3-14 day expiry options",
     },
     "POSITION": {
         "filter": "trade_type = 'POSITION'",
         "window_days": 90,  # Long-term trades need more history
         "min_samples": 20,
+        "quick_winner_seconds": 259200,  # 3 days
         "description": "14+ day expiry options",
     },
 }
@@ -121,6 +175,7 @@ async def fetch_training_data(
     window_days: int = 30,
     min_samples: int = 100,
     trade_type_filter: Optional[str] = None,
+    quick_winner_seconds: int = 3600,
 ) -> Tuple[Any, List[str]]:
     """
     Fetch training data from price_target_labels.
@@ -129,6 +184,7 @@ async def fetch_training_data(
         window_days: Number of days to look back
         min_samples: Minimum samples required
         trade_type_filter: Optional SQL filter for trade_type (e.g., "trade_type = '0DTE'")
+        quick_winner_seconds: Time threshold for quick_winner target (bucket-specific)
 
     Returns:
         Tuple of (pandas DataFrame, list of feature names)
@@ -136,7 +192,11 @@ async def fetch_training_data(
     import pandas as pd
 
     feature_cols = ", ".join(FEATURE_COLUMNS + CATEGORICAL_COLUMNS)
-    target_cols = ", ".join([f"({sql}) as target_{name}" for name, sql in TARGETS.items()])
+
+    # Build target columns - include dynamic quick_winner
+    all_targets = dict(TARGETS)
+    all_targets["quick_winner"] = get_quick_winner_target(quick_winner_seconds)
+    target_cols = ", ".join([f"({sql}) as target_{name}" for name, sql in all_targets.items()])
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
 
@@ -169,7 +229,10 @@ async def fetch_training_data(
 
     # Column names from query
     columns = (
-        ["event_id", "entry_ts"] + FEATURE_COLUMNS + CATEGORICAL_COLUMNS + [f"target_{name}" for name in TARGETS.keys()]
+        ["event_id", "entry_ts"]
+        + FEATURE_COLUMNS
+        + CATEGORICAL_COLUMNS
+        + [f"target_{name}" for name in all_targets.keys()]
     )
 
     df = pd.DataFrame(rows, columns=columns)
@@ -565,6 +628,7 @@ async def run_pattern_mining(
     window_days = bucket_config.get("window_days", 30) if bucket_config else 30
     min_samples = bucket_config.get("min_samples", 50) if bucket_config else 50
     trade_filter = bucket_config.get("filter") if bucket_config else None
+    quick_winner_seconds = bucket_config.get("quick_winner_seconds", 3600) if bucket_config else 3600
 
     logger.info(
         f"Starting pattern mining for {model_type}",
@@ -576,6 +640,7 @@ async def run_pattern_mining(
         window_days=window_days,
         min_samples=min_samples,
         trade_type_filter=trade_filter,
+        quick_winner_seconds=quick_winner_seconds,
     )
     if df is None or df.empty:
         logger.warning(f"No training data available for {model_type}")
@@ -665,8 +730,10 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
     alerts: List[str] = []
 
     # Train entry models: Iterate over each bucket x target
+    # Include quick_winner which is dynamically generated per bucket
+    all_target_names = list(TARGETS.keys()) + ["quick_winner"]
     for bucket_name, bucket_config in TRADE_BUCKET_CONFIGS.items():
-        for target_name in TARGETS.keys():
+        for target_name in all_target_names:
             try:
                 insight = await run_pattern_mining(
                     target_name=target_name,

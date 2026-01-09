@@ -6,7 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Quant Audit Phase 2 Remediation**: Comprehensive risk and ML fixes
+  - **Projected Gamma Check**: `_check_greeks_limits` now uses projected gamma (current + trade) instead of just current
+  - **Vega Exposure Limits**: New `max_portfolio_vega` (200) and `max_position_vega` (50) in `RiskSettings`
+  - **check_options_order** now accepts `vega` parameter for comprehensive Greeks checking
+  - **portfolio_vega** tracking in RiskManager for IV exposure monitoring
+  - **Heuristic Score Cap**: Fallback scorer capped at 0.50 to prevent untrained buckets generating live signals
+  - **Model Freshness Validation**: `ORION_MAX_MODEL_AGE_DAYS` env var (default 14) - stale models are skipped
+  - **Slippage Tracking**: `process_fill` accepts `expected_price` and logs slippage in basis points
+  - New test file: `tests/unit/test_risk_greeks_v2.py` with 12 test cases for Greeks fixes
+- **Correlation-Aware Position Sizing**: Reduce position size when correlated with existing holdings
+  - New `CorrelationAdjuster` class calculates rolling correlation with portfolio
+  - `calculate_size_with_correlation()` async method in RiskManager
+  - Auto-wired in `ExecutionEngine.__init__` when enabled
+  - Config: `correlation_size_scaling`, `correlation_threshold` (0.70), `correlation_penalty_factor` (0.30)
+  - Disabled by default (`ORION_RISK_CORRELATION_SIZE_SCALING=false`) for safe rollout
+  - New test file: `tests/unit/test_correlation_adjuster.py` with 10 test cases
+  - Full Risk Management section added to README
+
 ### Fixed
+- **EOD Agent Async Bug**: Fixed missing `await` on `session.execute()` in `performance_tracker.py` `get_daily_accuracy()` and `get_weekly_performance()` functions
+- **EOD Agent Proposal Schema**: Fixed LLM prompt to match `ProposalBuilder` validation - changed `solver_mutation` to `solver_edit`, added required `evidence_pointers`, `test_plan` fields
+- **EOD Agent FK Constraint**: Fixed `solver_edits` insert by creating Solver stub before edit record
+
+### Added
+- **Drift-Triggered Pattern Mining**: Retrain ML models when high feature drift detected
+  - New `orion/core/drift_trigger.py` module with flag coordination
+  - EOD agent sets drift flag when any feature PSI > 0.25
+  - Pattern miner checks for drift flag every hour (in addition to Mon/Fri schedule)
+  - Immediate model retraining when drift detected
+- **Expanded ML Features**: Added 33 new entry-time features to pattern miner
+  - Options Greeks: `delta_at_entry`, `gamma_at_entry`, `theta_at_entry`, `vega_at_entry`, `iv_at_entry`, `iv_vs_hv_ratio`
+  - Volume/OI: `volume_at_entry`, `open_interest_at_entry`, `rvol_1h`, `rvol_daily`
+  - Flow: `ask_side_ratio`, `sweep_ratio_1h`, `same_ticker_premium_1h`
+  - Timing: `entry_hour`, `minutes_to_close`, `entry_session`, `entry_day_of_week`
+  - Context: `spy_correlation_5d`, `spy_return_1h`, `days_to_earnings`, `sector`
 - **Trade Execution Flow**: Complete end-to-end execution pipeline from ML candidates to broker orders
   - Fixed `SignalEngine` to fetch current price and set `limit_price` in execution params
   - Fixed `RiskSettings` to use percentage-based limits instead of fixed USD amounts

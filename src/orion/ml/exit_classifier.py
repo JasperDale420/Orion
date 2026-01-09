@@ -99,6 +99,21 @@ class ExitFeatures:
     gex_at_entry: Optional[float] = None
     market_tide_30m: Optional[float] = None
 
+    # Entry Greeks
+    delta_at_entry: Optional[float] = None
+    theta_at_entry: Optional[float] = None
+    iv_at_entry: Optional[float] = None
+    ask_side_ratio: Optional[float] = None
+
+    # Checkpoint-specific (current position state)
+    delta_at_checkpoint: Optional[float] = None
+    gamma_at_checkpoint: Optional[float] = None
+    theta_at_checkpoint: Optional[float] = None
+    iv_at_checkpoint: Optional[float] = None
+    dte_at_checkpoint: Optional[float] = None
+    time_value_pct: Optional[float] = None
+    theta_decay_pct: Optional[float] = None
+
 
 @dataclass
 class ExitPrediction:
@@ -198,10 +213,19 @@ class BucketExitClassifier:
     def _features_to_dict(self, features: ExitFeatures) -> Dict[str, float]:
         """Convert ExitFeatures to dict for ML model."""
         return {
+            # Position state at checkpoint
             "current_return_pct": features.current_return_pct,
             "time_held_hours": features.time_held_hours,
-            "max_return_so_far": features.max_return_so_far,
-            "max_drawdown_so_far": features.max_drawdown_so_far,
+            # Greeks evolution at checkpoint
+            "delta_at_checkpoint": float(features.delta_at_checkpoint or 0),
+            "gamma_at_checkpoint": float(features.gamma_at_checkpoint or 0),
+            "theta_at_checkpoint": float(features.theta_at_checkpoint or 0),
+            "iv_at_checkpoint": float(features.iv_at_checkpoint or 0),
+            "dte_at_checkpoint": float(features.dte_at_checkpoint or 0),
+            # Time value decay
+            "time_value_pct": float(features.time_value_pct or 0),
+            "theta_decay_pct": float(features.theta_decay_pct or 0),
+            # Entry context
             "premium_usd": features.premium_usd,
             "dte_at_entry": float(features.dte_at_entry),
             "is_sweep": 1.0 if features.is_sweep else 0.0,
@@ -209,6 +233,11 @@ class BucketExitClassifier:
             "vix_at_entry": float(features.vix_at_entry or 20),
             "gex_at_entry": float(features.gex_at_entry or 0),
             "market_tide_30m": float(features.market_tide_30m or 0),
+            # Entry Greeks
+            "delta_at_entry": float(features.delta_at_entry or 0),
+            "theta_at_entry": float(features.theta_at_entry or 0),
+            "iv_at_entry": float(features.iv_at_entry or 0),
+            "ask_side_ratio": float(features.ask_side_ratio or 0),
         }
 
     def _heuristic_predict(self, features: ExitFeatures) -> ExitPrediction:
@@ -334,8 +363,15 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         logger.warning(f"No checkpoints defined for bucket {bucket}")
         return np.array([]), np.array([]), []
 
-    # Build column list for query
+    # Build column list for query - include returns, Greeks, IV, and time value at each checkpoint
     return_cols = ", ".join([f"return_at_{cp[0]}" for cp in checkpoints])
+    delta_cols = ", ".join([f"delta_at_{cp[0]}" for cp in checkpoints])
+    gamma_cols = ", ".join([f"gamma_at_{cp[0]}" for cp in checkpoints])
+    theta_cols = ", ".join([f"theta_at_{cp[0]}" for cp in checkpoints])
+    iv_cols = ", ".join([f"iv_at_{cp[0]}" for cp in checkpoints])
+    dte_cols = ", ".join([f"dte_at_{cp[0]}" for cp in checkpoints])
+    time_value_cols = ", ".join([f"time_value_pct_at_{cp[0]}" for cp in checkpoints])
+    theta_decay_cols = ", ".join([f"theta_decay_pct_at_{cp[0]}" for cp in checkpoints])
 
     # Determine trade_type filter
     trade_type_map = {
@@ -353,9 +389,20 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
             iv_rank_at_entry, vix_at_entry,
             trend_regime_at_entry, vol_regime_at_entry,
             gex_at_entry, market_tide_30m,
+            delta_at_entry, gamma_at_entry, theta_at_entry,
+            iv_at_entry, ask_side_ratio,
 
             -- Returns at bucket-specific checkpoints
             {return_cols},
+
+            -- Greeks at checkpoints (for exit timing)
+            {delta_cols},
+            {gamma_cols},
+            {theta_cols},
+            {iv_cols},
+            {dte_cols},
+            {time_value_cols},
+            {theta_decay_cols},
 
             -- Outcome
             max_return_pct, max_drawdown_pct
@@ -376,9 +423,21 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         logger.warning(f"No training data for bucket {bucket}")
         return np.array([]), np.array([]), []
 
+    # Expanded feature names - includes checkpoint-specific features
     feature_names = [
+        # Position state at checkpoint
         "current_return_pct",
         "time_held_hours",
+        # Greeks evolution
+        "delta_at_checkpoint",
+        "gamma_at_checkpoint",
+        "theta_at_checkpoint",
+        "iv_at_checkpoint",
+        "dte_at_checkpoint",
+        # Time value decay
+        "time_value_pct",
+        "theta_decay_pct",
+        # Entry context
         "premium_usd",
         "dte_at_entry",
         "is_sweep",
@@ -386,6 +445,10 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         "vix_at_entry",
         "gex_at_entry",
         "market_tide_30m",
+        "delta_at_entry",
+        "theta_at_entry",
+        "iv_at_entry",
+        "ask_side_ratio",
     ]
 
     X_list = []
@@ -399,7 +462,7 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         threshold = max_return * GOOD_EXIT_THRESHOLD
 
         # Create sample for each checkpoint
-        for col_suffix, hours, desc in checkpoints:
+        for col_suffix, hours, _desc in checkpoints:
             col_name = f"return_at_{col_suffix}"
             checkpoint_return = row.get(col_name)
             if checkpoint_return is None:
@@ -407,10 +470,29 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
 
             checkpoint_return = float(checkpoint_return)
 
+            # Get checkpoint-specific Greeks (safely)
+            delta = float(row.get(f"delta_at_{col_suffix}") or 0)
+            gamma = float(row.get(f"gamma_at_{col_suffix}") or 0)
+            theta = float(row.get(f"theta_at_{col_suffix}") or 0)
+            iv = float(row.get(f"iv_at_{col_suffix}") or 0)
+            dte_cp = float(row.get(f"dte_at_{col_suffix}") or 0)
+            time_value_pct = float(row.get(f"time_value_pct_at_{col_suffix}") or 0)
+            theta_decay_pct = float(row.get(f"theta_decay_pct_at_{col_suffix}") or 0)
+
             # Features
             features = [
                 checkpoint_return,  # current return at checkpoint
                 hours,  # time held
+                # Greeks at checkpoint
+                delta,
+                gamma,
+                theta,
+                iv,
+                dte_cp,
+                # Time value
+                time_value_pct,
+                theta_decay_pct,
+                # Entry context
                 float(row.get("premium_usd") or 0),
                 int(row.get("dte") or 0),
                 1 if row.get("is_sweep") else 0,
@@ -418,6 +500,10 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                 float(row.get("vix_at_entry") or 20),
                 float(row.get("gex_at_entry") or 0),
                 float(row.get("market_tide_30m") or 0),
+                float(row.get("delta_at_entry") or 0),
+                float(row.get("theta_at_entry") or 0),
+                float(row.get("iv_at_entry") or 0),
+                float(row.get("ask_side_ratio") or 0),
             ]
 
             # Target: was this a good exit point?

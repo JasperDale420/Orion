@@ -6,10 +6,10 @@ import os
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from sqlalchemy import select
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -132,6 +132,9 @@ class EODReviewAgent(BaseAgent):
         if not proposals:
             return
 
+        from orion.storage.models_solvers import Solver
+        from sqlalchemy import select
+
         async def save_edits(session: Any) -> None:
             for p in proposals:
                 if p.get("type") != "solver_edit":
@@ -147,6 +150,22 @@ class EODReviewAgent(BaseAgent):
                     edit_ops={"ops": ops_data},
                     prefix="eod",
                 )
+
+                # Check if solver already exists
+                existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
+                if existing.scalars().first() is None:
+                    # Create solver stub in research stage
+                    session.add(
+                        Solver(
+                            solver_id=new_solver_id,
+                            family_name="eod_derived",
+                            parent_solver_id=str(base_id),
+                            created_by="llm_eod_agent",
+                            stage="research",
+                            config={"derived_from": str(base_id), "ops": ops_data},
+                            notes=f"Auto-generated from EOD review run {run_id}",
+                        )
+                    )
 
                 session.add(
                     SolverEdits(
@@ -628,6 +647,19 @@ class EODReviewAgent(BaseAgent):
                 "psi": self._psi(bvals, cvals, bins=10),
             }
 
+        # Trigger pattern mining if high drift detected
+        try:
+            from orion.core.drift_trigger import set_drift_flag
+
+            psi_values = {k: v.get("psi") for k, v in feature_shift.items() if v.get("psi") is not None}
+            if set_drift_flag(psi_values, source="eod_agent"):
+                logger.info(
+                    "High drift detected, pattern mining will be triggered",
+                    extra={"event": "drift_trigger_set", "psi_values": psi_values},
+                )
+        except Exception as e:
+            logger.warning(f"Failed to check/set drift flag: {e}")
+
         drift_metrics = {
             "feature_distribution_shift": feature_shift,
             "execution_slippage": {
@@ -812,9 +844,8 @@ class EODReviewAgent(BaseAgent):
     async def _fetch_ml_insights(self) -> Optional[Dict[str, Any]]:
         """Fetch latest ML pattern insights for LLM context."""
         try:
-            from sqlalchemy import text
-
             from orion.shared.db_utils import db_query
+            from sqlalchemy import text
 
             async def query(session: Any) -> List[Any]:
                 # Get most recent insight per model type
@@ -918,34 +949,50 @@ Analyze today's performance and identify:
   },
   "proposals": [
     {
-      "type": "config_patch|do_not_trade|rule_change|solver_mutation",
-      "priority": 1-3,
+      "type": "solver_edit",
+      "priority": 1,
       "rationale": "Brief reason with data reference",
-      "action": "Specific change to make",
-      "mutation": {  // ONLY for solver_mutation type
-        "base_solver_id": "existing solver to mutate OR null for new",
-        "ops": [
-          {"op": "modify_param", "param_name": "exit_logic.take_profit_atr_multiple", "new_value": 2.5, "reasoning": "..."},
-          {"op": "add_rule", "new_value": "rule_iv_rank_v1", "reasoning": "ML shows IV rank is predictive"},
-          {"op": "toggle_feature", "feature_name": "vol_oi_ratio", "new_value": true, "reasoning": "..."}
-        ]
-      }
+      "evidence_pointers": {"ml_insight": "AUC=0.85 for iv_rank feature", "drift_psi": 0.02},
+      "test_plan": ["Backtest with 30-day window", "Verify win_rate improvement"],
+      "target_solver_id": "paper_v1",
+      "ops": [
+        {"op": "modify_param", "param_name": "exit_logic.take_profit_atr_multiple", "new_value": 2.5, "reasoning": "..."},
+        {"op": "add_rule", "new_value": "rule_iv_rank_v1", "reasoning": "ML shows IV rank is predictive"},
+        {"op": "toggle_feature", "feature_name": "vol_oi_ratio", "new_value": true, "reasoning": "..."}
+      ]
+    },
+    {
+      "type": "config_patch",
+      "rationale": "Reduce position size in high-vol regime",
+      "evidence_pointers": {"regime": "HIGH_VOL", "loss_rate": 0.65},
+      "test_plan": ["Verify sizing reduction in paper"],
+      "changes": {"risk.max_position_size_pct": 0.02}
+    },
+    {
+      "type": "do_not_trade",
+      "rationale": "Extreme drift detected",
+      "evidence_pointers": {"psi_close": 4.2, "psi_volume": 3.8},
+      "test_plan": ["Monitor drift for 2 days"],
+      "recommendation": "Pause trading until PSI < 0.25"
     }
   ]
 }
 ```
 
-## When to propose solver_mutation
+## When to propose solver_edit
 - When ML insights reveal strong predictive features not in current solvers
 - When a pattern works well for specific bucket (e.g., 0DTE) but current solver doesn't exploit it
 - When win rate could improve with tighter/looser exit logic based on today's data
-- Mutations start in 'research' stage - they gather data but don't trade live until promoted
+- Edits start in 'research' stage - they gather data but don't trade live until promoted
+- Use target_solver_id='paper_v1' to mutate the active paper solver
 
 ## Rules
 - Ground ALL proposals in data from the input - no speculation
 - If ML insights show low AUC (<0.55), note that model needs more data
 - Prioritize high-impact, low-risk changes
-- If nothing actionable, say so clearly"""
+- If nothing actionable, say so clearly
+- REQUIRED fields for all proposals: type, rationale, evidence_pointers (dict), test_plan (list)
+- For solver_edit: also need target_solver_id, ops (list)"""
 
         user_prompt = f"## Today's Snapshot\n```json\n{json.dumps(data, indent=2, default=str)}\n```\n\n{rag_context}"
 
