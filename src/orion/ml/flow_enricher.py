@@ -75,6 +75,7 @@ async def enrich_flow_for_scoring(
         _get_flow_greeks(event_id) if event_id else _empty_greeks(),
         _get_vix(entry_ts),
         _get_flow_metrics(ticker, entry_ts),
+        _get_market_context(ticker, entry_ts),  # New: rvol, overnight_gap, 52w_high
     ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -89,6 +90,7 @@ async def enrich_flow_for_scoring(
     greeks = results[6] if not isinstance(results[6], Exception) else {}
     vix = results[7] if not isinstance(results[7], Exception) else None
     flow_metrics = results[8] if not isinstance(results[8], Exception) else {}
+    market_context = results[9] if not isinstance(results[9], Exception) else {}
 
     # Merge all enriched features
     enriched.update(
@@ -121,8 +123,8 @@ async def enrich_flow_for_scoring(
             "volume_at_entry": greeks.get("volume"),
             "open_interest_at_entry": greeks.get("open_interest"),
             # Flow metrics
-            "rvol_1h": flow_metrics.get("rvol_1h"),
-            "rvol_daily": flow_metrics.get("rvol_daily"),
+            "rvol_1h": market_context.get("rvol_1h"),
+            "rvol_daily": market_context.get("rvol_daily"),
             "oi_change_1d": flow_metrics.get("oi_change_1d"),
             "oi_change_pct": flow_metrics.get("oi_change_pct"),
             "ask_side_ratio": flow_metrics.get("ask_side_ratio"),
@@ -132,9 +134,9 @@ async def enrich_flow_for_scoring(
             # Market context
             "spy_correlation_5d": flow_metrics.get("spy_correlation_5d"),
             "spy_return_1h": flow_metrics.get("spy_return_1h"),
-            "vwap_distance_pct": flow_metrics.get("vwap_distance_pct"),
-            "high_52w_distance_pct": flow_metrics.get("high_52w_distance_pct"),
-            "overnight_gap_pct": flow_metrics.get("overnight_gap_pct"),
+            "vwap_distance_pct": market_context.get("vwap_distance_pct"),
+            "high_52w_distance_pct": market_context.get("high_52w_distance_pct"),
+            "overnight_gap_pct": market_context.get("overnight_gap_pct"),
             # Timing
             "entry_hour": entry_ts.hour,
             "minutes_to_close": _get_minutes_to_close(entry_ts),
@@ -577,5 +579,125 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
             result["spy_return_1h"] = spy_ret
     except Exception as e:
         logger.debug(f"SPY return lookup failed: {e}")
+
+    return result
+
+
+async def _get_market_context(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get market context features: rvol, overnight_gap, 52w_high distance."""
+    from sqlalchemy import text
+
+    result = {
+        "rvol_1h": None,
+        "rvol_daily": None,
+        "overnight_gap_pct": None,
+        "high_52w_distance_pct": None,
+        "vwap_distance_pct": None,
+    }
+
+    # Get rvol (current volume / average volume)
+    try:
+
+        async def query_rvol(session: Any) -> Dict[str, Optional[float]]:
+            stmt = text(
+                """
+                WITH current_vol AS (
+                    SELECT COALESCE(SUM(volume), 0) as vol
+                    FROM silver_alpaca_bars
+                    WHERE ticker = :ticker
+                    AND bar_start_ts_utc > :start_1h AND bar_start_ts_utc <= :entry_ts
+                ),
+                avg_vol AS (
+                    SELECT COALESCE(AVG(daily_vol), 1) as avg_daily
+                    FROM (
+                        SELECT DATE(bar_start_ts_utc) as day, SUM(volume) as daily_vol
+                        FROM silver_alpaca_bars
+                        WHERE ticker = :ticker
+                        AND bar_start_ts_utc > :start_20d AND bar_start_ts_utc <= :entry_ts
+                        GROUP BY DATE(bar_start_ts_utc)
+                    ) daily
+                )
+                SELECT
+                    (SELECT vol FROM current_vol) / NULLIF((SELECT avg_daily FROM avg_vol) / 6.5, 0) as rvol_1h,
+                    (SELECT vol FROM current_vol) * 6.5 / NULLIF((SELECT avg_daily FROM avg_vol), 0) as rvol_daily
+            """
+            )
+            start_1h = entry_ts - timedelta(hours=1)
+            start_20d = entry_ts - timedelta(days=20)
+            res = await session.execute(
+                stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_1h": start_1h, "start_20d": start_20d}
+            )
+            row = res.fetchone()
+            if row:
+                return {"rvol_1h": row[0], "rvol_daily": row[1]}
+            return {}
+
+        rvol = await db_query(query_rvol)
+        result.update(rvol)
+    except Exception as e:
+        logger.debug(f"RVOL lookup failed: {e}")
+
+    # Get overnight gap
+    try:
+
+        async def query_overnight_gap(session: Any) -> Optional[float]:
+            stmt = text(
+                """
+                WITH prev_close AS (
+                    SELECT close FROM silver_alpaca_bars
+                    WHERE ticker = :ticker
+                    AND bar_start_ts_utc < DATE(:entry_date)
+                    ORDER BY bar_start_ts_utc DESC LIMIT 1
+                ),
+                today_open AS (
+                    SELECT open FROM silver_alpaca_bars
+                    WHERE ticker = :ticker
+                    AND DATE(bar_start_ts_utc) = DATE(:entry_date)
+                    ORDER BY bar_start_ts_utc ASC LIMIT 1
+                )
+                SELECT
+                    ((SELECT open FROM today_open) / NULLIF((SELECT close FROM prev_close), 0) - 1) * 100
+            """
+            )
+            res = await session.execute(stmt, {"ticker": ticker, "entry_date": entry_ts})
+            row = res.fetchone()
+            return row[0] if row and row[0] else None
+
+        overnight = await db_query(query_overnight_gap)
+        if overnight is not None:
+            result["overnight_gap_pct"] = overnight
+    except Exception as e:
+        logger.debug(f"Overnight gap lookup failed: {e}")
+
+    # Get 52-week high distance
+    try:
+
+        async def query_52w_high(session: Any) -> Optional[float]:
+            stmt = text(
+                """
+                WITH high_52w AS (
+                    SELECT MAX(high) as max_high FROM silver_alpaca_bars
+                    WHERE ticker = :ticker
+                    AND bar_start_ts_utc > :start_52w AND bar_start_ts_utc <= :entry_ts
+                ),
+                current_price AS (
+                    SELECT close FROM silver_alpaca_bars
+                    WHERE ticker = :ticker AND bar_start_ts_utc <= :entry_ts
+                    ORDER BY bar_start_ts_utc DESC LIMIT 1
+                )
+                SELECT
+                    ((SELECT close FROM current_price) / NULLIF((SELECT max_high FROM high_52w), 0) - 1) * 100
+            """
+            )
+            start_52w = entry_ts - timedelta(weeks=52)
+            res = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_52w": start_52w})
+            row = res.fetchone()
+            return row[0] if row and row[0] else None
+
+        high_dist = await db_query(query_52w_high)
+        if high_dist is not None:
+            result["high_52w_distance_pct"] = high_dist
+    except Exception as e:
+        logger.debug(f"52w high lookup failed: {e}")
 
     return result
