@@ -29,6 +29,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **EOD Agent Async Bug**: Fixed missing `await` on `session.execute()` in `performance_tracker.py` `get_daily_accuracy()` and `get_weekly_performance()` functions
 - **EOD Agent Proposal Schema**: Fixed LLM prompt to match `ProposalBuilder` validation - changed `solver_mutation` to `solver_edit`, added required `evidence_pointers`, `test_plan` fields
 - **EOD Agent FK Constraint**: Fixed `solver_edits` insert by creating Solver stub before edit record
+- **ML Scoring Feature Mismatch**: Fixed MLScorer receiving only 2/53 features during inference
+  - Created `flow_enricher.py` module with `enrich_flow_for_scoring()` that queries same DB sources as labeler
+  - Now populates 21/53 features: GEX, VEX, market tide, IV rank, VIX, regimes, max pain distance
+  - Added `score_enriched()` async method to MLScorer for real-time enrichment
+  - Updated `main_ingest.py` to use `process_flows_enriched()` for feature parity with training
+- **Alpaca Trading Connector**: Added `client_order_id` parameter to `submit_market_order()` to match execution engine calls
 
 ### Added
 - **Drift-Triggered Pattern Mining**: Retrain ML models when high feature drift detected
