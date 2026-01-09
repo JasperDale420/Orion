@@ -527,7 +527,7 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
                 SELECT
                     COUNT(CASE WHEN aggressor = 'ASK' THEN 1 END)::float /
                         NULLIF(COUNT(*), 0) as ask_ratio,
-                    COUNT(CASE WHEN is_sweep = 'true' THEN 1 END)::float /
+                    COUNT(CASE WHEN is_sweep::text = 'true' OR is_sweep::text = 'True' THEN 1 END)::float /
                         NULLIF(COUNT(*), 0) as sweep_ratio,
                     COALESCE(SUM(premium_usd), 0) as total_premium
                 FROM silver_uw_flow
@@ -579,6 +579,46 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
             result["spy_return_1h"] = spy_ret
     except Exception as e:
         logger.debug(f"SPY return lookup failed: {e}")
+
+    # Get sector net premium (for sector-level flow direction)
+    if sector:
+        try:
+            start_ts = entry_ts - timedelta(hours=1)
+            sector_tickers = [t for t, s in TICKER_SECTORS.items() if s == sector]
+
+            if sector_tickers:
+
+                async def query_sector_premium(session: Any) -> Dict[str, Any]:
+                    # Use ANY for array matching
+                    stmt = text(
+                        """
+                        SELECT
+                            COALESCE(SUM(CASE WHEN aggressor = 'ASK' THEN premium_usd ELSE 0 END), 0) as call_premium,
+                            COALESCE(SUM(CASE WHEN aggressor = 'BID' THEN premium_usd ELSE 0 END), 0) as put_premium
+                        FROM silver_uw_flow
+                        WHERE ticker = ANY(:tickers)
+                        AND flow_ts_utc > :start_ts AND flow_ts_utc <= :entry_ts
+                    """
+                    )
+                    res = await session.execute(
+                        stmt, {"tickers": sector_tickers, "start_ts": start_ts, "entry_ts": entry_ts}
+                    )
+                    row = res.fetchone()
+                    if row:
+                        call_prem = row[0] or 0
+                        put_prem = row[1] or 0
+                        net = call_prem - put_prem
+                        direction = "BULLISH" if net > 0 else "BEARISH" if net < 0 else "NEUTRAL"
+                        return {
+                            "sector_net_premium_1h": net,
+                            "sector_flow_direction": direction,
+                        }
+                    return {}
+
+                sector_flow = await db_query(query_sector_premium)
+                result.update(sector_flow)
+        except Exception as e:
+            logger.debug(f"Sector premium lookup failed: {e}")
 
     return result
 
