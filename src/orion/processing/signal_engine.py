@@ -99,6 +99,69 @@ class SignalEngine:
         # Calculate regime risk multiplier for later sizing
         regime_size_multiplier = risk_manager.calculate_combined_multiplier(regime_snapshot)
 
+        # 0c. ML Pre-Filter: Skip low-probability candidates before Solver evaluation
+        try:
+            from orion.ml.scorer import get_scorer
+
+            # Convert CandidateTrade to flow dict for MLScorer
+            flow_dict = {
+                "ticker": candidate.ticker,
+                "option_symbol": candidate.option_symbol,
+                "premium_usd": candidate.premium,
+                "dte": (
+                    (candidate.expiration_date - candidate.timestamp_utc).days if candidate.expiration_date else None
+                ),
+                "put_call": candidate.option_type,
+                "strike_price": candidate.strike_price,
+                "underlying_price": candidate.underlying_price,
+                "timestamp_utc": candidate.timestamp_utc,
+                # Additional fields from execution_params if available
+                **(candidate.execution_params or {}),
+            }
+
+            scorer = get_scorer()
+            ml_score = scorer.score(flow_dict)
+
+            # Pre-filter threshold (configurable via env)
+            import os
+
+            ml_threshold = float(os.getenv("ORION_ML_PREFILTER_THRESHOLD", "0.5"))
+
+            if ml_score < ml_threshold:
+                logger.info(
+                    f"ML pre-filter: {candidate.ticker} rejected (score={ml_score:.2f} < {ml_threshold})",
+                    extra={
+                        "event": "ml_prefilter_skip",
+                        "ticker": candidate.ticker,
+                        "ml_score": ml_score,
+                        "threshold": ml_threshold,
+                    },
+                )
+                return StrategyDecision(
+                    decision_id=f"ml_skip_{candidate.candidate_id}",
+                    candidate_id=candidate.candidate_id,
+                    timestamp_utc=candidate.timestamp_utc,
+                    ticker=candidate.ticker,
+                    strategy_version_id="ML_PREFILTER",
+                    model_version=None,
+                    decision="SKIP",
+                    reason=f"ML pre-filter: score {ml_score:.2f} below threshold ({ml_threshold})",
+                    executed_successfully="SKIPPED",
+                    execution_params={},
+                    decision_trace_json={
+                        "ml_prefilter": True,
+                        "ml_score": ml_score,
+                        "threshold": ml_threshold,
+                        "regime_snapshot": {
+                            "trend": regime_snapshot.trend.value,
+                            "vol": regime_snapshot.vol.value,
+                        },
+                    },
+                )
+        except Exception as e:
+            # Log but don't block on ML scorer failures - safety fallback
+            logger.warning(f"ML pre-filter failed: {e}, continuing with Solver evaluation")
+
         # Clear feature cache on regime transition (M1 remediation)
         previous_regime = self._previous_regime.get(candidate.ticker)
         if previous_regime and previous_regime != current_regime_str:
