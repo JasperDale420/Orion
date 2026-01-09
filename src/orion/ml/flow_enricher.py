@@ -125,8 +125,8 @@ async def enrich_flow_for_scoring(
             # Flow metrics
             "rvol_1h": market_context.get("rvol_1h"),
             "rvol_daily": market_context.get("rvol_daily"),
-            "oi_change_1d": flow_metrics.get("oi_change_1d"),
-            "oi_change_pct": flow_metrics.get("oi_change_pct"),
+            "oi_change_1d": greeks.get("oi_change_1d"),
+            "oi_change_pct": greeks.get("oi_change_pct"),
             "ask_side_ratio": flow_metrics.get("ask_side_ratio"),
             "sweep_ratio_1h": flow_metrics.get("sweep_ratio_1h"),
             "same_ticker_premium_1h": flow_metrics.get("same_ticker_premium_1h"),
@@ -434,6 +434,37 @@ async def _get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
                 except Exception:
                     pass  # Silent fail for HV calculation
 
+            # Calculate OI change from prior day
+            oi_change_1d = None
+            oi_change_pct = None
+            current_oi = row[6]
+            if current_oi and ticker and flow_ts:
+                try:
+                    oi_stmt = text(
+                        """
+                        SELECT open_interest
+                        FROM silver_uw_flow
+                        WHERE ticker = :ticker
+                        AND option_chain = (
+                            SELECT option_chain FROM silver_uw_flow WHERE event_id = :event_id
+                        )
+                        AND DATE(flow_ts_utc) < DATE(:flow_ts)
+                        ORDER BY flow_ts_utc DESC
+                        LIMIT 1
+                    """
+                    )
+                    oi_result = await session.execute(
+                        oi_stmt, {"ticker": ticker, "flow_ts": flow_ts, "event_id": event_id}
+                    )
+                    oi_row = oi_result.fetchone()
+                    if oi_row and oi_row[0]:
+                        prior_oi = oi_row[0]
+                        oi_change_1d = current_oi - prior_oi
+                        if prior_oi > 0:
+                            oi_change_pct = (current_oi - prior_oi) / prior_oi * 100
+                except Exception:
+                    pass  # Silent fail for OI change
+
             return {
                 "delta": row[0],
                 "gamma": row[1],
@@ -443,6 +474,8 @@ async def _get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
                 "volume": row[5],
                 "open_interest": row[6],
                 "iv_vs_hv_ratio": iv_vs_hv,
+                "oi_change_1d": oi_change_1d,
+                "oi_change_pct": oi_change_pct,
             }
         return {}
 
