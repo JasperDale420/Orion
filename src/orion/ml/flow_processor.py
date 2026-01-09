@@ -39,6 +39,9 @@ class MLFlowProcessor:
         """
         Score all flows and generate CandidateTrades for those above threshold.
 
+        NOTE: This method uses raw flow data without enrichment. For full feature
+        parity with training data, use process_flows_enriched() instead.
+
         Args:
             flows: List of flow dicts (from SilverOptionFlow or raw payload)
 
@@ -69,6 +72,72 @@ class MLFlowProcessor:
             f"Processed {len(flows)} flows, generated {len(candidates)} candidates",
             extra={
                 "event": "batch_processed",
+                "total_flows": len(flows),
+                "candidates_generated": len(candidates),
+                "threshold": self.score_threshold,
+            },
+        )
+
+        return candidates
+
+    async def process_flows_enriched(self, flows: List[Dict[str, Any]]) -> List[CandidateTrade]:
+        """
+        Score all flows with full feature enrichment.
+
+        This method enriches each flow with database features (GEX, market tide,
+        regimes, etc.) before scoring, ensuring feature parity with training data.
+
+        Args:
+            flows: List of flow dicts
+
+        Returns:
+            List of CandidateTrade objects for high-scoring flows
+        """
+        import asyncio
+
+        if not flows:
+            return []
+
+        candidates = []
+
+        # Score each flow with enrichment (async)
+        async def score_flow(flow: Dict[str, Any]) -> tuple:
+            score = await self.scorer.score_enriched(flow)
+            return flow, score
+
+        # Run enrichment in parallel
+        results = await asyncio.gather(*[score_flow(f) for f in flows], return_exceptions=True)
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(f"Flow scoring failed: {result}")
+                continue
+
+            flow, score = result
+            if score >= self.score_threshold:
+                try:
+                    candidate = self._flow_to_candidate(flow, score)
+                    if candidate:
+                        candidates.append(candidate)
+                        logger.info(
+                            f"High-scoring candidate: {flow.get('ticker')} score={score:.3f}",
+                            extra={
+                                "event": "enriched_candidate",
+                                "ticker": flow.get("ticker"),
+                                "score": score,
+                                "premium_usd": flow.get("premium_usd"),
+                            },
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to create candidate from flow: {e}",
+                        extra={"ticker": flow.get("ticker"), "score": score},
+                    )
+
+        logger.info(
+            f"Processed {len(flows)} flows with enrichment, generated {len(candidates)} candidates",
+            extra={
+                "event": "batch_processed_enriched",
                 "total_flows": len(flows),
                 "candidates_generated": len(candidates),
                 "threshold": self.score_threshold,

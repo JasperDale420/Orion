@@ -504,12 +504,13 @@ async def main() -> None:
                                 flow_dicts = [e.payload for e in uw_flow_events_only if e.payload]
                                 if flow_dicts:
                                     ml_processor = MLFlowProcessor(score_threshold=0.5)
-                                    ml_candidates = ml_processor.process_flows(flow_dicts)
+                                    # Use enriched scoring for feature parity with training
+                                    ml_candidates = await ml_processor.process_flows_enriched(flow_dicts)
                                     if ml_candidates:
                                         await save_candidates_to_db(ml_candidates)
                                         logger.info(
-                                            f"ML Scorer generated {len(ml_candidates)} candidates",
-                                            extra={"event": "ml_candidates", "count": len(ml_candidates)},
+                                            f"ML Scorer generated {len(ml_candidates)} candidates (enriched)",
+                                            extra={"event": "ml_candidates_enriched", "count": len(ml_candidates)},
                                         )
                                         if _metrics:
                                             _metrics.ingest_candidates_total.inc(len(ml_candidates))
