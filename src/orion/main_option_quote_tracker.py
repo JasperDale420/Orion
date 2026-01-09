@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
 from orion.shared.db_utils import db_query, db_write
-from orion.shared.logging import setup_struct_logger
+from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.option_quote_tracker")
 
@@ -64,24 +64,26 @@ async def get_pending_checkpoints() -> List[Dict[str, Any]]:
     """Get flow events that need checkpoint quotes fetched."""
 
     async def query(session: Any) -> List[Dict[str, Any]]:
-        # Find flow events from last 24 hours that have option symbols
+        # Find flow events from last 24 hours
+        # Construct option symbol from components: TICKER + YYMMDD + C/P + strike*1000 padded
         stmt = text(
             """
             SELECT 
                 f.event_id,
                 f.ticker,
-                f.option_symbol,
+                f.ticker || TO_CHAR(TO_DATE(f.expiry, 'YYYY-MM-DD'), 'YYMMDD') || 
+                    f.put_call || LPAD(CAST((f.strike * 1000)::bigint AS text), 8, '0') as option_symbol,
                 f.flow_ts_utc,
                 EXTRACT(EPOCH FROM (NOW() - f.flow_ts_utc)) / 60 as minutes_since_entry
             FROM silver_uw_flow f
-            WHERE f.flow_ts_utc > NOW() - INTERVAL :max_age
-            AND f.option_symbol IS NOT NULL
-            AND f.option_symbol != ''
+            WHERE f.flow_ts_utc > NOW() - INTERVAL '24 hours'
+            AND f.expiry IS NOT NULL
+            AND f.strike IS NOT NULL
             ORDER BY f.flow_ts_utc DESC
             LIMIT 1000
         """
         )
-        result = await session.execute(stmt, {"max_age": f"{MAX_TRACKING_AGE_HOURS} hours"})
+        result = await session.execute(stmt)
         return [dict(row._mapping) for row in result.fetchall()]
 
     return await db_query(query)
