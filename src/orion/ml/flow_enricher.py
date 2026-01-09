@@ -846,4 +846,54 @@ async def _get_market_context(ticker: str, entry_ts: datetime) -> Dict[str, Any]
     except Exception as e:
         logger.debug(f"VWAP lookup failed: {e}")
 
+    # Get SPY correlation (5-day rolling correlation of daily returns)
+    try:
+
+        async def query_spy_correlation(session: Any) -> Optional[float]:
+            stmt = text(
+                """
+                WITH ticker_returns AS (
+                    SELECT
+                        DATE(bar_start_ts_utc) as day,
+                        MAX(close) as close
+                    FROM silver_alpaca_bars
+                    WHERE ticker = :ticker
+                    AND bar_start_ts_utc > :start_5d AND bar_start_ts_utc <= :entry_ts
+                    GROUP BY DATE(bar_start_ts_utc)
+                    ORDER BY day
+                ),
+                spy_returns AS (
+                    SELECT
+                        DATE(bar_start_ts_utc) as day,
+                        MAX(close) as close
+                    FROM silver_alpaca_bars
+                    WHERE ticker = 'SPY'
+                    AND bar_start_ts_utc > :start_5d AND bar_start_ts_utc <= :entry_ts
+                    GROUP BY DATE(bar_start_ts_utc)
+                    ORDER BY day
+                ),
+                combined AS (
+                    SELECT
+                        t.day,
+                        t.close / NULLIF(LAG(t.close) OVER (ORDER BY t.day), 0) - 1 as ticker_ret,
+                        s.close / NULLIF(LAG(s.close) OVER (ORDER BY s.day), 0) - 1 as spy_ret
+                    FROM ticker_returns t
+                    JOIN spy_returns s ON t.day = s.day
+                )
+                SELECT CORR(ticker_ret, spy_ret)
+                FROM combined
+                WHERE ticker_ret IS NOT NULL AND spy_ret IS NOT NULL
+            """
+            )
+            start_5d = entry_ts - timedelta(days=7)  # 7 calendar days = ~5 trading
+            res = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_5d": start_5d})
+            row = res.fetchone()
+            return row[0] if row and row[0] else None
+
+        spy_corr = await db_query(query_spy_correlation)
+        if spy_corr is not None:
+            result["spy_correlation_5d"] = spy_corr
+    except Exception as e:
+        logger.debug(f"SPY correlation lookup failed: {e}")
+
     return result
