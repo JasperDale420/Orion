@@ -390,7 +390,7 @@ async def _get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
             """
             SELECT
                 delta_alpaca, gamma_alpaca, theta_alpaca, vega_alpaca,
-                iv, volume_contract, open_interest
+                iv, volume_contract, open_interest, ticker, flow_ts_utc
             FROM silver_uw_flow
             WHERE event_id = :event_id
         """
@@ -398,14 +398,51 @@ async def _get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
         result = await session.execute(stmt, {"event_id": event_id})
         row = result.fetchone()
         if row:
+            iv = row[4]
+            ticker = row[7]
+            flow_ts = row[8]
+
+            # Calculate iv_vs_hv_ratio if we have IV
+            iv_vs_hv = None
+            if iv and ticker and flow_ts:
+                try:
+                    # Get historical volatility from bars (20-day realized)
+                    hv_stmt = text(
+                        """
+                        WITH daily_returns AS (
+                            SELECT
+                                DATE(bar_start_ts_utc) as day,
+                                LN(MAX(close) / LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) as log_return
+                            FROM silver_alpaca_bars
+                            WHERE ticker = :ticker
+                            AND bar_start_ts_utc > :start_ts AND bar_start_ts_utc <= :end_ts
+                            GROUP BY DATE(bar_start_ts_utc)
+                            ORDER BY day
+                        )
+                        SELECT STDDEV(log_return) * SQRT(252) as hv_20d
+                        FROM daily_returns
+                        WHERE log_return IS NOT NULL
+                    """
+                    )
+                    start_ts = flow_ts - timedelta(days=30)
+                    hv_result = await session.execute(
+                        hv_stmt, {"ticker": ticker, "start_ts": start_ts, "end_ts": flow_ts}
+                    )
+                    hv_row = hv_result.fetchone()
+                    if hv_row and hv_row[0] and hv_row[0] > 0:
+                        iv_vs_hv = iv / hv_row[0]
+                except Exception:
+                    pass  # Silent fail for HV calculation
+
             return {
                 "delta": row[0],
                 "gamma": row[1],
                 "theta": row[2],
                 "vega": row[3],
-                "iv": row[4],
+                "iv": iv,
                 "volume": row[5],
                 "open_interest": row[6],
+                "iv_vs_hv_ratio": iv_vs_hv,
             }
         return {}
 
@@ -739,5 +776,41 @@ async def _get_market_context(ticker: str, entry_ts: datetime) -> Dict[str, Any]
             result["high_52w_distance_pct"] = high_dist
     except Exception as e:
         logger.debug(f"52w high lookup failed: {e}")
+
+    # Get VWAP distance (intraday VWAP vs current price)
+    try:
+
+        async def query_vwap(session: Any) -> Optional[float]:
+            stmt = text(
+                """
+                WITH today_bars AS (
+                    SELECT close, volume, high, low
+                    FROM silver_alpaca_bars
+                    WHERE ticker = :ticker
+                    AND DATE(bar_start_ts_utc) = DATE(:entry_ts)
+                ),
+                vwap_calc AS (
+                    SELECT
+                        SUM((high + low + close) / 3 * volume) / NULLIF(SUM(volume), 0) as vwap
+                    FROM today_bars
+                ),
+                current_price AS (
+                    SELECT close FROM silver_alpaca_bars
+                    WHERE ticker = :ticker AND bar_start_ts_utc <= :entry_ts
+                    ORDER BY bar_start_ts_utc DESC LIMIT 1
+                )
+                SELECT
+                    ((SELECT close FROM current_price) / NULLIF((SELECT vwap FROM vwap_calc), 0) - 1) * 100
+            """
+            )
+            res = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
+            row = res.fetchone()
+            return row[0] if row and row[0] else None
+
+        vwap_dist = await db_query(query_vwap)
+        if vwap_dist is not None:
+            result["vwap_distance_pct"] = vwap_dist
+    except Exception as e:
+        logger.debug(f"VWAP lookup failed: {e}")
 
     return result
