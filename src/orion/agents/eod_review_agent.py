@@ -361,14 +361,27 @@ class EODReviewAgent(BaseAgent):
             )
             bronze_rows = (await session.execute(bronze_stmt)).scalars().all()
 
-            # Feature drift data: pull daily OHLCV signals and a rolling baseline window (previous 20d)
-            silver_today_stmt = select(SilverSignal).where(
-                SilverSignal.signal_ts_utc >= start_ts,
-                SilverSignal.signal_ts_utc < end_ts,
+            # Feature drift data: pull sampled daily OHLCV signals and a rolling baseline window (previous 20d)
+            # IMPORTANT: Limit to 5000 rows each to prevent OOM (full baseline can be 500K+ rows)
+            from sqlalchemy import func
+            
+            silver_today_stmt = (
+                select(SilverSignal)
+                .where(
+                    SilverSignal.signal_ts_utc >= start_ts,
+                    SilverSignal.signal_ts_utc < end_ts,
+                )
+                .order_by(func.random())
+                .limit(5000)
             )
-            silver_base_stmt = select(SilverSignal).where(
-                SilverSignal.signal_ts_utc >= baseline_start,
-                SilverSignal.signal_ts_utc < start_ts,
+            silver_base_stmt = (
+                select(SilverSignal)
+                .where(
+                    SilverSignal.signal_ts_utc >= baseline_start,
+                    SilverSignal.signal_ts_utc < start_ts,
+                )
+                .order_by(func.random())
+                .limit(5000)
             )
             silver_today = (await session.execute(silver_today_stmt)).scalars().all()
             silver_baseline = (await session.execute(silver_base_stmt)).scalars().all()
