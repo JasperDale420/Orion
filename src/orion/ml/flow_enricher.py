@@ -27,6 +27,7 @@ async def enrich_flow_for_scoring(
     option_chain: Optional[str] = None,
     aggressor: Optional[str] = None,
     is_sweep: bool = False,
+    expiry: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Enrich a flow with all features required for ML scoring.
@@ -40,16 +41,37 @@ async def enrich_flow_for_scoring(
         put_call: 'C' or 'P'
         strike: Strike price
         underlying_price: Underlying price at entry
-        dte: Days to expiry
+        dte: Days to expiry (if None, calculated from expiry)
         premium_usd: Premium in USD
         event_id: UW flow event ID (for Greeks lookup)
         option_chain: OCC option symbol
         aggressor: 'ASK' or 'BID'
         is_sweep: Whether flow is a sweep
+        expiry: Expiry date (YYYY-MM-DD string or date object)
 
     Returns:
         Dict with all enriched features matching pattern_miner.FEATURE_COLUMNS
     """
+    # Calculate DTE from expiry if not provided
+    if dte is None and expiry is not None:
+        try:
+            from dateutil.parser import parse as parse_date
+            if isinstance(expiry, str):
+                expiry_date = parse_date(expiry).date()
+            elif hasattr(expiry, 'date'):
+                expiry_date = expiry.date() if callable(expiry.date) else expiry
+            else:
+                expiry_date = expiry
+            
+            # Use entry_ts date for DTE calculation
+            entry_date = entry_ts.date() if hasattr(entry_ts, 'date') else entry_ts
+            dte = (expiry_date - entry_date).days
+            if dte < 0:
+                dte = 0  # Expired options
+        except Exception as e:
+            logger.debug(f"Failed to calculate DTE from expiry {expiry}: {e}")
+            dte = None
+    
     # Start with basic flow data
     enriched = {
         "ticker": ticker,

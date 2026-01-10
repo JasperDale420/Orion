@@ -324,6 +324,7 @@ class MLScorer:
         option_chain = flow.get("option_chain") or flow.get("option_symbol")
         aggressor = flow.get("aggressor")
         is_sweep = flow.get("is_sweep") or flow.get("is_sweep") == "true"
+        expiry = flow.get("expiry")  # Pass expiry for DTE calculation
 
         try:
             # Enrich with all database features
@@ -339,6 +340,7 @@ class MLScorer:
                 option_chain=option_chain,
                 aggressor=aggressor,
                 is_sweep=is_sweep,
+                expiry=expiry,  # Pass expiry for DTE calculation
             )
 
             logger.debug(
