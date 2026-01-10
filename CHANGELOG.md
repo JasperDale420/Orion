@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Exit Classifier Window Features**: Added 10 window features from `gold_feature_windows` to exit classifier training
+  - `call_put_imbalance`, `sweep_ratio`, `flow_count` for 1h/1d/1w periods
+  - `dp_volume_1d`, `call_put_ratio_1d/1w` for dark pool context
+  - Uses LATERAL JOIN to look up historical window features at entry time
+- **Checkpoint Greeks Infrastructure**: Modified labeler to fetch Greeks from Alpaca at each checkpoint
+  - `get_real_checkpoint_prices` now returns delta, gamma, theta, vega, iv per checkpoint
+  - Greeks added to label dict in `build_label` function
+  - Note: INSERT statement update for persistence is a follow-up task
+
 - **Quant Audit Phase 2 Remediation**: Comprehensive risk and ML fixes
   - **Projected Gamma Check**: `_check_greeks_limits` now uses projected gamma (current + trade) instead of just current
   - **Vega Exposure Limits**: New `max_portfolio_vega` (200) and `max_position_vega` (50) in `RiskSettings`
