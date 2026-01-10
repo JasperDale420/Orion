@@ -28,6 +28,17 @@ logger = setup_struct_logger("orion.ml.exit_classifier")
 
 MODEL_DIR = Path(os.getenv("ORION_MODEL_DIR", "/app/models"))
 
+
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """Safely convert value to float, handling None and string values."""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
 # Bucket-specific checkpoint configurations
 # Each checkpoint has: (column_suffix, hours_held, description)
 BUCKET_CHECKPOINTS = {
@@ -384,13 +395,17 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
 
     query = f"""
         SELECT
+            -- Identifier for window feature lookup
+            p.ticker,
+            p.entry_ts,
+
             -- Entry context
-            premium_usd, dte, is_sweep,
-            iv_rank_at_entry, vix_at_entry,
-            trend_regime_at_entry, vol_regime_at_entry,
-            gex_at_entry, market_tide_30m,
-            delta_at_entry, gamma_at_entry, theta_at_entry,
-            iv_at_entry, ask_side_ratio,
+            p.premium_usd, p.dte, p.is_sweep,
+            p.iv_rank_at_entry, p.vix_at_entry,
+            p.trend_regime_at_entry, p.vol_regime_at_entry,
+            p.gex_at_entry, p.market_tide_30m,
+            p.delta_at_entry, p.gamma_at_entry, p.theta_at_entry,
+            p.iv_at_entry, p.ask_side_ratio,
 
             -- Returns at bucket-specific checkpoints
             {return_cols},
@@ -405,10 +420,46 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
             {theta_decay_cols},
 
             -- Outcome
-            max_return_pct, max_drawdown_pct
-        FROM price_target_labels
-        WHERE trade_type = '{trade_type}'
-        AND max_return_pct IS NOT NULL
+            p.max_return_pct, p.max_drawdown_pct,
+
+            -- Window features (1h context at entry)
+            w1h.features->>'call_put_imbalance' as window_call_put_imbalance_1h,
+            w1h.features->>'sweep_ratio' as window_sweep_ratio_1h,
+            w1h.features->>'flow_count' as window_flow_count_1h,
+
+            -- Window features (1d context at entry)
+            w1d.features->>'call_put_imbalance' as window_call_put_imbalance_1d,
+            w1d.features->>'sweep_ratio' as window_sweep_ratio_1d,
+            w1d.features->>'dp_volume' as window_dp_volume_1d,
+            w1d.features->>'call_put_ratio' as window_call_put_ratio_1d,
+
+            -- Window features (1w context at entry)
+            w1w.features->>'call_put_imbalance' as window_call_put_imbalance_1w,
+            w1w.features->>'sweep_ratio' as window_sweep_ratio_1w,
+            w1w.features->>'call_put_ratio' as window_call_put_ratio_1w
+
+        FROM price_target_labels p
+        -- Join window features for 1h, 1d, 1w periods
+        LEFT JOIN LATERAL (
+            SELECT features FROM gold_feature_windows
+            WHERE ticker = p.ticker AND period = '1h'
+            AND window_end_ts_utc <= p.entry_ts
+            ORDER BY window_end_ts_utc DESC LIMIT 1
+        ) w1h ON true
+        LEFT JOIN LATERAL (
+            SELECT features FROM gold_feature_windows
+            WHERE ticker = p.ticker AND period = '1d'
+            AND window_end_ts_utc <= p.entry_ts
+            ORDER BY window_end_ts_utc DESC LIMIT 1
+        ) w1d ON true
+        LEFT JOIN LATERAL (
+            SELECT features FROM gold_feature_windows
+            WHERE ticker = p.ticker AND period = '1w'
+            AND window_end_ts_utc <= p.entry_ts
+            ORDER BY window_end_ts_utc DESC LIMIT 1
+        ) w1w ON true
+        WHERE p.trade_type = '{trade_type}'
+        AND p.max_return_pct IS NOT NULL
     """
 
     async def run_query(session: Any) -> List[Any]:
@@ -423,7 +474,7 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         logger.warning(f"No training data for bucket {bucket}")
         return np.array([]), np.array([]), []
 
-    # Expanded feature names - includes checkpoint-specific features
+    # Expanded feature names - includes checkpoint-specific features and window features
     feature_names = [
         # Position state at checkpoint
         "current_return_pct",
@@ -449,6 +500,17 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         "theta_at_entry",
         "iv_at_entry",
         "ask_side_ratio",
+        # Window features (multi-timeframe flow context)
+        "window_call_put_imbalance_1h",
+        "window_sweep_ratio_1h",
+        "window_flow_count_1h",
+        "window_call_put_imbalance_1d",
+        "window_sweep_ratio_1d",
+        "window_dp_volume_1d",
+        "window_call_put_ratio_1d",
+        "window_call_put_imbalance_1w",
+        "window_sweep_ratio_1w",
+        "window_call_put_ratio_1w",
     ]
 
     X_list = []
@@ -492,7 +554,6 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                 # Time value
                 time_value_pct,
                 theta_decay_pct,
-                # Entry context
                 float(row.get("premium_usd") or 0),
                 int(row.get("dte") or 0),
                 1 if row.get("is_sweep") else 0,
@@ -504,6 +565,17 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                 float(row.get("theta_at_entry") or 0),
                 float(row.get("iv_at_entry") or 0),
                 float(row.get("ask_side_ratio") or 0),
+                # Window features (multi-timeframe flow context)
+                _safe_float(row.get("window_call_put_imbalance_1h")),
+                _safe_float(row.get("window_sweep_ratio_1h")),
+                _safe_float(row.get("window_flow_count_1h")),
+                _safe_float(row.get("window_call_put_imbalance_1d")),
+                _safe_float(row.get("window_sweep_ratio_1d")),
+                _safe_float(row.get("window_dp_volume_1d")),
+                _safe_float(row.get("window_call_put_ratio_1d")),
+                _safe_float(row.get("window_call_put_imbalance_1w")),
+                _safe_float(row.get("window_sweep_ratio_1w")),
+                _safe_float(row.get("window_call_put_ratio_1w")),
             ]
 
             # Target: was this a good exit point?
