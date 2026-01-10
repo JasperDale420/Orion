@@ -28,7 +28,6 @@ from orion.labeler import (
     calculate_black_scholes_delta,
     calculate_black_scholes_gamma,
     calculate_iv_rank_from_history,
-    calculate_return,
     calculate_volatility,
     get_price_at_offset,
     get_price_at_offset_days,
@@ -2278,7 +2277,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
     # Price at checkpoints - prefer real Alpaca quotes when available
     # Fetch real quotes from silver_option_quotes (populated by option_quote_tracker)
-    real_quotes = await get_real_checkpoint_prices(event_id)
+    real_quotes = await get_real_checkpoint_prices(entry.event_id)
 
     # Helper to get price: prefer real quote, fallback to flow data
     def _get_checkpoint_price(checkpoint: str, flow_price_fn, *flow_args) -> Optional[float]:
@@ -2683,106 +2682,35 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
 
 async def persist_labels(labels: List[Dict[str, Any]]) -> int:
-    """Persist labeled records to database."""
+    """Persist labeled records to database using dynamic INSERT.
+
+    Automatically includes all keys from label dict, including checkpoint Greeks.
+    New columns added to label dict are automatically persisted without code changes.
+    """
     if not labels:
         return 0
 
     async def write(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO price_target_labels (
-                event_id, ticker, option_chain, trade_type,
-                entry_ts, entry_option_price, expiry, dte,
-                premium_usd, aggressor, put_call, is_sweep,
-                max_price_reached, max_price_ts, max_return_pct,
-                min_price_reached, min_price_ts, max_drawdown_pct,
-                hit_50_pct_ts, hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts,
-                hit_stop_20_pct_ts,
-                first_exit_type, first_exit_ts, first_exit_return_pct,
-                last_tracked_ts,
-                time_to_max_seconds, time_to_50_pct_seconds,
-                time_to_75_pct_seconds, time_to_100_pct_seconds, time_to_150_pct_seconds,
-                time_to_stop_seconds, holding_period_seconds,
-                max_drawdown_before_target, min_distance_to_stop_pct, price_volatility,
-                price_at_1h, price_at_2h, price_at_4h,
-                return_at_1h, return_at_2h, return_at_4h,
-                price_at_5m, return_at_5m, price_at_10m, return_at_10m,
-                price_at_15m, return_at_15m, price_at_30m, return_at_30m,
-                price_at_8h, return_at_8h, price_at_eod, return_at_eod,
-                price_at_1d, return_at_1d, price_at_2d, return_at_2d,
-                price_at_3d, return_at_3d, price_at_1w, return_at_1w,
-                opposing_flow_count, opposing_premium_total, sentiment_shift_ts,
-                optimal_exit_return, optimal_exit_ts, final_return_pct,
-                gex_at_entry, vex_at_entry, market_tide_30m, market_tide_direction,
-                max_pain_distance_pct, iv_rank_at_entry, darkpool_volume_1h,
-                darkpool_15m, darkpool_30m, darkpool_4h, darkpool_1d, darkpool_3d,
-                darkpool_1w, darkpool_2w, darkpool_4w,
-                trend_regime_at_entry, vol_regime_at_entry, risk_regime_at_entry,
-                session_regime_at_entry, vix_at_entry, vix_regime_at_entry,
-                iv_at_entry, iv_at_1h, iv_change_1h_pct,
-                underlying_at_entry, underlying_at_1h, underlying_change_1h_pct,
-                delta_at_entry, gamma_at_entry, theta_at_entry, vega_at_entry, rho_at_entry,
-                iv_at_entry_alpaca, volume_at_entry, open_interest_at_entry,
-                entry_hour, entry_session, entry_day_of_week,
-                days_to_earnings, is_post_earnings, sector, industry,
-                rvol_1h, rvol_daily, rvol_weekly, rvol_30m, rvol_3d, rvol_monthly,
-                ask_side_ratio, sweep_ratio_1h,
-                same_ticker_premium_1h, institutional_flow_1w, trade_bucket,
-                minutes_to_close, overnight_gap_pct, price_change_5d_prior,
-                earnings_in_dte_window, vwap_distance_pct,
-                oi_change_1d, oi_change_pct, iv_vs_hv_ratio,
-                high_52w_distance_pct, is_spread_leg, same_expiry_trades_1h,
-                sector_net_premium_1h, sector_flow_direction, spy_correlation_5d, spy_return_1h
-            ) VALUES (
-                :event_id, :ticker, :option_chain, :trade_type,
-                :entry_ts, :entry_option_price, :expiry, :dte,
-                :premium_usd, :aggressor, :put_call, :is_sweep,
-                :max_price_reached, :max_price_ts, :max_return_pct,
-                :min_price_reached, :min_price_ts, :max_drawdown_pct,
-                :hit_50_pct_ts, :hit_75_pct_ts, :hit_100_pct_ts, :hit_150_pct_ts,
-                :hit_stop_20_pct_ts,
-                :first_exit_type, :first_exit_ts, :first_exit_return_pct,
-                :last_tracked_ts,
-                :time_to_max_seconds, :time_to_50_pct_seconds,
-                :time_to_75_pct_seconds, :time_to_100_pct_seconds, :time_to_150_pct_seconds,
-                :time_to_stop_seconds, :holding_period_seconds,
-                :max_drawdown_before_target, :min_distance_to_stop_pct, :price_volatility,
-                :price_at_1h, :price_at_2h, :price_at_4h,
-                :return_at_1h, :return_at_2h, :return_at_4h,
-                :price_at_5m, :return_at_5m, :price_at_10m, :return_at_10m,
-                :price_at_15m, :return_at_15m, :price_at_30m, :return_at_30m,
-                :price_at_8h, :return_at_8h, :price_at_eod, :return_at_eod,
-                :price_at_1d, :return_at_1d, :price_at_2d, :return_at_2d,
-                :price_at_3d, :return_at_3d, :price_at_1w, :return_at_1w,
-                :opposing_flow_count, :opposing_premium_total, :sentiment_shift_ts,
-                :optimal_exit_return, :optimal_exit_ts, :final_return_pct,
-                :gex_at_entry, :vex_at_entry, :market_tide_30m, :market_tide_direction,
-                :max_pain_distance_pct, :iv_rank_at_entry, :darkpool_volume_1h,
-                :darkpool_15m, :darkpool_30m, :darkpool_4h, :darkpool_1d, :darkpool_3d,
-                :darkpool_1w, :darkpool_2w, :darkpool_4w,
-                :trend_regime_at_entry, :vol_regime_at_entry, :risk_regime_at_entry,
-                :session_regime_at_entry, :vix_at_entry, :vix_regime_at_entry,
-                :iv_at_entry, :iv_at_1h, :iv_change_1h_pct,
-                :underlying_at_entry, :underlying_at_1h, :underlying_change_1h_pct,
-                :delta_at_entry, :gamma_at_entry, :theta_at_entry, :vega_at_entry, :rho_at_entry,
-                :iv_at_entry_alpaca, :volume_at_entry, :open_interest_at_entry,
-                :entry_hour, :entry_session, :entry_day_of_week,
-                :days_to_earnings, :is_post_earnings, :sector, :industry,
-                :rvol_1h, :rvol_daily, :rvol_weekly, :rvol_30m, :rvol_3d, :rvol_monthly,
-                :ask_side_ratio, :sweep_ratio_1h,
-                :same_ticker_premium_1h, :institutional_flow_1w, :trade_bucket,
-                :minutes_to_close, :overnight_gap_pct, :price_change_5d_prior,
-                :earnings_in_dte_window, :vwap_distance_pct,
-                :oi_change_1d, :oi_change_pct, :iv_vs_hv_ratio,
-                :high_52w_distance_pct, :is_spread_leg, :same_expiry_trades_1h,
-                :sector_net_premium_1h, :sector_flow_direction, :spy_correlation_5d, :spy_return_1h
-            )
-            ON CONFLICT (event_id) DO NOTHING
-        """
-        )
-
         for label in labels:
-            await session.execute(stmt, label)
+            # Filter to only include keys that have non-None values or are required
+            # This avoids inserting columns that don't exist in the table
+            columns = [k for k in label.keys() if k is not None]
+
+            # Build dynamic INSERT statement
+            cols_str = ", ".join(columns)
+            vals_str = ", ".join([f":{c}" for c in columns])
+
+            stmt = text(
+                f"""
+                INSERT INTO price_target_labels ({cols_str})
+                VALUES ({vals_str})
+                ON CONFLICT (event_id) DO NOTHING
+            """
+            )
+
+            # Only pass the columns we're inserting
+            params = {k: v for k, v in label.items() if k in columns}
+            await session.execute(stmt, params)
 
     await db_write(write)
     return len(labels)
