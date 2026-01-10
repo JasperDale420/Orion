@@ -75,7 +75,8 @@ async def enrich_flow_for_scoring(
         _get_flow_greeks(event_id) if event_id else _empty_greeks(),
         _get_vix(entry_ts),
         _get_flow_metrics(ticker, entry_ts, dte),
-        _get_market_context(ticker, entry_ts),  # New: rvol, overnight_gap, 52w_high
+        _get_market_context(ticker, entry_ts),
+        _get_window_features(ticker, entry_ts),  # Multi-timeframe flow context
     ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -91,6 +92,7 @@ async def enrich_flow_for_scoring(
     vix = results[7] if not isinstance(results[7], Exception) else None
     flow_metrics = results[8] if not isinstance(results[8], Exception) else {}
     market_context = results[9] if not isinstance(results[9], Exception) else {}
+    window_features = results[10] if not isinstance(results[10], Exception) else {}
 
     # Merge all enriched features
     enriched.update(
@@ -156,6 +158,16 @@ async def enrich_flow_for_scoring(
             "trend_regime_at_entry": regime.get("trend_regime"),
             "vix_regime_at_entry": regime.get("vix_regime"),
             "sector_flow_direction": flow_metrics.get("sector_flow_direction"),
+            # Window features (multi-timeframe context)
+            "call_put_imbalance_1h": window_features.get("call_put_imbalance_1h"),
+            "call_put_imbalance_1d": window_features.get("call_put_imbalance_1d"),
+            "call_put_imbalance_1w": window_features.get("call_put_imbalance_1w"),
+            "sweep_ratio_1d": window_features.get("sweep_ratio_1d"),
+            "sweep_ratio_1w": window_features.get("sweep_ratio_1w"),
+            "dp_volume_1d_window": window_features.get("dp_volume_1d"),
+            "dp_volume_1w_window": window_features.get("dp_volume_1w"),
+            "call_put_ratio_1d": window_features.get("call_put_ratio_1d"),
+            "call_put_ratio_1w": window_features.get("call_put_ratio_1w"),
         }
     )
 
@@ -943,5 +955,60 @@ async def _get_market_context(ticker: str, entry_ts: datetime) -> Dict[str, Any]
             result["spy_correlation_5d"] = spy_corr
     except Exception as e:
         logger.debug(f"SPY correlation lookup failed: {e}")
+
+    return result
+
+
+async def _get_window_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get aggregated flow features from gold_feature_windows for multi-timeframe context."""
+    from sqlalchemy import text
+
+    result: Dict[str, Any] = {}
+
+    # Query window features for 1h, 1d, 1w periods
+    async def query(session: Any) -> Dict[str, Any]:
+        features_by_period: Dict[str, Any] = {}
+
+        for period in ["1h", "1d", "1w"]:
+            stmt = text(
+                """
+                SELECT features
+                FROM gold_feature_windows
+                WHERE ticker = :ticker
+                AND period = :period
+                AND window_end_ts_utc <= :entry_ts
+                ORDER BY window_end_ts_utc DESC
+                LIMIT 1
+            """
+            )
+            result = await session.execute(
+                stmt,
+                {"ticker": ticker, "period": period, "entry_ts": entry_ts},
+            )
+            row = result.fetchone()
+            if row and row[0]:
+                features_by_period[period] = row[0]
+
+        return features_by_period
+
+    try:
+        window_data = await db_query(query)
+
+        # Extract key features from each period
+        for period in ["1h", "1d", "1w"]:
+            if period in window_data:
+                f = window_data[period]
+                result[f"call_put_imbalance_{period}"] = f.get("call_put_imbalance")
+                result[f"sweep_ratio_{period}"] = f.get("sweep_ratio")
+                result[f"flow_count_{period}"] = f.get("flow_count")
+
+                # Only include some features for certain periods to avoid feature bloat
+                if period in ["1d", "1w"]:
+                    result[f"dp_volume_{period}"] = f.get("dp_volume")
+                    result[f"call_put_ratio_{period}"] = f.get("call_put_ratio")
+                    result[f"total_premium_{period}"] = f.get("total_premium")
+
+    except Exception as e:
+        logger.debug(f"Window features lookup failed: {e}")
 
     return result
