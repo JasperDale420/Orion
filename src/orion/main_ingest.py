@@ -15,6 +15,7 @@ import uuid
 
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.uw_alerts_connector import UWAlertsConnector
 from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
 from orion.connectors.uw_flow_connector import UWFlowConnector
@@ -254,6 +255,20 @@ async def main() -> None:
         secret_key=system_settings.alpaca_secret_key,
         paper=system_settings.alpaca_paper,
     )
+    
+    # Real-time streaming connector (preferred over polling for lower latency)
+    alpaca_stream: AlpacaStreamConnector | None = None
+    use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
+    if use_streaming:
+        try:
+            alpaca_stream = AlpacaStreamConnector(
+                api_key=system_settings.alpaca_api_key,
+                secret_key=system_settings.alpaca_secret_key,
+                feed="sip",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create streaming connector, using polling: {e}")
+            alpaca_stream = None
 
     feature_engine = FeatureEngine()
     rule_engine = RuleEngine()
@@ -288,6 +303,18 @@ async def main() -> None:
         logger.info("Window feature job started as background task")
     except Exception as e:
         logger.warning(f"Failed to start window feature job: {e}")
+
+    # Start Alpaca WebSocket streaming (preferred for low-latency bars)
+    if alpaca_stream:
+        try:
+            active_tickers = universe.get_active_universe()
+            if active_tickers:
+                await alpaca_stream.subscribe(active_tickers)
+            await alpaca_stream.start()
+            logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
+        except Exception as e:
+            logger.warning(f"Failed to start Alpaca streaming, using polling: {e}")
+            alpaca_stream = None
 
     # Adaptive polling intervals (API optimization)
     # Core hours (9:30 AM - 4:00 PM ET): 5 min polling for real-time trading
@@ -408,13 +435,25 @@ async def main() -> None:
                 logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id, "event_type": "UW_POLL_ERROR"})
 
             # ... (Alpaca polling) ...
-            # 3. Poll Alpaca for Active Universe
+            # 3. Get Alpaca bars (streaming preferred, polling as fallback)
             active_tickers = universe.get_active_universe()
             if active_tickers:
                 try:
-                    alpaca_events = alpaca.poll(
-                        active_tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
-                    )
+                    # Use streaming if available (real-time, sub-second latency)
+                    if alpaca_stream and alpaca_stream.is_running:
+                        # Ensure newly added tickers are subscribed
+                        new_tickers = set(active_tickers) - alpaca_stream.subscribed_tickers
+                        if new_tickers:
+                            await alpaca_stream.subscribe(list(new_tickers))
+                        # Drain buffered streaming events
+                        alpaca_events = await alpaca_stream.drain_events()
+                        connector_name = "alpaca_stream"
+                    else:
+                        # Fallback to polling (higher latency)
+                        alpaca_events = alpaca.poll(
+                            active_tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
+                        )
+                        connector_name = "alpaca_market"
 
                     # Check Lag for Alpaca based on freshest event only (avoid tripping breaker on backfill batches)
                     if alpaca_events:
@@ -429,14 +468,14 @@ async def main() -> None:
                     for evt in alpaca_events:
                         if not getattr(evt, "ingest", None):
                             evt.ingest = {
-                                "connector": "alpaca_market",
+                                "connector": connector_name,
                                 "run_id": RUN_ID,
                                 "trace_id": trace_id,
                                 "attempt": 1,
                             }
                 except Exception as e:
                     logger.error(
-                        f"Error polling Alpaca: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_POLL_ERROR"}
+                        f"Error getting Alpaca bars: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_ERROR"}
                     )
 
             # ... (Processing) ...
