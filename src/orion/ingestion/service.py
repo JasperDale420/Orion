@@ -79,6 +79,7 @@ class IngestionService:
         # State
         self.eod_trigger_last_run: Optional[str] = None
         self._eod_task: Optional[asyncio.Task[None]] = None
+        self._rollup_task: Optional[asyncio.Task[None]] = None
 
     async def initialize(self) -> None:
         """Initialize resources that require async execution."""
@@ -105,6 +106,16 @@ class IngestionService:
             logger.info(f"Earnings calendar synced: {result}")
         except Exception as e:
             logger.warning(f"Failed to sync earnings calendar on startup: {e}")
+
+        # Start rollup job as background task
+        try:
+            from orion.jobs.rollup_job import RollupJob
+
+            rollup_job = RollupJob(loop_interval_seconds=60.0)
+            self._rollup_task = asyncio.create_task(rollup_job.run_forever())
+            logger.info("Rollup job started as background task")
+        except Exception as e:
+            logger.warning(f"Failed to start rollup job: {e}")
 
         logger.info("Ingestion Service Initialized.")
 

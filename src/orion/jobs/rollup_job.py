@@ -6,7 +6,7 @@ from typing import Iterable
 from orion.config import system_settings
 from orion.processing.rollup_builder import RollupBuilder
 from orion.storage.db import async_session_factory
-from orion.storage.models import get_watermark, upsert_watermark
+from orion.storage.watermarks import get_watermark, upsert_watermark
 
 logger = logging.getLogger("orion.jobs.rollup_job")
 

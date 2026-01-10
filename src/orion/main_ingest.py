@@ -269,6 +269,16 @@ async def main() -> None:
 
     logger.info("Connectors initialized. Starting polling loop.")
 
+    # Start rollup job as background task (aggregates silver_signals into gold_ticker_rollup)
+    try:
+        from orion.jobs.rollup_job import RollupJob
+
+        rollup_job = RollupJob(loop_interval_seconds=60.0)
+        _rollup_task = asyncio.create_task(rollup_job.run_forever())  # noqa: F841
+        logger.info("Rollup job started as background task")
+    except Exception as e:
+        logger.warning(f"Failed to start rollup job: {e}")
+
     # Adaptive polling intervals (API optimization)
     # Core hours (9:30 AM - 4:00 PM ET): 5 min polling for real-time trading
     # Extended hours (4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET): 15 min polling
