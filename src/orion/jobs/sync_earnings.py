@@ -71,6 +71,8 @@ async def sync_todays_earnings() -> Dict[str, int]:
 
 async def backfill_ticker_earnings(ticker: str, client: Any) -> int:
     """Backfill historical earnings for a single ticker."""
+    from datetime import datetime as dt
+
     from orion.unusualwhales.api.earnings import get_ticker_earnings
     from orion.unusualwhales.models.earnings_results import EarningsResults
     from orion.unusualwhales.types import UNSET
@@ -80,19 +82,39 @@ async def backfill_ticker_earnings(ticker: str, client: Any) -> int:
         response = await asyncio.to_thread(get_ticker_earnings.sync, ticker=ticker, client=client)
         if isinstance(response, EarningsResults) and response.data:
             for e in response.data:
-                if e.report_date and not isinstance(e.report_date, type(UNSET)):
+                report_date_raw = e.report_date
+                if report_date_raw and not isinstance(report_date_raw, type(UNSET)):
                     try:
+                        # Parse string date to date object
+                        if isinstance(report_date_raw, str):
+                            report_date = dt.strptime(report_date_raw, "%Y-%m-%d").date()
+                        else:
+                            report_date = report_date_raw
+
+                        # Get announce time from additional_properties
                         announce = None
-                        if e.report_time and not isinstance(e.report_time, type(UNSET)):
+                        if hasattr(e, "additional_properties") and e.additional_properties:
+                            announce = e.additional_properties.get("report_time")
+                        elif hasattr(e, "report_time") and e.report_time and not isinstance(e.report_time, type(UNSET)):
                             announce = (
                                 str(e.report_time.value) if hasattr(e.report_time, "value") else str(e.report_time)
                             )
 
+                        # Get EPS from street_mean_est (it's the estimate)
+                        eps_est = None
+                        if hasattr(e, "street_mean_est") and e.street_mean_est:
+                            try:
+                                eps_est = (
+                                    float(e.street_mean_est) if not isinstance(e.street_mean_est, type(UNSET)) else None
+                                )
+                            except (ValueError, TypeError):
+                                pass
+
                         await _upsert_earnings_direct(
                             ticker=ticker,
-                            report_date=e.report_date,
+                            report_date=report_date,
                             announce_time=announce,
-                            eps_estimate=getattr(e, "eps_estimate", None),
+                            eps_estimate=eps_est,
                             eps_actual=getattr(e, "eps_actual", None),
                             revenue_estimate=getattr(e, "revenue_estimate", None),
                             revenue_actual=getattr(e, "revenue_actual", None),
@@ -137,7 +159,7 @@ async def backfill_all_earnings() -> Dict[str, int]:
             if (i + 1) % 50 == 0:
                 logger.info(f"Progress: {i + 1}/{len(tickers)} tickers, {results['earnings']} earnings")
             # Rate limit: 1 request per 100ms
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)  # Rate limit: 2 requests per second
         except Exception as e:
             logger.debug(f"Failed to backfill {ticker}: {e}")
             results["errors"] += 1
@@ -217,7 +239,9 @@ async def _upsert_earnings_direct(
             },
         )
 
-    await db_query(upsert)
+    from orion.shared.db_utils import db_write
+
+    await db_write(upsert)
 
 
 async def get_earnings_for_ticker(ticker: str, as_of_date: date) -> Dict[str, Any]:
