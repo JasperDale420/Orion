@@ -279,6 +279,16 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Failed to start rollup job: {e}")
 
+    # Start window feature job (aggregates flow/darkpool into window features: 5m/1h/1d/1w)
+    try:
+        from orion.jobs.window_feature_job import WindowFeatureJob
+
+        window_job = WindowFeatureJob(loop_interval_seconds=300.0)  # Every 5 min
+        _window_task = asyncio.create_task(window_job.run_forever())  # noqa: F841
+        logger.info("Window feature job started as background task")
+    except Exception as e:
+        logger.warning(f"Failed to start window feature job: {e}")
+
     # Adaptive polling intervals (API optimization)
     # Core hours (9:30 AM - 4:00 PM ET): 5 min polling for real-time trading
     # Extended hours (4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET): 15 min polling
