@@ -227,7 +227,10 @@ class MLScorer:
 
             # Predict probability
             prob = model.predict_proba(feature_vector)[0][1]
-            return float(prob)
+            
+            # Apply confidence rules (post-model adjustments)
+            adjusted_prob = self._apply_confidence_rules(float(prob), flow, bucket)
+            return adjusted_prob
         except Exception as e:
             logger.warning(f"Model scoring failed for bucket {bucket}: {e}")
             return self._heuristic_score(flow)
@@ -288,6 +291,52 @@ class MLScorer:
             )
 
         return capped_score
+
+    def _apply_confidence_rules(self, base_score: float, flow: Dict[str, Any], bucket: str) -> float:
+        """
+        Apply post-model confidence rules.
+        
+        These rules adjust the model's probability score based on patterns
+        discovered by the EOD agent and pattern miner.
+        
+        Current rules:
+        - 0dte_low_gex_vex_avoid_stop: For 0DTE trades, when GEX and VEX are
+          both below their historical averages, increase confidence by 1.3x.
+          This rule predicts stop avoidance with 100% accuracy (n=149).
+        """
+        adjusted_score = base_score
+        
+        # Rule: 0DTE low GEX/VEX avoid stop (EOD agent proposal 2026-01-09)
+        # When GEX and VEX are both below average, the trade is more likely
+        # to avoid hitting stop loss (AUC=0.75, hit_rate=100%)
+        if bucket == "0DTE":
+            gex = flow.get("gex_at_entry") or flow.get("gex")
+            vex = flow.get("vex_at_entry") or flow.get("vex")
+            
+            # Use rolling averages from flow or fall back to hardcoded baseline
+            # These averages should be updated periodically from silver_greek_exposure
+            gex_avg = flow.get("gex_rolling_avg", 0)  # If not present, rule won't apply
+            vex_avg = flow.get("vex_rolling_avg", 0)
+            
+            # Only apply if we have valid GEX/VEX data
+            if gex is not None and vex is not None and gex_avg != 0 and vex_avg != 0:
+                if gex < gex_avg and vex < vex_avg:
+                    multiplier = 1.3
+                    adjusted_score = min(base_score * multiplier, 1.0)  # Cap at 1.0
+                    logger.info(
+                        f"0DTE low GEX/VEX rule applied: {base_score:.3f} → {adjusted_score:.3f}",
+                        extra={
+                            "event": "confidence_rule_applied",
+                            "rule": "0dte_low_gex_vex_avoid_stop",
+                            "gex": gex,
+                            "vex": vex,
+                            "gex_avg": gex_avg,
+                            "vex_avg": vex_avg,
+                            "multiplier": multiplier,
+                        },
+                    )
+        
+        return adjusted_score
 
     def should_trade(self, flow: Dict[str, Any], threshold: float = DEFAULT_SCORE_THRESHOLD) -> bool:
         """Check if flow score exceeds threshold."""

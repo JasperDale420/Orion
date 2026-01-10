@@ -122,6 +122,9 @@ async def enrich_flow_for_scoring(
             # GEX/VEX
             "gex_at_entry": gex_data.get("gex"),
             "vex_at_entry": gex_data.get("vex"),
+            # Rolling averages for confidence rules (0DTE low GEX/VEX rule)
+            "gex_rolling_avg": gex_data.get("gex_rolling_avg"),
+            "vex_rolling_avg": gex_data.get("vex_rolling_avg"),
             # Market Tide
             "market_tide_30m": tide_data.get("net_premium"),
             "market_tide_direction": tide_data.get("direction"),
@@ -215,10 +218,11 @@ def _get_session(ts: datetime) -> str:
 
 
 async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get GEX/VEX at entry time."""
+    """Get GEX/VEX at entry time, plus 20-day rolling averages for confidence rules."""
     from sqlalchemy import text
 
     async def query(session: Any) -> Dict[str, Any]:
+        # Get current GEX/VEX
         stmt = text(
             """
             SELECT gex_oi, vex_oi
@@ -229,7 +233,36 @@ async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
         )
         result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
         row = result.fetchone()
-        return {"gex": row[0], "vex": row[1]} if row else {}
+        
+        if not row:
+            return {}
+        
+        current_gex = row[0]
+        current_vex = row[1]
+        
+        # Get 20-day rolling averages for confidence rule
+        # (0DTE low GEX/VEX avoid stop rule uses these)
+        avg_stmt = text(
+            """
+            SELECT AVG(gex_oi), AVG(vex_oi)
+            FROM silver_greek_exposure
+            WHERE ticker = :ticker 
+              AND ts_utc <= :entry_ts 
+              AND ts_utc > :start_ts
+        """
+        )
+        start_ts = entry_ts - timedelta(days=20)
+        avg_result = await session.execute(
+            avg_stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts}
+        )
+        avg_row = avg_result.fetchone()
+        
+        return {
+            "gex": current_gex,
+            "vex": current_vex,
+            "gex_rolling_avg": avg_row[0] if avg_row else None,
+            "vex_rolling_avg": avg_row[1] if avg_row else None,
+        }
 
     try:
         return await db_query(query)
