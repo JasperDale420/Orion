@@ -50,6 +50,7 @@ class RiskManager:
         # Greeks tracking for options risk (portfolio-level)
         self.portfolio_delta: float = 0.0
         self.portfolio_gamma: float = 0.0
+        self.portfolio_vega: float = 0.0
         self.position_greeks: Dict[str, Dict[str, float]] = {}  # ticker -> {delta, gamma, theta, vega}
 
         # Sector exposure tracking
@@ -123,6 +124,7 @@ class RiskManager:
         side: str,
         delta: float,
         gamma: float = 0.0,
+        vega: float = 0.0,
         timestamp: datetime | None = None,
         risk_override: RiskSettings | None = None,
     ) -> bool:
@@ -137,6 +139,7 @@ class RiskManager:
             side: 'buy' or 'sell'
             delta: Position delta (contracts * delta * 100)
             gamma: Position gamma (contracts * gamma * 100)
+            vega: Position vega (contracts * vega * 100)
             timestamp: Order timestamp
             risk_override: Optional override settings
         """
@@ -146,8 +149,8 @@ class RiskManager:
         if not self.check_order(ticker, quantity, price, side, timestamp, risk_override):
             return False
 
-        # Then check Greeks limits
-        if not self._check_greeks_limits(cfg, ticker, delta):
+        # Then check Greeks limits (pass all Greeks for comprehensive check)
+        if not self._check_greeks_limits(cfg, ticker, delta, gamma, vega):
             return False
 
         return True
@@ -275,8 +278,19 @@ class RiskManager:
                 return False
         return True
 
-    def _check_greeks_limits(self, cfg: RiskSettings, ticker: str, position_delta: float = 0.0) -> bool:
-        """Check portfolio-level Greeks limits for options trades."""
+    def _check_greeks_limits(
+        self,
+        cfg: RiskSettings,
+        ticker: str,
+        position_delta: float = 0.0,
+        position_gamma: float = 0.0,
+        position_vega: float = 0.0,
+    ) -> bool:
+        """Check portfolio-level Greeks limits for options trades.
+        
+        All checks use PROJECTED values (current + new position) to prevent
+        trades that would breach limits upon execution.
+        """
         if not cfg.enable_greeks_checks:
             return True
 
@@ -287,7 +301,14 @@ class RiskManager:
             )
             return False
 
-        # Check portfolio-level delta limit
+        # Check per-position vega limit
+        if abs(position_vega) > cfg.max_position_vega:
+            logger.warning(
+                f"RISK REJECT: Position Vega {position_vega:.1f} > Limit {cfg.max_position_vega:.1f} for {ticker}"
+            )
+            return False
+
+        # Check portfolio-level delta limit (projected)
         projected_portfolio_delta = self.portfolio_delta + position_delta
         if abs(projected_portfolio_delta) > cfg.max_portfolio_delta:
             logger.warning(
@@ -295,10 +316,19 @@ class RiskManager:
             )
             return False
 
-        # Check portfolio-level gamma limit
-        if abs(self.portfolio_gamma) > cfg.max_portfolio_gamma:
+        # Check portfolio-level gamma limit (projected - FIX for gamma gap)
+        projected_portfolio_gamma = self.portfolio_gamma + position_gamma
+        if abs(projected_portfolio_gamma) > cfg.max_portfolio_gamma:
             logger.warning(
-                f"RISK REJECT: Portfolio Gamma {self.portfolio_gamma:.1f} > Limit {cfg.max_portfolio_gamma:.1f}"
+                f"RISK REJECT: Portfolio Gamma {projected_portfolio_gamma:.1f} > Limit {cfg.max_portfolio_gamma:.1f}"
+            )
+            return False
+
+        # Check portfolio-level vega limit (projected)
+        projected_portfolio_vega = self.portfolio_vega + position_vega
+        if abs(projected_portfolio_vega) > cfg.max_portfolio_vega:
+            logger.warning(
+                f"RISK REJECT: Portfolio Vega {projected_portfolio_vega:.1f} > Limit {cfg.max_portfolio_vega:.1f}"
             )
             return False
 
@@ -319,10 +349,11 @@ class RiskManager:
         # Recalculate portfolio totals
         self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
         self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+        self.portfolio_vega = sum(g["vega"] for g in self.position_greeks.values())
 
         logger.info(
-            f"Greeks Updated for {ticker}: delta={delta:.2f}, gamma={gamma:.4f} | "
-            f"Portfolio: delta={self.portfolio_delta:.2f}, gamma={self.portfolio_gamma:.4f}"
+            f"Greeks Updated for {ticker}: delta={delta:.2f}, gamma={gamma:.4f}, vega={vega:.4f} | "
+            f"Portfolio: delta={self.portfolio_delta:.2f}, gamma={self.portfolio_gamma:.4f}, vega={self.portfolio_vega:.4f}"
         )
 
     def clear_position_greeks(self, ticker: str) -> None:
@@ -332,6 +363,7 @@ class RiskManager:
             # Recalculate portfolio totals
             self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
             self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+            self.portfolio_vega = sum(g["vega"] for g in self.position_greeks.values())
 
     def check_sector_exposure(
         self, sector: str, additional_exposure: float = 0.0, risk_override: RiskSettings | None = None
@@ -494,6 +526,8 @@ class RiskManager:
         """
         Calculates position size based on risk per trade.
         Caps at max_order_size_pct of account equity.
+        
+        Note: For correlation-aware sizing, use calculate_size_with_correlation().
         """
         if entry_price <= 0:
             return 0.0
@@ -520,6 +554,73 @@ class RiskManager:
         qty = min(qty, exposure_cap_qty)
 
         return float(qty)
+
+    async def calculate_size_with_correlation(
+        self,
+        ticker: str,
+        entry_price: float,
+        stop_loss_pct: float | None = None,
+        account_equity: float | None = None,
+    ) -> float:
+        """
+        Calculates position size with correlation adjustment.
+        
+        First calculates base size using standard risk-per-trade,
+        then applies correlation penalty if new ticker is highly
+        correlated with existing holdings.
+        
+        Args:
+            ticker: Symbol to size
+            entry_price: Entry price per share
+            stop_loss_pct: Optional stop loss percentage
+            account_equity: Optional account equity override
+            
+        Returns:
+            Position size in shares (may be reduced from base size)
+        """
+        # Get base size
+        base_qty = self.calculate_size(entry_price, stop_loss_pct, account_equity)
+        
+        if base_qty <= 0:
+            return 0.0
+            
+        # Apply correlation adjustment if enabled and adjuster available
+        if not self.config.correlation_size_scaling:
+            return base_qty
+            
+        if not hasattr(self, "_correlation_adjuster") or self._correlation_adjuster is None:
+            return base_qty
+            
+        # Get existing position tickers
+        existing_tickers = [t for t, p in self.positions.items() if p.get("qty", 0) != 0]
+        
+        if not existing_tickers:
+            return base_qty
+            
+        # Get correlation-adjusted multiplier
+        multiplier = await self._correlation_adjuster.get_size_multiplier(
+            ticker, existing_tickers, self.config
+        )
+        
+        adjusted_qty = max(1.0, math.floor(base_qty * multiplier))
+        
+        if adjusted_qty < base_qty:
+            logger.info(
+                f"Correlation sizing for {ticker}: {base_qty:.0f} -> {adjusted_qty:.0f} shares (x{multiplier:.2f})",
+                extra={"event": "correlation_size_applied", "ticker": ticker, "base": base_qty, "adjusted": adjusted_qty}
+            )
+            
+        return float(adjusted_qty)
+
+    def set_correlation_adjuster(self, adjuster: "CorrelationAdjuster") -> None:
+        """
+        Inject correlation adjuster for size scaling.
+        
+        Args:
+            adjuster: CorrelationAdjuster instance with market connector
+        """
+        self._correlation_adjuster = adjuster
+        logger.info("Correlation adjuster configured for RiskManager")
 
     @db_retry
     async def upsert_position(self, position: "Position") -> None:
@@ -641,17 +742,51 @@ class RiskManager:
         )
         await CircuitBreaker().open(reason)
 
-    async def process_fill(self, ticker: str, qty: float, price: float, side: str, fill_id: str) -> None:
+    async def process_fill(
+        self,
+        ticker: str,
+        qty: float,
+        price: float,
+        side: str,
+        fill_id: str,
+        expected_price: float | None = None,
+    ) -> None:
         """
         Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
         Idempotent: Checks fill_id against in-memory history.
+        
+        Args:
+            ticker: Symbol filled
+            qty: Quantity filled
+            price: Fill price
+            side: 'buy' or 'sell'
+            fill_id: Unique fill identifier (for idempotency)
+            expected_price: Expected price for slippage calculation
         """
         if fill_id in self.processed_fill_ids:
             logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
             return
 
         self.processed_fill_ids.add(fill_id)
+        
+        # Calculate slippage if expected price provided
+        if expected_price is not None and expected_price > 0:
+            slippage_bps = (price - expected_price) / expected_price * 10000
+            logger.info(
+                f"Fill slippage for {ticker}: {slippage_bps:.1f} bps (expected={expected_price:.4f}, actual={price:.4f})",
+                extra={
+                    "event": "fill_slippage",
+                    "ticker": ticker,
+                    "fill_id": fill_id,
+                    "expected_price": expected_price,
+                    "fill_price": price,
+                    "slippage_bps": slippage_bps,
+                    "side": side,
+                },
+            )
+            if _metrics:
+                _metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
 
         # Standardize: side='buy' -> positive qty effect, side='sell'/'short' -> negative qty effect
         sign = 1 if side.lower() == "buy" else -1

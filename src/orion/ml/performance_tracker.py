@@ -173,9 +173,9 @@ async def get_daily_accuracy(bucket: Optional[str] = None) -> Dict[str, Any]:
     """
     from orion.shared.db_utils import db_query
 
-    def query(session: Any) -> Any:
+    async def query(session: Any) -> Any:
         bucket_filter = "AND bucket = :bucket" if bucket else ""
-        result = session.execute(
+        result = await session.execute(
             text(f"""
                 SELECT
                     COUNT(*) as total_predictions,
@@ -192,8 +192,8 @@ async def get_daily_accuracy(bucket: Optional[str] = None) -> Dict[str, Any]:
                 {bucket_filter}
             """),
             {"bucket": bucket} if bucket else {},
-        ).fetchone()
-        return result
+        )
+        return result.fetchone()
 
     try:
         result = await db_query(query)
@@ -220,8 +220,8 @@ async def get_weekly_performance() -> Dict[str, Any]:
     """
     from orion.shared.db_utils import db_query
 
-    def query(session: Any) -> Any:
-        return session.execute(
+    async def query(session: Any) -> Any:
+        result = await session.execute(
             text("""
                 SELECT
                     bucket,
@@ -239,7 +239,8 @@ async def get_weekly_performance() -> Dict[str, Any]:
                 GROUP BY bucket, model_type
                 ORDER BY bucket, model_type
             """)
-        ).fetchall()
+        )
+        return result.fetchall()
 
     try:
         results = await db_query(query)

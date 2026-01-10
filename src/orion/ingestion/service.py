@@ -96,6 +96,16 @@ class IngestionService:
 
         await init_db()
         await self.universe.hydrate_from_db()
+
+        # Sync today's earnings calendar from UW API
+        try:
+            from orion.jobs.sync_earnings import sync_todays_earnings
+
+            result = await sync_todays_earnings()
+            logger.info(f"Earnings calendar synced: {result}")
+        except Exception as e:
+            logger.warning(f"Failed to sync earnings calendar on startup: {e}")
+
         logger.info("Ingestion Service Initialized.")
 
     def _handle_shutdown_signals(self) -> None:

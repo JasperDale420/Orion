@@ -49,6 +49,16 @@ class ExecutionEngine:
             # Use same keys for market data
             self.market_connector = AlpacaMarketConnector(api_key=api_key, secret_key=secret_key)
 
+            # Wire up correlation-aware sizing if enabled
+            if risk_settings.correlation_size_scaling:
+                from orion.execution.correlation_adjuster import CorrelationAdjuster
+                adjuster = CorrelationAdjuster(market_connector=self.market_connector)
+                self.risk_manager.set_correlation_adjuster(adjuster)
+                logger.info(
+                    "Correlation-aware sizing enabled",
+                    extra={"event": "correlation_sizing_enabled", "threshold": risk_settings.correlation_threshold}
+                )
+
             # Sync Risk State
             # self.risk_manager.sync_with_broker(self.connector)
 

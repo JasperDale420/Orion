@@ -29,7 +29,9 @@ class RiskSettings(BaseSettings):
     # Portfolio-level Greeks limits (options risk)
     max_portfolio_delta: float = 500.0  # Absolute delta exposure limit
     max_portfolio_gamma: float = 100.0  # Absolute gamma exposure limit
+    max_portfolio_vega: float = 200.0  # Absolute vega exposure limit (IV crush protection)
     max_position_delta: float = 100.0  # Per-position delta limit
+    max_position_vega: float = 50.0  # Per-position vega limit
     enable_greeks_checks: bool = True  # Toggle Greeks checks
 
     # Sector concentration limits
@@ -41,6 +43,13 @@ class RiskSettings(BaseSettings):
     zero_dte_reduce_size_after_minutes: int = 120  # Reduce size after X minutes before close
     zero_dte_reduced_size_pct: float = 0.50  # Size reduction factor (50% of normal)
     enable_zero_dte_winddown: bool = True  # Toggle 0DTE wind-down
+
+    # Correlation-aware position sizing
+    correlation_size_scaling: bool = False  # Disabled by default for safe rollout
+    correlation_lookback_days: int = 30  # Days of price history for correlation
+    correlation_threshold: float = 0.70  # Correlation above this triggers penalty
+    correlation_penalty_factor: float = 0.30  # Size multiplier at max correlation
+    min_bars_for_correlation: int = 20  # Skip adjustment if insufficient data
 
     model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
 
