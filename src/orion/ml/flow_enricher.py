@@ -74,7 +74,7 @@ async def enrich_flow_for_scoring(
         _get_regime(entry_ts),
         _get_flow_greeks(event_id) if event_id else _empty_greeks(),
         _get_vix(entry_ts),
-        _get_flow_metrics(ticker, entry_ts),
+        _get_flow_metrics(ticker, entry_ts, dte),
         _get_market_context(ticker, entry_ts),  # New: rvol, overnight_gap, 52w_high
     ]
 
@@ -509,7 +509,7 @@ async def _get_vix(entry_ts: datetime) -> Optional[float]:
         return None
 
 
-async def _get_flow_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: Optional[int] = None) -> Dict[str, Any]:
     """Get additional flow metrics - sector, earnings, flow ratios."""
     from sqlalchemy import text
 
@@ -689,6 +689,54 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
                 result.update(sector_flow)
         except Exception as e:
             logger.debug(f"Sector premium lookup failed: {e}")
+
+    # Get earnings info from calendar
+    try:
+        entry_date = entry_ts.date()
+
+        async def query_earnings(session: Any) -> Dict[str, Any]:
+            # Get next earnings (future)
+            next_stmt = text(
+                """
+                SELECT report_date FROM silver_earnings_calendar
+                WHERE ticker = :ticker AND report_date >= :as_of
+                ORDER BY report_date ASC LIMIT 1
+            """
+            )
+            next_result = await session.execute(next_stmt, {"ticker": ticker, "as_of": entry_date})
+            next_row = next_result.fetchone()
+
+            # Get last earnings (past)
+            last_stmt = text(
+                """
+                SELECT report_date FROM silver_earnings_calendar
+                WHERE ticker = :ticker AND report_date < :as_of
+                ORDER BY report_date DESC LIMIT 1
+            """
+            )
+            last_result = await session.execute(last_stmt, {"ticker": ticker, "as_of": entry_date})
+            last_row = last_result.fetchone()
+
+            earnings_result = {}
+
+            if next_row:
+                days_to = (next_row[0] - entry_date).days
+                earnings_result["days_to_earnings"] = days_to
+                # Check if earnings within DTE window
+                if dte is not None and days_to <= dte:
+                    earnings_result["earnings_in_dte_window"] = True
+
+            if last_row:
+                days_since = (entry_date - last_row[0]).days
+                if 0 <= days_since <= 5:
+                    earnings_result["is_post_earnings"] = True
+
+            return earnings_result
+
+        earnings_data = await db_query(query_earnings)
+        result.update(earnings_data)
+    except Exception as e:
+        logger.debug(f"Earnings lookup failed: {e}")
 
     return result
 
