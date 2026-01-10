@@ -399,29 +399,38 @@ async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[D
     return await db_query(query)
 
 
-async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Optional[float]]:
-    """Get real option prices from silver_option_quotes (Alpaca API data).
+async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
+    """Get real option prices and Greeks from silver_option_quotes (Alpaca API data).
 
-    Returns dict mapping checkpoint names to mid prices.
-    Falls back to None for checkpoints without real data.
+    Returns dict mapping checkpoint names to dicts containing:
+    - price: mid price (or last_trade as fallback)
+    - delta, gamma, theta, vega, iv: Greeks at checkpoint
     """
 
-    async def query(session: Any) -> Dict[str, Optional[float]]:
+    async def query(session: Any) -> Dict[str, Dict[str, Optional[float]]]:
         stmt = text(
             """
-            SELECT checkpoint, mid_price, last_trade_price
+            SELECT checkpoint, mid_price, last_trade_price,
+                   delta, gamma, theta, vega, iv
             FROM silver_option_quotes
             WHERE flow_event_id = :event_id
         """
         )
         result = await session.execute(stmt, {"event_id": event_id})
-        prices: Dict[str, Optional[float]] = {}
+        data: Dict[str, Dict[str, Optional[float]]] = {}
         for row in result.fetchall():
             checkpoint = row[0]
             # Prefer mid_price, fallback to last_trade
             price = row[1] if row[1] is not None else row[2]
-            prices[checkpoint] = float(price) if price else None
-        return prices
+            data[checkpoint] = {
+                "price": float(price) if price else None,
+                "delta": float(row[3]) if row[3] is not None else None,
+                "gamma": float(row[4]) if row[4] is not None else None,
+                "theta": float(row[5]) if row[5] is not None else None,
+                "vega": float(row[6]) if row[6] is not None else None,
+                "iv": float(row[7]) if row[7] is not None else None,
+            }
+        return data
 
     try:
         return await db_query(query)
@@ -1271,7 +1280,6 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         "oi_change_pct": None,
         "iv_vs_hv_ratio": None,
     }
-
 
     entry_date = entry_ts.date()
     lookback_30d = entry_date - timedelta(days=30)
@@ -2273,14 +2281,26 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     real_quotes = await get_real_checkpoint_prices(event_id)
 
     # Helper to get price: prefer real quote, fallback to flow data
-    def _get_checkpoint_price(
-        checkpoint: str, flow_price_fn, *flow_args
-    ) -> Optional[float]:
+    def _get_checkpoint_price(checkpoint: str, flow_price_fn, *flow_args) -> Optional[float]:
         """Get checkpoint price: real quote first, then flow fallback."""
-        real_price = real_quotes.get(checkpoint)
-        if real_price is not None:
-            return real_price
+        quote_data = real_quotes.get(checkpoint)
+        if quote_data is not None and quote_data.get("price") is not None:
+            return quote_data["price"]
         return flow_price_fn(*flow_args)
+
+    # Helper to get Greeks at checkpoint
+    def _get_checkpoint_greeks(checkpoint: str) -> Dict[str, Optional[float]]:
+        """Get Greeks at checkpoint from Alpaca quote data."""
+        quote_data = real_quotes.get(checkpoint)
+        if quote_data is None:
+            return {"delta": None, "gamma": None, "theta": None, "vega": None, "iv": None}
+        return {
+            "delta": quote_data.get("delta"),
+            "gamma": quote_data.get("gamma"),
+            "theta": quote_data.get("theta"),
+            "vega": quote_data.get("vega"),
+            "iv": quote_data.get("iv"),
+        }
 
     # Original hourly checkpoints (1h/2h/4h)
     price_1h = _get_checkpoint_price("1h", get_price_at_offset, prices, entry_ts, 1)
@@ -2337,6 +2357,17 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
     # Opposing flow
     opposing = await get_opposing_flow(ticker, put_call, entry_ts, last_tracked_ts)
+
+    # Extract Greeks at each checkpoint from Alpaca quote data
+    greeks_5m = _get_checkpoint_greeks("5m") if real_quotes else {}
+    greeks_15m = _get_checkpoint_greeks("15m") if real_quotes else {}
+    greeks_30m = _get_checkpoint_greeks("30m") if real_quotes else {}
+    greeks_1h = _get_checkpoint_greeks("1h") if real_quotes else {}
+    greeks_2h = _get_checkpoint_greeks("2h") if real_quotes else {}
+    greeks_4h = _get_checkpoint_greeks("4h") if real_quotes else {}
+    greeks_8h = _get_checkpoint_greeks("8h") if real_quotes else {}
+    greeks_1d = _get_checkpoint_greeks("1d") if real_quotes else {}
+    greeks_eod = _get_checkpoint_greeks("eod") if real_quotes else {}
 
     # Build full label
     label.update(
@@ -2405,6 +2436,43 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             # SWING EOD checkpoint
             "price_at_eod": price_eod,
             "return_at_eod": return_eod,
+            # Checkpoint Greeks from Alpaca (delta, gamma, theta, iv)
+            "delta_at_5m": greeks_5m.get("delta"),
+            "gamma_at_5m": greeks_5m.get("gamma"),
+            "theta_at_5m": greeks_5m.get("theta"),
+            "iv_at_5m": greeks_5m.get("iv"),
+            "delta_at_15m": greeks_15m.get("delta"),
+            "gamma_at_15m": greeks_15m.get("gamma"),
+            "theta_at_15m": greeks_15m.get("theta"),
+            "iv_at_15m": greeks_15m.get("iv"),
+            "delta_at_30m": greeks_30m.get("delta"),
+            "gamma_at_30m": greeks_30m.get("gamma"),
+            "theta_at_30m": greeks_30m.get("theta"),
+            "iv_at_30m": greeks_30m.get("iv"),
+            "delta_at_1h": greeks_1h.get("delta"),
+            "gamma_at_1h": greeks_1h.get("gamma"),
+            "theta_at_1h": greeks_1h.get("theta"),
+            "iv_at_1h": greeks_1h.get("iv"),
+            "delta_at_2h": greeks_2h.get("delta"),
+            "gamma_at_2h": greeks_2h.get("gamma"),
+            "theta_at_2h": greeks_2h.get("theta"),
+            "iv_at_2h": greeks_2h.get("iv"),
+            "delta_at_4h": greeks_4h.get("delta"),
+            "gamma_at_4h": greeks_4h.get("gamma"),
+            "theta_at_4h": greeks_4h.get("theta"),
+            "iv_at_4h": greeks_4h.get("iv"),
+            "delta_at_8h": greeks_8h.get("delta"),
+            "gamma_at_8h": greeks_8h.get("gamma"),
+            "theta_at_8h": greeks_8h.get("theta"),
+            "iv_at_8h": greeks_8h.get("iv"),
+            "delta_at_1d": greeks_1d.get("delta"),
+            "gamma_at_1d": greeks_1d.get("gamma"),
+            "theta_at_1d": greeks_1d.get("theta"),
+            "iv_at_1d": greeks_1d.get("iv"),
+            "delta_at_eod": greeks_eod.get("delta"),
+            "gamma_at_eod": greeks_eod.get("gamma"),
+            "theta_at_eod": greeks_eod.get("theta"),
+            "iv_at_eod": greeks_eod.get("iv"),
             # Context
             "opposing_flow_count": opposing["count"],
             "opposing_premium_total": opposing["premium"],
