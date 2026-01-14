@@ -1,11 +1,12 @@
 import asyncio
 from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
 
 import pytest
 from orion.agents.meta_search_agent import EditOpType, MetaSearchAgent
 from orion.config import RiskSettings
 from orion.core.solver_router import SolverRouter
-from orion.core.solver_schema import SolverConfig, SolverRiskConfig
+from orion.core.solver_schema import SolverConfig, SolverRiskConfig, LiveContext
 from orion.execution.risk_manager import RiskManager
 
 
@@ -37,15 +38,6 @@ async def test_backtest_engine_solver_config():
     BacktestEngine()
 
     # Mock _simulate to inspect the constructed RiskManager (hard to inspect local var)
-    # But we can check if it runs without error
-    # Better: Inspect engine.risk_manager AFTER run_cv?
-    # run_cv -> _simulate -> overrides self.risk_manager?
-    # Current implementation instantiates 'local_risk_manager' but assumes it uses it.
-    # It does NOT assign back to self.risk_manager unless I changed that?
-    # Step 80: 'local_risk_manager = ...'
-    # It strictly uses local var.
-    # So we can't inspect 'engine.risk_manager'.
-    # We rely on logic correctness or mock calls.
     pass
 
 
@@ -70,12 +62,26 @@ async def test_solver_router_filtering():
             }
             self.is_active = True
             self.version_id = "v1"
+            self.definition_json = None
 
     # Paper Solver
     paper_solver = MockSolver(stage="paper")
 
     # Context: LIVE
-    live_context = {"stage": "live", "ticker": "AAPL"}
+    live_context = LiveContext(
+        ticker="AAPL",
+        current_stage="live",
+        regime="neutral",
+        time_of_day_utc=datetime.now(timezone.utc)
+    )
+
+    # Context: PAPER
+    paper_context = LiveContext(
+        ticker="AAPL",
+        current_stage="paper",
+        regime="neutral",
+        time_of_day_utc=datetime.now(timezone.utc)
+    )
 
     # Mock DB
     with patch("orion.core.solver_router.async_session_factory") as mock_sf:
@@ -83,60 +89,52 @@ async def test_solver_router_filtering():
         mock_sf.return_value.__aenter__.return_value = mock_session
 
         # Configure select result
-        # Configure select result
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [paper_solver]
 
-        # We need to handle the FIRST call (live context) which calls execute twice
-        # 1. solvers -> mock_result
-        # 2. metrics -> mock_result (re-used, or empty?)
-        # Let's provide a mock_result_metrics for the first call too, or reuse mock_result
-        # If we reuse mock_result, scalars().first() needs to return something valid or None.
-        # Let's return None for metrics on the first call to force skipping?
-        # If metrics None, score is -1e9. It skips LIVE checks.
+        # Empty metrics for LIVE call (skips selection)
         mock_result_empty = MagicMock()
-        mock_result_empty.scalars.return_value.first.return_value = None
+        mock_result_empty.scalars.return_value.all.return_value = []
 
-        mock_session.execute.side_effect = [mock_result, mock_result_empty]
+        # Metrics for PAPER call (passes selection)
+        mock_metric = MagicMock()
+        mock_metric.solver_id = "s1"
+        mock_metric.info_ratio = 1.0
+        mock_metric.oos_expect_bp = 10.0
+        mock_metric.max_dd_pct = 5.0
 
-        # ACT: Select
-        # Router is async method logic
-        # We need to mock the async execute.
-        # MagicMock isn't awaitable by default.
+        mock_result_metrics = MagicMock()
+        mock_result_metrics.scalars.return_value.all.return_value = [mock_metric]
 
-        future = asyncio.Future()
-        future.set_result(mock_result)
-        mock_session.execute.return_value = future
+        def async_return(result):
+            f = asyncio.Future()
+            f.set_result(result)
+            return f
 
-        # Run
+        # Set side_effect for the sequence of calls:
+        # 1. LIVE context -> query solvers (returns paper_solver)
+        # 2. LIVE context -> query metrics (returns empty)
+        # 3. PAPER context -> query solvers (returns paper_solver)
+        # 4. PAPER context -> query metrics (returns mock_metric)
+        mock_session.execute.side_effect = [
+            async_return(mock_result),
+            async_return(mock_result_empty),
+            async_return(mock_result),
+            async_return(mock_result_metrics)
+        ]
+
+        # Run LIVE
         selected_list = await router.select_solvers(live_context)
         selected = selected_list[0] if selected_list else None
 
         # ASSERT: Should be None because Paper < Live
         assert selected is None
 
-        # Now try Paper Context
-        # Configure metrics query result (returns same mock list or tailored mock)
-        # We need a metric object that passes rules
-        mock_metric = MagicMock()
-        mock_metric.info_ratio = 1.0
-        mock_metric.oos_expect_bp = 10.0  # Pass constraint
-        mock_metric.max_dd_pct = 5.0
-
-        mock_result_metrics = MagicMock()
-        mock_result_metrics.scalars.return_value.first.return_value = mock_metric
-
-        # Reset side_effect for the second call sequence
-        # Reset side_effect for the second call sequence
-        mock_session.execute.side_effect = [mock_result, mock_result_metrics]
-
-        # selected_list_paper = await router.select_solvers(paper_context)
-        # selected_paper = selected_list_paper[0] if selected_list_paper else None
-        # assert selected_paper is not None
-        # assert selected_paper.solver_id == "s1" # SelectedSolver has solver_id
-        # TODO: Fix mocking for second call in test_solver_router_filtering.
-        # The side_effect reset mechanism for async session in pytest-asyncio is proving flaky.
-        pass
+        # Run PAPER
+        selected_list_paper = await router.select_solvers(paper_context)
+        selected_paper = selected_list_paper[0] if selected_list_paper else None
+        assert selected_paper is not None
+        assert selected_paper.solver_id == "s1"
 
 
 # 3. Test Mutation
@@ -153,10 +151,6 @@ def test_meta_search_mutation():
     )
 
     # Mutate
-    # Because random, we might need loop? Or mock random
-    # Use internal heuristic method for test or use public if available
-    # agent._generate_heuristic_variants expects (base_config, base_metrics_obj, count, source)
-
     # Mock base solver DB object since _generate needs sharpe
     mock_base_solver = MagicMock()
     mock_base_solver.sharpe_ratio = 2.0
