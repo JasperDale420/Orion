@@ -100,14 +100,16 @@ class UniverseManager:
         """
         Promotes a ticker based on an incoming event (e.g. Alert or significant print).
         """
-        ticker = event.payload.get("ticker") or event.ticker
+        raw_ticker = event.payload.get("ticker") or event.ticker
+        if not raw_ticker:
+            return
+
+        # Extract underlying ticker from option symbols (e.g., IWM260220P00236000 -> IWM)
+        ticker = self._extract_underlying_ticker(raw_ticker)
         if not ticker:
             return
 
         # Simple logic: Any alert or dark pool print bumps the ticker activity
-        # We could filter by event_type if we only want Alerts to trigger this.
-        # For now, let's say ANY UW event implies we should watch it for a bit.
-
         now = time.time()
         self.active_tickers[ticker] = now
 
@@ -124,9 +126,35 @@ class UniverseManager:
 
                 if not current_exp or exp_date > current_exp:
                     self.expiry_tickers[ticker] = exp_date
-                    # logger.debug(f"Tracking {ticker} until {exp_date}")
             except ValueError:
                 pass  # Invalid date format, ignore
+
+    def _extract_underlying_ticker(self, symbol: str) -> str:
+        """
+        Extracts the underlying stock ticker from an option symbol.
+
+        Option symbols: AAPL240119C00150000 -> AAPL
+        Stock symbols: AAPL -> AAPL
+        """
+        import re
+
+        if not symbol:
+            return ""
+
+        # Option symbol pattern: <TICKER><YYMMDD><C|P><STRIKE>
+        # Examples: AAPL240119C00150000, IWM260220P00236000, SPXW250103C05850000
+        match = re.match(r"^([A-Z]+)\d{6}[CP]\d+$", symbol)
+        if match:
+            return match.group(1)
+
+        # If it doesn't match option pattern, assume it's already a stock ticker
+        # But validate it doesn't contain numbers in unexpected positions
+        if re.match(r"^[A-Z]{1,5}$", symbol):
+            return symbol
+
+        # For symbols like SPXW, BRK.A, etc. - strip trailing special chars
+        clean = re.match(r"^([A-Z]+)", symbol)
+        return clean.group(1) if clean else symbol
 
     def cleanup(self, ttl_seconds: int = UNIVERSE_TTL_SECONDS, alert_ttl_seconds: int | None = None) -> None:
         """

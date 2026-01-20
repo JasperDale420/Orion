@@ -21,7 +21,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:1143
 class EmbeddingClient:
     """
     Embedding client supporting Ollama (preferred) and OpenAI.
-    
+
     Priority:
     1. Ollama (local) - if available
     2. OpenAI - if OPENAI_API_KEY is set
@@ -31,17 +31,18 @@ class EmbeddingClient:
         self.use_ollama = True
         self.ollama_model = OLLAMA_EMBEDDING_MODEL
         self.ollama_url = f"{OLLAMA_BASE_URL}/api/embeddings"
-        
+
         # Fallback to OpenAI if configured
         self.openai_client: Optional["AsyncOpenAI"] = None
         api_key = os.getenv("OPENAI_API_KEY")
         if api_key and not api_key.startswith("sk-your"):
             try:
                 from openai import AsyncOpenAI
+
                 self.openai_client = AsyncOpenAI(api_key=api_key)
             except ImportError:
                 pass
-        
+
         logger.info(
             f"EmbeddingClient initialized: ollama={self.use_ollama}, "
             f"model={self.ollama_model}, openai_fallback={self.openai_client is not None}"
@@ -53,7 +54,7 @@ class EmbeddingClient:
         Get embedding for text using Ollama (preferred) or OpenAI.
         """
         text = text.replace("\n", " ").strip()
-        
+
         if self.use_ollama:
             try:
                 return await self._get_ollama_embedding(text)
@@ -62,10 +63,10 @@ class EmbeddingClient:
                 if self.openai_client:
                     return await self._get_openai_embedding(text)
                 raise
-        
+
         if self.openai_client:
             return await self._get_openai_embedding(text)
-        
+
         raise RuntimeError("No embedding backend available (Ollama or OpenAI)")
 
     async def _get_ollama_embedding(self, text: str) -> List[float]:

@@ -5,7 +5,6 @@ Tests exit prediction logic and training data builder.
 """
 
 import pytest
-
 from orion.ml.exit_classifier import (
     ExitClassifier,
     ExitFeatures,
@@ -32,7 +31,7 @@ class TestExitFeatures:
             trend_regime="BULLISH",
             vol_regime="NORMAL",
         )
-        
+
         assert features.current_return_pct == 25.0
         assert features.is_sweep is True
 
@@ -108,7 +107,7 @@ class TestExitClassifier:
     ) -> None:
         """Test predict returns ExitPrediction."""
         prediction = classifier.predict(profitable_position)
-        
+
         assert isinstance(prediction, ExitPrediction)
         assert isinstance(prediction.should_exit, bool)
         assert 0 <= prediction.confidence <= 1
@@ -121,7 +120,7 @@ class TestExitClassifier:
     ) -> None:
         """Test 50%+ return triggers exit signal."""
         prediction = classifier.predict(profitable_position)
-        
+
         assert prediction.should_exit is True
         assert "return" in prediction.reasoning.lower()
 
@@ -132,7 +131,7 @@ class TestExitClassifier:
     ) -> None:
         """Test stop loss triggers exit signal."""
         prediction = classifier.predict(losing_position)
-        
+
         assert prediction.should_exit is True
         assert "stop" in prediction.reasoning.lower()
 
@@ -143,7 +142,7 @@ class TestExitClassifier:
     ) -> None:
         """Test 0DTE with time held triggers exit."""
         prediction = classifier.predict(zero_dte_position)
-        
+
         assert prediction.should_exit is True
         assert "0dte" in prediction.reasoning.lower()
 
@@ -162,9 +161,9 @@ class TestExitClassifier:
             trend_regime="NEUTRAL",
             vol_regime="NORMAL",
         )
-        
+
         prediction = classifier.predict(features)
-        
+
         assert prediction.should_exit is True
         assert "reversal" in prediction.reasoning.lower()
 
@@ -186,32 +185,44 @@ class TestExitClassifier:
             trend_regime="BULLISH",
             vol_regime="LOW",
         )
-        
+
         prediction = classifier.predict(features)
-        
+
         assert prediction.should_exit is False
 
     def test_predict_batch(self, classifier: ExitClassifier) -> None:
         """Test batch prediction."""
         features_list = [
             ExitFeatures(
-                current_return_pct=60.0, time_held_hours=1.0,
-                max_return_so_far=65.0, max_drawdown_so_far=5.0,
-                premium_usd=100000, dte_at_entry=3, is_sweep=True,
-                iv_rank_at_entry=70.0, vix_at_entry=20.0,
-                trend_regime="BULLISH", vol_regime="NORMAL",
+                current_return_pct=60.0,
+                time_held_hours=1.0,
+                max_return_so_far=65.0,
+                max_drawdown_so_far=5.0,
+                premium_usd=100000,
+                dte_at_entry=3,
+                is_sweep=True,
+                iv_rank_at_entry=70.0,
+                vix_at_entry=20.0,
+                trend_regime="BULLISH",
+                vol_regime="NORMAL",
             ),
             ExitFeatures(
-                current_return_pct=5.0, time_held_hours=0.5,
-                max_return_so_far=8.0, max_drawdown_so_far=3.0,
-                premium_usd=50000, dte_at_entry=7, is_sweep=False,
-                iv_rank_at_entry=40.0, vix_at_entry=15.0,
-                trend_regime="NEUTRAL", vol_regime="LOW",
+                current_return_pct=5.0,
+                time_held_hours=0.5,
+                max_return_so_far=8.0,
+                max_drawdown_so_far=3.0,
+                premium_usd=50000,
+                dte_at_entry=7,
+                is_sweep=False,
+                iv_rank_at_entry=40.0,
+                vix_at_entry=15.0,
+                trend_regime="NEUTRAL",
+                vol_regime="LOW",
             ),
         ]
-        
+
         predictions = classifier.predict_batch(features_list)
-        
+
         assert len(predictions) == 2
         assert predictions[0].should_exit is True  # High profit
         assert predictions[1].should_exit is False  # Normal
@@ -224,5 +235,5 @@ class TestGetExitClassifier:
         """Test singleton behavior."""
         c1 = get_exit_classifier()
         c2 = get_exit_classifier()
-        
+
         assert c1 is c2

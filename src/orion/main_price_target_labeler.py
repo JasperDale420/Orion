@@ -5,6 +5,7 @@ Tracks option prices over time with comprehensive metrics for ML exit optimizati
 """
 
 import asyncio
+import math
 import os
 import signal
 from datetime import datetime, timedelta, timezone
@@ -12,11 +13,26 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from dotenv import load_dotenv
+from scipy.stats import norm
 
 load_dotenv()
 
 from sqlalchemy import text
 
+from orion.labeler import (
+    BATCH_SIZE,
+    CHECKPOINT_OFFSETS,
+    POLL_INTERVAL_SECONDS,
+    RISK_FREE_RATE,
+    SECTOR_MAPPING,
+    calculate_black_scholes_delta,
+    calculate_black_scholes_gamma,
+    calculate_iv_rank_from_history,
+    calculate_volatility,
+    get_price_at_offset,
+    get_price_at_offset_days,
+    get_price_at_offset_minutes,
+)
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -26,8 +42,252 @@ from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 
 logger = setup_struct_logger("orion.price_target")
 
-BATCH_SIZE = 50
-POLL_INTERVAL_SECONDS = 60
+# Static sector mapping for reliable feature calculation (avoids unreliable API calls)
+SECTOR_MAPPING: Dict[str, str] = {
+    # Technology
+    "AAPL": "Technology",
+    "MSFT": "Technology",
+    "GOOGL": "Technology",
+    "GOOG": "Technology",
+    "META": "Technology",
+    "NVDA": "Technology",
+    "AMD": "Technology",
+    "INTC": "Technology",
+    "CRM": "Technology",
+    "ADBE": "Technology",
+    "ORCL": "Technology",
+    "IBM": "Technology",
+    "CSCO": "Technology",
+    "AVGO": "Technology",
+    "QCOM": "Technology",
+    "MU": "Technology",
+    "AMAT": "Technology",
+    "LRCX": "Technology",
+    "KLAC": "Technology",
+    "MRVL": "Technology",
+    "ARM": "Technology",
+    "ANET": "Technology",
+    "PANW": "Technology",
+    "PLTR": "Technology",
+    "SNOW": "Technology",
+    "DDOG": "Technology",
+    "NET": "Technology",
+    "CRWD": "Technology",
+    "ZS": "Technology",
+    "ASML": "Technology",
+    "TSM": "Technology",
+    "SMCI": "Technology",
+    "MSTR": "Technology",
+    "DELL": "Technology",
+    "NOW": "Technology",
+    "MDB": "Technology",
+    "ON": "Technology",
+    "MCHP": "Technology",
+    "SNPS": "Technology",
+    "STX": "Technology",
+    # Consumer Discretionary
+    "AMZN": "Consumer Discretionary",
+    "TSLA": "Consumer Discretionary",
+    "HD": "Consumer Discretionary",
+    "NKE": "Consumer Discretionary",
+    "MCD": "Consumer Discretionary",
+    "SBUX": "Consumer Discretionary",
+    "LULU": "Consumer Discretionary",
+    "BABA": "Consumer Discretionary",
+    "PDD": "Consumer Discretionary",
+    "RIVN": "Consumer Discretionary",
+    "NIO": "Consumer Discretionary",
+    "UBER": "Consumer Discretionary",
+    "TGT": "Consumer Discretionary",
+    "JD": "Consumer Discretionary",
+    "GM": "Consumer Discretionary",
+    "F": "Consumer Discretionary",
+    "LCID": "Consumer Discretionary",
+    "CVNA": "Consumer Discretionary",
+    # Consumer Staples
+    "COST": "Consumer Staples",
+    "WMT": "Consumer Staples",
+    "KO": "Consumer Staples",
+    "PEP": "Consumer Staples",
+    # Communication Services
+    "DIS": "Communication Services",
+    "NFLX": "Communication Services",
+    "ROKU": "Communication Services",
+    "T": "Communication Services",
+    "VZ": "Communication Services",
+    "TMUS": "Communication Services",
+    "CMCSA": "Communication Services",
+    "SPOT": "Communication Services",
+    # Financial Services
+    "JPM": "Financial Services",
+    "BAC": "Financial Services",
+    "WFC": "Financial Services",
+    "GS": "Financial Services",
+    "MS": "Financial Services",
+    "V": "Financial Services",
+    "MA": "Financial Services",
+    "AXP": "Financial Services",
+    "C": "Financial Services",
+    "PYPL": "Financial Services",
+    "SQ": "Financial Services",
+    "COIN": "Financial Services",
+    "HOOD": "Financial Services",
+    "SOFI": "Financial Services",
+    "BRKB": "Financial Services",
+    "COF": "Financial Services",
+    "KKR": "Financial Services",
+    "AFRM": "Financial Services",
+    # Healthcare
+    "UNH": "Healthcare",
+    "JNJ": "Healthcare",
+    "PFE": "Healthcare",
+    "MRK": "Healthcare",
+    "ABBV": "Healthcare",
+    "LLY": "Healthcare",
+    "TMO": "Healthcare",
+    "ABT": "Healthcare",
+    "NVO": "Healthcare",
+    "MRNA": "Healthcare",
+    "ISRG": "Healthcare",
+    "DXCM": "Healthcare",
+    # Energy
+    "XOM": "Energy",
+    "CVX": "Energy",
+    "COP": "Energy",
+    "OXY": "Energy",
+    "SLB": "Energy",
+    "HAL": "Energy",
+    "DVN": "Energy",
+    "EOG": "Energy",
+    "VLO": "Energy",
+    "BKR": "Energy",
+    "ET": "Energy",
+    "PBR": "Energy",
+    "OKLO": "Energy",
+    # Industrials
+    "CAT": "Industrials",
+    "BA": "Industrials",
+    "RTX": "Industrials",
+    "LMT": "Industrials",
+    "GE": "Industrials",
+    "DE": "Industrials",
+    "HON": "Industrials",
+    "UPS": "Industrials",
+    "UAL": "Industrials",
+    "RKLB": "Industrials",
+    # Materials
+    "NEM": "Materials",
+    "FCX": "Materials",
+    "AA": "Materials",
+    "PAAS": "Materials",
+    "HL": "Materials",
+    "AG": "Materials",
+    "BMNR": "Materials",
+    # ETFs
+    "SPY": "ETF",
+    "QQQ": "ETF",
+    "IWM": "ETF",
+    "DIA": "ETF",
+    "XLF": "ETF",
+    "XLE": "ETF",
+    "XLK": "ETF",
+    "XLV": "ETF",
+    "XLI": "ETF",
+    "XLU": "ETF",
+    "UVXY": "ETF",
+    "VIXY": "ETF",
+    "VXX": "ETF",
+    "TLT": "ETF",
+    "GLD": "ETF",
+    "SLV": "ETF",
+    "EEM": "ETF",
+    "EWZ": "ETF",
+    "FXI": "ETF",
+    "ARKK": "ETF",
+    "GDX": "ETF",
+    "IBIT": "ETF",
+    "SQQQ": "ETF",
+    "TQQQ": "ETF",
+    "SPXU": "ETF",
+    "UPRO": "ETF",
+    "SMH": "ETF",
+    "SOXL": "ETF",
+    # Index
+    "SPX": "Index",
+    "SPXW": "Index",
+    "NDX": "Index",
+    "RUT": "Index",
+    "VIX": "Index",
+}
+
+
+def calculate_black_scholes_delta(
+    S: float, K: float, T: float, r: float, sigma: float, option_type: str
+) -> Optional[float]:
+    """Calculate option delta using Black-Scholes model.
+
+    Args:
+        S: Current underlying price
+        K: Strike price
+        T: Time to expiry in years
+        r: Risk-free rate
+        sigma: Implied volatility (as decimal, e.g., 0.30 for 30%)
+        option_type: 'C' for call, 'P' for put
+
+    Returns:
+        Delta value or None if calculation fails
+    """
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return None
+    try:
+        d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+        if option_type == "C":
+            return float(norm.cdf(d1))
+        else:
+            return float(norm.cdf(d1) - 1)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> Optional[float]:
+    """Calculate option gamma using Black-Scholes model.
+
+    Args:
+        S: Current underlying price
+        K: Strike price
+        T: Time to expiry in years
+        r: Risk-free rate
+        sigma: Implied volatility (as decimal)
+
+    Returns:
+        Gamma value or None if calculation fails
+    """
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return None
+    try:
+        d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+        return float(norm.pdf(d1) / (S * sigma * math.sqrt(T)))
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def calculate_iv_rank_from_history(current_iv: float, iv_history: List[float]) -> Optional[float]:
+    """Calculate IV rank as percentile within historical IV range.
+
+    Args:
+        current_iv: Current IV value
+        iv_history: List of historical IV values
+
+    Returns:
+        IV rank (0-100) or None if insufficient data
+    """
+    if not iv_history or len(iv_history) < 2:
+        return None
+    min_iv = min(iv_history)
+    max_iv = max(iv_history)
+    if max_iv == min_iv:
+        return 50.0  # No range, default to middle
+    return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100))
 
 
 def parse_expiry(expiry_str: Optional[str]) -> Optional[datetime]:
@@ -67,23 +327,48 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
     Criteria:
     - Sweeps (ASK/BID) >= $50k premium
     - Non-sweeps (ASK/BID) >= $100k premium (institutional)
+    - DTE-aware minimum age filter:
+      - 0DTE: 15 minutes (fast-moving, need quick labels)
+      - 1-3 DTE (SHORT_SWING): 30 minutes
+      - 4-14 DTE (SWING): 1 hour
+      - 15+ DTE (POSITION): 2 hours
     """
 
     async def query(session: Any) -> List[Any]:
         stmt = text(
             """
-            SELECT f.*
-            FROM silver_uw_flow f
-            LEFT JOIN price_target_labels p ON f.event_id = p.event_id
-            WHERE p.event_id IS NULL
-            AND f.option_chain IS NOT NULL
-            AND f.option_price > 0
-            AND f.aggressor IN ('ASK', 'BID')
-            AND (
-                (f.is_sweep = 'true' AND f.premium_usd >= 50000)
-                OR (f.is_sweep != 'true' AND f.premium_usd >= 100000)
+            WITH flow_with_dte AS (
+                SELECT f.*,
+                    CASE
+                        WHEN f.expiry IS NOT NULL THEN
+                            (f.expiry::date - DATE(f.flow_ts_utc))
+                        ELSE NULL
+                    END as dte
+                FROM silver_uw_flow f
+                LEFT JOIN price_target_labels p ON f.event_id = p.event_id
+                WHERE p.event_id IS NULL
+                AND f.option_chain IS NOT NULL
+                AND f.option_price > 0
+                AND f.aggressor IN ('ASK', 'BID')
+                AND (
+                    (f.is_sweep = 'true' AND f.premium_usd >= 50000)
+                    OR (f.is_sweep != 'true' AND f.premium_usd >= 100000)
+                )
             )
-            ORDER BY f.flow_ts_utc ASC
+            SELECT * FROM flow_with_dte
+            WHERE (
+                -- 0DTE: 15 minute minimum age
+                (dte = 0 AND flow_ts_utc < NOW() - INTERVAL '15 minutes')
+                -- 1-3 DTE (SHORT_SWING): 30 minute minimum age
+                OR (dte BETWEEN 1 AND 3 AND flow_ts_utc < NOW() - INTERVAL '30 minutes')
+                -- 4-14 DTE (SWING): 1 hour minimum age
+                OR (dte BETWEEN 4 AND 14 AND flow_ts_utc < NOW() - INTERVAL '1 hour')
+                -- 15+ DTE (POSITION): 2 hour minimum age
+                OR (dte >= 15 AND flow_ts_utc < NOW() - INTERVAL '2 hours')
+                -- Unknown DTE: use 30 minute default
+                OR (dte IS NULL AND flow_ts_utc < NOW() - INTERVAL '30 minutes')
+            )
+            ORDER BY flow_ts_utc ASC
             LIMIT :limit
         """
         )
@@ -111,6 +396,45 @@ async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[D
         return [{"price": row[0], "ts": row[1]} for row in result.fetchall()]
 
     return await db_query(query)
+
+
+async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
+    """Get real option prices and Greeks from silver_option_quotes (Alpaca API data).
+
+    Returns dict mapping checkpoint names to dicts containing:
+    - price: mid price (or last_trade as fallback)
+    - delta, gamma, theta, vega, iv: Greeks at checkpoint
+    """
+
+    async def query(session: Any) -> Dict[str, Dict[str, Optional[float]]]:
+        stmt = text(
+            """
+            SELECT checkpoint, mid_price, last_trade_price,
+                   delta, gamma, theta, vega, iv
+            FROM silver_option_quotes
+            WHERE flow_event_id = :event_id
+        """
+        )
+        result = await session.execute(stmt, {"event_id": event_id})
+        data: Dict[str, Dict[str, Optional[float]]] = {}
+        for row in result.fetchall():
+            checkpoint = row[0]
+            # Prefer mid_price, fallback to last_trade
+            price = row[1] if row[1] is not None else row[2]
+            data[checkpoint] = {
+                "price": float(price) if price else None,
+                "delta": float(row[3]) if row[3] is not None else None,
+                "gamma": float(row[4]) if row[4] is not None else None,
+                "theta": float(row[5]) if row[5] is not None else None,
+                "vega": float(row[6]) if row[6] is not None else None,
+                "iv": float(row[7]) if row[7] is not None else None,
+            }
+        return data
+
+    try:
+        return await db_query(query)
+    except Exception:
+        return {}
 
 
 async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
@@ -215,31 +539,59 @@ async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], en
 
 
 async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
-    """Get IV rank at entry time."""
+    """Get IV rank at entry time by calculating from flow IV history.
+
+    Calculates IV rank as percentile: (current - min) / (max - min) * 100
+    using historical IV data from silver_uw_flow for the same ticker.
+    """
 
     async def query(session: Any) -> Optional[float]:
+        # Get current IV and historical IVs for this ticker (last 30 days)
         stmt = text(
             """
-            SELECT iv_rank FROM silver_iv_rank
-            WHERE ticker = :ticker AND ts_utc <= :entry_ts
-            ORDER BY ts_utc DESC LIMIT 1
+            WITH iv_history AS (
+                SELECT iv
+                FROM silver_uw_flow
+                WHERE ticker = :ticker
+                AND flow_ts_utc BETWEEN :start_ts AND :entry_ts
+                AND iv IS NOT NULL AND iv > 0
+            )
+            SELECT
+                (SELECT iv FROM silver_uw_flow
+                 WHERE ticker = :ticker AND flow_ts_utc <= :entry_ts
+                 AND iv IS NOT NULL AND iv > 0
+                 ORDER BY flow_ts_utc DESC LIMIT 1) as current_iv,
+                MIN(iv) as min_iv,
+                MAX(iv) as max_iv
+            FROM iv_history
         """
         )
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
+        start_ts = entry_ts - timedelta(days=30)
+        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
         row = result.fetchone()
-        return row[0] if row else None
+        if row and row[0] and row[1] is not None and row[2] is not None:
+            current_iv, min_iv, max_iv = row[0], row[1], row[2]
+            if max_iv > min_iv:
+                return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100))
+            return 50.0  # No range, return middle
+        return None
 
     return await db_query(query)
 
 
 async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
-    """Get regime snapshot at entry time from VIX data + market tide."""
+    """Get regime snapshot at entry time from VIX/VIXY data + market tide.
+
+    Uses VIXY bar data from silver_alpaca_bars as VIX proxy when
+    silver_vix_data table is empty.
+    """
     from orion.analysis.regime import MultiAxisRegimeDetector
 
     detector = MultiAxisRegimeDetector()
 
-    # Get VIX data
+    # Try silver_vix_data first, then fallback to VIXY bars
     async def query_vix(session: Any) -> Dict[str, Any]:
+        # First try the VIX table
         stmt = text(
             """
             SELECT vix, vix_1d_change, vix_regime
@@ -250,7 +602,36 @@ async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
         )
         result = await session.execute(stmt, {"entry_ts": entry_ts})
         row = result.fetchone()
-        return {"vix": row[0], "vix_1d_change": row[1], "vix_regime": row[2]} if row else {}
+        if row and row[0]:
+            return {"vix": row[0], "vix_1d_change": row[1], "vix_regime": row[2]}
+
+        # Fallback: Use VIXY from silver_alpaca_bars as proxy
+        stmt = text(
+            """
+            SELECT close,
+                   close - LAG(close) OVER (ORDER BY bar_start_ts_utc) as change_1d
+            FROM silver_alpaca_bars
+            WHERE ticker = 'VIXY' AND bar_start_ts_utc <= :entry_ts
+            ORDER BY bar_start_ts_utc DESC LIMIT 1
+        """
+        )
+        result = await session.execute(stmt, {"entry_ts": entry_ts})
+        row = result.fetchone()
+        if row and row[0]:
+            vix_proxy = float(row[0])
+            vix_change = float(row[1]) if row[1] else 0.0
+            # Map VIXY price to VIX regime
+            if vix_proxy > 30:
+                regime = "EXTREME"
+            elif vix_proxy > 20:
+                regime = "ELEVATED"
+            elif vix_proxy > 12:
+                regime = "NORMAL"
+            else:
+                regime = "LOW"
+            return {"vix": vix_proxy, "vix_1d_change": vix_change, "vix_regime": regime}
+
+        return {}
 
     # Get market tide sum for risk scoring
     async def query_tide(session: Any) -> Optional[float]:
@@ -350,29 +731,131 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
 
 
 async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
-    """Get volume, OI, and IV from flow data."""
+    """Get Greeks from stored values or Alpaca API, with Black-Scholes fallback.
 
-    async def query(session: Any) -> Dict[str, Optional[float]]:
+    Priority:
+    1. Stored Greeks from silver_uw_flow (captured at ingestion time)
+    2. Alpaca API (for flows ingested before Greeks enrichment)
+    3. Black-Scholes fallback (if Alpaca unavailable)
+    """
+    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+
+    result = {
+        "delta": None,
+        "gamma": None,
+        "theta": None,
+        "vega": None,
+        "rho": None,
+        "volume": None,
+        "open_interest": None,
+        "iv": None,
+        "iv_alpaca": None,
+    }
+
+    async def query(session: Any) -> Dict[str, Any]:
         stmt = text(
             """
-            SELECT volume_contract, open_interest, iv, delta_diff
-            FROM silver_uw_flow
-            WHERE event_id = :event_id
+            SELECT
+                f.volume_contract, f.open_interest, f.iv, f.underlying_price,
+                f.strike, f.put_call, f.expiry, f.flow_ts_utc, f.option_chain,
+                f.delta_alpaca, f.gamma_alpaca, f.theta_alpaca, f.vega_alpaca,
+                f.rho_alpaca, f.iv_alpaca
+            FROM silver_uw_flow f
+            WHERE f.event_id = :event_id
         """
         )
-        result = await session.execute(stmt, {"event_id": event_id})
-        row = result.fetchone()
+        res = await session.execute(stmt, {"event_id": event_id})
+        row = res.fetchone()
         if row:
             return {
-                "delta": row[3],  # delta_diff (closest to delta we have)
-                "gamma": None,  # Not available in flow data
-                "volume": row[0],  # volume_contract
+                "volume": row[0],
                 "open_interest": row[1],
                 "iv": row[2],
+                "underlying_price": row[3],
+                "strike": row[4],
+                "put_call": row[5],
+                "expiry": row[6],
+                "flow_ts": row[7],
+                "option_chain": row[8],
+                "delta_stored": row[9],
+                "gamma_stored": row[10],
+                "theta_stored": row[11],
+                "vega_stored": row[12],
+                "rho_stored": row[13],
+                "iv_alpaca_stored": row[14],
             }
-        return {"delta": None, "gamma": None, "volume": None, "open_interest": None, "iv": None}
+        return {}
 
-    return await db_query(query)
+    flow_data = await db_query(query)
+
+    if not flow_data:
+        return result
+
+    result["volume"] = flow_data.get("volume")
+    result["open_interest"] = flow_data.get("open_interest")
+    result["iv"] = flow_data.get("iv")
+
+    option_chain = flow_data.get("option_chain")
+
+    # Priority 1: Use stored Greeks from silver_uw_flow (captured at ingestion)
+    if flow_data.get("delta_stored") is not None:
+        result["delta"] = flow_data.get("delta_stored")
+        result["gamma"] = flow_data.get("gamma_stored")
+        result["theta"] = flow_data.get("theta_stored")
+        result["vega"] = flow_data.get("vega_stored")
+        result["rho"] = flow_data.get("rho_stored")
+        result["iv_alpaca"] = flow_data.get("iv_alpaca_stored")
+        return result
+
+    # Priority 2: Try Alpaca API (for flows ingested before Greeks enrichment)
+    if option_chain:
+        alpaca_greeks = await get_option_greeks(option_chain)
+        if alpaca_greeks.get("delta") is not None:
+            result["delta"] = alpaca_greeks.get("delta")
+            result["gamma"] = alpaca_greeks.get("gamma")
+            result["theta"] = alpaca_greeks.get("theta")
+            result["vega"] = alpaca_greeks.get("vega")
+            result["rho"] = alpaca_greeks.get("rho")
+            result["iv_alpaca"] = alpaca_greeks.get("implied_volatility")
+            return result
+
+    # Fallback to Black-Scholes if Alpaca unavailable
+    S = float(flow_data.get("underlying_price") or 0)
+    K = float(flow_data.get("strike") or 0)
+    iv = flow_data.get("iv")
+    sigma = float(iv) if iv else 0
+    put_call = flow_data.get("put_call", "C")
+    expiry = flow_data.get("expiry")
+    flow_ts = flow_data.get("flow_ts")
+
+    # Calculate time to expiry in years
+    T = 0.0
+    if expiry and flow_ts:
+        if isinstance(expiry, str):
+            try:
+                expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
+            except ValueError:
+                expiry_dt = None
+        else:
+            expiry_dt = expiry
+        if expiry_dt:
+            if hasattr(expiry_dt, "date"):
+                expiry_date = expiry_dt.date()
+            else:
+                expiry_date = expiry_dt
+            if hasattr(flow_ts, "date"):
+                flow_date = flow_ts.date()
+            else:
+                flow_date = flow_ts
+            days_to_expiry = (expiry_date - flow_date).days
+            T = max(days_to_expiry / 365.0, 1 / 365.0)
+
+    # Calculate delta and gamma using Black-Scholes
+    if S > 0 and K > 0 and sigma > 0 and T > 0:
+        result["delta"] = calculate_black_scholes_delta(S, K, T, RISK_FREE_RATE, sigma, put_call)
+        result["gamma"] = calculate_black_scholes_gamma(S, K, T, RISK_FREE_RATE, sigma)
+
+    return result
 
 
 async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> Optional[float]:
@@ -619,8 +1102,8 @@ async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Opti
             """
             SELECT
                 COUNT(*) as total_trades,
-                SUM(CASE WHEN aggressor = 'ask' THEN 1 ELSE 0 END) as ask_trades,
-                SUM(CASE WHEN is_sweep = 'true' THEN 1 ELSE 0 END) as sweep_trades,
+                SUM(CASE WHEN UPPER(aggressor) = 'ASK' THEN 1 ELSE 0 END) as ask_trades,
+                SUM(CASE WHEN LOWER(is_sweep) IN ('true', '1', 'yes') THEN 1 ELSE 0 END) as sweep_trades,
                 SUM(premium_usd) as total_premium
             FROM silver_uw_flow
             WHERE ticker = :ticker
@@ -695,7 +1178,6 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
 
     # 2-5: DB lookups
     entry_date = entry_ts.date()
-    prior_day = entry_date - timedelta(days=1)
     five_days_ago = entry_date - timedelta(days=5)
 
     async def query(session: Any) -> Dict[str, Any]:
@@ -714,20 +1196,19 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
         today_row = today_result.fetchone()
 
         today_open = today_row[0] if today_row else None
-        today_vwap = today_row[1] if today_row else None
 
-        # Get prior day close
+        # Get prior trading day close (handles holidays/weekends)
         prior_stmt = text(
             """
-            SELECT close
+            SELECT close, bar_start_ts_utc
             FROM silver_alpaca_bars
             WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) = :prior_day
+            AND DATE(bar_start_ts_utc) < :entry_date
             ORDER BY bar_start_ts_utc DESC
             LIMIT 1
         """
         )
-        prior_result = await session.execute(prior_stmt, {"ticker": ticker, "prior_day": prior_day})
+        prior_result = await session.execute(prior_stmt, {"ticker": ticker, "entry_date": entry_date})
         prior_row = prior_result.fetchone()
         prior_close = prior_row[0] if prior_row else None
 
@@ -735,10 +1216,23 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
         if today_open and prior_close and prior_close > 0:
             result["overnight_gap_pct"] = ((today_open - prior_close) / prior_close) * 100
 
-        # VWAP distance
-        if today_vwap and today_open and today_vwap > 0:
-            # Use today's open as proxy for current price in this calculation
-            result["vwap_distance_pct"] = ((today_open - today_vwap) / today_vwap) * 100
+        # VWAP distance - use bar closest to entry time
+        vwap_stmt = text(
+            """
+            SELECT close, vwap
+            FROM silver_alpaca_bars
+            WHERE ticker = :ticker
+            AND bar_start_ts_utc <= :entry_ts
+            ORDER BY bar_start_ts_utc DESC
+            LIMIT 1
+        """
+        )
+        vwap_result = await session.execute(vwap_stmt, {"ticker": ticker, "entry_ts": entry_ts})
+        vwap_row = vwap_result.fetchone()
+        if vwap_row and vwap_row[0] and vwap_row[1] and vwap_row[1] > 0:
+            current_price = vwap_row[0]
+            current_vwap = vwap_row[1]
+            result["vwap_distance_pct"] = ((current_price - current_vwap) / current_vwap) * 100
 
         # 5-day price change (POSITION)
         five_day_stmt = text(
@@ -787,7 +1281,6 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
     }
 
     entry_date = entry_ts.date()
-    prior_date = entry_date - timedelta(days=1)
     lookback_30d = entry_date - timedelta(days=30)
 
     async def query(session: Any) -> Dict[str, Optional[float]]:
@@ -808,18 +1301,18 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         current_row = current_result.fetchone()
         current_oi = current_row[0] if current_row else None
 
-        # Get prior day OI
+        # Get prior OI (nearest flow before entry_ts for same option_chain)
         prior_oi_stmt = text(
             """
             SELECT open_interest
             FROM silver_uw_flow
             WHERE option_chain = :option_chain
-            AND DATE(flow_ts_utc) = :prior_date
+            AND flow_ts_utc < :entry_ts
             ORDER BY flow_ts_utc DESC
             LIMIT 1
         """
         )
-        prior_result = await session.execute(prior_oi_stmt, {"option_chain": option_chain, "prior_date": prior_date})
+        prior_result = await session.execute(prior_oi_stmt, {"option_chain": option_chain, "entry_ts": entry_ts})
         prior_row = prior_result.fetchone()
         prior_oi = prior_row[0] if prior_row else None
 
@@ -856,14 +1349,32 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
                 hv = statistics.stdev(returns) * (252**0.5) * 100 if len(returns) > 1 else None
                 result["hv_30d"] = hv  # Store for reference
 
+        # Fetch IV from the flow data for this option_chain
+        iv_stmt = text(
+            """
+            SELECT iv
+            FROM silver_uw_flow
+            WHERE option_chain = :option_chain
+            AND DATE(flow_ts_utc) = :entry_date
+            ORDER BY flow_ts_utc DESC
+            LIMIT 1
+        """
+        )
+        iv_result = await session.execute(iv_stmt, {"option_chain": option_chain, "entry_date": entry_date})
+        iv_row = iv_result.fetchone()
+        iv_value = iv_row[0] if iv_row and iv_row[0] else None
+
+        # Calculate IV vs HV ratio
+        if iv_value and result.get("hv_30d") and result["hv_30d"] > 0:
+            # IV is typically in decimal (0.25 = 25%) or percentage form
+            # Normalize IV to percentage if it's in decimal form
+            iv_pct = iv_value * 100 if iv_value < 2 else iv_value
+            result["iv_vs_hv_ratio"] = iv_pct / result["hv_30d"]
+
         return result
 
     db_result = await db_query(query)
     result.update(db_result)
-
-    # Get IV from the entry (we already have iv_at_entry elsewhere)
-    # For IV vs HV ratio, we need to calculate it in the label function
-    # where iv_at_entry is available
 
     return result
 
@@ -1020,70 +1531,78 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
                 pass
 
         # SPY return in last hour (market context)
-        spy_return_stmt = text(
+        try:
+            spy_return_stmt = text(
+                """
+                SELECT
+                    (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :entry_ts ORDER BY bar_start_ts_utc DESC LIMIT 1) as current_close,
+                    (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :lookback_1h ORDER BY bar_start_ts_utc DESC LIMIT 1) as prior_close
             """
-            SELECT
-                (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :entry_ts ORDER BY bar_start_ts_utc DESC LIMIT 1) as current_close,
-                (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :lookback_1h ORDER BY bar_start_ts_utc DESC LIMIT 1) as prior_close
-        """
-        )
-        spy_result = await session.execute(spy_return_stmt, {"entry_ts": entry_ts, "lookback_1h": lookback_1h})
-        spy_row = spy_result.fetchone()
-        if spy_row and spy_row[0] and spy_row[1] and spy_row[1] > 0:
-            result["spy_return_1h"] = ((spy_row[0] - spy_row[1]) / spy_row[1]) * 100
+            )
+            spy_result = await session.execute(spy_return_stmt, {"entry_ts": entry_ts, "lookback_1h": lookback_1h})
+            spy_row = spy_result.fetchone()
+            if spy_row and spy_row[0] and spy_row[1] and spy_row[1] > 0:
+                result["spy_return_1h"] = ((spy_row[0] - spy_row[1]) / spy_row[1]) * 100
+        except Exception:
+            # SPY data may not exist for pre-market times - skip this feature
+            pass
 
         # 5-day correlation with SPY
         # Get daily returns for ticker and SPY
-        ticker_returns_stmt = text(
+        try:
+            ticker_returns_stmt = text(
+                """
+                SELECT DATE(bar_start_ts_utc) as d,
+                       (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
+                       LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
+                FROM silver_alpaca_bars
+                WHERE ticker = :ticker
+                AND DATE(bar_start_ts_utc) >= :lookback_5d
+                AND DATE(bar_start_ts_utc) < :entry_date
+                GROUP BY DATE(bar_start_ts_utc)
+                ORDER BY d
             """
-            SELECT DATE(bar_start_ts_utc) as d,
-                   (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
-                   LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) >= :lookback_5d
-            AND DATE(bar_start_ts_utc) < :entry_date
-            GROUP BY DATE(bar_start_ts_utc)
-            ORDER BY d
-        """
-        )
-        spy_returns_stmt = text(
+            )
+            spy_returns_stmt = text(
+                """
+                SELECT DATE(bar_start_ts_utc) as d,
+                       (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
+                       LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
+                FROM silver_alpaca_bars
+                WHERE ticker = 'SPY'
+                AND DATE(bar_start_ts_utc) >= :lookback_5d
+                AND DATE(bar_start_ts_utc) < :entry_date
+                GROUP BY DATE(bar_start_ts_utc)
+                ORDER BY d
             """
-            SELECT DATE(bar_start_ts_utc) as d,
-                   (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
-                   LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
-            FROM silver_alpaca_bars
-            WHERE ticker = 'SPY'
-            AND DATE(bar_start_ts_utc) >= :lookback_5d
-            AND DATE(bar_start_ts_utc) < :entry_date
-            GROUP BY DATE(bar_start_ts_utc)
-            ORDER BY d
-        """
-        )
-        ticker_result = await session.execute(
-            ticker_returns_stmt, {"ticker": ticker, "lookback_5d": lookback_5d, "entry_date": entry_date}
-        )
-        spy_result = await session.execute(spy_returns_stmt, {"lookback_5d": lookback_5d, "entry_date": entry_date})
+            )
+            ticker_result = await session.execute(
+                ticker_returns_stmt, {"ticker": ticker, "lookback_5d": lookback_5d, "entry_date": entry_date}
+            )
+            spy_result = await session.execute(spy_returns_stmt, {"lookback_5d": lookback_5d, "entry_date": entry_date})
 
-        ticker_returns = [r[1] for r in ticker_result.fetchall() if r[1] is not None]
-        spy_returns = [r[1] for r in spy_result.fetchall() if r[1] is not None]
+            ticker_returns = [r[1] for r in ticker_result.fetchall() if r[1] is not None]
+            spy_returns = [r[1] for r in spy_result.fetchall() if r[1] is not None]
 
-        # Calculate correlation if we have enough data points
-        if len(ticker_returns) >= 3 and len(spy_returns) >= 3:
-            # Simple Pearson correlation
-            n = min(len(ticker_returns), len(spy_returns))
-            t_ret = ticker_returns[:n]
-            s_ret = spy_returns[:n]
+            # Calculate correlation if we have enough data points
+            if len(ticker_returns) >= 3 and len(spy_returns) >= 3:
+                # Simple Pearson correlation
+                n = min(len(ticker_returns), len(spy_returns))
+                t_ret = ticker_returns[:n]
+                s_ret = spy_returns[:n]
 
-            t_mean = sum(t_ret) / n
-            s_mean = sum(s_ret) / n
+                t_mean = sum(t_ret) / n
+                s_mean = sum(s_ret) / n
 
-            numerator = sum((t - t_mean) * (s - s_mean) for t, s in zip(t_ret, s_ret))
-            t_var = sum((t - t_mean) ** 2 for t in t_ret)
-            s_var = sum((s - s_mean) ** 2 for s in s_ret)
+                numerator = sum((t - t_mean) * (s - s_mean) for t, s in zip(t_ret, s_ret))
+                t_var = sum((t - t_mean) ** 2 for t in t_ret)
+                s_var = sum((s - s_mean) ** 2 for s in s_ret)
 
-            if t_var > 0 and s_var > 0:
-                result["spy_correlation_5d"] = numerator / ((t_var * s_var) ** 0.5)
+                if t_var > 0 and s_var > 0:
+                    result["spy_correlation_5d"] = numerator / ((t_var * s_var) ** 0.5)
+        except Exception:
+            # Correlation data may be incomplete - skip this feature
+            pass
 
         return result
 
@@ -1115,11 +1634,26 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
     """Fetch ticker info from UW API with caching.
 
     Uses both /api/stock/{ticker}/info and /api/earnings/{ticker} endpoints
-    to maximize data coverage.
+    to maximize data coverage. Persists sector to silver_ticker_info.
     """
     # Return cached if available
     if ticker in _ticker_info_cache:
         return _ticker_info_cache[ticker]
+
+    # Check database first (persisted from previous API calls)
+    try:
+        db_sector = await _get_sector_from_db(ticker)
+        if db_sector:
+            cache_entry = {
+                "sector": db_sector,
+                "next_earnings_date": None,
+                "announce_time": None,
+                "last_earnings_date": None,
+            }
+            _ticker_info_cache[ticker] = cache_entry
+            return cache_entry
+    except Exception:
+        pass  # DB check is optional; continue to API
 
     # Initialize empty cache entry
     cache_entry: Dict[str, Any] = {
@@ -1194,15 +1728,64 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
         except Exception as e:
             logger.debug(f"Failed to fetch earnings for {ticker}: {e}")
 
+    # Persist sector to database for future lookups
+    if cache_entry["sector"]:
+        try:
+            await _persist_ticker_info(ticker, cache_entry["sector"])
+        except Exception as e:
+            logger.debug(f"Failed to persist ticker info for {ticker}: {e}")
+
     _ticker_info_cache[ticker] = cache_entry
     return cache_entry
 
 
+async def _get_sector_from_db(ticker: str) -> Optional[str]:
+    """Check silver_ticker_info for cached sector."""
+
+    async def query(session: Any) -> Optional[str]:
+        stmt = text("SELECT sector FROM silver_ticker_info WHERE ticker = :ticker")
+        result = await session.execute(stmt, {"ticker": ticker})
+        row = result.fetchone()
+        return row[0] if row else None
+
+    return await db_query(query)
+
+
+async def _persist_ticker_info(ticker: str, sector: str) -> None:
+    """Persist ticker sector to silver_ticker_info."""
+
+    async def write(session: Any) -> None:
+        stmt = text(
+            """
+            INSERT INTO silver_ticker_info (ticker, sector, last_updated)
+            VALUES (:ticker, :sector, NOW())
+            ON CONFLICT (ticker) DO UPDATE SET
+                sector = EXCLUDED.sector,
+                last_updated = NOW()
+        """
+        )
+        await session.execute(stmt, {"ticker": ticker, "sector": sector})
+
+    await db_write(write)
+
+
 async def get_sector_info(ticker: str) -> Dict[str, Optional[str]]:
-    """Get sector from UW ticker info."""
-    info = await get_ticker_info(ticker)
-    # Note: UW only provides sector, not industry
-    return {"sector": info.get("sector"), "industry": None}
+    """Get sector from static mapping (reliable) or fallback to UW API.
+
+    Uses static SECTOR_MAPPING for common tickers to ensure reliability.
+    Falls back to UW API for less common tickers.
+    """
+    # Check static mapping first (reliable, no API calls)
+    sector = SECTOR_MAPPING.get(ticker)
+    if sector:
+        return {"sector": sector, "industry": None}
+
+    # Fallback to UW API for unknown tickers
+    try:
+        info = await get_ticker_info(ticker)
+        return {"sector": info.get("sector"), "industry": None}
+    except Exception:
+        return {"sector": "Other", "industry": None}
 
 
 async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
@@ -1298,6 +1881,107 @@ def calculate_volatility(prices: List[float]) -> Optional[float]:
         return None
 
 
+# Checkpoint definitions for Greeks fetching
+# (suffix, minutes_offset, hours_offset, days_offset)
+CHECKPOINT_OFFSETS = {
+    "5m": timedelta(minutes=5),
+    "10m": timedelta(minutes=10),
+    "15m": timedelta(minutes=15),
+    "30m": timedelta(minutes=30),
+    "1h": timedelta(hours=1),
+    "2h": timedelta(hours=2),
+    "4h": timedelta(hours=4),
+    "8h": timedelta(hours=8),
+    "eod": timedelta(hours=6, minutes=30),  # ~6.5h trading day
+    "1d": timedelta(days=1),
+    "2d": timedelta(days=2),
+    "3d": timedelta(days=3),
+    "1w": timedelta(days=7),
+    "2w": timedelta(days=14),
+    "3w": timedelta(days=21),
+    "4w": timedelta(days=28),
+}
+
+
+async def get_checkpoint_greeks(
+    option_chain: str,
+    ticker: str,
+    entry_ts: datetime,
+    entry_price: float,
+    expiry: Optional[datetime],
+    dte: Optional[int],
+) -> Dict[str, Dict[str, Optional[float]]]:
+    """Fetch Greeks and underlying price at each checkpoint from Alpaca.
+
+    Since Alpaca only provides current data, this only populates
+    for checkpoints that are near 'now' (within 5 minutes).
+    Historical checkpoints remain NULL and populate going forward.
+
+    Returns:
+        Dict mapping checkpoint suffix to Greeks + decay features + underlying
+    """
+    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+
+    now = datetime.now(timezone.utc)
+    results: Dict[str, Dict[str, Optional[float]]] = {}
+
+    for cp_suffix, offset in CHECKPOINT_OFFSETS.items():
+        checkpoint_ts = entry_ts + offset
+
+        # Initialize with NULLs
+        cp_data: Dict[str, Optional[float]] = {
+            "delta": None,
+            "gamma": None,
+            "theta": None,
+            "vega": None,
+            "iv": None,
+            "dte": None,
+            "theta_decay_pct": None,
+            "time_value_pct": None,
+            "underlying": None,
+        }
+
+        # Only fetch live data if checkpoint is within 5 minutes of now (real-time labeling)
+        time_to_checkpoint = abs((now - checkpoint_ts).total_seconds())
+        if time_to_checkpoint < 300:  # 5 minutes
+            try:
+                greeks = await get_option_greeks(option_chain)
+                cp_data["delta"] = greeks.get("delta")
+                cp_data["gamma"] = greeks.get("gamma")
+                cp_data["theta"] = greeks.get("theta")
+                cp_data["vega"] = greeks.get("vega")
+                cp_data["iv"] = greeks.get("implied_volatility")
+
+                # Fetch underlying price at checkpoint
+                underlying = await get_underlying_price_at_entry(ticker, checkpoint_ts)
+                cp_data["underlying"] = underlying
+            except Exception as e:
+                logger.debug(f"Error fetching data at {cp_suffix}: {e}")
+
+        # Calculate time decay features (can be calculated without API)
+        if expiry and dte is not None:
+            # DTE at checkpoint
+            cp_date = checkpoint_ts.date() if hasattr(checkpoint_ts, "date") else checkpoint_ts
+            if isinstance(expiry, datetime):
+                expiry_date = expiry.date()
+            else:
+                expiry_date = expiry
+            dte_at_cp = (expiry_date - cp_date).days if cp_date else None
+            cp_data["dte"] = dte_at_cp if dte_at_cp and dte_at_cp >= 0 else 0
+
+            # Theta decay percentage (rough estimate: theta * days / entry_price)
+            # Only calculate if we have entry theta
+            if cp_data.get("theta") and entry_price and entry_price > 0:
+                days_held = offset.total_seconds() / 86400  # Convert to days
+                # Theta is daily decay, so cumulative decay ≈ theta * days
+                theta_decay = abs(cp_data["theta"]) * days_held
+                cp_data["theta_decay_pct"] = (theta_decay / entry_price) * 100
+
+        results[cp_suffix] = cp_data
+
+    return results
+
+
 async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     """Label a single entry with comprehensive price target tracking."""
     option_chain = entry.option_chain
@@ -1366,10 +2050,19 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             "return_at_1h",
             "return_at_2h",
             "return_at_4h",
+            # 0DTE checkpoints
+            "price_at_5m",
+            "return_at_5m",
+            "price_at_10m",
+            "return_at_10m",
             "price_at_15m",
             "return_at_15m",
             "price_at_30m",
             "return_at_30m",
+            # EOD checkpoint
+            "price_at_eod",
+            "return_at_eod",
+            # Longer term checkpoints
             "price_at_8h",
             "return_at_8h",
             "price_at_1d",
@@ -1380,6 +2073,13 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             "return_at_3d",
             "price_at_1w",
             "return_at_1w",
+            # POSITION extended checkpoints
+            "price_at_2w",
+            "return_at_2w",
+            "price_at_3w",
+            "return_at_3w",
+            "price_at_4w",
+            "return_at_4w",
             "opposing_flow_count",
             "opposing_premium_total",
             "sentiment_shift_ts",
@@ -1453,6 +2153,10 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
         label["underlying_change_1h_pct"] = None
         label["delta_at_entry"] = None
         label["gamma_at_entry"] = None
+        label["theta_at_entry"] = None
+        label["vega_at_entry"] = None
+        label["rho_at_entry"] = None
+        label["iv_at_entry_alpaca"] = None
         label["volume_at_entry"] = None
         label["open_interest_at_entry"] = None
         time_features = get_entry_time_features(entry_ts)
@@ -1461,6 +2165,19 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
         label["is_post_earnings"] = None
         label["sector"] = None
         label["industry"] = None
+        # P2 ML features - set to None for early return (no subsequent prices)
+        label["oi_change_1d"] = None
+        label["oi_change_pct"] = None
+        label["iv_vs_hv_ratio"] = None
+        label["high_52w_distance_pct"] = None
+        label["is_spread_leg"] = None
+        label["same_expiry_trades_1h"] = None
+        # Sector correlation features
+        sector_corr = await get_sector_correlation_features(ticker, entry_ts)
+        label["sector_net_premium_1h"] = sector_corr.get("sector_net_premium_1h")
+        label["sector_flow_direction"] = sector_corr.get("sector_flow_direction")
+        label["spy_correlation_5d"] = sector_corr.get("spy_correlation_5d")
+        label["spy_return_1h"] = sector_corr.get("spy_return_1h")
         return label
 
     # Track core metrics
@@ -1558,37 +2275,72 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     time_to_stop = int((hit_stop_ts - entry_ts).total_seconds()) if hit_stop_ts else None
     holding_period = int((last_tracked_ts - entry_ts).total_seconds())
 
-    # Price at checkpoints (original 1h/2h/4h)
-    price_1h = get_price_at_offset(prices, entry_ts, 1)
-    price_2h = get_price_at_offset(prices, entry_ts, 2)
-    price_4h = get_price_at_offset(prices, entry_ts, 4)
+    # Price at checkpoints - prefer real Alpaca quotes when available
+    # Fetch real quotes from silver_option_quotes (populated by option_quote_tracker)
+    real_quotes = await get_real_checkpoint_prices(entry.event_id)
+
+    # Helper to get price: prefer real quote, fallback to flow data
+    def _get_checkpoint_price(checkpoint: str, flow_price_fn, *flow_args) -> Optional[float]:
+        """Get checkpoint price: real quote first, then flow fallback."""
+        quote_data = real_quotes.get(checkpoint)
+        if quote_data is not None and quote_data.get("price") is not None:
+            return quote_data["price"]
+        return flow_price_fn(*flow_args)
+
+    # Helper to get Greeks at checkpoint
+    def _get_checkpoint_greeks(checkpoint: str) -> Dict[str, Optional[float]]:
+        """Get Greeks at checkpoint from Alpaca quote data."""
+        quote_data = real_quotes.get(checkpoint)
+        if quote_data is None:
+            return {"delta": None, "gamma": None, "theta": None, "vega": None, "iv": None}
+        return {
+            "delta": quote_data.get("delta"),
+            "gamma": quote_data.get("gamma"),
+            "theta": quote_data.get("theta"),
+            "vega": quote_data.get("vega"),
+            "iv": quote_data.get("iv"),
+        }
+
+    # Original hourly checkpoints (1h/2h/4h)
+    price_1h = _get_checkpoint_price("1h", get_price_at_offset, prices, entry_ts, 1)
+    price_2h = _get_checkpoint_price("2h", get_price_at_offset, prices, entry_ts, 2)
+    price_4h = _get_checkpoint_price("4h", get_price_at_offset, prices, entry_ts, 4)
 
     return_1h = ((price_1h - entry_price) / entry_price * 100) if price_1h else None
     return_2h = ((price_2h - entry_price) / entry_price * 100) if price_2h else None
     return_4h = ((price_4h - entry_price) / entry_price * 100) if price_4h else None
 
     # 0DTE checkpoints (5m, 10m, 15m, 30m) - ultra-short for 0DTE
-    price_5m = get_price_at_offset_minutes(prices, entry_ts, 5)
-    price_10m = get_price_at_offset_minutes(prices, entry_ts, 10)
-    price_15m = get_price_at_offset_minutes(prices, entry_ts, 15)
-    price_30m = get_price_at_offset_minutes(prices, entry_ts, 30)
+    price_5m = get_price_at_offset_minutes(prices, entry_ts, 5)  # No real quote yet
+    price_10m = get_price_at_offset_minutes(prices, entry_ts, 10)  # No real quote yet
+    price_15m = _get_checkpoint_price("15m", get_price_at_offset_minutes, prices, entry_ts, 15)
+    price_30m = _get_checkpoint_price("30m", get_price_at_offset_minutes, prices, entry_ts, 30)
     return_5m = ((price_5m - entry_price) / entry_price * 100) if price_5m else None
     return_10m = ((price_10m - entry_price) / entry_price * 100) if price_10m else None
     return_15m = ((price_15m - entry_price) / entry_price * 100) if price_15m else None
     return_30m = ((price_30m - entry_price) / entry_price * 100) if price_30m else None
 
     # SWING/POSITION checkpoints (8h, 1d, 2d, 3d, 1w)
-    price_8h = get_price_at_offset(prices, entry_ts, 8)
-    price_1d = get_price_at_offset_days(prices, entry_ts, 1)
-    price_2d = get_price_at_offset_days(prices, entry_ts, 2)
-    price_3d = get_price_at_offset_days(prices, entry_ts, 3)
-    price_1w = get_price_at_offset_days(prices, entry_ts, 7)
+    price_8h = _get_checkpoint_price("8h", get_price_at_offset, prices, entry_ts, 8)
+    price_1d = _get_checkpoint_price("1d", get_price_at_offset_days, prices, entry_ts, 1)
+    price_2d = get_price_at_offset_days(prices, entry_ts, 2)  # No real quote yet
+    price_3d = get_price_at_offset_days(prices, entry_ts, 3)  # No real quote yet
+    price_1w = get_price_at_offset_days(prices, entry_ts, 7)  # No real quote yet
 
     return_8h = ((price_8h - entry_price) / entry_price * 100) if price_8h else None
     return_1d = ((price_1d - entry_price) / entry_price * 100) if price_1d else None
     return_2d = ((price_2d - entry_price) / entry_price * 100) if price_2d else None
     return_3d = ((price_3d - entry_price) / entry_price * 100) if price_3d else None
     return_1w = ((price_1w - entry_price) / entry_price * 100) if price_1w else None
+
+    # POSITION extended checkpoints (2w, 3w, 4w) - for longer holding periods
+    price_2w = get_price_at_offset_days(prices, entry_ts, 14)
+    price_3w = get_price_at_offset_days(prices, entry_ts, 21)
+    price_4w = get_price_at_offset_days(prices, entry_ts, 28)
+
+    return_2w = ((price_2w - entry_price) / entry_price * 100) if price_2w else None
+    return_3w = ((price_3w - entry_price) / entry_price * 100) if price_3w else None
+    return_4w = ((price_4w - entry_price) / entry_price * 100) if price_4w else None
 
     # SWING EOD checkpoint - price at end of entry day (4pm ET = 20:00 UTC)
     eod_ts = entry_ts.replace(hour=20, minute=0, second=0, microsecond=0)
@@ -1604,6 +2356,17 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
     # Opposing flow
     opposing = await get_opposing_flow(ticker, put_call, entry_ts, last_tracked_ts)
+
+    # Extract Greeks at each checkpoint from Alpaca quote data
+    greeks_5m = _get_checkpoint_greeks("5m") if real_quotes else {}
+    greeks_15m = _get_checkpoint_greeks("15m") if real_quotes else {}
+    greeks_30m = _get_checkpoint_greeks("30m") if real_quotes else {}
+    greeks_1h = _get_checkpoint_greeks("1h") if real_quotes else {}
+    greeks_2h = _get_checkpoint_greeks("2h") if real_quotes else {}
+    greeks_4h = _get_checkpoint_greeks("4h") if real_quotes else {}
+    greeks_8h = _get_checkpoint_greeks("8h") if real_quotes else {}
+    greeks_1d = _get_checkpoint_greeks("1d") if real_quotes else {}
+    greeks_eod = _get_checkpoint_greeks("eod") if real_quotes else {}
 
     # Build full label
     label.update(
@@ -1662,9 +2425,53 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             "return_at_3d": return_3d,
             "price_at_1w": price_1w,
             "return_at_1w": return_1w,
+            # POSITION extended checkpoints (2w/3w/4w)
+            "price_at_2w": price_2w,
+            "return_at_2w": return_2w,
+            "price_at_3w": price_3w,
+            "return_at_3w": return_3w,
+            "price_at_4w": price_4w,
+            "return_at_4w": return_4w,
             # SWING EOD checkpoint
             "price_at_eod": price_eod,
             "return_at_eod": return_eod,
+            # Checkpoint Greeks from Alpaca (delta, gamma, theta, iv)
+            "delta_at_5m": greeks_5m.get("delta"),
+            "gamma_at_5m": greeks_5m.get("gamma"),
+            "theta_at_5m": greeks_5m.get("theta"),
+            "iv_at_5m": greeks_5m.get("iv"),
+            "delta_at_15m": greeks_15m.get("delta"),
+            "gamma_at_15m": greeks_15m.get("gamma"),
+            "theta_at_15m": greeks_15m.get("theta"),
+            "iv_at_15m": greeks_15m.get("iv"),
+            "delta_at_30m": greeks_30m.get("delta"),
+            "gamma_at_30m": greeks_30m.get("gamma"),
+            "theta_at_30m": greeks_30m.get("theta"),
+            "iv_at_30m": greeks_30m.get("iv"),
+            "delta_at_1h": greeks_1h.get("delta"),
+            "gamma_at_1h": greeks_1h.get("gamma"),
+            "theta_at_1h": greeks_1h.get("theta"),
+            "iv_at_1h": greeks_1h.get("iv"),
+            "delta_at_2h": greeks_2h.get("delta"),
+            "gamma_at_2h": greeks_2h.get("gamma"),
+            "theta_at_2h": greeks_2h.get("theta"),
+            "iv_at_2h": greeks_2h.get("iv"),
+            "delta_at_4h": greeks_4h.get("delta"),
+            "gamma_at_4h": greeks_4h.get("gamma"),
+            "theta_at_4h": greeks_4h.get("theta"),
+            "iv_at_4h": greeks_4h.get("iv"),
+            "delta_at_8h": greeks_8h.get("delta"),
+            "gamma_at_8h": greeks_8h.get("gamma"),
+            "theta_at_8h": greeks_8h.get("theta"),
+            "iv_at_8h": greeks_8h.get("iv"),
+            "delta_at_1d": greeks_1d.get("delta"),
+            "gamma_at_1d": greeks_1d.get("gamma"),
+            "theta_at_1d": greeks_1d.get("theta"),
+            "iv_at_1d": greeks_1d.get("iv"),
+            "delta_at_eod": greeks_eod.get("delta"),
+            "gamma_at_eod": greeks_eod.get("gamma"),
+            "theta_at_eod": greeks_eod.get("theta"),
+            "iv_at_eod": greeks_eod.get("iv"),
             # Context
             "opposing_flow_count": opposing["count"],
             "opposing_premium_total": opposing["premium"],
@@ -1797,12 +2604,16 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     time_features = get_entry_time_features(entry_ts)
     label.update(time_features)
 
-    # New ML features - Greeks and volume from flow
+    # New ML features - Greeks and volume from flow (Alpaca API with Black-Scholes fallback)
     greeks_data = await get_flow_greeks(entry.event_id)
     label.update(
         {
             "delta_at_entry": greeks_data.get("delta"),
             "gamma_at_entry": greeks_data.get("gamma"),
+            "theta_at_entry": greeks_data.get("theta"),
+            "vega_at_entry": greeks_data.get("vega"),
+            "rho_at_entry": greeks_data.get("rho"),
+            "iv_at_entry_alpaca": greeks_data.get("iv_alpaca"),
             "volume_at_entry": greeks_data.get("volume"),
             "open_interest_at_entry": greeks_data.get("open_interest"),
         }
@@ -1842,108 +2653,64 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     earnings_info = await get_earnings_proximity(ticker, entry_ts)
     label.update(earnings_info)
 
+    # Checkpoint Greeks - fetch live Greeks from Alpaca at each checkpoint
+    # Only populates for checkpoints near "now" (within 5 minutes)
+    # Historical labels will have NULLs and populate going forward
+    try:
+        checkpoint_greeks = await get_checkpoint_greeks(
+            option_chain=option_chain,
+            ticker=ticker,
+            entry_ts=entry_ts,
+            entry_price=entry_price,
+            expiry=expiry,
+            dte=dte,
+        )
+        for cp_suffix, cp_data in checkpoint_greeks.items():
+            label[f"delta_at_{cp_suffix}"] = cp_data.get("delta")
+            label[f"gamma_at_{cp_suffix}"] = cp_data.get("gamma")
+            label[f"theta_at_{cp_suffix}"] = cp_data.get("theta")
+            label[f"vega_at_{cp_suffix}"] = cp_data.get("vega")
+            label[f"iv_at_{cp_suffix}"] = cp_data.get("iv")
+            label[f"dte_at_{cp_suffix}"] = cp_data.get("dte")
+            label[f"theta_decay_pct_at_{cp_suffix}"] = cp_data.get("theta_decay_pct")
+            label[f"time_value_pct_at_{cp_suffix}"] = cp_data.get("time_value_pct")
+            label[f"underlying_at_{cp_suffix}"] = cp_data.get("underlying")
+    except Exception as e:
+        logger.debug(f"Error fetching checkpoint Greeks: {e}")
+
     return label
 
 
 async def persist_labels(labels: List[Dict[str, Any]]) -> int:
-    """Persist labeled records to database."""
+    """Persist labeled records to database using dynamic INSERT.
+
+    Automatically includes all keys from label dict, including checkpoint Greeks.
+    New columns added to label dict are automatically persisted without code changes.
+    """
     if not labels:
         return 0
 
     async def write(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO price_target_labels (
-                event_id, ticker, option_chain, trade_type,
-                entry_ts, entry_option_price, expiry, dte,
-                premium_usd, aggressor, put_call, is_sweep,
-                max_price_reached, max_price_ts, max_return_pct,
-                min_price_reached, min_price_ts, max_drawdown_pct,
-                hit_50_pct_ts, hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts,
-                hit_stop_20_pct_ts,
-                first_exit_type, first_exit_ts, first_exit_return_pct,
-                last_tracked_ts,
-                time_to_max_seconds, time_to_50_pct_seconds,
-                time_to_75_pct_seconds, time_to_100_pct_seconds, time_to_150_pct_seconds,
-                time_to_stop_seconds, holding_period_seconds,
-                max_drawdown_before_target, min_distance_to_stop_pct, price_volatility,
-                price_at_1h, price_at_2h, price_at_4h,
-                return_at_1h, return_at_2h, return_at_4h,
-                price_at_5m, return_at_5m, price_at_10m, return_at_10m,
-                price_at_15m, return_at_15m, price_at_30m, return_at_30m,
-                price_at_8h, return_at_8h, price_at_eod, return_at_eod,
-                price_at_1d, return_at_1d, price_at_2d, return_at_2d,
-                price_at_3d, return_at_3d, price_at_1w, return_at_1w,
-                opposing_flow_count, opposing_premium_total, sentiment_shift_ts,
-                optimal_exit_return, optimal_exit_ts, final_return_pct,
-                gex_at_entry, vex_at_entry, market_tide_30m, market_tide_direction,
-                max_pain_distance_pct, iv_rank_at_entry, darkpool_volume_1h,
-                darkpool_15m, darkpool_30m, darkpool_4h, darkpool_1d, darkpool_3d,
-                darkpool_1w, darkpool_2w, darkpool_4w,
-                trend_regime_at_entry, vol_regime_at_entry, risk_regime_at_entry,
-                session_regime_at_entry, vix_at_entry, vix_regime_at_entry,
-                iv_at_entry, iv_at_1h, iv_change_1h_pct,
-                underlying_at_entry, underlying_at_1h, underlying_change_1h_pct,
-                delta_at_entry, gamma_at_entry, volume_at_entry, open_interest_at_entry,
-                entry_hour, entry_session, entry_day_of_week,
-                days_to_earnings, is_post_earnings, sector, industry,
-                rvol_1h, rvol_daily, rvol_weekly, rvol_30m, rvol_3d, rvol_monthly,
-                ask_side_ratio, sweep_ratio_1h,
-                same_ticker_premium_1h, institutional_flow_1w, trade_bucket,
-                minutes_to_close, overnight_gap_pct, price_change_5d_prior,
-                earnings_in_dte_window, vwap_distance_pct,
-                oi_change_1d, oi_change_pct, iv_vs_hv_ratio,
-                high_52w_distance_pct, is_spread_leg, same_expiry_trades_1h,
-                sector_net_premium_1h, sector_flow_direction, spy_correlation_5d, spy_return_1h
-            ) VALUES (
-                :event_id, :ticker, :option_chain, :trade_type,
-                :entry_ts, :entry_option_price, :expiry, :dte,
-                :premium_usd, :aggressor, :put_call, :is_sweep,
-                :max_price_reached, :max_price_ts, :max_return_pct,
-                :min_price_reached, :min_price_ts, :max_drawdown_pct,
-                :hit_50_pct_ts, :hit_75_pct_ts, :hit_100_pct_ts, :hit_150_pct_ts,
-                :hit_stop_20_pct_ts,
-                :first_exit_type, :first_exit_ts, :first_exit_return_pct,
-                :last_tracked_ts,
-                :time_to_max_seconds, :time_to_50_pct_seconds,
-                :time_to_75_pct_seconds, :time_to_100_pct_seconds, :time_to_150_pct_seconds,
-                :time_to_stop_seconds, :holding_period_seconds,
-                :max_drawdown_before_target, :min_distance_to_stop_pct, :price_volatility,
-                :price_at_1h, :price_at_2h, :price_at_4h,
-                :return_at_1h, :return_at_2h, :return_at_4h,
-                :price_at_5m, :return_at_5m, :price_at_10m, :return_at_10m,
-                :price_at_15m, :return_at_15m, :price_at_30m, :return_at_30m,
-                :price_at_8h, :return_at_8h, :price_at_eod, :return_at_eod,
-                :price_at_1d, :return_at_1d, :price_at_2d, :return_at_2d,
-                :price_at_3d, :return_at_3d, :price_at_1w, :return_at_1w,
-                :opposing_flow_count, :opposing_premium_total, :sentiment_shift_ts,
-                :optimal_exit_return, :optimal_exit_ts, :final_return_pct,
-                :gex_at_entry, :vex_at_entry, :market_tide_30m, :market_tide_direction,
-                :max_pain_distance_pct, :iv_rank_at_entry, :darkpool_volume_1h,
-                :darkpool_15m, :darkpool_30m, :darkpool_4h, :darkpool_1d, :darkpool_3d,
-                :darkpool_1w, :darkpool_2w, :darkpool_4w,
-                :trend_regime_at_entry, :vol_regime_at_entry, :risk_regime_at_entry,
-                :session_regime_at_entry, :vix_at_entry, :vix_regime_at_entry,
-                :iv_at_entry, :iv_at_1h, :iv_change_1h_pct,
-                :underlying_at_entry, :underlying_at_1h, :underlying_change_1h_pct,
-                :delta_at_entry, :gamma_at_entry, :volume_at_entry, :open_interest_at_entry,
-                :entry_hour, :entry_session, :entry_day_of_week,
-                :days_to_earnings, :is_post_earnings, :sector, :industry,
-                :rvol_1h, :rvol_daily, :rvol_weekly, :rvol_30m, :rvol_3d, :rvol_monthly,
-                :ask_side_ratio, :sweep_ratio_1h,
-                :same_ticker_premium_1h, :institutional_flow_1w, :trade_bucket,
-                :minutes_to_close, :overnight_gap_pct, :price_change_5d_prior,
-                :earnings_in_dte_window, :vwap_distance_pct,
-                :oi_change_1d, :oi_change_pct, :iv_vs_hv_ratio,
-                :high_52w_distance_pct, :is_spread_leg, :same_expiry_trades_1h,
-                :sector_net_premium_1h, :sector_flow_direction, :spy_correlation_5d, :spy_return_1h
-            )
-            ON CONFLICT (event_id) DO NOTHING
-        """
-        )
-
         for label in labels:
-            await session.execute(stmt, label)
+            # Filter to only include keys that have non-None values or are required
+            # This avoids inserting columns that don't exist in the table
+            columns = [k for k in label.keys() if k is not None]
+
+            # Build dynamic INSERT statement
+            cols_str = ", ".join(columns)
+            vals_str = ", ".join([f":{c}" for c in columns])
+
+            stmt = text(
+                f"""
+                INSERT INTO price_target_labels ({cols_str})
+                VALUES ({vals_str})
+                ON CONFLICT (event_id) DO NOTHING
+            """
+            )
+
+            # Only pass the columns we're inserting
+            params = {k: v for k, v in label.items() if k in columns}
+            await session.execute(stmt, params)
 
     await db_write(write)
     return len(labels)
@@ -2063,12 +2830,7 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
                 p3 = await get_p3_features(ticker, option_chain, expiry, entry_ts)
                 sector_corr = await get_sector_correlation_features(ticker, entry_ts)
 
-                # Calculate IV/HV ratio (need IV from record)
-                iv_at_entry = None  # Would need to query from record
-                hv_30d = p2.get("hv_30d")
-                iv_vs_hv = None  # Can't calculate without iv_at_entry from record
-
-                # Build update dict
+                # Build update dict (iv_vs_hv computed in p2 features)
                 updates = {
                     "rvol_1h": rvol.get("rvol_1h"),
                     "rvol_daily": rvol.get("rvol_daily"),
@@ -2097,8 +2859,10 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
                     "spy_return_1h": sector_corr.get("spy_return_1h"),
                 }
 
-                # Update record
-                async def update_record(session: Any) -> None:
+                # Update record - bind loop variables to avoid B023
+                event_id = record["event_id"]
+
+                async def update_record(session: Any, upd: Dict[str, Any] = updates, eid: str = event_id) -> None:
                     update_stmt = text(
                         """
                         UPDATE price_target_labels SET
@@ -2130,7 +2894,7 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
                         WHERE event_id = :event_id
                     """
                     )
-                    await session.execute(update_stmt, {**updates, "event_id": record["event_id"]})
+                    await session.execute(update_stmt, {**upd, "event_id": eid})
 
                 await db_write(update_record)
                 total_updated += 1

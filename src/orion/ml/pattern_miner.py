@@ -6,8 +6,11 @@ human-readable rules for the EOD agent.
 """
 
 import hashlib
+import os
+import pickle
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -24,6 +27,10 @@ from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.pattern_miner")
 
+# Model output directory - models are saved here for MLScorer to load
+MODEL_DIR = Path(os.getenv("ORION_MODEL_DIR", "/app/models"))
+
+
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
 # These features are known at trade entry and don't reveal the outcome
 FEATURE_COLUMNS = [
@@ -36,11 +43,41 @@ FEATURE_COLUMNS = [
     "premium_usd",
     "dte",
     "vix_at_entry",
-<<<<<<< HEAD
-    # Darkpool feature (1h lookback from entry)
+    # Darkpool features (at entry time)
     "darkpool_volume_1h",
-=======
->>>>>>> origin/master
+    "darkpool_30m",
+    "darkpool_4h",
+    "darkpool_1d",
+    # Options Greeks at entry (critical for options trading)
+    "delta_at_entry",
+    "gamma_at_entry",
+    "theta_at_entry",
+    "vega_at_entry",
+    "iv_at_entry",
+    "iv_vs_hv_ratio",
+    # Volume and OI
+    "volume_at_entry",
+    "open_interest_at_entry",
+    "rvol_1h",
+    "rvol_daily",
+    "oi_change_1d",
+    "oi_change_pct",
+    # Flow signals
+    "ask_side_ratio",
+    "sweep_ratio_1h",
+    "same_ticker_premium_1h",
+    "sector_net_premium_1h",
+    # Market context
+    "spy_correlation_5d",
+    "spy_return_1h",
+    "vwap_distance_pct",
+    "high_52w_distance_pct",
+    "overnight_gap_pct",
+    # Timing
+    "entry_hour",
+    "minutes_to_close",
+    # Earnings/Events
+    "days_to_earnings",
     # NOTE: Removed outcome features that cause data leakage:
     # - max_return_pct, max_drawdown_pct, time_to_max_seconds
     # - holding_period_seconds, return_at_1h/2h/4h, first_exit_type
@@ -49,17 +86,29 @@ FEATURE_COLUMNS = [
 
 CATEGORICAL_COLUMNS = [
     "put_call",
-    # NOTE: trade_type removed - it's used for filtering, not prediction
+    "aggressor",
+    "is_sweep",
+    "is_spread_leg",
+    "is_post_earnings",
+    "earnings_in_dte_window",
+    "entry_session",
+    "entry_day_of_week",
+    "sector",
+    "industry",
+    # Regimes
     "vol_regime_at_entry",
     "risk_regime_at_entry",
     "session_regime_at_entry",
     "trend_regime_at_entry",
     "vix_regime_at_entry",
     "market_tide_direction",
+    "sector_flow_direction",
 ]
 
-# Target definitions
+# Target definitions - 4 targets for diverse signal dimensions
+# Note: quick_winner has bucket-specific thresholds defined in TRADE_BUCKET_CONFIGS
 TARGETS = {
+    # Original targets
     "hit_target_50": """
         CASE WHEN hit_50_pct_ts IS NOT NULL
              AND (hit_stop_20_pct_ts IS NULL OR hit_50_pct_ts < hit_stop_20_pct_ts)
@@ -68,7 +117,26 @@ TARGETS = {
     "avoid_stop": """
         CASE WHEN hit_stop_20_pct_ts IS NULL THEN 1 ELSE 0 END
     """,
+    # New targets
+    "hit_target_100": """
+        CASE WHEN hit_100_pct_ts IS NOT NULL
+             AND (hit_stop_20_pct_ts IS NULL OR hit_100_pct_ts < hit_stop_20_pct_ts)
+        THEN 1 ELSE 0 END
+    """,
+    # quick_winner is dynamically generated per bucket - see get_quick_winner_target()
 }
+
+
+def get_quick_winner_target(seconds_threshold: int) -> str:
+    """Generate quick_winner target SQL with bucket-specific time threshold."""
+    return f"""
+        CASE WHEN hit_50_pct_ts IS NOT NULL
+             AND time_to_50_pct_seconds IS NOT NULL
+             AND time_to_50_pct_seconds < {seconds_threshold}
+             AND (hit_stop_20_pct_ts IS NULL OR hit_50_pct_ts < hit_stop_20_pct_ts)
+        THEN 1 ELSE 0 END
+    """
+
 
 # Trade bucket configurations with bucket-specific lookback windows
 TRADE_BUCKET_CONFIGS = {
@@ -76,24 +144,28 @@ TRADE_BUCKET_CONFIGS = {
         "filter": "trade_type = '0DTE'",
         "window_days": 10,  # Short lookback - fast-changing dynamics
         "min_samples": 50,
+        "quick_winner_seconds": 3600,  # 1 hour - fast moves expected
         "description": "Same-day expiry options",
     },
     "SHORT_SWING": {
         "filter": "trade_type = 'SHORT_SWING'",
         "window_days": 20,  # 1-3 DTE trades
         "min_samples": 50,
+        "quick_winner_seconds": 14400,  # 4 hours
         "description": "1-3 day expiry options",
     },
     "SWING": {
         "filter": "trade_type = 'SWING'",
         "window_days": 45,  # 3-14 DTE trades
         "min_samples": 30,
+        "quick_winner_seconds": 86400,  # 1 day
         "description": "3-14 day expiry options",
     },
     "POSITION": {
         "filter": "trade_type = 'POSITION'",
         "window_days": 90,  # Long-term trades need more history
         "min_samples": 20,
+        "quick_winner_seconds": 259200,  # 3 days
         "description": "14+ day expiry options",
     },
 }
@@ -103,6 +175,7 @@ async def fetch_training_data(
     window_days: int = 30,
     min_samples: int = 100,
     trade_type_filter: Optional[str] = None,
+    quick_winner_seconds: int = 3600,
 ) -> Tuple[Any, List[str]]:
     """
     Fetch training data from price_target_labels.
@@ -111,6 +184,7 @@ async def fetch_training_data(
         window_days: Number of days to look back
         min_samples: Minimum samples required
         trade_type_filter: Optional SQL filter for trade_type (e.g., "trade_type = '0DTE'")
+        quick_winner_seconds: Time threshold for quick_winner target (bucket-specific)
 
     Returns:
         Tuple of (pandas DataFrame, list of feature names)
@@ -118,7 +192,11 @@ async def fetch_training_data(
     import pandas as pd
 
     feature_cols = ", ".join(FEATURE_COLUMNS + CATEGORICAL_COLUMNS)
-    target_cols = ", ".join([f"({sql}) as target_{name}" for name, sql in TARGETS.items()])
+
+    # Build target columns - include dynamic quick_winner
+    all_targets = dict(TARGETS)
+    all_targets["quick_winner"] = get_quick_winner_target(quick_winner_seconds)
+    target_cols = ", ".join([f"({sql}) as target_{name}" for name, sql in all_targets.items()])
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
 
@@ -151,7 +229,10 @@ async def fetch_training_data(
 
     # Column names from query
     columns = (
-        ["event_id", "entry_ts"] + FEATURE_COLUMNS + CATEGORICAL_COLUMNS + [f"target_{name}" for name in TARGETS.keys()]
+        ["event_id", "entry_ts"]
+        + FEATURE_COLUMNS
+        + CATEGORICAL_COLUMNS
+        + [f"target_{name}" for name in all_targets.keys()]
     )
 
     df = pd.DataFrame(rows, columns=columns)
@@ -191,18 +272,24 @@ def train_model(
     X: Any,
     y: Any,
     test_size: float = 0.2,
+    use_walk_forward: bool = True,
+    n_splits: int = 5,
+    dates: Any = None,
 ) -> Tuple[Any, float, float]:
     """
-    Train LightGBM classifier.
+    Train LightGBM classifier using walk-forward or random validation.
+
+    Args:
+        X: Feature matrix
+        y: Target labels
+        test_size: Holdout size (only used if walk_forward=False)
+        use_walk_forward: If True, use time-series walk-forward CV
+        n_splits: Number of walk-forward folds
+        dates: Timestamps for ordering (required if use_walk_forward=True)
 
     Returns:
         Tuple of (model, train_auc, holdout_auc)
     """
-    import lightgbm as lgb
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import train_test_split
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
 
     # LightGBM parameters - fast and interpretable
     params = {
@@ -217,10 +304,25 @@ def train_model(
         "verbose": -1,
     }
 
+    if use_walk_forward and dates is not None:
+        # Walk-forward (expanding window) validation
+        return _train_walk_forward(X, y, dates, params, n_splits)
+    else:
+        # Fallback to random split (legacy behavior)
+        return _train_random_split(X, y, params, test_size)
+
+
+def _train_random_split(X: Any, y: Any, params: dict, test_size: float) -> Tuple[Any, float, float]:
+    """Train with random train/test split (legacy behavior)."""
+    import lightgbm as lgb
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import train_test_split
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
+
     model = lgb.LGBMClassifier(**params)
     model.fit(X_train, y_train)
 
-    # Evaluate
     train_pred = model.predict_proba(X_train)[:, 1]
     test_pred = model.predict_proba(X_test)[:, 1]
 
@@ -228,11 +330,118 @@ def train_model(
     holdout_auc = roc_auc_score(y_test, test_pred)
 
     logger.info(
-        f"Model trained: train_auc={train_auc:.3f}, holdout_auc={holdout_auc:.3f}",
-        extra={"event": "ml_model_train", "train_auc": train_auc, "holdout_auc": holdout_auc},
+        f"Model trained (random split): train_auc={train_auc:.3f}, holdout_auc={holdout_auc:.3f}",
+        extra={"event": "ml_model_train", "method": "random_split", "train_auc": train_auc, "holdout_auc": holdout_auc},
     )
 
     return model, train_auc, holdout_auc
+
+
+def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int = 5) -> Tuple[Any, float, float]:
+    """
+    Train with walk-forward (expanding window) validation.
+
+    This prevents look-ahead bias by always training on past data
+    and testing on future data.
+    """
+    import lightgbm as lgb
+    import numpy as np
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import TimeSeriesSplit
+
+    # Sort by date to ensure temporal ordering
+    sort_idx = np.argsort(dates)
+    x_sorted = X.iloc[sort_idx] if hasattr(X, "iloc") else X[sort_idx]
+    y_sorted = y.iloc[sort_idx] if hasattr(y, "iloc") else y[sort_idx]
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+
+    fold_aucs = []
+
+    for fold, (train_idx, test_idx) in enumerate(tscv.split(x_sorted)):
+        x_train, x_test = x_sorted.iloc[train_idx], x_sorted.iloc[test_idx]
+        y_train, y_test = y_sorted.iloc[train_idx], y_sorted.iloc[test_idx]
+
+        # Skip if either class is missing
+        if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
+            logger.warning(f"Fold {fold+1}: Skipped due to single class")
+            continue
+
+        model = lgb.LGBMClassifier(**params)
+        model.fit(x_train, y_train)
+
+        test_pred = model.predict_proba(x_test)[:, 1]
+        fold_auc = roc_auc_score(y_test, test_pred)
+        fold_aucs.append(fold_auc)
+
+        logger.debug(f"Fold {fold+1}/{n_splits}: AUC={fold_auc:.3f}")
+
+    if not fold_aucs:
+        logger.warning("Walk-forward CV failed: no valid folds")
+        return _train_random_split(X, y, params, 0.2)
+
+    avg_auc = np.mean(fold_aucs)
+    std_auc = np.std(fold_aucs)
+
+    # Final model: train on all data (for production use)
+    final_model = lgb.LGBMClassifier(**params)
+    final_model.fit(x_sorted, y_sorted)
+
+    # Use average CV AUC as holdout estimate
+    train_pred = final_model.predict_proba(x_sorted)[:, 1]
+    train_auc = roc_auc_score(y_sorted, train_pred)
+
+    logger.info(
+        f"Model trained (walk-forward): cv_auc={avg_auc:.3f}±{std_auc:.3f}, train_auc={train_auc:.3f}",
+        extra={
+            "event": "ml_model_train",
+            "method": "walk_forward",
+            "n_splits": n_splits,
+            "cv_auc": avg_auc,
+            "cv_std": std_auc,
+            "train_auc": train_auc,
+        },
+    )
+
+    # Return CV AUC as holdout estimate (more realistic than full-data train AUC)
+    return final_model, train_auc, avg_auc
+
+
+def save_model(model: Any, model_type: str, feature_names: List[str]) -> Optional[Path]:
+    """
+    Save trained model to disk for MLScorer to load.
+
+    Args:
+        model: Trained LightGBM model
+        model_type: Model identifier (e.g., "SWING_hit_target_50")
+        feature_names: List of feature names used for training
+
+    Returns:
+        Path to saved model, or None if save failed
+    """
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    model_path = MODEL_DIR / f"{model_type}.pkl"
+
+    try:
+        # Save model with metadata
+        model_data = {
+            "model": model,
+            "feature_names": feature_names,
+            "model_type": model_type,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(model_path, "wb") as f:
+            pickle.dump(model_data, f)
+
+        logger.info(
+            f"Saved model to {model_path}",
+            extra={"event": "model_saved", "model_type": model_type, "path": str(model_path)},
+        )
+        return model_path
+    except Exception as e:
+        logger.error(f"Failed to save model {model_type}: {e}")
+        return None
 
 
 def extract_feature_importance(
@@ -419,6 +628,7 @@ async def run_pattern_mining(
     window_days = bucket_config.get("window_days", 30) if bucket_config else 30
     min_samples = bucket_config.get("min_samples", 50) if bucket_config else 50
     trade_filter = bucket_config.get("filter") if bucket_config else None
+    quick_winner_seconds = bucket_config.get("quick_winner_seconds", 3600) if bucket_config else 3600
 
     logger.info(
         f"Starting pattern mining for {model_type}",
@@ -430,6 +640,7 @@ async def run_pattern_mining(
         window_days=window_days,
         min_samples=min_samples,
         trade_type_filter=trade_filter,
+        quick_winner_seconds=quick_winner_seconds,
     )
     if df is None or df.empty:
         logger.warning(f"No training data available for {model_type}")
@@ -444,14 +655,24 @@ async def run_pattern_mining(
         logger.warning(f"Target has no variance for {model_type}, skipping")
         return None
 
-    # 3. Train model
+    # 3. Train model with walk-forward CV
     try:
-        model, train_auc, holdout_auc = train_model(X, y)
+        dates = df["entry_ts"] if "entry_ts" in df.columns else None
+        model, train_auc, holdout_auc = train_model(X, y, dates=dates)
     except Exception as e:
         logger.error(f"Model training failed for {model_type}: {e}")
         return None
 
-    # 4. Extract patterns
+    # 4. Save model to disk for MLScorer (only save if AUC is acceptable)
+    if holdout_auc >= 0.55:
+        save_model(model, model_type, feature_names)
+    else:
+        logger.warning(
+            f"Skipping model save for {model_type}: AUC {holdout_auc:.3f} below threshold",
+            extra={"event": "model_save_skipped", "model_type": model_type, "auc": holdout_auc},
+        )
+
+    # 5. Extract patterns
     top_features = extract_feature_importance(model, feature_names, top_k=10)
     top_rules = extract_tree_rules(model, feature_names, X, y, top_k=5)
 
@@ -503,14 +724,16 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
     """
     Run pattern mining for all bucket x target combinations.
 
-    Produces 4 buckets x 2 targets = 8 separate models.
+    Produces 4 buckets x 4 targets = 16 entry models + 4 exit models.
     """
     insights: Dict[str, PatternInsight] = {}
     alerts: List[str] = []
 
-    # Iterate over each bucket
+    # Train entry models: Iterate over each bucket x target
+    # Include quick_winner which is dynamically generated per bucket
+    all_target_names = list(TARGETS.keys()) + ["quick_winner"]
     for bucket_name, bucket_config in TRADE_BUCKET_CONFIGS.items():
-        for target_name in TARGETS.keys():
+        for target_name in all_target_names:
             try:
                 insight = await run_pattern_mining(
                     target_name=target_name,
@@ -533,6 +756,24 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
                 logger.error(f"Pattern mining failed for {model_type}: {e}", exc_info=True)
                 alerts.append(f"{model_type}: Mining failed - {str(e)[:50]}")
 
+    # Train exit models: Retrain exit classifiers for each bucket
+    try:
+        from orion.ml.exit_classifier import train_all_exit_classifiers
+
+        logger.info("Training exit classifiers for all buckets")
+        exit_results = await train_all_exit_classifiers()
+
+        for bucket, data in exit_results.items():
+            if data.get("auc", 0) < 0.55:
+                alerts.append(f"{bucket}_exit: Exit AUC low ({data.get('auc', 0):.2f})")
+            logger.info(
+                f"Exit classifier trained for {bucket}: AUC={data.get('auc', 0):.3f}",
+                extra={"bucket": bucket, "auc": data.get("auc")},
+            )
+    except Exception as e:
+        logger.error(f"Exit classifier training failed: {e}", exc_info=True)
+        alerts.append(f"exit_classifiers: Training failed - {str(e)[:50]}")
+
     summary = MLInsightsSummary(
         generated_at_utc=datetime.now(timezone.utc),
         insights=insights,
@@ -540,7 +781,7 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
     )
 
     logger.info(
-        f"All pattern mining complete: {len(insights)} models trained",
+        f"All pattern mining complete: {len(insights)} entry models + 4 exit models trained",
         extra={"models_count": len(insights), "alerts_count": len(alerts)},
     )
 

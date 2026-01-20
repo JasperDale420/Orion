@@ -29,6 +29,14 @@ class CandidateTrade(Base):
     # Source of the signal (e.g. "UW", "ALPACA")
     source = Column(String, nullable=True)  # Added for SolverRouter context
 
+    # Options-specific fields (nullable for backward compatibility)
+    option_symbol = Column(String, nullable=True, index=True)  # OCC format: AAPL240419C00190000
+    strike_price = Column(Float, nullable=True)
+    expiration_date = Column(DateTime(timezone=True), nullable=True)
+    option_type = Column(String, nullable=True)  # CALL or PUT
+    underlying_price = Column(Float, nullable=True)  # Price at signal time
+    premium = Column(Float, nullable=True)  # Contract premium from UW flow
+
     # Execution Params (Limit Price, etc) - Added for PolicyEngine
     execution_params = Column(JSON, nullable=True)
 
@@ -40,6 +48,7 @@ class CandidateTrade(Base):
     __table_args__ = (
         Index("ix_candidate_ticker_time", "ticker", "timestamp_utc"),
         Index("ix_candidate_rule", "rule_id"),
+        Index("ix_candidate_option_symbol", "option_symbol"),
     )
 
 

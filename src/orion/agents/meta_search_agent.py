@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+from pydantic import ValidationError
+from sqlalchemy import select
+
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
@@ -20,8 +23,6 @@ from orion.storage.models_solvers import (
     SolverMetrics,
     SolverRun,
 )
-from pydantic import ValidationError
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -983,9 +984,10 @@ class MetaSearchAgent:
         return solver_run, metrics
 
     async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
+        from sqlalchemy import and_, select
+
         from orion.storage.models import BronzeEvent
         from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
-        from sqlalchemy import and_, select
 
         alpaca_events = []
         flow_events = []
@@ -1182,3 +1184,293 @@ class MetaSearchAgent:
                 logger.info(
                     f"Promotion Cycle Complete: +{count_recommendations} Recommendations, +{count_demoted} Demotion Recommendations."
                 )
+
+    # --------------------------------------------------------
+    # Weekly Evolution Cycle (Friday EOD)
+    # --------------------------------------------------------
+
+    async def run_weekly_evolution(self, dry_run: bool = False) -> Dict[str, Any]:
+        """
+        Friday EOD comprehensive analysis and solver evolution.
+
+        1. Aggregate week's EOD reports and trade data
+        2. Analyze live trade execution quality
+        3. Check ML model drift
+        4. Generate evolution recommendations
+        5. Propose solver mutations based on findings
+
+        Args:
+            dry_run: If True, analyze but don't create new solvers
+
+        Returns:
+            Summary of weekly analysis and actions taken.
+        """
+        from orion.agents.weekly_aggregator import WeeklyDataAggregator
+
+        log_meta_event(
+            logger,
+            component="MetaSearch",
+            severity="INFO",
+            entity_type="weekly_cycle",
+            entity_id="weekly",
+            message="Starting weekly evolution cycle",
+            metadata={"dry_run": dry_run},
+        )
+
+        # 1. Aggregate weekly data
+        aggregator = WeeklyDataAggregator()
+        week_data = await aggregator.aggregate_week()
+
+        logger.info(
+            f"Weekly data aggregated: {week_data['eod_reports']['total_reports']} EOD reports, "
+            f"{week_data['trade_execution'].get('trades', {}).get('total_orders', 0)} trades"
+        )
+
+        # 2. Analyze execution quality
+        execution_analysis = self._analyze_execution_quality(week_data)
+
+        # 3. Analyze ML drift
+        drift_analysis = self._analyze_ml_drift(week_data)
+
+        # 4. Generate recommendations
+        recommendations = await self._generate_weekly_recommendations(week_data, execution_analysis, drift_analysis)
+
+        # 5. Execute mutations if not dry run
+        mutations_applied = []
+        if not dry_run and recommendations.get("proposed_edits"):
+            for edit_proposal in recommendations["proposed_edits"][:3]:  # Max 3 per week
+                try:
+                    # Load base solver
+                    base_id = edit_proposal.get("base_solver_id")
+                    if not base_id:
+                        continue
+
+                    async with async_session_factory() as session:
+                        stmt = select(Solver).where(Solver.solver_id == base_id)
+                        result = await session.execute(stmt)
+                        base_solver = result.scalars().first()
+
+                        if base_solver:
+                            base_config = SolverConfig(**base_solver.config)
+
+                            # Use meta agent to propose edits
+                            context = edit_proposal.get("context", "Weekly evolution cycle")
+                            edits = await self.meta_agent.propose_edits(base_config, context)
+
+                            if edits:
+                                # Apply first edit
+                                new_config = self.apply_edit(base_config, edits[0])
+
+                                # Persist new solver as candidate
+                                new_solver = Solver(
+                                    solver_id=new_config.version_id,
+                                    family_name=f"{base_solver.family_name}_weekly",
+                                    config=new_config.model_dump(mode="json"),
+                                    is_active=False,
+                                    status="candidate",
+                                    stage="research",
+                                    created_by="weekly_evolution",
+                                    definition_json=ensure_solver_definition_json(
+                                        new_config.model_dump(mode="json"), None
+                                    ),
+                                )
+                                session.add(new_solver)
+                                await session.commit()
+
+                                mutations_applied.append(
+                                    {
+                                        "base_id": base_id,
+                                        "new_id": new_config.version_id,
+                                        "reason": edit_proposal.get("reason"),
+                                    }
+                                )
+                                logger.info(f"Created weekly mutation: {new_config.version_id}")
+
+                except Exception as e:
+                    logger.error(f"Failed to apply weekly mutation: {e}")
+
+        summary = {
+            "period": week_data["period"],
+            "eod_summary": {
+                "reports_analyzed": week_data["eod_reports"]["total_reports"],
+                "trading_days": week_data["eod_reports"]["trading_days"],
+                "total_decisions": week_data["eod_reports"]["total_decisions"],
+                "executed": week_data["eod_reports"]["executed_count"],
+            },
+            "execution_quality": execution_analysis,
+            "ml_drift": drift_analysis,
+            "recommendations": recommendations,
+            "mutations_applied": mutations_applied,
+            "dry_run": dry_run,
+        }
+
+        log_meta_event(
+            logger,
+            component="MetaSearch",
+            severity="INFO",
+            entity_type="weekly_cycle",
+            entity_id="weekly",
+            message="Weekly evolution cycle completed",
+            metadata=summary,
+        )
+
+        return summary
+
+    def _analyze_execution_quality(self, week_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze trade execution quality vs expectations.
+        """
+        trade_data = week_data.get("trade_execution", {}).get("trades", {})
+
+        analysis = {
+            "total_orders": trade_data.get("total_orders", 0),
+            "fill_rate": trade_data.get("fill_rate", 0.0),
+            "rejection_rate": 0.0,
+            "unique_tickers": len(trade_data.get("tickers", [])),
+            "execution_health": "unknown",
+        }
+
+        total = trade_data.get("total_orders", 0)
+        if total > 0:
+            rejected = trade_data.get("rejected", 0)
+            analysis["rejection_rate"] = rejected / total
+
+            # Health classification
+            if analysis["fill_rate"] >= 0.9 and analysis["rejection_rate"] < 0.05:
+                analysis["execution_health"] = "excellent"
+            elif analysis["fill_rate"] >= 0.7:
+                analysis["execution_health"] = "good"
+            elif analysis["fill_rate"] >= 0.5:
+                analysis["execution_health"] = "degraded"
+            else:
+                analysis["execution_health"] = "poor"
+
+        return analysis
+
+    def _analyze_ml_drift(self, week_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze ML model drift from pattern miner insights.
+        """
+        eod_data = week_data.get("eod_reports", {})
+        ml_insights = week_data.get("ml_insights", {})
+
+        drift_analysis = {
+            "buckets_analyzed": [],
+            "degrading_buckets": [],
+            "improving_buckets": [],
+            "stable_buckets": [],
+            "top_features": eod_data.get("top_features", {}),
+            "overall_health": "unknown",
+        }
+
+        # Analyze drift from aggregated ML insights
+        drift_info = ml_insights.get("drift_analysis", {})
+        for bucket, info in drift_info.items():
+            drift_analysis["buckets_analyzed"].append(bucket)
+            trend = info.get("trend", "stable")
+
+            if trend == "degrading":
+                drift_analysis["degrading_buckets"].append(
+                    {
+                        "bucket": bucket,
+                        "auc_drop": info.get("drift", 0),
+                        "current_auc": info.get("current_auc"),
+                    }
+                )
+            elif trend == "improving":
+                drift_analysis["improving_buckets"].append(bucket)
+            else:
+                drift_analysis["stable_buckets"].append(bucket)
+
+        # Overall health
+        n_degrading = len(drift_analysis["degrading_buckets"])
+        n_total = len(drift_analysis["buckets_analyzed"])
+
+        if n_total == 0:
+            drift_analysis["overall_health"] = "no_data"
+        elif n_degrading == 0:
+            drift_analysis["overall_health"] = "healthy"
+        elif n_degrading / n_total < 0.3:
+            drift_analysis["overall_health"] = "minor_drift"
+        else:
+            drift_analysis["overall_health"] = "significant_drift"
+
+        return drift_analysis
+
+    async def _generate_weekly_recommendations(
+        self,
+        week_data: Dict[str, Any],
+        execution_analysis: Dict[str, Any],
+        drift_analysis: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Generate evolution recommendations based on weekly analysis.
+        """
+        recommendations = {
+            "proposed_edits": [],
+            "alerts": [],
+            "insights": [],
+        }
+
+        # Check execution quality issues
+        if execution_analysis.get("execution_health") in ["degraded", "poor"]:
+            recommendations["alerts"].append(
+                {
+                    "type": "execution_degradation",
+                    "severity": "high",
+                    "message": f"Execution fill rate at {execution_analysis['fill_rate']:.1%}",
+                    "action": "Review order parameters and market conditions",
+                }
+            )
+
+        # Check ML drift
+        if drift_analysis.get("overall_health") == "significant_drift":
+            for bucket_info in drift_analysis.get("degrading_buckets", []):
+                recommendations["alerts"].append(
+                    {
+                        "type": "ml_drift",
+                        "severity": "medium",
+                        "message": f"Model {bucket_info['bucket']} AUC dropped by {abs(bucket_info.get('auc_drop', 0)):.3f}",
+                        "action": "Consider retraining or feature engineering",
+                    }
+                )
+
+        # Generate solver edit proposals based on top features
+        top_features = drift_analysis.get("top_features", {})
+        if top_features:
+            # Fetch active solvers to propose edits for
+            async with async_session_factory() as session:
+                stmt = select(Solver).where((Solver.status == "active") | (Solver.is_active.is_(True))).limit(5)
+                result = await session.execute(stmt)
+                active_solvers = result.scalars().all()
+
+                for solver in active_solvers:
+                    # Propose feature-based edits
+                    feature_list = list(top_features.keys())[:3]
+                    if feature_list:
+                        recommendations["proposed_edits"].append(
+                            {
+                                "base_solver_id": solver.solver_id,
+                                "reason": f"Incorporate top-performing features: {', '.join(feature_list)}",
+                                "context": (
+                                    f"Weekly analysis shows top features: {feature_list}. "
+                                    f"Execution health: {execution_analysis.get('execution_health')}. "
+                                    f"ML drift: {drift_analysis.get('overall_health')}. "
+                                    f"Propose parameter adjustments to align with these signals."
+                                ),
+                            }
+                        )
+
+        # Add insights
+        eod_summary = week_data.get("eod_reports", {})
+        if eod_summary.get("trading_days", 0) > 0:
+            win_rate = eod_summary.get("executed_count", 0) / max(eod_summary.get("total_decisions", 1), 1)
+            recommendations["insights"].append(
+                {
+                    "metric": "decision_execution_rate",
+                    "value": win_rate,
+                    "interpretation": f"{win_rate:.1%} of decisions resulted in execution",
+                }
+            )
+
+        return recommendations

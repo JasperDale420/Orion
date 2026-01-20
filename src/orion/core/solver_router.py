@@ -75,23 +75,17 @@ class SolverRouter:
 
                 # Subquery: get latest evaluated_at_utc per solver_id
                 latest_subq = (
-                    select(
-                        SolverMetrics.solver_id,
-                        func.max(SolverMetrics.evaluated_at_utc).label("max_eval")
-                    )
+                    select(SolverMetrics.solver_id, func.max(SolverMetrics.evaluated_at_utc).label("max_eval"))
                     .where(SolverMetrics.solver_id.in_(solver_ids))
                     .group_by(SolverMetrics.solver_id)
                     .subquery()
                 )
 
                 # Main query: join to get full metrics rows
-                stmt_metrics = (
-                    select(SolverMetrics)
-                    .join(
-                        latest_subq,
-                        (SolverMetrics.solver_id == latest_subq.c.solver_id)
-                        & (SolverMetrics.evaluated_at_utc == latest_subq.c.max_eval)
-                    )
+                stmt_metrics = select(SolverMetrics).join(
+                    latest_subq,
+                    (SolverMetrics.solver_id == latest_subq.c.solver_id)
+                    & (SolverMetrics.evaluated_at_utc == latest_subq.c.max_eval),
                 )
                 metrics_result = await session.execute(stmt_metrics)
                 all_metrics = metrics_result.scalars().all()

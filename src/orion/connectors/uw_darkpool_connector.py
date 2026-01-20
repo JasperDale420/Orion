@@ -200,6 +200,17 @@ class UWDarkPoolConnector:
         if not response:
             return []
 
+        # Handle ErrorMessage responses (rate limiting, auth errors, etc.)
+        if hasattr(response, "message") or (
+            hasattr(response, "__class__") and "ErrorMessage" in response.__class__.__name__
+        ):
+            error_msg = getattr(response, "message", None) or str(response)
+            logger.warning(
+                f"UW Dark Pool API error for {date_str}: {error_msg}",
+                extra={"event_type": "UW_DARKPOOL_API_ERROR", "error": error_msg},
+            )
+            return []
+
         # Handle Object Response (DarkpoolTradeResponse)
         if hasattr(response, "data") and isinstance(response.data, list):
             # Convert list of DarkpoolTrade objects to list of dicts
@@ -215,3 +226,4 @@ class UWDarkPoolConnector:
 
         logger.warning(f"Unexpected response format from UW Dark Pool: {type(data)}")
         return []
+
