@@ -11,6 +11,7 @@ async def test_root_endpoint():
 
     assert response.status_code == 200
     data = response.json()
+    assert data["message"] == "Welcome to Orion Admin API! 🚀"
     assert data["app"] == "Orion Admin API"
     assert data["version"] == "1.0.0"
     assert data["status"] == "operational"

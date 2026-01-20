@@ -84,6 +84,7 @@ async def root() -> Dict[str, Any]:
     Root endpoint providing API information and status.
     """
     return {
+        "message": "Welcome to Orion Admin API! 🚀",
         "app": "Orion Admin API",
         "version": "1.0.0",
         "status": "operational",
