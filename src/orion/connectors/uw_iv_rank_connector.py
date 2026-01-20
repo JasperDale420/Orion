@@ -34,6 +34,17 @@ class UWIVRankConnector:
         try:
             resp = requests.get(url, headers=self.headers, timeout=30)
             resp.raise_for_status()
+
+            # Log API usage headers for quota monitoring
+            daily_count = resp.headers.get("x-uw-daily-req-count")
+            daily_limit = resp.headers.get("x-uw-token-req-limit")
+            if daily_count and daily_limit:
+                usage_pct = round(100 * int(daily_count) / int(daily_limit), 1)
+                logger.info(
+                    f"UW API usage: {daily_count}/{daily_limit} ({usage_pct}%)",
+                    extra={"event_type": "UW_API_USAGE", "component": "iv_rank"},
+                )
+
             return resp.json()
         except Exception as e:
             logger.warning(f"Failed to fetch IV rank for {ticker}: {e}")
@@ -51,6 +62,14 @@ class UWIVRankConnector:
 
             iv_data = data["data"]
             if not iv_data:
+                continue
+
+            # Handle both list and dict responses from UW API
+            if isinstance(iv_data, list):
+                iv_data = iv_data[0] if iv_data else {}
+
+            if not isinstance(iv_data, dict):
+                logger.warning(f"Unexpected iv_data type for {ticker}: {type(iv_data)}")
                 continue
 
             record = {

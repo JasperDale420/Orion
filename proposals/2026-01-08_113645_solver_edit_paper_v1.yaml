@@ -1,0 +1,32 @@
+meta:
+  run_id: 2d7187b6-0e03-4c15-9a36-75a065ebfa85
+  created_at: '2026-01-09T11:36:45.500052+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-01-08_2d7187b6-0e03-4c15-9a36-75a065ebfa85.json
+  report_path: artifacts/reports/eod_report_2026-01-08.md
+proposal:
+  type: solver_edit
+  priority: 3
+  rationale: SWING_hit_target_50 model shows strong predictive patterns (AUC 0.929)
+    with high hit rates for specific IV rank/GEX/VEX combinations
+  evidence_pointers:
+    ml_insight: SWING_hit_target_50 AUC=0.929
+    top_rule: 'iv_rank_at_entry > avg AND gex_at_entry > avg AND vex_at_entry < avg
+      (hit_rate: 0.645)'
+    feature_importance: iv_rank_at_entry is most important feature
+  test_plan:
+  - Backtest with 14-day window
+  - Verify improved win rate in SWING bucket
+  - Limit position size to 50% normal during validation
+  target_solver_id: paper_v1
+  ops:
+  - op: add_rule
+    new_value: rule_swing_hit_50_v1
+    reasoning: ML shows 64.5% hit rate when IV rank > avg, GEX > avg, VEX < avg for
+      SWING trades
+  - op: toggle_feature
+    feature_name: darkpool_volume_1h
+    new_value: true
+    reasoning: Darkpool volume is consistently top 3 important feature across multiple
+      models

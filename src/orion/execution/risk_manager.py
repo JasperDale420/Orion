@@ -47,6 +47,15 @@ class RiskManager:
         # Idempotency Tracking
         self.processed_fill_ids: set[str] = set()
 
+        # Greeks tracking for options risk (portfolio-level)
+        self.portfolio_delta: float = 0.0
+        self.portfolio_gamma: float = 0.0
+        self.portfolio_vega: float = 0.0
+        self.position_greeks: Dict[str, Dict[str, float]] = {}  # ticker -> {delta, gamma, theta, vega}
+
+        # Sector exposure tracking
+        self.sector_exposures: Dict[str, float] = {}  # sector -> total USD exposure
+
     def _current_drawdown_pct(self) -> float:
         if self.peak_equity <= 0:
             return 0.0
@@ -82,9 +91,12 @@ class RiskManager:
         if not self._check_loss_limits(cfg):
             return False
 
-        # 2. Max Order Size
-        if estimated_cost > cfg.max_order_size_usd:
-            logger.warning(f"RISK REJECT: Order Size {estimated_cost} > Limit {cfg.max_order_size_usd}")
+        # 2. Max Order Size (percentage of equity)
+        max_order_size = self.current_equity * cfg.max_order_size_pct
+        if estimated_cost > max_order_size:
+            logger.warning(
+                f"RISK REJECT: Order Size ${estimated_cost:.2f} > Limit ${max_order_size:.2f} ({cfg.max_order_size_pct:.0%} of equity)"
+            )
             return False
 
         # Calculate projected signed exposure
@@ -100,6 +112,45 @@ class RiskManager:
 
         # 6. Max Ticker Exposure Check
         if not self._check_ticker_exposure_limit(cfg, ticker, projected_signed, effective_signed):
+            return False
+
+        return True
+
+    def check_options_order(
+        self,
+        ticker: str,
+        quantity: float,
+        price: float,
+        side: str,
+        delta: float,
+        gamma: float = 0.0,
+        vega: float = 0.0,
+        timestamp: datetime | None = None,
+        risk_override: RiskSettings | None = None,
+    ) -> bool:
+        """
+        Returns True if the options order is safe to execute.
+        Validates both standard order checks AND Greeks limits.
+
+        Args:
+            ticker: Underlying or option symbol
+            quantity: Number of contracts
+            price: Option premium per contract
+            side: 'buy' or 'sell'
+            delta: Position delta (contracts * delta * 100)
+            gamma: Position gamma (contracts * gamma * 100)
+            vega: Position vega (contracts * vega * 100)
+            timestamp: Order timestamp
+            risk_override: Optional override settings
+        """
+        cfg = risk_override if risk_override else self.config
+
+        # Run standard order checks first
+        if not self.check_order(ticker, quantity, price, side, timestamp, risk_override):
+            return False
+
+        # Then check Greeks limits (pass all Greeks for comprehensive check)
+        if not self._check_greeks_limits(cfg, ticker, delta, gamma, vega):
             return False
 
         return True
@@ -215,23 +266,268 @@ class RiskManager:
     ) -> bool:
         abs_proj = abs(projected_signed)
         abs_curr = abs(effective_signed)
-        limit = cfg.max_ticker_exposure_usd
+        limit = self.current_equity * cfg.max_ticker_exposure_pct
 
         if abs_proj > limit:
             if abs_proj < abs_curr:
                 return True  # Allowing Risk Reduction
             else:
                 logger.warning(
-                    f"RISK REJECT: Max Ticker Exposure {limit} Exceeded for {ticker} (Projected: {abs_proj})"
+                    f"RISK REJECT: Max Ticker Exposure ${limit:.2f} ({cfg.max_ticker_exposure_pct:.0%} of equity) Exceeded for {ticker} (Projected: ${abs_proj:.2f})"
                 )
                 return False
         return True
+
+    def _check_greeks_limits(
+        self,
+        cfg: RiskSettings,
+        ticker: str,
+        position_delta: float = 0.0,
+        position_gamma: float = 0.0,
+        position_vega: float = 0.0,
+    ) -> bool:
+        """Check portfolio-level Greeks limits for options trades.
+        
+        All checks use PROJECTED values (current + new position) to prevent
+        trades that would breach limits upon execution.
+        """
+        if not cfg.enable_greeks_checks:
+            return True
+
+        # Check per-position delta limit
+        if abs(position_delta) > cfg.max_position_delta:
+            logger.warning(
+                f"RISK REJECT: Position Delta {position_delta:.1f} > Limit {cfg.max_position_delta:.1f} for {ticker}"
+            )
+            return False
+
+        # Check per-position vega limit
+        if abs(position_vega) > cfg.max_position_vega:
+            logger.warning(
+                f"RISK REJECT: Position Vega {position_vega:.1f} > Limit {cfg.max_position_vega:.1f} for {ticker}"
+            )
+            return False
+
+        # Check portfolio-level delta limit (projected)
+        projected_portfolio_delta = self.portfolio_delta + position_delta
+        if abs(projected_portfolio_delta) > cfg.max_portfolio_delta:
+            logger.warning(
+                f"RISK REJECT: Portfolio Delta {projected_portfolio_delta:.1f} > Limit {cfg.max_portfolio_delta:.1f}"
+            )
+            return False
+
+        # Check portfolio-level gamma limit (projected - FIX for gamma gap)
+        projected_portfolio_gamma = self.portfolio_gamma + position_gamma
+        if abs(projected_portfolio_gamma) > cfg.max_portfolio_gamma:
+            logger.warning(
+                f"RISK REJECT: Portfolio Gamma {projected_portfolio_gamma:.1f} > Limit {cfg.max_portfolio_gamma:.1f}"
+            )
+            return False
+
+        # Check portfolio-level vega limit (projected)
+        projected_portfolio_vega = self.portfolio_vega + position_vega
+        if abs(projected_portfolio_vega) > cfg.max_portfolio_vega:
+            logger.warning(
+                f"RISK REJECT: Portfolio Vega {projected_portfolio_vega:.1f} > Limit {cfg.max_portfolio_vega:.1f}"
+            )
+            return False
+
+        return True
+
+    def update_position_greeks(
+        self, ticker: str, delta: float, gamma: float, theta: float = 0.0, vega: float = 0.0
+    ) -> None:
+        """Update Greeks for a position and recalculate portfolio totals."""
+        # Update position Greeks
+        self.position_greeks[ticker] = {
+            "delta": delta,
+            "gamma": gamma,
+            "theta": theta,
+            "vega": vega,
+        }
+
+        # Recalculate portfolio totals
+        self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
+        self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+        self.portfolio_vega = sum(g["vega"] for g in self.position_greeks.values())
+
+        logger.info(
+            f"Greeks Updated for {ticker}: delta={delta:.2f}, gamma={gamma:.4f}, vega={vega:.4f} | "
+            f"Portfolio: delta={self.portfolio_delta:.2f}, gamma={self.portfolio_gamma:.4f}, vega={self.portfolio_vega:.4f}"
+        )
+
+    def clear_position_greeks(self, ticker: str) -> None:
+        """Clear Greeks for a closed position."""
+        if ticker in self.position_greeks:
+            del self.position_greeks[ticker]
+            # Recalculate portfolio totals
+            self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
+            self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+            self.portfolio_vega = sum(g["vega"] for g in self.position_greeks.values())
+
+    def check_sector_exposure(
+        self, sector: str, additional_exposure: float = 0.0, risk_override: RiskSettings | None = None
+    ) -> bool:
+        """
+        Check if a new position would breach sector concentration limits.
+
+        Args:
+            sector: Sector name (e.g., 'Technology', 'Healthcare')
+            additional_exposure: USD exposure of the proposed new position
+            risk_override: Optional custom risk settings
+
+        Returns:
+            True if sector exposure is within limits, False if it would breach
+        """
+        cfg = risk_override if risk_override else self.config
+
+        if not cfg.enable_sector_checks:
+            return True
+
+        if self.current_equity <= 0:
+            return True
+
+        current_sector_exposure = self.sector_exposures.get(sector, 0.0)
+        projected_exposure = current_sector_exposure + additional_exposure
+        exposure_pct = projected_exposure / self.current_equity
+
+        if exposure_pct > cfg.max_sector_exposure_pct:
+            logger.warning(
+                f"RISK REJECT: Sector {sector} exposure {exposure_pct:.1%} > limit {cfg.max_sector_exposure_pct:.1%}"
+            )
+            return False
+
+        return True
+
+    def update_sector_exposure(self, sector: str, exposure_change: float) -> None:
+        """
+        Update sector exposure after a trade.
+
+        Args:
+            sector: Sector name
+            exposure_change: USD exposure change (+/- for buy/sell)
+        """
+        if not sector:
+            return
+
+        current = self.sector_exposures.get(sector, 0.0)
+        new_exposure = max(0.0, current + exposure_change)
+
+        if new_exposure > 0:
+            self.sector_exposures[sector] = new_exposure
+        elif sector in self.sector_exposures:
+            del self.sector_exposures[sector]
+
+        logger.info(
+            f"Sector exposure updated: {sector} {current:.2f} -> {new_exposure:.2f}",
+            extra={"event": "sector_exposure_update", "sector": sector, "exposure": new_exposure},
+        )
+
+    def get_sector_exposure_pct(self, sector: str) -> float:
+        """Get sector exposure as percentage of portfolio."""
+        if self.current_equity <= 0:
+            return 0.0
+        return self.sector_exposures.get(sector, 0.0) / self.current_equity
+
+    def check_zero_dte_winddown(
+        self, dte: int, timestamp: datetime | None = None, risk_override: RiskSettings | None = None
+    ) -> tuple[bool, str]:
+        """
+        Check if a 0DTE trade is allowed based on time-of-day wind-down rules.
+
+        Args:
+            dte: Days to expiration (0 for same-day expiry)
+            timestamp: Trade timestamp (defaults to now ET)
+            risk_override: Optional custom risk settings
+
+        Returns:
+            Tuple of (allowed, reason)
+        """
+        cfg = risk_override if risk_override else self.config
+
+        # Only applies to 0DTE trades
+        if dte != 0:
+            return (True, "Not 0DTE")
+
+        if not cfg.enable_zero_dte_winddown:
+            return (True, "Wind-down disabled")
+
+        # Get current time in ET
+        if timestamp is None:
+            from zoneinfo import ZoneInfo
+            timestamp = datetime.now(ZoneInfo("America/New_York"))
+        elif timestamp.tzinfo is None:
+            from zoneinfo import ZoneInfo
+            timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
+
+        # Market close is 4:00 PM ET
+        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+        minutes_to_close = (market_close - timestamp).total_seconds() / 60
+
+        # Check hard cutoff
+        if minutes_to_close <= cfg.zero_dte_cutoff_minutes:
+            logger.warning(
+                f"RISK REJECT: 0DTE blocked - only {minutes_to_close:.0f} min to close "
+                f"(cutoff: {cfg.zero_dte_cutoff_minutes} min)"
+            )
+            return (False, f"0DTE cutoff: {minutes_to_close:.0f} min to close")
+
+        # Check if in reduced size window
+        if minutes_to_close <= cfg.zero_dte_reduce_size_after_minutes:
+            logger.info(
+                f"0DTE size reduction active: {minutes_to_close:.0f} min to close "
+                f"(reduce after: {cfg.zero_dte_reduce_size_after_minutes} min)"
+            )
+            return (True, f"Reduce size: {cfg.zero_dte_reduced_size_pct:.0%}")
+
+        return (True, "Normal trading")
+
+    def get_zero_dte_size_multiplier(
+        self, dte: int, timestamp: datetime | None = None, risk_override: RiskSettings | None = None
+    ) -> float:
+        """
+        Get size multiplier for 0DTE trades based on time-of-day.
+
+        Args:
+            dte: Days to expiration
+            timestamp: Trade timestamp (defaults to now ET)
+            risk_override: Optional custom risk settings
+
+        Returns:
+            Multiplier (1.0 for full size, <1.0 for reduced)
+        """
+        cfg = risk_override if risk_override else self.config
+
+        if dte != 0 or not cfg.enable_zero_dte_winddown:
+            return 1.0
+
+        # Get current time in ET
+        if timestamp is None:
+            from zoneinfo import ZoneInfo
+            timestamp = datetime.now(ZoneInfo("America/New_York"))
+        elif timestamp.tzinfo is None:
+            from zoneinfo import ZoneInfo
+            timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
+
+        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+        minutes_to_close = (market_close - timestamp).total_seconds() / 60
+
+        if minutes_to_close <= cfg.zero_dte_cutoff_minutes:
+            return 0.0  # Blocked entirely
+
+        if minutes_to_close <= cfg.zero_dte_reduce_size_after_minutes:
+            return cfg.zero_dte_reduced_size_pct
+
+        return 1.0
 
     def calculate_size(
         self, entry_price: float, stop_loss_pct: float | None = None, account_equity: float | None = None
     ) -> float:
         """
         Calculates position size based on risk per trade.
+        Caps at max_order_size_pct of account equity.
+        
+        Note: For correlation-aware sizing, use calculate_size_with_correlation().
         """
         if entry_price <= 0:
             return 0.0
@@ -247,11 +543,84 @@ class RiskManager:
 
         qty = math.floor(risk_amt / stop_distance)
 
-        # Cap by Max Ticker Exposure
-        exposure_cap_qty = math.floor(self.config.max_ticker_exposure_usd / entry_price)
+        # Cap by Max Order Size (% of equity)
+        max_order_value = equity * self.config.max_order_size_pct
+        max_order_qty = math.floor(max_order_value / entry_price)
+        qty = min(qty, max_order_qty)
+
+        # Cap by Max Ticker Exposure (% of equity)
+        max_exposure = equity * self.config.max_ticker_exposure_pct
+        exposure_cap_qty = math.floor(max_exposure / entry_price)
         qty = min(qty, exposure_cap_qty)
 
         return float(qty)
+
+    async def calculate_size_with_correlation(
+        self,
+        ticker: str,
+        entry_price: float,
+        stop_loss_pct: float | None = None,
+        account_equity: float | None = None,
+    ) -> float:
+        """
+        Calculates position size with correlation adjustment.
+        
+        First calculates base size using standard risk-per-trade,
+        then applies correlation penalty if new ticker is highly
+        correlated with existing holdings.
+        
+        Args:
+            ticker: Symbol to size
+            entry_price: Entry price per share
+            stop_loss_pct: Optional stop loss percentage
+            account_equity: Optional account equity override
+            
+        Returns:
+            Position size in shares (may be reduced from base size)
+        """
+        # Get base size
+        base_qty = self.calculate_size(entry_price, stop_loss_pct, account_equity)
+        
+        if base_qty <= 0:
+            return 0.0
+            
+        # Apply correlation adjustment if enabled and adjuster available
+        if not self.config.correlation_size_scaling:
+            return base_qty
+            
+        if not hasattr(self, "_correlation_adjuster") or self._correlation_adjuster is None:
+            return base_qty
+            
+        # Get existing position tickers
+        existing_tickers = [t for t, p in self.positions.items() if p.get("qty", 0) != 0]
+        
+        if not existing_tickers:
+            return base_qty
+            
+        # Get correlation-adjusted multiplier
+        multiplier = await self._correlation_adjuster.get_size_multiplier(
+            ticker, existing_tickers, self.config
+        )
+        
+        adjusted_qty = max(1.0, math.floor(base_qty * multiplier))
+        
+        if adjusted_qty < base_qty:
+            logger.info(
+                f"Correlation sizing for {ticker}: {base_qty:.0f} -> {adjusted_qty:.0f} shares (x{multiplier:.2f})",
+                extra={"event": "correlation_size_applied", "ticker": ticker, "base": base_qty, "adjusted": adjusted_qty}
+            )
+            
+        return float(adjusted_qty)
+
+    def set_correlation_adjuster(self, adjuster: "CorrelationAdjuster") -> None:
+        """
+        Inject correlation adjuster for size scaling.
+        
+        Args:
+            adjuster: CorrelationAdjuster instance with market connector
+        """
+        self._correlation_adjuster = adjuster
+        logger.info("Correlation adjuster configured for RiskManager")
 
     @db_retry
     async def upsert_position(self, position: "Position") -> None:
@@ -262,9 +631,8 @@ class RiskManager:
         async def save_position(session: Any) -> None:
             from datetime import datetime, timezone
 
-            from sqlalchemy import select
-
             from orion.storage.models_execution import Position as PositionModel
+            from sqlalchemy import select
 
             stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
             result = await session.execute(stmt)
@@ -291,10 +659,9 @@ class RiskManager:
         Loads risk state from DB (if exists) to survive restarts.
         """
         try:
-            from sqlalchemy import select
-
             from orion.storage.db import async_session_factory
             from orion.storage.models_risk import RiskState
+            from sqlalchemy import select
 
             async with async_session_factory() as session:
                 stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
@@ -332,9 +699,8 @@ class RiskManager:
         """
 
         async def save_risk_state(session: Any) -> None:
-            from sqlalchemy import select
-
             from orion.storage.models_risk import RiskState
+            from sqlalchemy import select
 
             stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
             result = await session.execute(stmt)
@@ -376,17 +742,51 @@ class RiskManager:
         )
         await CircuitBreaker().open(reason)
 
-    async def process_fill(self, ticker: str, qty: float, price: float, side: str, fill_id: str) -> None:
+    async def process_fill(
+        self,
+        ticker: str,
+        qty: float,
+        price: float,
+        side: str,
+        fill_id: str,
+        expected_price: float | None = None,
+    ) -> None:
         """
         Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
         Idempotent: Checks fill_id against in-memory history.
+        
+        Args:
+            ticker: Symbol filled
+            qty: Quantity filled
+            price: Fill price
+            side: 'buy' or 'sell'
+            fill_id: Unique fill identifier (for idempotency)
+            expected_price: Expected price for slippage calculation
         """
         if fill_id in self.processed_fill_ids:
             logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
             return
 
         self.processed_fill_ids.add(fill_id)
+        
+        # Calculate slippage if expected price provided
+        if expected_price is not None and expected_price > 0:
+            slippage_bps = (price - expected_price) / expected_price * 10000
+            logger.info(
+                f"Fill slippage for {ticker}: {slippage_bps:.1f} bps (expected={expected_price:.4f}, actual={price:.4f})",
+                extra={
+                    "event": "fill_slippage",
+                    "ticker": ticker,
+                    "fill_id": fill_id,
+                    "expected_price": expected_price,
+                    "fill_price": price,
+                    "slippage_bps": slippage_bps,
+                    "side": side,
+                },
+            )
+            if _metrics:
+                _metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
 
         # Standardize: side='buy' -> positive qty effect, side='sell'/'short' -> negative qty effect
         sign = 1 if side.lower() == "buy" else -1

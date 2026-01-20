@@ -39,15 +39,14 @@ class MarketSchedule:
             return
 
         try:
-            # Get a sample schedule to detect column names
-            today = datetime.now(timezone.utc).date()
-            sample_sched = self.calendar.schedule(start_date=today, end_date=today)
+            # In newer exchange_calendars, schedule is a DataFrame attribute, not a method
+            sample_sched = self.calendar.schedule
 
-            # Try market_open/market_close first (newer versions)
+            # Try market_open/market_close first (some versions)
             if "market_open" in sample_sched.columns and "market_close" in sample_sched.columns:
                 self.open_col = "market_open"
                 self.close_col = "market_close"
-            # Fallback to open/close (older versions)
+            # Fallback to open/close (current versions)
             elif "open" in sample_sched.columns and "close" in sample_sched.columns:
                 self.open_col = "open"
                 self.close_col = "close"
@@ -93,15 +92,19 @@ class MarketSchedule:
         date_val = ts.date()
 
         try:
-            sched = self.calendar.schedule(start_date=date_val, end_date=date_val)
+            # Use schedule as DataFrame attribute, not method
+            import pandas as pd
 
-            if sched.empty:
+            date_ts = pd.Timestamp(date_val)
+            sched = self.calendar.schedule
+
+            if date_ts not in sched.index:
                 logger.warning(f"No market session for date: {date_val}")
                 return None, None
 
             # Use validated column names from initialization
-            open_dt = sched.iloc[0][self.open_col].to_pydatetime()
-            close_dt = sched.iloc[0][self.close_col].to_pydatetime()
+            open_dt = sched.loc[date_ts, self.open_col].to_pydatetime()
+            close_dt = sched.loc[date_ts, self.close_col].to_pydatetime()
 
             return open_dt, close_dt
 

@@ -294,9 +294,9 @@ async def get_db_url_and_engine():
     # Note: If DB_URL already has correct credentials from previous fix, it should work.
     urls = [
         os.getenv("DB_URL"),
-        "postgresql+asyncpg://postgres:password@localhost:5440/orion_db",
-        "postgresql+asyncpg://postgres:postgres@localhost:5440/orion_db",
-        "postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db",
+        "postgresql+asyncpg://postgres:password@localhost:5440/orion_db",  # pragma: allowlist secret
+        "postgresql+asyncpg://postgres:postgres@localhost:5440/orion_db",  # pragma: allowlist secret
+        "postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db",  # pragma: allowlist secret
     ]
 
     for url in urls:

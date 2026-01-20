@@ -5,8 +5,9 @@ Revises: 0018_meta_experiments_prd_fields
 Create Date: 2025-12-31
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers
 revision = "0019_exit_classifier_columns"

@@ -1,0 +1,21 @@
+meta:
+  run_id: ed1c59dd-fc8a-468f-ab40-a38d3dd61551
+  created_at: '2026-01-10T05:46:46.509185+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-01-09_ed1c59dd-fc8a-468f-ab40-a38d3dd61551.json
+  report_path: artifacts/reports/eod_report_2026-01-09.md
+proposal:
+  type: do_not_trade
+  priority: 1
+  rationale: Extreme distribution shift detected in core market features (close PSI=3.71,
+    volume PSI=3.48). Models trained on baseline distributions may produce unreliable
+    signals under current conditions.
+  evidence_pointers:
+    psi_close: 3.71
+    psi_volume: 3.48
+    regime_available: false
+  test_plan:
+  - Monitor PSI daily for next 2 days
+  - Resume when PSI < 0.25 for both features
+  recommendation: Pause all trading until PSI < 0.25 for close and volume features.

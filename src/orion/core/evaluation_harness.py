@@ -47,9 +47,9 @@ def _compute_t1_times(
         for event_ts, row in labels.iterrows():
             hit_ts = row.get("barrier_hit_ts")
             if pd.notna(hit_ts):
-                t1_by_event[(ticker, event_ts.to_pydatetime() if hasattr(event_ts, "to_pydatetime") else event_ts)] = (
-                    hit_ts
-                )
+                t1_by_event[
+                    (ticker, event_ts.to_pydatetime() if hasattr(event_ts, "to_pydatetime") else event_ts)
+                ] = hit_ts
 
     t1_times: List[datetime] = []
     for c in candidates_sorted:

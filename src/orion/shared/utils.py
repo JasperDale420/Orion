@@ -27,22 +27,18 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
 
         # If string, try ISO parsing
         if isinstance(ts_input, str):
-            # Bolt Optimization: Try datetime.fromisoformat first (150x faster)
             try:
-                dt = datetime.fromisoformat(ts_input)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                else:
-                    dt = dt.astimezone(timezone.utc)
-                return dt
+                # Optimized path for ISO format
+                dt = datetime.fromisoformat(ts_input.replace('Z', '+00:00'))
             except ValueError:
-                # Fallback to dateutil for looser formats
+                # Fallback to slower, more flexible parser
                 dt = dateutil.parser.parse(ts_input)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                else:
-                    dt = dt.astimezone(timezone.utc)
-                return dt
+
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt
 
     except Exception as e:
         if strict:
