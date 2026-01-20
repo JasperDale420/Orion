@@ -146,20 +146,14 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -
             # PRDv2 §12.4 Linkage to Trade Journal
             session.add(
                 TradeJournalEntry(
-                    journal_id=f"journal_{candidate.candidate_id}",
+                    decision_id=decision.decision_id,
                     signal_id=signal_id,
                     candidate_id=candidate.candidate_id,
+                    solver_id=decision.strategy_version_id,
                     ticker=candidate.ticker,
-                    direction=candidate.direction,
-                    entry_time=decision.timestamp_utc,
-                    entry_price=None,
-                    position_size=None,
-                    exit_time=None,
-                    exit_price=None,
-                    realized_pnl_usd=None,
-                    fees_usd=None,
-                    net_pnl_usd=None,
-                    trade_metadata={},
+                    direction=str(candidate.direction),
+                    evidence=candidate.evidence or {},
+                    decision_trace_json=decision.decision_trace_json or {},
                 )
             )
 

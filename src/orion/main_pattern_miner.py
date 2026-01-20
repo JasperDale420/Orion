@@ -89,12 +89,15 @@ def get_next_run_close() -> Optional[datetime]:
     return datetime.combine(fallback_date, datetime.min.time()).replace(hour=21, minute=0, tzinfo=timezone.utc)
 
 
-async def wait_for_next_run(shutdown_event: asyncio.Event) -> bool:
+async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
     """
-    Wait until next Monday or Friday market close + delay.
+    Wait until next Monday or Friday market close + delay, or check for drift more frequently.
 
     Returns:
-        True if should run, False if shutdown requested.
+        Tuple of (should_run_scheduled, check_drift):
+        - (True, False) if scheduled Mon/Fri time reached
+        - (False, True) if timeout reached for drift check
+        - (False, False) if shutdown requested
     """
     close_time = get_next_run_close()
     if close_time is None:
@@ -112,28 +115,39 @@ async def wait_for_next_run(shutdown_event: asyncio.Event) -> bool:
 
     wait_seconds = max(0, (target_time - now).total_seconds())
 
+    # Check for drift every hour (or until scheduled time)
+    DRIFT_CHECK_INTERVAL = 3600  # 1 hour
+    actual_wait = min(wait_seconds, DRIFT_CHECK_INTERVAL)
+
     day_name = target_time.strftime("%A")
     logger.info(
-        f"Waiting until {day_name} {target_time.isoformat()} to run pattern mining",
+        f"Waiting until {day_name} {target_time.isoformat()} (checking drift every {DRIFT_CHECK_INTERVAL}s)",
         extra={
             "event": "schedule_wait",
             "target_time": target_time.isoformat(),
             "wait_seconds": wait_seconds,
+            "actual_wait": actual_wait,
             "day": day_name,
         },
     )
 
     try:
-        await asyncio.wait_for(shutdown_event.wait(), timeout=wait_seconds)
-        return False  # Shutdown requested
+        await asyncio.wait_for(shutdown_event.wait(), timeout=actual_wait)
+        return (False, False)  # Shutdown requested
     except asyncio.TimeoutError:
-        return True  # Time to run
+        # Check if we hit the scheduled time
+        if actual_wait == wait_seconds:
+            return (True, False)  # Time to run scheduled
+        else:
+            return (False, True)  # Time to check drift
 
 
 async def main() -> None:
     """
     Main entry point for pattern mining service.
-    Runs continuously, executing mining job Monday and Friday after market close.
+    Runs continuously, executing mining job:
+    - Monday and Friday after market close (scheduled)
+    - Any day when drift flag is set by EOD agent (triggered)
     """
     await init_db()
 
@@ -147,19 +161,38 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
 
-    logger.info("Pattern mining service started. Running Monday and Friday after market close.")
+    logger.info("Pattern mining service started. Running Monday/Friday + on drift trigger.")
 
     while not shutdown_event.is_set():
-        should_run = await wait_for_next_run(shutdown_event)
+        run_scheduled, check_drift = await wait_for_next_run(shutdown_event)
 
-        if should_run:
+        if run_scheduled:
+            # Scheduled Mon/Fri run
             try:
                 await run_mining_job()
             except Exception as e:
                 logger.error(f"Mining job failed, will retry next run: {e}")
-
-            # Wait a bit before calculating next schedule to avoid double-run
             await asyncio.sleep(60)
+
+        elif check_drift:
+            # Hourly drift check
+            try:
+                from orion.core.drift_trigger import check_and_clear_drift_flag
+
+                flag_data = check_and_clear_drift_flag()
+                if flag_data:
+                    logger.info(
+                        f"Drift trigger detected (max_psi={flag_data.get('max_psi', 'N/A')}), running mining",
+                        extra={"event": "drift_triggered_mining", "flag_data": flag_data},
+                    )
+                    try:
+                        await run_mining_job()
+                    except Exception as e:
+                        logger.error(f"Drift-triggered mining failed: {e}")
+                    await asyncio.sleep(60)
+            except Exception as e:
+                logger.warning(f"Failed to check drift flag: {e}")
+        # else: shutdown requested, loop will exit
 
     logger.info("Pattern mining service stopped.")
 
