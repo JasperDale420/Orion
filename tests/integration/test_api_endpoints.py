@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from orion.api.deps import get_db
 from orion.api.main import app
 from orion.storage.models_solvers import Solver
@@ -66,7 +66,7 @@ async def test_read_solvers(monkeypatch):
     monkeypatch.setenv("ORION_API_KEY", "test_secret_key")
     headers = {"x-api-key": "test_secret_key"}
 
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.get("/solvers", headers=headers)
 
     if response.status_code != 200:
@@ -83,7 +83,7 @@ async def test_read_solver_detail(monkeypatch):
     monkeypatch.setenv("ORION_API_KEY", "test_secret_key")
     headers = {"x-api-key": "test_secret_key"}
 
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.get("/solvers/test_solver_1", headers=headers)
 
     if response.status_code != 200:
@@ -98,7 +98,7 @@ async def test_health_check(monkeypatch):
     monkeypatch.setenv("ORION_API_KEY", "test_secret_key")
     # Health might not need auth, but depends on global router.
     # Checking main.py: @app.get("/health") is open.
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

@@ -11,6 +11,7 @@ import pytz
 
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.redpanda_producer import RedpandaProducer
 from orion.connectors.uw_alerts_connector import UWAlertsConnector
 from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
@@ -69,8 +70,22 @@ class IngestionService:
             secret_key=alpaca_secret,
             paper=system_settings.alpaca_paper,
         )
+        
+        # Real-time streaming connector (preferred over polling for lower latency)
+        self.alpaca_stream: AlpacaStreamConnector | None = None
+        self._use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
+        if self._use_streaming:
+            try:
+                self.alpaca_stream = AlpacaStreamConnector(
+                    api_key=alpaca_key,
+                    secret_key=alpaca_secret,
+                    feed="sip",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create streaming connector, falling back to polling: {e}")
+                self.alpaca_stream = None
 
-        self.producer = RedpandaProducer.get_instance()
+        self.producer: RedpandaProducer | None = None
 
         # Timezone settings
         self.eastern = pytz.timezone("America/New_York")
@@ -79,13 +94,56 @@ class IngestionService:
         # State
         self.eod_trigger_last_run: Optional[str] = None
         self._eod_task: Optional[asyncio.Task[None]] = None
+        self._rollup_task: Optional[asyncio.Task[None]] = None
 
     async def initialize(self) -> None:
         """Initialize resources that require async execution."""
         logger.info("Initializing Ingestion Service...")
+        self.producer = await RedpandaProducer.get_instance()
         await self.producer.start()
+
+        if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
+            try:
+                from orion.core.circuit_breaker import CircuitBreaker
+
+                await CircuitBreaker().close()
+            except Exception as cb_err:
+                logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+
         await init_db()
         await self.universe.hydrate_from_db()
+
+        # Sync today's earnings calendar from UW API
+        try:
+            from orion.jobs.sync_earnings import sync_todays_earnings
+
+            result = await sync_todays_earnings()
+            logger.info(f"Earnings calendar synced: {result}")
+        except Exception as e:
+            logger.warning(f"Failed to sync earnings calendar on startup: {e}")
+
+        # Start rollup job as background task
+        try:
+            from orion.jobs.rollup_job import RollupJob
+
+            rollup_job = RollupJob(loop_interval_seconds=60.0)
+            self._rollup_task = asyncio.create_task(rollup_job.run_forever())
+            logger.info("Rollup job started as background task")
+        except Exception as e:
+            logger.warning(f"Failed to start rollup job: {e}")
+
+        # Start Alpaca WebSocket streaming (preferred for low-latency bars)
+        if self.alpaca_stream:
+            try:
+                active_tickers = self.universe.get_active_universe()
+                if active_tickers:
+                    await self.alpaca_stream.subscribe(active_tickers)
+                await self.alpaca_stream.start()
+                logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
+            except Exception as e:
+                logger.warning(f"Failed to start Alpaca streaming, falling back to polling: {e}")
+                self.alpaca_stream = None
+
         logger.info("Ingestion Service Initialized.")
 
     def _handle_shutdown_signals(self) -> None:
@@ -102,8 +160,8 @@ class IngestionService:
         await self.initialize()
         self._handle_shutdown_signals()
 
-        logger.info("Starting Polling Loop. Interval: 300s")
-        loop_interval = 300.0
+        logger.info("Starting Polling Loop. Interval: 60s")
+        loop_interval = 60.0
 
         while not self.shutdown_event.is_set():
             start_time = asyncio.get_running_loop().time()
@@ -128,7 +186,10 @@ class IngestionService:
         await self.stop()
 
     async def stop(self) -> None:
-        await self.producer.stop()
+        if self.alpaca_stream:
+            await self.alpaca_stream.stop()
+        if self.producer:
+            await self.producer.stop()
         logger.info("Ingestion Service Stopped.")
 
     async def _run_cycle(self) -> None:
@@ -142,11 +203,26 @@ class IngestionService:
         events = await self._poll_uw(trace_id)
         all_events.extend(events)
 
-        # 2. Poll Alpaca
+        # 2. Get Alpaca bars (streaming preferred, polling as fallback)
         active_tickers = self.universe.get_active_universe()
         if active_tickers:
-            alpaca_events = await self._poll_alpaca(active_tickers, trace_id)
-            all_events.extend(alpaca_events)
+            # Use streaming if available (real-time, sub-second latency)
+            if self.alpaca_stream and self.alpaca_stream.is_running:
+                # Ensure newly added tickers are subscribed
+                new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
+                if new_tickers:
+                    await self.alpaca_stream.subscribe(list(new_tickers))
+                # Drain any buffered streaming events
+                streaming_events = await self.alpaca_stream.drain_events()
+                if streaming_events:
+                    for e in streaming_events:
+                        self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
+                    all_events.extend(streaming_events)
+                    logger.debug(f"Drained {len(streaming_events)} streaming events")
+            else:
+                # Fallback to polling (higher latency)
+                alpaca_events = await self._poll_alpaca(active_tickers, trace_id)
+                all_events.extend(alpaca_events)
 
         # 3. Process & Persist
         if all_events:
@@ -188,9 +264,10 @@ class IngestionService:
 
     async def _poll_uw(self, trace_id: str) -> List[BronzeEvent]:
         try:
-            flow = await self.uw_flow.poll()
-            dark = await self.uw_dark.fetch_events()
-            alert = await self.uw_alerts.fetch_events()
+            # lookback_seconds only applies on cold start (no watermark); after first poll, watermarks take over
+            flow = await self.uw_flow.poll(lookback_seconds=300)
+            dark = await self.uw_dark.fetch_events(lookback_seconds=300)
+            alert = await self.uw_alerts.fetch_events(lookback_seconds=300)
             events = flow + dark + alert
 
             for e in events:
@@ -207,9 +284,13 @@ class IngestionService:
 
     async def _poll_alpaca(self, tickers: List[str], trace_id: str) -> List[BronzeEvent]:
         try:
-            events = self.alpaca.poll(tickers, default_lookback_minutes=7200)
+            events = self.alpaca.poll(tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes)
+            if events:
+                newest = max((e.event_ts_utc for e in events if e.event_ts_utc), default=None)
+                if newest:
+                    await self.health_monitor.check_lag(newest)
+
             for e in events:
-                await self._check_lag(e)
                 self._tag_ingest_metadata(e, trace_id, "alpaca_market")
             return events
         except Exception as e:
@@ -351,6 +432,8 @@ class IngestionService:
             try:
                 key = e.ticker if e.ticker else e.event_id
                 payload = self._to_dict(e)
+                if not self.producer:
+                    self.producer = await RedpandaProducer.get_instance()
                 await self.producer.produce_event(topic="orion.events.bronze", key=key, payload=payload)
             except Exception as e_prod:
                 logger.error(f"Redpanda Produce Failed: {e_prod}")

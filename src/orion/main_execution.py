@@ -1,6 +1,6 @@
 import asyncio
 import signal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
 from dotenv import load_dotenv
@@ -16,10 +16,33 @@ from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from orion.storage.models_signals import SignalLive
+from orion.storage.models_silver import SilverOptionFlow
 from orion.storage.models_trade_journal import TradeJournalEntry
 
 # Configure Logger
 logger = setup_struct_logger("orion.execution")
+
+
+async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[Any]:
+    """Fetch recent flow data for a ticker for exit rule evaluation."""
+
+    async def query_flow(session: Any) -> List[Any]:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        stmt = (
+            select(SilverOptionFlow)
+            .where(SilverOptionFlow.ticker == ticker)
+            .where(SilverOptionFlow.flow_ts_utc >= cutoff)
+            .order_by(SilverOptionFlow.flow_ts_utc.desc())
+            .limit(100)
+        )
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
+    try:
+        return await db_query(query_flow)
+    except Exception as e:
+        logger.error(f"Failed to fetch recent flow for {ticker}: {e}")
+        return []
 
 
 async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
@@ -123,20 +146,14 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -
             # PRDv2 §12.4 Linkage to Trade Journal
             session.add(
                 TradeJournalEntry(
-                    journal_id=f"journal_{candidate.candidate_id}",
+                    decision_id=decision.decision_id,
                     signal_id=signal_id,
                     candidate_id=candidate.candidate_id,
+                    solver_id=decision.strategy_version_id,
                     ticker=candidate.ticker,
-                    direction=candidate.direction,
-                    entry_time=decision.timestamp_utc,
-                    entry_price=None,
-                    position_size=None,
-                    exit_time=None,
-                    exit_price=None,
-                    realized_pnl_usd=None,
-                    fees_usd=None,
-                    net_pnl_usd=None,
-                    trade_metadata={},
+                    direction=str(candidate.direction),
+                    evidence=candidate.evidence or {},
+                    decision_trace_json=decision.decision_trace_json or {},
                 )
             )
 
@@ -199,9 +216,17 @@ async def main() -> None:
     signal_engine = SignalEngine()
     execution_engine = ExecutionEngine()
 
+    # Initialize Position Manager and Exit Rules
+    from orion.execution.position_manager import PositionManager
+    from orion.processing.rules.exit_rules import get_default_exit_rules
+
+    position_manager = PositionManager()
+    exit_rules = get_default_exit_rules()
+
     # Initialize history for execution error tracking
     await execution_engine.initialize()
     await signal_engine.initialize()
+    await position_manager.initialize()
 
     # Ensure tables exist (if running standalone)
     await init_db()
@@ -292,7 +317,30 @@ async def main() -> None:
             logger.error(f"Main Loop Error: {e}")
             await asyncio.sleep(5.0)  # Backoff
 
-        # Optional: Position Manager check would go here (Phase 2)
+        # Position Manager: Check exit rules for open positions
+        try:
+            for position in position_manager.get_open_positions():
+                # Fetch recent flow for this ticker (last 30 min)
+                recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
+
+                for rule in exit_rules:
+                    exit_sig = rule.should_exit(position, recent_flow, context={})
+                    if exit_sig:
+                        logger.info(
+                            f"Exit signal triggered: {position.ticker} - {exit_sig.rule_id}: {exit_sig.reason}",
+                            extra={"event_type": "EXIT_SIGNAL", "ticker": position.ticker, "rule_id": exit_sig.rule_id},
+                        )
+                        if exit_sig.urgency == "IMMEDIATE":
+                            closed = await execution_engine.close_position(
+                                ticker=position.ticker,
+                                qty=position.qty,
+                                exit_signal=exit_sig,
+                            )
+                            if closed:
+                                position_manager.remove_position(position.ticker)
+                            break  # Exit on first immediate signal
+        except Exception as exit_err:
+            logger.error(f"Exit rule evaluation error: {exit_err}")
 
         elapsed = loop.time() - start_time
         sleep_time = max(0.1, 1.0 - elapsed)

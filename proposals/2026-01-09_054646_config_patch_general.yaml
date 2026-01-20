@@ -1,0 +1,23 @@
+meta:
+  run_id: ed1c59dd-fc8a-468f-ab40-a38d3dd61551
+  created_at: '2026-01-10T05:46:46.511382+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-01-09_ed1c59dd-fc8a-468f-ab40-a38d3dd61551.json
+  report_path: artifacts/reports/eod_report_2026-01-09.md
+proposal:
+  type: config_patch
+  priority: 3
+  rationale: Ingestion lags for ALPACA_BAR_1M source are extremely high (p95 lag 2490s,
+    max 29476s). This could cause signals based on stale data, especially for 0DTE
+    and short-swing trades.
+  evidence_pointers:
+    source: ALPACA:ALPACA_BAR_1M
+    lag_p95_s: 2490.27
+    max_gap_s: 29446.31
+  test_plan:
+  - Monitor lag metrics after patch deployment
+  - Verify signal timeliness improves
+  changes:
+    data_ingestion.alert_on_lag_seconds: 300
+    data_ingestion.max_allowed_lag_seconds: 600

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -28,7 +29,6 @@ logger = logging.getLogger("backfill")
 # We import these AFTER setting env vars if possible, or just rely on them reading env
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
 from orion.connectors.uw_flow_connector import UWFlowConnector
 from orion.processing.ingest_pipeline import ingest_bronze_events
 from orion.processing.persistence import persist_bronze_events, persist_silver_from_bronze
@@ -41,42 +41,73 @@ RUN_ID = f"comprehensive_backfill_{datetime.now().strftime('%Y%m%d%H%M')}"
 
 
 class RobustUWConnector(UWFlowConnector):
-    """Overrides fetch logic to handle strict pagination for Flow/Alerts."""
+    """Overrides fetch logic to handle cursor pagination for Flow/Alerts.
 
-    def fetch_all_pages(self, target_date: date) -> list:
-        all_events = []
-        seen_ids = set()
-        offset = 0
-        limit = 1000
+    UW's `/option-trades/flow-alerts` endpoint is cursor-based (`older_than` / `newer_than`), not offset-based,
+    and its effective max page size appears capped (e.g. 500).
+    """
+
+    def fetch_day(self, target_date: date) -> list[dict]:
+        """
+        Fetch *all* flow alerts for a specific UTC date by paging backwards using `older_than`.
+        """
+        all_events: list[dict] = []
+        seen_ids: set[str] = set()
+
+        limit = 500  # empirically, larger values can be ignored/capped unpredictably
+        # Start just after end-of-day to ensure we capture the full day's range when paging backwards.
+        cursor = datetime.combine(target_date + timedelta(days=1), dt_time(0, 0, tzinfo=timezone.utc)).isoformat()
 
         while True:
-            logger.info(f"[UW Flow] Fetching offset={offset} limit={limit}...")
-            batch = self._fetch_page(target_date, offset, limit)
-
+            logger.info(f"[UW Flow] Fetching older_than={cursor} limit={limit}...")
+            batch = self._fetch_page(older_than=cursor, limit=limit)
             if not batch:
                 logger.info("[UW Flow] No more events found.")
                 break
 
-            # De-duplicate within batch to check for infinite loops
+            # Determine the next cursor from the oldest timestamp in the batch.
+            # We cannot rely on response-provided cursors (they can reflect server 'now').
+            def _ts(item: dict) -> str:
+                return str(item.get("timestamp") or item.get("created_at") or "")
+
+            oldest_ts = min((_ts(it) for it in batch if _ts(it)), default=None)
+            if not oldest_ts:
+                logger.warning("[UW Flow] Batch missing timestamps; stopping.")
+                break
+
+            # Keep only events that match the requested day; stop once we've paged into earlier dates.
+            batch_dates = {(_ts(it)[:10]) for it in batch if _ts(it)}
+            if batch_dates and min(batch_dates) < target_date.isoformat():
+                # We've crossed into the prior day; still ingest the in-day items and stop.
+                pass
+
             new_in_batch = 0
             for item in batch:
-                eid = str(item.get("id"))
-                if eid not in seen_ids:
-                    seen_ids.add(eid)
-                    new_in_batch += 1
+                ts = _ts(item)
+                if not ts or ts[:10] != target_date.isoformat():
+                    continue
+                eid = str(item.get("id") or "")
+                if not eid or eid in seen_ids:
+                    continue
+                seen_ids.add(eid)
+                all_events.append(item)
+                new_in_batch += 1
 
-            if new_in_batch == 0 and len(batch) > 0:
-                logger.warning("[UW Flow] Batch contains only duplicate IDs. Stopping.")
+            logger.info(f"[UW Flow] Batch {len(batch)} items, +{new_in_batch} in-day new, total={len(all_events)}")
+
+            # Stop condition: if the oldest item is already before target day, we've exhausted the day.
+            if oldest_ts[:10] < target_date.isoformat():
                 break
 
-            all_events.extend(batch)
-            logger.info(f"[UW Flow] Got {len(batch)} events ({new_in_batch} new). Total: {len(all_events)}")
-
-            if len(batch) < limit:
+            # Advance cursor backward. If the server treats `older_than` as inclusive, we can get stuck
+            # returning the same oldest record repeatedly. Detect and stop to avoid infinite loops.
+            if oldest_ts == cursor:
+                logger.warning("[UW Flow] Pagination cursor did not advance (inclusive older_than). Stopping.")
                 break
+            cursor = oldest_ts
 
-            offset += limit
-            time.sleep(0.5)  # Rate limit niceness
+            # Rate limit niceness
+            time.sleep(0.6)
 
         return all_events
 
@@ -85,9 +116,9 @@ class RobustUWConnector(UWFlowConnector):
         stop=stop_after_attempt(10),
         wait=wait_exponential(multiplier=2, min=5, max=60),
     )
-    def _fetch_page(self, target_date: date, offset: int, limit: int) -> list:
+    def _fetch_page(self, *, older_than: str, limit: int) -> list:
         url = f"{self.base_url}/option-trades/flow-alerts"
-        params = {"date": target_date.strftime("%Y-%m-%d"), "limit": limit, "offset": offset}
+        params = {"limit": limit, "older_than": older_than}
         try:
             # Strict Rate Limiting: 120 req/min = 2 req/sec => 0.5s interval
             # Using 0.6s to be safe
@@ -110,10 +141,147 @@ class RobustUWConnector(UWFlowConnector):
             if e.response.status_code == 429:
                 d_c = e.response.headers.get("x-uw-daily-req-count", "N/A")
                 l_t = e.response.headers.get("x-uw-token-req-limit", "N/A")
-                logger.warning(f"[UW Flow] 429 Rate Limit on offset {offset}! Usage: {d_c}/{l_t}. Backing off...")
+                logger.warning(f"[UW Flow] 429 Rate Limit! Usage: {d_c}/{l_t}. Backing off...")
                 # The @retry decorator handles the wait
                 raise e
             raise e
+
+
+# --- Raw HTTP helpers (avoid SDK model parsing issues) ---
+
+
+def _uw_headers() -> dict[str, str]:
+    token = system_settings.uw_api_key
+    if not token:
+        raise RuntimeError("Missing UW_API_KEY")
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _uw_base() -> str:
+    return os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api").rstrip("/")
+
+
+@retry(
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    stop=stop_after_attempt(10),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+)
+def _uw_get_json(path: str, *, params: dict[str, object]) -> dict:
+    url = f"{_uw_base()}{path}"
+    resp = requests.get(url, params=params, headers=_uw_headers(), timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict):
+        return data
+    return {"data": data}
+
+
+@retry(
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=5),
+)
+def _uw_get_json_fast(path: str, *, params: dict[str, object]) -> dict:
+    """
+    Faster/shallower retry policy for high-fanout endpoints (e.g., per-ticker darkpool).
+    """
+    url = f"{_uw_base()}{path}"
+    resp = requests.get(url, params=params, headers=_uw_headers(), timeout=15)
+    # Some endpoints return 4xx when there's simply no data for that symbol/date.
+    # Treat these as empty rather than retrying.
+    if resp.status_code in (404, 422):
+        return {"data": []}
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict):
+        return data
+    return {"data": data}
+
+
+def fetch_uw_alerts_day(date_target: date) -> list[dict]:
+    """
+    Fetch all UW alerts for a specific UTC date by paging backwards using `older_than`.
+    The endpoint is cursor-based and may not support an explicit `limit`, so we rely on cursor progress.
+    """
+    all_items: list[dict] = []
+    seen_ids: set[str] = set()
+
+    cursor = datetime.combine(date_target + timedelta(days=1), dt_time(0, 0, tzinfo=timezone.utc)).isoformat()
+
+    while True:
+        payload = _uw_get_json("/alerts", params={"older_than": cursor})
+        items = payload.get("data") or []
+        if not isinstance(items, list) or not items:
+            break
+
+        def _ts(it: dict) -> str:
+            return str(it.get("timestamp") or it.get("created_at") or "")
+
+        oldest_ts = min((_ts(it) for it in items if _ts(it)), default=None)
+        if not oldest_ts:
+            break
+
+        new_in_batch = 0
+        for it in items:
+            ts = _ts(it)
+            if not ts or ts[:10] != date_target.isoformat():
+                continue
+            sid = str(it.get("id") or "")
+            if sid and sid in seen_ids:
+                continue
+            if sid:
+                seen_ids.add(sid)
+            all_items.append(it)
+            new_in_batch += 1
+
+        logger.info(f"[UW Alerts] Batch {len(items)} items, +{new_in_batch} in-day new, total={len(all_items)}")
+
+        if oldest_ts[:10] < date_target.isoformat():
+            break
+        if oldest_ts == cursor:
+            logger.warning("[UW Alerts] Pagination cursor did not advance; stopping.")
+            break
+
+        cursor = oldest_ts
+        time.sleep(0.6)
+
+    return all_items
+
+
+def fetch_uw_darkpool_day(date_target: date, tickers: list[str]) -> list[dict]:
+    """
+    Fetch UW darkpool trades for the given tickers for a date.
+    Uses per-ticker endpoint to avoid model parsing issues seen in the SDK.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    all_items: list[dict] = []
+
+    def _fetch_one(ticker: str) -> list[dict]:
+        # UW_BASE_URL here includes `/api`, so per-ticker path is `/darkpool/{ticker}` (no extra `/api`).
+        payload = _uw_get_json_fast(f"/darkpool/{ticker}", params={"date": date_target.isoformat()})
+        items = payload.get("data") or []
+        if not isinstance(items, list):
+            return []
+        out: list[dict] = []
+        for it in items:
+            if isinstance(it, dict):
+                it.setdefault("ticker", ticker)
+                out.append(it)
+        return out
+
+    # Keep workers modest to stay under UW rate limits.
+    max_workers = min(5, max(1, len(tickers)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_fetch_one, t): t for t in tickers}
+        for fut in as_completed(futures):
+            t = futures[fut]
+            try:
+                all_items.extend(fut.result())
+            except Exception as e:
+                logger.warning(f"[UW DarkPool] Failed ticker={t} date={date_target}: {e}")
+
+    return all_items
 
 
 # --- Helpers ---
@@ -126,9 +294,9 @@ async def get_db_url_and_engine():
     # Note: If DB_URL already has correct credentials from previous fix, it should work.
     urls = [
         os.getenv("DB_URL"),
-        "postgresql+asyncpg://postgres:password@localhost:5440/orion_db",
-        "postgresql+asyncpg://postgres:postgres@localhost:5440/orion_db",
-        "postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db",
+        "postgresql+asyncpg://postgres:password@localhost:5440/orion_db",  # pragma: allowlist secret
+        "postgresql+asyncpg://postgres:postgres@localhost:5440/orion_db",  # pragma: allowlist secret
+        "postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db",  # pragma: allowlist secret
     ]
 
     for url in urls:
@@ -154,7 +322,7 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
     # 1. UW Flow
     try:
         uw_conn = RobustUWConnector(api_key=system_settings.uw_api_key)
-        raw_rows = await asyncio.to_thread(uw_conn.fetch_all_pages, date_target)
+        raw_rows = await asyncio.to_thread(uw_conn.fetch_day, date_target)
 
         for raw in raw_rows:
             try:
@@ -165,6 +333,13 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                     t = raw["type"].upper()
                     raw["put_call"] = "C" if t == "CALL" else ("P" if t == "PUT" else t[:1])
 
+                ticker = raw.get("ticker") or raw.get("underlying") or raw.get("underlying_symbol") or raw.get("symbol")
+                if not ticker:
+                    # Silver schema requires ticker; skip malformed records rather than failing the whole batch.
+                    continue
+                # Ensure payload ticker is present (do not use setdefault; API can include ticker=None).
+                raw["ticker"] = ticker
+
                 eid = uw_conn._generate_event_id(raw)
                 ts_str = raw.get("timestamp") or raw.get("created_at")
 
@@ -174,6 +349,7 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                         source="UW",
                         source_event_id=str(raw.get("id")) if raw.get("id") else None,
                         event_type="UW_FLOW",
+                        ticker=ticker,
                         event_ts_utc=parse_timestamptz(ts_str, strict=True),
                         received_ts_utc=datetime.now(timezone.utc),
                         payload=raw,
@@ -187,27 +363,68 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
     except Exception as e:
         logger.error(f"[UW Flow] Failed: {e}")
 
-    # 2. UW Dark Pool
+    # 2. UW Alerts
     try:
         current_len = len(events_to_ingest)
-        # Fix: use os.getenv instead of system_settings.uw_base_url if missing
-        uw_base = getattr(system_settings, "uw_base_url", os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api"))
-        dp_conn = UWDarkPoolConnector(api_key=system_settings.uw_api_key, base_url=uw_base)
-
-        # Note: UWDarkPoolConnector doesn't expose a clean sync fetch by date method that returns raw list easily
-        # We will use the private method or reimplement simple fetch
-        # Re-implementing ensure we control retries
-        raw_dp = await dp_conn._fetch_raw_for_date(date_target.strftime("%Y-%m-%d"))
-
-        for raw in raw_dp:
+        raw_alerts = await asyncio.to_thread(fetch_uw_alerts_day, date_target)
+        for raw in raw_alerts:
             try:
-                eid = dp_conn._generate_event_id(raw)
-                ts_str = raw.get("executed_at") or raw.get("timestamp") or raw.get("date")
+                # Alerts typically have an id
+                sid = raw.get("id")
+                eid = (
+                    hashlib.sha256(f"UW_ALERT_{sid}".encode("utf-8")).hexdigest()
+                    if sid
+                    else hashlib.sha256(str(raw).encode("utf-8")).hexdigest()
+                )
+                ts_str = raw.get("timestamp") or raw.get("created_at")
+                ticker = raw.get("ticker") or raw.get("symbol") or raw.get("underlying") or raw.get("underlying_symbol")
                 events_to_ingest.append(
                     BronzeEvent(
                         event_id=eid,
                         source="UW",
+                        source_event_id=str(sid) if sid is not None else None,
+                        event_type="UW_ALERT",
+                        ticker=ticker,
+                        event_ts_utc=parse_timestamptz(ts_str, strict=True),
+                        received_ts_utc=datetime.now(timezone.utc),
+                        payload=raw,
+                        session="REG",
+                    )
+                )
+            except Exception:
+                pass
+
+        logger.info(
+            f"[UW Alerts] Collected {len(raw_alerts)} raw events -> {len(events_to_ingest) - current_len} added"
+        )
+    except Exception as e:
+        logger.error(f"[UW Alerts] Failed: {e}")
+
+    # 3. UW Dark Pool (per ticker)
+    try:
+        current_len = len(events_to_ingest)
+        raw_dp = await asyncio.to_thread(fetch_uw_darkpool_day, date_target, active_tickers)
+
+        for raw in raw_dp:
+            try:
+                ticker = raw.get("ticker")
+                ts_str = raw.get("executed_at") or raw.get("timestamp") or raw.get("date")
+                # Deterministic hash with (ticker, ts, price, size) if no id.
+                sid = raw.get("id") or raw.get("id_")
+                if sid:
+                    eid = hashlib.sha256(f"UW_DARKPOOL_{sid}".encode("utf-8")).hexdigest()
+                else:
+                    eid = hashlib.sha256(
+                        f"UW_DARKPOOL_{ticker}_{raw.get('price')}_{raw.get('size')}_{ts_str}".encode("utf-8")
+                    ).hexdigest()
+
+                events_to_ingest.append(
+                    BronzeEvent(
+                        event_id=eid,
+                        source="UW",
+                        source_event_id=str(sid) if sid is not None else None,
                         event_type="UW_DARKPOOL",
+                        ticker=ticker,
                         event_ts_utc=parse_timestamptz(ts_str, strict=True),
                         received_ts_utc=datetime.now(timezone.utc),
                         payload=raw,
@@ -221,7 +438,7 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
     except Exception as e:
         logger.error(f"[UW DarkPool] Failed: {e}")
 
-    # 3. Alpaca Bars
+    # 4. Alpaca Bars
     if active_tickers:
         try:
             current_len = len(events_to_ingest)
@@ -256,6 +473,15 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
         # Ingest (Dedup)
         unique = await ingest_bronze_events(session, events_to_ingest, run_id=RUN_ID, trace_id=f"bf_{date_target}")
         logger.info(f"Unique Events: {len(unique)}")
+
+        # Guardrails: Silver schemas require non-null ticker for UW flow/darkpool/alerts and Alpaca bars.
+        # Drop malformed rows rather than failing the whole day.
+        unique = [
+            e
+            for e in unique
+            if (e.event_type not in ("UW_FLOW", "UW_DARKPOOL", "UW_ALERT", "ALPACA_BAR_1M"))
+            or getattr(e, "ticker", None)
+        ]
 
         # Persist
         await persist_bronze_events(session, unique)
