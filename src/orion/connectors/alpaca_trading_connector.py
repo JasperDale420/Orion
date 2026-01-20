@@ -46,13 +46,25 @@ class AlpacaTradingConnector:
             logger.error(f"Failed to connect to Alpaca: {e}")
             raise
 
+    @network_retry
     def submit_market_order(
-        self, symbol: str, qty: float, side: OrderSide, time_in_force: TimeInForce = TimeInForce.DAY
+        self,
+        symbol: str,
+        qty: float,
+        side: OrderSide,
+        time_in_force: TimeInForce = TimeInForce.DAY,
+        client_order_id: Optional[str] = None,
     ) -> Any:
         """
         Submits a market order.
         """
-        req = MarketOrderRequest(symbol=symbol, qty=qty, side=side, time_in_force=time_in_force)
+        req = MarketOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            time_in_force=time_in_force,
+            client_order_id=client_order_id,
+        )
 
         try:
             order = self.client.submit_order(order_data=req)
@@ -205,4 +217,3 @@ class AlpacaTradingConnector:
         except Exception as e:
             logger.error(f"Failed to close all positions: {e}")
             raise
-

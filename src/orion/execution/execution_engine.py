@@ -5,17 +5,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Tuple
 
 from alpaca.trading.enums import OrderSide, TimeInForce
-from sqlalchemy import select
-
 from orion.config import risk_settings, system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_options_connector import AlpacaOptionsConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
 from orion.core.errors import ErrorCode
+from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
 from orion.shared.utils import ensure_utc
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,16 @@ class ExecutionEngine:
             self.options_connector = AlpacaOptionsConnector(settings=system_settings)
             # Use same keys for market data
             self.market_connector = AlpacaMarketConnector(api_key=api_key, secret_key=secret_key)
+
+            # Wire up correlation-aware sizing if enabled
+            if risk_settings.correlation_size_scaling:
+                from orion.execution.correlation_adjuster import CorrelationAdjuster
+                adjuster = CorrelationAdjuster(market_connector=self.market_connector)
+                self.risk_manager.set_correlation_adjuster(adjuster)
+                logger.info(
+                    "Correlation-aware sizing enabled",
+                    extra={"event": "correlation_sizing_enabled", "threshold": risk_settings.correlation_threshold}
+                )
 
             # Sync Risk State
             # self.risk_manager.sync_with_broker(self.connector)
@@ -175,6 +185,7 @@ class ExecutionEngine:
         # 2. DTE Check
         if candidate.expiration_date:
             from datetime import timezone
+
             now = datetime.now(timezone.utc)
             dte = (candidate.expiration_date - now).days
             if dte < risk_settings.min_dte:
@@ -211,7 +222,6 @@ class ExecutionEngine:
 
         # 6. Submit options order
         await self._submit_options_order(decision, candidate, num_contracts, option_price)
-
 
     async def _pre_flight_checks(self, decision: StrategyDecision, candidate: CandidateTrade) -> bool:
         """System Health, Data Lag, Shorting Checks"""
@@ -295,6 +305,16 @@ class ExecutionEngine:
     async def _submit_order(self, decision: Any, candidate: Any, side: Any, qty: float, limit_price: float) -> None:
         logger.info(f"EXECUTION TRIGGERED: {side} {qty} {candidate.ticker} @ {limit_price}")
 
+        # Rate limit check before order submission
+        rate_limiter = get_order_rate_limiter()
+        if not await rate_limiter.acquire(timeout=10.0):
+            logger.warning(
+                f"Rate limit reached for order {candidate.ticker}, capacity={rate_limiter.available_capacity}/{rate_limiter.max_per_minute}"
+            )
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Rate limit exceeded"
+            return
+
         client_order_id = str(uuid.uuid4())
         decision.execution_params = decision.execution_params or {}
         decision.execution_params["client_order_id"] = client_order_id
@@ -350,9 +370,7 @@ class ExecutionEngine:
         self, decision: Any, candidate: Any, num_contracts: int, option_price: float
     ) -> None:
         """Submit an options order."""
-        logger.info(
-            f"OPTIONS EXECUTION TRIGGERED: BUY {num_contracts} {candidate.option_symbol} @ {option_price}"
-        )
+        logger.info(f"OPTIONS EXECUTION TRIGGERED: BUY {num_contracts} {candidate.option_symbol} @ {option_price}")
 
         client_order_id = str(uuid.uuid4())
         decision.execution_params = decision.execution_params or {}
@@ -385,10 +403,7 @@ class ExecutionEngine:
             )
 
             premium_paid = num_contracts * option_price * 100
-            logger.info(
-                f"OPTIONS Execution Successful {client_order_id} | "
-                f"Premium: ${premium_paid:.2f}"
-            )
+            logger.info(f"OPTIONS Execution Successful {client_order_id} | " f"Premium: ${premium_paid:.2f}")
             decision.executed_successfully = "TRUE"
             self._record_result(True)
 
@@ -407,7 +422,6 @@ class ExecutionEngine:
             decision.executed_successfully = "FALSE"
             decision.reason = f"Options Broker Error: {e}"
             self._record_result(False)
-
 
     async def close_position(
         self,
@@ -619,26 +633,70 @@ class ExecutionEngine:
             logger.error(f"Failed to poll fills: {e}")
 
     async def _process_single_fill(self, fill: Any) -> None:
-        """Processes a single fill event, updating risk state and persisting."""
+        """
+        Processes a single fill event, updating risk state and persisting.
+
+        Handles partial fills by tracking cumulative filled quantity and only
+        processing the incremental amount since last update.
+        """
         try:
             order_id = str(fill.id)
-            if await self._is_fill_processed(order_id):
+            client_oid = getattr(fill, "client_order_id", None) or order_id
+
+            # Get current filled qty and total order qty
+            filled_qty = float(fill.filled_qty) if fill.filled_qty else 0.0
+            total_qty = float(fill.qty) if fill.qty else filled_qty
+            filled_avg_price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
+
+            # Track partial fills: only process incremental fills
+            if not hasattr(self, "_partial_fill_tracker"):
+                self._partial_fill_tracker: dict = {}  # order_id -> last_filled_qty
+
+            last_filled = self._partial_fill_tracker.get(order_id, 0.0)
+            incremental_qty = filled_qty - last_filled
+
+            if incremental_qty <= 0:
+                # No new fills since last check
                 return
 
+            # Update tracker
+            self._partial_fill_tracker[order_id] = filled_qty
+
+            # Check if this is a partial or complete fill
+            is_partial = filled_qty < total_qty
+            fill_type = "PARTIAL" if is_partial else "COMPLETE"
+
             ticker = fill.symbol
-            qty = float(fill.filled_qty)
-            price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
             side = str(fill.side)
 
-            await self.risk_manager.process_fill(ticker, qty, price, side, fill_id=order_id)
+            logger.info(
+                f"Processing {fill_type} fill: {ticker} {side} {incremental_qty:.2f} @ {filled_avg_price:.2f} "
+                f"(total: {filled_qty:.2f}/{total_qty:.2f})",
+                extra={
+                    "event_type": f"FILL_{fill_type}",
+                    "order_id": order_id,
+                    "ticker": ticker,
+                    "incremental_qty": incremental_qty,
+                    "filled_qty": filled_qty,
+                    "total_qty": total_qty,
+                },
+            )
 
-            # Remove Pending Order (avoid double count)
-            client_oid = getattr(fill, "client_order_id", None)
-            if client_oid and hasattr(self.risk_manager, "remove_pending_order"):
-                self.risk_manager.remove_pending_order(client_oid)
+            # Process the incremental fill amount through risk manager
+            await self.risk_manager.process_fill(
+                ticker, incremental_qty, filled_avg_price, side, fill_id=f"{order_id}_{filled_qty}"
+            )
 
-            await self._mark_fill_processed(order_id, client_oid, ticker, qty)
+            # Only remove from pending orders when fully filled
+            if not is_partial:
+                if client_oid and hasattr(self.risk_manager, "remove_pending_order"):
+                    self.risk_manager.remove_pending_order(client_oid)
+                # Clean up tracker
+                if order_id in self._partial_fill_tracker:
+                    del self._partial_fill_tracker[order_id]
+
             await self._persist_fill_record(fill)
+
         except Exception as e:
             logger.error(f"Failed to process fill {getattr(fill, 'id', 'unknown')}: {e}")
 
@@ -861,9 +919,8 @@ class ExecutionEngine:
     @db_retry
     async def _persist_fill_record(self, fill: Any) -> None:
         async def save_fill_and_update_journal(session: Any) -> None:
-            from sqlalchemy.dialects.postgresql import insert
-
             from orion.storage.models_execution import FillRecord
+            from sqlalchemy.dialects.postgresql import insert
 
             broker_order_id = str(getattr(fill, "id", ""))
             ticker = getattr(fill, "symbol", None) or ""

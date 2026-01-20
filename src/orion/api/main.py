@@ -403,7 +403,19 @@ async def get_rollups(
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
-    stmt = select(GoldTickerRollup).where(GoldTickerRollup.ticker == ticker, GoldTickerRollup.period == period)
+    # Optimization: Use Core-style selection to avoid full ORM object overhead
+    stmt = select(
+        GoldTickerRollup.ticker,
+        GoldTickerRollup.period,
+        GoldTickerRollup.timestamp_utc,
+        GoldTickerRollup.open,
+        GoldTickerRollup.high,
+        GoldTickerRollup.low,
+        GoldTickerRollup.close,
+        GoldTickerRollup.volume,
+        GoldTickerRollup.vwap,
+        GoldTickerRollup.created_at_utc,
+    ).where(GoldTickerRollup.ticker == ticker, GoldTickerRollup.period == period)
     if start_dt is not None:
         stmt = stmt.where(GoldTickerRollup.timestamp_utc >= start_dt)
     if end_dt is not None:
@@ -411,7 +423,7 @@ async def get_rollups(
     stmt = stmt.order_by(GoldTickerRollup.timestamp_utc.asc()).limit(limit)
 
     res = await db.execute(stmt)
-    rows = res.scalars().all()
+    rows = res.all()
     return [
         {
             "ticker": r.ticker,
@@ -423,7 +435,7 @@ async def get_rollups(
             "close": r.close,
             "volume": r.volume,
             "vwap": r.vwap,
-            "created_at_utc": _dt_iso(getattr(r, "created_at_utc", None)),
+            "created_at_utc": _dt_iso(r.created_at_utc),
         }
         for r in rows
     ]
@@ -478,7 +490,33 @@ async def get_flows(
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
-    stmt = select(SilverOptionFlow).order_by(desc(SilverOptionFlow.flow_ts_utc)).limit(limit)
+    # Optimization: Use Core-style selection to avoid full ORM object overhead
+    stmt = (
+        select(
+            SilverOptionFlow.event_id,
+            SilverOptionFlow.source_event_id,
+            SilverOptionFlow.ticker,
+            SilverOptionFlow.flow_ts_utc,
+            SilverOptionFlow.put_call,
+            SilverOptionFlow.expiry,
+            SilverOptionFlow.strike,
+            SilverOptionFlow.option_price,
+            SilverOptionFlow.size_contracts,
+            SilverOptionFlow.premium_usd,
+            SilverOptionFlow.bid,
+            SilverOptionFlow.ask,
+            SilverOptionFlow.underlying_price,
+            SilverOptionFlow.aggressor,
+            SilverOptionFlow.is_sweep,
+            SilverOptionFlow.flags_json,
+            SilverOptionFlow.volume_contract,
+            SilverOptionFlow.open_interest,
+            SilverOptionFlow.ingest,
+            SilverOptionFlow.created_at_utc,
+        )
+        .order_by(desc(SilverOptionFlow.flow_ts_utc))
+        .limit(limit)
+    )
     if ticker:
         stmt = stmt.where(SilverOptionFlow.ticker == ticker)
     if start_dt is not None:
@@ -489,7 +527,7 @@ async def get_flows(
         stmt = stmt.where(SilverOptionFlow.premium_usd >= float(min_premium_usd))
 
     res = await db.execute(stmt)
-    rows = res.scalars().all()
+    rows = res.all()
     return [
         {
             "event_id": r.event_id,
@@ -511,7 +549,120 @@ async def get_flows(
             "volume_contract": r.volume_contract,
             "open_interest": r.open_interest,
             "ingest": r.ingest,
-            "created_at_utc": _dt_iso(getattr(r, "created_at_utc", None)),
+            "created_at_utc": _dt_iso(r.created_at_utc),
         }
         for r in rows
     ]
+
+
+# --- Dashboard ---
+
+
+@app.get("/dashboard/summary", tags=["Dashboard"])
+async def get_dashboard_summary(
+    _: None = Depends(require_api_key),
+) -> Dict[str, Any]:
+    """
+    Get real-time portfolio P&L summary.
+
+    Returns current unrealized/realized P&L, drawdown, trade stats,
+    and equity curve data.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    return tracker.get_portfolio_summary()
+
+
+@app.get("/dashboard/positions", tags=["Dashboard"])
+async def get_dashboard_positions(
+    _: None = Depends(require_api_key),
+) -> List[Dict[str, Any]]:
+    """
+    Get all open positions with P&L details.
+
+    Returns positions sorted by absolute unrealized P&L.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    return tracker.get_position_details()
+
+
+@app.get("/dashboard/sectors", tags=["Dashboard"])
+async def get_dashboard_sectors(
+    _: None = Depends(require_api_key),
+) -> Dict[str, Dict[str, float]]:
+    """
+    Get sector-level P&L breakdown.
+
+    Returns market value and unrealized P&L per sector.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    return tracker.get_sector_breakdown()
+
+
+@app.get("/dashboard/alerts", tags=["Dashboard"])
+async def get_dashboard_alerts(
+    _: None = Depends(require_api_key),
+) -> List[Dict[str, Any]]:
+    """
+    Get active risk alerts.
+
+    Checks risk thresholds and returns any breaches or warnings.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    alerts = tracker.check_risk_alerts()
+    return [
+        {
+            "alert_type": a.alert_type,
+            "severity": a.severity,
+            "message": a.message,
+            "current_value": a.current_value,
+            "threshold": a.threshold,
+            "timestamp": a.timestamp.isoformat(),
+        }
+        for a in alerts
+    ]
+
+
+@app.post("/dashboard/equity", tags=["Dashboard"])
+async def set_dashboard_equity(
+    equity: float = Query(..., gt=0, description="Starting equity for the day"),
+    _: None = Depends(require_api_key),
+) -> Dict[str, Any]:
+    """
+    Set starting equity for P&L calculations.
+
+    Should be called at market open with account equity.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    tracker.set_starting_equity(equity)
+    return {
+        "status": "ok",
+        "starting_equity": equity,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/dashboard/reset", tags=["Dashboard"])
+async def reset_dashboard_daily(
+    _: None = Depends(require_api_key),
+) -> Dict[str, str]:
+    """
+    Reset daily P&L counters.
+
+    Call at start of trading day to reset realized P&L and trade counts.
+    """
+    from orion.core.pnl_tracker import get_pnl_tracker
+
+    tracker = get_pnl_tracker()
+    tracker.reset_daily()
+    return {"status": "ok", "message": "Daily counters reset"}
+
