@@ -1,0 +1,159 @@
+"""
+Order Rate Limiter for Alpaca API.
+
+Implements token bucket algorithm to respect Alpaca's 200 requests/minute limit.
+"""
+
+import asyncio
+import logging
+import time
+from collections import deque
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+class OrderRateLimiter:
+    """
+    Token bucket rate limiter for order submissions.
+
+    Alpaca API limits:
+    - 200 orders per minute for trading API
+    - Burst allowed, but sustained rate must stay under limit
+
+    Usage:
+        limiter = OrderRateLimiter(max_per_minute=200)
+        if await limiter.acquire():
+            # Submit order
+        else:
+            # Rate limited, wait or reject
+    """
+
+    def __init__(
+        self,
+        max_per_minute: int = 200,
+        burst_size: Optional[int] = None,
+        window_seconds: float = 60.0,
+    ):
+        """
+        Initialize rate limiter.
+
+        Args:
+            max_per_minute: Maximum requests allowed per minute
+            burst_size: Max burst allowed (defaults to max_per_minute / 4)
+            window_seconds: Time window for rate calculation
+        """
+        self.max_per_minute = max_per_minute
+        self.burst_size = burst_size or max(10, max_per_minute // 4)
+        self.window_seconds = window_seconds
+
+        # Track request timestamps
+        self._request_times: deque = deque()
+        self._lock = asyncio.Lock()
+
+    @property
+    def requests_in_window(self) -> int:
+        """Count requests within the current time window."""
+        self._cleanup_old_requests()
+        return len(self._request_times)
+
+    @property
+    def available_capacity(self) -> int:
+        """Remaining capacity before rate limit hit."""
+        return max(0, self.max_per_minute - self.requests_in_window)
+
+    def _cleanup_old_requests(self) -> None:
+        """Remove request timestamps outside the window."""
+        cutoff = time.monotonic() - self.window_seconds
+        while self._request_times and self._request_times[0] < cutoff:
+            self._request_times.popleft()
+
+    async def acquire(self, timeout: float = 5.0) -> bool:
+        """
+        Attempt to acquire a rate limit slot.
+
+        Args:
+            timeout: Max seconds to wait for a slot
+
+        Returns:
+            True if slot acquired, False if timed out
+        """
+        start_time = time.monotonic()
+
+        async with self._lock:
+            while True:
+                self._cleanup_old_requests()
+
+                if len(self._request_times) < self.max_per_minute:
+                    # Slot available
+                    self._request_times.append(time.monotonic())
+                    return True
+
+                # Calculate wait time until oldest request expires
+                oldest = self._request_times[0]
+                wait_time = (oldest + self.window_seconds) - time.monotonic()
+
+                if wait_time <= 0:
+                    # Window has passed, retry
+                    continue
+
+                if time.monotonic() - start_time + wait_time > timeout:
+                    # Would exceed timeout
+                    logger.warning(
+                        f"Rate limit timeout: {self.requests_in_window}/{self.max_per_minute} requests in window"
+                    )
+                    return False
+
+                # Wait for slot
+                await asyncio.sleep(min(wait_time, timeout - (time.monotonic() - start_time)))
+
+    async def acquire_or_raise(self, timeout: float = 5.0) -> None:
+        """Acquire a slot or raise RateLimitExceeded."""
+        if not await self.acquire(timeout):
+            raise RateLimitExceeded(
+                f"Rate limit exceeded: {self.requests_in_window}/{self.max_per_minute} requests/min"
+            )
+
+    def try_acquire(self) -> bool:
+        """
+        Non-blocking attempt to acquire a slot.
+
+        Returns:
+            True if slot acquired immediately, False if would need to wait
+        """
+        self._cleanup_old_requests()
+
+        if len(self._request_times) < self.max_per_minute:
+            self._request_times.append(time.monotonic())
+            return True
+
+        return False
+
+    def reset(self) -> None:
+        """Clear all tracked requests."""
+        self._request_times.clear()
+
+
+class RateLimitExceeded(Exception):
+    """Raised when rate limit is exceeded and cannot be waited."""
+
+    pass
+
+
+# Global rate limiter instance for Alpaca orders
+_order_limiter: Optional[OrderRateLimiter] = None
+
+
+def get_order_rate_limiter() -> OrderRateLimiter:
+    """Get or create the global order rate limiter."""
+    global _order_limiter
+    if _order_limiter is None:
+        _order_limiter = OrderRateLimiter(max_per_minute=200)
+    return _order_limiter
+
+
+def reset_order_rate_limiter() -> None:
+    """Reset the global rate limiter (for testing)."""
+    global _order_limiter
+    if _order_limiter:
+        _order_limiter.reset()

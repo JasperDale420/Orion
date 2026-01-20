@@ -47,8 +47,9 @@ async def test_save_events_mock():
         patch("orion.main_ingest.RedpandaProducer") as MockProducerCls,
         patch("orion.main_ingest.async_session_factory") as mock_db_factory,
     ):
-        mock_producer = MockProducerCls.get_instance.return_value
+        mock_producer = AsyncMock()
         mock_producer.produce_event = AsyncMock()
+        MockProducerCls.get_instance = AsyncMock(return_value=mock_producer)
 
         mock_session = AsyncMock(spec=AsyncSession)
         mock_db_factory.return_value.__aenter__.return_value = mock_session

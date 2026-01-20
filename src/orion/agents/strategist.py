@@ -1,11 +1,13 @@
 import json
 import logging
-import os
 from typing import Any, Dict
 
-from openai import AsyncOpenAI
-
 from orion.agents.base import BaseAgent
+from orion.agents.codex_client import (
+    build_chat_prompt,
+    extract_json_from_response,
+    run_codex_completion,
+)
 from orion.rag.vector_store import VectorStore
 from orion.storage.models_gold import CandidateTrade
 
@@ -19,9 +21,9 @@ class StrategistAgent(BaseAgent):
     """
 
     def __init__(self) -> None:
-        super().__init__(name="Strategist", model="gpt-4-turbo")  # Or gpt-3.5-turbo if prefer cheaper
-        api_key = os.getenv("OPENAI_API_KEY")
-        self.client = AsyncOpenAI(api_key=api_key)
+        from orion.config import agent_settings
+
+        super().__init__(name="Strategist", model=agent_settings.model_name)
         self.vector_store = VectorStore()
 
     async def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -41,7 +43,8 @@ class StrategistAgent(BaseAgent):
             "You will be given a Candidate Trade and some context (RAG).\n"
             "Analyze the signal. If the signal is strong, output decision: EXECUTE.\n"
             "If weak or risky, output decision: SKIP.\n"
-            "Provide a brief rationale."
+            "Provide a brief rationale.\n"
+            "Output JSON format: {'decision': 'EXECUTE'|'SKIP', 'rationale': '...'}"
         )
 
         user_prompt = (
@@ -52,21 +55,22 @@ class StrategistAgent(BaseAgent):
             f"Confidence: {candidate.confidence}\n"
             f"Evidence: {json.dumps(candidate.evidence)}\n\n"
             f"Context / Similar History:\n{context_str}\n\n"
-            f"Make your decision. JSON format: {{'decision': 'EXECUTE'|'SKIP', 'rationale': '...'}}"
+            f"Make your decision."
         )
 
-        # 3. Call LLM
+        # 3. Call Codex CLI
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                response_format={"type": "json_object"},
+            from orion.config import agent_settings
+
+            full_prompt = build_chat_prompt(system_prompt, user_prompt)
+
+            response = await run_codex_completion(
+                prompt=full_prompt,
+                model=agent_settings.model_name,
+                reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
             )
 
-            content = response.choices[0].message.content
-            decision_json = json.loads(content)
-
-            return decision_json
+            return extract_json_from_response(response)
 
         except Exception as e:
             logger.error(f"Strategist Agent Error: {e}")

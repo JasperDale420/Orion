@@ -5,16 +5,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Tuple
 
 from alpaca.trading.enums import OrderSide, TimeInForce
-from sqlalchemy import select
-
-from orion.config import system_settings
+from orion.config import risk_settings, system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+from orion.connectors.alpaca_options_connector import AlpacaOptionsConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
 from orion.core.errors import ErrorCode
+from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
 from orion.shared.utils import ensure_utc
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,23 @@ class ExecutionEngine:
                 extra={"event_type": "EXECUTION_INIT_WARNING", "error_code": ErrorCode.PROVIDER_AUTH_FAILED.value},
             )
             self.connector = None
+            self.options_connector = None
             self.market_connector = None
         else:
             self.connector = AlpacaTradingConnector(settings=system_settings)
+            self.options_connector = AlpacaOptionsConnector(settings=system_settings)
             # Use same keys for market data
             self.market_connector = AlpacaMarketConnector(api_key=api_key, secret_key=secret_key)
+
+            # Wire up correlation-aware sizing if enabled
+            if risk_settings.correlation_size_scaling:
+                from orion.execution.correlation_adjuster import CorrelationAdjuster
+                adjuster = CorrelationAdjuster(market_connector=self.market_connector)
+                self.risk_manager.set_correlation_adjuster(adjuster)
+                logger.info(
+                    "Correlation-aware sizing enabled",
+                    extra={"event": "correlation_sizing_enabled", "threshold": risk_settings.correlation_threshold}
+                )
 
             # Sync Risk State
             # self.risk_manager.sync_with_broker(self.connector)
@@ -115,6 +128,16 @@ class ExecutionEngine:
             logger.info(f"Decision for {candidate.ticker} was {action}")
             return
 
+        # Check if this is an options trade
+        is_options_trade = bool(candidate.option_symbol)
+
+        if is_options_trade:
+            await self._execute_options_order(decision, candidate)
+        else:
+            await self._execute_equity_order(decision, candidate)
+
+    async def _execute_equity_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
+        """Execute a standard equity order."""
         # 1. Pre-Flight Checks (Health, Lag, Shorting)
         if not await self._pre_flight_checks(decision, candidate):
             return
@@ -132,7 +155,7 @@ class ExecutionEngine:
             return  # Decision updated in helper
 
         # 4. Check Risk Manager
-        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, str(side)):
+        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side.value):
             logger.error(f"Execution BLOCKED by RiskManager for {candidate.ticker}")
             decision.executed_successfully = "FALSE"
             decision.reason = "Risk Rejection"
@@ -146,6 +169,59 @@ class ExecutionEngine:
 
         # 6. Execution
         await self._submit_order(decision, candidate, side, qty, limit_price)
+
+    async def _execute_options_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
+        """Execute an options order."""
+        if not self.options_connector:
+            logger.warning("No options connector available. Skipping options execution.")
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Options Connector Missing"
+            return
+
+        # 1. Pre-Flight Checks
+        if not await self._pre_flight_checks(decision, candidate):
+            return
+
+        # 2. DTE Check
+        if candidate.expiration_date:
+            from datetime import timezone
+
+            now = datetime.now(timezone.utc)
+            dte = (candidate.expiration_date - now).days
+            if dte < risk_settings.min_dte:
+                logger.warning(f"OPTIONS BLOCKED: DTE {dte} < min {risk_settings.min_dte}")
+                decision.executed_successfully = "FALSE"
+                decision.reason = f"DTE Too Low ({dte} days)"
+                return
+
+        # 3. Get current option price
+        quote = await self.options_connector.get_option_quote(candidate.option_symbol)
+        option_price = quote.get("mid") or quote.get("ask") or candidate.premium
+
+        if not option_price or option_price <= 0:
+            logger.error(f"Cannot get option price for {candidate.option_symbol}")
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Option Price Fetch Failed"
+            return
+
+        # 4. Calculate contracts based on max premium
+        max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
+        num_contracts = self.options_connector.calculate_option_contracts(max_premium, option_price)
+
+        if num_contracts <= 0:
+            logger.warning(f"OPTIONS: Calculated 0 contracts for {candidate.option_symbol}")
+            decision.executed_successfully = "SKIPPED"
+            decision.reason = "Size 0 Contracts"
+            return
+
+        # 5. Circuit Breaker
+        if self._check_circuit_breaker():
+            decision.executed_successfully = "FALSE"
+            decision.reason = "High Error Rate"
+            return
+
+        # 6. Submit options order
+        await self._submit_options_order(decision, candidate, num_contracts, option_price)
 
     async def _pre_flight_checks(self, decision: StrategyDecision, candidate: CandidateTrade) -> bool:
         """System Health, Data Lag, Shorting Checks"""
@@ -229,6 +305,16 @@ class ExecutionEngine:
     async def _submit_order(self, decision: Any, candidate: Any, side: Any, qty: float, limit_price: float) -> None:
         logger.info(f"EXECUTION TRIGGERED: {side} {qty} {candidate.ticker} @ {limit_price}")
 
+        # Rate limit check before order submission
+        rate_limiter = get_order_rate_limiter()
+        if not await rate_limiter.acquire(timeout=10.0):
+            logger.warning(
+                f"Rate limit reached for order {candidate.ticker}, capacity={rate_limiter.available_capacity}/{rate_limiter.max_per_minute}"
+            )
+            decision.executed_successfully = "FALSE"
+            decision.reason = "Rate limit exceeded"
+            return
+
         client_order_id = str(uuid.uuid4())
         decision.execution_params = decision.execution_params or {}
         decision.execution_params["client_order_id"] = client_order_id
@@ -279,6 +365,184 @@ class ExecutionEngine:
             decision.executed_successfully = "FALSE"
             decision.reason = f"Broker Error: {e}"
             self._record_result(False)
+
+    async def _submit_options_order(
+        self, decision: Any, candidate: Any, num_contracts: int, option_price: float
+    ) -> None:
+        """Submit an options order."""
+        logger.info(f"OPTIONS EXECUTION TRIGGERED: BUY {num_contracts} {candidate.option_symbol} @ {option_price}")
+
+        client_order_id = str(uuid.uuid4())
+        decision.execution_params = decision.execution_params or {}
+        decision.execution_params["client_order_id"] = client_order_id
+        decision.execution_params["order_type"] = "OPTIONS"
+        decision.execution_params["contracts"] = num_contracts
+
+        # Determine side from direction
+        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
+
+        try:
+            order = self.options_connector.submit_option_order(
+                option_symbol=candidate.option_symbol,
+                qty=num_contracts,
+                side=side,
+                order_type="limit",
+                limit_price=option_price,
+                client_order_id=client_order_id,
+            )
+
+            await self._persist_order_record(
+                decision=decision,
+                candidate=candidate,
+                client_order_id=client_order_id,
+                side=str(side.value),
+                qty=num_contracts,
+                limit_price=option_price,
+                broker_order=order,
+                error_message=None,
+            )
+
+            premium_paid = num_contracts * option_price * 100
+            logger.info(f"OPTIONS Execution Successful {client_order_id} | " f"Premium: ${premium_paid:.2f}")
+            decision.executed_successfully = "TRUE"
+            self._record_result(True)
+
+        except Exception as e:
+            await self._persist_order_record(
+                decision=decision,
+                candidate=candidate,
+                client_order_id=client_order_id,
+                side=str(side.value),
+                qty=num_contracts,
+                limit_price=option_price,
+                broker_order=None,
+                error_message=str(e),
+            )
+            logger.error(f"OPTIONS Execution Failed: {e}")
+            decision.executed_successfully = "FALSE"
+            decision.reason = f"Options Broker Error: {e}"
+            self._record_result(False)
+
+    async def close_position(
+        self,
+        ticker: str,
+        qty: float,
+        exit_signal: Any,
+        use_market_order: bool = False,
+    ) -> bool:
+        """
+        Close a position based on exit signal.
+
+        Args:
+            ticker: Symbol to close
+            qty: Quantity to close
+            exit_signal: ExitSignal from exit rule
+            use_market_order: If True, use market order; else limit with buffer
+
+        Returns:
+            True if order submitted successfully
+        """
+        if not self.connector:
+            logger.warning("No connector available. Cannot close position.")
+            return False
+
+        try:
+            # Get current price
+            current_price = self.market_connector.get_latest_price(ticker) if self.market_connector else 0.0
+
+            if current_price <= 0:
+                logger.error(f"Cannot close {ticker}: Failed to get current price")
+                return False
+
+            # Determine order params
+            side = OrderSide.SELL  # Closing a long position
+            client_order_id = str(uuid.uuid4())
+
+            if use_market_order or exit_signal.urgency == "IMMEDIATE":
+                # Market order for urgent exits
+                order = self.connector.submit_market_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    time_in_force=TimeInForce.DAY,
+                    client_order_id=client_order_id,
+                )
+                logger.info(
+                    f"EXIT MARKET ORDER: {ticker} x{qty} - Reason: {exit_signal.reason}",
+                    extra={
+                        "event_type": "EXIT_ORDER_SUBMITTED",
+                        "ticker": ticker,
+                        "qty": qty,
+                        "order_type": "MARKET",
+                        "rule_id": exit_signal.rule_id,
+                        "reason": exit_signal.reason,
+                    },
+                )
+            else:
+                # Limit order with small buffer below current price
+                exit_buffer_bps = 5  # 5 basis points buffer
+                limit_price = round(current_price * (1 - exit_buffer_bps / 10000.0), 2)
+
+                order = self.connector.submit_limit_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    limit_price=limit_price,
+                    time_in_force=TimeInForce.DAY,
+                    client_order_id=client_order_id,
+                )
+                logger.info(
+                    f"EXIT LIMIT ORDER: {ticker} x{qty} @ {limit_price} - Reason: {exit_signal.reason}",
+                    extra={
+                        "event_type": "EXIT_ORDER_SUBMITTED",
+                        "ticker": ticker,
+                        "qty": qty,
+                        "order_type": "LIMIT",
+                        "limit_price": limit_price,
+                        "rule_id": exit_signal.rule_id,
+                        "reason": exit_signal.reason,
+                    },
+                )
+
+            # Persist exit decision
+            await self._persist_exit_decision(ticker, exit_signal, client_order_id, order)
+            self._record_result(True)
+            return True
+
+        except Exception as e:
+            logger.error(
+                f"Failed to close position {ticker}: {e}",
+                extra={"event_type": "EXIT_ORDER_FAILED", "ticker": ticker, "error": str(e)},
+            )
+            self._record_result(False)
+            return False
+
+    async def _persist_exit_decision(self, ticker: str, exit_signal: Any, client_order_id: str, order: Any) -> None:
+        """Persist exit decision to database."""
+        try:
+
+            async def save_exit(session: Any) -> None:
+                from orion.storage.models_gold import ExitDecision
+
+                broker_order_id = str(getattr(order, "id", "")) if order else None
+
+                session.add(
+                    ExitDecision(
+                        exit_id=client_order_id,
+                        ticker=ticker,
+                        rule_id=exit_signal.rule_id,
+                        exit_reason=exit_signal.reason,
+                        urgency=exit_signal.urgency,
+                        confidence=exit_signal.confidence,
+                        details=exit_signal.details or {},
+                        broker_order_id=broker_order_id,
+                        exit_ts_utc=datetime.now(timezone.utc),
+                    )
+                )
+
+            await db_write(save_exit)
+        except Exception as e:
+            logger.error(f"Failed to persist exit decision: {e}")
 
     async def _check_system_health(self) -> bool:
         """
@@ -369,26 +633,70 @@ class ExecutionEngine:
             logger.error(f"Failed to poll fills: {e}")
 
     async def _process_single_fill(self, fill: Any) -> None:
-        """Processes a single fill event, updating risk state and persisting."""
+        """
+        Processes a single fill event, updating risk state and persisting.
+
+        Handles partial fills by tracking cumulative filled quantity and only
+        processing the incremental amount since last update.
+        """
         try:
             order_id = str(fill.id)
-            if await self._is_fill_processed(order_id):
+            client_oid = getattr(fill, "client_order_id", None) or order_id
+
+            # Get current filled qty and total order qty
+            filled_qty = float(fill.filled_qty) if fill.filled_qty else 0.0
+            total_qty = float(fill.qty) if fill.qty else filled_qty
+            filled_avg_price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
+
+            # Track partial fills: only process incremental fills
+            if not hasattr(self, "_partial_fill_tracker"):
+                self._partial_fill_tracker: dict = {}  # order_id -> last_filled_qty
+
+            last_filled = self._partial_fill_tracker.get(order_id, 0.0)
+            incremental_qty = filled_qty - last_filled
+
+            if incremental_qty <= 0:
+                # No new fills since last check
                 return
 
+            # Update tracker
+            self._partial_fill_tracker[order_id] = filled_qty
+
+            # Check if this is a partial or complete fill
+            is_partial = filled_qty < total_qty
+            fill_type = "PARTIAL" if is_partial else "COMPLETE"
+
             ticker = fill.symbol
-            qty = float(fill.filled_qty)
-            price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
             side = str(fill.side)
 
-            await self.risk_manager.process_fill(ticker, qty, price, side, fill_id=order_id)
+            logger.info(
+                f"Processing {fill_type} fill: {ticker} {side} {incremental_qty:.2f} @ {filled_avg_price:.2f} "
+                f"(total: {filled_qty:.2f}/{total_qty:.2f})",
+                extra={
+                    "event_type": f"FILL_{fill_type}",
+                    "order_id": order_id,
+                    "ticker": ticker,
+                    "incremental_qty": incremental_qty,
+                    "filled_qty": filled_qty,
+                    "total_qty": total_qty,
+                },
+            )
 
-            # Remove Pending Order (avoid double count)
-            client_oid = getattr(fill, "client_order_id", None)
-            if client_oid and hasattr(self.risk_manager, "remove_pending_order"):
-                self.risk_manager.remove_pending_order(client_oid)
+            # Process the incremental fill amount through risk manager
+            await self.risk_manager.process_fill(
+                ticker, incremental_qty, filled_avg_price, side, fill_id=f"{order_id}_{filled_qty}"
+            )
 
-            await self._mark_fill_processed(order_id, client_oid, ticker, qty)
+            # Only remove from pending orders when fully filled
+            if not is_partial:
+                if client_oid and hasattr(self.risk_manager, "remove_pending_order"):
+                    self.risk_manager.remove_pending_order(client_oid)
+                # Clean up tracker
+                if order_id in self._partial_fill_tracker:
+                    del self._partial_fill_tracker[order_id]
+
             await self._persist_fill_record(fill)
+
         except Exception as e:
             logger.error(f"Failed to process fill {getattr(fill, 'id', 'unknown')}: {e}")
 
@@ -611,9 +919,8 @@ class ExecutionEngine:
     @db_retry
     async def _persist_fill_record(self, fill: Any) -> None:
         async def save_fill_and_update_journal(session: Any) -> None:
-            from sqlalchemy.dialects.postgresql import insert
-
             from orion.storage.models_execution import FillRecord
+            from sqlalchemy.dialects.postgresql import insert
 
             broker_order_id = str(getattr(fill, "id", ""))
             ticker = getattr(fill, "symbol", None) or ""

@@ -1,20 +1,20 @@
-import json
 import logging
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 
 from orion.agents.base import BaseAgent
+from orion.agents.codex_client import (
+    build_chat_prompt,
+    extract_json_from_response,
+    run_codex_completion,
+)
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdit
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-# Optional dependency hook.
-# Tests patch `orion.agents.meta_agent.acompletion`; keep a module-level name for patchability.
-acompletion = None
 
 
 class MetaAgent(BaseAgent):
@@ -28,9 +28,6 @@ class MetaAgent(BaseAgent):
         from orion.config import agent_settings
 
         super().__init__(name="MetaAgent", model=agent_settings.model_name)
-        self.api_key = agent_settings.openai_api_key
-        if not self.api_key:
-            logger.warning("OPENAI_API_KEY not found. Helper might fail.")
 
     async def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -38,11 +35,78 @@ class MetaAgent(BaseAgent):
         """
         pass
 
+    async def _fetch_strategy_research(
+        self,
+        base_config: SolverConfig,
+        performance_context: str,
+    ) -> str:
+        """
+        Fetch relevant strategy research from TradingRAG.
+
+        Queries indexed trading books for insights related to the solver's
+        strategy type and performance issues.
+        """
+        try:
+            from orion.clients.trading_rag import get_rag_client
+
+            rag = get_rag_client()
+
+            # Build a research query based on solver config
+            rule_ids = ", ".join(base_config.rules) if base_config.rules else "momentum"
+            query = (
+                f"Best practices for {rule_ids} trading strategies. "
+                f"How to optimize exits and risk management for options trading."
+            )
+
+            # If performance context mentions issues, add to query
+            if "drawdown" in performance_context.lower():
+                query += " How to reduce drawdown in trading systems."
+            if "win rate" in performance_context.lower():
+                query += " How to improve win rate in trading."
+
+            result = await rag.answer(query, top_k=3)
+
+            if result.get("answer"):
+                return f"--- Strategy Research from Trading Books ---\n{result['answer']}\n"
+
+            return ""
+        except Exception as e:
+            logger.warning(f"TradingRAG research failed (non-fatal): {e}")
+            return ""
+
     async def propose_edits(self, base_config: SolverConfig, performance_context: str = "") -> List[SolverEdit]:
         """
         Generates a list of valid SolverEdit objects to mutate the base_config.
         Uses a ReAct loop to query MCP tools for market context before deciding.
+        Also queries TradingRAG for strategy research from indexed trading books.
         """
+        # 0. Fetch strategy research from TradingRAG
+        rag_context = await self._fetch_strategy_research(base_config, performance_context)
+
+        # 0b. Fetch weekly ML performance metrics
+        ml_performance_context = ""
+        try:
+            from orion.ml.performance_tracker import get_weekly_performance
+
+            weekly_perf = await get_weekly_performance()
+            if weekly_perf:
+                ml_lines = ["--- ML Model Performance (Weekly) ---"]
+                for key, data in weekly_perf.items():
+                    acc = data.get("accuracy_pct", 0) or 0
+                    avg_ret = data.get("avg_return", 0) or 0
+                    ml_lines.append(f"{key}: accuracy={acc:.1f}%, avg_return={avg_ret:.2f}%")
+                    if acc < 55:
+                        ml_lines.append("  ⚠️ LOW ACCURACY - model may need retraining")
+                ml_performance_context = "\n".join(ml_lines)
+        except Exception as e:
+            logger.debug(f"Failed to fetch ML performance: {e}")
+
+        augmented_context = performance_context
+        if rag_context:
+            augmented_context += f"\n\n{rag_context}"
+        if ml_performance_context:
+            augmented_context += f"\n\n{ml_performance_context}"
+
         # 1. Initialize MCP Client & Fetch Tools
         from orion.connectors.mcp_client import MCPClient
 
@@ -96,65 +160,33 @@ class MetaAgent(BaseAgent):
 
         user_prompt = (
             f"Base Config:\n{base_config.model_dump_json(indent=2)}\n\n"
-            f"Context:\n{performance_context}\n\n"
+            f"Context:\n{augmented_context}\n\n"
             "Step 1: Analyze the market using available tools (e.g. get_market_tide, get_volatility).\n"
             "Step 2: Propose 3 variants based on your findings."
         )
 
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-
-        # 3. Execution Loop (Max 5 turns)
+        # 3. Execute via Codex CLI
+        # Codex handles tool calling internally, so we just send the prompt
         final_json_response = None
 
         try:
-            acompletion_fn = acompletion
-            if acompletion_fn is None:
-                from litellm import acompletion as acompletion_fn
+            from orion.config import agent_settings
 
-            for _ in range(5):  # Max turns
-                if acompletion_fn is None:
-                    logger.error("acompletion_fn is None, cannot proceed with LLM call")
-                    return []
-                response = await acompletion_fn(
-                    model=self.model,
-                    messages=messages,
-                    tools=openai_tools if openai_tools else None,
-                    tool_choice="auto" if openai_tools else None,
-                    api_key=self.api_key,
-                )
+            full_prompt = build_chat_prompt(system_prompt, user_prompt)
 
-                msg = response.choices[0].message
-                messages.append(msg)
-
-                if msg.tool_calls:
-                    # Execute Tools
-                    for tc in msg.tool_calls:
-                        func_name = tc.function.name
-                        args = json.loads(tc.function.arguments)
-                        logger.info(f"MetaAgent Calling Tool: {func_name} args={args}")
-
-                        tool_result = await mcp.call_tool(func_name, args)
-
-                        messages.append(
-                            {"tool_call_id": tc.id, "role": "tool", "name": func_name, "content": str(tool_result)}
-                        )
-                else:
-                    # Final response (presumably JSON)
-                    final_json_response = msg.content
-                    break
+            final_json_response = await run_codex_completion(
+                prompt=full_prompt,
+                model=agent_settings.model_name,
+                reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
+                timeout_seconds=600,  # Longer timeout for complex strategy analysis
+            )
 
             if not final_json_response:
-                logger.warning("MetaAgent exhausted turns without final JSON.")
+                logger.warning("MetaAgent received empty response from codex.")
                 return []
 
             # 4. Parse Final JSON
-            # Clean potential markdown fences
-            if "```json" in final_json_response:
-                final_json_response = final_json_response.split("```json")[1].split("```")[0].strip()
-            elif "```" in final_json_response:
-                final_json_response = final_json_response.split("```")[1].split("```")[0].strip()
-
-            data = json.loads(final_json_response)
+            data = extract_json_from_response(final_json_response)
 
             variants = []
             for v_data in data.get("variants", []):

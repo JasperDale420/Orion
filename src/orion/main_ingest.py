@@ -15,13 +15,13 @@ import uuid
 
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.uw_alerts_connector import UWAlertsConnector
 from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
 from orion.connectors.uw_flow_connector import UWFlowConnector
 from orion.core.universe_manager import UniverseManager
 from orion.processing.deduper import DeduplicationEngine
 from orion.processing.feature_engine import FeatureEngine
-from orion.processing.normalizer import NormalizationEngine
 from orion.processing.persistence import (
     persist_bronze_events,
     persist_candidates,
@@ -47,9 +47,9 @@ logger = setup_struct_logger("orion.ingest")
 
 # Initialize metrics
 try:
-    from orion.shared.metrics import init_metrics
+    from orion.shared.metrics import Metrics, init_metrics
 
-    _metrics = init_metrics()
+    _metrics: Metrics | None = None
 except ImportError:
     _metrics = None
 
@@ -58,6 +58,7 @@ load_dotenv()
 # Global flag for EOD tracking
 # SHUTDOWN removed in favor of asyncio.Event in main()
 EOD_TRIGGER_LAST_RUN = None
+QUALITY_CHECK_LOOP_COUNT = 0  # Track loop iterations for hourly quality check
 
 
 from orion.connectors.redpanda_producer import RedpandaProducer
@@ -70,7 +71,7 @@ async def save_events_to_db(events: List[BronzeEvent]) -> None:
         return
 
     # Dual-write: Produce to Redpanda
-    producer = RedpandaProducer.get_instance()
+    producer = await RedpandaProducer.get_instance()
 
     # print(f"DEBUG: Skipping Redpanda, proceeding to DB save for {len(events)} events.")
     for e in events:
@@ -196,6 +197,8 @@ async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
 
 async def main() -> None:
     global EOD_TRIGGER_LAST_RUN
+    global QUALITY_CHECK_LOOP_COUNT
+    global _metrics
 
     # Graceful Shutdown
     loop = asyncio.get_running_loop()
@@ -210,8 +213,24 @@ async def main() -> None:
 
     logger.info("Starting Orion Ingestion Service...")
 
+    # Initialize metrics once the event loop is running
+    if _metrics is None and "init_metrics" in globals():
+        try:
+            _metrics = await init_metrics()  # type: ignore[arg-type]
+        except Exception as metric_err:
+            logger.warning(f"Metrics initialization failed: {metric_err}")
+
+    # Optionally reset circuit breaker on start (useful after dev crashes / stale lag)
+    if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
+        try:
+            from orion.core.circuit_breaker import CircuitBreaker
+
+            await CircuitBreaker().close()
+        except Exception as cb_err:
+            logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+
     # Initialize Redpanda
-    producer = RedpandaProducer.get_instance()
+    producer = await RedpandaProducer.get_instance()
     await producer.start()
 
     # Initialize Health Monitor
@@ -236,6 +255,20 @@ async def main() -> None:
         secret_key=system_settings.alpaca_secret_key,
         paper=system_settings.alpaca_paper,
     )
+    
+    # Real-time streaming connector (preferred over polling for lower latency)
+    alpaca_stream: AlpacaStreamConnector | None = None
+    use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
+    if use_streaming:
+        try:
+            alpaca_stream = AlpacaStreamConnector(
+                api_key=system_settings.alpaca_api_key,
+                secret_key=system_settings.alpaca_secret_key,
+                feed="sip",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create streaming connector, using polling: {e}")
+            alpaca_stream = None
 
     feature_engine = FeatureEngine()
     rule_engine = RuleEngine()
@@ -251,8 +284,53 @@ async def main() -> None:
 
     logger.info("Connectors initialized. Starting polling loop.")
 
-    # USER REQUEST: Expand polling time to every 5 minutes (300 seconds)
-    loop_interval = 300.0  # seconds
+    # Start rollup job as background task (aggregates silver_signals into gold_ticker_rollup)
+    try:
+        from orion.jobs.rollup_job import RollupJob
+
+        rollup_job = RollupJob(loop_interval_seconds=60.0)
+        _rollup_task = asyncio.create_task(rollup_job.run_forever())  # noqa: F841
+        logger.info("Rollup job started as background task")
+    except Exception as e:
+        logger.warning(f"Failed to start rollup job: {e}")
+
+    # Start window feature job (aggregates flow/darkpool into window features: 5m/1h/1d/1w)
+    try:
+        from orion.jobs.window_feature_job import WindowFeatureJob
+
+        window_job = WindowFeatureJob(loop_interval_seconds=300.0)  # Every 5 min
+        _window_task = asyncio.create_task(window_job.run_forever())  # noqa: F841
+        logger.info("Window feature job started as background task")
+    except Exception as e:
+        logger.warning(f"Failed to start window feature job: {e}")
+
+    # Start Alpaca WebSocket streaming (preferred for low-latency bars)
+    if alpaca_stream:
+        try:
+            active_tickers = universe.get_active_universe()
+            if active_tickers:
+                await alpaca_stream.subscribe(active_tickers)
+            await alpaca_stream.start()
+            logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
+        except Exception as e:
+            logger.warning(f"Failed to start Alpaca streaming, using polling: {e}")
+            alpaca_stream = None
+
+    # Adaptive polling intervals (API optimization)
+    # Core hours (9:30 AM - 4:00 PM ET): 5 min polling for real-time trading
+    # Extended hours (4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET): 15 min polling
+    CORE_HOURS_INTERVAL = 300.0  # 5 minutes
+    EXTENDED_HOURS_INTERVAL = 900.0  # 15 minutes
+
+    def get_polling_interval(now_et: datetime) -> float:
+        """Return appropriate polling interval based on market hours."""
+        hour = now_et.hour
+        minute = now_et.minute
+        # Core hours: 9:30 AM - 4:00 PM ET
+        if (hour == 9 and minute >= 30) or (10 <= hour < 16):
+            return CORE_HOURS_INTERVAL
+        # Extended hours: 4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET
+        return EXTENDED_HOURS_INTERVAL
 
     while not shutdown_event.is_set():
         try:
@@ -264,6 +342,9 @@ async def main() -> None:
             # Active Window: Mon-Fri, 04:00 ET to 20:00 ET.
             now_utc = datetime.now(timezone.utc)
             now_et = now_utc.astimezone(eastern)
+
+            # Determine adaptive polling interval
+            loop_interval = get_polling_interval(now_et)
 
             # Check if we are in active hours
             is_weekday = now_et.weekday() < 5  # 0=Mon, 4=Fri
@@ -318,26 +399,21 @@ async def main() -> None:
 
             # 1. Poll UW
             try:
-                flow_events = await uw_flow.poll()
-                dark_events = await uw_dark.fetch_events()
-                alert_events = await uw_alerts.fetch_events()
+                # lookback_seconds only applies on cold start (no watermark); after first poll, watermarks take over
+                flow_events = await uw_flow.poll(lookback_seconds=300)
+                dark_events = await uw_dark.fetch_events(lookback_seconds=300)
+                alert_events = await uw_alerts.fetch_events(lookback_seconds=300)
 
-                # Check Lag for UW events
-                for evt in flow_events + dark_events + alert_events:
-                    if evt.event_ts_utc:
-                        try:
-                            await health_monitor.check_lag(evt.event_ts_utc)
-                        except CriticalHealthException as che:
-                            logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
-                            # Ideally, we write a "PAUSE_TRADING" flag to Redis/DB here.
-                            # For now, we log loud and continue (Ingestion should verify to recover?)
-                            # Or we Crash? "Fail Loud".
-                            # If we crash, system stops. Supervisor restarts. Loop.
-                            # PRD says "auto-pause trading".
-                            # We'll rely on "Stale Price" / "Stale Heartbeat" in Execution to pause trading if Ingestion dies.
-                            # So crashing or halting here effectively pauses trading.
-                            # Let's just catch and log for now to avoid rapid restart loops in this demo.
-                            pass
+                # Check Lag for UW based on freshest event only (avoid tripping breaker due to old records in a batch)
+                uw_events = flow_events + dark_events + alert_events
+                newest = max((e.event_ts_utc for e in uw_events if e.event_ts_utc), default=None)
+                if newest:
+                    try:
+                        await health_monitor.check_lag(newest)
+                    except CriticalHealthException as che:
+                        logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
+                        # Keep running; breaker state is handled via DB and observed by other services.
+                        pass
 
                 # 2. Update Universe
                 for evt in flow_events + dark_events + alert_events:
@@ -346,9 +422,7 @@ async def main() -> None:
                             "connector": (
                                 "uw_flow"
                                 if evt.event_type == "UW_FLOW"
-                                else "uw_darkpool"
-                                if evt.event_type == "UW_DARKPOOL"
-                                else "uw_alerts"
+                                else "uw_darkpool" if evt.event_type == "UW_DARKPOOL" else "uw_alerts"
                             ),
                             "run_id": RUN_ID,
                             "trace_id": trace_id,
@@ -361,18 +435,32 @@ async def main() -> None:
                 logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id, "event_type": "UW_POLL_ERROR"})
 
             # ... (Alpaca polling) ...
-            # 3. Poll Alpaca for Active Universe
+            # 3. Get Alpaca bars (streaming preferred, polling as fallback)
             active_tickers = universe.get_active_universe()
             if active_tickers:
                 try:
-                    # Look back 5 days on startup to ensure we cover weekends/holidays
-                    alpaca_events = alpaca.poll(active_tickers, default_lookback_minutes=7200)
+                    # Use streaming if available (real-time, sub-second latency)
+                    if alpaca_stream and alpaca_stream.is_running:
+                        # Ensure newly added tickers are subscribed
+                        new_tickers = set(active_tickers) - alpaca_stream.subscribed_tickers
+                        if new_tickers:
+                            await alpaca_stream.subscribe(list(new_tickers))
+                        # Drain buffered streaming events
+                        alpaca_events = await alpaca_stream.drain_events()
+                        connector_name = "alpaca_stream"
+                    else:
+                        # Fallback to polling (higher latency)
+                        alpaca_events = alpaca.poll(
+                            active_tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
+                        )
+                        connector_name = "alpaca_market"
 
-                    # Check Lag for Alpaca
-                    for evt in alpaca_events:
-                        if evt.event_ts_utc:
+                    # Check Lag for Alpaca based on freshest event only (avoid tripping breaker on backfill batches)
+                    if alpaca_events:
+                        newest = max((e.event_ts_utc for e in alpaca_events if e.event_ts_utc), default=None)
+                        if newest:
                             try:
-                                await health_monitor.check_lag(evt.event_ts_utc)
+                                await health_monitor.check_lag(newest)
                             except CriticalHealthException as che:
                                 logger.critical(f"HEALTH MONITOR TRIGGERED (Alpaca): {che}")
 
@@ -380,14 +468,14 @@ async def main() -> None:
                     for evt in alpaca_events:
                         if not getattr(evt, "ingest", None):
                             evt.ingest = {
-                                "connector": "alpaca_market",
+                                "connector": connector_name,
                                 "run_id": RUN_ID,
                                 "trace_id": trace_id,
                                 "attempt": 1,
                             }
                 except Exception as e:
                     logger.error(
-                        f"Error polling Alpaca: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_POLL_ERROR"}
+                        f"Error getting Alpaca bars: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_ERROR"}
                     )
 
             # ... (Processing) ...
@@ -396,33 +484,21 @@ async def main() -> None:
             if all_events:
                 async with async_session_factory() as session:
                     deduper = DeduplicationEngine(session)
-                    normalized_events = []
+                    processed_events = []
 
                     from orion.core.timekeeping import derive_trading_date_and_session
 
                     for evt in all_events:
-                        # ... Normalization ...
-                        try:
-                            evt.payload = NormalizationEngine.normalize_event(evt.source, evt.event_type, evt.payload)
-                        except Exception as norm_err:
-                            from orion.shared.dlq_utils import DLQWriter
+                        # Store raw payload in bronze - DO NOT normalize here
+                        # Normalization happens in save_silver_data()
+                        raw_payload = evt.payload  # Keep raw for bronze
 
-                            await DLQWriter.write_to_dlq(
-                                error=norm_err,
-                                event_type=f"{evt.event_type}_NORMALIZE_ERROR",
-                                source="NormalizationEngine",
-                                payload=getattr(evt, "payload", None),
-                                context=f"trace_id={trace_id}",
-                                event_id=getattr(evt, "event_id", None),
-                                source_event_id=getattr(evt, "source_event_id", None),
-                                ticker=getattr(evt, "ticker", None),
-                                event_ts_utc=getattr(evt, "event_ts_utc", None),
-                                run_id=RUN_ID,
-                                trace_id=trace_id,
-                            )
-                            continue
+                        # Extract ticker from raw payload if not set
                         if not evt.ticker:
-                            evt.ticker = evt.payload.get("ticker")
+                            evt.ticker = (
+                                raw_payload.get("ticker") or raw_payload.get("underlying") or raw_payload.get("symbol")
+                            )
+
                         if evt.event_ts_utc and evt.session is None:
                             evt.event_ts_utc = ensure_utc(evt.event_ts_utc)
                             td, sess = derive_trading_date_and_session(evt.event_ts_utc)
@@ -444,13 +520,15 @@ async def main() -> None:
                         if evt.received_ts_utc is None:
                             evt.received_ts_utc = datetime.now(timezone.utc)
 
-                        normalized_events.append(evt)
+                        # Keep raw payload for bronze storage
+                        evt.payload = raw_payload
+                        processed_events.append(evt)
 
-                    unique_events = await deduper.dedupe_batch(normalized_events)
+                    unique_events = await deduper.dedupe_batch(processed_events)
 
                     if unique_events:
                         await save_events_to_db(unique_events)
-                        # Persist Normalized Silver Data
+                        # Persist Normalized Silver Data (normalizer runs here)
                         await save_silver_data(unique_events)
                         all_events = unique_events
 
@@ -473,13 +551,42 @@ async def main() -> None:
                         uw_signals = feature_engine.process_uw_flow_events(uw_flow_events_only)
                         if uw_signals:
                             await save_signals_to_db(uw_signals)
+                            # Persist to Gold layer for model training (PRD 6.3)
+                            await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
+
+                            # === ML SCORING PATH (Pure ML, no rule pre-filter) ===
+                            try:
+                                from orion.ml.flow_processor import MLFlowProcessor
+
+                                # Include event_id in flow dict for Greeks enrichment
+                                flow_dicts = []
+                                for e in uw_flow_events_only:
+                                    if e.payload:
+                                        flow_dict = dict(e.payload)
+                                        flow_dict["event_id"] = e.event_id  # Inject for Greeks lookup
+                                        flow_dicts.append(flow_dict)
+
+                                if flow_dicts:
+                                    ml_processor = MLFlowProcessor(score_threshold=0.5)
+                                    # Use enriched scoring for feature parity with training
+                                    ml_candidates = await ml_processor.process_flows_enriched(flow_dicts)
+                                    if ml_candidates:
+                                        await save_candidates_to_db(ml_candidates)
+                                        logger.info(
+                                            f"ML Scorer generated {len(ml_candidates)} candidates (enriched)",
+                                            extra={"event": "ml_candidates_enriched", "count": len(ml_candidates)},
+                                        )
+                                        if _metrics:
+                                            _metrics.ingest_candidates_total.inc(len(ml_candidates))
+                            except Exception as ml_err:
+                                logger.warning(f"ML Scoring path error (non-fatal): {ml_err}")
+
+                            # === LEGACY RULE ENGINE PATH ===
                             try:
                                 uw_candidates = rule_engine.process_signals(uw_signals)
                                 if uw_candidates:
-                                    await save_candidates_to_db(uw_candidates)
-                                    # Metrics: track candidates
-                                    if _metrics:
-                                        _metrics.ingest_candidates_total.inc(len(uw_candidates))
+                                    # Note: These may duplicate ML candidates, dedup happens at execution
+                                    logger.debug(f"Rule engine generated {len(uw_candidates)} candidates")
                             except Exception as e:
                                 logger.error(f"Rule Engine Error (UW): {e}")
                     except Exception as e:
@@ -491,6 +598,8 @@ async def main() -> None:
                         bar_signals = feature_engine.process_alpaca_bars(alpaca_events_only)
                         if bar_signals:
                             await save_signals_to_db(bar_signals)
+                            # Persist to Gold layer for model training (PRD 6.3)
+                            await feature_engine.persist_signal_batch(bar_signals, "v1_legacy")
                             # Rule Engine
                             try:
                                 candidates = rule_engine.process_signals(bar_signals)
@@ -549,6 +658,18 @@ async def main() -> None:
                             EOD_TRIGGER_LAST_RUN = today_str
                         except Exception as e:
                             logger.error(f"Failed to trigger EOD Agent: {e}")
+
+                # 7. Data Quality Check (runs every ~60 loops / 1 hour)
+                QUALITY_CHECK_LOOP_COUNT += 1
+                if QUALITY_CHECK_LOOP_COUNT >= 60:
+                    QUALITY_CHECK_LOOP_COUNT = 0
+                    try:
+                        from orion.jobs.data_quality_checker import run_quality_checks
+
+                        asyncio.create_task(run_quality_checks())
+                        logger.info("Triggered hourly data quality check")
+                    except Exception as e:
+                        logger.error(f"Failed to run data quality check: {e}")
 
         except Exception as e:
             logger.error(f"Main Ingestion Loop Error: {e}")

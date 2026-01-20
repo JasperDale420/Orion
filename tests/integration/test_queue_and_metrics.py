@@ -68,7 +68,7 @@ async def test_candidate_queue_and_metrics():
 
     # Test metrics (if enabled)
     try:
-        metrics = Metrics.get_instance()
+        metrics = await Metrics.get_instance()
         # Verify metrics exist (we don't check values as they depend on test order)
         assert hasattr(metrics, "execution_queue_depth")
         assert hasattr(metrics, "risk_equity")

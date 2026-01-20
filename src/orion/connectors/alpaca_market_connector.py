@@ -89,6 +89,21 @@ class AlpacaMarketConnector:
             except AttributeError:
                 payload = bar.dict()  # Fallback for v1 if needed
 
+            # Data quality validation: reject bars with invalid OHLCV values
+            bar_close = getattr(bar, "close", None) or payload.get("close") or payload.get("c")
+            bar_open = getattr(bar, "open", None) or payload.get("open") or payload.get("o")
+            bar_volume = getattr(bar, "volume", None) or payload.get("volume") or payload.get("v")
+
+            if not bar_close or bar_close <= 0:
+                logger.warning(f"Rejecting invalid bar for {ticker}: close={bar_close}")
+                return None
+            if not bar_open or bar_open <= 0:
+                logger.warning(f"Rejecting invalid bar for {ticker}: open={bar_open}")
+                return None
+            if bar_volume is None or bar_volume < 0:
+                logger.warning(f"Rejecting invalid bar for {ticker}: volume={bar_volume}")
+                return None
+
             # Ensure timestamp 't' is present and serializable
             # Alpaca v2 models often use 'timestamp' instead of 't'
             if "t" not in payload:

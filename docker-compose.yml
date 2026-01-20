@@ -63,8 +63,78 @@ services:
       - ALPACA_API_KEY=${ALPACA_API_KEY}
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
       - ALPACA_PAPER=${ALPACA_PAPER}
+      - ORION_RESET_CIRCUIT_BREAKER_ON_START=true
+      - ORION_ALPACA_LOOKBACK_MINUTES=15
+      - ORION_TRIP_CIRCUIT_BREAKER_ON_LAG=false
       - ORION_RUN_ID=docker_persistent
     command: [ "python", "-m", "orion.main_ingest" ]
+
+  labeler:
+    build: .
+    container_name: orion_labeler
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ingestion:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ORION_RUN_ID=docker_persistent
+    command: [ "python", "-m", "orion.main_labeler" ]
+
+  price_target_labeler:
+    build: .
+    container_name: orion_price_target
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ingestion:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ORION_RUN_ID=docker_persistent
+    command: [ "python", "-m", "orion.main_price_target_labeler" ]
+
+  feature_enrichment:
+    build: .
+    container_name: orion_feature_enrichment
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ingestion:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - UW_API_KEY=${UW_API_KEY}
+      - ORION_RUN_ID=docker_persistent
+    command: [ "python", "-m", "orion.main_feature_enrichment" ]
+
+  option_quote_tracker:
+    build: .
+    container_name: orion_option_quote_tracker
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ingestion:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ORION_RUN_ID=docker_persistent
+    command: [ "python", "-m", "orion.main_option_quote_tracker" ]
 
   execution:
     build: .
@@ -84,7 +154,48 @@ services:
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
       - ALPACA_PAPER=${ALPACA_PAPER}
       - ORION_RUN_ID=docker_persistent_exec
+      - ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false
     command: [ "python", "-m", "orion.main_execution" ]
+
+  position-monitor:
+    build: .
+    container_name: orion_position_monitor
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      execution:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_PAPER=${ALPACA_PAPER}
+      - ORION_RUN_ID=docker_position_monitor
+      - ORION_MODEL_DIR=/app/models
+    command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
+
+  eod-agent:
+    build: .
+    container_name: orion_eod_agent
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ingestion:
+        condition: service_started
+    volumes:
+      - .:/app
+      - ~/.codex:/root/.codex:ro # Mount host codex credentials (read-only)
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ORION_RUN_ID=docker_persistent_eod
+      - ORION_REASONING_LEVEL=extra_high
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-reasoner}
+    command: [ "python", "-m", "orion.main_eod" ]
 
   meta-search:
     build: .
@@ -99,6 +210,53 @@ services:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     command: [ "python", "-m", "orion.main_meta", "--base-solver", "v1_legacy" ]
+
+  meta-weekly:
+    build: .
+    container_name: orion_meta_weekly
+    profiles: [ "scheduled" ]
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      eod-agent:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    command: [ "python", "-m", "orion.main_meta_weekly", "--scheduled" ]
+
+  pattern-miner:
+    build: .
+    container_name: orion_pattern_miner
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+    command: [ "python", "-m", "orion.main_pattern_miner" ]
+
+  nightly-backfill:
+    build: .
+    container_name: orion_nightly_backfill
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      price_target_labeler:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ORION_RUN_ID=docker_nightly_backfill
+    command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
 
   indexer:
     build: .

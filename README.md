@@ -11,9 +11,13 @@ Orion is a scalable, real-time trading backend that ingests market data from **U
     *   **Gold Layer**: Feature-enriched signals and candidate trades (`GoldSignal`, `CandidateTrade`).
 *   **Event Streaming**: Integrated with Redpanda (Kafka-compatible) for event propagation.
 *   **Feature Engineering**: On-the-fly calculation of technical indicators (RSI, SMA, Volatility) and flow-based features.
+*   **Multi-Axis Regime Detection**: VIX-aware regime system with 5 axes (Trend, Vol, Risk, Session, VIX).
+*   **ML Feature Enrichment**: GEX, Market Tide, Max Pain, IV Rank data for 60+ label columns.
+*   **Pattern Mining**: LightGBM-based rule extraction from price target outcomes.
 *   **Strategy Engine**:
     *   **Solver Abstraction**: Modular strategy configuration (`SolverConfig`) combining Entry/Exit logic, Risk parameters, and Universe definition.
     *   **Meta-Search**: Automated strategy optimization (LLM-driven proposals and heuristic mutation).
+    *   **Regime-Aware Risk**: Position sizing multipliers based on market regime.
 *   **Execution**: Alpaca API integration for order placement and position management.
 *   **Observability**: Structured JSON logging and Dead Letter Queue (DLQ) for failed events.
 *   **CI/CD**: Github Actions pipeline for automated testing.
@@ -62,19 +66,26 @@ Orion uses a smart tracking system for options:
 
 ```text
 ├── src/orion
-│   ├── agents/          # LLM Agents (EOD Review, Meta-Search)
-│   ├── api/             # HTTP API definitions
-│   ├── config.py        # Pydantic configuration models
-│   ├── connectors/      # API Clients (Alpaca, UW, Redpanda)
-│   ├── core/            # Core Domain Logic (Solver, Universe, Router)
-│   ├── execution/       # Order Management & Position Tracking
-│   ├── main_ingest.py   # Ingestion Entry Point
-│   ├── main_execution.py # Execution Entry Point
-│   ├── processing/      # ETL, Features, Normalization
-│   └── storage/         # SQLAlchemy Models (Gold/Silver/Bronze)
-├── tests/               # Pytest Suite (Unit, Integration)
-├── docker-compose.yml   # Infrastructure (Timescale, MinIO)
-└── pyproject.toml       # Dependencies & Tool Config
+│   ├── agents/              # LLM Agents (EOD Review, Meta-Search)
+│   ├── analysis/            # Regime detection, risk management
+│   ├── api/                 # HTTP API definitions
+│   ├── config.py            # Pydantic configuration models
+│   ├── connectors/          # API Clients (Alpaca, UW, VIX, Redpanda)
+│   ├── core/                # Core Domain Logic (Solver, Universe, Router)
+│   ├── execution/           # Order Management & Position Tracking
+│   ├── ml/                  # Machine Learning (Pattern Mining, LightGBM)
+│   ├── main_ingest.py       # Ingestion Entry Point
+│   ├── main_execution.py    # Execution Entry Point
+│   ├── main_eod.py          # EOD Agent Entry Point
+│   ├── main_feature_enrichment.py  # UW Feature Polling
+│   ├── main_price_target_labeler.py  # ML Label Generation
+│   ├── main_pattern_miner.py  # Pattern Mining
+│   ├── processing/          # ETL, Features, Normalization, Rules
+│   └── storage/             # SQLAlchemy Models (Gold/Silver/Bronze/ML)
+├── config/                  # YAML configs (regime_risk.yaml, etc.)
+├── tests/                   # Pytest Suite (Unit, Integration)
+├── docker-compose.yml       # Infrastructure + Services
+└── pyproject.toml           # Dependencies & Tool Config
 ```
 
 ## Setup & Installation
@@ -137,6 +148,19 @@ See `TESTING.md` for detailed instructions.
 pytest
 ```
 
+### ML Feature Validation
+Validate that all 130+ ML features are correctly calculated:
+```bash
+# Run all validations (sanity checks + data source audit)
+docker-compose run --rm ingestion python -m orion.jobs.validate_features --all
+
+# Spot-check a single record
+docker-compose run --rm ingestion python -m orion.jobs.validate_features --spot-check <EVENT_ID>
+
+# Backfill missing features for historical labels
+docker-compose run --rm ingestion python -m orion.jobs.backfill_ml_features --batch-size 100
+```
+
 ## Configuration
 
 Configuration is managed via `pydantic-settings` in `src/orion/config.py`. All settings can be overridden by environment variables.
@@ -168,6 +192,39 @@ Configuration is managed via `pydantic-settings` in `src/orion/config.py`. All s
 
 > [!IMPORTANT]
 > **Database**: The `docker-compose.yml` mounts a volume for TimescaleDB retention. Ensure this volume is backed up if using in production.
+
+## Risk Management
+
+Orion includes comprehensive risk controls for options trading:
+
+### Portfolio Greeks Limits
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ORION_RISK_MAX_PORTFOLIO_DELTA` | 500 | Absolute portfolio delta limit |
+| `ORION_RISK_MAX_PORTFOLIO_GAMMA` | 100 | Absolute portfolio gamma limit |
+| `ORION_RISK_MAX_PORTFOLIO_VEGA` | 200 | Absolute portfolio vega limit (IV crush protection) |
+| `ORION_RISK_MAX_POSITION_DELTA` | 100 | Per-position delta limit |
+| `ORION_RISK_MAX_POSITION_VEGA` | 50 | Per-position vega limit |
+
+### Correlation-Aware Position Sizing
+When enabled, reduces position size for assets highly correlated with existing holdings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ORION_RISK_CORRELATION_SIZE_SCALING` | `false` | Enable/disable correlation sizing |
+| `ORION_RISK_CORRELATION_THRESHOLD` | 0.70 | Correlation above this triggers penalty |
+| `ORION_RISK_CORRELATION_PENALTY_FACTOR` | 0.30 | Minimum size multiplier at max correlation |
+| `ORION_RISK_CORRELATION_LOOKBACK_DAYS` | 30 | Days of price history for correlation calc |
+| `ORION_RISK_MIN_BARS_FOR_CORRELATION` | 20 | Skip adjustment if insufficient data |
+
+**How it works**: If a new trade has average correlation > 0.70 with existing positions, its size is scaled down linearly from 1.0 to 0.30 as correlation approaches 1.0.
+
+**Rollout**: Start with paper trading (`ORION_RISK_CORRELATION_SIZE_SCALING=true`) and monitor logs for `event: correlation_size_adjustment`.
+
+### Model Freshness Validation
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ORION_MAX_MODEL_AGE_DAYS` | 14 | Skip ML models older than this |
 
 ## Known Gaps & TODOs
 

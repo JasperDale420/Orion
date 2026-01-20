@@ -1,6 +1,7 @@
 import logging
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -24,6 +25,7 @@ class LakehouseWriter:
         access_key: Optional[str] = None,
         secret_key: Optional[str] = None,
         bucket: Optional[str] = None,
+        max_workers: Optional[int] = None,
     ):
         endpoint_url = endpoint_url or os.getenv("ORION_LAKEHOUSE_ENDPOINT_URL")
         access_key = access_key or os.getenv("ORION_LAKEHOUSE_ACCESS_KEY")
@@ -32,6 +34,7 @@ class LakehouseWriter:
 
         self.enabled = bool(endpoint_url and access_key and secret_key and bucket)
         self.bucket = bucket or ""
+        self.max_workers = max_workers
 
         if not self.enabled:
             logger.warning("LakehouseWriter disabled (missing ORION_LAKEHOUSE_* config)")
@@ -55,17 +58,9 @@ class LakehouseWriter:
             return
 
         # Convert to DataFrame
-        # We need to serialize the payload to string or keep as struct?
-        # Parquet handles nested structs well, but for bronze raw, json string is often safer/easier
-        # or we rely on PyArrow's ability to handle dicts.
-        # Let's try keeping it as dict first, Pandas might struggle without specific types.
-        # Safer: normalize widely before writing?
-        # "Bronze" usually implies raw.
-        # For simplicity and robustness, we can dump payload to JSON string if nested.
-
-        data = []
-        for e in events:
-            row = {
+        # OPTIMIZATION: Use list comprehension for faster dictionary creation
+        data = [
+            {
                 "event_id": e.event_id,
                 "source": e.source,
                 "source_event_id": getattr(e, "source_event_id", None),
@@ -76,45 +71,44 @@ class LakehouseWriter:
                 "session": getattr(e, "session", None),
                 "ticker": getattr(e, "ticker", None),
                 "schema_version": getattr(e, "schema_version", None),
-                "payload": e.payload,  # pyarrow/pandas might complain if schema varies
+                "payload": e.payload,
                 "ingest": getattr(e, "ingest", None),
             }
-            data.append(row)
+            for e in events
+        ]
 
         df = pd.DataFrame(data)
 
-        # Determine partition date (using first event's date or current date?
-        # Ideally we group by date if batch spans multiple days.)
-
-        # Let's group by date to be safe
-        # Ensure event_ts_utc is datetime
-        # OPTIMIZATION: Use vectorized .dt.date.astype(str) instead of .apply(strftime)
-        # This is approx 4-5x faster for large datasets.
+        # Determine partition date
+        # OPTIMIZATION: Use vectorized .dt.date.astype(str)
         df["date"] = df["event_ts_utc"].dt.date.astype(str)
 
-        for date_str, group_df in df.groupby("date"):
-            # Construct path
-            # s3://{bucket}/v1/{source}/{event_type}/date={YYYY-MM-DD}/{timestamp}_{uuid}.parquet
+        # OPTIMIZATION: Use ThreadPoolExecutor to write partitions in parallel
+        # This significantly speeds up writing when there are multiple partitions/groups
+        tasks = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            for date_str, group_df in df.groupby("date"):
+                for (source, event_type), sub_group in group_df.groupby(["source", "event_type"]):
+                    tasks.append(executor.submit(self._write_partition, source, event_type, date_str, sub_group))
 
-            # We can only write if source and event_type are uniform per group?
-            # Or we include them in path?
-            # Typically lakehouse is source/type/date.
-            # If batch has mixed types, we must group by source/type too.
+            # Wait for all tasks to complete and raise any exceptions
+            for task in as_completed(tasks):
+                task.result()
 
-            for (source, event_type), sub_group in group_df.groupby(["source", "event_type"]):
-                # Create unique filename
-                filename = f"{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
-                path = f"s3://{self.bucket}/v1/{source}/{event_type}/date={date_str}/{filename}"
+    def _write_partition(self, source: str, event_type: str, date_str: str, sub_group: pd.DataFrame) -> None:
+        """
+        Writes a single partition to S3.
+        """
+        filename = f"{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
+        path = f"s3://{self.bucket}/v1/{source}/{event_type}/date={date_str}/{filename}"
 
-                # Write to S3
-                # We drop the partition columns from the file content usually, but keeping them is fine too.
-                # Dropping 'date' as it's in the path.
-                content_df = sub_group.drop(columns=["date"])
+        # Write to S3
+        content_df = sub_group.drop(columns=["date"])
 
-                try:
-                    with self.fs.open(path, "wb") as f:
-                        content_df.to_parquet(f, engine="pyarrow", index=False)
-                    logger.info(f"Wrote {len(sub_group)} events to {path}")
-                except Exception as e:
-                    logger.error(f"Failed to write to {path}: {e}")
-                    raise e
+        try:
+            with self.fs.open(path, "wb") as f:
+                content_df.to_parquet(f, engine="pyarrow", index=False)
+            logger.info(f"Wrote {len(sub_group)} events to {path}")
+        except Exception as e:
+            logger.error(f"Failed to write to {path}: {e}")
+            raise e

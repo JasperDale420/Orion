@@ -108,12 +108,31 @@ class UWAlertsConnector:
                         pc = item["type"].upper()
                         item["put_call"] = "C" if pc == "CALL" else ("P" if pc == "PUT" else pc[:1])
 
+                    # Ensure ticker is set (required by silver schema). UW payloads can use different keys.
+                    ticker = (
+                        item.get("ticker")
+                        or item.get("symbol")
+                        or item.get("underlying")
+                        or item.get("underlying_symbol")
+                        or item.get("stock")
+                    )
+                    if not ticker:
+                        # Skip events without a ticker - required by silver schema
+                        logger.warning(
+                            f"Skipping UW alert without ticker: id={item.get('id')}",
+                            extra={"event_type": "UW_ALERT_MISSING_TICKER"},
+                        )
+                        continue
+                    if not item.get("ticker"):
+                        item["ticker"] = ticker
+
                     events.append(
                         BronzeEvent(
                             event_id=event_id,
                             source="UW",
                             source_event_id=str(source_event_id) if source_event_id is not None else None,
                             event_type="UW_ALERT",
+                            ticker=ticker,
                             event_ts_utc=events_ts,
                             payload=item,
                             session="REG",

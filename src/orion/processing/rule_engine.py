@@ -14,25 +14,38 @@ class RuleEngine:
     """
 
     def __init__(self, config: dict[Any, Any] | None = None):
-        from orion.processing.rules.flow_rules import BearishPutPressureRule, BullishSweepRule
+        from orion.processing.rules.flow_rules import (
+            ShortSwingEntryRule,
+            SwingEntryRule,
+            ZeroDTESweepRule,
+        )
 
         cfg = config or {}
         overrides = cfg.get("rule_overrides", {})
 
-        # Extract rule-specific configs
-        # Prioritize 'rule_overrides', fallback to root keys (legacy), ensure defaults
-
         def get_rule_cfg(rule_id: str) -> Dict[str, Any]:
             return overrides.get(rule_id) or cfg.get(rule_id, {})
 
-        bull_cfg = get_rule_cfg("rule_bullish_sweep_v1")
-        bear_cfg = get_rule_cfg("rule_bearish_put_pressure_v1")
+        zero_dte_cfg = get_rule_cfg("rule_0dte_sweep_v1")
+        swing_cfg = get_rule_cfg("rule_swing_entry_v1")
+        short_swing_cfg = get_rule_cfg("rule_short_swing_entry_v1")
 
+        # Data-driven entry rules based on price target analysis
         self.rules: List[TradingRule] = [
-            BullishSweepRule(min_premium=bull_cfg.get("min_premium", 10000.0)),
-            BearishPutPressureRule(min_premium=bear_cfg.get("min_premium", 10000.0)),
+            ZeroDTESweepRule(
+                min_premium=zero_dte_cfg.get("min_premium", 100000.0),
+                max_premium=zero_dte_cfg.get("max_premium", 150000.0),
+            ),
+            SwingEntryRule(
+                min_premium=swing_cfg.get("min_premium", 50000.0),
+                max_premium=swing_cfg.get("max_premium", 75000.0),
+            ),
+            ShortSwingEntryRule(
+                min_premium=short_swing_cfg.get("min_premium", 75000.0),
+                max_premium=short_swing_cfg.get("max_premium", 100000.0),
+            ),
         ]
-        logger.info(f"RuleEngine initialized with overrides: {list(cfg.keys())}")
+        logger.info(f"RuleEngine initialized with {len(self.rules)} data-driven rules")
 
     def process_signals(self, signals: List[SilverSignal]) -> List[CandidateTrade]:
         candidates = []

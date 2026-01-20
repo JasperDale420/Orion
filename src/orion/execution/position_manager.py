@@ -1,0 +1,215 @@
+"""
+Position Manager - Track open positions with entry context for exit rule evaluation.
+
+Per Dynamic Exit Strategies PDF:
+- Stores entry context (IV, premium window, sweep count)
+- Provides position state to exit rules
+- Integrates with broker for actual position tracking
+"""
+
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import select
+
+from orion.shared.db_utils import db_query
+from orion.storage.models_gold import CandidateTrade, StrategyDecision
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OpenPosition:
+    """Represents an open position with entry context for exit rule evaluation."""
+
+    ticker: str
+    direction: str  # LONG or SHORT
+    candidate_id: str
+    decision_id: str
+
+    # Entry timing
+    entry_ts: datetime
+    entry_price: float
+
+    # Entry context for exit rules
+    option_chain: Optional[str] = None  # Full OCC symbol
+    entry_iv: Optional[float] = None
+    entry_premium_window: float = 0.0  # Sum of aligned premium at entry
+    entry_sweep_count: int = 0  # Sweeps in first 5 min window
+    entry_oi: Optional[float] = None  # Open interest at entry
+
+    # Position size
+    qty: float = 0.0
+
+    # Metadata
+    rule_id: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PositionManager:
+    """
+    Manages open positions and provides context to exit rules.
+
+    Responsibilities:
+    - Track positions opened by execution engine
+    - Store entry context (IV, premium, sweep count) for exit rule evaluation
+    - Sync with broker positions on startup
+    - Provide position list to exit rule evaluator
+    """
+
+    def __init__(self) -> None:
+        self._positions: Dict[str, OpenPosition] = {}  # ticker -> position
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        """Load open positions from database on startup."""
+        try:
+            # Fetch executed decisions without exit
+            async def fetch_open_positions(session: Any) -> List[Any]:
+                stmt = (
+                    select(StrategyDecision, CandidateTrade)
+                    .join(CandidateTrade, StrategyDecision.candidate_id == CandidateTrade.candidate_id)
+                    .where(StrategyDecision.executed_successfully == "TRUE")
+                    # TODO: Add filter for positions not yet exited
+                    .order_by(StrategyDecision.timestamp_utc.desc())
+                    .limit(50)
+                )
+                result = await session.execute(stmt)
+                return result.all()
+
+            rows = await db_query(fetch_open_positions)
+
+            for decision, candidate in rows:
+                pos = self._create_position_from_decision(decision, candidate)
+                if pos:
+                    self._positions[pos.ticker] = pos
+
+            self._initialized = True
+            logger.info(
+                "PositionManager initialized",
+                extra={"event_type": "POSITION_MANAGER_INIT", "position_count": len(self._positions)},
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize PositionManager: {e}")
+            self._initialized = True  # Mark as initialized to avoid blocking
+
+    def _create_position_from_decision(
+        self, decision: StrategyDecision, candidate: CandidateTrade
+    ) -> Optional[OpenPosition]:
+        """Create OpenPosition from database records."""
+        try:
+            ep = decision.execution_params or {}
+            evidence = candidate.evidence or {}
+
+            return OpenPosition(
+                ticker=candidate.ticker,
+                direction=candidate.direction,
+                candidate_id=candidate.candidate_id,
+                decision_id=decision.decision_id,
+                entry_ts=decision.timestamp_utc,
+                entry_price=float(ep.get("limit_price", 0)),
+                option_chain=evidence.get("option_chain"),
+                entry_iv=evidence.get("iv"),
+                entry_premium_window=float(evidence.get("premium", 0)),
+                entry_oi=evidence.get("open_interest"),
+                rule_id=candidate.rule_id,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create position from decision {decision.decision_id}: {e}")
+            return None
+
+    def add_position(
+        self,
+        candidate: CandidateTrade,
+        decision: StrategyDecision,
+        entry_context: Optional[Dict[str, Any]] = None,
+    ) -> OpenPosition:
+        """
+        Add a new position after successful execution.
+
+        Args:
+            candidate: The CandidateTrade that triggered the position
+            decision: The StrategyDecision with execution details
+            entry_context: Additional context (IV, premium window, sweep count)
+        """
+        ctx = entry_context or {}
+        ep = decision.execution_params or {}
+
+        pos = OpenPosition(
+            ticker=candidate.ticker,
+            direction=candidate.direction,
+            candidate_id=candidate.candidate_id,
+            decision_id=decision.decision_id,
+            entry_ts=decision.timestamp_utc or datetime.now(timezone.utc),
+            entry_price=float(ep.get("limit_price", 0)),
+            option_chain=ctx.get("option_chain"),
+            entry_iv=ctx.get("iv"),
+            entry_premium_window=float(ctx.get("premium_window", 0)),
+            entry_sweep_count=int(ctx.get("sweep_count", 0)),
+            entry_oi=ctx.get("open_interest"),
+            qty=float(ep.get("qty", 0)),
+            rule_id=candidate.rule_id,
+        )
+
+        self._positions[candidate.ticker] = pos
+        logger.info(
+            f"Position added: {candidate.ticker} {candidate.direction}",
+            extra={
+                "event_type": "POSITION_ADDED",
+                "ticker": candidate.ticker,
+                "direction": candidate.direction,
+                "entry_iv": pos.entry_iv,
+            },
+        )
+        return pos
+
+    def get_position(self, ticker: str) -> Optional[OpenPosition]:
+        """Get position for a ticker if exists."""
+        return self._positions.get(ticker)
+
+    def get_open_positions(self) -> List[OpenPosition]:
+        """Return all open positions."""
+        return list(self._positions.values())
+
+    def remove_position(self, ticker: str) -> Optional[OpenPosition]:
+        """Remove position after exit."""
+        pos = self._positions.pop(ticker, None)
+        if pos:
+            logger.info(
+                f"Position removed: {ticker}",
+                extra={"event_type": "POSITION_REMOVED", "ticker": ticker},
+            )
+        return pos
+
+    def has_position(self, ticker: str) -> bool:
+        """Check if we have an open position for ticker."""
+        return ticker in self._positions
+
+    async def sync_with_broker(self, connector: Any) -> None:
+        """
+        Sync internal state with broker positions.
+        Removes positions that no longer exist at broker.
+        """
+        if not connector:
+            return
+
+        try:
+            import asyncio
+
+            broker_positions = await asyncio.to_thread(connector.client.get_all_positions)
+            broker_tickers = {str(p.symbol) for p in broker_positions}
+
+            # Remove positions not at broker
+            to_remove = [t for t in self._positions if t not in broker_tickers]
+            for ticker in to_remove:
+                self.remove_position(ticker)
+                logger.info(f"Position {ticker} removed - not found at broker")
+
+            logger.info(
+                "PositionManager synced with broker",
+                extra={"broker_count": len(broker_tickers), "tracked_count": len(self._positions)},
+            )
+        except Exception as e:
+            logger.error(f"Failed to sync with broker: {e}")

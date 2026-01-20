@@ -1,5 +1,5 @@
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from orion.agents.meta_agent import MetaAgent
@@ -23,43 +23,43 @@ def mock_solver_config():
 
 @pytest.mark.asyncio
 async def test_propose_edits(mock_solver_config):
-    # Mock Response
-    mock_response = MagicMock()
-    mock_msg = MagicMock(
-        content=json.dumps(
-            {
-                "variants": [
-                    {
-                        "ops": [
-                            {
-                                "op": "modify_param",
-                                "param_name": "exit_logic.take_profit_atr_multiple",
-                                "new_value": 2.5,
-                                "reasoning": "Increase profit target",
-                            }
-                        ],
-                        "rationale": "More aggressive",
-                    }
-                ]
-            }
-        )
+    # Mock codex CLI response
+    mock_response = json.dumps(
+        {
+            "variants": [
+                {
+                    "ops": [
+                        {
+                            "op": "modify_param",
+                            "param_name": "exit_logic.take_profit_atr_multiple",
+                            "new_value": 2.5,
+                            "reasoning": "Increase profit target",
+                        }
+                    ],
+                    "rationale": "More aggressive",
+                }
+            ]
+        }
     )
-    mock_msg.tool_calls = None
-    mock_response.choices = [MagicMock(message=mock_msg)]
 
     with (
-        patch("orion.agents.meta_agent.acompletion", new_callable=AsyncMock) as mock_acompletion,
-        patch("orion.config.agent_settings.model_name", "deepseek-chat"),
+        patch(
+            "orion.agents.meta_agent.run_codex_completion",
+            new_callable=AsyncMock,
+        ) as mock_codex,
+        patch("orion.config.agent_settings.model_name", "gpt-5.2"),
+        patch("orion.config.agent_settings.reasoning_level", "extra_high"),
     ):
-        mock_acompletion.return_value = mock_response
+        mock_codex.return_value = mock_response
 
         agent = MetaAgent()
         edits = await agent.propose_edits(mock_solver_config)
 
-        # Verify call args
-        mock_acompletion.assert_called_once()
-        call_kwargs = mock_acompletion.call_args.kwargs
-        assert call_kwargs["model"] == "deepseek-chat"
+        # Verify codex was called
+        mock_codex.assert_called_once()
+        call_kwargs = mock_codex.call_args.kwargs
+        assert call_kwargs["model"] == "gpt-5.2"
+        assert call_kwargs["reasoning_level"] == "extra_high"
 
         # Verify output
         assert len(edits) == 1

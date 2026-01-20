@@ -6,16 +6,19 @@ import os
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from sqlalchemy import select
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
-from openai import AsyncOpenAI
-
 from orion.agents.base import BaseAgent
+from orion.agents.codex_client import (
+    build_chat_prompt,
+    extract_json_from_response,
+    run_codex_completion,
+)
 from orion.agents.proposal_builder import ProposalBuilder
 from orion.core.id_utils import deterministic_solver_id
 from orion.rag.vector_store import VectorStore
@@ -40,14 +43,12 @@ class EODReviewAgent(BaseAgent):
     def __init__(
         self,
         *,
-        llm_client: Optional[Any] = None,
         vector_store: Optional[Any] = None,
         proposal_builder: Optional[ProposalBuilder] = None,
     ):
         from orion.config import agent_settings
 
         super().__init__(name="EODReview", model=agent_settings.model_name)
-        self.client = llm_client or AsyncOpenAI(api_key=agent_settings.openai_api_key)
         self.vector_store = vector_store or VectorStore()
         self.proposal_builder = proposal_builder or ProposalBuilder()
 
@@ -131,6 +132,9 @@ class EODReviewAgent(BaseAgent):
         if not proposals:
             return
 
+        from orion.storage.models_solvers import Solver
+        from sqlalchemy import select
+
         async def save_edits(session: Any) -> None:
             for p in proposals:
                 if p.get("type") != "solver_edit":
@@ -146,6 +150,22 @@ class EODReviewAgent(BaseAgent):
                     edit_ops={"ops": ops_data},
                     prefix="eod",
                 )
+
+                # Check if solver already exists
+                existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
+                if existing.scalars().first() is None:
+                    # Create solver stub in research stage
+                    session.add(
+                        Solver(
+                            solver_id=new_solver_id,
+                            family_name="eod_derived",
+                            parent_solver_id=str(base_id),
+                            created_by="llm_eod_agent",
+                            stage="research",
+                            config={"derived_from": str(base_id), "ops": ops_data},
+                            notes=f"Auto-generated from EOD review run {run_id}",
+                        )
+                    )
 
                 session.add(
                     SolverEdits(
@@ -341,14 +361,27 @@ class EODReviewAgent(BaseAgent):
             )
             bronze_rows = (await session.execute(bronze_stmt)).scalars().all()
 
-            # Feature drift data: pull daily OHLCV signals and a rolling baseline window (previous 20d)
-            silver_today_stmt = select(SilverSignal).where(
-                SilverSignal.signal_ts_utc >= start_ts,
-                SilverSignal.signal_ts_utc < end_ts,
+            # Feature drift data: pull sampled daily OHLCV signals and a rolling baseline window (previous 20d)
+            # IMPORTANT: Limit to 5000 rows each to prevent OOM (full baseline can be 500K+ rows)
+            from sqlalchemy import func
+            
+            silver_today_stmt = (
+                select(SilverSignal)
+                .where(
+                    SilverSignal.signal_ts_utc >= start_ts,
+                    SilverSignal.signal_ts_utc < end_ts,
+                )
+                .order_by(func.random())
+                .limit(5000)
             )
-            silver_base_stmt = select(SilverSignal).where(
-                SilverSignal.signal_ts_utc >= baseline_start,
-                SilverSignal.signal_ts_utc < start_ts,
+            silver_base_stmt = (
+                select(SilverSignal)
+                .where(
+                    SilverSignal.signal_ts_utc >= baseline_start,
+                    SilverSignal.signal_ts_utc < start_ts,
+                )
+                .order_by(func.random())
+                .limit(5000)
             )
             silver_today = (await session.execute(silver_today_stmt)).scalars().all()
             silver_baseline = (await session.execute(silver_base_stmt)).scalars().all()
@@ -627,6 +660,19 @@ class EODReviewAgent(BaseAgent):
                 "psi": self._psi(bvals, cvals, bins=10),
             }
 
+        # Trigger pattern mining if high drift detected
+        try:
+            from orion.core.drift_trigger import set_drift_flag
+
+            psi_values = {k: v.get("psi") for k, v in feature_shift.items() if v.get("psi") is not None}
+            if set_drift_flag(psi_values, source="eod_agent"):
+                logger.info(
+                    "High drift detected, pattern mining will be triggered",
+                    extra={"event": "drift_trigger_set", "psi_values": psi_values},
+                )
+        except Exception as e:
+            logger.warning(f"Failed to check/set drift flag: {e}")
+
         drift_metrics = {
             "feature_distribution_shift": feature_shift,
             "execution_slippage": {
@@ -771,12 +817,88 @@ class EODReviewAgent(BaseAgent):
             },
         }
 
+        # Add ML pattern insights if available
+        try:
+            ml_insights = await self._fetch_ml_insights()
+            if ml_insights:
+                payload["ml_insights"] = ml_insights
+        except Exception as e:
+            logger.warning(f"Failed to fetch ML insights: {e}")
+
+        # Add ML prediction accuracy metrics
+        try:
+            from orion.ml.performance_tracker import get_daily_accuracy
+
+            ml_accuracy = await get_daily_accuracy()
+            payload["ml_prediction_accuracy"] = {
+                "total_predictions": ml_accuracy.get("total", 0),
+                "correct": ml_accuracy.get("correct", 0),
+                "incorrect": ml_accuracy.get("incorrect", 0),
+                "accuracy_pct": ml_accuracy.get("accuracy_pct"),
+                "avg_return_high_score": ml_accuracy.get("avg_return_high_score"),
+                "avg_return_low_score": ml_accuracy.get("avg_return_low_score"),
+                "edge_bps": (
+                    (ml_accuracy.get("avg_return_high_score", 0) - ml_accuracy.get("avg_return_low_score", 0)) * 100
+                    if ml_accuracy.get("avg_return_high_score") is not None
+                    and ml_accuracy.get("avg_return_low_score") is not None
+                    else None
+                ),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to fetch ML accuracy: {e}")
+
         input_snapshot_path = os.path.join(reports_dir, f"eod_input_{date}_{run_id}.json")
         with open(input_snapshot_path, "w") as f:
             json.dump(payload, f, indent=2, sort_keys=True, default=str)
 
         payload["input_snapshot_path"] = input_snapshot_path
         return payload, input_snapshot_path
+
+    async def _fetch_ml_insights(self) -> Optional[Dict[str, Any]]:
+        """Fetch latest ML pattern insights for LLM context."""
+        try:
+            from orion.shared.db_utils import db_query
+            from sqlalchemy import text
+
+            async def query(session: Any) -> List[Any]:
+                # Get most recent insight per model type
+                stmt = text(
+                    """
+                    SELECT DISTINCT ON (model_type)
+                        insight_id, model_type, created_at_utc,
+                        sample_size, positive_rate, holdout_auc,
+                        top_rules_json, top_features_json,
+                        degraded_features_json, emerging_patterns_json
+                    FROM ml_pattern_insights
+                    ORDER BY model_type, created_at_utc DESC
+                """
+                )
+                result = await session.execute(stmt)
+                return result.fetchall()
+
+            rows = await db_query(query)
+            if not rows:
+                return None
+
+            insights = {}
+            for row in rows:
+                insights[row[1]] = {
+                    "insight_id": row[0],
+                    "created_at": row[2].isoformat() if row[2] else None,
+                    "sample_size": row[3],
+                    "positive_rate": row[4],
+                    "holdout_auc": row[5],
+                    "top_rules": row[6] or [],
+                    "top_features": row[7] or [],
+                    "degraded_features": row[8] or [],
+                    "emerging_patterns": row[9] or [],
+                }
+
+            return {"insights": insights}
+
+        except Exception as e:
+            logger.debug(f"ML insights fetch failed (may not be available yet): {e}")
+            return None
 
     async def _fetch_rag_context(self, query: str) -> str:
         try:
@@ -788,57 +910,119 @@ class EODReviewAgent(BaseAgent):
             logger.warning(f"RAG fetch failed: {e}")
             return ""
 
-    async def _generate_analysis(self, data: Dict[str, Any], rag_context: str) -> Dict[str, Any]:
-        system_prompt = (
-            "You are the Orion EOD Review Agent.\n"
-            "You MUST ground proposals in the provided input snapshot (no speculation).\n"
-            "Output valid JSON with:\n"
-            "{\n"
-            '  "analysis": "markdown report",\n'
-            '  "proposals": [\n'
-            "    {\n"
-            '      "type": "solver_edit|config_patch|pr_patch|do_not_trade",\n'
-            '      "priority": 1,\n'
-            '      "category": "config|rules|features|model|risk|engineering",\n'
-            '      "rationale": "why (with stats references)",\n'
-            '      "expected_effect": "what should improve",\n'
-            '      "evidence_pointers": {\n'
-            '        "queries": ["string"],\n'
-            '        "ids": {\n'
-            '          "signal_ids": ["..."],\n'
-            '          "candidate_ids": ["..."],\n'
-            '          "event_ids": ["..."],\n'
-            '          "rollup_ids": ["..."],\n'
-            '          "order_ids": ["..."],\n'
-            '          "fill_ids": ["..."],\n'
-            '          "dlq_ids": ["..."]\n'
-            "        }\n"
-            "      },\n"
-            '      "test_plan": ["unit: ...", "integration: ...", "backtest: ..."],\n'
-            '      "rollback_plan": "how to revert safely",\n'
-            '      "changes": {"files": [{"path": "...", "patch": "..."}], "params": {"...": "..."}} ,\n'
-            '      "target_solver_id": "required if type=solver_edit",\n'
-            '      "ops": [{"op": "modify_param|toggle_feature|modify_risk|add_rule|remove_rule", "new_value": "...", "reasoning": "..."}]\n'
-            "    }\n"
-            "  ]\n"
-            "}\n"
-            "Rules:\n"
-            "- If you cannot cite concrete evidence ids from the input, do not emit a proposal.\n"
-            "- Do NOT propose changes without specifying exact files/params.\n"
-        )
+    async def _fetch_trading_book_context(self, performance_issues: str) -> str:
+        """
+        Fetch insights from TradingRAG (indexed trading books).
 
-        user_prompt = f"Day Summary:\n{json.dumps(data, indent=2)}\n\n{rag_context}"
+        Provides theoretical/best-practice guidance for performance issues.
+        """
+        try:
+            from orion.clients.trading_rag import get_rag_client
+
+            rag = get_rag_client()
+
+            # Build query based on performance issues
+            query = f"Trading strategy improvements for: {performance_issues}"
+
+            result = await rag.answer(query, top_k=3)
+
+            if result.get("answer"):
+                return f"## Trading Book Insights\n{result['answer']}\n"
+            return ""
+        except Exception as e:
+            logger.debug(f"TradingRAG context fetch failed (non-fatal): {e}")
+            return ""
+
+    async def _generate_analysis(self, data: Dict[str, Any], rag_context: str) -> Dict[str, Any]:
+        system_prompt = """You are the Orion EOD Review Agent - analyzing today's trading performance.
+## Your Data Sources
+1. **ML Pattern Insights** (in `ml_insights`): Pre-computed rules from LightGBM models showing what conditions predict success
+   - Models per bucket: 0DTE, SHORT_SWING, SWING, POSITION
+   - Look at AUC scores (>0.6 = useful), top rules, and feature importance
+2. **Today's Decisions**: Execute/Skip actions and their outcomes
+3. **Trade Journal**: P&L, execution quality, slippage
+4. **Regime Data**: Current market regime (vol, trend, risk, session)
+5. **DLQ Events**: System errors that need attention
+
+## Your Task
+Analyze today's performance and identify:
+1. **What worked**: Successful patterns, good decisions
+2. **What failed**: Losses, missed opportunities, errors
+3. **Actionable improvements**: Config changes, rule adjustments, or NEW SOLVER MUTATIONS
+
+## Output Format
+```json
+{
+  "analysis": "## Summary\\n...",
+  "key_metrics": {
+    "total_trades": N,
+    "win_rate": 0.XX,
+    "pnl": X.XX,
+    "regime": "..."
+  },
+  "proposals": [
+    {
+      "type": "solver_edit",
+      "priority": 1,
+      "rationale": "Brief reason with data reference",
+      "evidence_pointers": {"ml_insight": "AUC=0.85 for iv_rank feature", "drift_psi": 0.02},
+      "test_plan": ["Backtest with 30-day window", "Verify win_rate improvement"],
+      "target_solver_id": "paper_v1",
+      "ops": [
+        {"op": "modify_param", "param_name": "exit_logic.take_profit_atr_multiple", "new_value": 2.5, "reasoning": "..."},
+        {"op": "add_rule", "new_value": "rule_iv_rank_v1", "reasoning": "ML shows IV rank is predictive"},
+        {"op": "toggle_feature", "feature_name": "vol_oi_ratio", "new_value": true, "reasoning": "..."}
+      ]
+    },
+    {
+      "type": "config_patch",
+      "rationale": "Reduce position size in high-vol regime",
+      "evidence_pointers": {"regime": "HIGH_VOL", "loss_rate": 0.65},
+      "test_plan": ["Verify sizing reduction in paper"],
+      "changes": {"risk.max_position_size_pct": 0.02}
+    },
+    {
+      "type": "do_not_trade",
+      "rationale": "Extreme drift detected",
+      "evidence_pointers": {"psi_close": 4.2, "psi_volume": 3.8},
+      "test_plan": ["Monitor drift for 2 days"],
+      "recommendation": "Pause trading until PSI < 0.25"
+    }
+  ]
+}
+```
+
+## When to propose solver_edit
+- When ML insights reveal strong predictive features not in current solvers
+- When a pattern works well for specific bucket (e.g., 0DTE) but current solver doesn't exploit it
+- When win rate could improve with tighter/looser exit logic based on today's data
+- Edits start in 'research' stage - they gather data but don't trade live until promoted
+- Use target_solver_id='paper_v1' to mutate the active paper solver
+
+## Rules
+- Ground ALL proposals in data from the input - no speculation
+- If ML insights show low AUC (<0.55), note that model needs more data
+- Prioritize high-impact, low-risk changes
+- If nothing actionable, say so clearly
+- REQUIRED fields for all proposals: type, rationale, evidence_pointers (dict), test_plan (list)
+- For solver_edit: also need target_solver_id, ops (list)"""
+
+        user_prompt = f"## Today's Snapshot\n```json\n{json.dumps(data, indent=2, default=str)}\n```\n\n{rag_context}"
 
         try:
             from orion.config import agent_settings
 
-            response = await self.client.chat.completions.create(
+            # Build combined prompt for codex CLI
+            full_prompt = build_chat_prompt(system_prompt, user_prompt)
+
+            # Call codex CLI instead of OpenAI API
+            response = await run_codex_completion(
+                prompt=full_prompt,
                 model=agent_settings.model_name,
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                response_format={"type": "json_object"},
+                reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
             )
-            content = response.choices[0].message.content
-            return json.loads(content)
+
+            return extract_json_from_response(response)
         except Exception as e:
             logger.error(f"LLM Failed: {e}")
             return {"analysis": f"Error: {e}", "proposals": []}
