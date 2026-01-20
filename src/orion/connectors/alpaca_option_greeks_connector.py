@@ -56,6 +56,11 @@ class AlpacaOptionGreeksConnector:
             "vega": None,
             "rho": None,
             "implied_volatility": None,
+            # Price fields from snapshot
+            "bid_price": None,
+            "ask_price": None,
+            "mid_price": None,
+            "last_trade_price": None,
         }
 
         if not option_symbol:
@@ -99,12 +104,26 @@ class AlpacaOptionGreeksConnector:
 
                     result["implied_volatility"] = snapshot.get("impliedVolatility")
 
+                    # Extract latest quote (bid/ask)
+                    latest_quote = snapshot.get("latestQuote", {})
+                    if latest_quote:
+                        result["bid_price"] = latest_quote.get("bp")  # bid price
+                        result["ask_price"] = latest_quote.get("ap")  # ask price
+                        if result["bid_price"] and result["ask_price"]:
+                            result["mid_price"] = (result["bid_price"] + result["ask_price"]) / 2
+
+                    # Extract latest trade price
+                    latest_trade = snapshot.get("latestTrade", {})
+                    if latest_trade:
+                        result["last_trade_price"] = latest_trade.get("p")  # price
+
                     # Cache the result
                     _greeks_cache[cache_key] = {**result, "_cached_at": datetime.utcnow()}
 
                     logger.debug(
                         f"Fetched Greeks for {option_symbol}: delta={result['delta']}, "
-                        f"gamma={result['gamma']}, iv={result['implied_volatility']}"
+                        f"gamma={result['gamma']}, iv={result['implied_volatility']}, "
+                        f"mid={result['mid_price']}"
                     )
                 elif response.status_code == 404:
                     # Option not found (expired or invalid)
@@ -159,6 +178,13 @@ class AlpacaOptionGreeksConnector:
                         snapshot = snapshots.get(symbol, {})
                         greeks = snapshot.get("greeks", {})
 
+                        # Extract quote prices
+                        latest_quote = snapshot.get("latestQuote", {})
+                        bid_price = latest_quote.get("bp")
+                        ask_price = latest_quote.get("ap")
+                        mid_price = (bid_price + ask_price) / 2 if bid_price and ask_price else None
+                        latest_trade = snapshot.get("latestTrade", {})
+
                         results[symbol] = {
                             "delta": greeks.get("delta"),
                             "gamma": greeks.get("gamma"),
@@ -166,6 +192,10 @@ class AlpacaOptionGreeksConnector:
                             "vega": greeks.get("vega"),
                             "rho": greeks.get("rho"),
                             "implied_volatility": snapshot.get("impliedVolatility"),
+                            "bid_price": bid_price,
+                            "ask_price": ask_price,
+                            "mid_price": mid_price,
+                            "last_trade_price": latest_trade.get("p"),
                         }
                 else:
                     logger.warning(f"Alpaca batch Greeks API returned {response.status_code}")
@@ -180,7 +210,7 @@ class AlpacaOptionGreeksConnector:
         return results
 
     def _empty_greeks(self) -> Dict[str, Optional[float]]:
-        """Return empty Greeks dict."""
+        """Return empty Greeks and price dict."""
         return {
             "delta": None,
             "gamma": None,
@@ -188,6 +218,10 @@ class AlpacaOptionGreeksConnector:
             "vega": None,
             "rho": None,
             "implied_volatility": None,
+            "bid_price": None,
+            "ask_price": None,
+            "mid_price": None,
+            "last_trade_price": None,
         }
 
 

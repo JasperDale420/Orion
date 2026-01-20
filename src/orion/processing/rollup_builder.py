@@ -70,8 +70,8 @@ class RollupBuilder:
         if df.empty:
             return None
 
-        # 3. Define Rollup Periods
-        periods = {"1m": "1min", "5m": "5min", "1h": "1h", "1d": "1D"}
+        # 3. Define Rollup Periods (5m, 1h, 1d, 1w - no 1m as per user preference)
+        periods = {"5m": "5min", "1h": "1h", "1d": "1D", "1w": "1W"}
 
         latest_ts: datetime | None = None
         try:
