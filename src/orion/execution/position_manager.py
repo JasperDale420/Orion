@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 
 from orion.shared.db_utils import db_query
-from orion.storage.models_gold import CandidateTrade, StrategyDecision
+from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,11 @@ class PositionManager:
                 stmt = (
                     select(StrategyDecision, CandidateTrade)
                     .join(CandidateTrade, StrategyDecision.candidate_id == CandidateTrade.candidate_id)
-                    .where(StrategyDecision.executed_successfully == "TRUE")
-                    # TODO: Add filter for positions not yet exited
+                    .outerjoin(ExitDecision, StrategyDecision.candidate_id == ExitDecision.candidate_id)
+                    .where(
+                        StrategyDecision.executed_successfully == "TRUE",
+                        ExitDecision.exit_id.is_(None),
+                    )
                     .order_by(StrategyDecision.timestamp_utc.desc())
                     .limit(50)
                 )
