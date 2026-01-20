@@ -3,11 +3,12 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import SystemStatus
 from orion.storage.models_dlq import DeadLetterQueue
-from sqlalchemy import func, select
 
 logger = setup_struct_logger("orion.monitor")
 

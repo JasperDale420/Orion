@@ -7,7 +7,6 @@ Caches results in silver_ticker_info to avoid repeated API calls.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests

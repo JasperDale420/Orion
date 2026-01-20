@@ -11,6 +11,7 @@ import pytz
 
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
+from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.redpanda_producer import RedpandaProducer
 from orion.connectors.uw_alerts_connector import UWAlertsConnector
 from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
@@ -69,6 +70,20 @@ class IngestionService:
             secret_key=alpaca_secret,
             paper=system_settings.alpaca_paper,
         )
+        
+        # Real-time streaming connector (preferred over polling for lower latency)
+        self.alpaca_stream: AlpacaStreamConnector | None = None
+        self._use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
+        if self._use_streaming:
+            try:
+                self.alpaca_stream = AlpacaStreamConnector(
+                    api_key=alpaca_key,
+                    secret_key=alpaca_secret,
+                    feed="sip",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create streaming connector, falling back to polling: {e}")
+                self.alpaca_stream = None
 
         self.producer: RedpandaProducer | None = None
 
@@ -79,6 +94,7 @@ class IngestionService:
         # State
         self.eod_trigger_last_run: Optional[str] = None
         self._eod_task: Optional[asyncio.Task[None]] = None
+        self._rollup_task: Optional[asyncio.Task[None]] = None
 
     async def initialize(self) -> None:
         """Initialize resources that require async execution."""
@@ -96,6 +112,38 @@ class IngestionService:
 
         await init_db()
         await self.universe.hydrate_from_db()
+
+        # Sync today's earnings calendar from UW API
+        try:
+            from orion.jobs.sync_earnings import sync_todays_earnings
+
+            result = await sync_todays_earnings()
+            logger.info(f"Earnings calendar synced: {result}")
+        except Exception as e:
+            logger.warning(f"Failed to sync earnings calendar on startup: {e}")
+
+        # Start rollup job as background task
+        try:
+            from orion.jobs.rollup_job import RollupJob
+
+            rollup_job = RollupJob(loop_interval_seconds=60.0)
+            self._rollup_task = asyncio.create_task(rollup_job.run_forever())
+            logger.info("Rollup job started as background task")
+        except Exception as e:
+            logger.warning(f"Failed to start rollup job: {e}")
+
+        # Start Alpaca WebSocket streaming (preferred for low-latency bars)
+        if self.alpaca_stream:
+            try:
+                active_tickers = self.universe.get_active_universe()
+                if active_tickers:
+                    await self.alpaca_stream.subscribe(active_tickers)
+                await self.alpaca_stream.start()
+                logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
+            except Exception as e:
+                logger.warning(f"Failed to start Alpaca streaming, falling back to polling: {e}")
+                self.alpaca_stream = None
+
         logger.info("Ingestion Service Initialized.")
 
     def _handle_shutdown_signals(self) -> None:
@@ -138,6 +186,8 @@ class IngestionService:
         await self.stop()
 
     async def stop(self) -> None:
+        if self.alpaca_stream:
+            await self.alpaca_stream.stop()
         if self.producer:
             await self.producer.stop()
         logger.info("Ingestion Service Stopped.")
@@ -153,11 +203,26 @@ class IngestionService:
         events = await self._poll_uw(trace_id)
         all_events.extend(events)
 
-        # 2. Poll Alpaca
+        # 2. Get Alpaca bars (streaming preferred, polling as fallback)
         active_tickers = self.universe.get_active_universe()
         if active_tickers:
-            alpaca_events = await self._poll_alpaca(active_tickers, trace_id)
-            all_events.extend(alpaca_events)
+            # Use streaming if available (real-time, sub-second latency)
+            if self.alpaca_stream and self.alpaca_stream.is_running:
+                # Ensure newly added tickers are subscribed
+                new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
+                if new_tickers:
+                    await self.alpaca_stream.subscribe(list(new_tickers))
+                # Drain any buffered streaming events
+                streaming_events = await self.alpaca_stream.drain_events()
+                if streaming_events:
+                    for e in streaming_events:
+                        self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
+                    all_events.extend(streaming_events)
+                    logger.debug(f"Drained {len(streaming_events)} streaming events")
+            else:
+                # Fallback to polling (higher latency)
+                alpaca_events = await self._poll_alpaca(active_tickers, trace_id)
+                all_events.extend(alpaca_events)
 
         # 3. Process & Persist
         if all_events:

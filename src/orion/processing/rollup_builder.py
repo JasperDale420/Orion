@@ -2,10 +2,11 @@ import logging
 from datetime import datetime, timezone
 
 import pandas as pd
-from orion.storage.models_gold import GoldTickerRollup
-from orion.storage.models_silver import SignalType, SilverSignal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
+from orion.storage.models_gold import GoldTickerRollup
+from orion.storage.models_silver import SignalType, SilverSignal
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +70,8 @@ class RollupBuilder:
         if df.empty:
             return None
 
-        # 3. Define Rollup Periods
-        periods = {"1m": "1min", "5m": "5min", "1h": "1h", "1d": "1D"}
+        # 3. Define Rollup Periods (5m, 1h, 1d, 1w - no 1m as per user preference)
+        periods = {"5m": "5min", "1h": "1h", "1d": "1D", "1w": "1W"}
 
         latest_ts: datetime | None = None
         try:

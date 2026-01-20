@@ -7,6 +7,118 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Exit Classifier Window Features**: Added 10 window features from `gold_feature_windows` to exit classifier training
+  - `call_put_imbalance`, `sweep_ratio`, `flow_count` for 1h/1d/1w periods
+  - `dp_volume_1d`, `call_put_ratio_1d/1w` for dark pool context
+  - Uses LATERAL JOIN to look up historical window features at entry time
+- **Checkpoint Greeks Infrastructure**: Modified labeler to fetch Greeks from Alpaca at each checkpoint
+  - `get_real_checkpoint_prices` now returns delta, gamma, theta, vega, iv per checkpoint
+  - Greeks added to label dict in `build_label` function
+  - Note: INSERT statement update for persistence is a follow-up task
+
+- **Quant Audit Phase 2 Remediation**: Comprehensive risk and ML fixes
+  - **Projected Gamma Check**: `_check_greeks_limits` now uses projected gamma (current + trade) instead of just current
+  - **Vega Exposure Limits**: New `max_portfolio_vega` (200) and `max_position_vega` (50) in `RiskSettings`
+  - **check_options_order** now accepts `vega` parameter for comprehensive Greeks checking
+  - **portfolio_vega** tracking in RiskManager for IV exposure monitoring
+  - **Heuristic Score Cap**: Fallback scorer capped at 0.50 to prevent untrained buckets generating live signals
+  - **Model Freshness Validation**: `ORION_MAX_MODEL_AGE_DAYS` env var (default 14) - stale models are skipped
+  - **Slippage Tracking**: `process_fill` accepts `expected_price` and logs slippage in basis points
+  - New test file: `tests/unit/test_risk_greeks_v2.py` with 12 test cases for Greeks fixes
+- **Correlation-Aware Position Sizing**: Reduce position size when correlated with existing holdings
+  - New `CorrelationAdjuster` class calculates rolling correlation with portfolio
+  - `calculate_size_with_correlation()` async method in RiskManager
+  - Auto-wired in `ExecutionEngine.__init__` when enabled
+  - Config: `correlation_size_scaling`, `correlation_threshold` (0.70), `correlation_penalty_factor` (0.30)
+  - Disabled by default (`ORION_RISK_CORRELATION_SIZE_SCALING=false`) for safe rollout
+  - New test file: `tests/unit/test_correlation_adjuster.py` with 10 test cases
+  - Full Risk Management section added to README
+
+### Fixed
+- **EOD Agent Async Bug**: Fixed missing `await` on `session.execute()` in `performance_tracker.py` `get_daily_accuracy()` and `get_weekly_performance()` functions
+- **EOD Agent Proposal Schema**: Fixed LLM prompt to match `ProposalBuilder` validation - changed `solver_mutation` to `solver_edit`, added required `evidence_pointers`, `test_plan` fields
+- **EOD Agent FK Constraint**: Fixed `solver_edits` insert by creating Solver stub before edit record
+- **ML Scoring Feature Mismatch**: Fixed MLScorer receiving only 2/53 features during inference
+  - Created `flow_enricher.py` module with `enrich_flow_for_scoring()` that queries same DB sources as labeler
+  - Now populates 21/53 features: GEX, VEX, market tide, IV rank, VIX, regimes, max pain distance
+  - Added `score_enriched()` async method to MLScorer for real-time enrichment
+  - Updated `main_ingest.py` to use `process_flows_enriched()` for feature parity with training
+- **Alpaca Trading Connector**: Added `client_order_id` parameter to `submit_market_order()` to match execution engine calls
+
+### Added
+- **Drift-Triggered Pattern Mining**: Retrain ML models when high feature drift detected
+  - New `orion/core/drift_trigger.py` module with flag coordination
+  - EOD agent sets drift flag when any feature PSI > 0.25
+  - Pattern miner checks for drift flag every hour (in addition to Mon/Fri schedule)
+  - Immediate model retraining when drift detected
+- **Expanded ML Features**: Added 33 new entry-time features to pattern miner
+  - Options Greeks: `delta_at_entry`, `gamma_at_entry`, `theta_at_entry`, `vega_at_entry`, `iv_at_entry`, `iv_vs_hv_ratio`
+  - Volume/OI: `volume_at_entry`, `open_interest_at_entry`, `rvol_1h`, `rvol_daily`
+  - Flow: `ask_side_ratio`, `sweep_ratio_1h`, `same_ticker_premium_1h`
+  - Timing: `entry_hour`, `minutes_to_close`, `entry_session`, `entry_day_of_week`
+  - Context: `spy_correlation_5d`, `spy_return_1h`, `days_to_earnings`, `sector`
+- **Trade Execution Flow**: Complete end-to-end execution pipeline from ML candidates to broker orders
+  - Fixed `SignalEngine` to fetch current price and set `limit_price` in execution params
+  - Fixed `RiskSettings` to use percentage-based limits instead of fixed USD amounts
+    - `max_order_size_pct`: 5% of account equity (was fixed $5,000)
+    - `max_ticker_exposure_pct`: 10% of account equity (was fixed $10,000)
+  - Fixed `risk_manager.calculate_size()` to cap position size at max_order_size_pct
+  - Fixed `ExecutionEngine` side parameter conversion (`side.value` instead of `str(side)`)
+  - Fixed `TradeJournalEntry` field names to match model schema (`decision_id` not `journal_id`)
+  - Disabled rollup requirement for testing via `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false`
+
+### Added
+- **Options Trading Pipeline**: Trade options contracts instead of equities based on UW flow signals
+  - New `CandidateTrade` fields: `option_symbol`, `strike_price`, `expiration_date`, `option_type`, `underlying_price`, `premium`
+  - New `AlpacaOptionsConnector` with `submit_option_order()`, `get_option_quote()`, OCC symbol generation
+  - `ExecutionEngine` routes to options path when `candidate.option_symbol` is present
+  - Premium-based sizing: max 2% of equity per options trade (`max_option_premium_pct`)
+  - DTE minimum check (3 days by default) prevents trading very short-dated options
+  - New risk settings: `max_option_premium_pct`, `min_dte`, `max_option_positions`
+
+- **Weekly Meta Agent Evolution**: Friday EOD comprehensive analysis and solver evolution
+  - New `WeeklyDataAggregator` class aggregates EOD reports, trade data, and ML insights
+  - `run_weekly_evolution()` method analyzes execution quality, ML drift, and generates mutations
+  - Execution quality analysis: fill rate, rejection rate, health classification
+  - ML drift detection: tracks AUC trends across model buckets
+  - Automated solver mutation proposals based on top-performing features
+  - New `main_meta_weekly.py` CLI with `--dry-run` and `--scheduled` modes
+  - Scheduled Friday 5:30 PM EST via `meta-weekly` docker-compose service
+
+- **Expanded ML Targets**: 4 targets for multi-dimensional trade scoring
+  - `hit_target_50`: 50% profit before 20% stop (original)
+  - `avoid_stop`: Avoid 20% stop entirely (original)
+  - `hit_target_100`: High conviction runner - 100% profit before stop
+  - `quick_winner`: Fast exit - 50% profit within 1 hour
+  - New `MultiTargetScorer` class with `score_all()`, `get_composite_score()`, and `get_trade_signal()`
+  - 4 buckets × 4 targets = 16 models (up from 8)
+
+- **Bucket-Specific Exit Classifiers**: ML-based exit timing for each trade bucket
+  - 0DTE: Checkpoints at 5m, 10m, 15m, 30m, 1h, EOD (AUC=0.935)
+  - SHORT_SWING: Checkpoints at 30m, 1h, 2h, 4h, 8h, EOD (AUC=0.896)
+  - SWING: Checkpoints at 1h, 4h, 8h, EOD, 1d, 2d, 1w, 2w (AUC=0.904)
+  - POSITION: Checkpoints at 1d, 2d, 3d, 1w, 2w, 3w, 4w (AUC=0.955)
+  - DB columns added: price_at_2w/3w/4w, return_at_2w/3w/4w
+  - **Greeks at all checkpoints**: delta, gamma, theta, vega, IV fetched from Alpaca
+  - **Time decay features**: DTE, theta_decay_pct, time_value_pct at each checkpoint
+  - Bucket-aware heuristic fallbacks with tuned take-profit/stop-loss thresholds
+  - Training target: "Did exiting at checkpoint capture ≥80% of max return?"
+
+- **Position Monitor & Exit Execution**: Automated position management
+  - `PositionMonitor` class syncs with Alpaca broker positions
+  - Tracks max return, max drawdown for trailing stop logic
+  - Evaluates ML exit classifier for each position
+  - `AlpacaTradingConnector` extended with `get_all_positions()`, `close_position()`
+  - `main_position_monitor.py` CLI with `--interval`, `--dry-run`, `--once` modes
+  - `position-monitor` docker-compose service (60s check interval)
+
+- **ML Model Persistence Pipeline**: End-to-end wiring of ML models for live trading
+  - `pattern_miner.py` now saves trained models to `/app/models/{bucket}_{target}.pkl`
+  - Models saved with metadata (feature names, creation timestamp, model type)
+  - Conditional save: only persists models with holdout AUC >= 0.55
+  - `scorer.py` rewritten to load bucket-specific models (0DTE, SHORT_SWING, SWING, POSITION)
+  - Automatic bucket classification based on DTE for flow scoring
+  - Graceful fallback to heuristic scorer when no model available
 - **EOD Agent Service**: New `eod-agent` docker service that runs daily after market close
   - `main_eod.py` entry point with `MarketSchedule` integration (waits for 16:30 ET)
   - Mounts `~/.codex` for credentials passthrough

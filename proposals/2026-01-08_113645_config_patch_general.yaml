@@ -1,0 +1,20 @@
+meta:
+  run_id: 2d7187b6-0e03-4c15-9a36-75a065ebfa85
+  created_at: '2026-01-09T11:36:45.500831+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-01-08_2d7187b6-0e03-4c15-9a36-75a065ebfa85.json
+  report_path: artifacts/reports/eod_report_2026-01-08.md
+proposal:
+  type: config_patch
+  priority: 4
+  rationale: Reduce reliance on delayed ALPACA_BAR_1M data and improve signal timing
+  evidence_pointers:
+    ingestion_lag: 'ALPACA_BAR_1M p95 lag: 18701s (~5.2 hours)'
+    max_gap: 'ALPACA_BAR_1M max_gap_s: 28842s (~8 hours)'
+  test_plan:
+  - Monitor signal latency after patch
+  - Compare execution timing with UW sources
+  changes:
+    data.signal_validation.max_bar_age_seconds: 300
+    data.fallback_to_vwap: true

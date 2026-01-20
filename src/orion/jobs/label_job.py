@@ -4,10 +4,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import pandas as pd
+from sqlalchemy import select
+
 from orion.processing.label_engine import TripleBarrierLabeling
 from orion.storage.models import CandidateTrade, GoldTickerRollup
 from orion.storage.models_gold import CandidateLabel
-from sqlalchemy import select
 
 logger = logging.getLogger("orion.jobs.label_job")
 

@@ -1,9 +1,10 @@
 import logging
 from typing import List, Set
 
-from orion.storage.models import BronzeEvent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
 

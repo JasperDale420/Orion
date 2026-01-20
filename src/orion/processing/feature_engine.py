@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import dateutil.parser
+
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
@@ -66,8 +67,9 @@ class FeatureEngine:
             logger.error(f"Failed to hydrate FeatureEngine: {e}")
 
     async def _hydrate_single_ticker(self, ticker: str) -> None:
-        from orion.storage.models_silver import SilverAlpacaBar
         from sqlalchemy import select
+
+        from orion.storage.models_silver import SilverAlpacaBar
 
         try:
 
@@ -125,8 +127,9 @@ class FeatureEngine:
         Writes computed features to the GoldFeatureEvent table.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from orion.storage.models_gold import GoldFeatureEvent
         from sqlalchemy.dialects.postgresql import insert
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         # Ensure ID/PK uniqueness
         if not ticker or not ts:
@@ -154,8 +157,9 @@ class FeatureEngine:
         Batch write features to Gold store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from orion.storage.models_gold import GoldFeatureEvent
         from sqlalchemy.dialects.postgresql import insert
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         if not signals:
             return
@@ -203,8 +207,9 @@ class FeatureEngine:
         Hydrates SilverSignals from Gold Feature store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from orion.storage.models_gold import GoldFeatureEvent
         from sqlalchemy import and_, select
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         signals = []
         try:

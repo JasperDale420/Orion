@@ -18,9 +18,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from sqlalchemy import text
+
 from orion.shared.db_utils import db_query
 from orion.storage.db import init_db
-from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
