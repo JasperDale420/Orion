@@ -62,7 +62,9 @@ async def test_flows_endpoint_supports_min_premium_filter(monkeypatch):
         await session.commit()
 
     headers = {"x-api-key": "testkey"}
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    # Use ASGITransport to avoid DeprecationWarning/TypeError with newer httpx
+    from httpx import ASGITransport
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         rows = (await client.get("/flows", headers=headers, params={"ticker": "SPY", "min_premium_usd": 1000})).json()
         assert isinstance(rows, list)
         ids = {r["event_id"] for r in rows}
