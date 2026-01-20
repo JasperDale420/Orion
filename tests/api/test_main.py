@@ -24,6 +24,7 @@ def override_deps() -> Generator[None, None, None]:
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = []
     mock_result.scalars.return_value.first.return_value = None
+    mock_result.first.return_value = None
     mock_session.execute.return_value = mock_result
     mock_session.commit = AsyncMock()
 
