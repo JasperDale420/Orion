@@ -38,6 +38,17 @@ class UWMarketTideConnector:
         try:
             resp = requests.get(url, headers=self.headers, params=params, timeout=30)
             resp.raise_for_status()
+
+            # Log API usage headers for quota monitoring
+            daily_count = resp.headers.get("x-uw-daily-req-count")
+            daily_limit = resp.headers.get("x-uw-token-req-limit")
+            if daily_count and daily_limit:
+                usage_pct = round(100 * int(daily_count) / int(daily_limit), 1)
+                logger.info(
+                    f"UW API usage: {daily_count}/{daily_limit} ({usage_pct}%)",
+                    extra={"event_type": "UW_API_USAGE", "component": "market_tide"},
+                )
+
             return resp.json()
         except Exception as e:
             logger.warning(f"Failed to fetch market tide: {e}")

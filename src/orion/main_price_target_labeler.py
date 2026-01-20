@@ -19,6 +19,20 @@ load_dotenv()
 
 from sqlalchemy import text
 
+from orion.labeler import (
+    BATCH_SIZE,
+    CHECKPOINT_OFFSETS,
+    POLL_INTERVAL_SECONDS,
+    RISK_FREE_RATE,
+    SECTOR_MAPPING,
+    calculate_black_scholes_delta,
+    calculate_black_scholes_gamma,
+    calculate_iv_rank_from_history,
+    calculate_volatility,
+    get_price_at_offset,
+    get_price_at_offset_days,
+    get_price_at_offset_minutes,
+)
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -27,10 +41,6 @@ from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 
 logger = setup_struct_logger("orion.price_target")
-
-BATCH_SIZE = 50
-POLL_INTERVAL_SECONDS = 60
-RISK_FREE_RATE = 0.05  # Risk-free rate for Black-Scholes
 
 # Static sector mapping for reliable feature calculation (avoids unreliable API calls)
 SECTOR_MAPPING: Dict[str, str] = {
@@ -386,6 +396,45 @@ async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[D
         return [{"price": row[0], "ts": row[1]} for row in result.fetchall()]
 
     return await db_query(query)
+
+
+async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
+    """Get real option prices and Greeks from silver_option_quotes (Alpaca API data).
+
+    Returns dict mapping checkpoint names to dicts containing:
+    - price: mid price (or last_trade as fallback)
+    - delta, gamma, theta, vega, iv: Greeks at checkpoint
+    """
+
+    async def query(session: Any) -> Dict[str, Dict[str, Optional[float]]]:
+        stmt = text(
+            """
+            SELECT checkpoint, mid_price, last_trade_price,
+                   delta, gamma, theta, vega, iv
+            FROM silver_option_quotes
+            WHERE flow_event_id = :event_id
+        """
+        )
+        result = await session.execute(stmt, {"event_id": event_id})
+        data: Dict[str, Dict[str, Optional[float]]] = {}
+        for row in result.fetchall():
+            checkpoint = row[0]
+            # Prefer mid_price, fallback to last_trade
+            price = row[1] if row[1] is not None else row[2]
+            data[checkpoint] = {
+                "price": float(price) if price else None,
+                "delta": float(row[3]) if row[3] is not None else None,
+                "gamma": float(row[4]) if row[4] is not None else None,
+                "theta": float(row[5]) if row[5] is not None else None,
+                "vega": float(row[6]) if row[6] is not None else None,
+                "iv": float(row[7]) if row[7] is not None else None,
+            }
+        return data
+
+    try:
+        return await db_query(query)
+    except Exception:
+        return {}
 
 
 async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
@@ -1230,7 +1279,6 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         "oi_change_pct": None,
         "iv_vs_hv_ratio": None,
     }
-
 
     entry_date = entry_ts.date()
     lookback_30d = entry_date - timedelta(days=30)
@@ -2227,31 +2275,57 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     time_to_stop = int((hit_stop_ts - entry_ts).total_seconds()) if hit_stop_ts else None
     holding_period = int((last_tracked_ts - entry_ts).total_seconds())
 
-    # Price at checkpoints (original 1h/2h/4h)
-    price_1h = get_price_at_offset(prices, entry_ts, 1)
-    price_2h = get_price_at_offset(prices, entry_ts, 2)
-    price_4h = get_price_at_offset(prices, entry_ts, 4)
+    # Price at checkpoints - prefer real Alpaca quotes when available
+    # Fetch real quotes from silver_option_quotes (populated by option_quote_tracker)
+    real_quotes = await get_real_checkpoint_prices(entry.event_id)
+
+    # Helper to get price: prefer real quote, fallback to flow data
+    def _get_checkpoint_price(checkpoint: str, flow_price_fn, *flow_args) -> Optional[float]:
+        """Get checkpoint price: real quote first, then flow fallback."""
+        quote_data = real_quotes.get(checkpoint)
+        if quote_data is not None and quote_data.get("price") is not None:
+            return quote_data["price"]
+        return flow_price_fn(*flow_args)
+
+    # Helper to get Greeks at checkpoint
+    def _get_checkpoint_greeks(checkpoint: str) -> Dict[str, Optional[float]]:
+        """Get Greeks at checkpoint from Alpaca quote data."""
+        quote_data = real_quotes.get(checkpoint)
+        if quote_data is None:
+            return {"delta": None, "gamma": None, "theta": None, "vega": None, "iv": None}
+        return {
+            "delta": quote_data.get("delta"),
+            "gamma": quote_data.get("gamma"),
+            "theta": quote_data.get("theta"),
+            "vega": quote_data.get("vega"),
+            "iv": quote_data.get("iv"),
+        }
+
+    # Original hourly checkpoints (1h/2h/4h)
+    price_1h = _get_checkpoint_price("1h", get_price_at_offset, prices, entry_ts, 1)
+    price_2h = _get_checkpoint_price("2h", get_price_at_offset, prices, entry_ts, 2)
+    price_4h = _get_checkpoint_price("4h", get_price_at_offset, prices, entry_ts, 4)
 
     return_1h = ((price_1h - entry_price) / entry_price * 100) if price_1h else None
     return_2h = ((price_2h - entry_price) / entry_price * 100) if price_2h else None
     return_4h = ((price_4h - entry_price) / entry_price * 100) if price_4h else None
 
     # 0DTE checkpoints (5m, 10m, 15m, 30m) - ultra-short for 0DTE
-    price_5m = get_price_at_offset_minutes(prices, entry_ts, 5)
-    price_10m = get_price_at_offset_minutes(prices, entry_ts, 10)
-    price_15m = get_price_at_offset_minutes(prices, entry_ts, 15)
-    price_30m = get_price_at_offset_minutes(prices, entry_ts, 30)
+    price_5m = get_price_at_offset_minutes(prices, entry_ts, 5)  # No real quote yet
+    price_10m = get_price_at_offset_minutes(prices, entry_ts, 10)  # No real quote yet
+    price_15m = _get_checkpoint_price("15m", get_price_at_offset_minutes, prices, entry_ts, 15)
+    price_30m = _get_checkpoint_price("30m", get_price_at_offset_minutes, prices, entry_ts, 30)
     return_5m = ((price_5m - entry_price) / entry_price * 100) if price_5m else None
     return_10m = ((price_10m - entry_price) / entry_price * 100) if price_10m else None
     return_15m = ((price_15m - entry_price) / entry_price * 100) if price_15m else None
     return_30m = ((price_30m - entry_price) / entry_price * 100) if price_30m else None
 
     # SWING/POSITION checkpoints (8h, 1d, 2d, 3d, 1w)
-    price_8h = get_price_at_offset(prices, entry_ts, 8)
-    price_1d = get_price_at_offset_days(prices, entry_ts, 1)
-    price_2d = get_price_at_offset_days(prices, entry_ts, 2)
-    price_3d = get_price_at_offset_days(prices, entry_ts, 3)
-    price_1w = get_price_at_offset_days(prices, entry_ts, 7)
+    price_8h = _get_checkpoint_price("8h", get_price_at_offset, prices, entry_ts, 8)
+    price_1d = _get_checkpoint_price("1d", get_price_at_offset_days, prices, entry_ts, 1)
+    price_2d = get_price_at_offset_days(prices, entry_ts, 2)  # No real quote yet
+    price_3d = get_price_at_offset_days(prices, entry_ts, 3)  # No real quote yet
+    price_1w = get_price_at_offset_days(prices, entry_ts, 7)  # No real quote yet
 
     return_8h = ((price_8h - entry_price) / entry_price * 100) if price_8h else None
     return_1d = ((price_1d - entry_price) / entry_price * 100) if price_1d else None
@@ -2282,6 +2356,17 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
     # Opposing flow
     opposing = await get_opposing_flow(ticker, put_call, entry_ts, last_tracked_ts)
+
+    # Extract Greeks at each checkpoint from Alpaca quote data
+    greeks_5m = _get_checkpoint_greeks("5m") if real_quotes else {}
+    greeks_15m = _get_checkpoint_greeks("15m") if real_quotes else {}
+    greeks_30m = _get_checkpoint_greeks("30m") if real_quotes else {}
+    greeks_1h = _get_checkpoint_greeks("1h") if real_quotes else {}
+    greeks_2h = _get_checkpoint_greeks("2h") if real_quotes else {}
+    greeks_4h = _get_checkpoint_greeks("4h") if real_quotes else {}
+    greeks_8h = _get_checkpoint_greeks("8h") if real_quotes else {}
+    greeks_1d = _get_checkpoint_greeks("1d") if real_quotes else {}
+    greeks_eod = _get_checkpoint_greeks("eod") if real_quotes else {}
 
     # Build full label
     label.update(
@@ -2350,6 +2435,43 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
             # SWING EOD checkpoint
             "price_at_eod": price_eod,
             "return_at_eod": return_eod,
+            # Checkpoint Greeks from Alpaca (delta, gamma, theta, iv)
+            "delta_at_5m": greeks_5m.get("delta"),
+            "gamma_at_5m": greeks_5m.get("gamma"),
+            "theta_at_5m": greeks_5m.get("theta"),
+            "iv_at_5m": greeks_5m.get("iv"),
+            "delta_at_15m": greeks_15m.get("delta"),
+            "gamma_at_15m": greeks_15m.get("gamma"),
+            "theta_at_15m": greeks_15m.get("theta"),
+            "iv_at_15m": greeks_15m.get("iv"),
+            "delta_at_30m": greeks_30m.get("delta"),
+            "gamma_at_30m": greeks_30m.get("gamma"),
+            "theta_at_30m": greeks_30m.get("theta"),
+            "iv_at_30m": greeks_30m.get("iv"),
+            "delta_at_1h": greeks_1h.get("delta"),
+            "gamma_at_1h": greeks_1h.get("gamma"),
+            "theta_at_1h": greeks_1h.get("theta"),
+            "iv_at_1h": greeks_1h.get("iv"),
+            "delta_at_2h": greeks_2h.get("delta"),
+            "gamma_at_2h": greeks_2h.get("gamma"),
+            "theta_at_2h": greeks_2h.get("theta"),
+            "iv_at_2h": greeks_2h.get("iv"),
+            "delta_at_4h": greeks_4h.get("delta"),
+            "gamma_at_4h": greeks_4h.get("gamma"),
+            "theta_at_4h": greeks_4h.get("theta"),
+            "iv_at_4h": greeks_4h.get("iv"),
+            "delta_at_8h": greeks_8h.get("delta"),
+            "gamma_at_8h": greeks_8h.get("gamma"),
+            "theta_at_8h": greeks_8h.get("theta"),
+            "iv_at_8h": greeks_8h.get("iv"),
+            "delta_at_1d": greeks_1d.get("delta"),
+            "gamma_at_1d": greeks_1d.get("gamma"),
+            "theta_at_1d": greeks_1d.get("theta"),
+            "iv_at_1d": greeks_1d.get("iv"),
+            "delta_at_eod": greeks_eod.get("delta"),
+            "gamma_at_eod": greeks_eod.get("gamma"),
+            "theta_at_eod": greeks_eod.get("theta"),
+            "iv_at_eod": greeks_eod.get("iv"),
             # Context
             "opposing_flow_count": opposing["count"],
             "opposing_premium_total": opposing["premium"],
@@ -2560,106 +2682,35 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
 
 async def persist_labels(labels: List[Dict[str, Any]]) -> int:
-    """Persist labeled records to database."""
+    """Persist labeled records to database using dynamic INSERT.
+
+    Automatically includes all keys from label dict, including checkpoint Greeks.
+    New columns added to label dict are automatically persisted without code changes.
+    """
     if not labels:
         return 0
 
     async def write(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO price_target_labels (
-                event_id, ticker, option_chain, trade_type,
-                entry_ts, entry_option_price, expiry, dte,
-                premium_usd, aggressor, put_call, is_sweep,
-                max_price_reached, max_price_ts, max_return_pct,
-                min_price_reached, min_price_ts, max_drawdown_pct,
-                hit_50_pct_ts, hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts,
-                hit_stop_20_pct_ts,
-                first_exit_type, first_exit_ts, first_exit_return_pct,
-                last_tracked_ts,
-                time_to_max_seconds, time_to_50_pct_seconds,
-                time_to_75_pct_seconds, time_to_100_pct_seconds, time_to_150_pct_seconds,
-                time_to_stop_seconds, holding_period_seconds,
-                max_drawdown_before_target, min_distance_to_stop_pct, price_volatility,
-                price_at_1h, price_at_2h, price_at_4h,
-                return_at_1h, return_at_2h, return_at_4h,
-                price_at_5m, return_at_5m, price_at_10m, return_at_10m,
-                price_at_15m, return_at_15m, price_at_30m, return_at_30m,
-                price_at_8h, return_at_8h, price_at_eod, return_at_eod,
-                price_at_1d, return_at_1d, price_at_2d, return_at_2d,
-                price_at_3d, return_at_3d, price_at_1w, return_at_1w,
-                opposing_flow_count, opposing_premium_total, sentiment_shift_ts,
-                optimal_exit_return, optimal_exit_ts, final_return_pct,
-                gex_at_entry, vex_at_entry, market_tide_30m, market_tide_direction,
-                max_pain_distance_pct, iv_rank_at_entry, darkpool_volume_1h,
-                darkpool_15m, darkpool_30m, darkpool_4h, darkpool_1d, darkpool_3d,
-                darkpool_1w, darkpool_2w, darkpool_4w,
-                trend_regime_at_entry, vol_regime_at_entry, risk_regime_at_entry,
-                session_regime_at_entry, vix_at_entry, vix_regime_at_entry,
-                iv_at_entry, iv_at_1h, iv_change_1h_pct,
-                underlying_at_entry, underlying_at_1h, underlying_change_1h_pct,
-                delta_at_entry, gamma_at_entry, theta_at_entry, vega_at_entry, rho_at_entry,
-                iv_at_entry_alpaca, volume_at_entry, open_interest_at_entry,
-                entry_hour, entry_session, entry_day_of_week,
-                days_to_earnings, is_post_earnings, sector, industry,
-                rvol_1h, rvol_daily, rvol_weekly, rvol_30m, rvol_3d, rvol_monthly,
-                ask_side_ratio, sweep_ratio_1h,
-                same_ticker_premium_1h, institutional_flow_1w, trade_bucket,
-                minutes_to_close, overnight_gap_pct, price_change_5d_prior,
-                earnings_in_dte_window, vwap_distance_pct,
-                oi_change_1d, oi_change_pct, iv_vs_hv_ratio,
-                high_52w_distance_pct, is_spread_leg, same_expiry_trades_1h,
-                sector_net_premium_1h, sector_flow_direction, spy_correlation_5d, spy_return_1h
-            ) VALUES (
-                :event_id, :ticker, :option_chain, :trade_type,
-                :entry_ts, :entry_option_price, :expiry, :dte,
-                :premium_usd, :aggressor, :put_call, :is_sweep,
-                :max_price_reached, :max_price_ts, :max_return_pct,
-                :min_price_reached, :min_price_ts, :max_drawdown_pct,
-                :hit_50_pct_ts, :hit_75_pct_ts, :hit_100_pct_ts, :hit_150_pct_ts,
-                :hit_stop_20_pct_ts,
-                :first_exit_type, :first_exit_ts, :first_exit_return_pct,
-                :last_tracked_ts,
-                :time_to_max_seconds, :time_to_50_pct_seconds,
-                :time_to_75_pct_seconds, :time_to_100_pct_seconds, :time_to_150_pct_seconds,
-                :time_to_stop_seconds, :holding_period_seconds,
-                :max_drawdown_before_target, :min_distance_to_stop_pct, :price_volatility,
-                :price_at_1h, :price_at_2h, :price_at_4h,
-                :return_at_1h, :return_at_2h, :return_at_4h,
-                :price_at_5m, :return_at_5m, :price_at_10m, :return_at_10m,
-                :price_at_15m, :return_at_15m, :price_at_30m, :return_at_30m,
-                :price_at_8h, :return_at_8h, :price_at_eod, :return_at_eod,
-                :price_at_1d, :return_at_1d, :price_at_2d, :return_at_2d,
-                :price_at_3d, :return_at_3d, :price_at_1w, :return_at_1w,
-                :opposing_flow_count, :opposing_premium_total, :sentiment_shift_ts,
-                :optimal_exit_return, :optimal_exit_ts, :final_return_pct,
-                :gex_at_entry, :vex_at_entry, :market_tide_30m, :market_tide_direction,
-                :max_pain_distance_pct, :iv_rank_at_entry, :darkpool_volume_1h,
-                :darkpool_15m, :darkpool_30m, :darkpool_4h, :darkpool_1d, :darkpool_3d,
-                :darkpool_1w, :darkpool_2w, :darkpool_4w,
-                :trend_regime_at_entry, :vol_regime_at_entry, :risk_regime_at_entry,
-                :session_regime_at_entry, :vix_at_entry, :vix_regime_at_entry,
-                :iv_at_entry, :iv_at_1h, :iv_change_1h_pct,
-                :underlying_at_entry, :underlying_at_1h, :underlying_change_1h_pct,
-                :delta_at_entry, :gamma_at_entry, :theta_at_entry, :vega_at_entry, :rho_at_entry,
-                :iv_at_entry_alpaca, :volume_at_entry, :open_interest_at_entry,
-                :entry_hour, :entry_session, :entry_day_of_week,
-                :days_to_earnings, :is_post_earnings, :sector, :industry,
-                :rvol_1h, :rvol_daily, :rvol_weekly, :rvol_30m, :rvol_3d, :rvol_monthly,
-                :ask_side_ratio, :sweep_ratio_1h,
-                :same_ticker_premium_1h, :institutional_flow_1w, :trade_bucket,
-                :minutes_to_close, :overnight_gap_pct, :price_change_5d_prior,
-                :earnings_in_dte_window, :vwap_distance_pct,
-                :oi_change_1d, :oi_change_pct, :iv_vs_hv_ratio,
-                :high_52w_distance_pct, :is_spread_leg, :same_expiry_trades_1h,
-                :sector_net_premium_1h, :sector_flow_direction, :spy_correlation_5d, :spy_return_1h
-            )
-            ON CONFLICT (event_id) DO NOTHING
-        """
-        )
-
         for label in labels:
-            await session.execute(stmt, label)
+            # Filter to only include keys that have non-None values or are required
+            # This avoids inserting columns that don't exist in the table
+            columns = [k for k in label.keys() if k is not None]
+
+            # Build dynamic INSERT statement
+            cols_str = ", ".join(columns)
+            vals_str = ", ".join([f":{c}" for c in columns])
+
+            stmt = text(
+                f"""
+                INSERT INTO price_target_labels ({cols_str})
+                VALUES ({vals_str})
+                ON CONFLICT (event_id) DO NOTHING
+            """
+            )
+
+            # Only pass the columns we're inserting
+            params = {k: v for k, v in label.items() if k in columns}
+            await session.execute(stmt, params)
 
     await db_write(write)
     return len(labels)

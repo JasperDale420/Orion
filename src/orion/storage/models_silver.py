@@ -181,3 +181,40 @@ class SilverUWAlert(Base):
     created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("ix_silver_alerts_ticker_time", "ticker", "alert_ts_utc"),)
+
+
+class SilverOptionQuote(Base):
+    """
+    Real option quotes from Alpaca API at checkpoint intervals.
+    Used for accurate ML labeling instead of modeled prices.
+    """
+
+    __tablename__ = "silver_option_quotes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    option_symbol = Column(String(32), nullable=False, index=True)
+    underlying_ticker = Column(String(10), nullable=False, index=True)
+    flow_event_id = Column(String(64), nullable=False, index=True)
+    checkpoint = Column(String(10), nullable=False)  # 'entry', '15m', '30m', '1h', etc.
+    ts_utc = Column(DateTime(timezone=True), nullable=False)
+
+    # Price data
+    bid_price = Column(Float, nullable=True)
+    ask_price = Column(Float, nullable=True)
+    mid_price = Column(Float, nullable=True)
+    last_trade_price = Column(Float, nullable=True)
+
+    # Greeks at checkpoint
+    delta = Column(Float, nullable=True)
+    gamma = Column(Float, nullable=True)
+    theta = Column(Float, nullable=True)
+    vega = Column(Float, nullable=True)
+    iv = Column(Float, nullable=True)
+
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_option_quotes_event_checkpoint", "flow_event_id", "checkpoint"),
+        {"extend_existing": True},
+    )
+

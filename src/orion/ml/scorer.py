@@ -67,7 +67,7 @@ class MLScorer:
         self._load_models()
 
     def _load_models(self) -> None:
-        """Load all available bucket-specific models."""
+        """Load all available bucket-specific models with freshness validation."""
         if not MODEL_DIR.exists():
             logger.info(
                 f"Model directory {MODEL_DIR} does not exist, using heuristic scorer",
@@ -75,12 +75,35 @@ class MLScorer:
             )
             return
 
+        # Model freshness config (envvar override)
+        max_age_days = int(os.getenv("ORION_MAX_MODEL_AGE_DAYS", "14"))
+
         loaded_count = 0
+        skipped_stale = 0
         for bucket in TRADE_BUCKETS:
             model_type = f"{bucket}_{self.target}"
             model_path = MODEL_DIR / f"{model_type}.pkl"
 
             if model_path.exists():
+                # Check model freshness before loading
+                from datetime import datetime
+
+                model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime)
+                model_age_days = (datetime.now() - model_mtime).days
+
+                if model_age_days > max_age_days:
+                    logger.warning(
+                        f"Model {model_type} is {model_age_days} days old (limit: {max_age_days}), skipping",
+                        extra={
+                            "event": "stale_model_skipped",
+                            "model_type": model_type,
+                            "age_days": model_age_days,
+                            "max_age_days": max_age_days,
+                        },
+                    )
+                    skipped_stale += 1
+                    continue
+
                 try:
                     with open(model_path, "rb") as f:
                         model_data = pickle.load(f)
@@ -90,11 +113,12 @@ class MLScorer:
                     loaded_count += 1
 
                     logger.info(
-                        f"Loaded model {model_type}",
+                        f"Loaded model {model_type} (age: {model_age_days}d)",
                         extra={
                             "event": "model_loaded",
                             "model_type": model_type,
                             "path": str(model_path),
+                            "age_days": model_age_days,
                         },
                     )
                 except Exception as e:
@@ -103,9 +127,12 @@ class MLScorer:
         if loaded_count == 0:
             logger.info("No bucket models found, using heuristic scorer")
         else:
+            summary = f"Loaded {loaded_count}/{len(TRADE_BUCKETS)} bucket models"
+            if skipped_stale > 0:
+                summary += f" (skipped {skipped_stale} stale)"
             logger.info(
-                f"Loaded {loaded_count}/{len(TRADE_BUCKETS)} bucket models",
-                extra={"event": "models_loaded", "count": loaded_count},
+                summary,
+                extra={"event": "models_loaded", "count": loaded_count, "stale_skipped": skipped_stale},
             )
 
     def extract_features(self, flow: Dict[str, Any], bucket: str) -> Dict[str, float]:
@@ -200,7 +227,10 @@ class MLScorer:
 
             # Predict probability
             prob = model.predict_proba(feature_vector)[0][1]
-            return float(prob)
+            
+            # Apply confidence rules (post-model adjustments)
+            adjusted_prob = self._apply_confidence_rules(float(prob), flow, bucket)
+            return adjusted_prob
         except Exception as e:
             logger.warning(f"Model scoring failed for bucket {bucket}: {e}")
             return self._heuristic_score(flow)
@@ -210,7 +240,8 @@ class MLScorer:
         Heuristic baseline scorer when no trained model is available.
 
         Signals with high premium, sweeps, and good aggressor alignment
-        get higher scores.
+        get higher scores. CAPPED at 0.50 to prevent heuristic from
+        reaching live threshold (0.70) - models are required for live trading.
         """
         score = 0.3  # Base score
 
@@ -249,11 +280,128 @@ class MLScorer:
         if premium < 10000:
             score -= 0.20
 
-        return min(max(score, 0.0), 1.0)
+        # Cap heuristic at 0.50 to prevent untrained buckets from generating live signals
+        raw_score = min(max(score, 0.0), 1.0)
+        capped_score = min(raw_score, 0.50)
+
+        if raw_score > 0.50:
+            logger.warning(
+                f"Heuristic scorer used (no model) - score capped from {raw_score:.2f} to {capped_score:.2f}",
+                extra={"event": "heuristic_scorer_capped", "raw_score": raw_score, "capped_score": capped_score},
+            )
+
+        return capped_score
+
+    def _apply_confidence_rules(self, base_score: float, flow: Dict[str, Any], bucket: str) -> float:
+        """
+        Apply post-model confidence rules.
+        
+        These rules adjust the model's probability score based on patterns
+        discovered by the EOD agent and pattern miner.
+        
+        Current rules:
+        - 0dte_low_gex_vex_avoid_stop: For 0DTE trades, when GEX and VEX are
+          both below their historical averages, increase confidence by 1.3x.
+          This rule predicts stop avoidance with 100% accuracy (n=149).
+        """
+        adjusted_score = base_score
+        
+        # Rule: 0DTE low GEX/VEX avoid stop (EOD agent proposal 2026-01-09)
+        # When GEX and VEX are both below average, the trade is more likely
+        # to avoid hitting stop loss (AUC=0.75, hit_rate=100%)
+        if bucket == "0DTE":
+            gex = flow.get("gex_at_entry") or flow.get("gex")
+            vex = flow.get("vex_at_entry") or flow.get("vex")
+            
+            # Use rolling averages from flow or fall back to hardcoded baseline
+            # These averages should be updated periodically from silver_greek_exposure
+            gex_avg = flow.get("gex_rolling_avg", 0)  # If not present, rule won't apply
+            vex_avg = flow.get("vex_rolling_avg", 0)
+            
+            # Only apply if we have valid GEX/VEX data
+            if gex is not None and vex is not None and gex_avg != 0 and vex_avg != 0:
+                if gex < gex_avg and vex < vex_avg:
+                    multiplier = 1.3
+                    adjusted_score = min(base_score * multiplier, 1.0)  # Cap at 1.0
+                    logger.info(
+                        f"0DTE low GEX/VEX rule applied: {base_score:.3f} → {adjusted_score:.3f}",
+                        extra={
+                            "event": "confidence_rule_applied",
+                            "rule": "0dte_low_gex_vex_avoid_stop",
+                            "gex": gex,
+                            "vex": vex,
+                            "gex_avg": gex_avg,
+                            "vex_avg": vex_avg,
+                            "multiplier": multiplier,
+                        },
+                    )
+        
+        return adjusted_score
 
     def should_trade(self, flow: Dict[str, Any], threshold: float = DEFAULT_SCORE_THRESHOLD) -> bool:
         """Check if flow score exceeds threshold."""
         return self.score(flow) >= threshold
+
+    async def score_enriched(self, flow: Dict[str, Any]) -> float:
+        """
+        Score a flow with full feature enrichment.
+
+        This method enriches the flow with all features from the database
+        (GEX, market tide, regimes, Greeks, etc.) before scoring.
+        This ensures feature parity between training and inference.
+
+        Use this for real-time scoring where flow data is incomplete.
+        """
+        from datetime import datetime, timezone
+
+        from orion.ml.flow_enricher import enrich_flow_for_scoring
+
+        # Extract basic flow info
+        ticker = flow.get("ticker", "")
+        entry_ts = flow.get("timestamp_utc") or flow.get("flow_ts_utc") or datetime.now(timezone.utc)
+        if isinstance(entry_ts, str):
+            from dateutil.parser import parse
+
+            entry_ts = parse(entry_ts)
+
+        put_call = flow.get("put_call", "C")
+        strike = flow.get("strike") or flow.get("strike_price")
+        underlying = flow.get("underlying_price")
+        dte = flow.get("dte")
+        premium = flow.get("premium_usd")
+        event_id = flow.get("event_id")
+        option_chain = flow.get("option_chain") or flow.get("option_symbol")
+        aggressor = flow.get("aggressor")
+        is_sweep = flow.get("is_sweep") or flow.get("is_sweep") == "true"
+        expiry = flow.get("expiry")  # Pass expiry for DTE calculation
+
+        try:
+            # Enrich with all database features
+            enriched = await enrich_flow_for_scoring(
+                ticker=ticker,
+                entry_ts=entry_ts,
+                put_call=put_call,
+                strike=strike,
+                underlying_price=underlying,
+                dte=dte,
+                premium_usd=premium,
+                event_id=event_id,
+                option_chain=option_chain,
+                aggressor=aggressor,
+                is_sweep=is_sweep,
+                expiry=expiry,  # Pass expiry for DTE calculation
+            )
+
+            logger.debug(
+                f"Enriched flow for {ticker}: {sum(1 for v in enriched.values() if v is not None)} non-null features",
+                extra={"event": "flow_enriched", "ticker": ticker},
+            )
+
+            # Score with enriched features
+            return self.score(enriched)
+        except Exception as e:
+            logger.warning(f"Flow enrichment failed for {ticker}: {e}, using raw features")
+            return self.score(flow)
 
     def score_batch(self, flows: List[Dict[str, Any]]) -> List[float]:
         """Score multiple flows."""
