@@ -203,25 +203,8 @@ class IngestionService:
         all_events.extend(events)
 
         # 2. Get Alpaca bars (streaming preferred, polling as fallback)
-        active_tickers = self.universe.get_active_universe()
-        if active_tickers:
-            # Use streaming if available (real-time, sub-second latency)
-            if self.alpaca_stream and self.alpaca_stream.is_running:
-                # Ensure newly added tickers are subscribed
-                new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
-                if new_tickers:
-                    await self.alpaca_stream.subscribe(list(new_tickers))
-                # Drain any buffered streaming events
-                streaming_events = await self.alpaca_stream.drain_events()
-                if streaming_events:
-                    for e in streaming_events:
-                        self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
-                    all_events.extend(streaming_events)
-                    logger.debug(f"Drained {len(streaming_events)} streaming events")
-            else:
-                # Fallback to polling (higher latency)
-                alpaca_events = await self._poll_alpaca(active_tickers, trace_id)
-                all_events.extend(alpaca_events)
+        alpaca_events = await self._poll_alpaca_events(trace_id)
+        all_events.extend(alpaca_events)
 
         # 3. Process & Persist
         if all_events:
@@ -237,6 +220,36 @@ class IngestionService:
         logger.info(
             "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
         )
+
+    async def _poll_alpaca_events(self, trace_id: str) -> List[BronzeEvent]:
+        """Poll Alpaca for market data events via streaming or REST fallback."""
+        active_tickers = self.universe.get_active_universe()
+        if not active_tickers:
+            return []
+
+        # Use streaming if available (real-time, sub-second latency)
+        if self.alpaca_stream and self.alpaca_stream.is_running:
+            return await self._drain_alpaca_stream(active_tickers, trace_id)
+
+        # Fallback to polling (higher latency)
+        return await self._poll_alpaca(active_tickers, trace_id)
+
+    async def _drain_alpaca_stream(self, active_tickers: List[str], trace_id: str) -> List[BronzeEvent]:
+        """Drain events from Alpaca WebSocket stream."""
+        # Ensure newly added tickers are subscribed
+        new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
+        if new_tickers:
+            await self.alpaca_stream.subscribe(list(new_tickers))
+
+        # Drain any buffered streaming events
+        streaming_events = await self.alpaca_stream.drain_events()
+        if streaming_events:
+            for e in streaming_events:
+                self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
+            logger.debug(f"Drained {len(streaming_events)} streaming events")
+
+        return streaming_events
+
 
     async def _check_overnight_sleep(self) -> None:
         from orion.core.market_schedule import MarketSchedule

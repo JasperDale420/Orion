@@ -1,6 +1,6 @@
 # Orion Codebase
 
-*Generated: 2026-01-20T18:39:45*
+*Generated: 2026-01-20T20:40:27*
 
 ---
 
@@ -9,7 +9,7 @@
 Directory: Users/jacobmcmillan/Empire/Orion
 Files analyzed: 621
 
-Estimated tokens: 828.9k
+Estimated tokens: 830.0k
 
 ---
 
@@ -6674,12 +6674,13 @@ FILE: sonar-project.properties
 ================================================
 sonar.projectKey=Orion_Project
 sonar.projectName=Orion
+sonar.host.url=http://localhost:9000
 sonar.sources=src
 sonar.tests=tests
 sonar.python.version=3.12
-sonar.coverageReportPaths=test-results.xml
 # Exclude test files from coverage & duplications
 sonar.exclusions=tests/**
+
 
 
 
@@ -17089,6 +17090,7 @@ from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.uw_alerts_connector import UWAlertsConnector
 from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
 from orion.connectors.uw_flow_connector import UWFlowConnector
+from orion.core.health_monitor import CriticalHealthException, HealthMonitor
 from orion.core.universe_manager import UniverseManager
 from orion.processing.deduper import DeduplicationEngine
 from orion.processing.feature_engine import FeatureEngine
@@ -17254,7 +17256,6 @@ async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
         logger.error(f"DB Write Error (Gold): {e}")
         return
 
-    # Push to queue for execution service
     try:
         from orion.shared.candidate_queue import CandidateQueue
 
@@ -17265,7 +17266,590 @@ async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
         logger.error(f"Failed to push candidates to queue: {e}")
 
 
+# --- Helper functions for main() to reduce cognitive complexity ---
+
+
+async def _initialize_resources() -> (
+    tuple[
+        "RedpandaProducer",
+        "HealthMonitor",
+        "UWFlowConnector",
+        "UWDarkPoolConnector",
+        "UWAlertsConnector",
+        "UniverseManager",
+        "AlpacaMarketConnector",
+        "AlpacaStreamConnector | None",
+        "FeatureEngine",
+        "RuleEngine",
+        "LakehouseWriter",
+        "Metrics | None",
+    ]
+):
+    """Initialize all resources and connectors."""
+    from orion.core.health_monitor import HealthMonitor
+
+    global _metrics
+
+    logger.info("Starting Orion Ingestion Service...")
+
+    # Initialize metrics
+    if _metrics is None and "init_metrics" in globals():
+        try:
+            _metrics = await init_metrics()  # type: ignore[arg-type]
+        except Exception as metric_err:
+            logger.warning(f"Metrics initialization failed: {metric_err}")
+
+    # Reset circuit breaker if configured
+    if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
+        try:
+            from orion.core.circuit_breaker import CircuitBreaker
+
+            await CircuitBreaker().close()
+        except Exception as cb_err:
+            logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+
+    # Initialize Redpanda and Health Monitor
+    producer = await RedpandaProducer.get_instance()
+    await producer.start()
+    health_monitor = HealthMonitor()
+
+    # Initialize DB
+    await init_db()
+
+    # Initialize Connectors
+    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
+    uw_flow = UWFlowConnector(gateway_url=gateway_url)
+    uw_dark = UWDarkPoolConnector(gateway_url=gateway_url)
+    uw_alerts = UWAlertsConnector(gateway_url=gateway_url)
+
+    universe = UniverseManager()
+    await universe.hydrate_from_db()
+
+    alpaca = AlpacaMarketConnector(
+        api_key=system_settings.alpaca_api_key,
+        secret_key=system_settings.alpaca_secret_key,
+        paper=system_settings.alpaca_paper,
+    )
+
+    # Initialize streaming connector
+    alpaca_stream: AlpacaStreamConnector | None = None
+    use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
+    if use_streaming:
+        try:
+            alpaca_stream = AlpacaStreamConnector(
+                api_key=system_settings.alpaca_api_key,
+                secret_key=system_settings.alpaca_secret_key,
+                feed="sip",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create streaming connector, using polling: {e}")
+
+    feature_engine = FeatureEngine()
+    rule_engine = RuleEngine()
+    lakehouse = LakehouseWriter()
+
+    # Initialize Calendar
+    xcals.get_calendar("XNYS")
+
+    logger.info("Connectors initialized. Starting polling loop.")
+
+    return (
+        producer,
+        health_monitor,
+        uw_flow,
+        uw_dark,
+        uw_alerts,
+        universe,
+        alpaca,
+        alpaca_stream,
+        feature_engine,
+        rule_engine,
+        lakehouse,
+        _metrics,
+    )
+
+
+async def _start_background_jobs(alpaca_stream: "AlpacaStreamConnector | None", universe: UniverseManager) -> None:
+    """Start background jobs like rollup and window features."""
+    # Start rollup job
+    try:
+        from orion.jobs.rollup_job import RollupJob
+
+        rollup_job = RollupJob(loop_interval_seconds=60.0)
+        _rollup_task = asyncio.create_task(rollup_job.run_forever())  # noqa: F841
+        logger.info("Rollup job started as background task")
+    except Exception as e:
+        logger.warning(f"Failed to start rollup job: {e}")
+
+    # Start window feature job
+    try:
+        from orion.jobs.window_feature_job import WindowFeatureJob
+
+        window_job = WindowFeatureJob(loop_interval_seconds=300.0)
+        _window_task = asyncio.create_task(window_job.run_forever())  # noqa: F841
+        logger.info("Window feature job started as background task")
+    except Exception as e:
+        logger.warning(f"Failed to start window feature job: {e}")
+
+    # Start Alpaca streaming
+    if alpaca_stream:
+        try:
+            active_tickers = universe.get_active_universe()
+            if active_tickers:
+                await alpaca_stream.subscribe(active_tickers)
+            await alpaca_stream.start()
+            logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
+        except Exception as e:
+            logger.warning(f"Failed to start Alpaca streaming, using polling: {e}")
+
+
+def _get_polling_interval(now_et: datetime) -> float:
+    """Return appropriate polling interval based on market hours."""
+    CORE_HOURS_INTERVAL = 300.0  # 5 minutes
+    EXTENDED_HOURS_INTERVAL = 900.0  # 15 minutes
+
+    hour = now_et.hour
+    minute = now_et.minute
+    # Core hours: 9:30 AM - 4:00 PM ET
+    if (hour == 9 and minute >= 30) or (10 <= hour < 16):
+        return CORE_HOURS_INTERVAL
+    return EXTENDED_HOURS_INTERVAL
+
+
+async def _check_overnight_sleep(
+    now_et: datetime,
+    shutdown_event: asyncio.Event,
+    health_monitor: "HealthMonitor",
+) -> bool:
+    """Check if we should sleep during off-hours. Returns True if should continue main loop."""
+    is_weekday = now_et.weekday() < 5
+    is_active_time = 4 <= now_et.hour < 20
+
+    if is_weekday and is_active_time:
+        return False  # No sleep needed
+
+    # Calculate sleep duration until next 04:00 ET
+    next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+    # Handle early morning weekday case
+    if is_weekday and now_et.hour < 4:
+        next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
+
+    # Adjust for weekend
+    while next_wake.weekday() >= 5:
+        next_wake += timedelta(days=1)
+
+    sleep_seconds = (next_wake - now_et).total_seconds()
+
+    if sleep_seconds > 0:
+        logger.info(
+            f"Outside active hours (04:00-20:00 ET). Sleeping until {next_wake} ET ({sleep_seconds / 3600:.1f} hours).",
+            extra={"event_type": "SLEEP_OVERNIGHT", "next_wake_et": next_wake.isoformat()},
+        )
+
+        chunk = 60.0
+        while sleep_seconds > 0 and not shutdown_event.is_set():
+            wait = min(chunk, sleep_seconds)
+            await asyncio.sleep(wait)
+            sleep_seconds -= wait
+            health_monitor.update_heartbeat()
+
+    return True  # Should continue to next iteration
+
+
+async def _poll_uw_connectors(
+    uw_flow: UWFlowConnector,
+    uw_dark: UWDarkPoolConnector,
+    uw_alerts: UWAlertsConnector,
+    health_monitor: "HealthMonitor",
+    universe: UniverseManager,
+    trace_id: str,
+) -> List[BronzeEvent]:
+    """Poll all UW connectors and return combined events."""
+    from orion.core.health_monitor import CriticalHealthException
+
+    events: List[BronzeEvent] = []
+
+    try:
+        flow_events = await uw_flow.poll(lookback_seconds=300)
+        dark_events = await uw_dark.fetch_events(lookback_seconds=300)
+        alert_events = await uw_alerts.fetch_events(lookback_seconds=300)
+
+        uw_events = flow_events + dark_events + alert_events
+
+        # Check lag
+        newest = max((e.event_ts_utc for e in uw_events if e.event_ts_utc), default=None)
+        if newest:
+            try:
+                await health_monitor.check_lag(newest)
+            except CriticalHealthException as che:
+                logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
+
+        # Tag metadata and update universe
+        for evt in uw_events:
+            if not getattr(evt, "ingest", None):
+                connector_name = "uw_flow"
+                if evt.event_type == "UW_DARKPOOL":
+                    connector_name = "uw_darkpool"
+                elif evt.event_type == "UW_ALERT":
+                    connector_name = "uw_alerts"
+                evt.ingest = {
+                    "connector": connector_name,
+                    "run_id": RUN_ID,
+                    "trace_id": trace_id,
+                    "attempt": 1,
+                }
+            universe.update_from_event(evt)
+            events.append(evt)
+
+    except Exception as e:
+        logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id, "event_type": "UW_POLL_ERROR"})
+
+    return events
+
+
+async def _poll_alpaca(
+    alpaca: AlpacaMarketConnector,
+    alpaca_stream: "AlpacaStreamConnector | None",
+    universe: UniverseManager,
+    health_monitor: "HealthMonitor",
+    trace_id: str,
+) -> List[BronzeEvent]:
+    """Poll Alpaca for market data events."""
+    from orion.core.health_monitor import CriticalHealthException
+
+    events: List[BronzeEvent] = []
+    active_tickers = universe.get_active_universe()
+
+    if not active_tickers:
+        return events
+
+    try:
+        # Use streaming if available
+        if alpaca_stream and alpaca_stream.is_running:
+            new_tickers = set(active_tickers) - alpaca_stream.subscribed_tickers
+            if new_tickers:
+                await alpaca_stream.subscribe(list(new_tickers))
+            alpaca_events = await alpaca_stream.drain_events()
+            connector_name = "alpaca_stream"
+        else:
+            alpaca_events = alpaca.poll(
+                active_tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
+            )
+            connector_name = "alpaca_market"
+
+        # Check lag
+        if alpaca_events:
+            newest = max((e.event_ts_utc for e in alpaca_events if e.event_ts_utc), default=None)
+            if newest:
+                try:
+                    await health_monitor.check_lag(newest)
+                except CriticalHealthException as che:
+                    logger.critical(f"HEALTH MONITOR TRIGGERED (Alpaca): {che}")
+
+        for evt in alpaca_events:
+            if not getattr(evt, "ingest", None):
+                evt.ingest = {
+                    "connector": connector_name,
+                    "run_id": RUN_ID,
+                    "trace_id": trace_id,
+                    "attempt": 1,
+                }
+        events.extend(alpaca_events)
+
+    except Exception as e:
+        logger.error(f"Error getting Alpaca bars: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_ERROR"})
+
+    return events
+
+
+async def _process_and_persist_events(
+    all_events: List[BronzeEvent], trace_id: str, metrics: "Metrics | None"
+) -> List[BronzeEvent]:
+    """Deduplicate, enrich, and persist events to storage."""
+    from orion.core.timekeeping import derive_trading_date_and_session
+
+    async with async_session_factory() as session:
+        deduper = DeduplicationEngine(session)
+        processed_events = []
+
+        for evt in all_events:
+            raw_payload = evt.payload
+
+            if not evt.ticker:
+                evt.ticker = raw_payload.get("ticker") or raw_payload.get("underlying") or raw_payload.get("symbol")
+
+            if evt.event_ts_utc and evt.session is None:
+                evt.event_ts_utc = ensure_utc(evt.event_ts_utc)
+                td, sess = derive_trading_date_and_session(evt.event_ts_utc)
+                evt.trading_date = td
+                evt.session = sess
+
+            if evt.event_ts_utc and evt.trading_date is None:
+                td, _ = derive_trading_date_and_session(evt.event_ts_utc)
+                evt.trading_date = td
+
+            if evt.session is None:
+                evt.session = "CLOSED"
+
+            if getattr(evt, "ingest", None):
+                evt.ingest.setdefault("run_id", RUN_ID)
+                evt.ingest.setdefault("trace_id", trace_id)
+                evt.ingest.setdefault("attempt", 1)
+            else:
+                evt.ingest = {"connector": "unknown", "run_id": RUN_ID, "trace_id": trace_id, "attempt": 1}
+
+            if evt.received_ts_utc is None:
+                evt.received_ts_utc = datetime.now(timezone.utc)
+
+            evt.payload = raw_payload
+            processed_events.append(evt)
+
+        unique_events = await deduper.dedupe_batch(processed_events)
+
+        if unique_events:
+            await save_events_to_db(unique_events)
+            await save_silver_data(unique_events)
+
+            if metrics:
+                for evt in unique_events:
+                    metrics.ingest_events_total.labels(source=evt.source).inc()
+
+        return unique_events
+
+
+async def _run_feature_and_rule_pipelines(
+    all_events: List[BronzeEvent],
+    feature_engine: FeatureEngine,
+    rule_engine: RuleEngine,
+    metrics: "Metrics | None",
+) -> None:
+    """Run feature extraction and rule engine for events."""
+    try:
+        feature_engine.process_uw_flow(all_events)
+    except Exception as e:
+        logger.error(f"Feature Engine (UW Flow State) Error: {e}")
+
+    # Process UW Flow events
+    uw_flow_events = [e for e in all_events if e.event_type == "UW_FLOW"]
+    if uw_flow_events:
+        await _process_uw_flow_pipeline(uw_flow_events, feature_engine, rule_engine, metrics)
+
+    # Process Alpaca events
+    alpaca_events = [e for e in all_events if e.event_type == "ALPACA_BAR_1M"]
+    if alpaca_events:
+        await _process_alpaca_pipeline(alpaca_events, feature_engine, rule_engine, metrics)
+
+
+async def _process_uw_flow_pipeline(
+    events: List[BronzeEvent],
+    feature_engine: FeatureEngine,
+    rule_engine: RuleEngine,
+    metrics: "Metrics | None",
+) -> None:
+    """Process UW flow events through feature and rule pipeline."""
+    try:
+        uw_signals = feature_engine.process_uw_flow_events(events)
+        if uw_signals:
+            await save_signals_to_db(uw_signals)
+            await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
+
+            # ML Scoring Path
+            try:
+                from orion.ml.flow_processor import MLFlowProcessor
+
+                flow_dicts = []
+                for e in events:
+                    if e.payload:
+                        flow_dict = dict(e.payload)
+                        flow_dict["event_id"] = e.event_id
+                        flow_dicts.append(flow_dict)
+
+                if flow_dicts:
+                    ml_processor = MLFlowProcessor(score_threshold=0.5)
+                    ml_candidates = await ml_processor.process_flows_enriched(flow_dicts)
+                    if ml_candidates:
+                        await save_candidates_to_db(ml_candidates)
+                        logger.info(
+                            f"ML Scorer generated {len(ml_candidates)} candidates (enriched)",
+                            extra={"event": "ml_candidates_enriched", "count": len(ml_candidates)},
+                        )
+                        if metrics:
+                            metrics.ingest_candidates_total.inc(len(ml_candidates))
+            except Exception as ml_err:
+                logger.warning(f"ML Scoring path error (non-fatal): {ml_err}")
+
+            # Legacy Rule Engine
+            try:
+                uw_candidates = rule_engine.process_signals(uw_signals)
+                if uw_candidates:
+                    logger.debug(f"Rule engine generated {len(uw_candidates)} candidates")
+            except Exception as e:
+                logger.error(f"Rule Engine Error (UW): {e}")
+    except Exception as e:
+        logger.error(f"Feature Engine Error (UW): {e}")
+
+
+async def _process_alpaca_pipeline(
+    events: List[BronzeEvent],
+    feature_engine: FeatureEngine,
+    rule_engine: RuleEngine,
+    metrics: "Metrics | None",
+) -> None:
+    """Process Alpaca events through feature and rule pipeline."""
+    try:
+        bar_signals = feature_engine.process_alpaca_bars(events)
+        if bar_signals:
+            await save_signals_to_db(bar_signals)
+            await feature_engine.persist_signal_batch(bar_signals, "v1_legacy")
+
+            try:
+                candidates = rule_engine.process_signals(bar_signals)
+                if candidates:
+                    await save_candidates_to_db(candidates)
+                    if metrics:
+                        metrics.ingest_candidates_total.inc(len(candidates))
+            except Exception as e:
+                logger.error(f"Rule Engine Error: {e}")
+    except Exception as e:
+        logger.error(f"Feature Engine Error: {e}")
+
+
+async def _write_lakehouse(all_events: List[BronzeEvent], lakehouse: LakehouseWriter, trace_id: str) -> None:
+    """Write events to lakehouse."""
+    try:
+        lakehouse.write_events(all_events)
+    except Exception as e:
+        logger.error(f"Lakehouse Write Error: {e}", extra={"event_type": "LAKE_WRITE_FAILED"})
+        try:
+            from orion.shared.dlq_utils import DLQWriter
+
+            await DLQWriter.write_to_dlq(
+                error=e,
+                event_type="LAKE_WRITE_FAILED",
+                source="LakehouseWriter",
+                payload={
+                    "count": len(all_events),
+                    "event_ids": [ev.event_id for ev in all_events[:50]],
+                },
+                context="Failed to write lakehouse batch; see logs for details",
+                run_id=RUN_ID,
+                trace_id=trace_id,
+            )
+        except Exception as dlq_err:
+            logger.critical(f"Failed to DLQ lakehouse write failure: {dlq_err}")
+
+
+def _check_eod_trigger() -> None:
+    """Check if EOD agent should be triggered."""
+    global EOD_TRIGGER_LAST_RUN
+
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.hour == 1 and now_utc.minute >= 5:
+        today_str = now_utc.date().isoformat()
+        if EOD_TRIGGER_LAST_RUN != today_str:
+            logger.info("Triggering EOD Review Agent...")
+            try:
+                _eod_task = asyncio.create_task(run_eod_task())  # noqa: F841
+                EOD_TRIGGER_LAST_RUN = today_str
+            except Exception as e:
+                logger.error(f"Failed to trigger EOD Agent: {e}")
+
+
+def _check_data_quality() -> None:
+    """Check if data quality job should run."""
+    global QUALITY_CHECK_LOOP_COUNT
+
+    QUALITY_CHECK_LOOP_COUNT += 1
+    if QUALITY_CHECK_LOOP_COUNT >= 60:
+        QUALITY_CHECK_LOOP_COUNT = 0
+        try:
+            from orion.jobs.data_quality_checker import run_quality_checks
+
+            _quality_task = asyncio.create_task(run_quality_checks())  # noqa: F841
+            logger.info("Triggered hourly data quality check")
+        except Exception as e:
+            logger.error(f"Failed to run data quality check: {e}")
+
+
+async def _handle_loop_crash(e: Exception) -> None:
+    """Handle crash in main loop by writing to DLQ."""
+    try:
+        async with async_session_factory() as session:
+            dlq_entry = DeadLetterQueue(
+                error_message=str(e),
+                stack_trace=traceback.format_exc(),
+                source="INGEST_LOOP",
+                event_type="UNKNOWN",
+                payload={"context": "Main Loop Crash"},
+            )
+            session.add(dlq_entry)
+            await session.commit()
+    except Exception as dlq_err:
+        logger.critical(f"DLQ Write Failed: {dlq_err}")
+
+
+async def _run_health_check(health_monitor: HealthMonitor) -> None:
+    """Run health check and update DB status."""
+    try:
+        await health_monitor.check_health()
+        await health_monitor.update_db_status(True, "Nominal")
+    except CriticalHealthException as che:
+        logger.critical(f"HEALTH MONITOR HEARTBEAT FAILURE: {che}")
+        await health_monitor.update_db_status(False, str(che))
+
+
+async def _wait_for_next_cycle(shutdown_event: asyncio.Event, sleep_time: float) -> bool:
+    """Wait for next cycle or shutdown. Returns True if shutdown requested."""
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+async def _run_ingestion_cycle(
+    uw_flow: UWFlowConnector,
+    uw_dark: UWDarkPoolConnector,
+    uw_alerts: UWAlertsConnector,
+    universe: UniverseManager,
+    alpaca: AlpacaMarketConnector,
+    alpaca_stream: "AlpacaStreamConnector | None",
+    health_monitor: HealthMonitor,
+    feature_engine: FeatureEngine,
+    rule_engine: RuleEngine,
+    lakehouse: LakehouseWriter,
+    metrics: "Metrics | None",
+    trace_id: str,
+) -> int:
+    """Run a single ingestion cycle. Returns count of processed events."""
+    # Poll UW connectors
+    uw_events = await _poll_uw_connectors(uw_flow, uw_dark, uw_alerts, health_monitor, universe, trace_id)
+
+    # Poll Alpaca
+    alpaca_events = await _poll_alpaca(alpaca, alpaca_stream, universe, health_monitor, trace_id)
+
+    # Combine all events
+    all_events = uw_events + alpaca_events
+
+    if not all_events:
+        return 0
+
+    # Process and persist events
+    unique_events = await _process_and_persist_events(all_events, trace_id, metrics)
+
+    if unique_events:
+        # Run feature and rule pipelines
+        await _run_feature_and_rule_pipelines(unique_events, feature_engine, rule_engine, metrics)
+
+        # Write to lakehouse
+        await _write_lakehouse(unique_events, lakehouse, trace_id)
+
+    return len(unique_events)
+
+
 async def main() -> None:
+    """Main ingestion service entry point."""
     global EOD_TRIGGER_LAST_RUN
     global QUALITY_CHECK_LOOP_COUNT
     global _metrics
@@ -17281,513 +17865,96 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
-    logger.info("Starting Orion Ingestion Service...")
+    # Initialize all resources
+    (
+        producer,
+        health_monitor,
+        uw_flow,
+        uw_dark,
+        uw_alerts,
+        universe,
+        alpaca,
+        alpaca_stream,
+        feature_engine,
+        rule_engine,
+        lakehouse,
+        _metrics,
+    ) = await _initialize_resources()
 
-    # Initialize metrics once the event loop is running
-    if _metrics is None and "init_metrics" in globals():
-        try:
-            _metrics = await init_metrics()  # type: ignore[arg-type]
-        except Exception as metric_err:
-            logger.warning(f"Metrics initialization failed: {metric_err}")
+    # Start background jobs
+    await _start_background_jobs(alpaca_stream, universe)
 
-    # Optionally reset circuit breaker on start (useful after dev crashes / stale lag)
-    if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
-        try:
-            from orion.core.circuit_breaker import CircuitBreaker
+    # Timezone for market hours
+    from zoneinfo import ZoneInfo
 
-            await CircuitBreaker().close()
-        except Exception as cb_err:
-            logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+    eastern = ZoneInfo("America/New_York")
 
-    # Initialize Redpanda
-    producer = await RedpandaProducer.get_instance()
-    await producer.start()
-
-    # Initialize Health Monitor
-    from orion.core.health_monitor import CriticalHealthException, HealthMonitor
-
-    health_monitor = HealthMonitor()
-
-    # Initialize DB (create tables if not exist)
-    await init_db()
-
-    # Initialize Connectors
-    uw_base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
-    uw_flow = UWFlowConnector(api_key=system_settings.uw_api_key)
-    uw_dark = UWDarkPoolConnector(api_key=system_settings.uw_api_key, base_url=uw_base_url)
-    uw_alerts = UWAlertsConnector(api_key=system_settings.uw_api_key, base_url=uw_base_url)
-
-    universe = UniverseManager()
-    await universe.hydrate_from_db()
-
-    alpaca = AlpacaMarketConnector(
-        api_key=system_settings.alpaca_api_key,
-        secret_key=system_settings.alpaca_secret_key,
-        paper=system_settings.alpaca_paper,
-    )
-    
-    # Real-time streaming connector (preferred over polling for lower latency)
-    alpaca_stream: AlpacaStreamConnector | None = None
-    use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
-    if use_streaming:
-        try:
-            alpaca_stream = AlpacaStreamConnector(
-                api_key=system_settings.alpaca_api_key,
-                secret_key=system_settings.alpaca_secret_key,
-                feed="sip",
-            )
-        except Exception as e:
-            logger.warning(f"Failed to create streaming connector, using polling: {e}")
-            alpaca_stream = None
-
-    feature_engine = FeatureEngine()
-    rule_engine = RuleEngine()
-    lakehouse = LakehouseWriter()
-
-    # Initialize Calendar
-    xcals.get_calendar("XNYS")
-
-    # Timezone for Market Hours logic (ET)
-    import pytz
-
-    eastern = pytz.timezone("America/New_York")
-
-    logger.info("Connectors initialized. Starting polling loop.")
-
-    # Start rollup job as background task (aggregates silver_signals into gold_ticker_rollup)
-    try:
-        from orion.jobs.rollup_job import RollupJob
-
-        rollup_job = RollupJob(loop_interval_seconds=60.0)
-        _rollup_task = asyncio.create_task(rollup_job.run_forever())  # noqa: F841
-        logger.info("Rollup job started as background task")
-    except Exception as e:
-        logger.warning(f"Failed to start rollup job: {e}")
-
-    # Start window feature job (aggregates flow/darkpool into window features: 5m/1h/1d/1w)
-    try:
-        from orion.jobs.window_feature_job import WindowFeatureJob
-
-        window_job = WindowFeatureJob(loop_interval_seconds=300.0)  # Every 5 min
-        _window_task = asyncio.create_task(window_job.run_forever())  # noqa: F841
-        logger.info("Window feature job started as background task")
-    except Exception as e:
-        logger.warning(f"Failed to start window feature job: {e}")
-
-    # Start Alpaca WebSocket streaming (preferred for low-latency bars)
-    if alpaca_stream:
-        try:
-            active_tickers = universe.get_active_universe()
-            if active_tickers:
-                await alpaca_stream.subscribe(active_tickers)
-            await alpaca_stream.start()
-            logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
-        except Exception as e:
-            logger.warning(f"Failed to start Alpaca streaming, using polling: {e}")
-            alpaca_stream = None
-
-    # Adaptive polling intervals (API optimization)
-    # Core hours (9:30 AM - 4:00 PM ET): 5 min polling for real-time trading
-    # Extended hours (4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET): 15 min polling
-    CORE_HOURS_INTERVAL = 300.0  # 5 minutes
-    EXTENDED_HOURS_INTERVAL = 900.0  # 15 minutes
-
-    def get_polling_interval(now_et: datetime) -> float:
-        """Return appropriate polling interval based on market hours."""
-        hour = now_et.hour
-        minute = now_et.minute
-        # Core hours: 9:30 AM - 4:00 PM ET
-        if (hour == 9 and minute >= 30) or (10 <= hour < 16):
-            return CORE_HOURS_INTERVAL
-        # Extended hours: 4:00 AM - 9:30 AM, 4:00 PM - 8:00 PM ET
-        return EXTENDED_HOURS_INTERVAL
-
+    # Main polling loop
     while not shutdown_event.is_set():
         try:
             start_time = asyncio.get_running_loop().time()
-            all_events = []
             trace_id = str(uuid.uuid4())
 
-            # --- Overnight Sleep Logic ---
-            # Active Window: Mon-Fri, 04:00 ET to 20:00 ET.
+            # Check overnight sleep
             now_utc = datetime.now(timezone.utc)
             now_et = now_utc.astimezone(eastern)
+            loop_interval = _get_polling_interval(now_et)
 
-            # Determine adaptive polling interval
-            loop_interval = get_polling_interval(now_et)
+            should_continue = await _check_overnight_sleep(now_et, shutdown_event, health_monitor)
+            if should_continue:
+                if shutdown_event.is_set():
+                    break
+                continue
 
-            # Check if we are in active hours
-            is_weekday = now_et.weekday() < 5  # 0=Mon, 4=Fri
-            is_active_time = 4 <= now_et.hour < 20
-
-            if not (is_weekday and is_active_time):
-                # Calculate sleep duration until next 04:00 ET
-                # If it's a weekday but after 20:00, next wake is tomorrow 04:00.
-                # If it's Friday after 20:00 or Sat/Sun, next wake is Monday 04:00.
-
-                # Start with next day 4am
-                next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0) + timedelta(days=1)
-
-                # If we are currently before 4am on a weekday, safe to just wait until today 4am?
-                # Actually, if now_et.hour < 4 and it is a weekday, we just need to wait until today 4am.
-                if is_weekday and now_et.hour < 4:
-                    next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
-
-                # Adjust for weekend
-                # If next_wake is Sat (5) -> add 2 days -> Mon (0)
-                # If next_wake is Sun (6) -> add 1 day -> Mon (0)
-                while next_wake.weekday() >= 5:
-                    next_wake += timedelta(days=1)
-
-                sleep_seconds = (next_wake - now_et).total_seconds()
-
-                # Safety clamp: Ensure we don't sleep negative or crazy amounts,
-                # though logic above should cover it.
-                if sleep_seconds > 0:
-                    logger.info(
-                        f"Outside active hours (04:00-20:00 ET). Sleeping until {next_wake} ET ({sleep_seconds / 3600:.1f} hours).",
-                        extra={"event_type": "SLEEP_OVERNIGHT", "next_wake_et": next_wake.isoformat()},
-                    )
-
-                    # We await in chunks to allow for shutdown signals
-                    chunk = 60.0  # Check shutdown every minute
-                    while sleep_seconds > 0 and not shutdown_event.is_set():
-                        wait = min(chunk, sleep_seconds)
-                        await asyncio.sleep(wait)
-                        sleep_seconds -= wait
-                        health_monitor.update_heartbeat()  # Keep heartbeat alive so we don't look dead
-
-                    if shutdown_event.is_set():
-                        break
-
-                    # Refresh start_time after waking up so we don't calc weird elapsed times
-                    # Continue to start of loop
-                    continue
-
-            # Update Heartbeat
+            # Update heartbeat
             health_monitor.update_heartbeat()
 
-            # 1. Poll UW
-            try:
-                # lookback_seconds only applies on cold start (no watermark); after first poll, watermarks take over
-                flow_events = await uw_flow.poll(lookback_seconds=300)
-                dark_events = await uw_dark.fetch_events(lookback_seconds=300)
-                alert_events = await uw_alerts.fetch_events(lookback_seconds=300)
+            # Run ingestion cycle
+            processed_count = await _run_ingestion_cycle(
+                uw_flow,
+                uw_dark,
+                uw_alerts,
+                universe,
+                alpaca,
+                alpaca_stream,
+                health_monitor,
+                feature_engine,
+                rule_engine,
+                lakehouse,
+                _metrics,
+                trace_id,
+            )
 
-                # Check Lag for UW based on freshest event only (avoid tripping breaker due to old records in a batch)
-                uw_events = flow_events + dark_events + alert_events
-                newest = max((e.event_ts_utc for e in uw_events if e.event_ts_utc), default=None)
-                if newest:
-                    try:
-                        await health_monitor.check_lag(newest)
-                    except CriticalHealthException as che:
-                        logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
-                        # Keep running; breaker state is handled via DB and observed by other services.
-                        pass
+            # Check EOD trigger
+            _check_eod_trigger()
 
-                # 2. Update Universe
-                for evt in flow_events + dark_events + alert_events:
-                    if not getattr(evt, "ingest", None):
-                        evt.ingest = {
-                            "connector": (
-                                "uw_flow"
-                                if evt.event_type == "UW_FLOW"
-                                else "uw_darkpool" if evt.event_type == "UW_DARKPOOL" else "uw_alerts"
-                            ),
-                            "run_id": RUN_ID,
-                            "trace_id": trace_id,
-                            "attempt": 1,
-                        }
-                    universe.update_from_event(evt)
-                    all_events.append(evt)
+            # Check data quality
+            _check_data_quality()
 
-            except Exception as e:
-                logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id, "event_type": "UW_POLL_ERROR"})
+            # Metrics and heartbeat
+            elapsed = asyncio.get_running_loop().time() - start_time
+            if _metrics:
+                _metrics.ingest_loop_duration_seconds.observe(elapsed)
 
-            # ... (Alpaca polling) ...
-            # 3. Get Alpaca bars (streaming preferred, polling as fallback)
-            active_tickers = universe.get_active_universe()
-            if active_tickers:
-                try:
-                    # Use streaming if available (real-time, sub-second latency)
-                    if alpaca_stream and alpaca_stream.is_running:
-                        # Ensure newly added tickers are subscribed
-                        new_tickers = set(active_tickers) - alpaca_stream.subscribed_tickers
-                        if new_tickers:
-                            await alpaca_stream.subscribe(list(new_tickers))
-                        # Drain buffered streaming events
-                        alpaca_events = await alpaca_stream.drain_events()
-                        connector_name = "alpaca_stream"
-                    else:
-                        # Fallback to polling (higher latency)
-                        alpaca_events = alpaca.poll(
-                            active_tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
-                        )
-                        connector_name = "alpaca_market"
+            logger.info(
+                "Ingestion heartbeat",
+                extra={"trace_id": trace_id, "context": {"processed_events": processed_count}},
+            )
 
-                    # Check Lag for Alpaca based on freshest event only (avoid tripping breaker on backfill batches)
-                    if alpaca_events:
-                        newest = max((e.event_ts_utc for e in alpaca_events if e.event_ts_utc), default=None)
-                        if newest:
-                            try:
-                                await health_monitor.check_lag(newest)
-                            except CriticalHealthException as che:
-                                logger.critical(f"HEALTH MONITOR TRIGGERED (Alpaca): {che}")
+            # Health check
+            await _run_health_check(health_monitor)
 
-                    all_events.extend(alpaca_events)
-                    for evt in alpaca_events:
-                        if not getattr(evt, "ingest", None):
-                            evt.ingest = {
-                                "connector": connector_name,
-                                "run_id": RUN_ID,
-                                "trace_id": trace_id,
-                                "attempt": 1,
-                            }
-                except Exception as e:
-                    logger.error(
-                        f"Error getting Alpaca bars: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_ERROR"}
-                    )
-
-            # ... (Processing) ...
-
-            # 5. Write to Storage (and Redpanda)
-            if all_events:
-                async with async_session_factory() as session:
-                    deduper = DeduplicationEngine(session)
-                    processed_events = []
-
-                    from orion.core.timekeeping import derive_trading_date_and_session
-
-                    for evt in all_events:
-                        # Store raw payload in bronze - DO NOT normalize here
-                        # Normalization happens in save_silver_data()
-                        raw_payload = evt.payload  # Keep raw for bronze
-
-                        # Extract ticker from raw payload if not set
-                        if not evt.ticker:
-                            evt.ticker = (
-                                raw_payload.get("ticker") or raw_payload.get("underlying") or raw_payload.get("symbol")
-                            )
-
-                        if evt.event_ts_utc and evt.session is None:
-                            evt.event_ts_utc = ensure_utc(evt.event_ts_utc)
-                            td, sess = derive_trading_date_and_session(evt.event_ts_utc)
-                            evt.trading_date = td
-                            evt.session = sess
-                        if evt.event_ts_utc and evt.trading_date is None:
-                            td, _ = derive_trading_date_and_session(evt.event_ts_utc)
-                            evt.trading_date = td
-                        if evt.session is None:
-                            evt.session = "CLOSED"
-
-                        if getattr(evt, "ingest", None):
-                            evt.ingest.setdefault("run_id", RUN_ID)
-                            evt.ingest.setdefault("trace_id", trace_id)
-                            evt.ingest.setdefault("attempt", 1)
-                        else:
-                            evt.ingest = {"connector": "unknown", "run_id": RUN_ID, "trace_id": trace_id, "attempt": 1}
-
-                        if evt.received_ts_utc is None:
-                            evt.received_ts_utc = datetime.now(timezone.utc)
-
-                        # Keep raw payload for bronze storage
-                        evt.payload = raw_payload
-                        processed_events.append(evt)
-
-                    unique_events = await deduper.dedupe_batch(processed_events)
-
-                    if unique_events:
-                        await save_events_to_db(unique_events)
-                        # Persist Normalized Silver Data (normalizer runs here)
-                        await save_silver_data(unique_events)
-                        all_events = unique_events
-
-                        # Metrics: track events by source
-                        if _metrics:
-                            for evt in unique_events:
-                                _metrics.ingest_events_total.labels(source=evt.source).inc()
-
-                # Feature Engine, etc...
-                # Update in-memory UW flow state so OHLCV signals can be enriched with recent flow features.
-                try:
-                    feature_engine.process_uw_flow(all_events)
-                except Exception as e:
-                    logger.error(f"Feature Engine (UW Flow State) Error: {e}")
-
-                # Rule-first candidates from UW_FLOW events (PRD 9.1)
-                uw_flow_events_only = [e for e in all_events if e.event_type == "UW_FLOW"]
-                if uw_flow_events_only:
-                    try:
-                        uw_signals = feature_engine.process_uw_flow_events(uw_flow_events_only)
-                        if uw_signals:
-                            await save_signals_to_db(uw_signals)
-                            # Persist to Gold layer for model training (PRD 6.3)
-                            await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
-
-                            # === ML SCORING PATH (Pure ML, no rule pre-filter) ===
-                            try:
-                                from orion.ml.flow_processor import MLFlowProcessor
-
-                                # Include event_id in flow dict for Greeks enrichment
-                                flow_dicts = []
-                                for e in uw_flow_events_only:
-                                    if e.payload:
-                                        flow_dict = dict(e.payload)
-                                        flow_dict["event_id"] = e.event_id  # Inject for Greeks lookup
-                                        flow_dicts.append(flow_dict)
-
-                                if flow_dicts:
-                                    ml_processor = MLFlowProcessor(score_threshold=0.5)
-                                    # Use enriched scoring for feature parity with training
-                                    ml_candidates = await ml_processor.process_flows_enriched(flow_dicts)
-                                    if ml_candidates:
-                                        await save_candidates_to_db(ml_candidates)
-                                        logger.info(
-                                            f"ML Scorer generated {len(ml_candidates)} candidates (enriched)",
-                                            extra={"event": "ml_candidates_enriched", "count": len(ml_candidates)},
-                                        )
-                                        if _metrics:
-                                            _metrics.ingest_candidates_total.inc(len(ml_candidates))
-                            except Exception as ml_err:
-                                logger.warning(f"ML Scoring path error (non-fatal): {ml_err}")
-
-                            # === LEGACY RULE ENGINE PATH ===
-                            try:
-                                uw_candidates = rule_engine.process_signals(uw_signals)
-                                if uw_candidates:
-                                    # Note: These may duplicate ML candidates, dedup happens at execution
-                                    logger.debug(f"Rule engine generated {len(uw_candidates)} candidates")
-                            except Exception as e:
-                                logger.error(f"Rule Engine Error (UW): {e}")
-                    except Exception as e:
-                        logger.error(f"Feature Engine Error (UW): {e}")
-
-                alpaca_events_only = [e for e in all_events if e.event_type == "ALPACA_BAR_1M"]
-                if alpaca_events_only:
-                    try:
-                        bar_signals = feature_engine.process_alpaca_bars(alpaca_events_only)
-                        if bar_signals:
-                            await save_signals_to_db(bar_signals)
-                            # Persist to Gold layer for model training (PRD 6.3)
-                            await feature_engine.persist_signal_batch(bar_signals, "v1_legacy")
-                            # Rule Engine
-                            try:
-                                candidates = rule_engine.process_signals(bar_signals)
-                                if candidates:
-                                    await save_candidates_to_db(candidates)
-                                    # Metrics: track candidates
-                                    if _metrics:
-                                        _metrics.ingest_candidates_total.inc(len(candidates))
-                            except Exception as e:
-                                logger.error(f"Rule Engine Error: {e}")
-                    except Exception as e:
-                        logger.error(f"Feature Engine Error: {e}")
-
-                # Lakehouse
-                if lakehouse:
-                    try:
-                        lakehouse.write_events(all_events)
-                    except Exception as e:
-                        logger.error(
-                            f"Lakehouse Write Error: {e}",
-                            extra={"event_type": "LAKE_WRITE_FAILED"},
-                        )
-                        try:
-                            from orion.shared.dlq_utils import DLQWriter
-
-                            await DLQWriter.write_to_dlq(
-                                error=e,
-                                event_type="LAKE_WRITE_FAILED",
-                                source="LakehouseWriter",
-                                payload={
-                                    "count": len(all_events),
-                                    "event_ids": [ev.event_id for ev in all_events[:50]],
-                                },
-                                context="Failed to write lakehouse batch; see logs for details",
-                                run_id=RUN_ID,
-                                trace_id=trace_id,
-                            )
-                        except Exception as dlq_err:
-                            logger.critical(f"Failed to DLQ lakehouse write failure: {dlq_err}")
-
-                # 6. EOD Review Trigger (PRD 13)
-                # Run at 20:05 ET (approx 01:05 UTC, depending on DST).
-                # Simple check: If time is between 01:00 and 01:10 UTC AND we haven't run today.
-                # NOTE: Ideally this observes market holidays. For now, simple daily check.
-
-                now_utc = datetime.utcnow()
-                # 20:05 ET is roughly 00:05 - 01:05 UTC. Let's aim for 01:05 UTC to be safe for both DSTs (post 8pm ET).
-
-                if now_utc.hour == 1 and now_utc.minute >= 5:
-                    today_str = now_utc.date().isoformat()
-                    if EOD_TRIGGER_LAST_RUN != today_str:
-                        logger.info("Triggering EOD Review Agent...")
-                        try:
-                            # Run in background to not block ingestion
-                            asyncio.create_task(run_eod_task())
-                            EOD_TRIGGER_LAST_RUN = today_str
-                        except Exception as e:
-                            logger.error(f"Failed to trigger EOD Agent: {e}")
-
-                # 7. Data Quality Check (runs every ~60 loops / 1 hour)
-                QUALITY_CHECK_LOOP_COUNT += 1
-                if QUALITY_CHECK_LOOP_COUNT >= 60:
-                    QUALITY_CHECK_LOOP_COUNT = 0
-                    try:
-                        from orion.jobs.data_quality_checker import run_quality_checks
-
-                        asyncio.create_task(run_quality_checks())
-                        logger.info("Triggered hourly data quality check")
-                    except Exception as e:
-                        logger.error(f"Failed to run data quality check: {e}")
+            # Sleep until next cycle
+            sleep_time = max(0.1, loop_interval - elapsed)
+            if await _wait_for_next_cycle(shutdown_event, sleep_time):
+                break
 
         except Exception as e:
             logger.error(f"Main Ingestion Loop Error: {e}")
-            # DLQ Logic
-            try:
-                async with async_session_factory() as session:
-                    dlq_entry = DeadLetterQueue(
-                        error_message=str(e),
-                        stack_trace=traceback.format_exc(),
-                        source="INGEST_LOOP",
-                        event_type="UNKNOWN",
-                        payload={"context": "Main Loop Crash"},
-                    )
-                    session.add(dlq_entry)
-                    await session.commit()
-            except Exception as dlq_err:
-                logger.critical(f"DLQ Write Failed: {dlq_err}")
-
+            await _handle_loop_crash(e)
             await asyncio.sleep(5.0)
 
-        # Sleep
-        elapsed = asyncio.get_running_loop().time() - start_time
-        sleep_time = max(0.1, loop_interval - elapsed)
-
-        # Metrics: track loop duration
-        if _metrics:
-            _metrics.ingest_loop_duration_seconds.observe(elapsed)
-
-        # Log heartbeat
-        trace_id = str(uuid.uuid4())
-        logger.info(
-            "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
-        )
-
-        try:
-            await health_monitor.check_health()
-            await health_monitor.update_db_status(True, "Nominal")
-        except CriticalHealthException as che:
-            logger.critical(f"HEALTH MONITOR HEARTBEAT FAILURE: {che}")
-            await health_monitor.update_db_status(False, str(che))
-
-        try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
-            break
-        except asyncio.TimeoutError:
-            pass
-
-    # Stop Redpanda
+    # Cleanup
     await producer.stop()
     logger.info("Ingestion Service Stopped.")
 
@@ -28409,10 +28576,10 @@ USE_GATEWAY = os.getenv("ORION_USE_GATEWAY", "true").lower() == "true"
 class AlpacaStreamConnector:
     """
     Real-time WebSocket streaming connector for Alpaca market data.
-    
+
     By default, connects to the Data Gateway's WebSocket endpoint which
     multiplexes connections to avoid Alpaca's 1-connection-per-stream limit.
-    
+
     Set ORION_USE_GATEWAY=false to use direct alpaca-py connection (not recommended).
     """
 
@@ -28427,25 +28594,25 @@ class AlpacaStreamConnector:
         self._use_gateway = use_gateway if use_gateway is not None else USE_GATEWAY
         self.on_bar_callback = on_bar_callback
         self.feed = feed
-        
+
         # Gateway client (lazy initialized)
         self._gateway_client = None
-        
+
         # Direct alpaca-py client (legacy fallback)
         self._direct_stream = None
         self._api_key = api_key
         self._secret_key = secret_key
-        
+
         # Track subscribed tickers
         self._subscribed_tickers: Set[str] = set()
-        
+
         # Event queue for buffering bars
         self._event_queue: asyncio.Queue[BronzeEvent] = asyncio.Queue()
-        
+
         # Running state
         self._running = False
         self._stream_task: Optional[asyncio.Task] = None
-        
+
         if self._use_gateway:
             logger.info("AlpacaStreamConnector initialized in Gateway mode")
         else:
@@ -28455,6 +28622,7 @@ class AlpacaStreamConnector:
         """Lazy initialization of Gateway stream client."""
         if self._gateway_client is None:
             from orion.connectors.gateway_stream_client import create_gateway_stream_client
+
             self._gateway_client = create_gateway_stream_client(
                 on_bar_callback=self._handle_gateway_event,
             )
@@ -28464,13 +28632,13 @@ class AlpacaStreamConnector:
         """Lazy initialization of direct alpaca-py stream (legacy)."""
         if self._direct_stream is None:
             from alpaca.data.live import StockDataStream
-            
+
             api_key = self._api_key or os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY")
             secret_key = self._secret_key or os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY")
-            
+
             if not api_key or not secret_key:
                 raise ValueError("Alpaca API credentials not found")
-            
+
             self._direct_stream = StockDataStream(api_key, secret_key, feed=self.feed)
         return self._direct_stream
 
@@ -28494,13 +28662,13 @@ class AlpacaStreamConnector:
         """Callback for incoming bar data from direct alpaca-py stream (legacy)."""
         try:
             ticker = bar.symbol
-            
+
             # Convert to dict
             try:
                 payload = bar.model_dump(mode="json")
             except AttributeError:
                 payload = bar.dict()
-            
+
             # Data quality validation
             if not bar.close or bar.close <= 0:
                 logger.warning(f"Rejecting invalid bar for {ticker}: close={bar.close}")
@@ -28551,14 +28719,14 @@ class AlpacaStreamConnector:
             return
 
         logger.info(f"Subscribing to {len(new_tickers)} new tickers for streaming bars")
-        
+
         if self._use_gateway:
             client = self._get_gateway_client()
             await client.subscribe(list(new_tickers))
         else:
             stream = self._get_direct_stream()
             stream.subscribe_bars(self._handle_direct_bar, *new_tickers)
-        
+
         self._subscribed_tickers.update(new_tickers)
 
     async def unsubscribe(self, tickers: List[str]) -> None:
@@ -28571,14 +28739,14 @@ class AlpacaStreamConnector:
             return
 
         logger.info(f"Unsubscribing from {len(to_remove)} tickers")
-        
+
         if self._use_gateway:
             client = self._get_gateway_client()
             await client.unsubscribe(list(to_remove))
         else:
             stream = self._get_direct_stream()
             stream.unsubscribe_bars(*to_remove)
-        
+
         self._subscribed_tickers -= to_remove
 
     async def start(self) -> None:
@@ -28628,7 +28796,7 @@ class AlpacaStreamConnector:
                 try:
                     await self._stream_task
                 except asyncio.CancelledError:
-                    pass
+                    pass  # Expected when stopping - no need to re-raise here as this is the stop() method
 
     async def drain_events(self, max_events: int = 1000) -> List[BronzeEvent]:
         """
@@ -28636,8 +28804,8 @@ class AlpacaStreamConnector:
         Used when not using callback mode.
         """
         if self._use_gateway and self._gateway_client:
-            return await self._gateway_client.drain_events(max_events)
-        
+            return self._gateway_client.drain_events(max_events)
+
         events = []
         while len(events) < max_events:
             try:
@@ -28953,7 +29121,7 @@ MAX_RECONNECT_DELAY = 16.0
 class GatewayStreamClient:
     """
     WebSocket client for Data Gateway streaming.
-    
+
     Connects to the Gateway's /ws endpoint and handles:
     - Authentication handshake
     - Symbol subscription management
@@ -28977,19 +29145,19 @@ class GatewayStreamClient:
             self.ws_url = gateway_url if gateway_url.endswith("/ws") else gateway_url + "/ws"
         else:
             self.ws_url = f"ws://{gateway_url}/ws"
-        
+
         self.api_key = api_key
         self.on_bar_callback = on_bar_callback
-        
+
         # Connection state
         self._websocket: Optional[websockets.WebSocketClientProtocol] = None
         self._subscribed_symbols: Set[str] = set()
         self._running = False
         self._authenticated = False
-        
+
         # Event queue for buffering
         self._event_queue: asyncio.Queue[BronzeEvent] = asyncio.Queue()
-        
+
         # Background tasks
         self._receive_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
@@ -29008,22 +29176,25 @@ class GatewayStreamClient:
                 ping_interval=20,
                 ping_timeout=10,
             )
-            
+
             # Send authentication
-            await self._websocket.send_json({
-                "action": "auth",
-                "key": self.api_key,
-            })
-            
+            await self._websocket.send_json(
+                {
+                    "action": "auth",
+                    "key": self.api_key,
+                }
+            )
+
             # Wait for auth response
             response = await asyncio.wait_for(
                 self._websocket.recv(),
                 timeout=10.0,
             )
-            
+
             import json
+
             auth_result = json.loads(response)
-            
+
             if auth_result.get("status") == "ok":
                 self._authenticated = True
                 logger.info("Gateway WebSocket authenticated successfully")
@@ -29032,7 +29203,7 @@ class GatewayStreamClient:
                 error_msg = auth_result.get("message", "Unknown error")
                 logger.error(f"Gateway authentication failed: {error_msg}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Gateway connection failed: {e}", exc_info=True)
             return False
@@ -29040,19 +29211,19 @@ class GatewayStreamClient:
     async def _reconnect_with_backoff(self) -> bool:
         """Reconnect with exponential backoff."""
         delay = INITIAL_RECONNECT_DELAY
-        
+
         for attempt in range(MAX_RECONNECT_ATTEMPTS):
             logger.info(f"Reconnection attempt {attempt + 1}/{MAX_RECONNECT_ATTEMPTS}, delay={delay}s")
             await asyncio.sleep(delay)
-            
+
             if await self.connect():
                 # Resubscribe to previous symbols
                 if self._subscribed_symbols:
                     await self._send_subscribe(list(self._subscribed_symbols))
                 return True
-            
+
             delay = min(delay * 2, MAX_RECONNECT_DELAY)
-        
+
         logger.error("Max reconnection attempts reached")
         return False
 
@@ -29061,23 +29232,28 @@ class GatewayStreamClient:
         if not self._websocket or not self._authenticated:
             logger.warning("Cannot subscribe: not connected or authenticated")
             return False
-        
+
         try:
             import json
-            await self._websocket.send(json.dumps({
-                "action": "subscribe",
-                "provider": "alpaca",
-                "feed": "bars",
-                "symbols": symbols,
-            }))
-            
+
+            await self._websocket.send(
+                json.dumps(
+                    {
+                        "action": "subscribe",
+                        "provider": "alpaca",
+                        "feed": "bars",
+                        "symbols": symbols,
+                    }
+                )
+            )
+
             # Wait for ack
             response = await asyncio.wait_for(
                 self._websocket.recv(),
                 timeout=5.0,
             )
             result = json.loads(response)
-            
+
             if result.get("type") == "subscription_ack":
                 subscribed = result.get("subscribed", [])
                 self._subscribed_symbols.update(subscribed)
@@ -29086,7 +29262,7 @@ class GatewayStreamClient:
             else:
                 logger.warning(f"Unexpected subscribe response: {result}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Subscribe failed: {e}", exc_info=True)
             return False
@@ -29095,29 +29271,34 @@ class GatewayStreamClient:
         """Send unsubscribe message to Gateway."""
         if not self._websocket or not self._authenticated:
             return False
-        
+
         try:
             import json
-            await self._websocket.send(json.dumps({
-                "action": "unsubscribe",
-                "provider": "alpaca",
-                "feed": "bars",
-                "symbols": symbols,
-            }))
-            
+
+            await self._websocket.send(
+                json.dumps(
+                    {
+                        "action": "unsubscribe",
+                        "provider": "alpaca",
+                        "feed": "bars",
+                        "symbols": symbols,
+                    }
+                )
+            )
+
             response = await asyncio.wait_for(
                 self._websocket.recv(),
                 timeout=5.0,
             )
             result = json.loads(response)
-            
+
             if result.get("type") == "unsubscription_ack":
                 unsubscribed = result.get("unsubscribed", [])
                 self._subscribed_symbols -= set(unsubscribed)
                 logger.info(f"Unsubscribed from {len(unsubscribed)} symbols")
                 return True
             return False
-            
+
         except Exception as e:
             logger.error(f"Unsubscribe failed: {e}", exc_info=True)
             return False
@@ -29126,7 +29307,7 @@ class GatewayStreamClient:
         """Subscribe to bar updates for the given symbols."""
         if not symbols:
             return
-        
+
         new_symbols = [s for s in symbols if s not in self._subscribed_symbols]
         if new_symbols:
             await self._send_subscribe(new_symbols)
@@ -29135,7 +29316,7 @@ class GatewayStreamClient:
         """Unsubscribe from bar updates for the given symbols."""
         if not symbols:
             return
-        
+
         to_remove = [s for s in symbols if s in self._subscribed_symbols]
         if to_remove:
             await self._send_unsubscribe(to_remove)
@@ -29143,7 +29324,7 @@ class GatewayStreamClient:
     async def _receive_loop(self) -> None:
         """Main loop for receiving messages from Gateway."""
         import json
-        
+
         while self._running:
             try:
                 if not self._websocket:
@@ -29151,31 +29332,30 @@ class GatewayStreamClient:
                         self._running = False
                         break
                     continue
-                
+
                 message = await self._websocket.recv()
                 data = json.loads(message)
-                
+
                 msg_type = data.get("type") or data.get("event_type")
-                
+
                 # Handle heartbeat
                 if msg_type == "heartbeat":
                     await self._websocket.send(json.dumps({"action": "heartbeat"}))
                     continue
-                
+
                 # Handle market data
                 if msg_type in ("ALPACA_BAR_1M", "bar"):
                     await self._process_bar_message(data)
-                    
+
             except ConnectionClosed:
                 logger.warning("Gateway WebSocket connection closed")
                 self._websocket = None
                 self._authenticated = False
-                
-                if self._running:
-                    if not await self._reconnect_with_backoff():
-                        self._running = False
-                        break
-                        
+
+                if self._running and not await self._reconnect_with_backoff():
+                    self._running = False
+                    break
+
             except Exception as e:
                 logger.error(f"Receive loop error: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
@@ -29186,16 +29366,16 @@ class GatewayStreamClient:
             # Extract payload (Gateway EventEnvelope format)
             payload = data.get("payload", data)
             symbol = data.get("instrument_key", "").replace("equity:", "") or payload.get("S", "")
-            
+
             if not symbol:
                 return
-            
+
             # Validate data quality
             close_price = payload.get("c") or payload.get("close")
             if not close_price or close_price <= 0:
                 logger.warning(f"Rejecting invalid bar for {symbol}: close={close_price}")
                 return
-            
+
             # Parse timestamp
             timestamp_str = payload.get("t") or payload.get("timestamp")
             if timestamp_str:
@@ -29205,9 +29385,9 @@ class GatewayStreamClient:
                     event_ts = timestamp_str
             else:
                 event_ts = datetime.now(timezone.utc)
-            
+
             event_id = self._generate_event_id(symbol, payload)
-            
+
             event = BronzeEvent(
                 event_id=event_id,
                 source="ALPACA",
@@ -29216,14 +29396,14 @@ class GatewayStreamClient:
                 received_ts_utc=datetime.now(timezone.utc),
                 payload=payload,
             )
-            
+
             if self.on_bar_callback:
                 self.on_bar_callback(event)
             else:
                 await self._event_queue.put(event)
-            
+
             logger.debug(f"Received bar for {symbol} via Gateway")
-            
+
         except Exception as e:
             logger.error(f"Error processing bar message: {e}", exc_info=True)
 
@@ -29232,12 +29412,12 @@ class GatewayStreamClient:
         if self._running:
             logger.warning("Gateway stream client already running")
             return
-        
+
         self._running = True
-        
+
         if not await self.connect():
             raise ConnectionError("Failed to connect to Gateway WebSocket")
-        
+
         self._receive_task = asyncio.create_task(self._receive_loop())
         logger.info("Gateway stream client started")
 
@@ -29245,22 +29425,22 @@ class GatewayStreamClient:
         """Stop the WebSocket client."""
         if not self._running:
             return
-        
+
         self._running = False
         logger.info("Stopping Gateway stream client")
-        
+
         if self._receive_task:
             self._receive_task.cancel()
             try:
                 await self._receive_task
             except asyncio.CancelledError:
-                pass
-        
+                pass  # Expected when stopping - no need to re-raise here as this is the stop() method
+
         if self._websocket:
             await self._websocket.close()
             self._websocket = None
 
-    async def drain_events(self, max_events: int = 1000) -> List[BronzeEvent]:
+    def drain_events(self, max_events: int = 1000) -> List[BronzeEvent]:
         """Drain buffered events from the queue."""
         events = []
         while len(events) < max_events:
@@ -29286,12 +29466,12 @@ def create_gateway_stream_client(
     """Create GatewayStreamClient from environment variables."""
     gateway_url = os.getenv("DATA_GATEWAY_URL")
     api_key = os.getenv("DATA_GATEWAY_API_KEY")
-    
+
     if not gateway_url:
         raise ValueError("DATA_GATEWAY_URL environment variable not set")
     if not api_key:
         raise ValueError("DATA_GATEWAY_API_KEY environment variable not set")
-    
+
     return GatewayStreamClient(
         gateway_url=gateway_url,
         api_key=api_key,
@@ -29512,6 +29692,7 @@ FILE: src/orion/connectors/uw_alerts_connector.py
 import asyncio
 import hashlib
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -29529,11 +29710,14 @@ logger = logging.getLogger(__name__)
 
 class UWAlertsConnector:
     """
-    Connects to Unusual Whales API to poll for Flow Alerts.
+    Connects to Data Gateway to poll for Unusual Whales Flow Alerts.
     """
 
-    def __init__(self, api_key: str, base_url: str):
-        self.client = UnusualWhalesClient(base_url=base_url, token=api_key)
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
+        # Use Gateway URL for UW endpoints (auth handled by Gateway)
+        self.client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token=gateway_key)
         self.last_seen_id: Optional[str] = None
         self.last_poll_ts: Optional[datetime] = None
         self._watermark_loaded: bool = False
@@ -29543,21 +29727,44 @@ class UWAlertsConnector:
         """
         Generates a deterministic event ID.
         """
-        # Alerts typically have an 'id'.
         source_id = event_data.get("id")
         if source_id:
             return hashlib.sha256(f"UW_ALERT_{source_id}".encode("utf-8")).hexdigest()
 
-        # Fallback
         raw_str = f"UW_ALERT_{event_data.get('ticker')}_{event_data.get('timestamp')}_{event_data.get('strike')}"
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """
-        Fetches latest flow alerts.
-        """
-        # P1 Audit Fix: Check circuit breaker before polling
+    @staticmethod
+    def _resolve_ticker(item: dict[str, Any]) -> str | None:
+        """Extract ticker from various possible payload fields."""
+        return (
+            item.get("ticker")
+            or item.get("symbol")
+            or item.get("underlying")
+            or item.get("underlying_symbol")
+            or item.get("stock")
+        )
+
+    @staticmethod
+    def _normalize_put_call(item: dict[str, Any]) -> None:
+        """Normalize put_call field to C/P format in-place."""
+        raw_value: str | None = None
+        if "put_call" in item:
+            raw_value = item["put_call"]
+        elif "type" in item:
+            raw_value = item["type"]
+
+        if raw_value:
+            upper = raw_value.upper()
+            if upper == "CALL":
+                item["put_call"] = "C"
+            elif upper == "PUT":
+                item["put_call"] = "P"
+            else:
+                item["put_call"] = upper[:1] if upper else None
+
+    async def _check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker is open. Returns True if should skip fetch."""
         from orion.core.circuit_breaker import CircuitBreaker
 
         if await CircuitBreaker().is_open():
@@ -29565,30 +29772,93 @@ class UWAlertsConnector:
                 "Circuit breaker OPEN, skipping UW alerts fetch",
                 extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_ALERTS"},
             )
+            return True
+        return False
+
+    def _extract_response_data(self, response: Any) -> list[dict[str, Any]] | None:
+        """Extract list data from response, handling various formats."""
+        if not response:
+            return None
+
+        data = response
+        if isinstance(response, dict) and "data" in response:
+            data = response["data"]
+
+        if not isinstance(data, list):
+            logger.warning(f"Unexpected response format from UW Alerts: {type(data)}")
+            return None
+
+        return data
+
+    def _parse_single_item(self, item: dict[str, Any], fetch_start: datetime, seen_ids: set[str]) -> BronzeEvent | None:
+        """Parse a single raw item into a BronzeEvent, or return None if invalid."""
+        event_id = self._generate_event_id(item)
+        if event_id in seen_ids:
+            return None
+        seen_ids.add(event_id)
+
+        ts_str = item.get("timestamp") or item.get("created_at")
+        if not ts_str:
+            raise ValueError("Missing timestamp/created_at in UW alert payload")
+
+        events_ts = parse_timestamptz(ts_str, strict=True)
+        if events_ts < fetch_start:
+            return None
+
+        self._normalize_put_call(item)
+
+        ticker = self._resolve_ticker(item)
+        if not ticker:
+            logger.warning(
+                f"Skipping UW alert without ticker: id={item.get('id')}",
+                extra={"event_type": "UW_ALERT_MISSING_TICKER"},
+            )
+            return None
+
+        if not item.get("ticker"):
+            item["ticker"] = ticker
+
+        source_event_id = item.get("id")
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            source_event_id=str(source_event_id) if source_event_id is not None else None,
+            event_type="UW_ALERT",
+            ticker=ticker,
+            event_ts_utc=events_ts,
+            payload=item,
+            session="REG",
+        )
+
+    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
+        """Update watermark based on processed events."""
+        if events:
+            candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
+            if self.last_poll_ts is None or candidate > self.last_poll_ts:
+                self.last_poll_ts = candidate
+                await self._persist_watermark(self.last_poll_ts)
+        elif self.last_poll_ts is None:
+            self.last_poll_ts = now
+            await self._persist_watermark(self.last_poll_ts)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
+        """Fetches latest flow alerts."""
+        if await self._check_circuit_breaker():
             return []
 
-        # Enforce Rate Limit (async-safe)
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.6)  # Rate limit
+
         try:
             await self._ensure_watermark_loaded()
 
             now = datetime.now(timezone.utc)
             poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
-            fetch_start = (
-                poll_start_ts if self.last_poll_ts is None else (poll_start_ts - timedelta(seconds=overlap_seconds))
-            )
+            fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
             response = await self._fetch_raw_events(newer_than=fetch_start)
-
-            if not response:
-                return []
-
-            data = response
-            if isinstance(response, dict) and "data" in response:
-                data = response["data"]
-
-            if not isinstance(data, list):
-                logger.warning(f"Unexpected response format from UW Alerts: {type(data)}")
+            data = self._extract_response_data(response)
+            if data is None:
                 return []
 
             events: List[BronzeEvent] = []
@@ -29596,61 +29866,10 @@ class UWAlertsConnector:
 
             for item in data:
                 try:
-                    event_id = self._generate_event_id(item)
-                    if event_id in seen_event_ids:
-                        continue
-                    seen_event_ids.add(event_id)
-                    source_event_id = item.get("id")
-
-                    # Try to extract timestamp
-                    ts_str = item.get("timestamp") or item.get("created_at")
-                    if not ts_str:
-                        raise ValueError("Missing timestamp/created_at in UW alert payload")
-                    events_ts = parse_timestamptz(ts_str, strict=True)
-
-                    if events_ts < fetch_start:
-                        continue
-
-                    # Normalize put_call to C/P
-                    if "put_call" in item:
-                        pc = item["put_call"].upper()
-                        item["put_call"] = "C" if pc == "CALL" else ("P" if pc == "PUT" else pc[:1])
-                    elif "type" in item:
-                        pc = item["type"].upper()
-                        item["put_call"] = "C" if pc == "CALL" else ("P" if pc == "PUT" else pc[:1])
-
-                    # Ensure ticker is set (required by silver schema). UW payloads can use different keys.
-                    ticker = (
-                        item.get("ticker")
-                        or item.get("symbol")
-                        or item.get("underlying")
-                        or item.get("underlying_symbol")
-                        or item.get("stock")
-                    )
-                    if not ticker:
-                        # Skip events without a ticker - required by silver schema
-                        logger.warning(
-                            f"Skipping UW alert without ticker: id={item.get('id')}",
-                            extra={"event_type": "UW_ALERT_MISSING_TICKER"},
-                        )
-                        continue
-                    if not item.get("ticker"):
-                        item["ticker"] = ticker
-
-                    events.append(
-                        BronzeEvent(
-                            event_id=event_id,
-                            source="UW",
-                            source_event_id=str(source_event_id) if source_event_id is not None else None,
-                            event_type="UW_ALERT",
-                            ticker=ticker,
-                            event_ts_utc=events_ts,
-                            payload=item,
-                            session="REG",
-                        )
-                    )
+                    event = self._parse_single_item(item, fetch_start, seen_event_ids)
+                    if event:
+                        events.append(event)
                 except Exception as e:
-                    # Granular DLQ Handling per Event
                     from orion.shared.dlq_utils import DLQWriter
 
                     await DLQWriter.write_to_dlq(
@@ -29663,17 +29882,8 @@ class UWAlertsConnector:
                         ticker=item.get("ticker"),
                         event_ts_utc=parse_timestamptz(item.get("timestamp") or item.get("created_at"), strict=False),
                     )
-                    continue
 
-            if events:
-                candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
-                if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                    self.last_poll_ts = candidate
-                    await self._persist_watermark(self.last_poll_ts)
-            elif self.last_poll_ts is None:
-                self.last_poll_ts = now
-                await self._persist_watermark(self.last_poll_ts)
-
+            await self._update_watermark(events, now)
             return events
 
         except Exception as e:
@@ -29725,6 +29935,7 @@ FILE: src/orion/connectors/uw_darkpool_connector.py
 import asyncio
 import hashlib
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -29742,11 +29953,14 @@ logger = logging.getLogger(__name__)
 
 class UWDarkPoolConnector:
     """
-    Connects to Unusual Whales API to poll for Dark Pool prints.
+    Connects to Data Gateway to poll for Unusual Whales Dark Pool prints.
     """
 
-    def __init__(self, api_key: str, base_url: str):
-        self.client = UnusualWhalesClient(base_url=base_url, token=api_key)
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
+        # Use Gateway URL for UW endpoints (auth handled by Gateway)
+        self.client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token=gateway_key)
         self.last_seen_id: Optional[str] = None
         self.last_poll_ts: Optional[datetime] = None
         self._watermark_loaded: bool = False
@@ -29769,12 +29983,8 @@ class UWDarkPoolConnector:
         raw_str = f"UW_DARKPOOL_{event_data.get('ticker')}_{event_data.get('price')}_{event_data.get('size')}_{event_data.get('timestamp')}"
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """
-        Fetches latest dark pool prints.
-        """
-        # P1 Audit Fix: Check circuit breaker before polling
+    async def _check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker is open. Returns True if should skip fetch."""
         from orion.core.circuit_breaker import CircuitBreaker
 
         if await CircuitBreaker().is_open():
@@ -29782,98 +29992,113 @@ class UWDarkPoolConnector:
                 "Circuit breaker OPEN, skipping UW darkpool fetch",
                 extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_DARKPOOL"},
             )
+            return True
+        return False
+
+    @staticmethod
+    def _resolve_ticker(item: dict[str, Any]) -> str | None:
+        """Extract ticker from various possible payload fields."""
+        return item.get("ticker") or item.get("symbol")
+
+    def _parse_single_item(self, item: dict[str, Any], fetch_start: datetime, seen_ids: set[str]) -> BronzeEvent | None:
+        """Parse a single raw item into a BronzeEvent, or return None if invalid."""
+        event_id = self._generate_event_id(item)
+        if event_id in seen_ids:
+            return None
+        seen_ids.add(event_id)
+
+        ts_str = item.get("executed_at") or item.get("timestamp") or item.get("date")
+        if not ts_str:
+            raise ValueError("Missing executed_at/timestamp/date in UW darkpool payload")
+
+        events_ts = parse_timestamptz(ts_str, strict=True)
+        if events_ts < fetch_start:
+            return None
+
+        ticker = self._resolve_ticker(item)
+        if not ticker:
+            logger.warning(
+                f"Skipping UW darkpool without ticker: id={item.get('id') or item.get('id_')}",
+                extra={"event_type": "UW_DARKPOOL_MISSING_TICKER"},
+            )
+            return None
+
+        source_event_id = item.get("id") or item.get("id_")
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            source_event_id=str(source_event_id) if source_event_id is not None else None,
+            event_type="UW_DARKPOOL",
+            ticker=ticker,
+            event_ts_utc=events_ts,
+            payload=item,
+            session="REG",
+        )
+
+    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
+        """Update watermark based on processed events."""
+        if events:
+            candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
+            if self.last_poll_ts is None or candidate > self.last_poll_ts:
+                self.last_poll_ts = candidate
+                await self._persist_watermark(self.last_poll_ts)
+        elif self.last_poll_ts is None:
+            self.last_poll_ts = now
+            await self._persist_watermark(self.last_poll_ts)
+
+    async def _fetch_all_raw_for_date_range(self, start_date: datetime, end_date: datetime) -> list[dict[str, Any]]:
+        """Fetch raw events for a date range."""
+        all_raw: list[dict[str, Any]] = []
+        cursor = start_date.date()
+        end = end_date.date()
+        while cursor <= end:
+            all_raw.extend(await self._fetch_raw_for_date(cursor.strftime("%Y-%m-%d")))
+            cursor = cursor + timedelta(days=1)
+        return all_raw
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
+        """Fetches latest dark pool prints."""
+        if await self._check_circuit_breaker():
             return []
 
-        # Enforce Rate Limit (async-safe)
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.6)  # Rate limit
+
         try:
             await self._ensure_watermark_loaded()
 
             now = datetime.now(timezone.utc)
             poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
-            fetch_start = (
-                poll_start_ts if self.last_poll_ts is None else (poll_start_ts - timedelta(seconds=overlap_seconds))
-            )
+            fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
-            start_date = fetch_start.astimezone(timezone.utc).date()
-            end_date = now.astimezone(timezone.utc).date()
-
-            all_raw: list[dict[str, Any]] = []
-            cursor = start_date
-            while cursor <= end_date:
-                all_raw.extend(await self._fetch_raw_for_date(cursor.strftime("%Y-%m-%d")))
-                cursor = cursor + timedelta(days=1)
+            all_raw = await self._fetch_all_raw_for_date_range(fetch_start, now)
 
             events: List[BronzeEvent] = []
             seen_event_ids: set[str] = set()
 
             for item in all_raw:
                 try:
-                    event_id = self._generate_event_id(item)
-                    if event_id in seen_event_ids:
-                        continue
-                    seen_event_ids.add(event_id)
-                    source_event_id = item.get("id") or item.get("id_")
-
-                    ts_str = item.get("executed_at") or item.get("timestamp") or item.get("date")
-                    if not ts_str:
-                        raise ValueError("Missing executed_at/timestamp/date in UW darkpool payload")
-                    events_ts = parse_timestamptz(ts_str, strict=True)
-
-                    if events_ts < fetch_start:
-                        continue
-
-                    ticker = item.get("ticker") or item.get("symbol")
-                    if not ticker:
-                        # Skip events without a ticker - required by silver schema
-                        logger.warning(
-                            f"Skipping UW darkpool without ticker: id={item.get('id') or item.get('id_')}",
-                            extra={"event_type": "UW_DARKPOOL_MISSING_TICKER"},
-                        )
-                        continue
-
-                    events.append(
-                        BronzeEvent(
-                            event_id=event_id,
-                            source="UW",
-                            source_event_id=str(source_event_id) if source_event_id is not None else None,
-                            event_type="UW_DARKPOOL",
-                            ticker=ticker,
-                            event_ts_utc=events_ts,
-                            payload=item,
-                            session="REG",
-                        )
-                    )
+                    event = self._parse_single_item(item, fetch_start, seen_event_ids)
+                    if event:
+                        events.append(event)
                 except Exception as e:
                     from orion.shared.dlq_utils import DLQWriter
 
+                    source_id = item.get("id") or item.get("id_")
                     await DLQWriter.write_to_dlq(
                         error=e,
                         event_type="UW_DARKPOOL_PARSE_ERROR",
                         source="UWDarkPoolConnector",
                         payload=item,
                         context="Failed to parse raw event in fetch loop",
-                        source_event_id=(
-                            str(item.get("id") or item.get("id_"))
-                            if (item.get("id") or item.get("id_")) is not None
-                            else None
-                        ),
+                        source_event_id=str(source_id) if source_id is not None else None,
                         ticker=item.get("ticker"),
                         event_ts_utc=parse_timestamptz(
                             item.get("executed_at") or item.get("timestamp") or item.get("date"), strict=False
                         ),
                     )
-                    continue
 
-            if events:
-                candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
-                if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                    self.last_poll_ts = candidate
-                    await self._persist_watermark(self.last_poll_ts)
-            elif self.last_poll_ts is None:
-                self.last_poll_ts = now
-                await self._persist_watermark(self.last_poll_ts)
-
+            await self._update_watermark(events, now)
             return events
 
         except Exception as e:
@@ -29953,7 +30178,6 @@ class UWDarkPoolConnector:
 
 
 
-
 ================================================
 FILE: src/orion/connectors/uw_flow_connector.py
 ================================================
@@ -29978,18 +30202,16 @@ logger = logging.getLogger(__name__)
 
 class UWFlowConnector:
     """
-    Connects to the Unusual Whales API to poll for options flow events.
+    Connects to the Data Gateway to poll for Unusual Whales options flow events.
     Implements watermark polling and deduplication.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("UW_API_KEY")
-        if not self.api_key:
-            raise ProviderError("UW_API_KEY is required.", code=ErrorCode.PROVIDER_AUTH_FAILED)
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
 
-        self.base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
         self.session = requests.Session()
-        self.session.headers.update({"Authorization": f"Bearer {self.api_key}", "User-Agent": "Orion/0.1.0"})
+        self.session.headers.update({"X-Gateway-Key": self.gateway_key, "User-Agent": "Orion/0.1.0"})
 
         # State tracking
         self.last_poll_ts: Optional[datetime] = None
@@ -30023,6 +30245,78 @@ class UWFlowConnector:
             return True
         return False
 
+    async def _check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker is open. Returns True if should skip fetch."""
+        from orion.core.circuit_breaker import CircuitBreaker
+
+        if await CircuitBreaker().is_open():
+            logger.warning(
+                "Circuit breaker OPEN, skipping UW flow poll",
+                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_FLOW"},
+            )
+            return True
+        return False
+
+    @staticmethod
+    def _normalize_put_call(raw: Dict[str, Any]) -> None:
+        """Normalize put_call field to C/P format in-place."""
+        if "put_call" not in raw and "type" in raw:
+            t = raw["type"].upper()
+            if t == "CALL":
+                raw["put_call"] = "C"
+            elif t == "PUT":
+                raw["put_call"] = "P"
+            else:
+                raw["put_call"] = t[:1] if t else None
+
+    @staticmethod
+    def _normalize_premium(raw: Dict[str, Any]) -> None:
+        """Normalize premium field from total_premium if needed."""
+        if "premium" not in raw and "total_premium" in raw:
+            raw["premium"] = raw["total_premium"]
+
+    def _parse_single_event(
+        self, raw: Dict[str, Any], fetch_start: datetime, now: datetime, seen_ids: set[str]
+    ) -> BronzeEvent | None:
+        """Parse a single raw event into a BronzeEvent, or return None if invalid."""
+        ts_str = raw.get("timestamp") or raw.get("created_at")
+        event_ts = parse_timestamptz(ts_str, strict=True)
+
+        if event_ts < fetch_start:
+            return None
+
+        event_id = self._generate_event_id(raw)
+        if event_id in seen_ids:
+            return None
+        seen_ids.add(event_id)
+
+        source_event_id = str(raw.get("id")) if raw.get("id") is not None else None
+
+        self._normalize_premium(raw)
+        self._normalize_put_call(raw)
+
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            source_event_id=source_event_id,
+            event_type="UW_FLOW",
+            event_ts_utc=event_ts,
+            received_ts_utc=now,
+            payload=raw,
+            session="REG",
+        )
+
+    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
+        """Update watermark based on processed events."""
+        if events:
+            candidate = max(e.event_ts_utc for e in events)
+            if self.last_poll_ts is None or candidate > self.last_poll_ts:
+                self.last_poll_ts = candidate
+                await self._persist_watermark(self.last_poll_ts)
+        elif self.last_poll_ts is None:
+            self.last_poll_ts = now
+            await self._persist_watermark(self.last_poll_ts)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -30036,13 +30330,13 @@ class UWFlowConnector:
         time.sleep(0.6)
 
         try:
-            # PROD FIX: Use 'flow-alerts' endpoint
-            url = f"{self.base_url}/option-trades/flow-alerts"
+            # Use Data Gateway flow endpoint
+            url = f"{self.gateway_url}/api/v1/uw/flow/all"
             from orion.config import system_settings
 
             params = {"date": trading_date.strftime("%Y-%m-%d"), "limit": system_settings.uw_fetch_limit}
 
-            response = self.session.get(url, params=params, timeout=10)
+            response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
 
             # Log API usage headers for quota monitoring
@@ -30218,30 +30512,16 @@ class UWFlowConnector:
         Polls for new events (Async).
         PRD 7.1: request events after (last_seen_ts - overlap_margin).
         """
-        # P1 Audit Fix: Check circuit breaker before polling
-        from orion.core.circuit_breaker import CircuitBreaker
-
-        if await CircuitBreaker().is_open():
-            logger.warning(
-                "Circuit breaker OPEN, skipping UW flow poll",
-                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_FLOW"},
-            )
+        if await self._check_circuit_breaker():
             return []
 
         await self._ensure_watermark_loaded()
         await self.send_heartbeat_async()
 
         now = datetime.now(timezone.utc)
-
-        # If first run, look back X seconds (or use config default)
         poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
+        fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
-        # Safety margin overlap (PRD default overlap=120s)
-        fetch_start = (
-            poll_start_ts if self.last_poll_ts is None else (poll_start_ts - timedelta(seconds=overlap_seconds))
-        )
-
-        # Run blocking HTTP fetch in thread to stay async-friendly
         try:
             t0 = time.perf_counter()
             raw_events = await self.fetch_raw_events(fetch_start, now)
@@ -30253,57 +30533,23 @@ class UWFlowConnector:
             )
 
         except ProviderError as e:
-            # Re-raising allows caller to handle backoff/circuit breaker.
-            raise e
+            logger.warning(
+                f"Provider error during UW flow fetch: {e}",
+                extra={"event_type": "UW_FLOW_PROVIDER_ERROR", "error": str(e)},
+            )
+            raise
 
         bronze_events = []
         seen_event_ids: set[str] = set()
 
         for raw in raw_events:
             try:
-                # Schema Adaptation for 'flow-alerts' vs 'full-tape'
-                ts_str = raw.get("timestamp") or raw.get("created_at")
-                # If timestamp is int (start_time ms), convert? created_at is safer.
-
-                event_ts = parse_timestamptz(ts_str, strict=True)
-
-                if event_ts < fetch_start:
-                    continue
-
-                event_id = self._generate_event_id(raw)
-                if event_id in seen_event_ids:
-                    continue
-                seen_event_ids.add(event_id)
-                source_event_id = str(raw.get("id")) if raw.get("id") is not None else None
-
-                # Normalize Payload for downstream consumers who expect 'premium', 'put_call'
-                # If 'total_premium' exists but 'premium' doesn't, copy it.
-                if "premium" not in raw and "total_premium" in raw:
-                    raw["premium"] = raw["total_premium"]
-                if "put_call" not in raw and "type" in raw:
-                    t = raw["type"].upper()
-                    raw["put_call"] = "C" if t == "CALL" else ("P" if t == "PUT" else t[:1])
-
-                bronze_event = BronzeEvent(
-                    event_id=event_id,
-                    source="UW",
-                    source_event_id=source_event_id,
-                    event_type="UW_FLOW",
-                    event_ts_utc=event_ts,
-                    received_ts_utc=now,
-                    payload=raw,
-                    session="REG",
-                )
-                bronze_events.append(bronze_event)
-
+                event = self._parse_single_event(raw, fetch_start, now, seen_event_ids)
+                if event:
+                    bronze_events.append(event)
             except Exception as e:
-                # Granular DLQ Handling per Event
                 from orion.shared.dlq_utils import DLQWriter
 
-                # Check if we're in an async context? poll() IS async.
-                # However, loop might be tight. We should use await.
-                # But wait, DLQWriter is async.
-                # We can await it.
                 await DLQWriter.write_to_dlq(
                     error=e,
                     event_type="UW_FLOW_PARSE_ERROR",
@@ -30316,19 +30562,8 @@ class UWFlowConnector:
                         parse_timestamptz(raw.get("timestamp"), strict=False) if raw.get("timestamp") else None
                     ),
                 )
-                continue
 
-        # Update watermark
-        if bronze_events:
-            candidate = max(e.event_ts_utc for e in bronze_events)
-            if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                self.last_poll_ts = candidate
-                await self._persist_watermark(self.last_poll_ts)
-        elif self.last_poll_ts is None:
-            # Avoid repeating the initial lookback window forever on restarts.
-            self.last_poll_ts = now
-            await self._persist_watermark(self.last_poll_ts)
-
+        await self._update_watermark(bronze_events, now)
         return bronze_events
 
     async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
@@ -30784,12 +31019,15 @@ class UWMaxPainConnector:
 
     async def _get_current_price(self, ticker: str) -> Optional[float]:
         """Get latest price from silver_alpaca_bars."""
+
         async def query(session: Any) -> Optional[float]:
-            stmt = text("""
+            stmt = text(
+                """
                 SELECT close FROM silver_alpaca_bars
                 WHERE ticker = :ticker
                 ORDER BY bar_start_ts_utc DESC LIMIT 1
-            """)
+            """
+            )
             result = await session.execute(stmt, {"ticker": ticker})
             row = result.fetchone()
             return float(row[0]) if row else None
@@ -31020,11 +31258,14 @@ class UWTickerInfoConnector:
 
     async def _get_from_db(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Check if ticker info exists in database."""
+
         async def query(session: Any) -> Optional[Dict[str, Any]]:
-            stmt = text("""
+            stmt = text(
+                """
                 SELECT ticker, company_name, sector, industry, market_cap, exchange
                 FROM silver_ticker_info WHERE ticker = :ticker
-            """)
+            """
+            )
             result = await session.execute(stmt, {"ticker": ticker})
             row = result.fetchone()
             if row:
@@ -31061,8 +31302,10 @@ class UWTickerInfoConnector:
 
     async def _persist(self, record: Dict[str, Any]) -> None:
         """Persist ticker info to database."""
+
         async def write(session: Any) -> None:
-            stmt = text("""
+            stmt = text(
+                """
                 INSERT INTO silver_ticker_info (
                     ticker, company_name, sector, industry, market_cap, exchange, last_updated
                 ) VALUES (
@@ -31075,7 +31318,8 @@ class UWTickerInfoConnector:
                     market_cap = EXCLUDED.market_cap,
                     exchange = EXCLUDED.exchange,
                     last_updated = NOW()
-            """)
+            """
+            )
             await session.execute(stmt, record)
 
         await db_write(write)
@@ -37778,7 +38022,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 
 import exchange_calendars as xcals
-import pytz
+from zoneinfo import ZoneInfo
 
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
@@ -37824,24 +38068,23 @@ class IngestionService:
         self.rule_engine = RuleEngine()
         self.lakehouse = LakehouseWriter()
 
-        # Connectors
-        uw_base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
+        # Connectors (using Data Gateway for UW)
+        gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
 
         # Ensure keys are strings
-        uw_key = system_settings.uw_api_key or ""
         alpaca_key = system_settings.alpaca_api_key or ""
         alpaca_secret = system_settings.alpaca_secret_key or ""
 
-        self.uw_flow = UWFlowConnector(api_key=uw_key)
-        self.uw_dark = UWDarkPoolConnector(api_key=uw_key, base_url=uw_base_url)
-        self.uw_alerts = UWAlertsConnector(api_key=uw_key, base_url=uw_base_url)
+        self.uw_flow = UWFlowConnector(gateway_url=gateway_url)
+        self.uw_dark = UWDarkPoolConnector(gateway_url=gateway_url)
+        self.uw_alerts = UWAlertsConnector(gateway_url=gateway_url)
 
         self.alpaca = AlpacaMarketConnector(
             api_key=alpaca_key,
             secret_key=alpaca_secret,
             paper=system_settings.alpaca_paper,
         )
-        
+
         # Real-time streaming connector (preferred over polling for lower latency)
         self.alpaca_stream: AlpacaStreamConnector | None = None
         self._use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
@@ -37859,7 +38102,7 @@ class IngestionService:
         self.producer: RedpandaProducer | None = None
 
         # Timezone settings
-        self.eastern = pytz.timezone("America/New_York")
+        self.eastern = ZoneInfo("America/New_York")
         xcals.get_calendar("XNYS")
 
         # State
@@ -41166,9 +41409,8 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import text
-
 from orion.shared.db_utils import db_query
+from sqlalchemy import text
 
 logger = logging.getLogger("orion.jobs.sync_earnings")
 
@@ -49200,13 +49442,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, List
 
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverAlpacaBar, SilverDarkPool, SilverOptionFlow, SilverSignal, SilverUWAlert
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -53549,7 +53790,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Index, Integer, String
 
-# from sqlalchemy.dialects.postgresql import JSONB, UUID
 from orion.storage.db import Base
 
 
@@ -53758,7 +53998,6 @@ class SilverOptionQuote(Base):
         Index("ix_option_quotes_event_checkpoint", "flow_event_id", "checkpoint"),
         {"extend_existing": True},
     )
-
 
 
 
@@ -94085,7 +94324,7 @@ async def test_eod_review_uses_config():
         # Mock run_codex_completion
         with patch("orion.agents.eod_review_agent.run_codex_completion", new_callable=AsyncMock) as mock_codex:
             mock_codex.return_value = '{"analysis": "foo"}'
-            
+
             agent = EODReviewAgent()
 
             # Use AsyncMock for async methods
@@ -94543,6 +94782,7 @@ async def test_drawdown_kill_switch_opens_circuit_breaker():
     with patch("orion.execution.risk_manager._metrics", MagicMock()):
         await _run_test_drawdown_logic()
 
+
 async def _run_test_drawdown_logic():
     await init_db()
 
@@ -94832,9 +95072,9 @@ def engine():
         patch("orion.execution.execution_engine.AlpacaMarketConnector"),
         patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
     ):
-        mock_settings.alpaca_api_key = "test_key"
-        mock_settings.alpaca_secret_key = "test_secret"
-        
+        mock_settings.alpaca_api_key = "test_key"  # pragma: allowlist secret
+        mock_settings.alpaca_secret_key = "test_secret"  # pragma: allowlist secret
+
         yield ExecutionEngine()
 
 
@@ -94869,7 +95109,7 @@ async def test_dedupe_fills_new(engine):
         assert engine.risk_manager.process_fill.called
         assert len(mock_session.executed_stmts) >= 1
         # Check that one of the stmts is an insert for FillRecord
-        # We can't easily introspect the stmt object fully without complex checks, 
+        # We can't easily introspect the stmt object fully without complex checks,
         # but the fact it called execute is enough for this dedupe test which focuses on FLOW.
         print("[PASS] test_dedupe_fills_new")
 
@@ -95827,7 +96067,7 @@ async def test_uw_flow_connector_poll_updates_db_heartbeat():
             ):
                 mock_get_wm.return_value = None
 
-                connector = UWFlowConnector(api_key="test_key")
+                connector = UWFlowConnector(gateway_url="http://localhost:8080")
                 # Manually mock the instance method to ensure interception
                 connector.fetch_raw_events = AsyncMock(return_value=MOCK_FLOW_RESPONSE)
                 # Ensure we bypass any validation that might check api key via property
