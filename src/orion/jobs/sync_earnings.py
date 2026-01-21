@@ -23,46 +23,39 @@ async def sync_todays_earnings() -> Dict[str, int]:
 
     from orion.unusualwhales.api.earnings import get_afterhours_earnings, get_premarket_earnings
     from orion.unusualwhales.client import UnusualWhalesClient
-    from orion.unusualwhales.models.earnings_results import EarningsResults
 
     gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
-    # Use gateway URL with a placeholder token (auth handled by Gateway)
     client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"synced": 0, "errors": 0}
     today = date.today()
 
-    # Fetch premarket earnings
-    try:
-        response = await asyncio.to_thread(get_premarket_earnings.sync, client=client)
-        if isinstance(response, EarningsResults) and response.data:
-            for e in response.data:
-                try:
-                    await _upsert_earnings(e, today, "premarket")
-                    results["synced"] += 1
-                except Exception as ex:
-                    logger.debug(f"Failed to upsert earnings: {ex}")
-                    results["errors"] += 1
-    except Exception as e:
-        logger.error(f"Failed to fetch premarket earnings: {e}")
-        results["errors"] += 1
-
-    # Fetch afterhours earnings
-    try:
-        response = await asyncio.to_thread(get_afterhours_earnings.sync, client=client)
-        if isinstance(response, EarningsResults) and response.data:
-            for e in response.data:
-                try:
-                    await _upsert_earnings(e, today, "afterhours")
-                    results["synced"] += 1
-                except Exception as ex:
-                    logger.debug(f"Failed to upsert earnings: {ex}")
-                    results["errors"] += 1
-    except Exception as e:
-        logger.error(f"Failed to fetch afterhours earnings: {e}")
-        results["errors"] += 1
+    # Fetch both premarket and afterhours earnings
+    await _fetch_and_sync_earnings(get_premarket_earnings.sync, client, today, "premarket", results)
+    await _fetch_and_sync_earnings(get_afterhours_earnings.sync, client, today, "afterhours", results)
 
     logger.info(f"Earnings sync complete: {results}")
     return results
+
+
+async def _fetch_and_sync_earnings(
+    fetch_fn: Any, client: Any, today: date, announce_time: str, results: Dict[str, int]
+) -> None:
+    """Fetch earnings using the given function and sync to database."""
+    from orion.unusualwhales.models.earnings_results import EarningsResults
+
+    try:
+        response = await asyncio.to_thread(fetch_fn, client=client)
+        if isinstance(response, EarningsResults) and response.data:
+            for e in response.data:
+                try:
+                    await _upsert_earnings(e, today, announce_time)
+                    results["synced"] += 1
+                except Exception as ex:
+                    logger.debug(f"Failed to upsert earnings: {ex}")
+                    results["errors"] += 1
+    except Exception as e:
+        logger.error(f"Failed to fetch {announce_time} earnings: {e}")
+        results["errors"] += 1
 
 
 async def backfill_ticker_earnings(ticker: str, client: Any) -> int:

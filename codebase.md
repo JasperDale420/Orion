@@ -1,6 +1,6 @@
 # Orion Codebase
 
-*Generated: 2026-01-20T20:40:27*
+*Generated: 2026-01-21T00:41:56*
 
 ---
 
@@ -9,7 +9,7 @@
 Directory: Users/jacobmcmillan/Empire/Orion
 Files analyzed: 621
 
-Estimated tokens: 830.0k
+Estimated tokens: 830.1k
 
 ---
 
@@ -38218,25 +38218,8 @@ class IngestionService:
         all_events.extend(events)
 
         # 2. Get Alpaca bars (streaming preferred, polling as fallback)
-        active_tickers = self.universe.get_active_universe()
-        if active_tickers:
-            # Use streaming if available (real-time, sub-second latency)
-            if self.alpaca_stream and self.alpaca_stream.is_running:
-                # Ensure newly added tickers are subscribed
-                new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
-                if new_tickers:
-                    await self.alpaca_stream.subscribe(list(new_tickers))
-                # Drain any buffered streaming events
-                streaming_events = await self.alpaca_stream.drain_events()
-                if streaming_events:
-                    for e in streaming_events:
-                        self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
-                    all_events.extend(streaming_events)
-                    logger.debug(f"Drained {len(streaming_events)} streaming events")
-            else:
-                # Fallback to polling (higher latency)
-                alpaca_events = await self._poll_alpaca(active_tickers, trace_id)
-                all_events.extend(alpaca_events)
+        alpaca_events = await self._poll_alpaca_events(trace_id)
+        all_events.extend(alpaca_events)
 
         # 3. Process & Persist
         if all_events:
@@ -38252,6 +38235,36 @@ class IngestionService:
         logger.info(
             "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
         )
+
+    async def _poll_alpaca_events(self, trace_id: str) -> List[BronzeEvent]:
+        """Poll Alpaca for market data events via streaming or REST fallback."""
+        active_tickers = self.universe.get_active_universe()
+        if not active_tickers:
+            return []
+
+        # Use streaming if available (real-time, sub-second latency)
+        if self.alpaca_stream and self.alpaca_stream.is_running:
+            return await self._drain_alpaca_stream(active_tickers, trace_id)
+
+        # Fallback to polling (higher latency)
+        return await self._poll_alpaca(active_tickers, trace_id)
+
+    async def _drain_alpaca_stream(self, active_tickers: List[str], trace_id: str) -> List[BronzeEvent]:
+        """Drain events from Alpaca WebSocket stream."""
+        # Ensure newly added tickers are subscribed
+        new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
+        if new_tickers:
+            await self.alpaca_stream.subscribe(list(new_tickers))
+
+        # Drain any buffered streaming events
+        streaming_events = await self.alpaca_stream.drain_events()
+        if streaming_events:
+            for e in streaming_events:
+                self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
+            logger.debug(f"Drained {len(streaming_events)} streaming events")
+
+        return streaming_events
+
 
     async def _check_overnight_sleep(self) -> None:
         from orion.core.market_schedule import MarketSchedule
@@ -41421,46 +41434,39 @@ async def sync_todays_earnings() -> Dict[str, int]:
 
     from orion.unusualwhales.api.earnings import get_afterhours_earnings, get_premarket_earnings
     from orion.unusualwhales.client import UnusualWhalesClient
-    from orion.unusualwhales.models.earnings_results import EarningsResults
 
     gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
-    # Use gateway URL with a placeholder token (auth handled by Gateway)
     client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"synced": 0, "errors": 0}
     today = date.today()
 
-    # Fetch premarket earnings
-    try:
-        response = await asyncio.to_thread(get_premarket_earnings.sync, client=client)
-        if isinstance(response, EarningsResults) and response.data:
-            for e in response.data:
-                try:
-                    await _upsert_earnings(e, today, "premarket")
-                    results["synced"] += 1
-                except Exception as ex:
-                    logger.debug(f"Failed to upsert earnings: {ex}")
-                    results["errors"] += 1
-    except Exception as e:
-        logger.error(f"Failed to fetch premarket earnings: {e}")
-        results["errors"] += 1
-
-    # Fetch afterhours earnings
-    try:
-        response = await asyncio.to_thread(get_afterhours_earnings.sync, client=client)
-        if isinstance(response, EarningsResults) and response.data:
-            for e in response.data:
-                try:
-                    await _upsert_earnings(e, today, "afterhours")
-                    results["synced"] += 1
-                except Exception as ex:
-                    logger.debug(f"Failed to upsert earnings: {ex}")
-                    results["errors"] += 1
-    except Exception as e:
-        logger.error(f"Failed to fetch afterhours earnings: {e}")
-        results["errors"] += 1
+    # Fetch both premarket and afterhours earnings
+    await _fetch_and_sync_earnings(get_premarket_earnings.sync, client, today, "premarket", results)
+    await _fetch_and_sync_earnings(get_afterhours_earnings.sync, client, today, "afterhours", results)
 
     logger.info(f"Earnings sync complete: {results}")
     return results
+
+
+async def _fetch_and_sync_earnings(
+    fetch_fn: Any, client: Any, today: date, announce_time: str, results: Dict[str, int]
+) -> None:
+    """Fetch earnings using the given function and sync to database."""
+    from orion.unusualwhales.models.earnings_results import EarningsResults
+
+    try:
+        response = await asyncio.to_thread(fetch_fn, client=client)
+        if isinstance(response, EarningsResults) and response.data:
+            for e in response.data:
+                try:
+                    await _upsert_earnings(e, today, announce_time)
+                    results["synced"] += 1
+                except Exception as ex:
+                    logger.debug(f"Failed to upsert earnings: {ex}")
+                    results["errors"] += 1
+    except Exception as e:
+        logger.error(f"Failed to fetch {announce_time} earnings: {e}")
+        results["errors"] += 1
 
 
 async def backfill_ticker_earnings(ticker: str, client: Any) -> int:
@@ -95049,18 +95055,18 @@ class MockAsyncSession:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        # No cleanup needed - context manager protocol requires this method
         pass
 
-    async def execute(self, stmt):
+    async def execute(self, stmt):  # noqa: async required by SQLAlchemy interface
         self.executed_stmts.append(stmt)
         result = MagicMock()
-        # Handle scalar results if needed
         return result
 
     def add(self, item):
         self.added_items.append(item)
 
-    async def commit(self):
+    async def commit(self):  # noqa: async required by SQLAlchemy interface
         self.committed = True
 
 
