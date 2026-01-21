@@ -15,18 +15,18 @@ class MockAsyncSession:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        # No cleanup needed - context manager protocol requires this method
         pass
 
-    async def execute(self, stmt):
+    async def execute(self, stmt):  # noqa: async required by SQLAlchemy interface
         self.executed_stmts.append(stmt)
         result = MagicMock()
-        # Handle scalar results if needed
         return result
 
     def add(self, item):
         self.added_items.append(item)
 
-    async def commit(self):
+    async def commit(self):  # noqa: async required by SQLAlchemy interface
         self.committed = True
 
 
