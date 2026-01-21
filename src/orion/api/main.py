@@ -129,7 +129,23 @@ async def list_solvers(
     """
     List registered solvers with pagination.
     """
-    stmt = select(Solver).offset(skip).limit(limit)
+    # Optimization: Select specific columns to avoid loading large definition_json
+    stmt = (
+        select(
+            Solver.solver_id,
+            Solver.family_name,
+            Solver.stage,
+            Solver.is_active,
+            Solver.config,
+            Solver.created_at_utc,
+            Solver.total_pnl,
+            Solver.sharpe_ratio,
+            Solver.win_rate,
+            Solver.trades_count,
+        )
+        .offset(skip)
+        .limit(limit)
+    )
     if active_only:
         stmt = stmt.where((Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active)))
 
@@ -137,7 +153,7 @@ async def list_solvers(
     stmt = stmt.order_by(desc(Solver.created_at_utc))
 
     result = await db.execute(stmt)
-    return result.scalars().all()
+    return result.all()
 
 
 @app.get("/solvers/{solver_id}", response_model=SolverResponse)
@@ -190,9 +206,21 @@ async def list_experiments(
     """
     List meta-search experiments.
     """
-    stmt = select(MetaExperiment).order_by(desc(MetaExperiment.start_time_utc)).limit(limit)
+    # Optimization: Select specific columns to avoid loading large config_json
+    stmt = (
+        select(
+            MetaExperiment.experiment_id,
+            MetaExperiment.description,
+            MetaExperiment.status,
+            MetaExperiment.best_solver_id,
+            MetaExperiment.start_time_utc,
+            MetaExperiment.end_time_utc,
+        )
+        .order_by(desc(MetaExperiment.start_time_utc))
+        .limit(limit)
+    )
     result = await db.execute(stmt)
-    return result.scalars().all()
+    return result.all()
 
 
 @app.get("/promotions", response_model=List[PromotionRecommendationResponse])
@@ -666,4 +694,3 @@ async def reset_dashboard_daily(
     tracker = get_pnl_tracker()
     tracker.reset_daily()
     return {"status": "ok", "message": "Daily counters reset"}
-
