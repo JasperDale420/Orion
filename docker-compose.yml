@@ -99,6 +99,7 @@ services:
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_RUN_ID=docker_persistent
+      - GATEWAY_URL=http://host.docker.internal:8080
     command: [ "python", "-m", "orion.main_price_target_labeler" ]
 
   feature_enrichment:
@@ -116,6 +117,7 @@ services:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - UW_API_KEY=${UW_API_KEY}
       - ORION_RUN_ID=docker_persistent
+      - GATEWAY_URL=http://host.docker.internal:8080
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
 
   option_quote_tracker:
@@ -256,6 +258,7 @@ services:
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_RUN_ID=docker_nightly_backfill
+      - GATEWAY_URL=http://host.docker.internal:8080
     command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
 
   indexer:

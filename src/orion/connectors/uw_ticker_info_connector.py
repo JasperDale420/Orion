@@ -1,12 +1,13 @@
 """
 UW Ticker Info Connector.
 
-Fetches ticker information (sector, industry, market cap) from Unusual Whales API.
+Fetches ticker information (sector, industry, market cap) from Data Gateway.
 Caches results in silver_ticker_info to avoid repeated API calls.
 """
 
 import asyncio
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import requests
@@ -19,19 +20,18 @@ logger = logging.getLogger(__name__)
 
 
 class UWTickerInfoConnector:
-    """Fetches and caches ticker info from UW API."""
+    """Fetches and caches ticker info via Data Gateway."""
 
-    BASE_URL = "https://api.unusualwhales.com"
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.headers = {"Authorization": f"Bearer {api_key}"}
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
+        self.headers = {"X-Gateway-Key": self.gateway_key}
         self._cache: Dict[str, Dict[str, Any]] = {}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_ticker_info(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch ticker info from UW API."""
-        url = f"{self.BASE_URL}/api/stock/{ticker}/info"
+        """Fetch ticker info via Data Gateway."""
+        url = f"{self.gateway_url}/api/v1/uw/stock/{ticker}/info"
         try:
             resp = requests.get(url, headers=self.headers, timeout=30)
             resp.raise_for_status()
@@ -59,11 +59,14 @@ class UWTickerInfoConnector:
 
     async def _get_from_db(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Check if ticker info exists in database."""
+
         async def query(session: Any) -> Optional[Dict[str, Any]]:
-            stmt = text("""
+            stmt = text(
+                """
                 SELECT ticker, company_name, sector, industry, market_cap, exchange
                 FROM silver_ticker_info WHERE ticker = :ticker
-            """)
+            """
+            )
             result = await session.execute(stmt, {"ticker": ticker})
             row = result.fetchone()
             if row:
@@ -100,8 +103,10 @@ class UWTickerInfoConnector:
 
     async def _persist(self, record: Dict[str, Any]) -> None:
         """Persist ticker info to database."""
+
         async def write(session: Any) -> None:
-            stmt = text("""
+            stmt = text(
+                """
                 INSERT INTO silver_ticker_info (
                     ticker, company_name, sector, industry, market_cap, exchange, last_updated
                 ) VALUES (
@@ -114,7 +119,8 @@ class UWTickerInfoConnector:
                     market_cap = EXCLUDED.market_cap,
                     exchange = EXCLUDED.exchange,
                     last_updated = NOW()
-            """)
+            """
+            )
             await session.execute(stmt, record)
 
         await db_write(write)

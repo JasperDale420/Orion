@@ -35,7 +35,7 @@ class MockAsyncSession:
 async def test_dlq_run_once_no_items(consumer):
     mock_session = MockAsyncSession(result_scalars=[])
 
-    with patch("orion.jobs.dlq_consumer.async_session_factory") as mock_factory:
+    with patch("orion.shared.db_utils.async_session_factory") as mock_factory:
         mock_factory.return_value = mock_session
 
         await consumer.run_once()
@@ -57,7 +57,7 @@ async def test_dlq_replay_success(consumer):
 
     mock_session = MockAsyncSession(result_scalars=[mock_item])
 
-    with patch("orion.jobs.dlq_consumer.async_session_factory") as mock_factory:
+    with patch("orion.shared.db_utils.async_session_factory") as mock_factory:
         mock_factory.return_value = mock_session
 
         # Mock FeatureEngine processing
@@ -81,7 +81,7 @@ async def test_dlq_replay_failure(consumer):
 
     mock_session = MockAsyncSession(result_scalars=[mock_item])
 
-    with patch("orion.jobs.dlq_consumer.async_session_factory") as mock_factory:
+    with patch("orion.shared.db_utils.async_session_factory") as mock_factory:
         mock_factory.return_value = mock_session
 
         await consumer.run_once()

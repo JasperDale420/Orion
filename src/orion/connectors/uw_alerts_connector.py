@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -18,11 +19,14 @@ logger = logging.getLogger(__name__)
 
 class UWAlertsConnector:
     """
-    Connects to Unusual Whales API to poll for Flow Alerts.
+    Connects to Data Gateway to poll for Unusual Whales Flow Alerts.
     """
 
-    def __init__(self, api_key: str, base_url: str):
-        self.client = UnusualWhalesClient(base_url=base_url, token=api_key)
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
+        # Use Gateway URL for UW endpoints (auth handled by Gateway)
+        self.client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token=gateway_key)
         self.last_seen_id: Optional[str] = None
         self.last_poll_ts: Optional[datetime] = None
         self._watermark_loaded: bool = False
@@ -32,21 +36,44 @@ class UWAlertsConnector:
         """
         Generates a deterministic event ID.
         """
-        # Alerts typically have an 'id'.
         source_id = event_data.get("id")
         if source_id:
             return hashlib.sha256(f"UW_ALERT_{source_id}".encode("utf-8")).hexdigest()
 
-        # Fallback
         raw_str = f"UW_ALERT_{event_data.get('ticker')}_{event_data.get('timestamp')}_{event_data.get('strike')}"
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """
-        Fetches latest flow alerts.
-        """
-        # P1 Audit Fix: Check circuit breaker before polling
+    @staticmethod
+    def _resolve_ticker(item: dict[str, Any]) -> str | None:
+        """Extract ticker from various possible payload fields."""
+        return (
+            item.get("ticker")
+            or item.get("symbol")
+            or item.get("underlying")
+            or item.get("underlying_symbol")
+            or item.get("stock")
+        )
+
+    @staticmethod
+    def _normalize_put_call(item: dict[str, Any]) -> None:
+        """Normalize put_call field to C/P format in-place."""
+        raw_value: str | None = None
+        if "put_call" in item:
+            raw_value = item["put_call"]
+        elif "type" in item:
+            raw_value = item["type"]
+
+        if raw_value:
+            upper = raw_value.upper()
+            if upper == "CALL":
+                item["put_call"] = "C"
+            elif upper == "PUT":
+                item["put_call"] = "P"
+            else:
+                item["put_call"] = upper[:1] if upper else None
+
+    async def _check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker is open. Returns True if should skip fetch."""
         from orion.core.circuit_breaker import CircuitBreaker
 
         if await CircuitBreaker().is_open():
@@ -54,30 +81,93 @@ class UWAlertsConnector:
                 "Circuit breaker OPEN, skipping UW alerts fetch",
                 extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_ALERTS"},
             )
+            return True
+        return False
+
+    def _extract_response_data(self, response: Any) -> list[dict[str, Any]] | None:
+        """Extract list data from response, handling various formats."""
+        if not response:
+            return None
+
+        data = response
+        if isinstance(response, dict) and "data" in response:
+            data = response["data"]
+
+        if not isinstance(data, list):
+            logger.warning(f"Unexpected response format from UW Alerts: {type(data)}")
+            return None
+
+        return data
+
+    def _parse_single_item(self, item: dict[str, Any], fetch_start: datetime, seen_ids: set[str]) -> BronzeEvent | None:
+        """Parse a single raw item into a BronzeEvent, or return None if invalid."""
+        event_id = self._generate_event_id(item)
+        if event_id in seen_ids:
+            return None
+        seen_ids.add(event_id)
+
+        ts_str = item.get("timestamp") or item.get("created_at")
+        if not ts_str:
+            raise ValueError("Missing timestamp/created_at in UW alert payload")
+
+        events_ts = parse_timestamptz(ts_str, strict=True)
+        if events_ts < fetch_start:
+            return None
+
+        self._normalize_put_call(item)
+
+        ticker = self._resolve_ticker(item)
+        if not ticker:
+            logger.warning(
+                f"Skipping UW alert without ticker: id={item.get('id')}",
+                extra={"event_type": "UW_ALERT_MISSING_TICKER"},
+            )
+            return None
+
+        if not item.get("ticker"):
+            item["ticker"] = ticker
+
+        source_event_id = item.get("id")
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            source_event_id=str(source_event_id) if source_event_id is not None else None,
+            event_type="UW_ALERT",
+            ticker=ticker,
+            event_ts_utc=events_ts,
+            payload=item,
+            session="REG",
+        )
+
+    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
+        """Update watermark based on processed events."""
+        if events:
+            candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
+            if self.last_poll_ts is None or candidate > self.last_poll_ts:
+                self.last_poll_ts = candidate
+                await self._persist_watermark(self.last_poll_ts)
+        elif self.last_poll_ts is None:
+            self.last_poll_ts = now
+            await self._persist_watermark(self.last_poll_ts)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
+        """Fetches latest flow alerts."""
+        if await self._check_circuit_breaker():
             return []
 
-        # Enforce Rate Limit (async-safe)
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.6)  # Rate limit
+
         try:
             await self._ensure_watermark_loaded()
 
             now = datetime.now(timezone.utc)
             poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
-            fetch_start = (
-                poll_start_ts if self.last_poll_ts is None else (poll_start_ts - timedelta(seconds=overlap_seconds))
-            )
+            fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
             response = await self._fetch_raw_events(newer_than=fetch_start)
-
-            if not response:
-                return []
-
-            data = response
-            if isinstance(response, dict) and "data" in response:
-                data = response["data"]
-
-            if not isinstance(data, list):
-                logger.warning(f"Unexpected response format from UW Alerts: {type(data)}")
+            data = self._extract_response_data(response)
+            if data is None:
                 return []
 
             events: List[BronzeEvent] = []
@@ -85,61 +175,10 @@ class UWAlertsConnector:
 
             for item in data:
                 try:
-                    event_id = self._generate_event_id(item)
-                    if event_id in seen_event_ids:
-                        continue
-                    seen_event_ids.add(event_id)
-                    source_event_id = item.get("id")
-
-                    # Try to extract timestamp
-                    ts_str = item.get("timestamp") or item.get("created_at")
-                    if not ts_str:
-                        raise ValueError("Missing timestamp/created_at in UW alert payload")
-                    events_ts = parse_timestamptz(ts_str, strict=True)
-
-                    if events_ts < fetch_start:
-                        continue
-
-                    # Normalize put_call to C/P
-                    if "put_call" in item:
-                        pc = item["put_call"].upper()
-                        item["put_call"] = "C" if pc == "CALL" else ("P" if pc == "PUT" else pc[:1])
-                    elif "type" in item:
-                        pc = item["type"].upper()
-                        item["put_call"] = "C" if pc == "CALL" else ("P" if pc == "PUT" else pc[:1])
-
-                    # Ensure ticker is set (required by silver schema). UW payloads can use different keys.
-                    ticker = (
-                        item.get("ticker")
-                        or item.get("symbol")
-                        or item.get("underlying")
-                        or item.get("underlying_symbol")
-                        or item.get("stock")
-                    )
-                    if not ticker:
-                        # Skip events without a ticker - required by silver schema
-                        logger.warning(
-                            f"Skipping UW alert without ticker: id={item.get('id')}",
-                            extra={"event_type": "UW_ALERT_MISSING_TICKER"},
-                        )
-                        continue
-                    if not item.get("ticker"):
-                        item["ticker"] = ticker
-
-                    events.append(
-                        BronzeEvent(
-                            event_id=event_id,
-                            source="UW",
-                            source_event_id=str(source_event_id) if source_event_id is not None else None,
-                            event_type="UW_ALERT",
-                            ticker=ticker,
-                            event_ts_utc=events_ts,
-                            payload=item,
-                            session="REG",
-                        )
-                    )
+                    event = self._parse_single_item(item, fetch_start, seen_event_ids)
+                    if event:
+                        events.append(event)
                 except Exception as e:
-                    # Granular DLQ Handling per Event
                     from orion.shared.dlq_utils import DLQWriter
 
                     await DLQWriter.write_to_dlq(
@@ -152,17 +191,8 @@ class UWAlertsConnector:
                         ticker=item.get("ticker"),
                         event_ts_utc=parse_timestamptz(item.get("timestamp") or item.get("created_at"), strict=False),
                     )
-                    continue
 
-            if events:
-                candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
-                if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                    self.last_poll_ts = candidate
-                    await self._persist_watermark(self.last_poll_ts)
-            elif self.last_poll_ts is None:
-                self.last_poll_ts = now
-                await self._persist_watermark(self.last_poll_ts)
-
+            await self._update_watermark(events, now)
             return events
 
         except Exception as e:

@@ -187,16 +187,13 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
     await init_db()
 
-    api_key = os.environ.get("UW_API_KEY")
-    if not api_key:
-        logger.error("UW_API_KEY not set")
-        return
+    gateway_url = os.environ.get("GATEWAY_URL", "http://localhost:8080")
 
-    # Initialize connectors
-    greek_connector = UWGreekExposureConnector(api_key)
-    tide_connector = UWMarketTideConnector(api_key)
-    max_pain_connector = UWMaxPainConnector(api_key)
-    iv_connector = UWIVRankConnector(api_key)
+    # Initialize connectors (now using Data Gateway)
+    greek_connector = UWGreekExposureConnector(gateway_url=gateway_url)
+    tide_connector = UWMarketTideConnector(gateway_url=gateway_url)
+    max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url)
+    iv_connector = UWIVRankConnector(gateway_url=gateway_url)
     regime_detector = MultiAxisRegimeDetector()
     vix_connector = VIXProxyConnector()  # Uses VIXY bars from silver_alpaca_bars
 

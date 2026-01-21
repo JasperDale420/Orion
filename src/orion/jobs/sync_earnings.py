@@ -11,27 +11,23 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import text
-
 from orion.shared.db_utils import db_query
+from sqlalchemy import text
 
 logger = logging.getLogger("orion.jobs.sync_earnings")
 
 
 async def sync_todays_earnings() -> Dict[str, int]:
-    """Sync today's earnings from UW API (premarket + afterhours)."""
+    """Sync today's earnings via Data Gateway (premarket + afterhours)."""
     import os
 
     from orion.unusualwhales.api.earnings import get_afterhours_earnings, get_premarket_earnings
     from orion.unusualwhales.client import UnusualWhalesClient
     from orion.unusualwhales.models.earnings_results import EarningsResults
 
-    token = os.getenv("UW_TOKEN")
-    if not token:
-        logger.error("UW_TOKEN not set")
-        return {"synced": 0, "errors": 0}
-
-    client = UnusualWhalesClient(base_url="https://api.unusualwhales.com", token=token)
+    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
+    # Use gateway URL with a placeholder token (auth handled by Gateway)
+    client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"synced": 0, "errors": 0}
     today = date.today()
 
@@ -129,17 +125,14 @@ async def backfill_ticker_earnings(ticker: str, client: Any) -> int:
 
 
 async def backfill_all_earnings() -> Dict[str, int]:
-    """Backfill earnings for all unique tickers in price_target_labels."""
+    """Backfill earnings for all unique tickers via Data Gateway."""
     import os
 
     from orion.unusualwhales.client import UnusualWhalesClient
 
-    token = os.getenv("UW_TOKEN")
-    if not token:
-        logger.error("UW_TOKEN not set")
-        return {"tickers": 0, "earnings": 0, "errors": 0}
-
-    client = UnusualWhalesClient(base_url="https://api.unusualwhales.com", token=token)
+    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
+    # Use gateway URL with a placeholder token (auth handled by Gateway)
+    client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"tickers": 0, "earnings": 0, "errors": 0}
 
     # Get unique tickers from labels

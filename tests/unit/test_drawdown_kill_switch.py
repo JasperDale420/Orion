@@ -1,4 +1,5 @@
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,6 +15,12 @@ from orion.storage.models_risk import RiskState
 
 @pytest.mark.asyncio
 async def test_drawdown_kill_switch_opens_circuit_breaker():
+    # Patch metrics to avoid side effects
+    with patch("orion.execution.risk_manager._metrics", MagicMock()):
+        await _run_test_drawdown_logic()
+
+
+async def _run_test_drawdown_logic():
     await init_db()
 
     cb = CircuitBreaker()

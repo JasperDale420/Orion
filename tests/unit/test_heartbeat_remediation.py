@@ -42,7 +42,7 @@ async def test_uw_flow_connector_poll_updates_db_heartbeat():
             ):
                 mock_get_wm.return_value = None
 
-                connector = UWFlowConnector(api_key="test_key")
+                connector = UWFlowConnector(gateway_url="http://localhost:8080")
                 # Manually mock the instance method to ensure interception
                 connector.fetch_raw_events = AsyncMock(return_value=MOCK_FLOW_RESPONSE)
                 # Ensure we bypass any validation that might check api key via property

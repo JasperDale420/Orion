@@ -43,12 +43,11 @@ async def test_eod_review_uses_config():
     ):
         from orion.agents.eod_review_agent import EODReviewAgent
 
-        # We need to mock AsyncOpenAI to prevent network calls
-        with patch("orion.agents.eod_review_agent.AsyncOpenAI") as mock_openai:
-            agent = EODReviewAgent()
+        # Mock run_codex_completion
+        with patch("orion.agents.eod_review_agent.run_codex_completion", new_callable=AsyncMock) as mock_codex:
+            mock_codex.return_value = '{"analysis": "foo"}'
 
-            # Check API Key usage
-            mock_openai.assert_called_with(api_key="sk-mock")
+            agent = EODReviewAgent()
 
             # Use AsyncMock for async methods
             agent._gather_data = AsyncMock(return_value=({}, ""))

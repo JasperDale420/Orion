@@ -1,11 +1,12 @@
 """
 UW Greek Exposure Connector.
 
-Fetches GEX (Gamma), VEX (Vanna), CEX (Charm) exposure data from Unusual Whales API.
+Fetches GEX (Gamma), VEX (Vanna), CEX (Charm) exposure data via Data Gateway.
 """
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -19,32 +20,20 @@ logger = logging.getLogger(__name__)
 
 
 class UWGreekExposureConnector:
-    """Fetches Greek exposure (GEX, Vanna, Charm) from UW API."""
+    """Fetches Greek exposure (GEX, Vanna, Charm) via Data Gateway."""
 
-    BASE_URL = "https://api.unusualwhales.com"
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.headers = {"Authorization": f"Bearer {api_key}"}
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
+        self.headers = {"X-Gateway-Key": self.gateway_key}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_greek_exposure(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch greek exposure for a ticker."""
-        url = f"{self.BASE_URL}/api/stock/{ticker}/greek-exposure"
+        """Fetch greek exposure for a ticker via Data Gateway."""
+        url = f"{self.gateway_url}/api/v1/uw/{ticker}/spot-exposures"
         try:
             resp = requests.get(url, headers=self.headers, timeout=30)
             resp.raise_for_status()
-
-            # Log API usage headers for quota monitoring
-            daily_count = resp.headers.get("x-uw-daily-req-count")
-            daily_limit = resp.headers.get("x-uw-token-req-limit")
-            if daily_count and daily_limit:
-                usage_pct = round(100 * int(daily_count) / int(daily_limit), 1)
-                logger.info(
-                    f"UW API usage: {daily_count}/{daily_limit} ({usage_pct}%)",
-                    extra={"event_type": "UW_API_USAGE", "component": "greek_exposure"},
-                )
-
             return resp.json()
         except Exception as e:
             logger.warning(f"Failed to fetch greek exposure for {ticker}: {e}")

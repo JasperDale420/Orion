@@ -1,11 +1,12 @@
 """
 UW Market Tide Connector.
 
-Fetches market-wide options flow sentiment (net call/put premium).
+Fetches market-wide options flow sentiment (net call/put premium) via Data Gateway.
 """
 
 import asyncio
 import logging
+import os
 from datetime import date, datetime
 from typing import Any, Dict, Optional
 
@@ -19,18 +20,17 @@ logger = logging.getLogger(__name__)
 
 
 class UWMarketTideConnector:
-    """Fetches market tide (net premium intraday) from UW API."""
+    """Fetches market tide (net premium intraday) via Data Gateway."""
 
-    BASE_URL = "https://api.unusualwhales.com"
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.headers = {"Authorization": f"Bearer {api_key}"}
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
+        self.headers = {"X-Gateway-Key": self.gateway_key}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_market_tide(self, market_date: Optional[date] = None) -> Optional[Dict[str, Any]]:
-        """Fetch market tide for a date."""
-        url = f"{self.BASE_URL}/api/market/market-tide"
+        """Fetch market tide for a date via Data Gateway."""
+        url = f"{self.gateway_url}/api/v1/uw/market/tide"
         params = {}
         if market_date:
             params["date"] = market_date.isoformat()
@@ -38,17 +38,6 @@ class UWMarketTideConnector:
         try:
             resp = requests.get(url, headers=self.headers, params=params, timeout=30)
             resp.raise_for_status()
-
-            # Log API usage headers for quota monitoring
-            daily_count = resp.headers.get("x-uw-daily-req-count")
-            daily_limit = resp.headers.get("x-uw-token-req-limit")
-            if daily_count and daily_limit:
-                usage_pct = round(100 * int(daily_count) / int(daily_limit), 1)
-                logger.info(
-                    f"UW API usage: {daily_count}/{daily_limit} ({usage_pct}%)",
-                    extra={"event_type": "UW_API_USAGE", "component": "market_tide"},
-                )
-
             return resp.json()
         except Exception as e:
             logger.warning(f"Failed to fetch market tide: {e}")

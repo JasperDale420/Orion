@@ -5,7 +5,7 @@ from orion.execution.risk_manager import RiskManager
 def test_risk_manager_shorting_disabled():
     cfg = RiskSettings()
     cfg.enable_shorting = False  # Explicitly disable
-    cfg.max_order_size_usd = 10000
+    cfg.max_order_size_pct = 0.10  # 10000 / 100000 = 10%
 
     rm = RiskManager(config=cfg)
 
@@ -42,7 +42,7 @@ def test_risk_manager_shorting_flip():
 def test_risk_manager_shorting_enabled():
     cfg = RiskSettings()
     cfg.enable_shorting = True
-    cfg.max_order_size_usd = 50000
+    cfg.max_order_size_pct = 0.50  # 50000 / 100000 = 50%
 
     rm = RiskManager(config=cfg)
 

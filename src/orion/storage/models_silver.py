@@ -1,9 +1,8 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, DateTime, Float, Index, Integer, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Index, Integer, String
 
-# from sqlalchemy.dialects.postgresql import JSONB, UUID
 from orion.storage.db import Base
 
 
@@ -63,12 +62,7 @@ class SilverOptionFlow(Base):
 
     # Flags/Meta
     aggressor = Column(String, nullable=True)  # ASK, BID, MID
-    is_sweep = Column(
-        String, nullable=True
-    )  # Stored as boolean or 'true'/'false' string? Using String to match likely JSON source or cast to Boolean in normalizer.
-    # SQLAlchemy Boolean is better. Let's stick closer to SQL.
-    # But for speed/simplicity with potentially mixed inputs, we might default.
-    # Let's use Boolean if normalizer guarantees it.
+    is_sweep = Column(Boolean, nullable=True)  # Whether this is a sweep trade
 
     # Use JSON for flags to handle variations? Or explicit columns as per PRD "minimum"?
     # PRD lists specifics. Let's do explicit columns for PRD specified fields.
@@ -217,4 +211,3 @@ class SilverOptionQuote(Base):
         Index("ix_option_quotes_event_checkpoint", "flow_event_id", "checkpoint"),
         {"extend_existing": True},
     )
-

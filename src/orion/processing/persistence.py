@@ -4,13 +4,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, List
 
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverAlpacaBar, SilverDarkPool, SilverOptionFlow, SilverSignal, SilverUWAlert
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +174,8 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
                     "underlying_price": _safe_float(p.get("underlying_price")),
                     # Infer aggressor from UW API total_bid_side_prem vs total_ask_side_prem
                     "aggressor": _infer_aggressor(p),
-                    # UW uses has_sweep boolean - convert to str for VARCHAR column
-                    "is_sweep": str(p.get("is_sweep") or p.get("has_sweep") or ""),
+                    # UW uses has_sweep boolean - database column is boolean
+                    "is_sweep": bool(p.get("is_sweep") or p.get("has_sweep")),
                     "flags_json": p.get("flags_json") if p.get("flags_json") != "null" else None,
                     "volume_contract": _safe_int(p.get("volume_contract") or p.get("volume")),
                     "open_interest": _safe_int(p.get("open_interest")),
@@ -266,7 +265,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
         for i in range(0, len(flow_rows), BATCH_SIZE):
             batch = flow_rows[i : i + BATCH_SIZE]
             stmt = insert(SilverOptionFlow).values(batch)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["event_id"])
+            stmt = stmt.on_conflict_do_nothing(index_elements=["event_id", "flow_ts_utc"])
             await session.execute(stmt)
     if bar_rows:
         for i in range(0, len(bar_rows), BATCH_SIZE):
@@ -278,7 +277,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
         for i in range(0, len(dark_rows), BATCH_SIZE):
             batch = dark_rows[i : i + BATCH_SIZE]
             stmt = insert(SilverDarkPool).values(batch)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["event_id"])
+            stmt = stmt.on_conflict_do_nothing(index_elements=["event_id", "dark_ts_utc"])
             await session.execute(stmt)
     if alert_rows:
         for i in range(0, len(alert_rows), BATCH_SIZE):

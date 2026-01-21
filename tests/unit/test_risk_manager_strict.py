@@ -5,7 +5,7 @@ def get_strict_config():
     return RiskSettings(
         max_daily_loss=1000.0,
         max_positions=5,
-        max_ticker_exposure_usd=5000.0,
+        max_ticker_exposure_pct=0.05,  # 5000 / 100000 = 5%
         risk_per_trade_pct=0.01,
         enable_shorting=False,  # Strict
     )

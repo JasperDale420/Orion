@@ -11,8 +11,8 @@ from orion.execution.risk_manager import RiskManager
 @pytest.fixture
 def risk_manager():
     """RiskManager fixture with permissive settings."""
-    risk_settings.max_order_size_usd = 1e9
-    risk_settings.max_ticker_exposure_usd = 1e9
+    risk_settings.max_order_size_pct = 1.0
+    risk_settings.max_ticker_exposure_pct = 1.0
     risk_settings.max_positions = 50
     risk_settings.max_daily_loss = 1e9
     return RiskManager()

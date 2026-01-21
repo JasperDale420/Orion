@@ -10,7 +10,7 @@ def test_risk_manager_defaults(risk_manager_factory):
 
 
 def test_risk_manager_blocks_excessive_order_size(risk_manager_factory):
-    config = RiskConfig(max_order_size_usd=5000.0)
+    config = RiskConfig(max_order_size_pct=0.05)
     rm = risk_manager_factory(config)
 
     # 10 * 600 = 6000 > 5000
@@ -47,7 +47,7 @@ def test_check_order_max_positions_allow_existing(risk_manager_factory):
 
 
 def test_check_order_ticker_exposure_limit(risk_manager_factory):
-    config = RiskConfig(max_ticker_exposure_usd=10000.0)
+    config = RiskConfig(max_ticker_exposure_pct=0.10)
     rm = risk_manager_factory(config)
 
     # Pre-seed exposure
@@ -93,7 +93,7 @@ def test_check_order_allow_risk_reduction_at_limit(risk_manager_factory):
     If we are already over the exposure limit (e.g. gap up),
     we should be allowed to SELL to reduce risk.
     """
-    config = RiskConfig(max_ticker_exposure_usd=10000.0)
+    config = RiskConfig(max_ticker_exposure_pct=0.10)
     rm = risk_manager_factory(config)
 
     # Pre-seed exposure ABOVE limit
@@ -114,7 +114,7 @@ def test_check_order_flip_long_to_short(risk_manager_factory):
     Test flipping from Net Long to Net Short.
     Start Long 5000. Sell 8000 -> Net Short -3000.
     """
-    config = RiskConfig(max_ticker_exposure_usd=10000.0, enable_shorting=True, max_order_size_usd=50000.0)
+    config = RiskConfig(max_ticker_exposure_pct=0.10, enable_shorting=True, max_order_size_pct=0.50)
     rm = risk_manager_factory(config)
 
     # Start Long
@@ -135,7 +135,7 @@ def test_check_order_flip_short_to_long(risk_manager_factory):
     Test flipping from Net Short to Net Long.
     Start Short -5000. Buy 8000 -> Net Long +3000.
     """
-    config = RiskConfig(max_ticker_exposure_usd=10000.0, enable_shorting=True, max_order_size_usd=50000.0)
+    config = RiskConfig(max_ticker_exposure_pct=0.10, enable_shorting=True, max_order_size_pct=0.50)
     rm = risk_manager_factory(config)
 
     # Start Short

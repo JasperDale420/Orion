@@ -15,6 +15,7 @@ def engine():
         patch.object(system_settings, "alpaca_secret_key", "test_secret"),
         patch("orion.execution.execution_engine.AlpacaTradingConnector"),
         patch("orion.execution.execution_engine.AlpacaMarketConnector"),
+        patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
     ):
         return ExecutionEngine()
 

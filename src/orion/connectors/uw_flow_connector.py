@@ -19,18 +19,16 @@ logger = logging.getLogger(__name__)
 
 class UWFlowConnector:
     """
-    Connects to the Unusual Whales API to poll for options flow events.
+    Connects to the Data Gateway to poll for Unusual Whales options flow events.
     Implements watermark polling and deduplication.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("UW_API_KEY")
-        if not self.api_key:
-            raise ProviderError("UW_API_KEY is required.", code=ErrorCode.PROVIDER_AUTH_FAILED)
+    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
+        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
 
-        self.base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
         self.session = requests.Session()
-        self.session.headers.update({"Authorization": f"Bearer {self.api_key}", "User-Agent": "Orion/0.1.0"})
+        self.session.headers.update({"X-Gateway-Key": self.gateway_key, "User-Agent": "Orion/0.1.0"})
 
         # State tracking
         self.last_poll_ts: Optional[datetime] = None
@@ -64,6 +62,78 @@ class UWFlowConnector:
             return True
         return False
 
+    async def _check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker is open. Returns True if should skip fetch."""
+        from orion.core.circuit_breaker import CircuitBreaker
+
+        if await CircuitBreaker().is_open():
+            logger.warning(
+                "Circuit breaker OPEN, skipping UW flow poll",
+                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_FLOW"},
+            )
+            return True
+        return False
+
+    @staticmethod
+    def _normalize_put_call(raw: Dict[str, Any]) -> None:
+        """Normalize put_call field to C/P format in-place."""
+        if "put_call" not in raw and "type" in raw:
+            t = raw["type"].upper()
+            if t == "CALL":
+                raw["put_call"] = "C"
+            elif t == "PUT":
+                raw["put_call"] = "P"
+            else:
+                raw["put_call"] = t[:1] if t else None
+
+    @staticmethod
+    def _normalize_premium(raw: Dict[str, Any]) -> None:
+        """Normalize premium field from total_premium if needed."""
+        if "premium" not in raw and "total_premium" in raw:
+            raw["premium"] = raw["total_premium"]
+
+    def _parse_single_event(
+        self, raw: Dict[str, Any], fetch_start: datetime, now: datetime, seen_ids: set[str]
+    ) -> BronzeEvent | None:
+        """Parse a single raw event into a BronzeEvent, or return None if invalid."""
+        ts_str = raw.get("timestamp") or raw.get("created_at")
+        event_ts = parse_timestamptz(ts_str, strict=True)
+
+        if event_ts < fetch_start:
+            return None
+
+        event_id = self._generate_event_id(raw)
+        if event_id in seen_ids:
+            return None
+        seen_ids.add(event_id)
+
+        source_event_id = str(raw.get("id")) if raw.get("id") is not None else None
+
+        self._normalize_premium(raw)
+        self._normalize_put_call(raw)
+
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            source_event_id=source_event_id,
+            event_type="UW_FLOW",
+            event_ts_utc=event_ts,
+            received_ts_utc=now,
+            payload=raw,
+            session="REG",
+        )
+
+    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
+        """Update watermark based on processed events."""
+        if events:
+            candidate = max(e.event_ts_utc for e in events)
+            if self.last_poll_ts is None or candidate > self.last_poll_ts:
+                self.last_poll_ts = candidate
+                await self._persist_watermark(self.last_poll_ts)
+        elif self.last_poll_ts is None:
+            self.last_poll_ts = now
+            await self._persist_watermark(self.last_poll_ts)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -77,13 +147,13 @@ class UWFlowConnector:
         time.sleep(0.6)
 
         try:
-            # PROD FIX: Use 'flow-alerts' endpoint
-            url = f"{self.base_url}/option-trades/flow-alerts"
+            # Use Data Gateway flow endpoint
+            url = f"{self.gateway_url}/api/v1/uw/flow/all"
             from orion.config import system_settings
 
             params = {"date": trading_date.strftime("%Y-%m-%d"), "limit": system_settings.uw_fetch_limit}
 
-            response = self.session.get(url, params=params, timeout=10)
+            response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
 
             # Log API usage headers for quota monitoring
@@ -259,30 +329,16 @@ class UWFlowConnector:
         Polls for new events (Async).
         PRD 7.1: request events after (last_seen_ts - overlap_margin).
         """
-        # P1 Audit Fix: Check circuit breaker before polling
-        from orion.core.circuit_breaker import CircuitBreaker
-
-        if await CircuitBreaker().is_open():
-            logger.warning(
-                "Circuit breaker OPEN, skipping UW flow poll",
-                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_FLOW"},
-            )
+        if await self._check_circuit_breaker():
             return []
 
         await self._ensure_watermark_loaded()
         await self.send_heartbeat_async()
 
         now = datetime.now(timezone.utc)
-
-        # If first run, look back X seconds (or use config default)
         poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
+        fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
-        # Safety margin overlap (PRD default overlap=120s)
-        fetch_start = (
-            poll_start_ts if self.last_poll_ts is None else (poll_start_ts - timedelta(seconds=overlap_seconds))
-        )
-
-        # Run blocking HTTP fetch in thread to stay async-friendly
         try:
             t0 = time.perf_counter()
             raw_events = await self.fetch_raw_events(fetch_start, now)
@@ -294,57 +350,23 @@ class UWFlowConnector:
             )
 
         except ProviderError as e:
-            # Re-raising allows caller to handle backoff/circuit breaker.
-            raise e
+            logger.warning(
+                f"Provider error during UW flow fetch: {e}",
+                extra={"event_type": "UW_FLOW_PROVIDER_ERROR", "error": str(e)},
+            )
+            raise
 
         bronze_events = []
         seen_event_ids: set[str] = set()
 
         for raw in raw_events:
             try:
-                # Schema Adaptation for 'flow-alerts' vs 'full-tape'
-                ts_str = raw.get("timestamp") or raw.get("created_at")
-                # If timestamp is int (start_time ms), convert? created_at is safer.
-
-                event_ts = parse_timestamptz(ts_str, strict=True)
-
-                if event_ts < fetch_start:
-                    continue
-
-                event_id = self._generate_event_id(raw)
-                if event_id in seen_event_ids:
-                    continue
-                seen_event_ids.add(event_id)
-                source_event_id = str(raw.get("id")) if raw.get("id") is not None else None
-
-                # Normalize Payload for downstream consumers who expect 'premium', 'put_call'
-                # If 'total_premium' exists but 'premium' doesn't, copy it.
-                if "premium" not in raw and "total_premium" in raw:
-                    raw["premium"] = raw["total_premium"]
-                if "put_call" not in raw and "type" in raw:
-                    t = raw["type"].upper()
-                    raw["put_call"] = "C" if t == "CALL" else ("P" if t == "PUT" else t[:1])
-
-                bronze_event = BronzeEvent(
-                    event_id=event_id,
-                    source="UW",
-                    source_event_id=source_event_id,
-                    event_type="UW_FLOW",
-                    event_ts_utc=event_ts,
-                    received_ts_utc=now,
-                    payload=raw,
-                    session="REG",
-                )
-                bronze_events.append(bronze_event)
-
+                event = self._parse_single_event(raw, fetch_start, now, seen_event_ids)
+                if event:
+                    bronze_events.append(event)
             except Exception as e:
-                # Granular DLQ Handling per Event
                 from orion.shared.dlq_utils import DLQWriter
 
-                # Check if we're in an async context? poll() IS async.
-                # However, loop might be tight. We should use await.
-                # But wait, DLQWriter is async.
-                # We can await it.
                 await DLQWriter.write_to_dlq(
                     error=e,
                     event_type="UW_FLOW_PARSE_ERROR",
@@ -357,19 +379,8 @@ class UWFlowConnector:
                         parse_timestamptz(raw.get("timestamp"), strict=False) if raw.get("timestamp") else None
                     ),
                 )
-                continue
 
-        # Update watermark
-        if bronze_events:
-            candidate = max(e.event_ts_utc for e in bronze_events)
-            if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                self.last_poll_ts = candidate
-                await self._persist_watermark(self.last_poll_ts)
-        elif self.last_poll_ts is None:
-            # Avoid repeating the initial lookback window forever on restarts.
-            self.last_poll_ts = now
-            await self._persist_watermark(self.last_poll_ts)
-
+        await self._update_watermark(bronze_events, now)
         return bronze_events
 
     async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:

@@ -1,8 +1,9 @@
 """
 Alpaca WebSocket Streaming Connector.
 
-Uses alpaca-py StockDataStream for real-time bar data with sub-second latency.
-Replaces polling-based approach that had 5-30 minute lag due to Historical API delays.
+Routes real-time bar data through the Data Gateway's WebSocket multiplexer
+to avoid Alpaca connection limit issues. Falls back to direct alpaca-py
+connection if Gateway is unavailable.
 """
 
 import asyncio
@@ -12,67 +13,111 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from alpaca.data.live import StockDataStream
-from alpaca.data.models import Bar
-
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
 
+# Feature flag for Gateway mode (default: True to use Gateway)
+USE_GATEWAY = os.getenv("ORION_USE_GATEWAY", "true").lower() == "true"
+
 
 class AlpacaStreamConnector:
     """
     Real-time WebSocket streaming connector for Alpaca market data.
-    
-    Provides sub-second latency for 1-minute bars compared to 5-30 minute
-    lag from the Historical API polling approach.
+
+    By default, connects to the Data Gateway's WebSocket endpoint which
+    multiplexes connections to avoid Alpaca's 1-connection-per-stream limit.
+
+    Set ORION_USE_GATEWAY=false to use direct alpaca-py connection (not recommended).
     """
 
     def __init__(
         self,
-        api_key: str,
-        secret_key: str,
+        api_key: Optional[str] = None,
+        secret_key: Optional[str] = None,
         feed: str = "sip",
         on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
+        use_gateway: Optional[bool] = None,
     ):
-        self.api_key = api_key
-        self.secret_key = secret_key
-        self.feed = feed
+        self._use_gateway = use_gateway if use_gateway is not None else USE_GATEWAY
         self.on_bar_callback = on_bar_callback
-        
-        # Initialize the streaming client
-        self.stream = StockDataStream(api_key, secret_key, feed=feed)
-        
+        self.feed = feed
+
+        # Gateway client (lazy initialized)
+        self._gateway_client = None
+
+        # Direct alpaca-py client (legacy fallback)
+        self._direct_stream = None
+        self._api_key = api_key
+        self._secret_key = secret_key
+
         # Track subscribed tickers
         self._subscribed_tickers: Set[str] = set()
-        
+
         # Event queue for buffering bars
         self._event_queue: asyncio.Queue[BronzeEvent] = asyncio.Queue()
-        
+
         # Running state
         self._running = False
         self._stream_task: Optional[asyncio.Task] = None
+
+        if self._use_gateway:
+            logger.info("AlpacaStreamConnector initialized in Gateway mode")
+        else:
+            logger.info("AlpacaStreamConnector initialized in Direct mode (legacy)")
+
+    def _get_gateway_client(self):
+        """Lazy initialization of Gateway stream client."""
+        if self._gateway_client is None:
+            from orion.connectors.gateway_stream_client import create_gateway_stream_client
+
+            self._gateway_client = create_gateway_stream_client(
+                on_bar_callback=self._handle_gateway_event,
+            )
+        return self._gateway_client
+
+    def _get_direct_stream(self):
+        """Lazy initialization of direct alpaca-py stream (legacy)."""
+        if self._direct_stream is None:
+            from alpaca.data.live import StockDataStream
+
+            api_key = self._api_key or os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY")
+            secret_key = self._secret_key or os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY")
+
+            if not api_key or not secret_key:
+                raise ValueError("Alpaca API credentials not found")
+
+            self._direct_stream = StockDataStream(api_key, secret_key, feed=self.feed)
+        return self._direct_stream
+
+    def _handle_gateway_event(self, event: BronzeEvent) -> None:
+        """Handle events from Gateway client (callback mode)."""
+        if self.on_bar_callback:
+            self.on_bar_callback(event)
+        else:
+            # Queue for later drain
+            try:
+                self._event_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning("Event queue full, dropping event")
 
     def _generate_event_id(self, ticker: str, bar_data: Dict[str, Any]) -> str:
         """Generates a deterministic event ID based on event content."""
         raw_str = f"ALPACA_BAR_1M_{ticker}_{bar_data.get('timestamp', '')}_{bar_data.get('volume', '')}"
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
 
-    async def _handle_bar(self, bar: Bar) -> None:
-        """
-        Callback for incoming bar data from WebSocket.
-        Converts to BronzeEvent and either queues or invokes callback.
-        """
+    async def _handle_direct_bar(self, bar) -> None:
+        """Callback for incoming bar data from direct alpaca-py stream (legacy)."""
         try:
             ticker = bar.symbol
-            
+
             # Convert to dict
             try:
                 payload = bar.model_dump(mode="json")
             except AttributeError:
                 payload = bar.dict()
-            
+
             # Data quality validation
             if not bar.close or bar.close <= 0:
                 logger.warning(f"Rejecting invalid bar for {ticker}: close={bar.close}")
@@ -100,7 +145,6 @@ class AlpacaStreamConnector:
                 payload=payload,
             )
 
-            # Either use callback or queue
             if self.on_bar_callback:
                 self.on_bar_callback(event)
             else:
@@ -124,9 +168,14 @@ class AlpacaStreamConnector:
             return
 
         logger.info(f"Subscribing to {len(new_tickers)} new tickers for streaming bars")
-        
-        # Register handler if not already done
-        self.stream.subscribe_bars(self._handle_bar, *new_tickers)
+
+        if self._use_gateway:
+            client = self._get_gateway_client()
+            await client.subscribe(list(new_tickers))
+        else:
+            stream = self._get_direct_stream()
+            stream.subscribe_bars(self._handle_direct_bar, *new_tickers)
+
         self._subscribed_tickers.update(new_tickers)
 
     async def unsubscribe(self, tickers: List[str]) -> None:
@@ -139,11 +188,18 @@ class AlpacaStreamConnector:
             return
 
         logger.info(f"Unsubscribing from {len(to_remove)} tickers")
-        self.stream.unsubscribe_bars(*to_remove)
+
+        if self._use_gateway:
+            client = self._get_gateway_client()
+            await client.unsubscribe(list(to_remove))
+        else:
+            stream = self._get_direct_stream()
+            stream.unsubscribe_bars(*to_remove)
+
         self._subscribed_tickers -= to_remove
 
     async def start(self) -> None:
-        """Start the WebSocket stream in a background task."""
+        """Start the WebSocket stream."""
         if self._running:
             logger.warning("Stream already running")
             return
@@ -151,15 +207,20 @@ class AlpacaStreamConnector:
         self._running = True
         logger.info("Starting Alpaca WebSocket stream")
 
-        # Run the stream in a background task
-        async def _run_stream():
-            try:
-                await self.stream._run_forever()
-            except Exception as e:
-                logger.error(f"Stream error: {e}", exc_info=True)
-                self._running = False
+        if self._use_gateway:
+            client = self._get_gateway_client()
+            await client.start()
+        else:
+            # Direct mode: run stream in background task
+            async def _run_direct_stream():
+                try:
+                    stream = self._get_direct_stream()
+                    await stream._run_forever()
+                except Exception as e:
+                    logger.error(f"Direct stream error: {e}", exc_info=True)
+                    self._running = False
 
-        self._stream_task = asyncio.create_task(_run_stream())
+            self._stream_task = asyncio.create_task(_run_direct_stream())
 
     async def stop(self) -> None:
         """Stop the WebSocket stream."""
@@ -169,23 +230,31 @@ class AlpacaStreamConnector:
         self._running = False
         logger.info("Stopping Alpaca WebSocket stream")
 
-        try:
-            await self.stream.stop()
-        except Exception as e:
-            logger.warning(f"Error stopping stream: {e}")
-
-        if self._stream_task:
-            self._stream_task.cancel()
+        if self._use_gateway:
+            if self._gateway_client:
+                await self._gateway_client.stop()
+        else:
             try:
-                await self._stream_task
-            except asyncio.CancelledError:
-                pass
+                if self._direct_stream:
+                    await self._direct_stream.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping direct stream: {e}")
+
+            if self._stream_task:
+                self._stream_task.cancel()
+                try:
+                    await self._stream_task
+                except asyncio.CancelledError:
+                    pass  # Expected when stopping - no need to re-raise here as this is the stop() method
 
     async def drain_events(self, max_events: int = 1000) -> List[BronzeEvent]:
         """
         Drain buffered events from the queue.
         Used when not using callback mode.
         """
+        if self._use_gateway and self._gateway_client:
+            return self._gateway_client.drain_events(max_events)
+
         events = []
         while len(events) < max_events:
             try:
@@ -204,20 +273,10 @@ class AlpacaStreamConnector:
         return self._subscribed_tickers.copy()
 
 
-# Factory function for easy initialization
 def create_alpaca_stream_connector(
     on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
 ) -> AlpacaStreamConnector:
-    """Create AlpacaStreamConnector from environment variables."""
-    api_key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY")
-    secret_key = os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY")
-    
-    if not api_key or not secret_key:
-        raise ValueError("Alpaca API credentials not found in environment")
-    
+    """Create AlpacaStreamConnector using environment configuration."""
     return AlpacaStreamConnector(
-        api_key=api_key,
-        secret_key=secret_key,
-        feed="sip",
         on_bar_callback=on_bar_callback,
     )

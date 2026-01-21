@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 
 import exchange_calendars as xcals
-import pytz
+from zoneinfo import ZoneInfo
 
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
@@ -53,24 +53,23 @@ class IngestionService:
         self.rule_engine = RuleEngine()
         self.lakehouse = LakehouseWriter()
 
-        # Connectors
-        uw_base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
+        # Connectors (using Data Gateway for UW)
+        gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
 
         # Ensure keys are strings
-        uw_key = system_settings.uw_api_key or ""
         alpaca_key = system_settings.alpaca_api_key or ""
         alpaca_secret = system_settings.alpaca_secret_key or ""
 
-        self.uw_flow = UWFlowConnector(api_key=uw_key)
-        self.uw_dark = UWDarkPoolConnector(api_key=uw_key, base_url=uw_base_url)
-        self.uw_alerts = UWAlertsConnector(api_key=uw_key, base_url=uw_base_url)
+        self.uw_flow = UWFlowConnector(gateway_url=gateway_url)
+        self.uw_dark = UWDarkPoolConnector(gateway_url=gateway_url)
+        self.uw_alerts = UWAlertsConnector(gateway_url=gateway_url)
 
         self.alpaca = AlpacaMarketConnector(
             api_key=alpaca_key,
             secret_key=alpaca_secret,
             paper=system_settings.alpaca_paper,
         )
-        
+
         # Real-time streaming connector (preferred over polling for lower latency)
         self.alpaca_stream: AlpacaStreamConnector | None = None
         self._use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
@@ -88,7 +87,7 @@ class IngestionService:
         self.producer: RedpandaProducer | None = None
 
         # Timezone settings
-        self.eastern = pytz.timezone("America/New_York")
+        self.eastern = ZoneInfo("America/New_York")
         xcals.get_calendar("XNYS")
 
         # State

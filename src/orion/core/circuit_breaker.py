@@ -82,7 +82,7 @@ class CircuitBreaker:
     async def get_state(self) -> dict[str, Any]:
         """Get current circuit breaker state."""
 
-        async def fetch_state(session: Any) -> None:
+        async def fetch_state(session: Any) -> dict[str, Any]:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
             result = await session.execute(stmt)
             status_record = result.scalars().first()
@@ -95,3 +95,13 @@ class CircuitBreaker:
             }
 
         return await db_query(fetch_state)
+
+
+async def check_health_status() -> bool:
+    """
+    Legacy compatibility stub for check_health_status.
+    Returns True if system is healthy (Circuit Closed), False otherwise.
+    """
+    cb = CircuitBreaker()
+    is_open = await cb.is_open()
+    return not is_open

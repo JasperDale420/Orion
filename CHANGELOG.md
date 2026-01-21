@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alpaca Connection Limit**: Fixed `connection limit exceeded` error by migrating `AlpacaStreamConnector` to use Data Gateway's WebSocket multiplexer
+  - New `GatewayStreamClient` connects to Gateway's `/ws` endpoint instead of directly to Alpaca
+  - `ORION_USE_GATEWAY=true` (default) routes all streaming through Gateway
+  - Eliminates competing WebSocket connections that exceed Algo Trader Pro's 1-connection limit
+
 ### Added
+
 - **Exit Classifier Window Features**: Added 10 window features from `gold_feature_windows` to exit classifier training
   - `call_put_imbalance`, `sweep_ratio`, `flow_count` for 1h/1d/1w periods
   - `dp_volume_1d`, `call_put_ratio_1d/1w` for dark pool context
@@ -35,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Full Risk Management section added to README
 
 ### Fixed
+
 - **EOD Agent Async Bug**: Fixed missing `await` on `session.execute()` in `performance_tracker.py` `get_daily_accuracy()` and `get_weekly_performance()` functions
 - **EOD Agent Proposal Schema**: Fixed LLM prompt to match `ProposalBuilder` validation - changed `solver_mutation` to `solver_edit`, added required `evidence_pointers`, `test_plan` fields
 - **EOD Agent FK Constraint**: Fixed `solver_edits` insert by creating Solver stub before edit record
@@ -46,6 +55,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Alpaca Trading Connector**: Added `client_order_id` parameter to `submit_market_order()` to match execution engine calls
 
 ### Added
+
 - **Drift-Triggered Pattern Mining**: Retrain ML models when high feature drift detected
   - New `orion/core/drift_trigger.py` module with flag coordination
   - EOD agent sets drift flag when any feature PSI > 0.25
@@ -68,6 +78,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Disabled rollup requirement for testing via `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false`
 
 ### Added
+
 - **Options Trading Pipeline**: Trade options contracts instead of equities based on UW flow signals
   - New `CandidateTrade` fields: `option_symbol`, `strike_price`, `expiration_date`, `option_type`, `underlying_price`, `premium`
   - New `AlpacaOptionsConnector` with `submit_option_order()`, `get_option_quote()`, OCC symbol generation
@@ -166,10 +177,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Market tide and institutional flow
 
 ### Changed
+
 - Reduced ingestion polling interval from 5 minutes to 1 minute for more responsive data capture
 - Configured UW connectors (flow, darkpool, alerts) with explicit 5-minute lookback on cold start (darkpool API has max 200 items per request)
 
 ### Added
+
 - Added `ensemble_consensus_threshold` configuration to `SystemSettings` (default 0.5) for configurable signal decision threshold
 - Added singleton pattern to `CircuitBreaker` class for more efficient instantiation
 - **Dynamic Exit Strategies**: Implemented 6 flow-based exit rules per PDF spec
@@ -197,11 +210,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **PriceTargetExitRule**: Exit rule for profit target/stop loss based exits
 
 ### Changed
+
 - `SignalEngine.decide()` now uses configurable consensus threshold from `system_settings.ensemble_consensus_threshold` instead of hardcoded 0.5
 - **M1 Consolidation**: `main_execution.py` is now a thin wrapper (38 lines) that delegates to `ExecutionService.run()` - all execution logic consolidated in single source of truth
 - `ExecutionService._save_decision()` now handles full signal persistence (SignalLive + TradeJournalEntry) for EXECUTE decisions
 
 ### Fixed
+
 - Fixed `overnight_gap_pct` calculation to correctly find prior trading day close (handles weekends/holidays)
 - Fixed `vwap_distance_pct` calculation to use bar closest to entry timestamp instead of day's open
 - Fixed `_calculate_projected_exposure` return type annotation from `Tuple[float, float, float]` to `Tuple[float, float]` to match actual 2-value return in `risk_manager.py`
@@ -234,6 +249,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `flow_max_size_per_ticker` cap (500) in `feature_engine.py` to prevent memory growth
 
 ### Removed
+
 - Removed unused `get_pending_candidates()` function from `main_execution.py` that referenced non-existent columns
 - Removed unused `update_candidate_status()` function from `main_execution.py`
 - Removed unused `_persist_signal_live()` method from `ExecutionService` in `service.py`

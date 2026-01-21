@@ -6,8 +6,8 @@ from orion.execution.risk_manager import RiskManager
 @pytest.mark.asyncio
 async def test_risk_manager_race_condition():
     cfg = RiskSettings()
-    cfg.max_ticker_exposure_usd = 2000.0
-    cfg.max_order_size_usd = 5000.0
+    cfg.max_ticker_exposure_pct = 0.02
+    cfg.max_order_size_pct = 0.05
 
     rm = RiskManager(config=cfg)
 
@@ -50,7 +50,7 @@ async def test_risk_manager_race_condition():
 async def test_risk_manager_pending_cleared_on_fill():
     """Verify that we don't double count after fill + removal"""
     cfg = RiskSettings()
-    cfg.max_ticker_exposure_usd = 2000.0
+    cfg.max_ticker_exposure_pct = 0.02
 
     rm = RiskManager(config=cfg)
     ticker = "DBL_COUNT"
