@@ -7,6 +7,7 @@ leveraging the Gateway's multiplexer to avoid connection limit issues.
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -71,7 +72,11 @@ class GatewayStreamClient:
 
     def _generate_event_id(self, symbol: str, payload: Dict[str, Any]) -> str:
         """Generate deterministic event ID for deduplication."""
-        raw_str = f"ALPACA_BAR_1M_{symbol}_{payload.get('t', '')}_{payload.get('v', '')}"
+        raw_str = (
+            f"ALPACA_BAR_1M_{symbol}_"
+            f"{payload.get('t', payload.get('timestamp', ''))}_"
+            f"{payload.get('v', payload.get('volume', ''))}"
+        )
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
 
     async def connect(self) -> bool:
@@ -85,11 +90,13 @@ class GatewayStreamClient:
             )
 
             # Send authentication
-            await self._websocket.send_json(
-                {
-                    "action": "auth",
-                    "key": self.api_key,
-                }
+            await self._websocket.send(
+                json.dumps(
+                    {
+                        "action": "auth",
+                        "key": self.api_key,
+                    }
+                )
             )
 
             # Wait for auth response
@@ -97,8 +104,6 @@ class GatewayStreamClient:
                 self._websocket.recv(),
                 timeout=10.0,
             )
-
-            import json
 
             auth_result = json.loads(response)
 
@@ -141,8 +146,6 @@ class GatewayStreamClient:
             return False
 
         try:
-            import json
-
             await self._websocket.send(
                 json.dumps(
                     {
@@ -154,21 +157,10 @@ class GatewayStreamClient:
                 )
             )
 
-            # Wait for ack
-            response = await asyncio.wait_for(
-                self._websocket.recv(),
-                timeout=5.0,
-            )
-            result = json.loads(response)
-
-            if result.get("type") == "subscription_ack":
-                subscribed = result.get("subscribed", [])
-                self._subscribed_symbols.update(subscribed)
-                logger.info(f"Subscribed to {len(subscribed)} symbols via Gateway")
-                return True
-            else:
-                logger.warning(f"Unexpected subscribe response: {result}")
-                return False
+            # We do not wait for ack here because receive loop may already be active.
+            self._subscribed_symbols.update(symbols)
+            logger.info(f"Sent subscribe for {len(symbols)} symbols via Gateway")
+            return True
 
         except Exception as e:
             logger.error(f"Subscribe failed: {e}", exc_info=True)
@@ -180,8 +172,6 @@ class GatewayStreamClient:
             return False
 
         try:
-            import json
-
             await self._websocket.send(
                 json.dumps(
                     {
@@ -193,18 +183,10 @@ class GatewayStreamClient:
                 )
             )
 
-            response = await asyncio.wait_for(
-                self._websocket.recv(),
-                timeout=5.0,
-            )
-            result = json.loads(response)
-
-            if result.get("type") == "unsubscription_ack":
-                unsubscribed = result.get("unsubscribed", [])
-                self._subscribed_symbols -= set(unsubscribed)
-                logger.info(f"Unsubscribed from {len(unsubscribed)} symbols")
-                return True
-            return False
+            # Do not block on ack while receive loop may be active.
+            self._subscribed_symbols -= set(symbols)
+            logger.info(f"Sent unsubscribe for {len(symbols)} symbols")
+            return True
 
         except Exception as e:
             logger.error(f"Unsubscribe failed: {e}", exc_info=True)
@@ -216,8 +198,16 @@ class GatewayStreamClient:
             return
 
         new_symbols = [s for s in symbols if s not in self._subscribed_symbols]
-        if new_symbols:
+        if not new_symbols:
+            return
+
+        # Track desired subscriptions even before connection is live.
+        self._subscribed_symbols.update(new_symbols)
+
+        if self._websocket and self._authenticated:
             await self._send_subscribe(new_symbols)
+        else:
+            logger.debug(f"Queued {len(new_symbols)} subscriptions until Gateway connection is ready")
 
     async def unsubscribe(self, symbols: List[str]) -> None:
         """Unsubscribe from bar updates for the given symbols."""
@@ -225,13 +215,63 @@ class GatewayStreamClient:
             return
 
         to_remove = [s for s in symbols if s in self._subscribed_symbols]
-        if to_remove:
+        if not to_remove:
+            return
+
+        # Remove from desired set immediately.
+        self._subscribed_symbols -= set(to_remove)
+
+        if self._websocket and self._authenticated:
             await self._send_unsubscribe(to_remove)
+        else:
+            logger.debug(f"Removed {len(to_remove)} queued subscriptions before Gateway connection")
+
+    @staticmethod
+    def _loads_message(message: Any) -> Dict[str, Any]:
+        """Decode a websocket frame into a JSON object."""
+        if isinstance(message, bytes):
+            return json.loads(message.decode("utf-8"))
+        if isinstance(message, str):
+            return json.loads(message)
+        if isinstance(message, dict):
+            return message
+        raise ValueError(f"Unsupported websocket frame type: {type(message)}")
+
+    @staticmethod
+    def _is_bar_message(data: Dict[str, Any]) -> bool:
+        """Return True when message contains bar data in any supported Gateway shape."""
+        msg_type = str(data.get("type") or data.get("event_type") or "").lower()
+        feed = str(data.get("feed") or "").lower()
+
+        if msg_type in ("alpaca_bar_1m", "bar"):
+            return True
+
+        if msg_type == "data" and feed in ("bars", "stock_bars", "bar", "alpaca_bar_1m"):
+            return True
+
+        return False
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime:
+        """Parse provider timestamp values to UTC datetime."""
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _to_float(value: Any) -> Optional[float]:
+        """Best-effort numeric parsing."""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     async def _receive_loop(self) -> None:
         """Main loop for receiving messages from Gateway."""
-        import json
-
         while self._running:
             try:
                 if not self._websocket:
@@ -241,7 +281,7 @@ class GatewayStreamClient:
                     continue
 
                 message = await self._websocket.recv()
-                data = json.loads(message)
+                data = self._loads_message(message)
 
                 msg_type = data.get("type") or data.get("event_type")
 
@@ -250,8 +290,12 @@ class GatewayStreamClient:
                     await self._websocket.send(json.dumps({"action": "heartbeat"}))
                     continue
 
+                # Ack/system messages
+                if msg_type in ("auth_result", "subscription_ack", "unsubscription_ack", "heartbeat_ack", "pong"):
+                    continue
+
                 # Handle market data
-                if msg_type in ("ALPACA_BAR_1M", "bar"):
+                if self._is_bar_message(data):
                     await self._process_bar_message(data)
 
             except ConnectionClosed:
@@ -270,30 +314,56 @@ class GatewayStreamClient:
     async def _process_bar_message(self, data: Dict[str, Any]) -> None:
         """Process incoming bar data and convert to BronzeEvent."""
         try:
-            # Extract payload (Gateway EventEnvelope format)
-            payload = data.get("payload", data)
-            symbol = data.get("instrument_key", "").replace("equity:", "") or payload.get("S", "")
+            envelope = data.get("envelope", {})
+            if not isinstance(envelope, dict):
+                envelope = {}
+
+            # Gateway wraps market data as type=data with raw bar under "data".
+            payload = data.get("data")
+            if not isinstance(payload, dict):
+                payload = data.get("payload")
+            if not isinstance(payload, dict):
+                payload = envelope.get("payload")
+            if not isinstance(payload, dict):
+                payload = data
+
+            instrument_key = (
+                data.get("instrument_key")
+                or envelope.get("instrument_key")
+                or payload.get("instrument_key")
+                or ""
+            )
+            top_symbol = data.get("symbol") or envelope.get("symbol")
+            payload_symbol = payload.get("symbol") or payload.get("S")
+            symbol = top_symbol or payload_symbol or instrument_key.replace("equity:", "")
 
             if not symbol:
                 return
 
             # Validate data quality
-            close_price = payload.get("c") or payload.get("close")
-            if not close_price or close_price <= 0:
+            close_price = self._to_float(payload.get("c", payload.get("close")))
+            if close_price is None or close_price <= 0:
                 logger.warning(f"Rejecting invalid bar for {symbol}: close={close_price}")
                 return
 
             # Parse timestamp
-            timestamp_str = payload.get("t") or payload.get("timestamp")
-            if timestamp_str:
-                if isinstance(timestamp_str, str):
-                    event_ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                else:
-                    event_ts = timestamp_str
-            else:
-                event_ts = datetime.now(timezone.utc)
+            timestamp_value = (
+                payload.get("t")
+                or payload.get("timestamp")
+                or envelope.get("ts_event")
+                or data.get("ts_event")
+            )
+            event_ts = self._parse_timestamp(timestamp_value)
 
-            event_id = self._generate_event_id(symbol, payload)
+            # Use Gateway envelope idempotency id when available.
+            event_id = data.get("event_id") or envelope.get("event_id") or self._generate_event_id(symbol, payload)
+
+            # Add normalized symbol keys for downstream normalizer compatibility.
+            normalized_payload = dict(payload)
+            normalized_payload.setdefault("symbol", symbol)
+            normalized_payload.setdefault("ticker", symbol)
+            if instrument_key:
+                normalized_payload.setdefault("instrument_key", instrument_key)
 
             event = BronzeEvent(
                 event_id=event_id,
@@ -301,7 +371,7 @@ class GatewayStreamClient:
                 event_type="ALPACA_BAR_1M",
                 event_ts_utc=event_ts,
                 received_ts_utc=datetime.now(timezone.utc),
-                payload=payload,
+                payload=normalized_payload,
             )
 
             if self.on_bar_callback:
@@ -324,6 +394,10 @@ class GatewayStreamClient:
 
         if not await self.connect():
             raise ConnectionError("Failed to connect to Gateway WebSocket")
+
+        # Flush queued subscriptions that were requested before startup.
+        if self._subscribed_symbols:
+            await self._send_subscribe(list(self._subscribed_symbols))
 
         self._receive_task = asyncio.create_task(self._receive_loop())
         logger.info("Gateway stream client started")

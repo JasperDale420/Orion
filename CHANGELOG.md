@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Column-level labels parity table (Orion vs Heber)
   - Column-level features parity table (Orion vs Heber)
   - Explicit keep/migrate/dispose decisions per feature/label family
+- **Gateway Stream Contract Tests**: Added `tests/connectors/test_gateway_stream_client.py` to validate:
+  - Gateway `type=data` + `envelope` + `data` bar message parsing
+  - Invalid bar rejection behavior
+  - Pre-connect subscription queue behavior
 
 ### Changed
 
@@ -31,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **HeberReader Data Access Path**: Replaced unsupported HTTP reads (`/silver/read`, `/gold/read`) with Heber-compatible access:
   - Silver and Gold reads now use Heber parquet layout from `HEBER_DATA_ROOT`
   - Catalog calls limited to supported endpoints (for example `/health`, `/datasets`)
+- **GatewayStreamClient Message Handling**:
+  - Added support for Data Gateway websocket payload shape (`type=data`, `feed=bars`, `envelope`, `data`)
+  - Uses envelope-provided `event_id` when present for idempotency parity
+  - Normalizes `symbol`/`ticker` keys into payload for downstream Alpaca bar normalization
+  - Queues subscriptions requested before websocket connection and flushes them on startup
 
 ### Fixed
 
