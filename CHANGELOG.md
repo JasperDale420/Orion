@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Catalog health endpoint contract (`/health`)
   - Silver parquet reads with instrument/as-of filtering
   - Gold parquet reads with symbol/as-of filtering
+- **Parity Matrix Extension**: Expanded `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md` with:
+  - Column-level labels parity table (Orion vs Heber)
+  - Column-level features parity table (Orion vs Heber)
+  - Explicit keep/migrate/dispose decisions per feature/label family
 
 ### Changed
 
