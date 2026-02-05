@@ -1,0 +1,311 @@
+"""Heber data reader for Orion.
+
+This adapter follows Heber's supported access model:
+- Catalog metadata and health over HTTP (`/health`, `/api/v1/*`)
+- Silver/Gold data reads from Heber parquet layout on disk
+
+It intentionally avoids unsupported endpoints like `/silver/read` and `/gold/read`.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pandas as pd
+import pyarrow.parquet as pq
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+HEBER_CATALOG_URL = os.getenv("HEBER_CATALOG_URL", "http://localhost:8085/api/v1")
+HEBER_DATA_ROOT = os.getenv("HEBER_DATA_ROOT", "/Volumes/heber/data")
+
+_SILVER_BARS_DATASET = "bars"
+_SILVER_FLOW_DATASET = "flow_alerts"
+_SILVER_DARKPOOL_DATASET = "darkpool_trades"
+
+
+class HeberReader:
+    """Read-only client for Heber datasets used by Orion."""
+
+    def __init__(
+        self,
+        catalog_url: str | None = None,
+        data_root: str | Path | None = None,
+        http_client: httpx.Client | None = None,
+    ):
+        self.catalog_url = catalog_url or HEBER_CATALOG_URL
+        self.data_root = Path(data_root) if data_root is not None else Path(HEBER_DATA_ROOT)
+        self._client = http_client
+
+    @property
+    def client(self) -> httpx.Client:
+        """Lazy HTTP client initialization for Catalog API calls."""
+        if self._client is None:
+            self._client = httpx.Client(
+                base_url=self.catalog_url,
+                timeout=30.0,
+            )
+        return self._client
+
+    def close(self) -> None:
+        """Close the underlying HTTP client."""
+        if self._client:
+            self._client.close()
+            self._client = None
+
+    def __enter__(self) -> HeberReader:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def health_check(self) -> bool:
+        """Check Heber catalog API health via supported endpoint."""
+        errors: list[str] = []
+        for path in ("/health", "../../health"):
+            try:
+                response = self.client.get(path)
+                if response.status_code == 200:
+                    return True
+            except Exception as exc:
+                errors.append(str(exc))
+
+        if errors:
+            logger.warning("heber_health_check_failed", error=" | ".join(errors))
+        return False
+
+    def list_datasets(self, layer: str | None = None) -> list[dict[str, Any]]:
+        """List datasets from Heber catalog (`/datasets`)."""
+        params: dict[str, str] = {}
+        if layer:
+            params["layer"] = layer
+
+        response = self.client.get("/datasets", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data", [])
+        if isinstance(data, list):
+            return data
+        return []
+
+    def read_bars(
+        self,
+        symbols: list[str],
+        asof_time: datetime,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        timeframe: str = "1m",
+    ) -> pd.DataFrame:
+        """Read bars from Heber Silver (`feed=bars`) with as-of filtering.
+
+        `timeframe` is kept for interface compatibility. Orion currently reads
+        from the canonical `bars` dataset in Heber.
+        """
+        _ = timeframe  # Reserved for future dataset routing (e.g., bars_5min).
+
+        instrument_keys = self._to_instrument_keys(symbols)
+        df = self._read_silver_dataset(
+            dataset=_SILVER_BARS_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=end_time,
+            asof_time=asof_time,
+        )
+
+        if df.empty:
+            return df
+
+        if "bar_start_ts" in df.columns and "ts_event" not in df.columns:
+            df = df.copy()
+            df["ts_event"] = pd.to_datetime(df["bar_start_ts"], utc=True, errors="coerce")
+
+        if "instrument_key" in df.columns and "symbol" not in df.columns:
+            df = df.copy()
+            df["symbol"] = df["instrument_key"].astype(str).str.split(":").str[-1]
+
+        return df
+
+    def read_flow(
+        self,
+        symbols: list[str] | None = None,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+        min_premium: float | None = None,
+    ) -> pd.DataFrame:
+        """Read options flow from Heber Silver (`feed=flow_alerts`)."""
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+
+        df = self._read_silver_dataset(
+            dataset=_SILVER_FLOW_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
+        if df.empty or min_premium is None:
+            return df
+
+        premium_column = self._pick_first_existing_column(df, ["premium", "premium_usd"])
+        if premium_column is None:
+            return df
+
+        return df[df[premium_column] >= min_premium]
+
+    def read_darkpool(
+        self,
+        symbols: list[str] | None = None,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Read darkpool prints from Heber Silver (`feed=darkpool_trades`)."""
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+
+        return self._read_silver_dataset(
+            dataset=_SILVER_DARKPOOL_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
+    def read_gold_features(
+        self,
+        dataset: str,
+        asof_time: datetime,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Read Gold features/labels from Heber parquet layout."""
+        gold_path = self.data_root / "gold" / f"dataset={dataset}"
+        if not gold_path.exists():
+            return pd.DataFrame()
+
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+        filters: list[tuple[str, str, Any]] = []
+        if instrument_keys:
+            filters.append(("instrument_key", "in", instrument_keys))
+
+        df = self._read_parquet(gold_path, filters=filters)
+        if df.empty:
+            return df
+
+        return self._apply_asof_filter(df, asof_time)
+
+    def _read_silver_dataset(
+        self,
+        dataset: str,
+        instrument_keys: list[str] | None,
+        start_time: datetime | None,
+        end_time: datetime | None,
+        asof_time: datetime | None,
+    ) -> pd.DataFrame:
+        silver_path = self.data_root / "silver" / f"feed={dataset}"
+        if not silver_path.exists():
+            return pd.DataFrame()
+
+        filters: list[tuple[str, str, Any]] = []
+        if instrument_keys:
+            filters.append(("instrument_key", "in", instrument_keys))
+
+        df = self._read_parquet(silver_path, filters=filters)
+        if df.empty:
+            return df
+
+        df = self._apply_time_range_filter(df, start_time=start_time, end_time=end_time)
+
+        if asof_time is not None:
+            df = self._apply_asof_filter(df, asof_time)
+
+        return df
+
+    @staticmethod
+    def _to_instrument_keys(symbols: list[str] | None) -> list[str]:
+        if not symbols:
+            return []
+        return [f"equity:{symbol.upper()}" for symbol in symbols if symbol]
+
+    @staticmethod
+    def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
+        for column in columns:
+            if column in df.columns:
+                return column
+        return None
+
+    @staticmethod
+    def _to_utc_timestamp(value: datetime) -> pd.Timestamp:
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            return ts.tz_localize("UTC")
+        return ts.tz_convert("UTC")
+
+    def _apply_asof_filter(self, df: pd.DataFrame, asof_time: datetime) -> pd.DataFrame:
+        if "ts_available" not in df.columns:
+            return df
+
+        asof_ts = self._to_utc_timestamp(asof_time)
+        available = pd.to_datetime(df["ts_available"], utc=True, errors="coerce")
+        return df[available <= asof_ts]
+
+    def _apply_time_range_filter(
+        self,
+        df: pd.DataFrame,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> pd.DataFrame:
+        if start_time is None and end_time is None:
+            return df
+
+        time_column = self._pick_first_existing_column(
+            df,
+            ["ts_event", "bar_start_ts", "flow_ts_utc", "dark_ts_utc"],
+        )
+        if time_column is None:
+            return df
+
+        series = pd.to_datetime(df[time_column], utc=True, errors="coerce")
+        mask = pd.Series(True, index=df.index)
+
+        if start_time is not None:
+            mask = mask & (series >= self._to_utc_timestamp(start_time))
+        if end_time is not None:
+            mask = mask & (series <= self._to_utc_timestamp(end_time))
+
+        return df[mask]
+
+    def _read_parquet(
+        self,
+        path: Path,
+        columns: list[str] | None = None,
+        filters: list[tuple[str, str, Any]] | None = None,
+    ) -> pd.DataFrame:
+        try:
+            table = pq.read_table(path, columns=columns, filters=filters if filters else None)
+            return table.to_pandas()
+        except Exception as exc:
+            if filters:
+                logger.warning(
+                    "heber_reader_filter_fallback",
+                    path=str(path),
+                    error=str(exc),
+                )
+                table = pq.read_table(path, columns=columns)
+                return table.to_pandas()
+
+            logger.error(
+                "heber_read_failed",
+                path=str(path),
+                error=str(exc),
+            )
+            return pd.DataFrame()
+
+
+@lru_cache
+def get_heber_reader() -> HeberReader:
+    """Get singleton HeberReader instance."""
+    return HeberReader()

@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels
   - Includes migration sequence and open architecture decisions
+- **HeberReader Contract Tests**: Added `tests/unit/test_heber_reader.py` to cover:
+  - Catalog health endpoint contract (`/health`)
+  - Silver parquet reads with instrument/as-of filtering
+  - Gold parquet reads with symbol/as-of filtering
 
 ### Changed
 
@@ -20,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
   - Archived legacy UW backfill scripts to `archive/.../legacy_scripts/`
   - Added archive manifest: `archive/2026-02-05_gateway-heber-migration/README.md`
+- **HeberReader Data Access Path**: Replaced unsupported HTTP reads (`/silver/read`, `/gold/read`) with Heber-compatible access:
+  - Silver and Gold reads now use Heber parquet layout from `HEBER_DATA_ROOT`
+  - Catalog calls limited to supported endpoints (for example `/health`, `/datasets`)
 
 ### Fixed
 
