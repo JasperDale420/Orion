@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
+  - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
+  - Includes technical debt backlog and keep/migrate/dispose framing for features and labels
+  - Includes migration sequence and open architecture decisions
+
+### Changed
+
+- **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
+  - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
+  - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
+  - Archived legacy UW backfill scripts to `archive/.../legacy_scripts/`
+  - Added archive manifest: `archive/2026-02-05_gateway-heber-migration/README.md`
+
 ### Fixed
 
 - **Alpaca Connection Limit**: Fixed `connection limit exceeded` error by migrating `AlpacaStreamConnector` to use Data Gateway's WebSocket multiplexer

@@ -5,21 +5,20 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.watermarks import get_watermark, upsert_watermark
-from orion.unusualwhales.api.alerts import get_alerts
+from orion.unusualwhales.api.darkpool import get_trades_by_date
 from orion.unusualwhales.client import UnusualWhalesClient
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
 
-class UWAlertsConnector:
+class UWDarkPoolConnector:
     """
-    Connects to Data Gateway to poll for Unusual Whales Flow Alerts.
+    Connects to Data Gateway to poll for Unusual Whales Dark Pool prints.
     """
 
     def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
@@ -30,47 +29,24 @@ class UWAlertsConnector:
         self.last_seen_id: Optional[str] = None
         self.last_poll_ts: Optional[datetime] = None
         self._watermark_loaded: bool = False
-        self._watermark_key: str = "uw_alerts"
+        self._watermark_key: str = "uw_darkpool"
 
     def _generate_event_id(self, event_data: dict[str, Any]) -> str:
         """
         Generates a deterministic event ID.
+        Prefer source event ID if available, otherwise hash content.
         """
-        source_id = event_data.get("id")
+        # Dark pool prints usually have an 'id' field?
+        # Let's check the endpoint response structure if possible, but assuming standard flow.
+        # If 'id' or 'id_' exists, use it.
+        source_id = event_data.get("id") or event_data.get("id_")
         if source_id:
-            return hashlib.sha256(f"UW_ALERT_{source_id}".encode("utf-8")).hexdigest()
+            return hashlib.sha256(f"UW_DARKPOOL_{source_id}".encode("utf-8")).hexdigest()
 
-        raw_str = f"UW_ALERT_{event_data.get('ticker')}_{event_data.get('timestamp')}_{event_data.get('strike')}"
+        # Fallback: Hash content
+        # Use stable subset: ticker, price, size, timestamp
+        raw_str = f"UW_DARKPOOL_{event_data.get('ticker')}_{event_data.get('price')}_{event_data.get('size')}_{event_data.get('timestamp')}"
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _resolve_ticker(item: dict[str, Any]) -> str | None:
-        """Extract ticker from various possible payload fields."""
-        return (
-            item.get("ticker")
-            or item.get("symbol")
-            or item.get("underlying")
-            or item.get("underlying_symbol")
-            or item.get("stock")
-        )
-
-    @staticmethod
-    def _normalize_put_call(item: dict[str, Any]) -> None:
-        """Normalize put_call field to C/P format in-place."""
-        raw_value: str | None = None
-        if "put_call" in item:
-            raw_value = item["put_call"]
-        elif "type" in item:
-            raw_value = item["type"]
-
-        if raw_value:
-            upper = raw_value.upper()
-            if upper == "CALL":
-                item["put_call"] = "C"
-            elif upper == "PUT":
-                item["put_call"] = "P"
-            else:
-                item["put_call"] = upper[:1] if upper else None
 
     async def _check_circuit_breaker(self) -> bool:
         """Check if circuit breaker is open. Returns True if should skip fetch."""
@@ -78,26 +54,16 @@ class UWAlertsConnector:
 
         if await CircuitBreaker().is_open():
             logger.warning(
-                "Circuit breaker OPEN, skipping UW alerts fetch",
-                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_ALERTS"},
+                "Circuit breaker OPEN, skipping UW darkpool fetch",
+                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_DARKPOOL"},
             )
             return True
         return False
 
-    def _extract_response_data(self, response: Any) -> list[dict[str, Any]] | None:
-        """Extract list data from response, handling various formats."""
-        if not response:
-            return None
-
-        data = response
-        if isinstance(response, dict) and "data" in response:
-            data = response["data"]
-
-        if not isinstance(data, list):
-            logger.warning(f"Unexpected response format from UW Alerts: {type(data)}")
-            return None
-
-        return data
+    @staticmethod
+    def _resolve_ticker(item: dict[str, Any]) -> str | None:
+        """Extract ticker from various possible payload fields."""
+        return item.get("ticker") or item.get("symbol")
 
     def _parse_single_item(self, item: dict[str, Any], fetch_start: datetime, seen_ids: set[str]) -> BronzeEvent | None:
         """Parse a single raw item into a BronzeEvent, or return None if invalid."""
@@ -106,33 +72,28 @@ class UWAlertsConnector:
             return None
         seen_ids.add(event_id)
 
-        ts_str = item.get("timestamp") or item.get("created_at")
+        ts_str = item.get("executed_at") or item.get("timestamp") or item.get("date")
         if not ts_str:
-            raise ValueError("Missing timestamp/created_at in UW alert payload")
+            raise ValueError("Missing executed_at/timestamp/date in UW darkpool payload")
 
         events_ts = parse_timestamptz(ts_str, strict=True)
         if events_ts < fetch_start:
             return None
 
-        self._normalize_put_call(item)
-
         ticker = self._resolve_ticker(item)
         if not ticker:
             logger.warning(
-                f"Skipping UW alert without ticker: id={item.get('id')}",
-                extra={"event_type": "UW_ALERT_MISSING_TICKER"},
+                f"Skipping UW darkpool without ticker: id={item.get('id') or item.get('id_')}",
+                extra={"event_type": "UW_DARKPOOL_MISSING_TICKER"},
             )
             return None
 
-        if not item.get("ticker"):
-            item["ticker"] = ticker
-
-        source_event_id = item.get("id")
+        source_event_id = item.get("id") or item.get("id_")
         return BronzeEvent(
             event_id=event_id,
             source="UW",
             source_event_id=str(source_event_id) if source_event_id is not None else None,
-            event_type="UW_ALERT",
+            event_type="UW_DARKPOOL",
             ticker=ticker,
             event_ts_utc=events_ts,
             payload=item,
@@ -150,9 +111,19 @@ class UWAlertsConnector:
             self.last_poll_ts = now
             await self._persist_watermark(self.last_poll_ts)
 
+    async def _fetch_all_raw_for_date_range(self, start_date: datetime, end_date: datetime) -> list[dict[str, Any]]:
+        """Fetch raw events for a date range."""
+        all_raw: list[dict[str, Any]] = []
+        cursor = start_date.date()
+        end = end_date.date()
+        while cursor <= end:
+            all_raw.extend(await self._fetch_raw_for_date(cursor.strftime("%Y-%m-%d")))
+            cursor = cursor + timedelta(days=1)
+        return all_raw
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """Fetches latest flow alerts."""
+        """Fetches latest dark pool prints."""
         if await self._check_circuit_breaker():
             return []
 
@@ -165,15 +136,12 @@ class UWAlertsConnector:
             poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
             fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
-            response = await self._fetch_raw_events(newer_than=fetch_start)
-            data = self._extract_response_data(response)
-            if data is None:
-                return []
+            all_raw = await self._fetch_all_raw_for_date_range(fetch_start, now)
 
             events: List[BronzeEvent] = []
             seen_event_ids: set[str] = set()
 
-            for item in data:
+            for item in all_raw:
                 try:
                     event = self._parse_single_item(item, fetch_start, seen_event_ids)
                     if event:
@@ -181,28 +149,31 @@ class UWAlertsConnector:
                 except Exception as e:
                     from orion.shared.dlq_utils import DLQWriter
 
+                    source_id = item.get("id") or item.get("id_")
                     await DLQWriter.write_to_dlq(
                         error=e,
-                        event_type="UW_ALERT_PARSE_ERROR",
-                        source="UWAlertsConnector",
+                        event_type="UW_DARKPOOL_PARSE_ERROR",
+                        source="UWDarkPoolConnector",
                         payload=item,
                         context="Failed to parse raw event in fetch loop",
-                        source_event_id=str(item.get("id")) if item.get("id") is not None else None,
+                        source_event_id=str(source_id) if source_id is not None else None,
                         ticker=item.get("ticker"),
-                        event_ts_utc=parse_timestamptz(item.get("timestamp") or item.get("created_at"), strict=False),
+                        event_ts_utc=parse_timestamptz(
+                            item.get("executed_at") or item.get("timestamp") or item.get("date"), strict=False
+                        ),
                     )
 
             await self._update_watermark(events, now)
             return events
 
         except Exception as e:
-            logger.error(f"Error fetching UW Alerts: {e}")
-            raise e
+            logger.error(f"Error fetching UW Dark Pool prints: {e}")
+            raise
 
     async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
         """
         PRDv2 7.2: Polling interface shim (fetch_since).
-        UW alerts endpoint supports newer_than; we still keep an overlap window.
+        UW darkpool endpoint is date-based; we filter client-side using timestamps.
         """
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
@@ -227,11 +198,45 @@ class UWAlertsConnector:
 
         await db_write(update_watermark)
 
-    async def _fetch_raw_events(self, *, newer_than: datetime) -> object:
+    async def _fetch_raw_for_date(self, date_str: str) -> list[dict[str, Any]]:
         import asyncio
 
-        return await asyncio.to_thread(
-            get_alerts.sync,
-            client=self.client,
-            newer_than=newer_than.isoformat(),
-        )
+        try:
+            response = await asyncio.to_thread(
+                get_trades_by_date.sync,
+                client=self.client,
+                date=date_str,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch UW Dark Pool for {date_str}: {e}")
+            return []
+
+        if not response:
+            return []
+
+        # Handle ErrorMessage responses (rate limiting, auth errors, etc.)
+        if hasattr(response, "message") or (
+            hasattr(response, "__class__") and "ErrorMessage" in response.__class__.__name__
+        ):
+            error_msg = getattr(response, "message", None) or str(response)
+            logger.warning(
+                f"UW Dark Pool API error for {date_str}: {error_msg}",
+                extra={"event_type": "UW_DARKPOOL_API_ERROR", "error": error_msg},
+            )
+            return []
+
+        # Handle Object Response (DarkpoolTradeResponse)
+        if hasattr(response, "data") and isinstance(response.data, list):
+            # Convert list of DarkpoolTrade objects to list of dicts
+            return [item.to_dict() for item in response.data]
+
+        data = response
+        if isinstance(response, dict) and "data" in response:
+            data = response["data"]
+
+        if isinstance(data, list):
+            # Ensure items are dicts (if list of dicts)
+            return data
+
+        logger.warning(f"Unexpected response format from UW Dark Pool: {type(data)}")
+        return []

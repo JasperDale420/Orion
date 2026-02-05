@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import websockets
-
 from orion.core.errors import ErrorCode, ProviderError
 from orion.storage.models import BronzeEvent
 

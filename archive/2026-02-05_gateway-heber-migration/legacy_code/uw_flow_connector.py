@@ -7,12 +7,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
-
 from orion.core.errors import ErrorCode, ProviderError
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -288,10 +287,9 @@ class UWFlowConnector:
         Upserts heartbeat to SystemStatus table.
         PRD 8.1 / 15.4: Ingestion heartbeat to DB.
         """
-        from sqlalchemy import select
-
         from orion.storage.db import async_session_factory
         from orion.storage.models import SystemStatus
+        from sqlalchemy import select
 
         try:
             # Also log standard event for log ingestion tools
