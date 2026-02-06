@@ -1336,3 +1336,26 @@ P0:
 
 P1:
 1. Decide whether `main_feature_enrichment` local SQL fallback is acceptable as a transitional mode; if yes, gate behind explicit flag and emit prominent startup warning.
+
+## 32) Pass 25 Continuation (2026-02-06)
+
+### 32.1 Duplicate Outcome-Tracking Stacks: Orion Local Tables vs Heber Watch Gold Labels
+
+Heber stack:
+- watch service tracks alert outcomes and writes `labels_alert_barriers` into Gold (`../Heber/heber/watch/writer.py:1`, `../Heber/heber/watch/writer.py:30`, `../Heber/heber/watch/writer.py:94` to `../Heber/heber/watch/writer.py:99`).
+
+Orion stack:
+- `main_option_quote_tracker` polls checkpoint quotes and writes `silver_option_quotes` (`src/orion/main_option_quote_tracker.py:63`, `src/orion/main_option_quote_tracker.py:101`, `src/orion/main_option_quote_tracker.py:129`, `src/orion/main_option_quote_tracker.py:180`).
+- `main_price_target_labeler` depends on Orion-local `silver_uw_flow` + `silver_option_quotes` + `price_target_labels` (`src/orion/main_price_target_labeler.py:347` to `src/orion/main_price_target_labeler.py:349`, `src/orion/main_price_target_labeler.py:401` to `src/orion/main_price_target_labeler.py:415`).
+
+Risk:
+- maintaining both stacks increases operational and contract-drift cost, and delays retirement of Orion-local silver/label tables after centralization.
+
+### 32.2 Updated Priorities
+
+P0:
+1. Choose one canonical outcome-tracking path (Heber watch labels vs Orion `main_option_quote_tracker` + `main_price_target_labeler`) and publish retirement criteria for the non-canonical stack.
+2. If Heber watch is canonical, design a parity bridge for Orion models still requiring wide checkpoint features currently in `price_target_labels`.
+
+P1:
+1. Add migration scorecard mapping each `price_target_labels` training field to either Heber watch labels, Heber feature datasets, or explicit deprecation.

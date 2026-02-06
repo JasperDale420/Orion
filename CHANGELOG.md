@@ -119,6 +119,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - compose/runtime wiring findings for Heber-dependent Orion services lacking explicit Heber data mount/env contracts
   - deployment-risk finding for silent fallback/empty-read behavior in Heber-backed flows
   - fail-fast and environment-contract recommendations for Heber runtime access
+- **Gateway/Heber Parity Audit (Pass 25)**: Continued audit with:
+  - duplicate outcome-tracking stack findings across Heber watch labels and Orion local checkpoint-label pipeline
+  - retirement-decision framing for canonical outcome path ownership
+  - parity-bridge recommendations for migrating `price_target_labels`-dependent training fields
 
 ### Changed
 
