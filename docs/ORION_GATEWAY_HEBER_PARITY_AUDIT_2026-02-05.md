@@ -931,3 +931,35 @@ High-confidence archive candidates (after one explicit stakeholder sign-off on e
 
 Conditional archive candidates (after Heber-native replacements are live):
 - local dual-write enrichment connectors that persist `silver_greek_exposure` / `silver_market_tide` / `silver_max_pain` / `silver_iv_rank`
+
+## 20) Pass 13 Continuation (2026-02-06)
+
+### 20.1 Archival Executed: Queue-Driven Execution Path (Wave 6)
+
+Wave-6 archive action completed:
+- `src/orion/execution/service.py` -> `archive/2026-02-06_runtime-consolidation-wave6/legacy_code/execution_service.py`
+- `src/orion/shared/candidate_queue.py` -> `archive/2026-02-06_runtime-consolidation-wave6/legacy_code/candidate_queue.py`
+- `tests/unit/test_candidate_queue.py` -> `archive/2026-02-06_runtime-consolidation-wave6/legacy_tests/test_candidate_queue.py`
+- archive manifest added at `archive/2026-02-06_runtime-consolidation-wave6/README.md`
+
+Rationale:
+- compose runtime executes `orion.main_execution` (`docker-compose.yml:124`);
+- no active runtime module referenced `ExecutionService`;
+- `CandidateQueue` usage was isolated to archived service path.
+
+### 20.2 Post-Archive Runtime State
+
+Execution runtime source-of-truth is now unambiguous in repo:
+- `src/orion/main_execution.py` is the active execution entrypoint.
+
+Residual risk:
+- If any future branch expects queue-driven execution, reintroduction should happen only via explicit runtime switch + compose wiring rather than parallel shadow path.
+
+### 20.3 Updated Priorities
+
+P0:
+1. Complete auth-contract hardening for Gateway-backed services (feature enrichment + earnings sync) to prevent silent data starvation.
+2. Start Wave-7 archival decisions for label fragmentation (`flow_labels` and PRD 6.3 label jobs) after external consumer confirmation.
+
+P1:
+1. Migrate retained label and feature writers to Heber-gold contracts (`instrument_key`, `ts_event`, `ts_available`) and deprecate local SQL-only sinks.

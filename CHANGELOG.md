@@ -87,6 +87,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
   - Archived legacy UW backfill scripts to `archive/.../legacy_scripts/`
   - Added archive manifest: `archive/2026-02-05_gateway-heber-migration/README.md`
+- **Runtime Consolidation Wave 6 Archival**: Archived inactive queue-driven execution path under `archive/2026-02-06_runtime-consolidation-wave6/`
+  - Archived `src/orion/execution/service.py` to `archive/.../legacy_code/execution_service.py`
+  - Archived `src/orion/shared/candidate_queue.py` to `archive/.../legacy_code/candidate_queue.py`
+  - Archived queue-specific unit tests to `archive/.../legacy_tests/test_candidate_queue.py`
+  - Added archive manifest: `archive/2026-02-06_runtime-consolidation-wave6/README.md`
 - **HeberReader Data Access Path**: Replaced unsupported HTTP reads (`/silver/read`, `/gold/read`) with Heber-compatible access:
   - Silver and Gold reads now use Heber parquet layout from `HEBER_DATA_ROOT`
   - Catalog calls limited to supported endpoints (for example `/health`, `/datasets`)
