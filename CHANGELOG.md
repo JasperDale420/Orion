@@ -157,6 +157,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - API-surface mismatch finding: Heber watch and label pipelines call batch options routes (`/options/quotes`, `/options/bars`) not exposed by current Gateway Alpaca router
   - provider/router drift finding: Gateway Alpaca provider has batch options quote/bar support, but router only exposes single-contract paths
   - discovery-contract drift finding: Gateway `/catalog` advertises stale/nonexistent Alpaca paths (`/options/bars`, `/stocks/bars`) vs actual router exports
+- **Gateway/Heber Parity Audit (Pass 34)**: Continued audit with:
+  - execution-tech-debt finding: `main_execution.py` still contains dead helper paths (`get_pending_candidates`, `update_candidate_status`) that reference non-existent `CandidateTrade` columns
+  - changelog drift finding: removal claim for those helpers is currently false in code
+  - consolidation drift finding: changelog still claims `main_execution.py` is a thin wrapper while runtime module remains a full execution loop
 
 ### Changed
 

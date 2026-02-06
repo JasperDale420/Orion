@@ -1712,3 +1712,37 @@ P0:
 
 P1:
 1. Reconcile `/catalog` endpoint inventory with actual router exports and add CI checks to fail on catalog/router drift.
+
+## 41) Pass 34 Continuation (2026-02-06)
+
+### 41.1 `main_execution.py` Still Contains Broken/Dead Candidate-Status Helpers Contrary to Changelog Removal Claim
+
+Current code state:
+- `main_execution.py` still defines `get_pending_candidates()` and `update_candidate_status()` (`src/orion/main_execution.py:165`, `src/orion/main_execution.py:177`),
+- both functions reference `CandidateTrade.status`/`updated_at_utc` (`src/orion/main_execution.py:170`, `src/orion/main_execution.py:184` to `src/orion/main_execution.py:185`),
+- `CandidateTrade` model does not define `status` or `updated_at_utc` columns (`src/orion/storage/models_gold.py:14` to `src/orion/storage/models_gold.py:52`),
+- active execution loop uses `fetch_pending_candidates()` instead (`src/orion/main_execution.py:48`, `src/orion/main_execution.py:254`).
+
+Changelog mismatch:
+- changelog states these helpers were removed (`CHANGELOG.md:451` to `CHANGELOG.md:452`), but they remain in current runtime module.
+
+Risk:
+- dormant paths become latent runtime faults if reused (SQL/model attribute errors),
+- operators and maintainers cannot rely on changelog statements for current execution-path behavior, increasing migration/debugging time.
+
+### 41.2 Execution-Consolidation Changelog Claim Remains Out of Sync With Live Module Shape
+
+Changelog states:
+- "`main_execution.py` is now a thin wrapper (38 lines) that delegates to `ExecutionService.run()`" (`CHANGELOG.md:413`).
+
+Current code:
+- `main_execution.py` remains a full execution loop module (`363` lines; `src/orion/main_execution.py`), with candidate polling, preflight, execution, and exit-rule loops (`src/orion/main_execution.py:236` to `src/orion/main_execution.py:357`).
+
+Risk:
+- architectural runbooks and migration tasks can target non-existent consolidation state, causing incorrect remediation and duplicated work.
+
+### 41.3 Updated Priorities
+
+P1:
+1. Remove or archive dead helper functions in `main_execution.py` (`get_pending_candidates`, `update_candidate_status`) and add a regression test that forbids references to non-existent `CandidateTrade` columns.
+2. Correct changelog entries to match actual execution architecture and add a simple CI guardrail (for example, assert expected `main_execution.py` size/entrypoint contract when “thin-wrapper” claims are introduced).
