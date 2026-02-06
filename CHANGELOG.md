@@ -197,6 +197,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - runtime split-brain finding: compose runs both `main_execution` and `position_monitor`, each with independent close-position execution paths
   - exit-feature fidelity finding: `PositionMonitor` initializes `entry_time` from process `now` rather than true entry timestamp, skewing time-held exit signals
   - context-lookup finding: position monitor resolves entry context via `candidate_trades.ticker` match only, which can miss option-contract positions keyed by `option_symbol`
+- **Gateway/Heber Parity Audit (Pass 44)**: Continued audit with:
+  - observability finding: Admin `/dashboard/*` endpoints are powered by an in-memory `PnLTracker` singleton with no active runtime feed path in repo
+  - source-of-truth drift finding: dashboard path bypasses persisted execution tables (`orders`, `fills`, `positions_snapshots`) and can report stale/empty portfolio state
+  - migration recommendation to anchor dashboard telemetry to durable execution/broker-backed data
 
 ### Changed
 

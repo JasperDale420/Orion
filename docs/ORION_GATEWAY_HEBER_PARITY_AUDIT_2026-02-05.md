@@ -2079,3 +2079,33 @@ P0:
 P1:
 1. Extend position-context lookup to match option positions by `option_symbol` and fall back to ticker only when appropriate.
 2. Add idempotency guardrails around close-order submission (for example open-close intent table keyed by position + decision window).
+
+## 51) Pass 44 Continuation (2026-02-06)
+
+### 51.1 Admin Dashboard Endpoints Are Backed by In-Memory State, Not Runtime Execution Data
+
+Current behavior:
+- `/dashboard/*` endpoints read from `core.pnl_tracker` singleton (`src/orion/api/main.py:572` to `src/orion/api/main.py:667`),
+- `PnLTracker` stores positions and P&L in process memory only (`src/orion/core/pnl_tracker.py:80` to `src/orion/core/pnl_tracker.py:89`),
+- no in-repo caller updates tracker position state (`update_position` / `close_position`) outside the tracker itself (reference scan shows only definitions in `src/orion/core/pnl_tracker.py:91` and `src/orion/core/pnl_tracker.py:129`).
+
+Risk:
+- dashboard can report empty/stale portfolio state despite active trading, creating false operational confidence.
+
+### 51.2 Dashboard Data Path Bypasses Persisted Execution Sources Already Present in Orion Schema
+
+Current schema/runtime contrast:
+- execution persistence tables exist for `orders`, `fills`, and `positions_snapshots` (`src/orion/storage/models_execution.py:13`, `src/orion/storage/models_execution.py:38`, `src/orion/storage/models_execution.py:65`),
+- dashboard endpoints do not query these tables; they return ephemeral singleton state (`src/orion/api/main.py:562` to `src/orion/api/main.py:667`).
+
+Risk:
+- observability path is disconnected from durable execution truth and cannot be reliably reconciled across restarts/incidents.
+
+### 51.3 Updated Priorities
+
+P0:
+1. Rebase dashboard endpoints onto durable execution sources (`fills`, `positions_snapshots`, and/or broker sync) rather than in-memory tracker state.
+2. Add parity checks that compare dashboard open positions/P&L against broker or persisted fills snapshots and alert on divergence.
+
+P1:
+1. If in-memory tracker is retained for low-latency UI hints, clearly label it as transient and add periodic hydration from persisted execution tables.
