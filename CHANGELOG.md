@@ -140,6 +140,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - MetaSearch regression finding: `_fetch_silver_events` defines but does not execute its data-fetch coroutine, yielding empty evaluation inputs
   - changelog-to-code drift finding for prior “fixed” meta-search fetch path vs current implementation
   - adaptive-runtime coupling findings: meta weekly/evolution and EOD analytics still depend on Orion-local ingestion tables while compose omits ingestion service
+- **Gateway/Heber Parity Audit (Pass 30)**: Continued audit with:
+  - repo-hygiene debt finding: `detect-secrets` baseline is coupled to large/generated and archived files, creating commit-loop instability
+  - commit-reliability risk framing tied to tracked `codebase.md` and baseline line-number churn
+  - scheduler-reliability finding: weekly meta evolution runs on exact-minute trigger with no catch-up window
 
 ### Changed
 

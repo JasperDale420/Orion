@@ -1555,3 +1555,37 @@ P0:
 
 P1:
 1. Either add ingestion service back to compose for analytics correctness, or reroute EOD/weekly analytics to canonical Gateway/Heber-backed datasets with explicit freshness checks.
+
+## 37) Pass 30 Continuation (2026-02-06)
+
+### 37.1 Pre-commit Secret Baseline Is Coupled to Large/Generated and Archived Files (Commit-Loop Instability)
+
+Current hygiene contract:
+- pre-commit runs `detect-secrets` against `.secrets.baseline` (`.pre-commit-config.yaml:24` to `.pre-commit-config.yaml:28`),
+- baseline tracks many findings in large/generated/archived files including `codebase.md` and archived legacy files (`.secrets.baseline:169` to `.secrets.baseline:185`, `.secrets.baseline:185` to `.secrets.baseline:284`).
+
+Observed debt signals:
+- `codebase.md` is very large and mutable (`98302` lines; ~`3.3M`) and is currently tracked (`codebase.md` file stats),
+- baseline line-number entries for these files are high-churn by nature, creating repeated baseline rewrites and non-deterministic commit friction.
+
+Risk:
+- engineering throughput degradation during migration (hook churn, forced retries, frequent manual baseline staging),
+- increased chance of bypassing hooks (`--no-verify`) under schedule pressure, reducing trust in hygiene controls.
+
+### 37.2 Weekly Meta Scheduler Has Exact-Minute Trigger With No Catch-up Window
+
+Current scheduler logic:
+- scheduled mode triggers only when `weekday == Friday` and exact `hour == 17` and `minute == 30` (`src/orion/main_meta_weekly.py:109` to `src/orion/main_meta_weekly.py:114`),
+- polling loop sleeps for 60 seconds between checks (`src/orion/main_meta_weekly.py:133` to `src/orion/main_meta_weekly.py:134`).
+
+Risk:
+- if process restarts late, clock drifts, or loop wake-up misses the exact minute, weekly evolution may skip an entire week with no catch-up execution.
+
+### 37.3 Updated Priorities
+
+P0:
+1. Reduce `.secrets.baseline` volatility by excluding generated/aggregate artifacts (for example `codebase.md`) and archived wave folders from secret-scan scope, then regenerate baseline once.
+2. Add deterministic pre-commit guidance for migration branches (single source of truth for baseline refresh command).
+
+P1:
+1. Replace exact-minute weekly trigger with a bounded execution window/catch-up rule (for example first run after Friday 17:30 ET if not yet executed for current week).
