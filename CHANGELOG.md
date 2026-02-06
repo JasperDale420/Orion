@@ -221,6 +221,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - options-risk enforcement finding: live `_execute_options_order` path does not invoke `RiskManager.check_order`/`check_options_order`, so options orders can bypass configured risk/Greeks gates
   - sizing-contract drift finding: preflight validates options candidates using `calculate_size` + ticker-level `check_order`, but execution submits contracts via `max_option_premium_pct` + connector contract sizing
   - hardening recommendations for mandatory options risk-gate enforcement and preflight-vs-execution quantity parity tests
+- **Gateway/Heber Parity Audit (Pass 50)**: Continued audit with:
+  - options-unit finding: `RiskManager` share-style cost math (`quantity * price`) conflicts with contract-based options premium semantics (`contracts * price * 100`)
+  - enforcement-gap finding: `check_options_order` delegates to `check_order` and therefore inherits non-contract-aware notional checks
+  - hardening recommendations for contract-normalized risk accounting and options-specific max-order/exposure regression tests
 
 ### Changed
 

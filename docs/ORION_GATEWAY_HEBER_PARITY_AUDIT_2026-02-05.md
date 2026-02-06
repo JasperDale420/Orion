@@ -2282,3 +2282,35 @@ P0:
 P1:
 1. Add regression tests that fail if options execution submits without a `RiskManager` pass.
 2. Add side-by-side preflight-vs-execution size parity assertions for option candidates.
+
+## 57) Pass 50 Continuation (2026-02-06)
+
+### 57.1 Options Notional Units Are Inconsistent in Risk Sizing Paths
+
+Current implementation contracts:
+- `RiskManager.calculate_size(...)` is share-based (`max_order_qty = floor(max_order_value / entry_price)`) (`src/orion/execution/risk_manager.py:523` to `src/orion/execution/risk_manager.py:556`),
+- `RiskManager.check_order(...)` computes `estimated_cost = quantity * price` (`src/orion/execution/risk_manager.py:71` to `src/orion/execution/risk_manager.py:85`),
+- options contract sizing uses `option_price * 100` in connector logic (`src/orion/connectors/alpaca_options_connector.py:240` to `src/orion/connectors/alpaca_options_connector.py:254`),
+- execution logging also treats options premium as `contracts * option_price * 100` (`src/orion/execution/execution_engine.py:405`).
+
+Risk:
+- options risk checks using share-style `quantity * price` understate true contract notional by ~100x, making max-order/exposure safeguards materially weaker than configured intent.
+
+### 57.2 `check_options_order` Reuses Share-Style `check_order` Cost Math
+
+Current method behavior:
+- `RiskManager.check_options_order(...)` delegates to `check_order(...)` before Greeks checks (`src/orion/execution/risk_manager.py:148` to `src/orion/execution/risk_manager.py:153`),
+- delegated `check_order(...)` uses share-style notional math (`quantity * price`) with no contract multiplier (`src/orion/execution/risk_manager.py:84`).
+
+Risk:
+- even after wiring `check_options_order` into runtime, notional-based limits may still be non-binding for options unless cost semantics are fixed.
+
+### 57.3 Updated Priorities
+
+P0:
+1. Introduce contract-aware cost normalization for options risk checks (for example `notional = contracts * premium * 100`) and apply it consistently in `check_order`/`check_options_order` paths.
+2. Add explicit unit semantics to risk method contracts (`shares` vs `contracts`) to avoid silent misuse across preflight and execution.
+
+P1:
+1. Add risk regression tests that enforce options max-order-size and ticker-exposure rejections at realistic premium/contract sizes.
+2. Add an audit assertion that `check_options_order` and execution premium accounting produce matching notional values for the same order payload.
