@@ -75,6 +75,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - runtime entrypoint drift findings across execution queue path, rollup generation, and compose wiring
   - changelog-to-code mismatch finding for execution consolidation claims vs current deployed codepath
   - labeling-stack fragmentation analysis (`flow_labels`, `price_target_labels`, and PRD 6.3 label jobs) with archive-wave guidance
+- **Gateway/Heber Parity Audit (Pass 12)**: Continued audit with:
+  - active runtime Gateway auth-contract drift findings (`X-Gateway-Key` requirements vs compose env wiring)
+  - direct-provider bypass finding in option quote tracking (direct Alpaca calls vs Gateway endpoint parity)
+  - explicit keep/migrate/dispose matrix for Orion label/feature families and Heber gold contract gaps
 
 ### Changed
 

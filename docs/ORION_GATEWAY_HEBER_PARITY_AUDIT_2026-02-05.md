@@ -858,3 +858,76 @@ Archive candidates after label consolidation:
 - `src/orion/main_labeler.py` + `flow_labels` path (if `price_target_labels` or Heber-gold labels remain canonical and no external consumer depends on `flow_labels`)
 - `src/orion/jobs/label_job.py`
 - `src/orion/jobs/window_label_job.py`
+
+## 19) Pass 12 Continuation (2026-02-06)
+
+### 19.1 Gateway Auth Contract Drift in Active Feature Enrichment Runtime
+
+Feature-enrichment connectors require Gateway key auth:
+- Connectors build `X-Gateway-Key` from `system_settings.data_gateway_api_key` (`src/orion/connectors/uw_greek_exposure_connector.py:27` to `src/orion/connectors/uw_greek_exposure_connector.py:29`, similarly `src/orion/connectors/uw_market_tide_connector.py:27`, `src/orion/connectors/uw_iv_rank_connector.py:27`, `src/orion/connectors/uw_max_pain_connector.py:27`).
+
+Current compose service config sets `GATEWAY_URL` but not Gateway key env:
+- Feature enrichment env includes `GATEWAY_URL` and `UW_API_KEY` (`docker-compose.yml:87` to `docker-compose.yml:90`).
+- No `DATA_GATEWAY_API_KEY` or `GATEWAY_API_KEY` env is set for that service.
+
+Gateway API enforces key header:
+- `require_api_key` rejects missing `X-Gateway-Key` (`../Data-gateway/gateway/api/deps.py:101` to `../Data-gateway/gateway/api/deps.py:115`).
+
+Risk:
+- Feature enrichment can run while silently persisting little/no fresh data due auth failures.
+
+### 19.2 Direct Alpaca Bypass Still Exists in Option Quote Pipeline
+
+`main_option_quote_tracker` still bypasses Data Gateway:
+- Instantiates `AlpacaOptionGreeksConnector` directly (`src/orion/main_option_quote_tracker.py:180`).
+- Connector calls Alpaca endpoint `https://data.alpaca.markets` using direct APCA headers (`src/orion/connectors/alpaca_option_greeks_connector.py:25`, `src/orion/connectors/alpaca_option_greeks_connector.py:37` to `src/orion/connectors/alpaca_option_greeks_connector.py:39`).
+
+Data Gateway already exposes Alpaca options routes:
+- `/api/v1/alpaca/options/snapshots/{underlying}` and related options endpoints (`../Data-gateway/gateway/api/alpaca/options.py:239`).
+
+Risk:
+- Orion bypasses centralized provider throttling, auth, and observability layers that the migration intended to standardize.
+
+### 19.3 Label/Data Product Decision Matrix (Keep vs Migrate vs Dispose)
+
+| Label/Feature Family | Current Producer Path | Active Consumer Path | Heber/Gateway Integration Status | Decision |
+| --- | --- | --- | --- | --- |
+| `flow_labels` | `main_labeler` (`src/orion/main_labeler.py:318`) | no in-repo consumer found (search references only in producer) | Reads from Heber, but writes local SQL only | **Dispose/Archive candidate** after external consumer check |
+| `price_target_labels` | `main_price_target_labeler` (`src/orion/main_price_target_labeler.py:2705`) | `pattern_miner`, `exit_classifier`, backfills (`src/orion/ml/pattern_miner.py:216`, `src/orion/ml/exit_classifier.py:441`) | Heavy local `silver_*` SQL coupling; no Heber gold write | **Keep + migrate to Heber gold** |
+| `candidate_labels` / `labels_event` / `labels_window` | `label_job` + `window_label_job` (`src/orion/jobs/label_job.py:162`, `src/orion/jobs/window_label_job.py:135`) | no active compose service wiring | Legacy PRD path, not part of current deployed loop | **Archive candidate** after deprecation notice |
+| `gold_feature_windows` | `window_feature_job` / rollup-adjacent jobs (`src/orion/jobs/window_feature_job.py:193`) | `exit_classifier`, `flow_enricher` (`src/orion/ml/exit_classifier.py:444`, `src/orion/ml/flow_enricher.py:1031`) | Consumer-critical, producer wiring unclear in compose | **Keep, but migrate producer to explicit Heber-aligned service** |
+
+### 19.4 Heber Gold Contract Gap for Orion Label Outputs
+
+Heber gold datasets require canonical time/instrument semantics (including `instrument_key`, `ts_event`, `ts_available`) per contract:
+- `../Heber/docs/data_contract.md`.
+
+Current Orion label outputs are local-table schemas keyed around `ticker`, `entry_ts`, and event IDs:
+- `flow_labels` insert shape (`src/orion/main_labeler.py:318`).
+- `price_target_labels` persistence path (`src/orion/main_price_target_labeler.py:2705`).
+
+No `write_gold(...)` integration usage found in Orion runtime modules.
+
+Risk:
+- Even when labels/features are high-value, they are not yet publishable through Heber-native reproducible/as-of semantics.
+
+### 19.5 Updated Priorities
+
+P0:
+1. Fix compose env contract for Gateway-backed connectors (`DATA_GATEWAY_API_KEY`/`GATEWAY_API_KEY`) and add startup fail-fast if key is missing.
+2. Migrate option quote checkpoint pipeline to Gateway-backed Alpaca options endpoints to remove direct provider bypass.
+3. Declare one canonical label family for model training (recommendation: `price_target_labels` lineage), and mark others deprecated.
+
+P1:
+1. Define Heber gold schema for retained label products with `instrument_key` + `ts_event` + `ts_available`.
+2. Move retained label/feature writers behind Heber SDK write paths; keep local SQL only as temporary cache during migration.
+
+### 19.6 Archival Readiness Update (Wave 7)
+
+High-confidence archive candidates (after one explicit stakeholder sign-off on external consumers):
+- `src/orion/main_labeler.py` + `flow_labels` pipeline
+- `src/orion/jobs/label_job.py`
+- `src/orion/jobs/window_label_job.py`
+
+Conditional archive candidates (after Heber-native replacements are live):
+- local dual-write enrichment connectors that persist `silver_greek_exposure` / `silver_market_tide` / `silver_max_pain` / `silver_iv_rank`
