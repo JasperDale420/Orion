@@ -1022,3 +1022,36 @@ P0:
 
 P1:
 1. Decommission Orion-local label sinks once Heber parity datasets satisfy current pattern-miner and exit-classifier queries.
+
+## 22) Pass 15 Continuation (2026-02-06)
+
+### 22.1 Archival Executed: Legacy PRD 6.3 Label Jobs (Wave 7)
+
+Wave-7 archive action completed:
+- `src/orion/jobs/label_job.py` -> `archive/2026-02-06_label-stack-wave7/legacy_code/label_job.py`
+- `src/orion/jobs/window_label_job.py` -> `archive/2026-02-06_label-stack-wave7/legacy_code/window_label_job.py`
+- archive manifest added at `archive/2026-02-06_label-stack-wave7/README.md`
+
+Evidence used:
+- no active compose entrypoints reference these jobs (`docker-compose.yml`).
+- no active `src/` references to these module paths after archival sweep.
+
+### 22.2 Label Stack State After Wave 7
+
+Active label/training path remains:
+- `price_target_labels` via `main_price_target_labeler`.
+
+Archived inactive alternatives:
+- queue-based execution-linked label jobs (`label_job`, `window_label_job`).
+
+Still active but disposal candidate:
+- `main_labeler` (`flow_labels`) pending external-consumer confirmation.
+
+### 22.3 Updated Priorities
+
+P0:
+1. Resolve Data Gateway contract/auth gaps blocking Heber alert-label pipeline parity (`options bars` route shape + `X-Gateway-Key`).
+2. Define and implement Heber gold datasets for retained Orion training columns, then begin controlled retirement of `price_target_labels`.
+
+P1:
+1. Confirm external consumers of `flow_labels`; archive `main_labeler` if no consumer exists.

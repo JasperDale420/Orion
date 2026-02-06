@@ -96,6 +96,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Archived `src/orion/shared/candidate_queue.py` to `archive/.../legacy_code/candidate_queue.py`
   - Archived queue-specific unit tests to `archive/.../legacy_tests/test_candidate_queue.py`
   - Added archive manifest: `archive/2026-02-06_runtime-consolidation-wave6/README.md`
+- **Label Stack Wave 7 Archival**: Archived inactive PRD 6.3 label jobs under `archive/2026-02-06_label-stack-wave7/`
+  - Archived `src/orion/jobs/label_job.py` to `archive/.../legacy_code/label_job.py`
+  - Archived `src/orion/jobs/window_label_job.py` to `archive/.../legacy_code/window_label_job.py`
+  - Added archive manifest: `archive/2026-02-06_label-stack-wave7/README.md`
 - **HeberReader Data Access Path**: Replaced unsupported HTTP reads (`/silver/read`, `/gold/read`) with Heber-compatible access:
   - Silver and Gold reads now use Heber parquet layout from `HEBER_DATA_ROOT`
   - Catalog calls limited to supported endpoints (for example `/health`, `/datasets`)
