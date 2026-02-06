@@ -47,10 +47,10 @@ Bottom line:
   - Heber parquet layout for Silver/Gold reads (`HEBER_DATA_ROOT`)
 - Residual impact: integration consumers still need migration from Orion-local SQL tables to Heber datasets.
 
-2. Gateway WebSocket payload mismatch in Orion client
+2. Gateway WebSocket payload mismatch in Orion client (Resolved)
 - Data Gateway sends stream payloads as `{type: "data", envelope: {...}, data: {...}}` (`../Data-Gateway/gateway/main.py`, `_on_stream_data`).
-- Orion `GatewayStreamClient` only processes message types `ALPACA_BAR_1M` or `bar` and expects payload at top-level or `payload` field (`src/orion/connectors/gateway_stream_client.py`).
-- Impact: Stream events can be silently ignored.
+- Current state (commit `1185476`, 2026-02-05): `GatewayStreamClient` now parses `type=data` + `feed=bars` messages, consumes `envelope` + `data`, and normalizes symbols before emitting `BronzeEvent`.
+- Residual impact: downstream jobs still need migration off Orion-local SQL feature/label tables.
 
 3. Test suite is structurally broken by removed modules
 - Removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) are still imported in many tests.
@@ -62,18 +62,18 @@ Bottom line:
 
 ## Medium
 
-4. Environment variable contract drift
+4. Environment variable contract drift (Mostly Resolved)
 - Orion uses multiple naming families: `GATEWAY_URL`, `DATA_GATEWAY_URL`, `GATEWAY_API_KEY`, `DATA_GATEWAY_API_KEY`, plus legacy UW vars.
-- `src/orion/config.py` does not centrally define Gateway/Heber settings, leaving direct `os.getenv` spread across connectors.
-- Impact: deploy misconfiguration risk and hidden behavior divergence.
+- Current state (commit `006db38`, 2026-02-05): centralized settings now exist in `src/orion/config.py` (`data_gateway_url`, `data_gateway_api_key`, `heber_catalog_url`, `heber_data_root`, `orion_use_gateway`) with backward-compatible alias support.
+- Residual impact: some non-Gateway legacy env usage remains outside migration scope.
 
 5. Mixed data ownership model (SQL-local vs lakehouse)
 - Orion still writes and depends on local SQL silver tables for UW-derived context while migration intent is Heber ownership.
 - Impact: duplicate sources of truth and schema drift.
 
-6. Hardcoded default gateway key in several connectors
+6. Hardcoded default gateway key in several connectors (Resolved)
 - Example defaults like `gw_orion_trading_key_55555` in UW connectors.
-- Impact: security and operational hygiene concern.
+- Current state (commit `006db38`, 2026-02-05): active connectors now read centralized settings and fail fast when keys are not configured.
 
 ## Low
 
@@ -129,24 +129,24 @@ Scripts archived:
 
 ## 6) Technical Debt Backlog (Migration-Critical)
 
-P0 (Do next):
-1. Fix Gateway stream client message parsing to consume `type=data` + `envelope` payload shape.
-2. Introduce central config for Gateway/Heber URLs and keys in `src/orion/config.py`; remove scattered hardcoded defaults.
+P0 (Completed in this migration pass):
+1. Gateway stream client message parsing now consumes `type=data` + `envelope` payload shape.
+2. Central config for Gateway/Heber URLs and keys added in `src/orion/config.py`; active callers migrated.
 
 P1:
-4. Refactor label/enrichment jobs to read from Heber datasets (or a single sanctioned data-access layer) instead of local UW silver SQL tables.
-5. Rebuild tests around `orion.ingestion.service` and new integration contracts.
-6. Update README/docs to match new architecture and command paths.
+1. Refactor remaining label/enrichment jobs to read from Heber datasets (or a single sanctioned data-access layer) instead of local UW silver SQL tables.
+2. Rebuild tests around `orion.ingestion.service` and new integration contracts.
+3. Update README/docs to match new architecture and command paths.
 
 P2:
-7. Define canonical feature/label schema ownership between Orion and Heber (single source of truth per dataset family).
-8. Remove stale generated artifacts/docs that keep reintroducing deprecated paths.
+1. Define canonical feature/label schema ownership between Orion and Heber (single source of truth per dataset family).
+2. Remove stale generated artifacts/docs that keep reintroducing deprecated paths.
 
 ## 7) Recommended Migration Sequence
 
 1. Runtime contract hardening
-- Fix Gateway stream parsing.
-- Fix Heber read client contract.
+- Fix Gateway stream parsing. (Completed 2026-02-05)
+- Fix Heber read client contract. (Completed 2026-02-05)
 
 2. Data-access consolidation
 - Introduce one Orion data-access facade for Gateway/Heber.
@@ -211,4 +211,55 @@ Reference sources used for this table:
 
 ---
 
-This audit now includes pass-2 column parity mapping. Next pass should implement the remaining P0 runtime fix (Gateway stream payload parsing) and start executing the migration decisions above.
+This audit now includes pass-2 column parity mapping and pass-3 migration status. Next pass should execute remaining data-access migration and archive decisions.
+
+## 10) Pass 3 Status Update (2026-02-06)
+
+### 10.1 Completed Since Pass 2
+
+- `main_labeler` now reads flow + bars from Heber (`src/orion/main_labeler.py`) while preserving local `flow_labels` persistence for compatibility.
+- `main_feature_enrichment` now discovers active tickers from Heber flow first, with local SQL fallback (`src/orion/main_feature_enrichment.py`).
+- Gateway/Heber config centralization and websocket envelope parsing are now in production code and covered by new tests.
+
+### 10.2 Current Technical Debt Snapshot (from repo scan)
+
+Observed SQL-coupled references in active code:
+
+| Table token | Approx refs in `src/orion` |
+| --- | --- |
+| `silver_uw_flow` | 67 |
+| `silver_market_tide` | 13 |
+| `silver_greek_exposure` | 15 |
+| `silver_max_pain` | 9 |
+| `silver_iv_rank` | 4 |
+
+Top concentration by file:
+- `src/orion/jobs/validate_features.py` (49 refs)
+- `src/orion/main_price_target_labeler.py` (22 refs)
+- `src/orion/ml/flow_enricher.py` (11 refs)
+
+### 10.3 Remaining Integration Gaps (High Priority)
+
+1. `main_price_target_labeler` remains tightly coupled to Orion-local silver tables.
+- Still queries `silver_uw_flow`, `silver_market_tide`, `silver_greek_exposure`, `silver_max_pain`, `silver_iv_rank` directly.
+- This is the largest single blocker for true Gateway+Heber parity.
+
+2. ML enrichment and backfill path still assumes Orion-local UW SQL data.
+- `src/orion/ml/flow_enricher.py`, `src/orion/jobs/backfill_ml_features.py`, `src/orion/jobs/window_feature_job.py`, and `src/orion/jobs/data_quality_checker.py` are still local-SQL-centric.
+- These jobs need a shared Heber-backed data-access facade to avoid repeated schema logic.
+
+3. Cross-project runtime default mismatch to align.
+- Orion defaults `data_gateway_url` to `http://localhost:8080` (`src/orion/config.py`).
+- Heber alert-label pipeline currently defaults `DATA_GATEWAY_URL` to `http://localhost:8000` (`../Heber/heber/features/pipelines/alert_labels.py`).
+- This should be standardized to prevent environment-specific drift.
+
+### 10.4 Archive Candidates for Step 1 (Do Not Remove Yet)
+
+These are likely removable after migration parity is signed off:
+- `src/orion/main_option_quote_tracker.py` (depends on local `silver_uw_flow` + `silver_option_quotes` checkpoint loop)
+- `src/orion/jobs/backfill_historical_gex.py` (local historical GEX backfill path)
+- `src/orion/jobs/backfill_exit_columns.py` (legacy local backfill path)
+
+Recommendation:
+- Keep these in active tree until Heber-backed replacements are validated in staging.
+- Then archive as a single wave (`archive/2026-02-xx_gateway-heber-migration-wave2/`) to reduce rollback complexity.

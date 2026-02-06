@@ -35,6 +35,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Top-ticker extraction from Heber flow frames
   - Recent-window filtering behavior
   - Graceful handling when expected columns are missing
+- **Gateway/Heber Parity Audit (Pass 3)**: Extended `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md` with:
+  - 2026-02-06 status updates for completed migration items
+  - Current SQL-coupling technical-debt counts and highest-concentration files
+  - Remaining high-priority integration gaps and wave-2 archive candidates
 
 ### Changed
 
