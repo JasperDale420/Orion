@@ -1055,3 +1055,34 @@ P0:
 
 P1:
 1. Confirm external consumers of `flow_labels`; archive `main_labeler` if no consumer exists.
+
+## 23) Pass 16 Continuation (2026-02-06)
+
+### 23.1 `flow_labels` Appears Write-Only Inside This Repo
+
+Current reference sweep shows:
+- `flow_labels` is read/written only by `main_labeler` itself (`src/orion/main_labeler.py:122`, `src/orion/main_labeler.py:318`).
+- No in-repo API, ML trainer, or job consumer reads `flow_labels`.
+- Compose still deploys the labeler service (`docker-compose.yml:59`).
+
+Risk:
+- Running a write-only service consumes resources and can mislead operators into assuming downstream usage that does not exist.
+
+### 23.2 Active Training Dependencies Are Centered on `price_target_labels`
+
+Active in-repo consumers continue to use `price_target_labels`:
+- pattern mining (`src/orion/ml/pattern_miner.py:216`),
+- exit classifier (`src/orion/ml/exit_classifier.py:441`),
+- backfill/validation jobs (`src/orion/jobs/backfill_ml_features.py:286`, `src/orion/jobs/validate_features.py:248`, `src/orion/jobs/nightly_backfill.py:4`).
+
+Implication:
+- Migration and parity should prioritize `price_target_labels` successor datasets in Heber; `flow_labels` should be considered compatibility-only until proven externally required.
+
+### 23.3 Updated Priorities
+
+P0:
+1. Verify whether any external dashboard/consumer depends on `flow_labels`.
+2. If none, move `labeler` compose service behind an opt-in profile and schedule archival of `main_labeler`.
+
+P1:
+1. Redirect any true `flow_labels` consumer to Heber `labels_alert_barriers` (after Gateway contract/auth fixes) instead of maintaining local Orion table writes.

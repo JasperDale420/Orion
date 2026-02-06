@@ -83,6 +83,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - cross-repo contract gap findings between Heber alert-label option-bar fetch shape and Data Gateway route implementation
   - cross-repo auth gap findings (Heber alert-label gateway calls missing `X-Gateway-Key`)
   - concrete keep/migrate/dispose decisions for Orion label families into Heber gold dataset splits
+- **Gateway/Heber Parity Audit (Pass 16)**: Continued audit with:
+  - write-only service finding for `flow_labels`/`main_labeler` in current Orion repo wiring
+  - dependency confirmation that active model-training and backfill paths are centered on `price_target_labels`
+  - decommission gating recommendations for moving `labeler` to opt-in profile pending external-consumer check
 
 ### Changed
 
