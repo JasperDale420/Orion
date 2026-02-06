@@ -2496,3 +2496,34 @@ P0:
 
 P1:
 1. Normalize execution failure taxonomy across `strategy_decisions.reason` and `order_records.error_message` so dashboards/alerts can group by canonical failure codes.
+
+## 64) Pass 57 Continuation (2026-02-06)
+
+### 64.1 Option-Quote Checkpoint Selection Can Starve Older Eligible Events
+
+Current selection logic:
+- tracker pulls recent flows with fixed recency and newest-first cap (`ORDER BY f.flow_ts_utc DESC LIMIT 1000`) (`src/orion/main_option_quote_tracker.py:82` to `src/orion/main_option_quote_tracker.py:83`),
+- checkpoint worklist is derived only from that bounded result set (`src/orion/main_option_quote_tracker.py:187` to `src/orion/main_option_quote_tracker.py:217`),
+- no pagination/cursor over older candidate rows exists in this path.
+
+Risk:
+- in high-flow periods, older-but-still-within-window events can be consistently excluded from processing, leaving checkpoint coverage gaps in `silver_option_quotes` and downstream label features.
+
+### 64.2 Tracking-Window Constant Drift (Config Says Variable, Query Is Hardcoded)
+
+Current code state:
+- module defines `MAX_TRACKING_AGE_HOURS = 24` (`src/orion/main_option_quote_tracker.py:37`),
+- SQL filter is hardcoded `NOW() - INTERVAL '24 hours'` and does not use the constant (`src/orion/main_option_quote_tracker.py:79`).
+
+Risk:
+- maintainers may assume the constant governs behavior, but runtime window changes require manual SQL edits, increasing configuration drift and operational mistakes.
+
+### 64.3 Updated Priorities
+
+P0:
+1. Replace newest-only fixed-limit polling with deterministic pagination/cursor (for example event-time ascending batches with last-processed checkpoint state) so all eligible rows are eventually processed.
+2. Bind SQL recency filter to a single config source (`MAX_TRACKING_AGE_HOURS` or env setting), removing hardcoded interval literals.
+
+P1:
+1. Add coverage monitor: expected-vs-populated checkpoint counts by horizon/day and alert on sustained underfill.
+2. Add regression/integration test with >1000 flow rows to assert no starvation of older eligible checkpoint events.

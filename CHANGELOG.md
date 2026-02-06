@@ -249,6 +249,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - auditability finding: execution-time failure reasons are set on the in-memory decision object, but post-execution DB update path persists only `executed_successfully`
   - observability finding: `strategy_decisions.reason` can remain stale pre-execution text while final status indicates execution failure/skips
   - hardening recommendations for full post-execution decision-state persistence and failure-reason regression tests
+- **Gateway/Heber Parity Audit (Pass 57)**: Continued audit with:
+  - checkpoint-coverage finding: `main_option_quote_tracker` selects only newest `LIMIT 1000` flow events in a fixed recency window, enabling starvation of older eligible checkpoint rows
+  - config-drift finding: tracking-age constant is defined in code but SQL filter is hardcoded to `24 hours`
+  - hardening recommendations for deterministic pagination/cursor processing and checkpoint coverage monitoring
 
 ### Changed
 
