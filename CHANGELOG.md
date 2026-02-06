@@ -213,6 +213,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - execution-concurrency finding: `main_execution.fetch_pending_candidates` uses anti-join polling without atomic claim/lock semantics, allowing duplicate pickup in multi-worker scenarios
   - idempotency-contract finding: `strategy_decisions` stores `candidate_id` as non-unique, so duplicate decisions per candidate are structurally possible
   - hardening recommendations for claim-based polling and one-decision-per-candidate constraints/tests
+- **Gateway/Heber Parity Audit (Pass 48)**: Continued audit with:
+  - fill-idempotency finding: execution restart path can reprocess recent fills because dedupe state is process-local (`_partial_fill_tracker`, `processed_fill_ids`) and reset on sync/restart
+  - ordering finding: risk-state mutation happens before DB fill dedupe (`ON CONFLICT DO NOTHING`), so duplicate fill events can still skew risk/equity state
+  - integration-gap finding: DB-backed processed-fill helpers exist in `ExecutionEngine` but are not used by active fill polling flow
 
 ### Changed
 

@@ -2209,3 +2209,43 @@ P0:
 
 P1:
 1. Add multi-worker integration test that runs two execution loops against the same candidate set and asserts single decision/execution outcome per candidate.
+
+## 55) Pass 48 Continuation (2026-02-06)
+
+### 55.1 Fill Idempotency Is Process-Local; Restart Path Can Reprocess Recent Fills Into Risk State
+
+Current runtime behavior:
+- fill polling defaults to a 5-minute lookback when `last_fill_poll_ts` is absent (startup/restart path) (`src/orion/execution/execution_engine.py:618` to `src/orion/execution/execution_engine.py:621`),
+- partial-fill dedupe uses in-memory `_partial_fill_tracker` only (`src/orion/execution/execution_engine.py:652` to `src/orion/execution/execution_engine.py:656`),
+- `RiskManager.process_fill` idempotency uses in-memory `processed_fill_ids` set (`src/orion/execution/risk_manager.py:48`, `src/orion/execution/risk_manager.py:767` to `src/orion/execution/risk_manager.py:772`),
+- broker sync explicitly clears processed fill history (`src/orion/execution/risk_manager.py:942` to `src/orion/execution/risk_manager.py:944`).
+
+Risk:
+- after restart, already-accounted fills within lookback can be reapplied to risk state (equity/daily-loss/exposure), causing drift from broker truth.
+
+### 55.2 DB Fill Dedupe Happens After Risk Mutation
+
+Current processing order:
+- `_process_single_fill` mutates risk state first via `risk_manager.process_fill(...)` (`src/orion/execution/execution_engine.py:686` to `src/orion/execution/execution_engine.py:688`),
+- fill DB write uses `ON CONFLICT DO NOTHING` on broker order id (`src/orion/execution/execution_engine.py:946` to `src/orion/execution/execution_engine.py:948`).
+
+Risk:
+- duplicate fill events can still alter risk state even when persistence layer correctly drops duplicate fill rows.
+
+### 55.3 Durable Idempotency Helpers Exist But Are Unused
+
+Current code state:
+- `ExecutionEngine` defines `_is_fill_processed` and `_mark_fill_processed` backed by `ProcessedFill` table (`src/orion/execution/execution_engine.py:785`, `src/orion/execution/execution_engine.py:828`),
+- no runtime call sites invoke these helpers in fill polling path (reference scan shows definitions only).
+
+Risk:
+- durable anti-duplication infrastructure is present but disconnected, leaving runtime behavior dependent on volatile in-memory caches.
+
+### 55.4 Updated Priorities
+
+P0:
+1. Move fill idempotency to durable pre-checks (DB-backed `ProcessedFill` or equivalent) before mutating risk state.
+2. Reorder processing so duplicate detection/persistence claim occurs before `risk_manager.process_fill`.
+
+P1:
+1. Add restart regression test: process fill, restart engine, replay same fill payload, assert risk state unchanged.
