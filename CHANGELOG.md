@@ -91,6 +91,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - compose env-contract drift findings for Gateway-backed services (missing Gateway key wiring)
   - direct-UW dependency drift findings in `main_price_target_labeler` versus centralization goals
   - archival execution notes for orphaned integration modules
+- **Gateway/Heber Parity Audit (Pass 18)**: Continued audit with:
+  - concrete `sync_earnings` contract-break findings (Gateway path shape and auth mismatch)
+  - label-ontology parity findings between Orion `price_target_labels` and current Heber `labels_alert_*` views
+  - migration-split recommendation for outcome labels vs training-fact feature datasets
 
 ### Changed
 
@@ -112,6 +116,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Archived `src/orion/connectors/uw_ticker_info_connector.py` to `archive/.../legacy_code/uw_ticker_info_connector.py`
   - Archived `src/orion/jobs/backfill_historical_gex.py` to `archive/.../legacy_code/backfill_historical_gex.py`
   - Added archive manifest: `archive/2026-02-06_integration-debt-wave8/README.md`
+- **Runner Debt Wave 9 Archival**: Archived deprecated runner/harness modules under `archive/2026-02-06_runner-debt-wave9/`
+  - Archived `src/orion/run_agent.py` to `archive/.../legacy_code/run_agent.py`
+  - Archived `src/orion/paper_live_harness.py` to `archive/.../legacy_code/paper_live_harness.py`
+  - Added archive manifest: `archive/2026-02-06_runner-debt-wave9/README.md`
 - **HeberReader Data Access Path**: Replaced unsupported HTTP reads (`/silver/read`, `/gold/read`) with Heber-compatible access:
   - Silver and Gold reads now use Heber parquet layout from `HEBER_DATA_ROOT`
   - Catalog calls limited to supported endpoints (for example `/health`, `/datasets`)

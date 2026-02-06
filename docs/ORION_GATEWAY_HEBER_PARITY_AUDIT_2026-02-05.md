@@ -1123,3 +1123,59 @@ P0:
 
 P1:
 1. Complete migration of ticker/earnings metadata lookups in labeling flow to Gateway/Heber canonical paths and retire remaining direct-UW client usage.
+
+## 25) Pass 18 Continuation (2026-02-06)
+
+### 25.1 `sync_earnings` Gateway Contract Is Broken by Path and Auth Shape
+
+Current Orion implementation:
+- `sync_earnings` builds a UW SDK client using `base_url=f"{gateway_url}/api/v1/uw"` with bearer token auth (`src/orion/jobs/sync_earnings.py:27`, `src/orion/jobs/sync_earnings.py:142`, `src/orion/unusualwhales/client.py:56`, `src/orion/unusualwhales/client.py:98`).
+- Orion UW SDK earnings endpoints are hardcoded as `/api/earnings/...` (`src/orion/unusualwhales/api/earnings/get_premarket.py:26`, `src/orion/unusualwhales/api/earnings/get_afterhours.py:26`, `src/orion/unusualwhales/api/earnings/get_ticker_earnings.py:18`).
+
+Resulting request path shape becomes:
+- `{gateway}/api/v1/uw/api/earnings/...` (extra `/api` segment), not Gateway route shape.
+
+Data Gateway route/auth contract:
+- earnings routes are `/api/v1/uw/earnings/...` (`../Data-gateway/gateway/api/uw/earnings.py:22`, `../Data-gateway/gateway/api/uw/earnings.py:45`, `../Data-gateway/gateway/api/uw/earnings.py:68`),
+- protected by `require_api_key` (Gateway key contract), not UW bearer token (`../Data-gateway/gateway/api/uw/earnings.py:26`, `../Data-gateway/gateway/api/uw/earnings.py:49`, `../Data-gateway/gateway/api/uw/earnings.py:72`).
+
+Risk:
+- daily sync/backfill can fail silently or return empty payloads, producing stale `silver_earnings_calendar` features used by labeling/training.
+
+### 25.2 Label Ontology Drift: Orion `price_target_labels` vs Heber Gold Labels
+
+Heber label contract today:
+- `labels_alert_barriers`/`labels_alert_intraday`/`labels_alert_swing` centered on barrier outcomes and compact context fields (`../Heber/features/feature_views/alert_labels.py:27`, `../Heber/features/feature_views/alert_labels.py:43`, `../Heber/features/feature_views/alert_labels.py:80`, `../Heber/features/feature_views/alert_labels.py:130`).
+
+Orion label contract today:
+- `main_price_target_labeler` builds a wide, checkpoint-heavy + enrichment-heavy row with dynamic insert into `price_target_labels` (`src/orion/main_price_target_labeler.py:2093`, `src/orion/main_price_target_labeler.py:2438`, `src/orion/main_price_target_labeler.py:2528`, `src/orion/main_price_target_labeler.py:2684`, `src/orion/main_price_target_labeler.py:2705`).
+
+Implication:
+- direct replacement of Orion training table with current Heber label views is not parity-complete.
+- migration needs explicit split:
+  1. keep Heber barrier labels as decision/outcome labels,
+  2. migrate Orion ML enrichment/checkpoint columns into Heber feature datasets (or a dedicated training-fact gold dataset),
+  3. then decommission local `price_target_labels`.
+
+### 25.3 Archival Executed: Deprecated Runner Debt (Wave 9)
+
+Wave-9 archive action completed:
+- `src/orion/run_agent.py` -> `archive/2026-02-06_runner-debt-wave9/legacy_code/run_agent.py`
+- `src/orion/paper_live_harness.py` -> `archive/2026-02-06_runner-debt-wave9/legacy_code/paper_live_harness.py`
+- archive manifest added at `archive/2026-02-06_runner-debt-wave9/README.md`
+
+Rationale:
+- neither file is wired in compose/runtime entrypoints,
+- `run_agent.py` is an explicit deprecated stub,
+- harness logic depended on legacy runner assumptions.
+
+### 25.4 Updated Priorities
+
+P0:
+1. Replace `sync_earnings` UW-SDK-through-gateway usage with direct Gateway client calls using canonical routes (`/api/v1/uw/earnings/*`) and `X-Gateway-Key`.
+2. Define the Heber target for Orion `price_target_labels` parity as two artifacts:
+- outcome labels (existing barrier views),
+- training-fact features (checkpoint/entry-context fields currently local to Orion).
+
+P1:
+1. Run a repo-wide cleanup plan for remaining local scripts/jobs that assume deprecated runner paths.
