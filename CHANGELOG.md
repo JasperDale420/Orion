@@ -148,6 +148,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - root-cause integration finding: Orion `HeberReader` hardcodes Silver feed names instead of using Heber catalog feed-resolution contracts
   - cross-repo naming drift finding: `darkpool` vs `darkpool_trades` inconsistencies persist between Data Gateway producer feeds, Heber writer/storage keys, and catalog inventory
   - data-quality/scaling finding: `HeberReader` filter fallback re-reads full parquet datasets without re-applying symbol filters
+- **Gateway/Heber Parity Audit (Pass 32)**: Continued audit with:
+  - cross-service URL-contract finding: Heber watch poller/consumer and feature-enrichment build Data Gateway paths with inconsistent `/api/v1` assumptions
+  - endpoint-shape mismatch finding: watch market-context enrichment targets `/alpaca/stocks/bars` while Gateway serves `/api/v1/alpaca/stocks/{symbol}/bars`
+  - auth-contract finding: Heber watch and alert-label pipeline Gateway requests omit required `X-Gateway-Key` header wiring
+  - migration-hardening recommendations for shared URL builders, startup contract validation, and integration tests for watch enrichment paths
 
 ### Changed
 

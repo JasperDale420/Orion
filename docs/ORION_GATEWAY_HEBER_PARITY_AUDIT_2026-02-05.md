@@ -1624,3 +1624,53 @@ P0:
 
 P1:
 1. In `HeberReader`, re-apply instrument filtering after fallback full-read (or hard-fail instead of broad fallback) and add guardrail tests for symbol-scoped reads.
+
+## 39) Pass 32 Continuation (2026-02-06)
+
+### 39.1 Heber Watch Builds Data Gateway URLs Inconsistently (`/api/v1` Mixed Inline vs Base URL)
+
+Current Heber watch behavior:
+- poller and consumer hardcode `/api/v1` into quote URLs (`../Heber/heber/watch/poller.py:165`, `../Heber/heber/watch/consumer.py:418`),
+- feature-enrichment paths do not include `/api/v1` and assume provider root under base URL (`../Heber/heber/watch/features.py:319`, `../Heber/heber/watch/features.py:366`, `../Heber/heber/watch/features.py:452`),
+- compose sets `DATA_GATEWAY_URL` without API prefix (`../Heber/docker-compose.yml:268`).
+
+Gateway contract:
+- provider routers are mounted at `/api/v1/uw` and `/api/v1/alpaca` (`../Data-gateway/gateway/api/uw/__init__.py:32`, `../Data-gateway/gateway/api/alpaca/__init__.py:19`).
+
+Risk:
+- with `DATA_GATEWAY_URL=http://host.docker.internal:8080`, quote polling can work while enrichment calls 404;
+- with `DATA_GATEWAY_URL` including `/api/v1`, enrichment can work while poller/consumer calls become `/api/v1/api/v1/...` and fail.
+
+### 39.2 Market-Context Enrichment Uses a Nonexistent Stock Bars Path Shape
+
+Current Heber watch enrichment request:
+- calls `GET {gateway}/alpaca/stocks/bars` with `symbol` as query param (`../Heber/heber/watch/features.py:452` to `../Heber/heber/watch/features.py:455`).
+
+Gateway stock-bars contract:
+- route is `GET /api/v1/alpaca/stocks/{symbol}/bars` (path param, not query-only symbol) (`../Data-gateway/gateway/api/alpaca/stock.py:25` to `../Data-gateway/gateway/api/alpaca/stock.py:31`).
+
+Risk:
+- market-context enrichment (returns/volatility fields) silently degrades due to repeated non-200 responses and fallback behavior, reducing label-quality parity and feature completeness.
+
+### 39.3 Heber Watch/Label Pipelines Lack Gateway API-Key Injection Despite Required Auth Contract
+
+Gateway auth contract:
+- Gateway endpoints require `X-Gateway-Key` header via `require_api_key` (`../Data-gateway/gateway/api/deps.py:101` to `../Data-gateway/gateway/api/deps.py:116`).
+
+Current Heber call paths:
+- watch consumer/poller/enrichment issue `httpx` requests without auth headers (`../Heber/heber/watch/consumer.py:417` to `../Heber/heber/watch/consumer.py:420`, `../Heber/heber/watch/poller.py:164` to `../Heber/heber/watch/poller.py:167`, `../Heber/heber/watch/features.py:321` to `../Heber/heber/watch/features.py:323`, `../Heber/heber/watch/features.py:374` to `../Heber/heber/watch/features.py:376`, `../Heber/heber/watch/features.py:461` to `../Heber/heber/watch/features.py:463`),
+- alert-labels pipeline option-bars fetch also omits auth headers (`../Heber/heber/features/pipelines/alert_labels.py:361` to `../Heber/heber/features/pipelines/alert_labels.py:369`),
+- watch CLI/config surface exposes `DATA_GATEWAY_URL` but no gateway-key configuration (`../Heber/heber/watch/__main__.py:23`, `../Heber/heber/watch/__main__.py:47`, `../Heber/heber/features/pipelines/alert_labels.py:540`).
+
+Risk:
+- Heber watch labeling and feature enrichment can fail with 401 responses in any environment enforcing Gateway auth, leading to silent parity erosion (missing entry prices, missing enrichment, incomplete contract labels).
+
+### 39.4 Updated Priorities
+
+P0:
+1. Standardize Heber watch Gateway URL contract to one rule: `gateway_base_url` excludes `/api/v1`, and all clients build paths through a shared helper that prepends `/api/v1` exactly once.
+2. Fix watch market-context enrichment path to `GET /api/v1/alpaca/stocks/{symbol}/bars` and add integration tests for bars/chain/iv-rank URL construction.
+3. Add explicit Gateway auth wiring for Heber call paths (`DATA_GATEWAY_KEY` env + `X-Gateway-Key` header injection in shared HTTP client code).
+
+P1:
+1. Add startup validation in Heber watch: fail fast when `gateway_base_url` includes `/api/v1` or when required endpoints return non-contract responses.
