@@ -1208,3 +1208,27 @@ P0:
 
 P1:
 1. Add a parity check job comparing recent `silver_earnings_calendar.report_date` values against Gateway payload dates to detect drift early.
+
+## 27) Pass 20 Continuation (2026-02-06)
+
+### 27.1 Heber Watch Quote Pull Uses Nonexistent/Unauthorized Gateway Contract
+
+Current Heber watch usage:
+- watch consumer requests `GET {gateway}/api/v1/alpaca/options/quotes` with `symbols=<occ>` and no Gateway auth header (`../Heber/heber/watch/consumer.py:417` to `../Heber/heber/watch/consumer.py:420`).
+- snapshot poller uses the same route and query shape for batched symbols (`../Heber/heber/watch/poller.py:164` to `../Heber/heber/watch/poller.py:167`).
+
+Data Gateway contract:
+- options quote route is per-contract path `GET /api/v1/alpaca/options/{contract}/quotes` (`../Data-gateway/gateway/api/alpaca/options.py:157`).
+- route requires API key via `require_api_key` (`../Data-gateway/gateway/api/alpaca/options.py:160`).
+
+Risk:
+- Heber watch/monitoring flow can return 404/401 or empty quote paths, degrading alert-watch label quality and producing silent parity gaps versus intended Gateway-centralized reads.
+
+### 27.2 Updated Priorities
+
+P0:
+1. Align Heber watch quote-fetch contract to Gateway routes (either per-contract fetches or a newly added bulk quotes route in Data Gateway).
+2. Add explicit Gateway auth wiring (`X-Gateway-Key`) for watch consumer/poller HTTP clients.
+
+P1:
+1. Add integration tests in Heber that validate quote-fetch success against live Gateway route catalog to catch route-shape drift early.

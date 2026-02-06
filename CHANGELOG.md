@@ -99,6 +99,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `sync_todays_earnings` date-semantic drift finding (`date.today()` override vs provider record dates)
   - runtime-coupling finding that earnings sync remains tied to ingestion startup path
   - operational guidance for explicit scheduling and parity verification of earnings calendar freshness
+- **Gateway/Heber Parity Audit (Pass 20)**: Continued audit with:
+  - Heber watch quote-route mismatch findings (`/options/quotes?symbols=` vs Gateway per-contract quote route)
+  - cross-repo auth-gap findings for watch quote pulls (missing Gateway API key contract)
+  - P0 alignment guidance for quote contract and watch service auth wiring
 
 ### Changed
 
