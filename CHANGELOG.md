@@ -51,6 +51,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - source-by-source migration targets into Heber datasets
   - safe slice order for incremental migration
   - explicit parity gates before additional archival
+- **Gateway/Heber Parity Audit (Pass 7)**: Continued audit with:
+  - active-service keep/migrate/retire matrix from `docker-compose` runtime wiring
+  - darkpool contract-drift finding (`darkpool` vs `darkpool_trades`) across Data Gateway, Heber, and Orion reader paths
+  - ML dependency mapping for `pattern_miner`, `exit_classifier`, and `nightly_backfill`
+  - refreshed SQL-coupling hotspot heatmap and updated archival readiness wave
 
 ### Changed
 

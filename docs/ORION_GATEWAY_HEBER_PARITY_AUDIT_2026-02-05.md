@@ -443,3 +443,103 @@ Do not archive additional labeler/backfill modules until the following are true:
 - Heber-backed labeler output count matches legacy count within tolerance over the same date window.
 - Key label columns (`return_at_*`, `first_exit_type`, `max_drawdown_pct`) pass side-by-side checks.
 - Feature null-rate and range checks match or improve vs legacy baseline.
+
+## 14) Pass 7 Continuation (2026-02-06)
+
+### 14.1 SQL-Coupling Heatmap (Repo-Wide Refresh)
+
+A repo-wide scan of legacy table/dataset names shows remaining coupling concentration in a small set of files:
+
+| File | Legacy refs count |
+| --- | --- |
+| `src/orion/jobs/validate_features.py` | 67 |
+| `src/orion/main_price_target_labeler.py` | 30 |
+| `src/orion/ml/flow_enricher.py` | 14 |
+| `src/orion/jobs/window_feature_job.py` | 7 |
+| `src/orion/jobs/data_quality_checker.py` | 7 |
+| `src/orion/ml/exit_classifier.py` | 6 |
+| `src/orion/jobs/backfill_historical_gex.py` | 6 |
+| `src/orion/jobs/backfill_exit_columns.py` | 6 |
+| `src/orion/jobs/backfill_ml_features.py` | 5 |
+
+Implication:
+- Migration risk is now highly localized. We do not need a whole-repo rewrite to get parity; we need focused migration work on these modules.
+
+### 14.2 Active Runtime Services: Keep/Migrate/Retire Matrix
+
+Current compose wiring confirms these jobs/services are still live and must be included in parity validation:
+- `labeler` -> `orion.main_labeler` (`docker-compose.yml:59`)
+- `price_target_labeler` -> `orion.main_price_target_labeler` (`docker-compose.yml:74`)
+- `feature_enrichment` -> `orion.main_feature_enrichment` (`docker-compose.yml:90`)
+- `option_quote_tracker` -> `orion.main_option_quote_tracker` (`docker-compose.yml:106`)
+- `pattern-miner` -> `orion.main_pattern_miner` (`docker-compose.yml:207`)
+- `nightly-backfill` -> `orion.jobs.nightly_backfill` (`docker-compose.yml:224`)
+
+| Service/module | Current role | Decision | Parity gate before retire/archive |
+| --- | --- | --- | --- |
+| `main_labeler` | Core flow label loop; now Heber-backed for reads | Keep | Verify event-count and label parity by day/ticker |
+| `main_price_target_labeler` | Main label + feature derivation surface | Migrate (high priority) | Complete Heber facade migration + side-by-side label diffs |
+| `main_feature_enrichment` | Context enrichment scheduling | Keep temporarily | Replace SQL fallback dependency and confirm feature-null rates |
+| `main_option_quote_tracker` | Option quote checkpoint input | Keep temporarily | Heber canonical quote/checkpoint dataset exists and is consumed |
+| `jobs/nightly_backfill` | Orchestrates ML/exit backfills | Keep temporarily | Backfill inputs fully Heber-aligned and stable |
+| `main_pattern_miner` | Model training from local labels | Keep temporarily | Downstream training source of truth decision finalized |
+
+### 14.3 Contract Drift: Darkpool Naming Mismatch
+
+Observed naming split across systems:
+- Data Gateway emits darkpool envelopes with `feed="darkpool"` (`../Data-gateway/gateway/core/uw_poller.py:365`).
+- Heber Silver schema keys include `"darkpool"` (`../Heber/heber/schemas/silver.py:122`).
+- Heber writer partitions Silver by `feed={envelope.feed}` and maps darkpool fields under `envelope.feed == "darkpool"` (`../Heber/heber/writer/silver.py:40`, `../Heber/heber/writer/silver.py:76`).
+- Orion `HeberReader` currently reads darkpool from `_SILVER_DARKPOOL_DATASET = "darkpool_trades"` and path `silver/feed={dataset}` (`src/orion/clients/heber_reader.py:28`, `src/orion/clients/heber_reader.py:206`).
+- Heber catalog dataset list still advertises `darkpool_trades` (`../Heber/heber/catalog/datasources.py:178`).
+
+Risk:
+- If Silver partitions are written to `feed=darkpool` (as current Gateway->Heber pipeline implies), Orion reads against `feed=darkpool_trades` will silently return empty DataFrames.
+
+Action:
+1. Normalize on one canonical name (`darkpool` recommended, because it matches envelope/feed and silver schema keying).
+2. Make Orion `HeberReader` darkpool dataset name configurable with backward-compatible aliasing.
+3. Add a contract test that asserts non-empty read path for both accepted aliases during transition.
+
+### 14.4 Downstream ML Coupling Still Tied to Local Label Tables
+
+Critical dependencies still point to Orion-local label/window tables:
+- Exit classifier training joins `price_target_labels` + `gold_feature_windows` (`src/orion/ml/exit_classifier.py:441`, `src/orion/ml/exit_classifier.py:444`).
+- Pattern miner training queries `price_target_labels` directly (`src/orion/ml/pattern_miner.py:216`).
+- Nightly backfill orchestrator runs local backfill jobs (`src/orion/jobs/nightly_backfill.py:17`, `src/orion/jobs/nightly_backfill.py:18`, `src/orion/jobs/nightly_backfill.py:69`, `src/orion/jobs/nightly_backfill.py:74`).
+
+Decision:
+- Keep these training paths in Orion for now, but treat them as transitional data products.
+- Do not archive ML/backfill modules until a source-of-truth decision is made for training labels/features (Orion-local vs Heber Gold).
+
+### 14.5 Updated Archival Readiness (Wave 3)
+
+Ready to archive now:
+- No new modules promoted to "ready now" in this pass.
+
+Candidate to archive after replacement verification:
+- `src/orion/main_option_quote_tracker.py`
+- `src/orion/jobs/backfill_historical_gex.py`
+- `src/orion/jobs/backfill_exit_columns.py`
+
+Explicitly not ready to archive:
+- `src/orion/main_price_target_labeler.py`
+- `src/orion/ml/flow_enricher.py`
+- `src/orion/jobs/backfill_ml_features.py`
+- `src/orion/jobs/window_feature_job.py`
+- `src/orion/jobs/data_quality_checker.py`
+- `src/orion/jobs/validate_features.py`
+- `src/orion/ml/exit_classifier.py`
+- `src/orion/ml/pattern_miner.py`
+
+### 14.6 Decision Inputs Needed Before Step 1 (Archive Execution)
+
+Before we execute additional archival/removal, we need explicit decisions on:
+1. Training source of truth:
+- Keep `price_target_labels` local in Orion, or migrate to a canonical Heber Gold dataset.
+
+2. Darkpool canonical dataset name:
+- `darkpool` vs `darkpool_trades` as the long-term feed/dataset key.
+
+3. Feature ownership split:
+- Which Orion-only derived features should be promoted into Heber Gold versus intentionally retired.
