@@ -115,6 +115,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - active Orion ingestion-path finding for direct Alpaca Greeks enrichment in persistence layer
   - duplicate ownership risk framing for Greeks data across direct-provider and Gateway/Heber contracts
   - canonicalization recommendations for option Greeks sourcing
+- **Gateway/Heber Parity Audit (Pass 24)**: Continued audit with:
+  - compose/runtime wiring findings for Heber-dependent Orion services lacking explicit Heber data mount/env contracts
+  - deployment-risk finding for silent fallback/empty-read behavior in Heber-backed flows
+  - fail-fast and environment-contract recommendations for Heber runtime access
 
 ### Changed
 

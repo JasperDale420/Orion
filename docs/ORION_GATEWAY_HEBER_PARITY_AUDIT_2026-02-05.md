@@ -1310,3 +1310,29 @@ P0:
 
 P1:
 1. Add parity checks ensuring Greeks columns in Orion training paths are sourced from the selected canonical contract and not mixed across direct and Gateway paths.
+
+## 31) Pass 24 Continuation (2026-02-06)
+
+### 31.1 Heber-Backed Orion Services Are Not Fully Wired in Compose Runtime
+
+Runtime behavior:
+- `main_labeler` and `main_feature_enrichment` instantiate `HeberReader` (`src/orion/main_labeler.py:21`, `src/orion/main_labeler.py:34`, `src/orion/main_feature_enrichment.py:21`, `src/orion/main_feature_enrichment.py:42`).
+- `HeberReader` defaults `heber_data_root` to `/Volumes/heber/data` (`src/orion/config.py:85` to `src/orion/config.py:87`) and returns empty frames when silver paths are absent (`src/orion/clients/heber_reader.py:206` to `src/orion/clients/heber_reader.py:208`).
+
+Compose wiring:
+- `labeler` and `feature_enrichment` do not set `HEBER_DATA_ROOT` and do not mount Heber data volume; they only mount repo source (`docker-compose.yml:55`, `docker-compose.yml:84`) and set DB/Gateway/UW env.
+
+Observed consequence:
+- Heber read paths can become inert in containerized runtime; `feature_enrichment` then falls back to Orion-local SQL ticker discovery (`src/orion/main_feature_enrichment.py:91` to `src/orion/main_feature_enrichment.py:110`), while `main_labeler` has no local-flow fallback in current path (`src/orion/main_labeler.py:134` to `src/orion/main_labeler.py:145`).
+
+Risk:
+- deployment appears Heber-integrated in code, but runtime behavior can remain local/empty depending on container filesystem wiring.
+
+### 31.2 Updated Priorities
+
+P0:
+1. Wire explicit Heber data access in compose for Heber-dependent services (`HEBER_DATA_ROOT` + volume mount or remote-read strategy).
+2. Add startup checks that fail fast when Heber data root is unreachable for services that require it (`main_labeler`, `main_feature_enrichment`).
+
+P1:
+1. Decide whether `main_feature_enrichment` local SQL fallback is acceptable as a transitional mode; if yes, gate behind explicit flag and emit prominent startup warning.
