@@ -217,6 +217,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - fill-idempotency finding: execution restart path can reprocess recent fills because dedupe state is process-local (`_partial_fill_tracker`, `processed_fill_ids`) and reset on sync/restart
   - ordering finding: risk-state mutation happens before DB fill dedupe (`ON CONFLICT DO NOTHING`), so duplicate fill events can still skew risk/equity state
   - integration-gap finding: DB-backed processed-fill helpers exist in `ExecutionEngine` but are not used by active fill polling flow
+- **Gateway/Heber Parity Audit (Pass 49)**: Continued audit with:
+  - options-risk enforcement finding: live `_execute_options_order` path does not invoke `RiskManager.check_order`/`check_options_order`, so options orders can bypass configured risk/Greeks gates
+  - sizing-contract drift finding: preflight validates options candidates using `calculate_size` + ticker-level `check_order`, but execution submits contracts via `max_option_premium_pct` + connector contract sizing
+  - hardening recommendations for mandatory options risk-gate enforcement and preflight-vs-execution quantity parity tests
 
 ### Changed
 

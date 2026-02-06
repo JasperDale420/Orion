@@ -2249,3 +2249,36 @@ P0:
 
 P1:
 1. Add restart regression test: process fill, restart engine, replay same fill payload, assert risk state unchanged.
+
+## 56) Pass 49 Continuation (2026-02-06)
+
+### 56.1 Options Live Path Bypasses `RiskManager` Order Gates (Including Greeks Limits)
+
+Current runtime behavior:
+- options execution path (`_execute_options_order`) performs system-health/lag preflight, DTE check, quote lookup, and contract sizing, then submits order directly (`src/orion/execution/execution_engine.py:173` to `src/orion/execution/execution_engine.py:224`),
+- no call to `risk_manager.check_order(...)` or `risk_manager.check_options_order(...)` exists in this path,
+- `RiskManager.check_options_order(...)` exists and includes Greeks-limit checks (`src/orion/execution/risk_manager.py:119` to `src/orion/execution/risk_manager.py:156`),
+- current references show `check_options_order` only in unit tests, not active runtime callsites (`tests/unit/test_risk_greeks_v2.py:152`, `tests/unit/test_risk_greeks_v2.py:165`, `tests/unit/test_risk_greeks_v2.py:185`).
+
+Risk:
+- options orders can bypass max-order/ticker exposure and options Greeks constraints in live execution flow, creating production behavior drift from risk-policy intent and tests.
+
+### 56.2 Preflight Risk Sizing Contract Differs From Actual Options Order Sizing
+
+Current flow split:
+- preflight computes `qty` via `risk_manager.calculate_size(entry_price=limit_price, ...)` and validates with `check_order(candidate.ticker, qty, price, side, ...)` (`src/orion/execution/signal_preflight.py:93` to `src/orion/execution/signal_preflight.py:103`),
+- actual options execution later derives contracts from `max_option_premium_pct` and `options_connector.calculate_option_contracts(...)` (`src/orion/execution/execution_engine.py:208` to `src/orion/execution/execution_engine.py:210`).
+
+Risk:
+- preflight approval is not bound to the real contracts submitted, so accepted signals can still produce materially different risk/exposure outcomes at execution time.
+
+### 56.3 Updated Priorities
+
+P0:
+1. Add mandatory risk gate in `_execute_options_order` before submission:
+- use `risk_manager.check_options_order(...)` (or equivalent unified options gate) with contract-aware cost and Greeks inputs.
+2. Unify preflight/execution sizing contracts for options so preflight-validated quantity matches order-submission quantity semantics.
+
+P1:
+1. Add regression tests that fail if options execution submits without a `RiskManager` pass.
+2. Add side-by-side preflight-vs-execution size parity assertions for option candidates.
