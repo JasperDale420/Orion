@@ -165,6 +165,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - stream-contract finding: `GatewayStreamClient` mutates local subscription state before ACK and does not surface Gateway `type=error` subscription failures
   - feed-contract finding: Orion subscribes with legacy `feed=\"bars\"` and relies on Gateway fallback behavior instead of canonical feed IDs (`stock_bars`, etc.)
   - reliability recommendations for ACK-gated subscription state, explicit WS error handling, and feed-ID contract tests
+- **Gateway/Heber Parity Audit (Pass 36)**: Continued audit with:
+  - data-completeness finding: `backfill_exit_columns` selects rows by `price_at_15m IS NULL` only, which can skip partially-missing checkpoint columns
+  - operational-throughput finding: nightly backfill applies fixed per-run limits with non-deterministic `LIMIT`-only selectors (no stable pagination/order)
+  - scheduling-contract drift finding: `nightly_backfill` docs claim post-close 4:30pm ET while runtime config schedules 4:00pm ET
 
 ### Changed
 

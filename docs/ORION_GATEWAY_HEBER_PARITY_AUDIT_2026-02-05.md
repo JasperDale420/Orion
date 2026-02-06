@@ -1782,3 +1782,41 @@ P0:
 
 P1:
 1. Migrate Orion subscription payloads to canonical Gateway feed IDs (`stock_bars` for current usage) and add contract tests against `/catalog/feeds`.
+
+## 43) Pass 36 Continuation (2026-02-06)
+
+### 43.1 `backfill_exit_columns` Uses a Single Anchor Column Filter That Can Skip Partially-Missing Checkpoint Rows
+
+Current selection logic:
+- checkpoint backfill candidates are selected only where `price_at_15m IS NULL` (`src/orion/jobs/backfill_exit_columns.py:100` to `src/orion/jobs/backfill_exit_columns.py:101`),
+- update routine fills many checkpoint columns (`price_at_30m`, `price_at_8h`, `price_at_1d`, `price_at_2d`, `price_at_3d`, `price_at_1w`) once selected (`src/orion/jobs/backfill_exit_columns.py:185` to `src/orion/jobs/backfill_exit_columns.py:200`).
+
+Risk:
+- rows with `price_at_15m` already populated but later checkpoints still null are never selected for remediation, leaving persistent partial feature gaps in `price_target_labels`.
+
+### 43.2 Nightly Backfill Throughput Is Hard-Capped Per Run Without Deterministic Pagination
+
+Current orchestrator/runtime behavior:
+- nightly orchestrator invokes both backfills with fixed `limit=10000` (`src/orion/jobs/nightly_backfill.py:69`, `src/orion/jobs/nightly_backfill.py:74`),
+- backfill selectors rely on `LIMIT :limit` without `ORDER BY` in candidate queries (`src/orion/jobs/backfill_ml_features.py:290` to `src/orion/jobs/backfill_ml_features.py:291`, `src/orion/jobs/backfill_exit_columns.py:82`, `src/orion/jobs/backfill_exit_columns.py:101`).
+
+Risk:
+- backlog processing order is non-deterministic and can repeatedly prioritize the same subset of rows, delaying catch-up and causing long-lived null-feature pockets.
+
+### 43.3 Nightly Scheduler Intent/Config Drift: Declared “After Close (4:30pm ET)” vs Configured 4:00pm ET
+
+Current module contract:
+- module docstring states run “after market close (4:30pm ET)” (`src/orion/jobs/nightly_backfill.py:4`),
+- configured schedule is `BACKFILL_HOUR_ET = 16`, `BACKFILL_MINUTE_ET = 0` (`src/orion/jobs/nightly_backfill.py:25` to `src/orion/jobs/nightly_backfill.py:26`).
+
+Risk:
+- operational expectations and runbook timing can diverge from actual execution window, increasing the chance of running before all intended end-of-day artifacts are finalized.
+
+### 43.4 Updated Priorities
+
+P0:
+1. Update checkpoint-candidate query in `backfill_exit_columns` to target any missing checkpoint field (not only `price_at_15m`) and add regression tests for partial-row recovery.
+2. Introduce deterministic pagination/checkpointing for nightly backfills (stable ordering + last-processed cursor) instead of fixed-limit best effort.
+
+P1:
+1. Align `nightly_backfill` scheduling docs/config to one explicit post-close time and validate it with timezone-aware scheduling rules.
