@@ -253,6 +253,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - checkpoint-coverage finding: `main_option_quote_tracker` selects only newest `LIMIT 1000` flow events in a fixed recency window, enabling starvation of older eligible checkpoint rows
   - config-drift finding: tracking-age constant is defined in code but SQL filter is hardcoded to `24 hours`
   - hardening recommendations for deterministic pagination/cursor processing and checkpoint coverage monitoring
+- **Gateway/Heber Parity Audit (Pass 58)**: Continued audit with:
+  - exit-context finding: `main_execution` exit rules fetch recent flow from Orion-local `silver_uw_flow`, while flow-based exit logic mostly returns no signal when this context is empty
+  - ownership-drift finding: centralized Gateway->Heber ingestion assumptions plus non-running ingestion runtime increase chance of silent empty-flow exit evaluation
+  - hardening recommendations for Heber/Gateway-backed exit context reads and fail-loud missing-context telemetry
 
 ### Changed
 

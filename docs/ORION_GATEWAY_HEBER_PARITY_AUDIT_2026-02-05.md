@@ -2527,3 +2527,32 @@ P0:
 P1:
 1. Add coverage monitor: expected-vs-populated checkpoint counts by horizon/day and alert on sustained underfill.
 2. Add regression/integration test with >1000 flow rows to assert no starvation of older eligible checkpoint events.
+
+## 65) Pass 58 Continuation (2026-02-06)
+
+### 65.1 Exit-Rule Evaluator Still Pulls Flow Context from Orion-Local `silver_uw_flow`
+
+Current exit-context path:
+- `main_execution` fetches recent flow from `SilverOptionFlow` SQL rows for each open position (`src/orion/main_execution.py:26` to `src/orion/main_execution.py:39`, `src/orion/main_execution.py:324`),
+- flow-based exit rules use `recent_flow` as primary trigger input and return no signal when empty (`src/orion/processing/rules/exit_rules.py:148` to `src/orion/processing/rules/exit_rules.py:149`, `src/orion/processing/rules/exit_rules.py:212`, `src/orion/processing/rules/exit_rules.py:311`).
+
+Risk:
+- when local `silver_uw_flow` is stale/empty, exit-rule engine can silently degrade to “no exit” behavior even under adverse flow conditions.
+
+### 65.2 Runtime Ownership Drift Increases Exit Blind-Spot Probability
+
+Current ingestion ownership notes:
+- ingestion service comments state UW flow/darkpool ingestion is centralized via Data-Gateway -> Heber and local UW polling was removed (`src/orion/ingestion/service.py:200` to `src/orion/ingestion/service.py:201`, `src/orion/ingestion/service.py:275`),
+- active compose runtime does not run ingestion service in default profile (`docker-compose.yml:47` to `docker-compose.yml:224`).
+
+Risk:
+- exit rules tied to local SQL flow context are vulnerable to missing-input blind spots under current centralized data architecture.
+
+### 65.3 Updated Priorities
+
+P0:
+1. Move exit-rule flow context reads behind the same Gateway/Heber-backed data-access facade used for ingestion parity work.
+2. Add fail-loud behavior when exit context is unavailable (for example explicit warning state/metric rather than implicit empty-flow “no exit”).
+
+P1:
+1. Add integration test that simulates stale local `silver_uw_flow` with available Heber flow and asserts exit evaluator still receives non-empty context.
