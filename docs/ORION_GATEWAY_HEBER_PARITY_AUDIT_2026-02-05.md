@@ -1969,3 +1969,32 @@ P0:
 
 P1:
 1. Add backlog regression tests that simulate >`limit*4` historical rows with mixed labeled/unlabeled states and assert forward progress on newest unlabeled rows.
+
+## 48) Pass 41 Continuation (2026-02-06)
+
+### 48.1 Pattern-Miner Drift Baseline Uses Oldest-In-Window Importance, Not Latest
+
+Current implementation:
+- `get_last_week_importance` queries all rows ordered by newest first (`src/orion/ml/pattern_miner.py:552` to `src/orion/ml/pattern_miner.py:559`),
+- then converts to a dict with duplicate feature keys (`src/orion/ml/pattern_miner.py:563`), which keeps the last occurrence per key (effectively oldest row in the 7-day window for each feature).
+
+Risk:
+- drift deltas in `run_pattern_mining` compare against stale baseline values instead of most recent production baseline, weakening alert quality for degrading features.
+
+### 48.2 Pattern-Miner Training Query Does Not Gate on `ml_ready`
+
+Current training query:
+- filters `price_target_labels` by `entry_ts >= :cutoff` and `last_tracked_ts IS NOT NULL` (`src/orion/ml/pattern_miner.py:204` to `src/orion/ml/pattern_miner.py:217`),
+- does not require `ml_ready = true` before model fitting.
+
+Risk:
+- model training can include rows that are track-complete but not fully feature-complete/validated under current Orion readiness semantics, increasing label/feature noise.
+
+### 48.3 Updated Priorities
+
+P0:
+1. Fix `get_last_week_importance` to select one latest row per feature (for example `DISTINCT ON (feature_name) ... ORDER BY feature_name, created_at_utc DESC`) before drift delta calculation.
+2. Add explicit `ml_ready` gating (or equivalent completeness predicate) in pattern-miner training queries and enforce with a regression test.
+
+P1:
+1. Add a data-quality metric that reports the fraction of fetched training rows passing readiness/completeness gates over time.

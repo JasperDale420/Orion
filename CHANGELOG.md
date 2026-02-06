@@ -185,6 +185,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - labeling-progress integrity finding: `main_labeler` checks labeled IDs for only a bounded prefix of candidate records, then filters the full backlog, which can misclassify already-labeled rows as unlabeled
   - observability finding: `persist_labels` returns attempted label count while insert path uses `ON CONFLICT DO NOTHING`, inflating `total_labeled` progress logs under duplicate retries
   - reliability recommendations for DB-driven unlabeled pagination and true inserted-row counting in labeler metrics
+- **Gateway/Heber Parity Audit (Pass 41)**: Continued audit with:
+  - drift-baseline correctness finding: `pattern_miner.get_last_week_importance` orders newest-first but collapses duplicate feature rows via dict overwrite, effectively retaining oldest-per-feature values in-window
+  - training-readiness finding: pattern-miner training query gates on `last_tracked_ts` but not `ml_ready`, allowing incomplete/unvalidated rows into model fitting
+  - model-quality recommendations for latest-per-feature baseline selection and explicit readiness gating in training datasets
 
 ### Changed
 
