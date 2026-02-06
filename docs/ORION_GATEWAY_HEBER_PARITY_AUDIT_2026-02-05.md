@@ -610,3 +610,95 @@ For these three hotspot jobs, preserve intent but retire implementation:
 
 Condition before archival:
 - Heber-native replacements exist and pass side-by-side checks for at least one full trading week.
+
+## 16) Pass 9 Continuation (2026-02-06)
+
+### 16.1 Live Pipeline Gap: UW Strategies Cannot Fire in Current Runtime
+
+Current ingestion runtime behavior is Alpaca-only:
+- `_run_cycle()` only polls Alpaca events (`src/orion/ingestion/service.py:204`).
+- UW polling was removed and only comments remain (`src/orion/ingestion/service.py:275`).
+- `HeberReader` is instantiated but not used for reads (`src/orion/ingestion/service.py:60`).
+
+Rule generation still depends on UW flow signals:
+- Rule engine loads flow entry rules (`src/orion/processing/rule_engine.py:17` to `src/orion/processing/rule_engine.py:47`).
+- Those rules require `signal.signal_type == "UW_FLOW"` (`src/orion/processing/rules/flow_rules.py:23`, `src/orion/processing/rules/flow_rules.py:174`, `src/orion/processing/rules/flow_rules.py:273`).
+- Alpaca bar processing emits `OHLCV_1M` signals (`src/orion/processing/feature_engine.py:513`).
+
+Result:
+- With current runtime wiring, UW-dependent candidate generation is effectively inactive unless UW events are injected out-of-band.
+
+### 16.2 Deployment Drift: Compose Does Not Run Ingestion Service
+
+`docker-compose.yml` currently runs labelers, enrichment, execution, and backfills, but no ingestion service entry:
+- Services include `labeler`, `price_target_labeler`, `feature_enrichment`, `execution`, `pattern-miner`, `nightly-backfill` (`docker-compose.yml:47`, `docker-compose.yml:61`, `docker-compose.yml:76`, `docker-compose.yml:108`, `docker-compose.yml:196`, `docker-compose.yml:209`).
+- No service runs `python -m orion.ingestion`.
+
+At the same time, ingestion entrypoint docs state that it reads Heber flow/darkpool:
+- `src/orion/ingestion/__main__.py:8`.
+- But service implementation does not yet read flow/darkpool from Heber.
+
+Risk:
+- Operational assumptions about "live UW-driven execution" may not match actual running services.
+
+### 16.3 Integration Debt: Dual-Write Shadow Silver in Orion
+
+Feature enrichment currently fetches from Data Gateway and writes back into Orion-local `silver_*` tables:
+- Connector initialization via Gateway in `main_feature_enrichment` (`src/orion/main_feature_enrichment.py:237` to `src/orion/main_feature_enrichment.py:245`).
+- Connectors persist to local tables:
+  - `silver_greek_exposure` (`src/orion/connectors/uw_greek_exposure_connector.py:118`)
+  - `silver_market_tide` (`src/orion/connectors/uw_market_tide_connector.py:86`)
+  - `silver_max_pain` (`src/orion/connectors/uw_max_pain_connector.py:115`)
+  - `silver_iv_rank` (`src/orion/connectors/uw_iv_rank_connector.py:87`)
+
+Given Gateway+Heber already provide canonical feed handling, this creates:
+- duplicate ingestion paths,
+- schema/availability drift risk,
+- extra failure surfaces with unclear source-of-truth.
+
+### 16.4 Sync Earnings Auth-Contract Mismatch
+
+`sync_earnings` builds an `UnusualWhalesClient` against Gateway URL with token `"gateway"`:
+- `src/orion/jobs/sync_earnings.py:27`, `src/orion/jobs/sync_earnings.py:142`.
+
+That client sends `Authorization: Bearer <token>`:
+- `src/orion/unusualwhales/client.py:98`, `src/orion/unusualwhales/client.py:130`.
+
+Gateway UW endpoints require `X-Gateway-Key`:
+- `../Data-gateway/gateway/api/deps.py:103`, `../Data-gateway/gateway/api/deps.py:111`.
+- UW route handlers depend on `require_api_key` (for example `../Data-gateway/gateway/api/uw/earnings.py:26` and `../Data-gateway/gateway/api/uw/options.py:55`).
+
+Risk:
+- Earnings sync can fail authorization in production while appearing as intermittent fetch errors.
+
+### 16.5 Test Coverage Gap for New Integration Boundary
+
+Current tests cover Heber reader basics and ticker extraction, but not end-to-end Gateway auth contracts or live UW signal availability:
+- Heber reader tests: `tests/unit/test_heber_reader.py`
+- Feature enrichment ticker extraction only: `tests/unit/test_feature_enrichment_heber_source.py`
+
+No dedicated tests found for:
+- `sync_earnings` Gateway auth header contract,
+- connector->Gateway endpoint/auth compatibility,
+- runtime guarantee that ingestion produces UW signals when Heber has flow data.
+
+### 16.6 Updated P0 Priorities
+
+P0:
+1. Re-enable UW signal production in runtime by implementing Heber->BronzeEvent ingestion adapters in `IngestionService`.
+2. Add ingestion service to deployment profile (or document intentional non-use explicitly with equivalent replacement path).
+3. Fix `sync_earnings` to use `X-Gateway-Key` auth path compatible with Gateway dependencies.
+
+P1:
+1. Replace dual-write feature enrichment connectors with Heber-first reads where feasible.
+2. Add integration tests for Gateway auth and Heber-backed UW signal pipeline viability.
+
+### 16.7 Archival Readiness Update (Wave 4)
+
+Not ready to archive:
+- `src/orion/processing/rules/flow_rules.py` (still active strategy logic)
+- `src/orion/processing/rule_engine.py` (orchestration still required)
+- `src/orion/ingestion/service.py` (needs completion, not retirement)
+
+Candidate to archive after runtime completion:
+- Legacy UW event persistence branches in `src/orion/processing/persistence.py` that mirror canonical Heber silver once Heber->signal adapters are productionized and validated.

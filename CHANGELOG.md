@@ -61,6 +61,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - schema/column contract mismatch mapping between legacy Orion SQL assumptions and Heber Silver canon
   - feature-lineage drift finding in validation mapping vs current checkpoint quote source usage
   - DST scheduling-risk finding in fixed-offset market-time logic
+- **Gateway/Heber Parity Audit (Pass 9)**: Continued audit with:
+  - live-pipeline gap finding: current runtime wiring does not produce UW-flow signals required by active flow rules
+  - deployment drift finding: compose profile lacks ingestion service entry despite ingestion-based assumptions
+  - dual-write debt finding: Data Gateway pulls are persisted back into Orion-local silver tables
+  - auth-contract mismatch finding in `sync_earnings` (`Authorization` token client vs Gateway `X-Gateway-Key` requirement)
 
 ### Changed
 
