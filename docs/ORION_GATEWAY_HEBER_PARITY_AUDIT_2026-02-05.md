@@ -2314,3 +2314,36 @@ P0:
 P1:
 1. Add risk regression tests that enforce options max-order-size and ticker-exposure rejections at realistic premium/contract sizes.
 2. Add an audit assertion that `check_options_order` and execution premium accounting produce matching notional values for the same order payload.
+
+## 58) Pass 51 Continuation (2026-02-06)
+
+### 58.1 Rollup Consumers Still Depend on Orion-Local `gold_ticker_rollup`
+
+Current rollup read paths:
+- execution preflight resolves rollup evidence from `GoldTickerRollup` ORM rows (`src/orion/execution/signal_preflight.py:118` to `src/orion/execution/signal_preflight.py:124`),
+- admin API `/rollups` and `/rollups/{ticker}/{period}/{timestamp_utc}` query `GoldTickerRollup` directly (`src/orion/api/main.py:392` to `src/orion/api/main.py:442`, `src/orion/api/main.py:445` to `src/orion/api/main.py:476`).
+
+Risk:
+- rollup integrity and observability remain tied to Orion-local SQL state instead of a centralized Gateway/Heber-backed contract, creating divergence risk when local rollup job lags or is not running.
+
+### 58.2 Rollup Production Path Is Not a First-Class Deployed Service
+
+Current production wiring:
+- rollup generation starts only as a background task inside `IngestionService.initialize()` (`src/orion/ingestion/service.py:123` to `src/orion/ingestion/service.py:129`),
+- current compose profile runs execution/label/enrichment services but does not run ingestion service (`docker-compose.yml:47` to `docker-compose.yml:144`),
+- execution service explicitly disables rollup requirement (`docker-compose.yml:123`).
+
+Risk:
+- rollup consumers can operate with stale or absent rollups while still serving API responses and preflight traces, reducing confidence in decision evidence and debugging surfaces.
+
+### 58.3 Updated Priorities
+
+P0:
+1. Decide canonical rollup ownership now:
+- either run rollups as a dedicated always-on service in Orion,
+- or consume rollups from Heber canonical datasets via one data-access facade.
+2. Align execution preflight and admin `/rollups` endpoints to the same canonical source to prevent split-brain rollup views.
+
+P1:
+1. Add freshness SLO checks for rollup datasets used by preflight/API (max allowed staleness, explicit alerting).
+2. Add integration tests that validate rollup availability/shape for execution preflight in the deployed compose profile.

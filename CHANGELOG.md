@@ -225,6 +225,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - options-unit finding: `RiskManager` share-style cost math (`quantity * price`) conflicts with contract-based options premium semantics (`contracts * price * 100`)
   - enforcement-gap finding: `check_options_order` delegates to `check_order` and therefore inherits non-contract-aware notional checks
   - hardening recommendations for contract-normalized risk accounting and options-specific max-order/exposure regression tests
+- **Gateway/Heber Parity Audit (Pass 51)**: Continued audit with:
+  - rollup-source finding: execution preflight and admin `/rollups` endpoints both read Orion-local `gold_ticker_rollup` rather than a centralized Heber-backed rollup contract
+  - deployment finding: rollup production is tied to ingestion-service background startup, while current compose profile runs execution path with rollup requirement disabled
+  - hardening recommendations for canonical rollup ownership, source alignment, and freshness/SLO validation
 
 ### Changed
 
