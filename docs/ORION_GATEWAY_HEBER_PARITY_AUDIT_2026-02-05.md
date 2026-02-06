@@ -1179,3 +1179,32 @@ P0:
 
 P1:
 1. Run a repo-wide cleanup plan for remaining local scripts/jobs that assume deprecated runner paths.
+
+## 26) Pass 19 Continuation (2026-02-06)
+
+### 26.1 `sync_todays_earnings` Overwrites Provider Dates with Local `today`
+
+Current behavior:
+- `sync_todays_earnings` computes `today = date.today()` and passes that value into every upsert call (`src/orion/jobs/sync_earnings.py:29`, `src/orion/jobs/sync_earnings.py:32`, `src/orion/jobs/sync_earnings.py:33`, `src/orion/jobs/sync_earnings.py:50`).
+- Data Gateway provider path emits normalized earnings rows with per-record date from payload (`../Data-gateway/gateway/providers/uw.py:740`, `../Data-gateway/gateway/providers/uw.py:796`, `../Data-gateway/gateway/providers/uw.py:852`).
+
+Risk:
+- when upcoming earnings are not on local `today` (or on non-trading days), Orion can store wrong `report_date` values in `silver_earnings_calendar`, corrupting downstream `days_to_earnings` / post-earnings features.
+
+### 26.2 Earnings Sync Runtime Is Still Coupled to Ingestion Startup Path
+
+Current call graph:
+- `sync_todays_earnings` is invoked from ingestion service init (`src/orion/ingestion/service.py:116` to `src/orion/ingestion/service.py:119`).
+- no other active runtime service path in this repo invokes it directly (only module CLI path remains in the job file itself).
+
+Risk:
+- if ingestion runtime is not active in deployment, earnings calendar freshness can drift even before resolving Gateway contract mismatches.
+
+### 26.3 Updated Priorities
+
+P0:
+1. Fix daily earnings sync semantics to use record-level provider date fields (with strict parse/validation) instead of forcing `date.today()`.
+2. Decouple earnings sync from ingestion startup by scheduling an explicit daily job path (or service profile) so it remains active in current deployment topology.
+
+P1:
+1. Add a parity check job comparing recent `silver_earnings_calendar.report_date` values against Gateway payload dates to detect drift early.

@@ -95,6 +95,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - concrete `sync_earnings` contract-break findings (Gateway path shape and auth mismatch)
   - label-ontology parity findings between Orion `price_target_labels` and current Heber `labels_alert_*` views
   - migration-split recommendation for outcome labels vs training-fact feature datasets
+- **Gateway/Heber Parity Audit (Pass 19)**: Continued audit with:
+  - `sync_todays_earnings` date-semantic drift finding (`date.today()` override vs provider record dates)
+  - runtime-coupling finding that earnings sync remains tied to ingestion startup path
+  - operational guidance for explicit scheduling and parity verification of earnings calendar freshness
 
 ### Changed
 
