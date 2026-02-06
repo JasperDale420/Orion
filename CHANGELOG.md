@@ -205,6 +205,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - execution-state finding: `PositionManager` add/sync methods are effectively unwired in runtime, so exit-rule position state can go stale after startup
   - identity-model finding: position tracking is keyed by underlying ticker, which can collapse multiple option contracts on the same symbol
   - exit-targeting finding: `ExecutionEngine.close_position` uses ticker-only symboling in `main_execution` exit path, lacking explicit option-contract close handling
+- **Gateway/Heber Parity Audit (Pass 46)**: Continued audit with:
+  - data-linkage finding: `ExecutionEngine` exit persistence path omits `ExitDecision.candidate_id` even though model/schema expects candidate linkage
+  - restart-correctness finding: `PositionManager.initialize` determines open positions via `StrategyDecision.candidate_id` ↔ `ExitDecision.candidate_id` join, which can misclassify exited positions when linkage is missing
+  - reliability recommendations for candidate-linked exit writes and restart-resume regression coverage
 
 ### Changed
 

@@ -2151,3 +2151,32 @@ P0:
 
 P1:
 1. Add integration tests covering simultaneous multi-contract positions on one ticker and correct exit targeting per contract.
+
+## 53) Pass 46 Continuation (2026-02-06)
+
+### 53.1 Exit Decisions Are Persisted Without `candidate_id` Linkage
+
+Current persistence path:
+- `ExecutionEngine._persist_exit_decision(...)` inserts `ExitDecision` rows with `ticker`, rule metadata, and broker IDs but does not populate `candidate_id` (`src/orion/execution/execution_engine.py:530` to `src/orion/execution/execution_engine.py:540`),
+- `ExitDecision` model explicitly includes `candidate_id` as the link back to entry trade (`src/orion/storage/models_gold.py:62`).
+
+Risk:
+- exit records lose deterministic linkage to the originating candidate, weakening auditability and lifecycle reconstruction.
+
+### 53.2 `PositionManager.initialize` Relies on Missing Linkage, So Closed Positions Can Reappear as Open
+
+Current open-position reconstruction:
+- startup query joins `StrategyDecision` to `ExitDecision` on `candidate_id` and keeps rows where no exit join exists (`src/orion/execution/position_manager.py:74` to `src/orion/execution/position_manager.py:78`),
+- because exit rows from runtime close path omit `candidate_id`, this join can fail to match historical closes.
+
+Risk:
+- on restart, already-exited positions can be rehydrated as open and re-enter exit loops, causing noisy/double-close behavior.
+
+### 53.3 Updated Priorities
+
+P0:
+1. Persist `candidate_id` on all `ExitDecision` writes from execution paths (thread through `close_position`/`_persist_exit_decision` call chain).
+2. Add restart-resume integration test: execute open->close cycle, restart `PositionManager.initialize`, assert position is not rehydrated.
+
+P1:
+1. Backfill/repair recent `ExitDecision` rows with candidate linkage where deterministically resolvable (for example via broker order IDs + order/fill tables).
