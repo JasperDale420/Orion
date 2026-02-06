@@ -1256,3 +1256,31 @@ P0:
 
 P1:
 1. For jobs that are retained, add compose `tools` profile wiring and runbook links so they are intentionally operable instead of implicitly dormant.
+
+## 29) Pass 22 Continuation (2026-02-06)
+
+### 29.1 Cross-Repo Default URL Drift: Heber Uses `:8000` for Data Gateway
+
+Data Gateway canonical local port:
+- Gateway README and compose standardize API at `http://localhost:8080` (`../Data-gateway/README.md:81`, `../Data-gateway/README.md:88`, `../Data-gateway/docker-compose.yml:8`).
+
+Heber defaults still point Data Gateway usage to `http://localhost:8000`:
+- alert-label pipeline default (`../Heber/heber/features/pipelines/alert_labels.py:40`, `../Heber/heber/features/pipelines/alert_labels.py:540`),
+- watch consumer default (`../Heber/heber/watch/consumer.py:35`),
+- watch CLI default (`../Heber/heber/watch/__main__.py:23`),
+- Heber README watch env docs (`../Heber/README.md:78`).
+
+Conflict:
+- In Heber local topology, `:8000` is lakeFS (`../Heber/README.md:27`), not Data Gateway.
+
+Risk:
+- out-of-box runs can silently target the wrong service, causing quote/label pipelines to fail or behave unpredictably even before route/auth fixes are applied.
+
+### 29.2 Updated Priorities
+
+P0:
+1. Normalize Heber Data Gateway defaults to `http://localhost:8080` across code + docs (`alert_labels`, watch modules, README).
+2. Add startup validation in Heber Gateway-dependent services that detects obvious service mismatches (for example lakeFS response signature on expected Gateway URL) and fails fast.
+
+P1:
+1. Add an environment contract test asserting Data Gateway URL consistency between Orion, Heber, and Data Gateway defaults.

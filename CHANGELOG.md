@@ -107,6 +107,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - ops/remediation job inventory findings for currently unwired `src/orion/jobs/*` modules
   - runtime-vs-repo ownership risk framing for dormant CLI/test-only jobs
   - operational jobs matrix recommendation before next archive wave decisions
+- **Gateway/Heber Parity Audit (Pass 22)**: Continued audit with:
+  - cross-repo default URL drift findings (`DATA_GATEWAY_URL` defaulting to `:8000` in Heber paths)
+  - deployment-risk finding where Heber default points to lakeFS port rather than Data Gateway
+  - normalization and fail-fast recommendations for Gateway URL contracts
 
 ### Changed
 
