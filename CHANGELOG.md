@@ -123,6 +123,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - duplicate outcome-tracking stack findings across Heber watch labels and Orion local checkpoint-label pipeline
   - retirement-decision framing for canonical outcome path ownership
   - parity-bridge recommendations for migrating `price_target_labels`-dependent training fields
+- **Gateway/Heber Parity Audit (Pass 26)**: Continued audit with:
+  - nightly-backfill credential-contract gap findings (`backfill_ml_features` direct UW dependency vs compose env wiring)
+  - scheduler timebase finding for fixed UTC-5 ET conversion (DST drift risk)
+  - enrichment completeness and scheduling-hardening recommendations
 
 ### Changed
 

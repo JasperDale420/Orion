@@ -1359,3 +1359,35 @@ P0:
 
 P1:
 1. Add migration scorecard mapping each `price_target_labels` training field to either Heber watch labels, Heber feature datasets, or explicit deprecation.
+
+## 33) Pass 26 Continuation (2026-02-06)
+
+### 33.1 Nightly Backfill Runtime Still Depends on Direct UW Credentials Not Wired in Compose
+
+Active runtime path:
+- `nightly-backfill` service runs `orion.jobs.nightly_backfill` (`docker-compose.yml:209` to `docker-compose.yml:224`).
+- this orchestrator executes `run_ml_backfill(...)` (`src/orion/jobs/nightly_backfill.py:18`, `src/orion/jobs/nightly_backfill.py:69`).
+- `backfill_ml_features` still fetches ticker metadata via direct UW client requiring `UW_API_KEY` (`src/orion/jobs/backfill_ml_features.py:66` to `src/orion/jobs/backfill_ml_features.py:76`, `src/orion/jobs/backfill_ml_features.py:90` to `src/orion/jobs/backfill_ml_features.py:100`).
+
+Compose gap:
+- `nightly-backfill` env includes `DB_URL` + `GATEWAY_URL` only, no `UW_API_KEY` (`docker-compose.yml:220` to `docker-compose.yml:224`).
+
+Risk:
+- nightly backfill can silently skip/under-populate sector/earnings-related features when UW credentials are absent, reducing training parity and completeness.
+
+### 33.2 Nightly Scheduler Uses Fixed UTC-5 Offset (DST Drift Risk)
+
+Current scheduler logic:
+- computes ET by hardcoding `timedelta(hours=-5)` (`src/orion/jobs/nightly_backfill.py:39` to `src/orion/jobs/nightly_backfill.py:59`).
+
+Risk:
+- run time shifts by one hour during daylight-saving periods, causing off-target operational windows.
+
+### 33.3 Updated Priorities
+
+P0:
+1. Remove direct UW dependency from nightly backfill path (prefer Gateway/Heber metadata source) or wire explicit transitional credentials with hard-fail visibility.
+2. Replace fixed-offset ET scheduling with timezone-aware conversion to avoid DST drift.
+
+P1:
+1. Add completeness checks for nightly backfill outputs (feature population thresholds) and alert when expected enrichment columns regress.
