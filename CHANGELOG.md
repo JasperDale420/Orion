@@ -173,6 +173,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - label-integrity finding: `main_option_quote_tracker` can write latest-available quotes into overdue historical checkpoints (`ts_utc` backdated), corrupting checkpoint chronology
   - contract-symbol finding: quote tracker reconstructs OCC symbols from components instead of using canonical `silver_uw_flow.option_chain`
   - reliability recommendations for checkpoint-timestamp tolerance gating and provenance checks on quote writes
+- **Gateway/Heber Parity Audit (Pass 38)**: Continued audit with:
+  - connector-reliability finding: UW Gateway connectors decorate fetches with `@retry(...)` but swallow exceptions and return `None`, effectively disabling retry/backoff protections
+  - regime-signal correctness finding: `get_spy_cumulative_return` window query computes long-horizon return instead of the intended bounded 20-bar trend input
+  - schema-governance finding: enrichment silver tables (`silver_greek_exposure`, `silver_market_tide`, `silver_max_pain`, `silver_iv_rank`) are written via raw SQL but not represented in canonical silver ORM/docs artifacts
 
 ### Changed
 

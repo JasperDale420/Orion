@@ -1850,3 +1850,51 @@ P0:
 
 P1:
 1. Add data-quality assertions for checkpoint monotonicity/timing provenance in `silver_option_quotes` (for example `abs(fetched_at - ts_utc)` bounds) and alert on violations.
+
+## 45) Pass 38 Continuation (2026-02-06)
+
+### 45.1 Tenacity Retry Configuration in UW Gateway Connectors Is Effectively Disabled
+
+Current connector behavior:
+- each UW connector fetch method is decorated with `@retry(...)` but catches broad exceptions and returns `None` instead of raising:
+  - `src/orion/connectors/uw_greek_exposure_connector.py:30` to `src/orion/connectors/uw_greek_exposure_connector.py:40`
+  - `src/orion/connectors/uw_market_tide_connector.py:30` to `src/orion/connectors/uw_market_tide_connector.py:44`
+  - `src/orion/connectors/uw_iv_rank_connector.py:30` to `src/orion/connectors/uw_iv_rank_connector.py:40`
+  - `src/orion/connectors/uw_max_pain_connector.py:30` to `src/orion/connectors/uw_max_pain_connector.py:40`
+- feature loop logs stored counts and continues (`src/orion/main_feature_enrichment.py:261` to `src/orion/main_feature_enrichment.py:283`), so transient failures can look like normal low-volume cycles.
+
+Risk:
+- transient Gateway/network failures bypass intended retry/backoff behavior and silently degrade enrichment freshness.
+
+### 45.2 `get_spy_cumulative_return` Computes Long-Horizon Return, Not the Intended “Past 20 Bars”
+
+Current implementation:
+- query uses window functions over full SPY history (`FIRST_VALUE`/`LAST_VALUE`) and then applies `ORDER BY ... DESC LIMIT 20` (`src/orion/main_feature_enrichment.py:168` to `src/orion/main_feature_enrichment.py:178`),
+- function then reads a single row (`fetchone`) as the output (`src/orion/main_feature_enrichment.py:181` to `src/orion/main_feature_enrichment.py:182`),
+- value is fed directly into regime detection (`src/orion/main_feature_enrichment.py:299` to `src/orion/main_feature_enrichment.py:303`).
+
+Risk:
+- trend input to `MultiAxisRegimeDetector` can be materially mis-scaled (anchored to very old history), skewing regime labels and downstream adaptive behavior.
+
+### 45.3 Enrichment Silver Tables Are Written via Raw SQL but Not Represented in Canonical Schema Artifacts
+
+Current write paths:
+- connectors persist into `silver_greek_exposure`, `silver_market_tide`, `silver_max_pain`, and `silver_iv_rank` using raw SQL:
+  - `src/orion/connectors/uw_greek_exposure_connector.py:118` to `src/orion/connectors/uw_greek_exposure_connector.py:129`
+  - `src/orion/connectors/uw_market_tide_connector.py:86` to `src/orion/connectors/uw_market_tide_connector.py:92`
+  - `src/orion/connectors/uw_max_pain_connector.py:115` to `src/orion/connectors/uw_max_pain_connector.py:124`
+  - `src/orion/connectors/uw_iv_rank_connector.py:87` to `src/orion/connectors/uw_iv_rank_connector.py:94`
+- silver ORM model file currently defines only flow/darkpool/bars/alerts/option-quotes tables and ends at line 213 (`src/orion/storage/models_silver.py:1` to `src/orion/storage/models_silver.py:213`).
+- repo schema documentation also omits these enrichment silver tables from layer summary (`docs/DATABASE_SCHEMA.md:55` to `docs/DATABASE_SCHEMA.md:57`).
+
+Risk:
+- schema ownership is fragmented (runtime writes without schema-as-code parity), increasing migration and deployment break risk when table contracts evolve.
+
+### 45.4 Updated Priorities
+
+P0:
+1. Make retry behavior real: re-raise request failures (or configure `retry_if_result` on `None`) in UW connectors and add failure-rate alerting in `main_feature_enrichment`.
+2. Rewrite `get_spy_cumulative_return` with deterministic 20-bar semantics (explicit bounded subquery) and add a regression test for known bar sequences.
+
+P1:
+1. Bring enrichment silver tables under explicit schema governance (ORM + migration + docs), or retire Orion-local copies in favor of canonical Heber datasets.
