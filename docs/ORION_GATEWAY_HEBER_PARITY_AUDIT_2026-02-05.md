@@ -776,3 +776,85 @@ Not ready to archive:
 - `src/orion/processing/signal_engine.py`
 - `src/orion/processing/rules/flow_rules.py`
 - `src/orion/ml/flow_enricher.py`
+
+## 18) Pass 11 Continuation (2026-02-06)
+
+### 18.1 Queue-Driven Execution Path Is Unwired in Deployment
+
+Queue-based execution primitives are isolated from the deployed runtime:
+- `CandidateQueue` usage appears only in `src/orion/execution/service.py` (`src/orion/execution/service.py:89`, `src/orion/execution/service.py:180`, `src/orion/execution/service.py:221`).
+- `ExecutionService` is only defined there and not referenced by other runtime modules (`src/orion/execution/service.py:28`).
+- Compose deploys `python -m orion.main_execution`, not `ExecutionService` (`docker-compose.yml:124`).
+- Active execution path polls DB directly for unprocessed candidates (`src/orion/main_execution.py:48`, `src/orion/main_execution.py:254`).
+
+Risk:
+- Queue-specific tests/changes can pass while production behavior remains unaffected.
+- Two execution mental models remain in code, slowing migration and incident response.
+
+### 18.2 Rollup Guardrails Are Soft-Disabled in Current Compose Profile
+
+Rollup generation and rollup enforcement are split across inactive/active paths:
+- Rollup job is started by ingestion service initialization (`src/orion/ingestion/service.py:123` to `src/orion/ingestion/service.py:129`).
+- Compose does not run ingestion service (`docker-compose.yml` service list; no `orion.ingestion` command).
+- Compose execution explicitly disables rollup requirement (`docker-compose.yml:123`).
+- Preflight only hard-rejects on missing rollups when the config flag is enabled (`src/orion/execution/signal_preflight.py:140` to `src/orion/execution/signal_preflight.py:148`).
+
+Risk:
+- Signal preflight can run without intended rollup completeness guarantees, reducing decision-quality safeguards.
+
+### 18.3 Changelog-to-Code Drift on Execution Consolidation
+
+The changelog currently states:
+- "`main_execution.py` is now a thin wrapper (38 lines) that delegates to `ExecutionService.run()`" (`CHANGELOG.md:310`).
+
+Current code state does not match:
+- `main_execution.py` is still a full loop implementation (~363 lines) with candidate polling, preflight, execution, and exit-rule evaluation (`src/orion/main_execution.py:201` to `src/orion/main_execution.py:357`).
+- `ExecutionService` remains separate and unwired to compose (`src/orion/execution/service.py:28`, `docker-compose.yml:124`).
+
+Risk:
+- Operational/debug assumptions based on changelog can target the wrong codepath.
+
+### 18.4 Labeling Stack Fragmentation (Three Parallel Label Pipelines)
+
+Three distinct label stacks coexist:
+1. Heber-read -> `flow_labels` writer:
+- `main_labeler` reads flow from Heber and persists to `flow_labels` (`src/orion/main_labeler.py:140`, `src/orion/main_labeler.py:318`).
+2. Price-target label pipeline:
+- `main_price_target_labeler` builds `price_target_labels` (`src/orion/main_price_target_labeler.py:348`, `src/orion/main_price_target_labeler.py:2705`).
+3. PRD 6.3 candidate/window labels:
+- `label_job` writes `candidate_labels`/`labels_event` (`src/orion/jobs/label_job.py:11`, `src/orion/jobs/label_job.py:162`, `src/orion/jobs/label_job.py:182`).
+- `window_label_job` writes `labels_window` (`src/orion/jobs/window_label_job.py:11`, `src/orion/jobs/window_label_job.py:135`).
+
+Only `price_target_labels` is directly consumed by active ML trainers:
+- `pattern_miner` training query (`src/orion/ml/pattern_miner.py:216`).
+- `exit_classifier` training query (`src/orion/ml/exit_classifier.py:441`).
+
+Risk:
+- Duplicate labeling logic increases maintenance burden and schema drift while only one label family materially drives model training.
+
+### 18.5 Updated Priorities
+
+P0:
+1. Select canonical execution path now (DB polling vs queue) and archive the non-canonical path.
+2. Re-enable rollup guarantees by either:
+- restoring ingestion/rollup runtime, or
+- creating a dedicated rollup service in compose and turning `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE` back on.
+3. Correct changelog drift for execution architecture to prevent operator error.
+
+P1:
+1. Collapse to one label family for model training (`price_target_labels` or Heber-gold successor) and mark others as compatibility-only or archive candidates.
+
+### 18.6 Archival Readiness Update (Wave 6)
+
+Archive candidates after execution decision:
+- If DB-polling path remains canonical:
+  - `src/orion/execution/service.py`
+  - `src/orion/shared/candidate_queue.py`
+  - `tests/unit/test_candidate_queue.py`
+- If queue path becomes canonical:
+  - `src/orion/main_execution.py`
+
+Archive candidates after label consolidation:
+- `src/orion/main_labeler.py` + `flow_labels` path (if `price_target_labels` or Heber-gold labels remain canonical and no external consumer depends on `flow_labels`)
+- `src/orion/jobs/label_job.py`
+- `src/orion/jobs/window_label_job.py`

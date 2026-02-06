@@ -71,6 +71,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - ML prefilter candidate-contract mismatch finding (nullable option fields vs required scorer inputs)
   - inference enrichment coupling finding (`flow_enricher` still bound to Orion-local `silver_*`/`gold_feature_windows`)
   - inactive ML flow processor wiring review and archive/consolidation guidance
+- **Gateway/Heber Parity Audit (Pass 11)**: Continued audit with:
+  - runtime entrypoint drift findings across execution queue path, rollup generation, and compose wiring
+  - changelog-to-code mismatch finding for execution consolidation claims vs current deployed codepath
+  - labeling-stack fragmentation analysis (`flow_labels`, `price_target_labels`, and PRD 6.3 label jobs) with archive-wave guidance
 
 ### Changed
 
