@@ -702,3 +702,77 @@ Not ready to archive:
 
 Candidate to archive after runtime completion:
 - Legacy UW event persistence branches in `src/orion/processing/persistence.py` that mirror canonical Heber silver once Heber->signal adapters are productionized and validated.
+
+## 17) Pass 10 Continuation (2026-02-06)
+
+### 17.1 Execution Path Split-Brain (Two Live Implementations)
+
+There are two execution-loop implementations with different behavior:
+- `src/orion/main_execution.py` (DB polling style, large monolith).
+- `src/orion/execution/service.py` (queue-driven `ExecutionService`).
+
+Compose currently runs `python -m orion.main_execution`:
+- `docker-compose.yml:124`.
+
+Risk:
+- Fixes/features can be added to one path but not the other, creating silent behavior drift.
+- Operationally, there is no single confirmed source-of-truth execution loop.
+
+### 17.2 ML Prefilter Contract Mismatch Can False-Skip Rule Candidates
+
+`SignalEngine` builds ML prefilter input from `CandidateTrade`:
+- `src/orion/processing/signal_engine.py:106` to `src/orion/processing/signal_engine.py:123`.
+
+It sends:
+- `premium_usd` from `candidate.premium`,
+- `put_call` from `candidate.option_type`,
+- `dte` from `candidate.expiration_date`.
+
+But rule-generated candidates typically do not populate those option fields:
+- base candidate factory sets only core fields (`src/orion/processing/rules/base.py:86` to `src/orion/processing/rules/base.py:94`).
+- flow rules mostly attach context under `evidence` / `execution_params` (`src/orion/processing/rules/flow_rules.py:223` to `src/orion/processing/rules/flow_rules.py:243`).
+- `CandidateTrade` option fields are nullable (`src/orion/storage/models_gold.py:33` to `src/orion/storage/models_gold.py:39`).
+
+Risk:
+- ML prefilter can evaluate incomplete candidate payloads and reject otherwise valid rule signals.
+
+### 17.3 Inference Enrichment Still Uses Orion-Local Silver Contracts
+
+Enrichment used for score parity remains SQL-local:
+- `enrich_flow_for_scoring` hits `silver_uw_flow`, `silver_uw_darkpool`, `silver_alpaca_bars`, `gold_feature_windows` (`src/orion/ml/flow_enricher.py:346`, `src/orion/ml/flow_enricher.py:392`, `src/orion/ml/flow_enricher.py:483`, `src/orion/ml/flow_enricher.py:1018`).
+
+This means inference parity work is still coupled to Orion-local tables rather than Heber canonical datasets.
+
+### 17.4 ML Flow Processor Exists but Is Not Wired Into Active Runtime
+
+`MLFlowProcessor` provides enriched scoring path:
+- `src/orion/ml/flow_processor.py:22`, `src/orion/ml/flow_processor.py:83`.
+
+No active runtime module currently references this processor for ingestion/execution orchestration.
+
+Risk:
+- Parallel "intended" ML-first flow path exists but is not part of deployed service flow, increasing maintenance and confusion.
+
+### 17.5 Updated Priorities
+
+P0:
+1. Standardize on one execution entrypoint (`main_execution` vs `ExecutionService`) and retire the other path.
+2. Fix ML prefilter input contract:
+- either populate option fields on `CandidateTrade` for rule-based candidates,
+- or build prefilter inputs from `candidate.evidence`/source signal payload instead of nullable option columns.
+
+P1:
+1. Move `flow_enricher` queries behind Heber facade equivalents to remove direct `silver_*` coupling.
+2. Decide whether to wire `MLFlowProcessor` into production flow or archive it as inactive.
+
+### 17.6 Archival Readiness Update (Wave 5)
+
+Candidate for archive after entrypoint consolidation:
+- one of:
+  - `src/orion/main_execution.py`
+  - `src/orion/execution/service.py`
+
+Not ready to archive:
+- `src/orion/processing/signal_engine.py`
+- `src/orion/processing/rules/flow_rules.py`
+- `src/orion/ml/flow_enricher.py`

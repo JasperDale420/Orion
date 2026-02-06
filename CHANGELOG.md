@@ -66,6 +66,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - deployment drift finding: compose profile lacks ingestion service entry despite ingestion-based assumptions
   - dual-write debt finding: Data Gateway pulls are persisted back into Orion-local silver tables
   - auth-contract mismatch finding in `sync_earnings` (`Authorization` token client vs Gateway `X-Gateway-Key` requirement)
+- **Gateway/Heber Parity Audit (Pass 10)**: Continued audit with:
+  - execution path split-brain finding (`main_execution.py` vs `execution/service.py`) and active deployment path verification
+  - ML prefilter candidate-contract mismatch finding (nullable option fields vs required scorer inputs)
+  - inference enrichment coupling finding (`flow_enricher` still bound to Orion-local `silver_*`/`gold_feature_windows`)
+  - inactive ML flow processor wiring review and archive/consolidation guidance
 
 ### Changed
 
