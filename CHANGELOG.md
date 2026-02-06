@@ -136,6 +136,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Orion Admin API drift finding: `/flows` still reads Orion-local `silver_uw_flow` instead of centralized Gateway/Heber flow interfaces
   - orphaned-integration finding: Shared MCP client/service stack remains wired with direct provider credentials but has no active runtime consumers
   - MCP endpoint-contract finding: default `MCP_SERVER_URL` (`localhost:8001`) is misaligned with compose topology (`8090:8001` host mapping / `mcp-server` service DNS)
+- **Gateway/Heber Parity Audit (Pass 29)**: Continued audit with:
+  - MetaSearch regression finding: `_fetch_silver_events` defines but does not execute its data-fetch coroutine, yielding empty evaluation inputs
+  - changelog-to-code drift finding for prior “fixed” meta-search fetch path vs current implementation
+  - adaptive-runtime coupling findings: meta weekly/evolution and EOD analytics still depend on Orion-local ingestion tables while compose omits ingestion service
 
 ### Changed
 

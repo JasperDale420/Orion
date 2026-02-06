@@ -1508,3 +1508,50 @@ P0:
 
 P1:
 1. If MCP is retained, standardize endpoint/auth config (`MCP_SERVER_URL`) and align to centralized Gateway/Heber ownership boundaries.
+
+## 36) Pass 29 Continuation (2026-02-06)
+
+### 36.1 MetaSearch Event Loader Regression: Data Fetch Coroutine Is Defined But Never Executed
+
+Current behavior:
+- `evaluate_variant(...)` relies on `_fetch_silver_events(...)` for bars/flow inputs (`src/orion/agents/meta_search_agent.py:840` to `src/orion/agents/meta_search_agent.py:843`),
+- inside `_fetch_silver_events(...)`, nested `fetch_bars_and_flow(...)` is defined (`src/orion/agents/meta_search_agent.py:996`) but never invoked (no call site in module),
+- function returns default-empty `alpaca_events`, `flow_events`, `price_data` (`src/orion/agents/meta_search_agent.py:992` to `src/orion/agents/meta_search_agent.py:995`, `src/orion/agents/meta_search_agent.py:1094`).
+
+Observed drift:
+- changelog previously marked this bug as fixed (`CHANGELOG.md:403` to `CHANGELOG.md:407`), but current code path still has the no-call regression.
+
+Risk:
+- meta-search evaluation can degrade to persistent `no_data`/no-candidate outcomes, blocking meaningful solver evolution while appearing operational.
+
+### 36.2 MetaSearch/Weekly Evolution Path Is Still Hard-Coupled to Orion Local Silver Tables
+
+Current data contract:
+- `_fetch_silver_events` imports and queries `SilverAlpacaBar` + `SilverOptionFlow` directly (`src/orion/agents/meta_search_agent.py:990`, `src/orion/agents/meta_search_agent.py:998`, `src/orion/agents/meta_search_agent.py:1052`),
+- no HeberReader/Gateway facade use in this path,
+- weekly automation entrypoint runs the same MetaSearchAgent (`src/orion/main_meta_weekly.py:19`, `src/orion/main_meta_weekly.py:61`, `src/orion/main_meta_weekly.py:118`).
+
+Risk:
+- solver evolution/training feedback can drift from centralized Gateway/Heber canonical datasets,
+- migration parity is undermined in adaptive components even if core ingestion paths are eventually centralized.
+
+### 36.3 Analytics Agents Depend on Local Ingestion Tables While Compose Still Omits Ingestion Service
+
+Data dependency:
+- EOD review gathers ingestion health and regime context from local `BronzeEvent` + `SilverAlpacaBar` tables (`src/orion/agents/eod_review_agent.py:358` to `src/orion/agents/eod_review_agent.py:363`, `src/orion/agents/eod_review_agent.py:393` to `src/orion/agents/eod_review_agent.py:399`).
+
+Runtime wiring:
+- compose runs `eod-agent` and `meta-weekly` (`docker-compose.yml:146` to `docker-compose.yml:163`, `docker-compose.yml:178` to `docker-compose.yml:195`),
+- no ingestion service is present in compose service list.
+
+Risk:
+- EOD/weekly analytics can run on stale/sparse local ingestion telemetry, reducing reliability of drift detection and solver mutation decisions.
+
+### 36.4 Updated Priorities
+
+P0:
+1. Fix `_fetch_silver_events` by executing the data-fetch coroutine (and add regression test to prevent recurrence).
+2. Decide canonical data source for MetaSearch evaluation (Gateway/Heber facade vs Orion local silver) and align weekly evolution path to it.
+
+P1:
+1. Either add ingestion service back to compose for analytics correctness, or reroute EOD/weekly analytics to canonical Gateway/Heber-backed datasets with explicit freshness checks.
