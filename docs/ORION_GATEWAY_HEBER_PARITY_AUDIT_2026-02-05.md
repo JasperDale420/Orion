@@ -1589,3 +1589,38 @@ P0:
 
 P1:
 1. Replace exact-minute weekly trigger with a bounded execution window/catch-up rule (for example first run after Friday 17:30 ET if not yet executed for current week).
+
+## 38) Pass 31 Continuation (2026-02-06)
+
+### 38.1 HeberReader Hardcodes Silver Feed Names Instead of Using Catalog Feed-Resolution Contract
+
+Current Orion behavior:
+- `HeberReader` pins dataset names in constants (`bars`, `flow_alerts`, `darkpool_trades`) and builds parquet path directly as `silver/feed={dataset}` (`src/orion/clients/heber_reader.py:26` to `src/orion/clients/heber_reader.py:28`, `src/orion/clients/heber_reader.py:206`),
+- no Orion call sites use Heber catalog feed-resolution (`/api/v1/feeds/resolve`) despite catalog support (`../Heber/heber/catalog/api.py:300` to `../Heber/heber/catalog/api.py:306`, `../Heber/heber/catalog/service.py:136` to `../Heber/heber/catalog/service.py:142`).
+
+Cross-repo naming drift context:
+- Data Gateway UW poller emits darkpool as `feed="darkpool"` (`../Data-gateway/gateway/core/uw_poller.py:362` to `../Data-gateway/gateway/core/uw_poller.py:366`),
+- Heber writer/storage schema keys also use `darkpool` (`../Heber/heber/writer/silver.py:76`, `../Heber/heber/storage/iceberg_catalog.py:895`),
+- while Heber catalog datasources and PRD-facing dataset inventory still promote `darkpool_trades` (`../Heber/heber/catalog/datasources.py:178`).
+
+Risk:
+- Orion remains brittle to catalog/producer naming drift and repeats contract mismatch failures already observed in darkpool reads.
+
+### 38.2 HeberReader Filter Fallback Can Silently Drop Instrument Filtering (Data Contamination + Scaling Risk)
+
+Current implementation:
+- `_read_silver_dataset` applies `instrument_key` filters when symbols are provided (`src/orion/clients/heber_reader.py:210` to `src/orion/clients/heber_reader.py:214`),
+- `_read_parquet` fallback path (on filter errors) re-reads entire dataset without filters (`src/orion/clients/heber_reader.py:289` to `src/orion/clients/heber_reader.py:296`),
+- post-read path only applies time/as-of filters, not instrument filter re-application (`src/orion/clients/heber_reader.py:218` to `src/orion/clients/heber_reader.py:223`).
+
+Risk:
+- symbol-scoped reads can expand to whole-feed data under fallback conditions, polluting downstream feature/label computations and increasing memory/latency under larger Silver datasets.
+
+### 38.3 Updated Priorities
+
+P0:
+1. Move Orion Heber feed selection to catalog-resolved mapping (provider+feed -> silver dataset) rather than hardcoded dataset strings.
+2. Add a single canonical darkpool dataset alias policy across Data Gateway, Heber catalog, and Heber writer/storage keys.
+
+P1:
+1. In `HeberReader`, re-apply instrument filtering after fallback full-read (or hard-fail instead of broad fallback) and add guardrail tests for symbol-scoped reads.

@@ -144,6 +144,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - repo-hygiene debt finding: `detect-secrets` baseline is coupled to large/generated and archived files, creating commit-loop instability
   - commit-reliability risk framing tied to tracked `codebase.md` and baseline line-number churn
   - scheduler-reliability finding: weekly meta evolution runs on exact-minute trigger with no catch-up window
+- **Gateway/Heber Parity Audit (Pass 31)**: Continued audit with:
+  - root-cause integration finding: Orion `HeberReader` hardcodes Silver feed names instead of using Heber catalog feed-resolution contracts
+  - cross-repo naming drift finding: `darkpool` vs `darkpool_trades` inconsistencies persist between Data Gateway producer feeds, Heber writer/storage keys, and catalog inventory
+  - data-quality/scaling finding: `HeberReader` filter fallback re-reads full parquet datasets without re-applying symbol filters
 
 ### Changed
 
