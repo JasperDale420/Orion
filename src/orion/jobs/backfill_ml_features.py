@@ -442,7 +442,7 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
     # Sector correlation and flow features
     sector = updates.get("sector")
     if sector:
-        sector_corr = await get_sector_correlation_features(ticker, sector, entry_ts)
+        sector_corr = await get_sector_correlation_features(ticker, entry_ts)
         updates["sector_net_premium_1h"] = sector_corr.get("sector_net_premium_1h")
         updates["sector_flow_direction"] = sector_corr.get("sector_flow_direction")
         updates["spy_correlation_5d"] = sector_corr.get("spy_correlation_5d")

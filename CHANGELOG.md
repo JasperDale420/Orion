@@ -43,6 +43,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `main_price_target_labeler`, `ml/flow_enricher`, and SQL-coupled backfill/validation jobs
   - Severity-ranked findings including a concrete backfill runtime bug and train/inference feature-semantics drift
   - Module-by-module migration readiness and updated P0/P1/P2 backlog
+- **Backfill Signature Regression Test**: Added `tests/unit/test_backfill_ml_features_signature.py` to enforce the `get_sector_correlation_features(ticker, entry_ts)` call contract.
+- **Gateway/Heber Parity Audit (Pass 5)**: Continued audit with:
+  - validation of the backfill runtime bug fix
+  - SQL portability debt findings (`date_trunc`, Postgres casts/operators) in migration-critical modules
 
 ### Changed
 
@@ -78,6 +82,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - New `GatewayStreamClient` connects to Gateway's `/ws` endpoint instead of directly to Alpaca
   - `ORION_USE_GATEWAY=true` (default) routes all streaming through Gateway
   - Eliminates competing WebSocket connections that exceed Algo Trader Pro's 1-connection limit
+- **Backfill Runtime TypeError**: Fixed wrong-arity call in `backfill_ml_features.py` by updating `get_sector_correlation_features` invocation to match the two-argument function signature.
 
 ### Added
 

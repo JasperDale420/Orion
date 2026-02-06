@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+import orion.jobs.backfill_ml_features as backfill
+import orion.main_price_target_labeler as labeler
+
+
+def _async_return(value):
+    async def _inner(*_args, **_kwargs):
+        return value
+
+    return _inner
+
+
+@pytest.mark.asyncio
+async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = {
+        "event_id": "evt-1",
+        "ticker": "AAPL",
+        "entry_ts": datetime(2026, 2, 6, 16, 0, tzinfo=timezone.utc),
+        "expiry": "2026-02-21",
+        "dte": 15,
+        "option_chain": "AAPL260221C00100000",
+    }
+
+    # Local backfill helpers
+    monkeypatch.setattr(backfill, "get_flow_greeks", _async_return({"delta": 0.1, "gamma": 0.01, "volume": 10, "open_interest": 50, "iv": 0.4}))
+    monkeypatch.setattr(backfill, "get_underlying_price_at_entry", _async_return(100.0))
+    monkeypatch.setattr(backfill, "get_underlying_price_at_offset", _async_return(101.0))
+    monkeypatch.setattr(backfill, "get_ticker_info", _async_return({"sector": "Technology", "next_earnings_date": None}))
+    monkeypatch.setattr(backfill, "get_gex_at_entry", _async_return({"gex": 1.0, "vex": 2.0}))
+    monkeypatch.setattr(backfill, "get_max_pain_distance", _async_return(0.5))
+    monkeypatch.setattr(backfill, "db_write", _async_return(None))
+
+    # Labeler helpers imported inside update_ml_features
+    monkeypatch.setattr(labeler, "get_phase1_bucket_features", _async_return({"overnight_gap_pct": 0.1, "vwap_distance_pct": 0.2, "minutes_to_close": 60, "price_change_5d_prior": 1.2, "earnings_in_dte_window": False}))
+    monkeypatch.setattr(labeler, "get_darkpool_metrics", _async_return({"darkpool_1h": 1, "darkpool_15m": 1, "darkpool_30m": 1, "darkpool_4h": 1, "darkpool_1d": 1, "darkpool_3d": 1, "darkpool_1w": 1, "darkpool_2w": 1, "darkpool_4w": 1}))
+    monkeypatch.setattr(
+        labeler,
+        "get_rvol_metrics",
+        _async_return(
+            {
+                "rvol_1h": 1.0,
+                "rvol_daily": 1.0,
+                "rvol_weekly": 1.0,
+                "rvol_30m": 1.0,
+                "rvol_3d": 1.0,
+                "rvol_monthly": 1.0,
+            }
+        ),
+    )
+    monkeypatch.setattr(labeler, "get_flow_aggression", _async_return({"ask_side_ratio": 0.7, "sweep_ratio_1h": 0.2, "same_ticker_premium_1h": 10000}))
+    monkeypatch.setattr(labeler, "get_institutional_flow_1w", _async_return(100000))
+    monkeypatch.setattr(labeler, "get_market_tide_before_entry", _async_return({"net_premium": 123.0, "direction": "BULLISH"}))
+    monkeypatch.setattr(labeler, "get_regime_at_entry", _async_return({"trend_regime": "UP", "vol_regime": "NORMAL", "risk_regime": "ON", "session_regime": "MID", "vix_at_entry": 18.0, "vix_regime": "NORMAL"}))
+    monkeypatch.setattr(labeler, "get_p2_features", _async_return({"oi_change_1d": 1.0, "oi_change_pct": 2.0, "iv_vs_hv_ratio": 1.1}))
+    monkeypatch.setattr(labeler, "get_p3_features", _async_return({"high_52w_distance_pct": 3.0, "is_spread_leg": False, "same_expiry_trades_1h": 1}))
+    monkeypatch.setattr(labeler, "get_iv_rank_at_entry", _async_return(55.0))
+
+    captured: dict[str, object] = {}
+
+    async def _sector_corr(ticker: str, entry_ts: datetime) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = entry_ts
+        return {
+            "sector_net_premium_1h": 10.0,
+            "sector_flow_direction": "BULLISH",
+            "spy_correlation_5d": 0.5,
+            "spy_return_1h": 0.2,
+        }
+
+    # Regression guard: this stub accepts exactly 2 args.
+    monkeypatch.setattr(labeler, "get_sector_correlation_features", _sector_corr)
+
+    ok = await backfill.update_ml_features(record)
+
+    assert ok is True
+    assert captured["ticker"] == "AAPL"
+    assert captured["entry_ts"] == record["entry_ts"]

@@ -360,3 +360,44 @@ Ready to archive after replacement verification remains unchanged from pass 3:
 - `src/orion/main_option_quote_tracker.py`
 - `src/orion/jobs/backfill_historical_gex.py`
 - `src/orion/jobs/backfill_exit_columns.py`
+
+## 12) Pass 5 Continuation (2026-02-06)
+
+### 12.1 What Was Fixed During This Audit Pass
+
+1. Backfill runtime signature bug fixed.
+- Updated `src/orion/jobs/backfill_ml_features.py` to call:
+  `get_sector_correlation_features(ticker, entry_ts)`.
+- Added regression test:
+  `tests/unit/test_backfill_ml_features_signature.py`.
+- This prevents the `TypeError` path identified in pass 4.
+
+### 12.2 Additional Technical-Debt Findings
+
+1. Postgres-specific SQL in core feature code reduces test/runtime portability.
+- `main_price_target_labeler` uses `date_trunc(...)` at:
+  - `src/orion/main_price_target_labeler.py:987`
+  - `src/orion/main_price_target_labeler.py:1020`
+  - `src/orion/main_price_target_labeler.py:1053`
+- Additional Postgres-specific casts/operators exist across critical modules:
+  - `src/orion/main_price_target_labeler.py:344` (`::date`)
+  - `src/orion/ml/flow_enricher.py:665` (`::float`)
+  - `src/orion/ml/flow_enricher.py:667` (`::text`)
+  - `src/orion/jobs/window_feature_job.py:100` (`::text`)
+- Impact: local SQLite-backed test runs or fallback envs can fail with SQL function/operator errors, reducing confidence in migration safety.
+
+### 12.3 Updated Action Priorities
+
+P0 completed:
+- Backfill signature mismatch fix + regression test.
+
+P1 updated:
+1. Normalize SQL portability assumptions for audit-critical jobs.
+- Either enforce Postgres-only execution contract explicitly in tests/docs,
+  or provide compatibility shims for local/SQLite test paths.
+
+2. Continue Heber-first migration for `main_price_target_labeler` via facade.
+
+3. Standardize feature semantics shared across labeler/enricher/backfill:
+- `entry_session` buckets
+- `minutes_to_close` calculation baseline.
