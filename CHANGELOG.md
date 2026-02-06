@@ -56,6 +56,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - darkpool contract-drift finding (`darkpool` vs `darkpool_trades`) across Data Gateway, Heber, and Orion reader paths
   - ML dependency mapping for `pattern_miner`, `exit_classifier`, and `nightly_backfill`
   - refreshed SQL-coupling hotspot heatmap and updated archival readiness wave
+- **Gateway/Heber Parity Audit (Pass 8)**: Continued audit with:
+  - deep review of `validate_features`, `data_quality_checker`, and `window_feature_job` migration readiness
+  - schema/column contract mismatch mapping between legacy Orion SQL assumptions and Heber Silver canon
+  - feature-lineage drift finding in validation mapping vs current checkpoint quote source usage
+  - DST scheduling-risk finding in fixed-offset market-time logic
 
 ### Changed
 

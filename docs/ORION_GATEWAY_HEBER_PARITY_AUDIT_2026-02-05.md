@@ -543,3 +543,70 @@ Before we execute additional archival/removal, we need explicit decisions on:
 
 3. Feature ownership split:
 - Which Orion-only derived features should be promoted into Heber Gold versus intentionally retired.
+
+## 15) Pass 8 Continuation (2026-02-06)
+
+### 15.1 Validation/Quality Jobs Are Still Bound to Legacy SQL Contracts
+
+The highest-coupling job modules (`validate_features`, `data_quality_checker`, `window_feature_job`) are still coded against Orion-local legacy table/column contracts:
+- `silver_uw_flow`, `silver_uw_darkpool`, `silver_alpaca_bars` (for example `src/orion/jobs/validate_features.py:286`, `src/orion/jobs/data_quality_checker.py:176`, `src/orion/jobs/window_feature_job.py:105`).
+
+This conflicts with Heber Silver canonical naming and columns:
+- Heber bars schema: `symbol`, `ts_event`, `bar_start_ts`, `open/high/low/close` (`../Heber/heber/schemas/silver.py:9`, `../Heber/heber/schemas/silver.py:25`).
+- Heber flow schema (`flow_alerts`): `symbol/underlying`, `ts_event`, `premium` (`../Heber/heber/schemas/silver.py:80`, `../Heber/heber/schemas/silver.py:95`, `../Heber/heber/schemas/silver.py:100`).
+- Heber darkpool schema (`darkpool`): `symbol/underlying`, `ts_event`, `size`, `price` (`../Heber/heber/schemas/silver.py:122`, `../Heber/heber/schemas/silver.py:137`, `../Heber/heber/schemas/silver.py:138`, `../Heber/heber/schemas/silver.py:139`).
+
+| Legacy assumption in Orion jobs | Heber canonical equivalent | Migration note |
+| --- | --- | --- |
+| `ticker` | `symbol`/`instrument_key` | Add a single normalization helper; stop per-job aliasing |
+| `flow_ts_utc` | `ts_event` | Standardize event-time column in shared facade |
+| `premium_usd` | `premium` | Add compatibility alias during transition |
+| `dark_ts_utc` | `ts_event` | Reuse same event-time adapter |
+| `size_shares` / `trade_price` | `size` / `price` | Required for darkpool feature parity |
+| `bar_start_ts_utc` | `bar_start_ts` | Required for bar gap/staleness checks |
+
+Risk:
+- These jobs can produce false "missing/stale" alerts or incorrect validation outcomes when reading Heber-backed data without compatibility adapters.
+
+### 15.2 Feature-Lineage Mapping Drift in Validation Logic
+
+`validate_features` currently documents return checkpoints as sourced from `silver_uw_flow` (`src/orion/jobs/validate_features.py:351` to `src/orion/jobs/validate_features.py:360`).
+
+But current labeler behavior uses option quote checkpoints:
+- `get_real_checkpoint_prices` reads from `silver_option_quotes` (`src/orion/main_price_target_labeler.py:401`, `src/orion/main_price_target_labeler.py:414`, `src/orion/main_price_target_labeler.py:2279`).
+
+Risk:
+- Validation source audits can report "green" while checking the wrong source lineage.
+
+Action:
+1. Treat `FEATURE_SOURCE_MAPPING` as a migration-controlled artifact and split it into:
+- `source_of_truth_current` (actual runtime lineage)
+- `source_of_truth_target` (post-Heber target lineage).
+2. Add a small CI check that compares mapping entries to actual query helpers used by labeler/backfill modules.
+
+### 15.3 Timezone Scheduling Debt (DST Drift Risk)
+
+Two operational jobs use fixed `UTC-5` math for ET scheduling:
+- `nightly_backfill.get_next_run_time` (`src/orion/jobs/nightly_backfill.py:39`).
+- `data_quality_checker` market-hours constants assume fixed UTC conversion (`src/orion/jobs/data_quality_checker.py:31` to `src/orion/jobs/data_quality_checker.py:33`).
+
+Risk:
+- During daylight saving periods, schedules and market-hours gating can drift by one hour.
+
+Action:
+- Replace fixed offsets with timezone-aware conversions (`America/New_York`) in shared scheduling utilities.
+
+### 15.4 Archive-Execution Guidance for Step 1
+
+For these three hotspot jobs, preserve intent but retire implementation:
+- Keep:
+  - "feature validation" objective
+  - "data quality alerting" objective
+  - "window aggregation for ML context" objective
+- Dispose/archive after replacement:
+  - `src/orion/jobs/validate_features.py`
+  - `src/orion/jobs/data_quality_checker.py`
+  - `src/orion/jobs/window_feature_job.py`
+
+Condition before archival:
+- Heber-native replacements exist and pass side-by-side checks for at least one full trading week.
