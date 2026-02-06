@@ -2109,3 +2109,45 @@ P0:
 
 P1:
 1. If in-memory tracker is retained for low-latency UI hints, clearly label it as transient and add periodic hydration from persisted execution tables.
+
+## 52) Pass 45 Continuation (2026-02-06)
+
+### 52.1 `PositionManager` Runtime Integration Is Incomplete (Write/Sync Paths Unused)
+
+Current runtime behavior:
+- `main_execution` initializes `PositionManager` and iterates `get_open_positions()` for exit rules (`src/orion/main_execution.py:223`, `src/orion/main_execution.py:322`),
+- but `PositionManager.add_position(...)` has no in-repo call sites (`src/orion/execution/position_manager.py:126`; reference search shows no usage),
+- `PositionManager.sync_with_broker(...)` is also not called (`src/orion/execution/position_manager.py:193`; no runtime usage found).
+
+Risk:
+- exit-rule evaluation set can become stale and miss newly opened positions during process lifetime.
+
+### 52.2 `PositionManager` Keys Positions by Ticker, Collapsing Multi-Position/Options Cases
+
+Current model/state shape:
+- internal store uses `Dict[str, OpenPosition]` keyed by ticker (`src/orion/execution/position_manager.py:63`),
+- `add_position` writes by `candidate.ticker` (`src/orion/execution/position_manager.py:159`),
+- `OpenPosition` has optional `option_chain`, but keying does not include contract identity (`src/orion/execution/position_manager.py:37`).
+
+Risk:
+- multiple open positions on the same underlying (for example different option contracts/legs) can overwrite each other and lose exit context.
+
+### 52.3 Exit Path in `ExecutionEngine.close_position` Uses Ticker-Only Symboling
+
+Current exit execution behavior:
+- `close_position` accepts `ticker` and uses it directly for price lookup and order submission (`src/orion/execution/execution_engine.py:428`, `src/orion/execution/execution_engine.py:451`, `src/orion/execution/execution_engine.py:464`, `src/orion/execution/execution_engine.py:487`),
+- `main_execution` passes `position.ticker` from `PositionManager` into this method (`src/orion/main_execution.py:334` to `src/orion/main_execution.py:336`),
+- no option-symbol branch is present in this exit path despite options fields existing in candidate/position models (`src/orion/storage/models_gold.py:33`, `src/orion/execution/position_manager.py:37`).
+
+Risk:
+- option exits in this path can target the wrong instrument identity (underlying ticker vs option contract), causing failed or incorrect close behavior.
+
+### 52.4 Updated Priorities
+
+P0:
+1. Wire `PositionManager.add_position` on successful executions and invoke periodic `sync_with_broker` to keep tracked positions current.
+2. Re-key tracked positions by stable instrument identity (`option_chain`/broker symbol + side) rather than underlying ticker only.
+3. Add contract-aware close path in `ExecutionEngine.close_position` that uses option symbol when applicable.
+
+P1:
+1. Add integration tests covering simultaneous multi-contract positions on one ticker and correct exit targeting per contract.

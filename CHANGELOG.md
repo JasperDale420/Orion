@@ -201,6 +201,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - observability finding: Admin `/dashboard/*` endpoints are powered by an in-memory `PnLTracker` singleton with no active runtime feed path in repo
   - source-of-truth drift finding: dashboard path bypasses persisted execution tables (`orders`, `fills`, `positions_snapshots`) and can report stale/empty portfolio state
   - migration recommendation to anchor dashboard telemetry to durable execution/broker-backed data
+- **Gateway/Heber Parity Audit (Pass 45)**: Continued audit with:
+  - execution-state finding: `PositionManager` add/sync methods are effectively unwired in runtime, so exit-rule position state can go stale after startup
+  - identity-model finding: position tracking is keyed by underlying ticker, which can collapse multiple option contracts on the same symbol
+  - exit-targeting finding: `ExecutionEngine.close_position` uses ticker-only symboling in `main_execution` exit path, lacking explicit option-contract close handling
 
 ### Changed
 
