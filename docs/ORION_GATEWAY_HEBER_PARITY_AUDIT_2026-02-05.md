@@ -2556,3 +2556,26 @@ P0:
 
 P1:
 1. Add integration test that simulates stale local `silver_uw_flow` with available Heber flow and asserts exit evaluator still receives non-empty context.
+
+## 66) Pass 59 Continuation (2026-02-06)
+
+### 66.1 `main_execution` Calls Exit Rules With Empty Context, Disabling Context-Dependent Rules
+
+Current runtime invocation:
+- exit-rule loop calls `rule.should_exit(position, recent_flow, context={})` for every rule (`src/orion/main_execution.py:327`),
+- multiple rules require context keys and return `None` when absent:
+  - `VolumeOIDivergenceExitRule` requires `current_oi` (`src/orion/processing/rules/exit_rules.py:270` to `src/orion/processing/rules/exit_rules.py:275`),
+  - `IVContractionExitRule` requires `current_iv` for IV-drop logic and optional earnings context (`src/orion/processing/rules/exit_rules.py:370` to `src/orion/processing/rules/exit_rules.py:376`, `src/orion/processing/rules/exit_rules.py:388`),
+  - `PriceTargetExitRule` requires `current_option_price` and entry option price (`src/orion/processing/rules/exit_rules.py:496` to `src/orion/processing/rules/exit_rules.py:503`).
+
+Risk:
+- configured exit policy surface appears active, but context-dependent rules are effectively inert in this runtime path, reducing exit coverage and increasing unintended hold risk.
+
+### 66.2 Updated Priorities
+
+P0:
+1. Build and pass a populated exit context object in `main_execution` (at minimum `current_oi`, `current_iv`, `current_option_price`, and earnings proximity where supported).
+2. Add guardrail logging/metrics when required context keys are missing so rule deactivation is explicit, not silent.
+
+P1:
+1. Add integration tests proving each context-dependent exit rule can fire in `main_execution` path with representative context payloads.

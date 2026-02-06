@@ -257,6 +257,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - exit-context finding: `main_execution` exit rules fetch recent flow from Orion-local `silver_uw_flow`, while flow-based exit logic mostly returns no signal when this context is empty
   - ownership-drift finding: centralized Gateway->Heber ingestion assumptions plus non-running ingestion runtime increase chance of silent empty-flow exit evaluation
   - hardening recommendations for Heber/Gateway-backed exit context reads and fail-loud missing-context telemetry
+- **Gateway/Heber Parity Audit (Pass 59)**: Continued audit with:
+  - rule-activation finding: `main_execution` invokes exit rules with `context={}`, effectively disabling context-dependent rules (`current_oi`, `current_iv`, `current_option_price`)
+  - coverage finding: several configured exit rules can silently return `None` in production path due to missing context population
+  - hardening recommendations for populated exit-context construction and missing-context observability/tests
 
 ### Changed
 
