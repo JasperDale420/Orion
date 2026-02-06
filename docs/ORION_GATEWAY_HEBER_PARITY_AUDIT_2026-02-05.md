@@ -963,3 +963,62 @@ P0:
 
 P1:
 1. Migrate retained label and feature writers to Heber-gold contracts (`instrument_key`, `ts_event`, `ts_available`) and deprecate local SQL-only sinks.
+
+## 21) Pass 14 Continuation (2026-02-06)
+
+### 21.1 Heber Already Has Canonical Alert-Label Gold Path (Good News)
+
+Heber provides a first-class alert-label pipeline that already writes to Gold with as-of semantics:
+- Pipeline orchestration: `../Heber/heber/features/pipelines/alert_labels.py:43`.
+- Gold write via SDK contract (`instrument_key`, `ts_event`, `ts_available`): `../Heber/heber/features/pipelines/alert_labels.py:231`, `../Heber/heber/sdk/client.py:409` to `../Heber/heber/sdk/client.py:433`.
+- Label schema includes barrier outcomes and availability timestamps: `../Heber/heber/features/templates/alert_labels.py:474` to `../Heber/heber/features/templates/alert_labels.py:496`.
+
+Implication:
+- Orion `flow_labels` and parts of local label persistence can be retired in favor of Heber-native gold labels once contract gaps below are fixed.
+
+### 21.2 Cross-Repo Contract Gap: Heber Alert Pipeline vs Data Gateway Options API
+
+Heber option-bar fetch currently calls:
+- `GET {gateway}/api/v1/alpaca/options/bars` with `symbols=<csv>` (`../Heber/heber/features/pipelines/alert_labels.py:362` to `../Heber/heber/features/pipelines/alert_labels.py:368`).
+
+Data Gateway currently exposes:
+- `GET /api/v1/alpaca/options/{contract}/bars` (single contract path) (`../Data-gateway/gateway/api/alpaca/options.py:109`).
+- No matching `/options/bars` handler found in gateway routes (catalog lists it, but no route implementation in `gateway/api/alpaca/options.py`).
+
+Risk:
+- Heber contract-label enrichment can fail at runtime due endpoint shape mismatch, blocking parity replacement of Orion checkpoint labeling.
+
+### 21.3 Cross-Repo Auth Gap: Heber Alert Pipeline Missing Gateway Key Header
+
+Data Gateway Alpaca options endpoints require API-key dependency:
+- `client: Client = Depends(require_api_key)` on options routes (`../Data-gateway/gateway/api/alpaca/options.py:116`).
+- `require_api_key` enforces `X-Gateway-Key` (`../Data-gateway/gateway/api/deps.py:103` to `../Data-gateway/gateway/api/deps.py:115`).
+
+Heber alert pipeline gateway calls do not set auth headers:
+- Request call has no `headers=` containing `X-Gateway-Key` (`../Heber/heber/features/pipelines/alert_labels.py:361` to `../Heber/heber/features/pipelines/alert_labels.py:369`).
+
+Risk:
+- Even with endpoint path fixed, pipeline can still fail with 401 in secured environments.
+
+### 21.4 What To Keep and Add to Heber vs Dispose in Orion
+
+Keep and migrate to Heber:
+1. `price_target_labels` outcome semantics used by active trainers (`src/orion/ml/pattern_miner.py:216`, `src/orion/ml/exit_classifier.py:441`), but publish as Heber gold datasets with canonical columns.
+2. Entry-time feature bundle used for model training (`src/orion/ml/pattern_miner.py:36` to `src/orion/ml/pattern_miner.py:106`) as separate Heber gold features dataset.
+3. Checkpoint option-state features used by exit classifier (`src/orion/ml/exit_classifier.py:377` to `src/orion/ml/exit_classifier.py:420`) as optional Heber gold extension dataset.
+
+Dispose/archive in Orion:
+1. `flow_labels` pipeline (already non-consumer in repo) after external-consumer verification.
+2. PRD 6.3 label jobs (`label_job`, `window_label_job`) unless reattached to active runtime and Heber contract.
+
+### 21.5 Updated Priorities
+
+P0:
+1. Align Heber `alert_labels` gateway contract (endpoint shape + `X-Gateway-Key`) before using it as Orion replacement.
+2. Define Heber dataset split for Orion training parity:
+- `labels_alert_barriers` (outcomes),
+- `features_alert_entry` (entry context),
+- `features_alert_checkpoints` (checkpoint Greeks/returns, if retained).
+
+P1:
+1. Decommission Orion-local label sinks once Heber parity datasets satisfy current pattern-miner and exit-classifier queries.

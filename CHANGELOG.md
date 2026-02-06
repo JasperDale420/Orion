@@ -79,6 +79,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - active runtime Gateway auth-contract drift findings (`X-Gateway-Key` requirements vs compose env wiring)
   - direct-provider bypass finding in option quote tracking (direct Alpaca calls vs Gateway endpoint parity)
   - explicit keep/migrate/dispose matrix for Orion label/feature families and Heber gold contract gaps
+- **Gateway/Heber Parity Audit (Pass 14)**: Continued audit with:
+  - cross-repo contract gap findings between Heber alert-label option-bar fetch shape and Data Gateway route implementation
+  - cross-repo auth gap findings (Heber alert-label gateway calls missing `X-Gateway-Key`)
+  - concrete keep/migrate/dispose decisions for Orion label families into Heber gold dataset splits
 
 ### Changed
 

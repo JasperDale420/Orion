@@ -2,8 +2,6 @@ import asyncio
 import signal
 from typing import Any, List, Sequence
 
-from sqlalchemy import select
-
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
 from orion.shared.db_utils import db_query, db_write
@@ -13,6 +11,7 @@ from orion.storage.db import init_db
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from orion.storage.models_signals import SignalLive
 from orion.storage.models_trade_journal import TradeJournalEntry
+from sqlalchemy import select
 
 logger = setup_struct_logger("orion.execution")
 
