@@ -229,6 +229,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - rollup-source finding: execution preflight and admin `/rollups` endpoints both read Orion-local `gold_ticker_rollup` rather than a centralized Heber-backed rollup contract
   - deployment finding: rollup production is tied to ingestion-service background startup, while current compose profile runs execution path with rollup requirement disabled
   - hardening recommendations for canonical rollup ownership, source alignment, and freshness/SLO validation
+- **Gateway/Heber Parity Audit (Pass 52)**: Continued audit with:
+  - infra-runtime finding: compose provisions `redpanda`/`minio` services while active runtime profile does not run Orion ingestion producer path
+  - lakehouse-contract finding: `LakehouseWriter` is disabled unless `ORION_LAKEHOUSE_*` vars are set, but those vars are absent from current compose env blocks
+  - hardening recommendations for canonical transport ownership and fail-fast lakehouse configuration checks
 
 ### Changed
 

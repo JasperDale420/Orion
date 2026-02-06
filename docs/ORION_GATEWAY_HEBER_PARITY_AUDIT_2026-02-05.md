@@ -2347,3 +2347,36 @@ P0:
 P1:
 1. Add freshness SLO checks for rollup datasets used by preflight/API (max allowed staleness, explicit alerting).
 2. Add integration tests that validate rollup availability/shape for execution preflight in the deployed compose profile.
+
+## 59) Pass 52 Continuation (2026-02-06)
+
+### 59.1 Compose Provisions Redpanda/MinIO, but Active Runtime Does Not Execute the Producer Path
+
+Current deployment shape:
+- compose includes `redpanda`, `minio`, and `createbuckets` services (`docker-compose.yml:21` to `docker-compose.yml:46`, `docker-compose.yml:241` to `docker-compose.yml:267`),
+- compose does not run `orion.ingestion` (no ingestion service entry in active service list; execution stack starts at labelers/enrichment/execution) (`docker-compose.yml:47` to `docker-compose.yml:224`),
+- `RedpandaProducer` is only used by `IngestionService` (`src/orion/ingestion/service.py:16`, `src/orion/ingestion/service.py:100`, `src/orion/ingestion/service.py:430`).
+
+Risk:
+- Kafka/lakehouse infrastructure appears “live” in deployment config but receives no Orion-produced event flow in active runtime, obscuring true data-path ownership and incident triage.
+
+### 59.2 Orion Lakehouse Writer Is Config-Gated Off by Default in Current Compose Contract
+
+Current write-path behavior:
+- `IngestionService` initializes `LakehouseWriter` and calls it in cycle processing (`src/orion/ingestion/service.py:55`, `src/orion/ingestion/service.py:213`, `src/orion/ingestion/service.py:343`),
+- `LakehouseWriter` disables itself unless all `ORION_LAKEHOUSE_*` vars are present (`src/orion/storage/lakehouse.py:30` to `src/orion/storage/lakehouse.py:40`),
+- current compose service env blocks do not define `ORION_LAKEHOUSE_ENDPOINT_URL`, `ORION_LAKEHOUSE_ACCESS_KEY`, `ORION_LAKEHOUSE_SECRET_KEY`, or `ORION_LAKEHOUSE_BUCKET` (`docker-compose.yml:56` to `docker-compose.yml:223`).
+
+Risk:
+- even when ingestion is run ad hoc, lakehouse writes can silently no-op under missing env configuration, producing false confidence in bronze archival coverage.
+
+### 59.3 Updated Priorities
+
+P0:
+1. Choose one canonical infra story for Orion runtime:
+- either remove/disable unused local Redpanda/MinIO services from default compose profile,
+- or restore ingestion as a first-class service and wire end-to-end producer/consumer/lakehouse health checks.
+2. Add startup hard-fail (or prominent health-fail state) when lakehouse write path is expected but `ORION_LAKEHOUSE_*` config is incomplete.
+
+P1:
+1. Add compose-level integration check that verifies active event production volume to intended transport (DB-only vs Redpanda/lakehouse) and alerts on drift.
