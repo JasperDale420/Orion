@@ -233,6 +233,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - infra-runtime finding: compose provisions `redpanda`/`minio` services while active runtime profile does not run Orion ingestion producer path
   - lakehouse-contract finding: `LakehouseWriter` is disabled unless `ORION_LAKEHOUSE_*` vars are set, but those vars are absent from current compose env blocks
   - hardening recommendations for canonical transport ownership and fail-fast lakehouse configuration checks
+- **Gateway/Heber Parity Audit (Pass 53)**: Continued audit with:
+  - deployment-coverage finding: FastAPI Admin endpoints are exercised by in-process ASGI tests but no API service is present in the active compose runtime
+  - data-contract finding: API `/flows` and `/rollups` remain coupled to Orion-local silver/gold tables rather than a Gateway/Heber canonical facade
+  - hardening recommendations for explicit API product ownership, deployment smoke checks, and canonical data-source routing
 
 ### Changed
 

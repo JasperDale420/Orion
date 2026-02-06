@@ -2380,3 +2380,36 @@ P0:
 
 P1:
 1. Add compose-level integration check that verifies active event production volume to intended transport (DB-only vs Redpanda/lakehouse) and alerts on drift.
+
+## 60) Pass 53 Continuation (2026-02-06)
+
+### 60.1 Admin API Is Test-Covered but Not Deployed in Current Compose Runtime
+
+Current state:
+- `orion.api.main` defines active Admin endpoints (`/flows`, `/rollups`, `/dashboard/*`) (`src/orion/api/main.py:479` to `src/orion/api/main.py:669`),
+- compose service list has no API/uvicorn service for this app (`docker-compose.yml:47` to `docker-compose.yml:286`),
+- tests exercise API routes in-process via ASGI/TestClient imports of `app` (`tests/integration/test_api_endpoints.py:7`, `tests/api/test_flow_filters.py:5`, `tests/api/test_pointer_endpoints.py:5`).
+
+Risk:
+- endpoint contract tests can pass while the endpoint surface is unavailable in deployed runtime, creating false operational confidence for consumers and runbooks.
+
+### 60.2 API Contract Still Anchored to Orion-Local Tables While Runtime Ownership Is Shifting
+
+Current API data sources:
+- `/flows` reads `SilverOptionFlow` SQL rows (`src/orion/api/main.py:495` to `src/orion/api/main.py:531`),
+- `/rollups` reads `GoldTickerRollup` SQL rows (`src/orion/api/main.py:408` to `src/orion/api/main.py:427`),
+- tests seed/read these same Orion-local tables for endpoint behavior (`tests/api/test_flow_filters.py:7` to `tests/api/test_flow_filters.py:8`, `tests/api/test_pointer_endpoints.py:8`).
+
+Risk:
+- even if API deployment is restored, endpoint semantics remain coupled to Orion-local storage rather than Gateway/Heber canonical data contracts.
+
+### 60.3 Updated Priorities
+
+P0:
+1. Make an explicit product decision for Admin API:
+- deploy it as a first-class service with health checks and auth wiring,
+- or archive API surface/tests from default runtime expectations.
+2. If API remains, route `/flows`/`/rollups` through the same canonical data-access facade used for Gateway/Heber parity work.
+
+P1:
+1. Add a deployment-level smoke test (outside in-process ASGI tests) that verifies API availability in active compose profile.
