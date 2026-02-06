@@ -103,6 +103,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Heber watch quote-route mismatch findings (`/options/quotes?symbols=` vs Gateway per-contract quote route)
   - cross-repo auth-gap findings for watch quote pulls (missing Gateway API key contract)
   - P0 alignment guidance for quote contract and watch service auth wiring
+- **Gateway/Heber Parity Audit (Pass 21)**: Continued audit with:
+  - ops/remediation job inventory findings for currently unwired `src/orion/jobs/*` modules
+  - runtime-vs-repo ownership risk framing for dormant CLI/test-only jobs
+  - operational jobs matrix recommendation before next archive wave decisions
 
 ### Changed
 

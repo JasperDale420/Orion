@@ -1232,3 +1232,27 @@ P0:
 
 P1:
 1. Add integration tests in Heber that validate quote-fetch success against live Gateway route catalog to catch route-shape drift early.
+
+## 28) Pass 21 Continuation (2026-02-06)
+
+### 28.1 Ops/Remediation Job Inventory Still Largely Unwired in Active Runtime
+
+Current reference sweep indicates several jobs are not wired through compose/runtime entrypoints and are mainly self-contained CLIs and/or test-only references:
+
+- `dlq_consumer` appears referenced only by itself + unit test (`src/orion/jobs/dlq_consumer.py:129`, `tests/unit/test_dlq_consumer.py:5`).
+- `monitor_system` appears referenced only by unit test (`tests/unit/test_monitor_system.py:10`).
+- `reconcile_backfill` appears referenced only by remediation unit test (`tests/unit/test_remediation_rules.py:5`).
+- `gatekeeper` has no in-repo callers beyond its own module CLI (`src/orion/jobs/gatekeeper.py:198`).
+- `seed_solvers` has no in-repo references in current sweep.
+
+Risk:
+- operator expectations drift: job files exist but are not part of the currently deployed service topology, making incident response and ownership unclear.
+
+### 28.2 Updated Priorities
+
+P0:
+1. Produce an explicit “operational jobs matrix” (owner, trigger path, cadence, required env, runtime profile) for all `src/orion/jobs/*` modules.
+2. For jobs with no active owner/cadence, move to archive wave after sign-off.
+
+P1:
+1. For jobs that are retained, add compose `tools` profile wiring and runbook links so they are intentionally operable instead of implicitly dormant.
