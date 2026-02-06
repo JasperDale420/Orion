@@ -1638,8 +1638,8 @@ Gateway contract:
 - provider routers are mounted at `/api/v1/uw` and `/api/v1/alpaca` (`../Data-gateway/gateway/api/uw/__init__.py:32`, `../Data-gateway/gateway/api/alpaca/__init__.py:19`).
 
 Risk:
-- with `DATA_GATEWAY_URL=http://host.docker.internal:8080`, quote polling can work while enrichment calls 404;
-- with `DATA_GATEWAY_URL` including `/api/v1`, enrichment can work while poller/consumer calls become `/api/v1/api/v1/...` and fail.
+- with `DATA_GATEWAY_URL=http://host.docker.internal:8080`, watch components still construct incompatible path families (some prefixed, some not), guaranteeing partial request failure;
+- with `DATA_GATEWAY_URL` including `/api/v1`, prefixed call sites become `/api/v1/api/v1/...` and fail.
 
 ### 39.2 Market-Context Enrichment Uses a Nonexistent Stock Bars Path Shape
 
@@ -1674,3 +1674,41 @@ P0:
 
 P1:
 1. Add startup validation in Heber watch: fail fast when `gateway_base_url` includes `/api/v1` or when required endpoints return non-contract responses.
+
+## 40) Pass 33 Continuation (2026-02-06)
+
+### 40.1 Heber Watch and Label Pipelines Call Batch Options Endpoints Not Exposed by Data Gateway API Router
+
+Current Heber calls:
+- watch quote polling and entry-price lookups call `GET /api/v1/alpaca/options/quotes?symbols=...` (`../Heber/heber/watch/poller.py:165` to `../Heber/heber/watch/poller.py:167`, `../Heber/heber/watch/consumer.py:418` to `../Heber/heber/watch/consumer.py:420`),
+- alert-label contract labeling calls `GET /api/v1/alpaca/options/bars?symbols=...` (`../Heber/heber/features/pipelines/alert_labels.py:361` to `../Heber/heber/features/pipelines/alert_labels.py:368`).
+
+Current Data Gateway router contract:
+- options bars route is single-contract `GET /api/v1/alpaca/options/{contract}/bars` (`../Data-gateway/gateway/api/alpaca/options.py:109` to `../Data-gateway/gateway/api/alpaca/options.py:116`),
+- options quotes route is single-contract `GET /api/v1/alpaca/options/{contract}/quotes` (`../Data-gateway/gateway/api/alpaca/options.py:157` to `../Data-gateway/gateway/api/alpaca/options.py:161`),
+- no batch `/options/bars` or `/options/quotes` route exists in this router.
+
+Provider capability drift:
+- Alpaca provider already supports batch option bars/quotes internally (`../Data-gateway/gateway/providers/alpaca.py:521` to `../Data-gateway/gateway/providers/alpaca.py:548`, `../Data-gateway/gateway/providers/alpaca.py:572` to `../Data-gateway/gateway/providers/alpaca.py:583`), but router does not surface equivalent batch endpoints.
+
+Risk:
+- watch service cannot reliably fetch live option quotes for watch lifecycle updates/entry pricing through current Gateway API contract,
+- contract-label pipeline cannot fetch option bars through current Gateway API contract,
+- both paths silently degrade label quality and parity when HTTP failures are swallowed.
+
+### 40.2 Data Gateway `/catalog` Endpoint Inventory Is Out of Sync With Implemented Alpaca Routes
+
+Catalog advertises endpoints including `/options/bars` and `/stocks/bars` (`../Data-gateway/gateway/api/catalog.py:34` to `../Data-gateway/gateway/api/catalog.py:35`, `../Data-gateway/gateway/api/catalog.py:47`),
+while Alpaca router currently exposes `/stocks/{symbol}/bars` and `/stocks/bars/latest` plus single-contract option bars/quotes (`../Data-gateway/gateway/api/alpaca/stock.py:25`, `../Data-gateway/gateway/api/alpaca/stock.py:191`, `../Data-gateway/gateway/api/alpaca/options.py:109`, `../Data-gateway/gateway/api/alpaca/options.py:157`).
+
+Risk:
+- integration clients that trust `/catalog` can target stale/nonexistent paths, increasing 404-driven data loss and migration confusion.
+
+### 40.3 Updated Priorities
+
+P0:
+1. Decide and implement canonical batch options API contract at Gateway router level (`/options/quotes` and `/options/bars` with `symbols` query), or immediately patch Heber watch/label clients to single-contract routes with bounded batching.
+2. Add contract tests spanning Heber watch + label pipelines against live Gateway route inventory to prevent silent 404 fallbacks.
+
+P1:
+1. Reconcile `/catalog` endpoint inventory with actual router exports and add CI checks to fail on catalog/router drift.

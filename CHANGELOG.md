@@ -153,6 +153,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - endpoint-shape mismatch finding: watch market-context enrichment targets `/alpaca/stocks/bars` while Gateway serves `/api/v1/alpaca/stocks/{symbol}/bars`
   - auth-contract finding: Heber watch and alert-label pipeline Gateway requests omit required `X-Gateway-Key` header wiring
   - migration-hardening recommendations for shared URL builders, startup contract validation, and integration tests for watch enrichment paths
+- **Gateway/Heber Parity Audit (Pass 33)**: Continued audit with:
+  - API-surface mismatch finding: Heber watch and label pipelines call batch options routes (`/options/quotes`, `/options/bars`) not exposed by current Gateway Alpaca router
+  - provider/router drift finding: Gateway Alpaca provider has batch options quote/bar support, but router only exposes single-contract paths
+  - discovery-contract drift finding: Gateway `/catalog` advertises stale/nonexistent Alpaca paths (`/options/bars`, `/stocks/bars`) vs actual router exports
 
 ### Changed
 
