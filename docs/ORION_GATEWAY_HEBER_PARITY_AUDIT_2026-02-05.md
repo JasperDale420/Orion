@@ -2413,3 +2413,33 @@ P0:
 
 P1:
 1. Add a deployment-level smoke test (outside in-process ASGI tests) that verifies API availability in active compose profile.
+
+## 61) Pass 54 Continuation (2026-02-06)
+
+### 61.1 `ExecutionEngine.close_position` Hardcodes Sell-Side Exit, Ignoring Position Direction
+
+Current execution behavior:
+- `ExecutionEngine.close_position(...)` always sets `side = OrderSide.SELL` before submitting exit order (`src/orion/execution/execution_engine.py:458`),
+- `main_execution` calls this path with only `ticker` + `qty` (no direction passed) (`src/orion/main_execution.py:334` to `src/orion/main_execution.py:337`),
+- `PositionManager` tracks `direction` on open positions (`LONG`/`SHORT`) but that field is not consumed in this close path (`src/orion/execution/position_manager.py:28`, `src/orion/execution/position_manager.py:145`).
+
+Risk:
+- if shorting is enabled (`src/orion/config.py:19`) and a short position is tracked, the exit path can submit an additional sell instead of buy-to-cover, increasing exposure instead of closing it.
+
+### 61.2 Exit Semantics Diverge Across the Two Active Close Paths
+
+Current split behavior:
+- `position_monitor` closes via broker-level `connector.close_position(symbol)` which is position-side aware (`src/orion/execution/position_monitor.py:315`),
+- `main_execution` close path uses explicit side selection and currently forces sell (`src/orion/execution/execution_engine.py:458`).
+
+Risk:
+- the same position can receive different close semantics depending on which runtime path handles it, compounding split-brain behavior with directional correctness drift.
+
+### 61.3 Updated Priorities
+
+P0:
+1. Make `ExecutionEngine.close_position` direction-aware (`SELL` for long exits, `BUY` for short cover) and thread position side through call chain.
+2. Add guardrails/tests that fail if close logic for short positions submits sell-side orders.
+
+P1:
+1. Unify close semantics by standardizing on one close primitive across `main_execution` and `position_monitor` (prefer broker-native close-by-symbol if contract identity is reliable).

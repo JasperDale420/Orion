@@ -237,6 +237,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - deployment-coverage finding: FastAPI Admin endpoints are exercised by in-process ASGI tests but no API service is present in the active compose runtime
   - data-contract finding: API `/flows` and `/rollups` remain coupled to Orion-local silver/gold tables rather than a Gateway/Heber canonical facade
   - hardening recommendations for explicit API product ownership, deployment smoke checks, and canonical data-source routing
+- **Gateway/Heber Parity Audit (Pass 54)**: Continued audit with:
+  - directional-exit finding: `ExecutionEngine.close_position` hardcodes `OrderSide.SELL` and `main_execution` does not pass position direction, enabling wrong-side closes when shorting is active
+  - path-divergence finding: `position_monitor` uses broker-native `close_position(symbol)` while `main_execution` uses explicit side logic, creating inconsistent close semantics across active runtimes
+  - hardening recommendations for direction-aware close orders and unified close primitive coverage
 
 ### Changed
 
