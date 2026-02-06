@@ -1746,3 +1746,39 @@ Risk:
 P1:
 1. Remove or archive dead helper functions in `main_execution.py` (`get_pending_candidates`, `update_candidate_status`) and add a regression test that forbids references to non-existent `CandidateTrade` columns.
 2. Correct changelog entries to match actual execution architecture and add a simple CI guardrail (for example, assert expected `main_execution.py` size/entrypoint contract when “thin-wrapper” claims are introduced).
+
+## 42) Pass 35 Continuation (2026-02-06)
+
+### 42.1 Orion GatewayStreamClient Treats Subscriptions as Successful Before Server ACK
+
+Current Orion behavior:
+- `_send_subscribe()` sends subscription JSON and immediately updates local subscription state without waiting for server response (`src/orion/connectors/gateway_stream_client.py:149` to `src/orion/connectors/gateway_stream_client.py:162`),
+- `_send_unsubscribe()` similarly mutates local state without confirmation (`src/orion/connectors/gateway_stream_client.py:175` to `src/orion/connectors/gateway_stream_client.py:188`),
+- receive loop discards ack/system frames and has no explicit handling/logging path for `type="error"` responses (`src/orion/connectors/gateway_stream_client.py:294` to `src/orion/connectors/gateway_stream_client.py:300`).
+
+Gateway contract behavior:
+- WebSocket handler returns structured error frames for invalid feeds/symbols/permissions/subscription limits (`../Data-gateway/gateway/api/websocket.py:287` to `../Data-gateway/gateway/api/websocket.py:300`, `../Data-gateway/gateway/api/websocket.py:321` to `../Data-gateway/gateway/api/websocket.py:336`, `../Data-gateway/gateway/api/websocket.py:342` to `../Data-gateway/gateway/api/websocket.py:349`, `../Data-gateway/gateway/api/websocket.py:537` to `../Data-gateway/gateway/api/websocket.py:540`).
+
+Risk:
+- Orion can believe symbols are subscribed while Gateway rejected them, causing silent data starvation and stale universe behavior.
+
+### 42.2 Orion Stream Client Uses Ambiguous Legacy Feed Name (`bars`) Instead of Canonical Feed IDs
+
+Current Orion behavior:
+- subscribes with `feed="bars"` (`src/orion/connectors/gateway_stream_client.py:154`), not canonical feed IDs documented in Gateway discovery.
+
+Gateway discovery contract:
+- `/catalog/feeds` documents canonical IDs such as `stock_bars`, `option_bars`, etc. (`../Data-gateway/gateway/api/catalog.py:596` to `../Data-gateway/gateway/api/catalog.py:607`, `../Data-gateway/gateway/api/catalog.py:644` to `../Data-gateway/gateway/api/catalog.py:649`),
+- stream router currently tolerates legacy feed values via substring matching/fallback logic (`../Data-gateway/gateway/api/websocket.py:364` to `../Data-gateway/gateway/api/websocket.py:366`, `../Data-gateway/gateway/core/stream.py:34` to `../Data-gateway/gateway/core/stream.py:60`).
+
+Risk:
+- integration currently depends on permissive fallback behavior; if feed normalization tightens, Orion subscriptions can fail without obvious client-side error handling.
+
+### 42.3 Updated Priorities
+
+P0:
+1. In `GatewayStreamClient`, wait for and validate subscription/unsubscription ACK responses before mutating local subscription state.
+2. Add explicit handling/logging for `type="error"` WebSocket frames and surface failure back to caller/retry logic.
+
+P1:
+1. Migrate Orion subscription payloads to canonical Gateway feed IDs (`stock_bars` for current usage) and add contract tests against `/catalog/feeds`.

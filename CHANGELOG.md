@@ -161,6 +161,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - execution-tech-debt finding: `main_execution.py` still contains dead helper paths (`get_pending_candidates`, `update_candidate_status`) that reference non-existent `CandidateTrade` columns
   - changelog drift finding: removal claim for those helpers is currently false in code
   - consolidation drift finding: changelog still claims `main_execution.py` is a thin wrapper while runtime module remains a full execution loop
+- **Gateway/Heber Parity Audit (Pass 35)**: Continued audit with:
+  - stream-contract finding: `GatewayStreamClient` mutates local subscription state before ACK and does not surface Gateway `type=error` subscription failures
+  - feed-contract finding: Orion subscribes with legacy `feed=\"bars\"` and relies on Gateway fallback behavior instead of canonical feed IDs (`stock_bars`, etc.)
+  - reliability recommendations for ACK-gated subscription state, explicit WS error handling, and feed-ID contract tests
 
 ### Changed
 
