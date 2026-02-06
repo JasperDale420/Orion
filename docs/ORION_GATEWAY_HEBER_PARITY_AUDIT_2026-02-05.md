@@ -1086,3 +1086,40 @@ P0:
 
 P1:
 1. Redirect any true `flow_labels` consumer to Heber `labels_alert_barriers` (after Gateway contract/auth fixes) instead of maintaining local Orion table writes.
+
+## 24) Pass 17 Continuation (2026-02-06)
+
+### 24.1 Compose Env Contracts Still Drift from Gateway/Auth Requirements
+
+Feature enrichment runtime:
+- Connectors send `X-Gateway-Key` only when `system_settings.data_gateway_api_key` is set (`src/orion/connectors/uw_greek_exposure_connector.py:27` to `src/orion/connectors/uw_greek_exposure_connector.py:29`, similarly market tide/iv/max pain connectors).
+- Compose service config sets `GATEWAY_URL` but does not set `DATA_GATEWAY_API_KEY`/`GATEWAY_API_KEY` (`docker-compose.yml:86` to `docker-compose.yml:90`).
+
+Price-target labeler runtime:
+- Service config sets `GATEWAY_URL` only (`docker-compose.yml:71` to `docker-compose.yml:74`).
+- Labeler still performs direct UW API lookup via `UW_API_KEY` for ticker/earnings metadata (`src/orion/main_price_target_labeler.py:1624` to `src/orion/main_price_target_labeler.py:1629`), not Gateway.
+
+Risk:
+- Gateway-backed requests can degrade to repeated 401/empty results, while direct-UW fallback behavior remains inconsistent with centralization goals.
+
+### 24.2 Archival Executed: Orphaned Integration Modules (Wave 8)
+
+Wave-8 archive action completed:
+- `src/orion/connectors/uw_ticker_info_connector.py` -> `archive/2026-02-06_integration-debt-wave8/legacy_code/uw_ticker_info_connector.py`
+- `src/orion/jobs/backfill_historical_gex.py` -> `archive/2026-02-06_integration-debt-wave8/legacy_code/backfill_historical_gex.py`
+- archive manifest added at `archive/2026-02-06_integration-debt-wave8/README.md`
+
+Rationale:
+- both modules had no active in-repo runtime wiring in compose/service entrypoints,
+- both represented side-paths that bypass or duplicate current Gateway/Heber migration direction.
+
+### 24.3 Updated Priorities
+
+P0:
+1. Normalize service env contracts in compose:
+- add `DATA_GATEWAY_API_KEY` where Gateway routes are used,
+- decide whether to remove direct `UW_API_KEY` dependencies from `main_price_target_labeler` or wire them explicitly as transitional.
+2. Add startup fail-fast for Gateway-backed services when URL is present but API key is missing.
+
+P1:
+1. Complete migration of ticker/earnings metadata lookups in labeling flow to Gateway/Heber canonical paths and retire remaining direct-UW client usage.

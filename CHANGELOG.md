@@ -87,6 +87,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - write-only service finding for `flow_labels`/`main_labeler` in current Orion repo wiring
   - dependency confirmation that active model-training and backfill paths are centered on `price_target_labels`
   - decommission gating recommendations for moving `labeler` to opt-in profile pending external-consumer check
+- **Gateway/Heber Parity Audit (Pass 17)**: Continued audit with:
+  - compose env-contract drift findings for Gateway-backed services (missing Gateway key wiring)
+  - direct-UW dependency drift findings in `main_price_target_labeler` versus centralization goals
+  - archival execution notes for orphaned integration modules
 
 ### Changed
 
@@ -104,6 +108,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Archived `src/orion/jobs/label_job.py` to `archive/.../legacy_code/label_job.py`
   - Archived `src/orion/jobs/window_label_job.py` to `archive/.../legacy_code/window_label_job.py`
   - Added archive manifest: `archive/2026-02-06_label-stack-wave7/README.md`
+- **Integration Debt Wave 8 Archival**: Archived orphaned integration modules under `archive/2026-02-06_integration-debt-wave8/`
+  - Archived `src/orion/connectors/uw_ticker_info_connector.py` to `archive/.../legacy_code/uw_ticker_info_connector.py`
+  - Archived `src/orion/jobs/backfill_historical_gex.py` to `archive/.../legacy_code/backfill_historical_gex.py`
+  - Added archive manifest: `archive/2026-02-06_integration-debt-wave8/README.md`
 - **HeberReader Data Access Path**: Replaced unsupported HTTP reads (`/silver/read`, `/gold/read`) with Heber-compatible access:
   - Silver and Gold reads now use Heber parquet layout from `HEBER_DATA_ROOT`
   - Catalog calls limited to supported endpoints (for example `/health`, `/datasets`)
