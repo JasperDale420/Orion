@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - 2026-02-06 status updates for completed migration items
   - Current SQL-coupling technical-debt counts and highest-concentration files
   - Remaining high-priority integration gaps and wave-2 archive candidates
+- **Gateway/Heber Parity Audit (Pass 4)**: Added deep audit coverage for:
+  - `main_price_target_labeler`, `ml/flow_enricher`, and SQL-coupled backfill/validation jobs
+  - Severity-ranked findings including a concrete backfill runtime bug and train/inference feature-semantics drift
+  - Module-by-module migration readiness and updated P0/P1/P2 backlog
 
 ### Changed
 

@@ -263,3 +263,100 @@ These are likely removable after migration parity is signed off:
 Recommendation:
 - Keep these in active tree until Heber-backed replacements are validated in staging.
 - Then archive as a single wave (`archive/2026-02-xx_gateway-heber-migration-wave2/`) to reduce rollback complexity.
+
+## 11) Pass 4 Deep Audit (2026-02-06)
+
+Scope in this pass:
+- `src/orion/main_price_target_labeler.py` (2,944 LOC)
+- `src/orion/ml/flow_enricher.py` (1,069 LOC)
+- `src/orion/jobs/backfill_ml_features.py` (522 LOC)
+- `src/orion/jobs/window_feature_job.py` (241 LOC)
+- `src/orion/jobs/data_quality_checker.py` (564 LOC)
+- `src/orion/jobs/validate_features.py` (507 LOC)
+
+### 11.1 Findings (Ordered by Severity)
+
+#### High
+
+1. Core label pipeline is still fully SQL-coupled and not Heber-backed.
+- `main_price_target_labeler` still queries `silver_uw_flow`, `silver_market_tide`, `silver_greek_exposure`, `silver_max_pain`, `silver_iv_rank`, and `silver_uw_darkpool`.
+- No `HeberReader` usage exists in this file.
+- Impact: largest remaining parity blocker; training labels remain tied to Orion-local silver tables.
+
+2. Concrete runtime bug in backfill path: incorrect function call signature.
+- `src/orion/jobs/backfill_ml_features.py:445` calls `get_sector_correlation_features(ticker, sector, entry_ts)`.
+- `src/orion/main_price_target_labeler.py:1467` defines `get_sector_correlation_features(ticker: str, entry_ts: datetime)`.
+- Impact: raises `TypeError` in backfill execution, causing feature backfill failures for affected records.
+
+3. ML enrichment/backfill stack has zero Heber read-path adoption.
+- `flow_enricher`, `backfill_ml_features`, `window_feature_job`, `data_quality_checker`, and `validate_features` do not use `HeberReader`.
+- All still depend on Orion SQL tables as source-of-truth.
+- Impact: duplicate ownership and schema drift against Heber datasets.
+
+#### Medium
+
+4. Feature semantics diverge across training/inference/backfill paths.
+- `entry_session` classification differs across modules:
+  - `main_price_target_labeler.py:671` uses `OPEN/MID/CLOSE`.
+  - `flow_enricher.py:210` uses `OPEN/MID/CLOSE` but with different cutoff assumptions.
+  - `backfill_ml_features.py:122` uses `early/midday/afternoon/late`.
+- `minutes_to_close` logic diverges (`20:00 UTC` vs `21:00 UTC`) between `main_price_target_labeler.py:1173`, `backfill_ml_features.py:221`, and `flow_enricher.py:202`.
+- Impact: train/inference skew and non-deterministic feature behavior.
+
+5. Validation tooling source-map drift.
+- `validate_features` maps RVOL features to `silver_uw_flow` (`src/orion/jobs/validate_features.py:344-349`) while label computation pulls RVOL from `silver_alpaca_bars` (`src/orion/main_price_target_labeler.py:952`).
+- Impact: false confidence from audit checks and misattributed data lineage.
+
+6. Direct env/SDK lookups remain duplicated outside centralized config.
+- Duplicate `_get_uw_client` env reads in:
+  - `src/orion/main_price_target_labeler.py:1620`
+  - `src/orion/jobs/backfill_ml_features.py:66`
+- Impact: inconsistent runtime behavior and avoidable credential/config drift.
+
+#### Low
+
+7. Significant logic duplication increases migration risk.
+- Shared function names between labeler and backfill include:
+  `_get_uw_client`, `get_entry_time_features`, `get_flow_greeks`, `get_ticker_info`, `get_underlying_price_at_entry`, `get_underlying_price_at_offset`.
+- Impact: high chance of silent divergence during future edits.
+
+### 11.2 Module-Level Migration Readiness
+
+| Module | Current parity status | Keep / migrate / archive |
+| --- | --- | --- |
+| `main_price_target_labeler.py` | Low parity (SQL-coupled, large surface area) | Keep temporarily; migrate read-path to Heber in phases |
+| `ml/flow_enricher.py` | Low parity (SQL-coupled; duplicate logic) | Keep temporarily; consolidate behind Heber data facade |
+| `jobs/backfill_ml_features.py` | Low parity + runtime bug | Keep temporarily; fix bug, then migrate/possibly retire |
+| `jobs/window_feature_job.py` | Medium parity (window logic useful, source is SQL) | Migrate logic to Heber Gold pipeline; archive Orion job after parity |
+| `jobs/data_quality_checker.py` | Low parity (checks local SQL feeds) | Rebuild against Heber dataset coverage + freshness |
+| `jobs/validate_features.py` | Low parity (legacy source map assumptions) | Rewrite validation map for Heber datasets and canonical ownership |
+
+### 11.3 Updated Priority Backlog
+
+P0:
+1. Fix `backfill_ml_features` signature bug (`get_sector_correlation_features` callsite).
+2. Define and implement one Orion read facade that resolves all flow/bar/darkpool/context reads via Heber-first APIs.
+
+P1:
+1. Migrate `main_price_target_labeler` off direct `silver_uw_*` queries using the facade.
+2. Align feature semantics (`entry_session`, `minutes_to_close`) across labeler, enricher, and backfill.
+3. Rewrite `validate_features` source mapping to reflect actual feature lineage and Heber ownership.
+
+P2:
+1. Move reusable window aggregation to Heber Gold features; retire `window_feature_job` in Orion.
+2. Replace SQL-based quality checks with Heber dataset freshness/completeness checks.
+
+### 11.4 Archival Readiness Snapshot (Wave 2)
+
+Not ready to archive yet (still functionally required for parity coverage):
+- `src/orion/main_price_target_labeler.py`
+- `src/orion/ml/flow_enricher.py`
+- `src/orion/jobs/backfill_ml_features.py`
+- `src/orion/jobs/window_feature_job.py`
+- `src/orion/jobs/data_quality_checker.py`
+- `src/orion/jobs/validate_features.py`
+
+Ready to archive after replacement verification remains unchanged from pass 3:
+- `src/orion/main_option_quote_tracker.py`
+- `src/orion/jobs/backfill_historical_gex.py`
+- `src/orion/jobs/backfill_exit_columns.py`
