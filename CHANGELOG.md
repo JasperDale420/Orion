@@ -169,6 +169,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - data-completeness finding: `backfill_exit_columns` selects rows by `price_at_15m IS NULL` only, which can skip partially-missing checkpoint columns
   - operational-throughput finding: nightly backfill applies fixed per-run limits with non-deterministic `LIMIT`-only selectors (no stable pagination/order)
   - scheduling-contract drift finding: `nightly_backfill` docs claim post-close 4:30pm ET while runtime config schedules 4:00pm ET
+- **Gateway/Heber Parity Audit (Pass 37)**: Continued audit with:
+  - label-integrity finding: `main_option_quote_tracker` can write latest-available quotes into overdue historical checkpoints (`ts_utc` backdated), corrupting checkpoint chronology
+  - contract-symbol finding: quote tracker reconstructs OCC symbols from components instead of using canonical `silver_uw_flow.option_chain`
+  - reliability recommendations for checkpoint-timestamp tolerance gating and provenance checks on quote writes
 
 ### Changed
 

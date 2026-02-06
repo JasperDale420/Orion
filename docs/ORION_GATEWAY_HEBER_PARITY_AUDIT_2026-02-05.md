@@ -1820,3 +1820,33 @@ P0:
 
 P1:
 1. Align `nightly_backfill` scheduling docs/config to one explicit post-close time and validate it with timezone-aware scheduling rules.
+
+## 44) Pass 37 Continuation (2026-02-06)
+
+### 44.1 Option Quote Tracker Can Persist “Latest-Now” Prices as Historical Checkpoint Quotes
+
+Current tracker behavior:
+- selects any matured checkpoint where `minutes_since_entry >= checkpoint_minutes` (`src/orion/main_option_quote_tracker.py:203`, `src/orion/main_option_quote_tracker.py:212`),
+- fetches current option snapshots via Alpaca snapshot endpoint (latest quote/trade only) (`src/orion/connectors/alpaca_option_greeks_connector.py:164` to `src/orion/connectors/alpaca_option_greeks_connector.py:171`, `src/orion/connectors/alpaca_option_greeks_connector.py:182` to `src/orion/connectors/alpaca_option_greeks_connector.py:199`),
+- writes the fetched current quote into each overdue checkpoint while stamping `ts_utc` to historical checkpoint time (`src/orion/main_option_quote_tracker.py:242` to `src/orion/main_option_quote_tracker.py:252`).
+
+Risk:
+- if tracker is delayed/restarted or backlog exists, historical checkpoints (`15m`, `30m`, `1h`, etc.) can be populated with incorrect later prices, distorting return labels and downstream model training.
+
+### 44.2 Quote Tracker Reconstructs OCC Symbols Instead of Using Canonical `option_chain` Field
+
+Current query path:
+- rebuilds `option_symbol` from ticker/expiry/put_call/strike math in SQL (`src/orion/main_option_quote_tracker.py:74` to `src/orion/main_option_quote_tracker.py:75`),
+- ignores canonical source symbol already stored in flow schema (`src/orion/storage/models_silver.py:79`).
+
+Risk:
+- symbol reconstruction drift (format/rounding/root edge cases) can produce unmapped contracts and silent quote gaps even when canonical OCC symbols are available.
+
+### 44.3 Updated Priorities
+
+P0:
+1. Enforce checkpoint integrity: only persist quote data when fetch time is within a strict tolerance window of target checkpoint timestamp; otherwise mark checkpoint as missed/stale (do not backfill with “latest-now” value).
+2. Replace reconstructed OCC symbol logic with canonical `silver_uw_flow.option_chain` usage in quote tracking selection.
+
+P1:
+1. Add data-quality assertions for checkpoint monotonicity/timing provenance in `silver_option_quotes` (for example `abs(fetched_at - ts_utc)` bounds) and alert on violations.
