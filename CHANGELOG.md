@@ -47,6 +47,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Gateway/Heber Parity Audit (Pass 5)**: Continued audit with:
   - validation of the backfill runtime bug fix
   - SQL portability debt findings (`date_trunc`, Postgres casts/operators) in migration-critical modules
+- **Gateway/Heber Parity Audit (Pass 6)**: Added function-level migration map for `main_price_target_labeler`:
+  - source-by-source migration targets into Heber datasets
+  - safe slice order for incremental migration
+  - explicit parity gates before additional archival
 
 ### Changed
 

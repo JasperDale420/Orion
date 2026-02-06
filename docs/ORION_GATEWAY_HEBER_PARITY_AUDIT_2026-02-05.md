@@ -401,3 +401,45 @@ P1 updated:
 3. Standardize feature semantics shared across labeler/enricher/backfill:
 - `entry_session` buckets
 - `minutes_to_close` calculation baseline.
+
+## 13) Pass 6 Continuation (2026-02-06)
+
+### 13.1 Function-Level Migration Map (`main_price_target_labeler`)
+
+The primary migration risk is concentrated in `src/orion/main_price_target_labeler.py`.
+To reduce blast radius, migrate by function clusters instead of rewriting the file in one pass.
+
+| Function cluster | Current Orion source | Target source after migration | Decision |
+| --- | --- | --- | --- |
+| `get_entry_signals`, `get_subsequent_prices` | `silver_uw_flow` | Heber Silver `feed=flow_alerts` + option bars path | Migrate first (critical path) |
+| `get_opposing_flow`, `get_flow_aggression`, `get_institutional_flow_1w`, `get_p2_features`, `get_p3_features` | `silver_uw_flow` | Heber Silver `flow_alerts` and derived Gold context datasets | Migrate |
+| `get_gex_at_entry` | `silver_greek_exposure` | Heber Silver Greek exposure feed | Migrate |
+| `get_market_tide_before_entry`, regime tide component | `silver_market_tide` | Heber Silver market tide feed | Migrate |
+| `get_max_pain_distance` | `silver_max_pain` | Heber Silver max-pain feed | Migrate |
+| `get_iv_rank_at_entry` | Derived from `silver_uw_flow.iv` history | Heber flow history (or canonical IV-rank Gold view) | Migrate, then canonicalize |
+| `get_darkpool_volume` / `get_darkpool_metrics` | `silver_uw_darkpool` | Heber Silver `feed=darkpool_trades` | Migrate |
+| `get_underlying_price_at_entry`, `get_underlying_price_at_offset`, RVOL/HV/VWAP/52w calculations | `silver_alpaca_bars` | Heber Silver `feed=bars` | Migrate |
+| `get_real_checkpoint_prices` | `silver_option_quotes` (Orion-local) | Keep local until Heber has canonical checkpoint quote dataset | Keep temporary |
+| `get_ticker_info`, earnings/sector helpers | UW API + `silver_ticker_info` | Prefer Heber-backed reference dataset where available; fallback to API | Migrate partially |
+| `persist_labels` | `price_target_labels` local table | Keep local during transition; later swap to Heber Gold writer | Keep temporary |
+
+### 13.2 Suggested Slice Order for Safe Migration
+
+1. Build `labeler_data_access.py` facade with Heber-backed implementations for:
+- flow, bars, darkpool, gex, market-tide, max-pain.
+
+2. Migrate read-only feature helpers first:
+- no schema writes, easy parity diffing.
+
+3. Migrate label-selection path:
+- `get_entry_signals`, `get_subsequent_prices`, `label_entry`.
+
+4. Keep `persist_labels` local until parity signoff:
+- then evaluate switching to Heber Gold dataset output.
+
+### 13.3 Parity Gate Before Any Further Archival
+
+Do not archive additional labeler/backfill modules until the following are true:
+- Heber-backed labeler output count matches legacy count within tolerance over the same date window.
+- Key label columns (`return_at_*`, `first_exit_type`, `max_drawdown_pct`) pass side-by-side checks.
+- Feature null-rate and range checks match or improve vs legacy baseline.
