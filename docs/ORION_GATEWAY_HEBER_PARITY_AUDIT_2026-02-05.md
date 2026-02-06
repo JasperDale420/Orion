@@ -1938,3 +1938,34 @@ P0:
 
 P1:
 1. Decide one canonical VIX ingestion path (`VIXProxyConnector` vs `VIXConnector`) and archive the non-canonical path after deployment confirmation.
+
+## 47) Pass 40 Continuation (2026-02-06)
+
+### 47.1 `main_labeler` “Unlabeled” Detection Can Misclassify Already-Labeled Backlog Rows
+
+Current behavior:
+- DB lookup only checks the first `max(limit * 4, limit)` event IDs (`src/orion/main_labeler.py:119` to `src/orion/main_labeler.py:124`),
+- unlabeled filtering is then applied across the full record list (`src/orion/main_labeler.py:130`),
+- records beyond the probed ID window are treated as unlabeled by default even if already present in `flow_labels`.
+
+Risk:
+- the labeler can repeatedly reprocess old/labeled rows under large backlogs, consuming cycles and delaying fresh-flow coverage.
+
+### 47.2 Labeler Write Metrics Overstate Success Because Conflict-Noop Inserts Are Counted as New Labels
+
+Current behavior:
+- insert path uses `ON CONFLICT (event_id) DO NOTHING` (`src/orion/main_labeler.py:337`),
+- `persist_labels` still returns `len(labels)` regardless of actual inserted row count (`src/orion/main_labeler.py:345`),
+- loop aggregates this into `total_labeled` and success logs (`src/orion/main_labeler.py:354`, `src/orion/main_labeler.py:371` to `src/orion/main_labeler.py:380`).
+
+Risk:
+- operational telemetry can report successful labeling progress even when most writes are conflict no-ops, masking backlog/staleness.
+
+### 47.3 Updated Priorities
+
+P0:
+1. Make unlabeled detection exact (query all candidate IDs used for batch selection, or switch to DB-driven anti-join pagination) before selecting the next batch.
+2. Return and log real inserted-row counts from `persist_labels` (for example, via `RETURNING`/rowcount) instead of attempted-label counts.
+
+P1:
+1. Add backlog regression tests that simulate >`limit*4` historical rows with mixed labeled/unlabeled states and assert forward progress on newest unlabeled rows.

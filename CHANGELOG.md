@@ -181,6 +181,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - volatility-metric integrity finding: active `VIXProxyConnector` computes `vix_1d_change` and `vix_5d_ma` from recent 1-minute `silver_alpaca_bars` rows while labeling them as daily-style metrics
   - regime-input fidelity finding: `main_feature_enrichment` still feeds `MultiAxisRegimeDetector` with hardcoded `realized_vol=0.015` instead of derived live-bar volatility
   - consolidation finding: direct Alpaca `VIXConnector` remains in repo but is not wired into runtime, leaving duplicate VIX-source paths without a canonical owner
+- **Gateway/Heber Parity Audit (Pass 40)**: Continued audit with:
+  - labeling-progress integrity finding: `main_labeler` checks labeled IDs for only a bounded prefix of candidate records, then filters the full backlog, which can misclassify already-labeled rows as unlabeled
+  - observability finding: `persist_labels` returns attempted label count while insert path uses `ON CONFLICT DO NOTHING`, inflating `total_labeled` progress logs under duplicate retries
+  - reliability recommendations for DB-driven unlabeled pagination and true inserted-row counting in labeler metrics
 
 ### Changed
 
