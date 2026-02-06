@@ -1284,3 +1284,29 @@ P0:
 
 P1:
 1. Add an environment contract test asserting Data Gateway URL consistency between Orion, Heber, and Data Gateway defaults.
+
+## 30) Pass 23 Continuation (2026-02-06)
+
+### 30.1 Orion Flow Persistence Still Performs Direct Alpaca Greeks Calls
+
+Current Orion persistence path:
+- `persist_silver_from_bronze` enriches UW flows via `_enrich_flows_with_greeks` before write (`src/orion/processing/persistence.py:142`, `src/orion/processing/persistence.py:263` to `src/orion/processing/persistence.py:264`).
+- enrichment uses `AlpacaOptionGreeksConnector.get_greeks_batch` (`src/orion/processing/persistence.py:113`, `src/orion/processing/persistence.py:123`).
+- connector calls Alpaca snapshots directly (`https://data.alpaca.markets/v1beta1/options/snapshots`) with Alpaca credentials (`src/orion/connectors/alpaca_option_greeks_connector.py:25`, `src/orion/connectors/alpaca_option_greeks_connector.py:164`).
+
+Active call path evidence:
+- ingestion runtime imports and invokes persistence module (`src/orion/ingestion/service.py:29`, `src/orion/ingestion/service.py:448`).
+- DLQ replay path also reuses same enrichment flow (`src/orion/jobs/dlq_consumer.py:14`, `src/orion/jobs/dlq_consumer.py:162`).
+
+Risk:
+- even where Gateway/Heber are intended as canonical data path, ingestion-side enrichment still depends on direct provider credentials and provider availability from Orion runtime.
+- this can produce contract drift (fields populated from direct provider semantics vs Gateway-normalized semantics) and reintroduce external rate-limit/credential failures into Orion.
+
+### 30.2 Updated Priorities
+
+P0:
+1. Replace ingestion-time direct Alpaca Greeks enrichment with Gateway-backed contract reads (or drop enrichment at ingestion and source Greeks from Heber canonical datasets).
+2. Define one canonical ownership point for option Greeks (Gateway vs Orion local enrichment) and remove duplicate path.
+
+P1:
+1. Add parity checks ensuring Greeks columns in Orion training paths are sourced from the selected canonical contract and not mixed across direct and Gateway paths.

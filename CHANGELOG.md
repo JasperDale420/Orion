@@ -111,6 +111,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - cross-repo default URL drift findings (`DATA_GATEWAY_URL` defaulting to `:8000` in Heber paths)
   - deployment-risk finding where Heber default points to lakeFS port rather than Data Gateway
   - normalization and fail-fast recommendations for Gateway URL contracts
+- **Gateway/Heber Parity Audit (Pass 23)**: Continued audit with:
+  - active Orion ingestion-path finding for direct Alpaca Greeks enrichment in persistence layer
+  - duplicate ownership risk framing for Greeks data across direct-provider and Gateway/Heber contracts
+  - canonicalization recommendations for option Greeks sourcing
 
 ### Changed
 
