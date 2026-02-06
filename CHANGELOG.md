@@ -127,6 +127,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - nightly-backfill credential-contract gap findings (`backfill_ml_features` direct UW dependency vs compose env wiring)
   - scheduler timebase finding for fixed UTC-5 ET conversion (DST drift risk)
   - enrichment completeness and scheduling-hardening recommendations
+- **Gateway/Heber Parity Audit (Pass 27)**: Continued audit with:
+  - ingestion-runtime parity finding: `IngestionService` documents Heber UW sourcing but still processes Alpaca-only events in active cycle
+  - UW enrichment schema-drift findings across Greek exposure / max pain / IV-rank connector field mappings vs Gateway normalized payloads
+  - feature-enrichment auth-contract finding: Gateway key wiring missing in compose path for API-key-protected UW endpoints
+  - darkpool feed-name drift finding (`darkpool` vs `darkpool_trades`) across Data Gateway poller, Heber Silver partitioning, and Orion `HeberReader`
+- **Gateway/Heber Parity Audit (Pass 28)**: Continued audit with:
+  - Orion Admin API drift finding: `/flows` still reads Orion-local `silver_uw_flow` instead of centralized Gateway/Heber flow interfaces
+  - orphaned-integration finding: Shared MCP client/service stack remains wired with direct provider credentials but has no active runtime consumers
+  - MCP endpoint-contract finding: default `MCP_SERVER_URL` (`localhost:8001`) is misaligned with compose topology (`8090:8001` host mapping / `mcp-server` service DNS)
 
 ### Changed
 

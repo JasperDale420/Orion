@@ -1391,3 +1391,120 @@ P0:
 
 P1:
 1. Add completeness checks for nightly backfill outputs (feature population thresholds) and alert when expected enrichment columns regress.
+
+## 34) Pass 27 Continuation (2026-02-06)
+
+### 34.1 Ingestion Runtime Still Does Not Consume Heber Flow/Darkpool Despite Migration Comments
+
+Current behavior:
+- ingestion initializes `HeberReader` and comments that UW data now comes from Heber (`src/orion/ingestion/service.py:57` to `src/orion/ingestion/service.py:60`),
+- but `_run_cycle` only appends Alpaca events and never calls `read_flow` / `read_darkpool` (`src/orion/ingestion/service.py:200` to `src/orion/ingestion/service.py:205`),
+- while downstream rule path still expects `UW_FLOW` events (`src/orion/ingestion/service.py:323` to `src/orion/ingestion/service.py:325`).
+
+Entrypoint/docs drift:
+- ingestion module docstring claims it reads flow/darkpool from Heber (`src/orion/ingestion/__main__.py:7` to `src/orion/ingestion/__main__.py:10`), which is not true in active `_run_cycle` logic.
+
+Risk:
+- UW flow-driven features/rules can be starved in runtime while code/docs imply parity is already achieved.
+
+### 34.2 Gateway Response-Shape Drift in Orion UW Enrichment Connectors
+
+Greek exposure mismatch:
+- Orion connector aggregates `call_gamma`/`put_gamma`/`call_vanna`/`put_vanna`/`call_charm`/`put_charm` (`src/orion/connectors/uw_greek_exposure_connector.py:57` to `src/orion/connectors/uw_greek_exposure_connector.py:73`),
+- Gateway provider returns strike-level rows keyed as `gamma_exposure`, `call_volume`, `put_volume`, `call_oi`, `put_oi` (`../Data-gateway/gateway/providers/uw.py:2434` to `../Data-gateway/gateway/providers/uw.py:2444`).
+
+Max pain mismatch:
+- Orion expects `max_pain` (`src/orion/connectors/uw_max_pain_connector.py:61`),
+- Gateway normalizes as `max_pain_strike` (`../Data-gateway/gateway/providers/uw.py:1362` to `../Data-gateway/gateway/providers/uw.py:1364`).
+
+IV rank mismatch:
+- Orion expects `iv_high`/`iv_low`/`iv_30d` (`src/orion/connectors/uw_iv_rank_connector.py:70` to `src/orion/connectors/uw_iv_rank_connector.py:73`),
+- Gateway provides `one_year_high`/`one_year_low` (and does not expose `iv_30d` in normalized model) (`../Data-gateway/gateway/providers/uw.py:1425` to `../Data-gateway/gateway/providers/uw.py:1430`).
+
+Risk:
+- enrichment tables can silently fill with zeros/null-equivalents, degrading model feature quality while pipelines appear healthy.
+
+### 34.3 Feature-Enrichment Gateway Auth Contract Is Not Wired in Compose
+
+Connector auth behavior:
+- UW connectors only set `X-Gateway-Key` if configured key is present (`src/orion/connectors/uw_greek_exposure_connector.py:25` to `src/orion/connectors/uw_greek_exposure_connector.py:28`).
+
+Runtime wiring:
+- `main_feature_enrichment` instantiates Gateway connectors with URL only (`src/orion/main_feature_enrichment.py:237` to `src/orion/main_feature_enrichment.py:243`),
+- compose `feature_enrichment` sets `GATEWAY_URL` but no gateway API key env (`docker-compose.yml:86` to `docker-compose.yml:90`).
+
+Gateway contract:
+- UW endpoints used by these connectors are API-key protected (`../Data-gateway/gateway/api/uw/flow_analytics.py:24`, `../Data-gateway/gateway/api/uw/market.py:107`).
+
+Risk:
+- connector calls can degrade to repeated 401 paths and near-zero persisted enrichment output.
+
+### 34.4 Darkpool Feed Naming Drift Breaks Orion Heber Read Path
+
+Orion Heber read target:
+- `HeberReader` points darkpool reads to `feed=darkpool_trades` (`src/orion/clients/heber_reader.py:28`, `src/orion/clients/heber_reader.py:165`, `src/orion/clients/heber_reader.py:206`).
+
+Upstream canonical event feed:
+- Gateway UW poller wraps darkpool events with `feed="darkpool"` (`../Data-gateway/gateway/core/uw_poller.py:362` to `../Data-gateway/gateway/core/uw_poller.py:366`),
+- Heber Silver writer partitions by `envelope.feed` (`../Heber/heber/writer/silver.py:33`, `../Heber/heber/writer/silver.py:40`).
+
+Risk:
+- Orion `read_darkpool(...)` can point at a non-existent partition path in the centralized pipeline and return empty data even when darkpool events are being ingested.
+
+### 34.5 Updated Priorities
+
+P0:
+1. Implement actual Heber flow/darkpool ingestion in `IngestionService` (or remove UW-flow pipeline branches and document migration state explicitly).
+2. Fix UW enrichment connector field mappings to Gateway normalized response contracts (`spot-exposures`, `max-pain`, `iv-rank`) and add regression tests for non-zero/expected mappings.
+3. Wire `DATA_GATEWAY_API_KEY`/`GATEWAY_API_KEY` into feature-enrichment runtime and fail fast on missing key when Gateway mode is enabled.
+
+P1:
+1. Resolve darkpool feed naming (`darkpool` vs `darkpool_trades`) with a single canonical dataset alias across Data Gateway -> Heber writer -> Orion `HeberReader`.
+
+## 35) Pass 28 Continuation (2026-02-06)
+
+### 35.1 Orion Admin `/flows` Endpoint Still Bypasses Gateway/Heber Canonical Flow APIs
+
+Current Orion behavior:
+- Orion API imports and queries local `SilverOptionFlow` table directly (`src/orion/api/main.py:24`, `src/orion/api/main.py:495` to `src/orion/api/main.py:531`),
+- `/flows` returns Orion-local row shape from `silver_uw_flow` (`src/orion/api/main.py:479` to `src/orion/api/main.py:556`).
+
+Centralized contract exists upstream:
+- Data Gateway exposes canonical UW flow APIs with auth + pagination/caching (`../Data-gateway/gateway/api/uw/flow.py:23` to `../Data-gateway/gateway/api/uw/flow.py:46`, `../Data-gateway/gateway/api/uw/flow.py:49` to `../Data-gateway/gateway/api/uw/flow.py:75`).
+
+Risk:
+- Orion and Gateway can present divergent flow records/response contracts,
+- local table dependency keeps Orion API coupled to legacy SQL ingestion health instead of centralized data ownership.
+
+### 35.2 Shared MCP Server Stack Appears Orphaned Relative to Active Runtime Paths
+
+Observed state:
+- Orion still includes MCP client surface for Alpaca/UW tools (`src/orion/clients/mcp_server.py:21` to `src/orion/clients/mcp_server.py:200`),
+- client exports remain in package init (`src/orion/clients/__init__.py:11` to `src/orion/clients/__init__.py:20`),
+- runtime usage appears absent outside self/tests (no references beyond `clients/__init__.py` and `tests/clients/test_mcp_server.py`),
+- compose still runs dedicated `mcp-server` with direct provider credentials (`docker-compose.yml:269` to `docker-compose.yml:283`).
+
+Risk:
+- unnecessary operational surface and secret exposure for a path not currently tied to core ingestion/labeling/execution flows,
+- architectural confusion (parallel direct-provider path) during Gateway/Heber centralization.
+
+### 35.3 MCP Endpoint Defaults Are Misaligned With Compose Networking
+
+Current config:
+- MCP client defaults to `http://localhost:8001` (`src/orion/clients/mcp_server.py:18`),
+- compose exposes MCP as host `8090:8001` and service name `mcp-server` (`docker-compose.yml:269` to `docker-compose.yml:275`),
+- no compose-wide `MCP_SERVER_URL` wiring for Orion services.
+
+Risk:
+- if MCP path is reactivated, default connectivity can fail in both common contexts:
+  - host runs (service published on `8090`, not `8001`),
+  - container runs (`localhost` resolves to same container, not `mcp-server`).
+
+### 35.4 Updated Priorities
+
+P0:
+1. Decide whether Orion `/flows` remains a product API; if yes, make it a Gateway-backed proxy (or Heber-backed facade) instead of direct `silver_uw_flow` SQL.
+2. Decide whether Shared MCP Server is still in-scope; if not, archive `orion.clients.mcp_server` + related tests and remove `mcp-server` compose service.
+
+P1:
+1. If MCP is retained, standardize endpoint/auth config (`MCP_SERVER_URL`) and align to centralized Gateway/Heber ownership boundaries.
