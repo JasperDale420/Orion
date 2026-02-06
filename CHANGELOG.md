@@ -189,6 +189,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - drift-baseline correctness finding: `pattern_miner.get_last_week_importance` orders newest-first but collapses duplicate feature rows via dict overwrite, effectively retaining oldest-per-feature values in-window
   - training-readiness finding: pattern-miner training query gates on `last_tracked_ts` but not `ml_ready`, allowing incomplete/unvalidated rows into model fitting
   - model-quality recommendations for latest-per-feature baseline selection and explicit readiness gating in training datasets
+- **Gateway/Heber Parity Audit (Pass 42)**: Continued audit with:
+  - model-bias finding: `exit_classifier` training data generation skips `max_return_pct <= 0` trades, introducing winner/survivor bias in exit timing models
+  - readiness-contract finding: exit-classifier training query does not enforce `ml_ready` completeness before building samples
+  - validation-method finding: exit-classifier AUC is evaluated with random `train_test_split` rather than time-aware validation, increasing temporal leakage risk
 
 ### Changed
 

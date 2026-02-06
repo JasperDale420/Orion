@@ -1998,3 +1998,42 @@ P0:
 
 P1:
 1. Add a data-quality metric that reports the fraction of fetched training rows passing readiness/completeness gates over time.
+
+## 49) Pass 42 Continuation (2026-02-06)
+
+### 49.1 Exit-Classifier Training Drops Losing Trades (Survivor Bias)
+
+Current behavior:
+- bucket training rows are fetched from `price_target_labels` (`src/orion/ml/exit_classifier.py:441` to `src/orion/ml/exit_classifier.py:463`),
+- sample construction explicitly skips trades where `max_return_pct <= 0` (`src/orion/ml/exit_classifier.py:520` to `src/orion/ml/exit_classifier.py:522`).
+
+Risk:
+- model is trained primarily on winner trajectories and lacks explicit stop-loss/failed-trade exit patterns, which can bias live exit timing decisions.
+
+### 49.2 Exit-Classifier Training Query Does Not Enforce Label Readiness Gate
+
+Current training filter:
+- query requires only `p.trade_type = ...` and `p.max_return_pct IS NOT NULL` (`src/orion/ml/exit_classifier.py:461` to `src/orion/ml/exit_classifier.py:463`),
+- does not gate on `ml_ready` (or equivalent completeness predicate) before generating training samples.
+
+Risk:
+- checkpoint feature columns may be partially populated or stale while still entering model training.
+
+### 49.3 Exit-Classifier Validation Uses Random Split Instead of Time-Aware Split
+
+Current training path:
+- `train_bucket_exit_classifier` uses `train_test_split(..., stratify=y)` (`src/orion/ml/exit_classifier.py:622`),
+- no time-ordered or walk-forward validation path is used in this module.
+
+Risk:
+- reported AUC can be optimistic due temporal leakage, especially in non-stationary options-flow regimes.
+
+### 49.4 Updated Priorities
+
+P0:
+1. Include losing/stop scenarios in exit-classifier training set (or train explicit “winner-only” and “risk-protect” models with clear runtime routing) to remove survivor bias.
+2. Add `ml_ready` (or strict completeness equivalent) to exit-classifier training query filters.
+3. Replace random split with time-aware validation (walk-forward or anchored split) and report both temporal holdout and training metrics.
+
+P1:
+1. Add per-bucket class-balance dashboards and fail training when class coverage is below minimum thresholds.
