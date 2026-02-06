@@ -2443,3 +2443,35 @@ P0:
 
 P1:
 1. Unify close semantics by standardizing on one close primitive across `main_execution` and `position_monitor` (prefer broker-native close-by-symbol if contract identity is reliable).
+
+## 62) Pass 55 Continuation (2026-02-06)
+
+### 62.1 Exit-Rule Position Quantity Can Rehydrate as Zero in `PositionManager`
+
+Current rehydration path:
+- `PositionManager._create_position_from_decision` reconstructs `entry_price` from `decision.execution_params.limit_price` and does not read persisted order tables (`src/orion/execution/position_manager.py:106` to `src/orion/execution/position_manager.py:116`),
+- `PositionManager.add_position` sets `qty` from `decision.execution_params["qty"]` defaulting to `0` (`src/orion/execution/position_manager.py:155`),
+- `ExecutionEngine._submit_order` sets only `client_order_id` in `decision.execution_params` and does not persist `qty` there (`src/orion/execution/execution_engine.py:318` to `src/orion/execution/execution_engine.py:321`),
+- actual executed quantity is persisted in order records (`src/orion/execution/execution_engine.py:873` to `src/orion/execution/execution_engine.py:880`).
+
+Risk:
+- positions tracked for exit-rule orchestration can carry `qty=0`, causing ineffective close attempts and stale “open” state loops despite real broker exposure.
+
+### 62.2 `main_execution` Exit Path Uses Rehydrated `position.qty` Directly
+
+Current close call:
+- `main_execution` passes `position.qty` into `execution_engine.close_position(...)` (`src/orion/main_execution.py:334` to `src/orion/main_execution.py:337`).
+
+Risk:
+- zero/incorrect rehydrated quantity directly propagates into exit order submission path, degrading exit reliability.
+
+### 62.3 Updated Priorities
+
+P0:
+1. Make position quantity source-of-truth explicit:
+- persist executed qty on `StrategyDecision` (or linked execution snapshot),
+- or reconstruct from `OrderRecord`/broker positions during `PositionManager.initialize`.
+2. Add hard guard to block close submissions when tracked qty is non-positive and force broker-side quantity refresh.
+
+P1:
+1. Add restart regression test: execute order with nonzero qty, restart `PositionManager`, assert tracked qty matches persisted/broker qty and exit call uses that qty.

@@ -241,6 +241,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - directional-exit finding: `ExecutionEngine.close_position` hardcodes `OrderSide.SELL` and `main_execution` does not pass position direction, enabling wrong-side closes when shorting is active
   - path-divergence finding: `position_monitor` uses broker-native `close_position(symbol)` while `main_execution` uses explicit side logic, creating inconsistent close semantics across active runtimes
   - hardening recommendations for direction-aware close orders and unified close primitive coverage
+- **Gateway/Heber Parity Audit (Pass 55)**: Continued audit with:
+  - position-state finding: `PositionManager` rehydrates/stores exit-rule quantity from `decision.execution_params`, but execution path does not persist submitted `qty` there
+  - exit-reliability finding: `main_execution` uses tracked `position.qty` directly for close orders, so zero/incorrect rehydrated qty can propagate into close attempts
+  - hardening recommendations for persisted quantity source-of-truth and restart qty-parity regression coverage
 
 ### Changed
 
