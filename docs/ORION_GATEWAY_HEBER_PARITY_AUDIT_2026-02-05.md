@@ -1898,3 +1898,43 @@ P0:
 
 P1:
 1. Bring enrichment silver tables under explicit schema governance (ORM + migration + docs), or retire Orion-local copies in favor of canonical Heber datasets.
+
+## 46) Pass 39 Continuation (2026-02-06)
+
+### 46.1 VIX Proxy “Daily” Metrics Are Computed from 1-Minute Bars
+
+Current connector behavior:
+- `VIXProxyConnector` claims to compute from recent daily bars (`src/orion/connectors/vix_proxy_connector.py:84` to `src/orion/connectors/vix_proxy_connector.py:85`),
+- query reads `silver_alpaca_bars` for `ticker='VIXY'` with `ORDER BY ... DESC LIMIT 30` (`src/orion/connectors/vix_proxy_connector.py:90` to `src/orion/connectors/vix_proxy_connector.py:95`),
+- underlying silver bars table is explicitly the 1-minute OHLCV store (`src/orion/storage/models_silver.py:126` to `src/orion/storage/models_silver.py:129`),
+- connector then labels derived metrics as `vix_1d_change` and `vix_5d_ma` (`src/orion/connectors/vix_proxy_connector.py:53` to `src/orion/connectors/vix_proxy_connector.py:65`, `src/orion/connectors/vix_proxy_connector.py:74` to `src/orion/connectors/vix_proxy_connector.py:75`).
+
+Risk:
+- volatility regime inputs are semantically misnamed/misaligned (minute-scale calculations stored as daily-scale fields), which can distort downstream regime and feature interpretation.
+
+### 46.2 Regime Detection Uses Hardcoded Realized Volatility Placeholder
+
+Current runtime behavior:
+- regime snapshots are generated in `main_feature_enrichment` (`src/orion/main_feature_enrichment.py:295`),
+- detector call hardcodes `realized_vol=0.015` (`src/orion/main_feature_enrichment.py:304`) rather than deriving realized volatility from current bar history.
+
+Risk:
+- `silver_regime_history` can encode low-fidelity volatility-state labels that are weakly tied to live market conditions.
+
+### 46.3 Duplicate VIX Ingestion Paths Exist, but Only Proxy Path Is Wired
+
+Current code state:
+- `main_feature_enrichment` wires `VIXProxyConnector` only (`src/orion/main_feature_enrichment.py:27`, `src/orion/main_feature_enrichment.py:245`),
+- legacy direct Alpaca `VIXConnector` exists as standalone class (`src/orion/connectors/vix_connector.py:34`) with no in-repo runtime references (`src/orion/connectors/vix_connector.py` only hit for `VIXConnector` symbol).
+
+Risk:
+- dead/parallel connector paths increase maintenance overhead and ambiguity about canonical VIX source during Gateway/Heber migration.
+
+### 46.4 Updated Priorities
+
+P0:
+1. Correct VIX proxy semantics: either aggregate to daily bars before deriving `vix_1d_change`/`vix_5d_ma`, or rename/store explicitly intraday metrics to avoid false daily semantics.
+2. Replace hardcoded `realized_vol` with computed realized volatility from bounded recent SPY bar windows and add regression checks for known inputs.
+
+P1:
+1. Decide one canonical VIX ingestion path (`VIXProxyConnector` vs `VIXConnector`) and archive the non-canonical path after deployment confirmation.

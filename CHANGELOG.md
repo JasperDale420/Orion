@@ -177,6 +177,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - connector-reliability finding: UW Gateway connectors decorate fetches with `@retry(...)` but swallow exceptions and return `None`, effectively disabling retry/backoff protections
   - regime-signal correctness finding: `get_spy_cumulative_return` window query computes long-horizon return instead of the intended bounded 20-bar trend input
   - schema-governance finding: enrichment silver tables (`silver_greek_exposure`, `silver_market_tide`, `silver_max_pain`, `silver_iv_rank`) are written via raw SQL but not represented in canonical silver ORM/docs artifacts
+- **Gateway/Heber Parity Audit (Pass 39)**: Continued audit with:
+  - volatility-metric integrity finding: active `VIXProxyConnector` computes `vix_1d_change` and `vix_5d_ma` from recent 1-minute `silver_alpaca_bars` rows while labeling them as daily-style metrics
+  - regime-input fidelity finding: `main_feature_enrichment` still feeds `MultiAxisRegimeDetector` with hardcoded `realized_vol=0.015` instead of derived live-bar volatility
+  - consolidation finding: direct Alpaca `VIXConnector` remains in repo but is not wired into runtime, leaving duplicate VIX-source paths without a canonical owner
 
 ### Changed
 
