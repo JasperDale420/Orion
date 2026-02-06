@@ -28,6 +28,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `DATA_GATEWAY_*` env mappings
   - legacy `GATEWAY_*` alias compatibility
   - `HEBER_*` env mappings into centralized settings
+- **Heber Labeler Migration Tests**: Added `tests/unit/test_main_labeler_heber_migration.py` covering:
+  - Heber flow payload normalization into labeler records
+  - Alias-field handling for mixed flow schemas
 
 ### Changed
 
@@ -49,6 +52,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added backward-compatible alias support (`GATEWAY_*` -> `DATA_GATEWAY_*`)
   - Refactored Gateway/Heber callers to use centralized config (`gateway_stream_client`, `heber_reader`, UW enrichment connectors, `sync_earnings`, `main_feature_enrichment`)
   - Removed hardcoded default Gateway API key fallback in UW connectors
+- **Main Labeler Data Source**:
+  - Migrated `main_labeler.py` read path from local `silver_uw_flow` SQL queries to Heber-backed `HeberReader.read_flow(...)`
+  - Migrated price lookup for label horizons to Heber bars (`HeberReader.read_bars(...)`)
+  - Kept `flow_labels` persistence in local Orion DB for compatibility during transition
 
 ### Fixed
 

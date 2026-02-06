@@ -7,15 +7,18 @@ Labels each flow with actual returns at 15m, 30m, 1h, 2h horizons.
 
 import asyncio
 import signal
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+import pandas as pd
 
 load_dotenv()
 
 from sqlalchemy import text
 
+from orion.clients.heber_reader import HeberReader
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -26,67 +29,157 @@ logger = setup_struct_logger("orion.labeler")
 BATCH_SIZE = 100
 POLL_INTERVAL_SECONDS = 60
 MIN_AGE_MINUTES = 130  # Only label flows older than 2h10m (so 2h price is available)
+FLOW_LOOKBACK_HOURS = 72
+
+_heber_reader = HeberReader()
+
+
+@dataclass
+class FlowRecord:
+    event_id: str
+    ticker: str
+    flow_ts_utc: datetime
+    expiry: Optional[str]
+    underlying_price: float
+    option_price: Optional[float]
+    premium_usd: Optional[float]
+    aggressor: Optional[str]
+    put_call: Optional[str]
+    is_sweep: Optional[Any]
+    iv: Optional[float]
+
+
+def _coerce_dt(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.to_pydatetime()
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_series_value(row: pd.Series, keys: List[str]) -> Any:
+    for key in keys:
+        if key in row and pd.notna(row[key]):
+            return row[key]
+    return None
+
+
+def _normalize_flow_df(raw_df: pd.DataFrame, cutoff: datetime) -> List[FlowRecord]:
+    if raw_df.empty:
+        return []
+
+    rows: List[FlowRecord] = []
+    for _, row in raw_df.iterrows():
+        event_id = _resolve_series_value(row, ["event_id", "source_event_id", "id"])
+        ticker = _resolve_series_value(row, ["ticker", "symbol", "underlying"])
+        flow_ts = _coerce_dt(_resolve_series_value(row, ["flow_ts_utc", "ts_event", "timestamp", "created_at"]))
+        if not event_id or not ticker or not flow_ts:
+            continue
+        if flow_ts >= cutoff:
+            continue
+
+        underlying_price = _coerce_float(_resolve_series_value(row, ["underlying_price", "spot_px", "spot_price"])) or 0.0
+
+        rows.append(
+            FlowRecord(
+                event_id=str(event_id),
+                ticker=str(ticker),
+                flow_ts_utc=flow_ts,
+                expiry=_resolve_series_value(row, ["expiry"]),
+                underlying_price=underlying_price,
+                option_price=_coerce_float(_resolve_series_value(row, ["option_price", "price"])),
+                premium_usd=_coerce_float(_resolve_series_value(row, ["premium_usd", "premium"])),
+                aggressor=_resolve_series_value(row, ["aggressor", "side"]),
+                put_call=_resolve_series_value(row, ["put_call", "type"]),
+                is_sweep=_resolve_series_value(row, ["is_sweep", "sweep"]),
+                iv=_coerce_float(_resolve_series_value(row, ["iv", "implied_volatility"])),
+            )
+        )
+
+    rows.sort(key=lambda r: r.flow_ts_utc)
+    return rows
+
+
+async def _filter_unlabeled(records: List[FlowRecord], limit: int) -> List[FlowRecord]:
+    if not records:
+        return []
+
+    candidate_ids = [r.event_id for r in records[: max(limit * 4, limit)]]
+
+    async def query(session: Any) -> set[str]:
+        stmt = text("SELECT event_id FROM flow_labels WHERE event_id = ANY(:event_ids)")
+        result = await session.execute(stmt, {"event_ids": candidate_ids})
+        return {row[0] for row in result.fetchall()}
+
+    labeled_ids = await db_query(query)
+    if not isinstance(labeled_ids, set):
+        labeled_ids = set(labeled_ids or [])
+
+    unlabeled = [r for r in records if r.event_id not in labeled_ids]
+    return unlabeled[:limit]
 
 
 async def get_unlabeled_flows(limit: int = BATCH_SIZE) -> List[Any]:
-    """Get flow records that haven't been labeled yet."""
+    """Get flow records that haven't been labeled yet, sourced from Heber."""
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(minutes=MIN_AGE_MINUTES)
+    start_time = cutoff - timedelta(hours=FLOW_LOOKBACK_HOURS)
 
-    async def query(session: Any) -> List[Any]:
-        # Get flows older than MIN_AGE_MINUTES that aren't in flow_labels yet
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=MIN_AGE_MINUTES)
-
-        stmt = text(
-            """
-            SELECT f.*
-            FROM silver_uw_flow f
-            LEFT JOIN flow_labels l ON f.event_id = l.event_id
-            WHERE l.event_id IS NULL
-            AND f.flow_ts_utc < :cutoff
-            ORDER BY f.flow_ts_utc ASC
-            LIMIT :limit
-        """
-        )
-
-        result = await session.execute(stmt, {"cutoff": cutoff, "limit": limit})
-        return result.fetchall()
-
-    return await db_query(query)
+    raw_df = _heber_reader.read_flow(
+        asof_time=now_utc,
+        start_time=start_time,
+    )
+    records = _normalize_flow_df(raw_df, cutoff=cutoff)
+    return await _filter_unlabeled(records, limit=limit)
 
 
 async def get_price_at_time(ticker: str, target_ts: datetime, tolerance_minutes: int = 10) -> Optional[float]:
-    """Get underlying price at a specific time from flow data (bars have zero prices)."""
+    """Get underlying price near target time using Heber bars."""
+    window_start = target_ts - timedelta(minutes=tolerance_minutes)
+    window_end = target_ts + timedelta(minutes=tolerance_minutes)
 
-    async def query(session: Any) -> Optional[float]:
-        window_start = target_ts - timedelta(minutes=tolerance_minutes)
-        window_end = target_ts + timedelta(minutes=tolerance_minutes)
+    bars = _heber_reader.read_bars(
+        symbols=[ticker],
+        asof_time=datetime.now(timezone.utc),
+        start_time=window_start,
+        end_time=window_end,
+    )
+    if bars.empty:
+        return None
 
-        # Use flow records' underlying_price since bar data is broken
-        stmt = text(
-            """
-            SELECT underlying_price
-            FROM silver_uw_flow
-            WHERE ticker = :ticker
-            AND flow_ts_utc >= :window_start
-            AND flow_ts_utc <= :window_end
-            AND underlying_price > 0
-            ORDER BY ABS(EXTRACT(EPOCH FROM flow_ts_utc - :target_ts))
-            LIMIT 1
-        """
-        )
+    ts_col = None
+    for candidate in ("ts_event", "bar_start_ts", "timestamp"):
+        if candidate in bars.columns:
+            ts_col = candidate
+            break
+    if ts_col is None:
+        return None
 
-        result = await session.execute(
-            stmt,
-            {
-                "ticker": ticker,
-                "window_start": window_start,
-                "window_end": window_end,
-                "target_ts": target_ts,
-            },
-        )
-        row = result.fetchone()
-        return float(row[0]) if row else None
+    close_col = "close" if "close" in bars.columns else ("c" if "c" in bars.columns else None)
+    if close_col is None:
+        return None
 
-    return await db_query(query)
+    bars = bars.copy()
+    bars["__ts"] = pd.to_datetime(bars[ts_col], utc=True, errors="coerce")
+    bars = bars[(bars["__ts"] >= pd.Timestamp(window_start)) & (bars["__ts"] <= pd.Timestamp(window_end))]
+    if bars.empty:
+        return None
+
+    bars["__delta"] = (bars["__ts"] - pd.Timestamp(target_ts)).abs()
+    best = bars.sort_values("__delta").iloc[0]
+    return _coerce_float(best[close_col])
 
 
 def calculate_return(entry_price: float, exit_price: float) -> Optional[float]:
