@@ -2579,3 +2579,28 @@ P0:
 
 P1:
 1. Add integration tests proving each context-dependent exit rule can fire in `main_execution` path with representative context payloads.
+
+## 67) Pass 60 Continuation (2026-02-06)
+
+### 67.1 Exit Rules Consume Underlying-Ticker Flow Streams Without Contract Scoping
+
+Current data fetch:
+- `main_execution` pulls recent flow by underlying ticker only (`SilverOptionFlow.ticker == ticker`) (`src/orion/main_execution.py:32` to `src/orion/main_execution.py:35`),
+- this same `recent_flow` list is passed to all exit rules for the tracked position (`src/orion/main_execution.py:324` to `src/orion/main_execution.py:327`).
+
+Rule-level scope behavior:
+- `NetPremiumDeclineExitRule` aggregates bullish/bearish premium across all `recent_flow` rows with no option contract or DTE match filter (`src/orion/processing/rules/exit_rules.py:221` to `src/orion/processing/rules/exit_rules.py:236`),
+- `WaningMomentumExitRule` counts sweeps across all rows in window with no contract scoping (`src/orion/processing/rules/exit_rules.py:323` to `src/orion/processing/rules/exit_rules.py:329`),
+- `OpposingClusterExitRule` includes a note that strike/expiry filtering “could” be added but does not implement it (`src/orion/processing/rules/exit_rules.py:450`).
+
+Risk:
+- exits for one option position can be triggered by unrelated flow activity on different expiries/strikes of the same underlying, increasing false positives/negatives in contract-level strategy exits.
+
+### 67.2 Updated Priorities
+
+P0:
+1. Scope exit-rule flow inputs to position identity (option contract or explicit strike/expiry family), not ticker-only streams.
+2. Add deterministic filter contract in rule input layer (for example by `option_chain` exact match, then fallback to bucketed strike/expiry neighborhood only if explicitly intended).
+
+P1:
+1. Add regression tests with mixed-contract same-ticker flow proving one position’s exits are unaffected by unrelated contract flow.

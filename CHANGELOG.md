@@ -261,6 +261,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - rule-activation finding: `main_execution` invokes exit rules with `context={}`, effectively disabling context-dependent rules (`current_oi`, `current_iv`, `current_option_price`)
   - coverage finding: several configured exit rules can silently return `None` in production path due to missing context population
   - hardening recommendations for populated exit-context construction and missing-context observability/tests
+- **Gateway/Heber Parity Audit (Pass 60)**: Continued audit with:
+  - flow-scoping finding: `main_execution` fetches exit context by underlying ticker only and feeds that stream to all exit rules
+  - contract-integrity finding: several exit rules aggregate flow without option-contract scoping, allowing unrelated expiry/strike flow to influence exits
+  - hardening recommendations for contract-aware flow filters and mixed-contract regression coverage
 
 ### Changed
 
