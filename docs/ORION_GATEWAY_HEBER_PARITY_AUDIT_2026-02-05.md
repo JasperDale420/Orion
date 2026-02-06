@@ -2037,3 +2037,45 @@ P0:
 
 P1:
 1. Add per-bucket class-balance dashboards and fail training when class coverage is below minimum thresholds.
+
+## 50) Pass 43 Continuation (2026-02-06)
+
+### 50.1 Exit Orchestration Split-Brain: Two Independent Runtime Loops Can Close the Same Positions
+
+Current runtime wiring:
+- compose runs both `execution` (`python -m orion.main_execution`) and `position-monitor` (`python -m orion.main_position_monitor`) simultaneously (`docker-compose.yml:124`, `docker-compose.yml:144`),
+- `main_execution` evaluates exit rules and executes closes via `execution_engine.close_position(...)` (`src/orion/main_execution.py:320` to `src/orion/main_execution.py:340`),
+- `position_monitor` independently evaluates ML/heuristic exits and calls `connector.close_position(...)` (`src/orion/execution/position_monitor.py:242`, `src/orion/execution/position_monitor.py:315`).
+
+Risk:
+- duplicate/uncoordinated exit attempts can generate conflicting close orders and noisy execution telemetry.
+
+### 50.2 `PositionMonitor` Uses Approximate Entry Time (`now`) Instead of Actual Entry Timestamp
+
+Current behavior:
+- new tracked positions set `entry_time=datetime.now(timezone.utc)` (`src/orion/execution/position_monitor.py:124`),
+- time-held features are derived from this value for exit decisions (`src/orion/execution/position_monitor.py:222` to `src/orion/execution/position_monitor.py:223`),
+- `_fetch_entry_context` query does not return entry timestamp from decision/candidate rows (`src/orion/execution/position_monitor.py:155` to `src/orion/execution/position_monitor.py:173`).
+
+Risk:
+- time-based exit logic (especially bucket urgency) is systematically wrong after monitor restarts or when positions predate process start.
+
+### 50.3 `PositionMonitor` Entry-Context Lookup Uses Ticker Match, Not Option Symbol Match
+
+Current lookup path:
+- context query filters on `ct.ticker = :symbol` (`src/orion/execution/position_monitor.py:168`),
+- but candidate model stores option contracts separately in `candidate_trades.option_symbol` (`src/orion/storage/models_gold.py:33`),
+- if broker position symbol is an option contract, lookup can miss and default to generic `{"bucket": "SWING"}` (`src/orion/execution/position_monitor.py:209`).
+
+Risk:
+- option positions can be misbucketed and evaluated with weak/default context, reducing exit-model reliability.
+
+### 50.4 Updated Priorities
+
+P0:
+1. Consolidate to one canonical exit executor (either `main_execution` exit-rule path or `position_monitor`) and disable the other in active compose runtime.
+2. Populate monitor `entry_time` from authoritative execution timestamps (strategy decision / fill time), not process-time defaults.
+
+P1:
+1. Extend position-context lookup to match option positions by `option_symbol` and fall back to ticker only when appropriate.
+2. Add idempotency guardrails around close-order submission (for example open-close intent table keyed by position + decision window).

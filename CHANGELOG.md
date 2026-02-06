@@ -193,6 +193,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - model-bias finding: `exit_classifier` training data generation skips `max_return_pct <= 0` trades, introducing winner/survivor bias in exit timing models
   - readiness-contract finding: exit-classifier training query does not enforce `ml_ready` completeness before building samples
   - validation-method finding: exit-classifier AUC is evaluated with random `train_test_split` rather than time-aware validation, increasing temporal leakage risk
+- **Gateway/Heber Parity Audit (Pass 43)**: Continued audit with:
+  - runtime split-brain finding: compose runs both `main_execution` and `position_monitor`, each with independent close-position execution paths
+  - exit-feature fidelity finding: `PositionMonitor` initializes `entry_time` from process `now` rather than true entry timestamp, skewing time-held exit signals
+  - context-lookup finding: position monitor resolves entry context via `candidate_trades.ticker` match only, which can miss option-contract positions keyed by `option_symbol`
 
 ### Changed
 
