@@ -2475,3 +2475,24 @@ P0:
 
 P1:
 1. Add restart regression test: execute order with nonzero qty, restart `PositionManager`, assert tracked qty matches persisted/broker qty and exit call uses that qty.
+
+## 63) Pass 56 Continuation (2026-02-06)
+
+### 63.1 Post-Execution Failure Reasons Are Mutated In-Memory but Not Persisted to `strategy_decisions`
+
+Current lifecycle:
+- `main_execution` persists the decision record before execution (`src/orion/main_execution.py:293` to `src/orion/main_execution.py:295`),
+- `ExecutionEngine` mutates `decision.reason` for execution-time failures/rejections (for example broker error, rate limit, risk rejection) (`src/orion/execution/execution_engine.py:161`, `src/orion/execution/execution_engine.py:315`, `src/orion/execution/execution_engine.py:366`, `src/orion/execution/execution_engine.py:423`),
+- post-execution DB update path only sets `executed_successfully` and does not persist updated `reason`/trace fields (`src/orion/main_execution.py:190` to `src/orion/main_execution.py:198`).
+
+Risk:
+- `strategy_decisions` can show final status (`FALSE`/`SKIPPED`) with stale pre-execution reasons, degrading auditability and operator debugging fidelity.
+
+### 63.2 Updated Priorities
+
+P0:
+1. Replace status-only post-execution update with full decision-state persistence (at minimum `executed_successfully`, `reason`, and execution-trace deltas).
+2. Add regression test asserting that broker/risk failures are reflected in persisted `strategy_decisions.reason`.
+
+P1:
+1. Normalize execution failure taxonomy across `strategy_decisions.reason` and `order_records.error_message` so dashboards/alerts can group by canonical failure codes.

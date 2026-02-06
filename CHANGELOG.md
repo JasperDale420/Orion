@@ -245,6 +245,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - position-state finding: `PositionManager` rehydrates/stores exit-rule quantity from `decision.execution_params`, but execution path does not persist submitted `qty` there
   - exit-reliability finding: `main_execution` uses tracked `position.qty` directly for close orders, so zero/incorrect rehydrated qty can propagate into close attempts
   - hardening recommendations for persisted quantity source-of-truth and restart qty-parity regression coverage
+- **Gateway/Heber Parity Audit (Pass 56)**: Continued audit with:
+  - auditability finding: execution-time failure reasons are set on the in-memory decision object, but post-execution DB update path persists only `executed_successfully`
+  - observability finding: `strategy_decisions.reason` can remain stale pre-execution text while final status indicates execution failure/skips
+  - hardening recommendations for full post-execution decision-state persistence and failure-reason regression tests
 
 ### Changed
 
