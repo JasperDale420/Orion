@@ -31,6 +31,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Heber Labeler Migration Tests**: Added `tests/unit/test_main_labeler_heber_migration.py` covering:
   - Heber flow payload normalization into labeler records
   - Alias-field handling for mixed flow schemas
+- **Heber Feature-Enrichment Source Tests**: Added `tests/unit/test_feature_enrichment_heber_source.py` for:
+  - Top-ticker extraction from Heber flow frames
+  - Recent-window filtering behavior
+  - Graceful handling when expected columns are missing
 
 ### Changed
 
@@ -56,6 +60,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Migrated `main_labeler.py` read path from local `silver_uw_flow` SQL queries to Heber-backed `HeberReader.read_flow(...)`
   - Migrated price lookup for label horizons to Heber bars (`HeberReader.read_bars(...)`)
   - Kept `flow_labels` persistence in local Orion DB for compatibility during transition
+- **Feature Enrichment Active-Ticker Discovery**:
+  - Updated `main_feature_enrichment.py` to source active tickers from Heber flow data first
+  - Retained local SQL discovery as a fallback path for operational safety
 
 ### Fixed
 

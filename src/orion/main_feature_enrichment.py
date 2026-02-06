@@ -10,6 +10,7 @@ import signal
 from datetime import datetime, timezone
 from typing import Any, List
 
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,6 +18,7 @@ load_dotenv()
 from sqlalchemy import text
 
 from orion.analysis.regime import MultiAxisRegimeDetector
+from orion.clients.heber_reader import HeberReader
 from orion.config import system_settings
 from orion.connectors.uw_greek_exposure_connector import UWGreekExposureConnector
 from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
@@ -37,9 +39,54 @@ IV_RANK_INTERVAL = 900  # Every 15 minutes
 REGIME_SNAPSHOT_INTERVAL = 300  # Every 5 minutes
 VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
 
+_heber_reader = HeberReader()
+
+
+def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> List[str]:
+    if flow_df.empty:
+        return []
+
+    ticker_col = None
+    for candidate in ("ticker", "symbol", "underlying"):
+        if candidate in flow_df.columns:
+            ticker_col = candidate
+            break
+
+    if ticker_col is None:
+        return []
+
+    ts_col = None
+    for candidate in ("flow_ts_utc", "ts_event", "timestamp", "created_at"):
+        if candidate in flow_df.columns:
+            ts_col = candidate
+            break
+
+    if ts_col is not None:
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)
+        ts = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+        flow_df = flow_df.loc[ts >= cutoff]
+
+    tickers = flow_df[ticker_col].dropna().astype(str).str.upper().str.strip().replace("", pd.NA).dropna()
+    if tickers.empty:
+        return []
+
+    counts = tickers.value_counts()
+    return counts.head(limit).index.tolist()
+
 
 async def get_active_tickers(limit: int = 20) -> List[str]:
-    """Get tickers with recent flow activity."""
+    """Get tickers with recent flow activity (Heber first, DB fallback)."""
+    try:
+        now_utc = datetime.now(timezone.utc)
+        flow_df = _heber_reader.read_flow(
+            asof_time=now_utc,
+            start_time=now_utc - pd.Timedelta(days=2),
+        )
+        tickers = _extract_top_tickers_from_flow_df(flow_df, limit=limit)
+        if tickers:
+            return tickers
+    except Exception:
+        logger.debug("Heber flow ticker discovery failed, falling back to local DB", exc_info=True)
 
     async def query(session: Any) -> List[str]:
         stmt = text(
