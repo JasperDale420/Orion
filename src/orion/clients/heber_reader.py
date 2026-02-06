@@ -9,7 +9,6 @@ It intentionally avoids unsupported endpoints like `/silver/read` and `/gold/rea
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -20,10 +19,9 @@ import pandas as pd
 import pyarrow.parquet as pq
 import structlog
 
-logger = structlog.get_logger(__name__)
+from orion.config import system_settings
 
-HEBER_CATALOG_URL = os.getenv("HEBER_CATALOG_URL", "http://localhost:8085/api/v1")
-HEBER_DATA_ROOT = os.getenv("HEBER_DATA_ROOT", "/Volumes/heber/data")
+logger = structlog.get_logger(__name__)
 
 _SILVER_BARS_DATASET = "bars"
 _SILVER_FLOW_DATASET = "flow_alerts"
@@ -39,8 +37,8 @@ class HeberReader:
         data_root: str | Path | None = None,
         http_client: httpx.Client | None = None,
     ):
-        self.catalog_url = catalog_url or HEBER_CATALOG_URL
-        self.data_root = Path(data_root) if data_root is not None else Path(HEBER_DATA_ROOT)
+        self.catalog_url = catalog_url or system_settings.heber_catalog_url
+        self.data_root = Path(data_root) if data_root is not None else Path(system_settings.heber_data_root)
         self._client = http_client
 
     @property

@@ -13,13 +13,14 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from orion.config import system_settings
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
 
 # Feature flag for Gateway mode (default: True to use Gateway)
-USE_GATEWAY = os.getenv("ORION_USE_GATEWAY", "true").lower() == "true"
+USE_GATEWAY = system_settings.orion_use_gateway
 
 
 class AlpacaStreamConnector:

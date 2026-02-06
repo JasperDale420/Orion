@@ -9,13 +9,13 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from orion.config import system_settings
 from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
@@ -444,14 +444,14 @@ class GatewayStreamClient:
 def create_gateway_stream_client(
     on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
 ) -> GatewayStreamClient:
-    """Create GatewayStreamClient from environment variables."""
-    gateway_url = os.getenv("DATA_GATEWAY_URL")
-    api_key = os.getenv("DATA_GATEWAY_API_KEY")
+    """Create GatewayStreamClient from centralized system settings."""
+    gateway_url = system_settings.data_gateway_url
+    api_key = system_settings.data_gateway_api_key
 
     if not gateway_url:
-        raise ValueError("DATA_GATEWAY_URL environment variable not set")
+        raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
     if not api_key:
-        raise ValueError("DATA_GATEWAY_API_KEY environment variable not set")
+        raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
 
     return GatewayStreamClient(
         gateway_url=gateway_url,

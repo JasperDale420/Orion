@@ -28,6 +28,59 @@ def test_agent_settings_env_mapping():
         assert s.openai_api_key == "sk-test-123"
 
 
+def test_gateway_settings_env_mapping_primary_names():
+    """Verify DATA_GATEWAY_* env vars map into centralized system settings."""
+    with patch.dict(
+        os.environ,
+        {
+            "DATA_GATEWAY_URL": "http://gateway.internal:8080",
+            "DATA_GATEWAY_API_KEY": "gw-key-123",
+            "ORION_USE_GATEWAY": "false",
+        },
+        clear=True,
+    ):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.data_gateway_url == "http://gateway.internal:8080"
+        assert s.data_gateway_api_key == "gw-key-123"
+        assert s.orion_use_gateway is False
+
+
+def test_gateway_settings_env_mapping_legacy_aliases():
+    """Verify legacy GATEWAY_* env vars are still accepted."""
+    with patch.dict(
+        os.environ,
+        {
+            "GATEWAY_URL": "http://legacy-gateway:8080",
+            "GATEWAY_API_KEY": "legacy-key",
+        },
+        clear=True,
+    ):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.data_gateway_url == "http://legacy-gateway:8080"
+        assert s.data_gateway_api_key == "legacy-key"
+
+
+def test_heber_settings_env_mapping():
+    """Verify Heber env vars map into centralized system settings."""
+    with patch.dict(
+        os.environ,
+        {
+            "HEBER_CATALOG_URL": "http://heber-catalog:8085/api/v1",
+            "HEBER_DATA_ROOT": "/tmp/heber-data",
+        },
+        clear=True,
+    ):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.heber_catalog_url == "http://heber-catalog:8085/api/v1"
+        assert str(s.heber_data_root) == "/tmp/heber-data"
+
+
 @pytest.mark.asyncio
 async def test_eod_review_uses_config():
     """Verify EODReviewAgent uses configured paths."""

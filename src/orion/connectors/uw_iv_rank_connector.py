@@ -6,7 +6,6 @@ Fetches IV rank and percentile via Data Gateway.
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +13,7 @@ import requests
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
@@ -23,9 +23,9 @@ class UWIVRankConnector:
     """Fetches IV rank/percentile via Data Gateway."""
 
     def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        self.headers = {"X-Gateway-Key": self.gateway_key}
+        self.gateway_url = gateway_url or system_settings.data_gateway_url
+        self.gateway_key = gateway_key or system_settings.data_gateway_api_key
+        self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_iv_rank(self, ticker: str) -> Optional[Dict[str, Any]]:

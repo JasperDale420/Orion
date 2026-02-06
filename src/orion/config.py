@@ -2,9 +2,10 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file if present
 
+from pathlib import Path
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +67,25 @@ class SystemSettings(BaseSettings):
     artifacts_dir: str = Field(default="artifacts", validation_alias="ORION_ARTIFACTS_DIR")
     baseline_solver_id: Optional[str] = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
+    orion_use_gateway: bool = Field(default=True, validation_alias="ORION_USE_GATEWAY")
+
+    # Centralized Gateway + Heber integration settings
+    data_gateway_url: str = Field(
+        default="http://localhost:8080",
+        validation_alias=AliasChoices("DATA_GATEWAY_URL", "GATEWAY_URL"),
+    )
+    data_gateway_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("DATA_GATEWAY_API_KEY", "GATEWAY_API_KEY"),
+    )
+    heber_catalog_url: str = Field(
+        default="http://localhost:8085/api/v1",
+        validation_alias="HEBER_CATALOG_URL",
+    )
+    heber_data_root: Path = Field(
+        default=Path("/Volumes/heber/data"),
+        validation_alias="HEBER_DATA_ROOT",
+    )
 
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)

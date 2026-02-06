@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Gateway `type=data` + `envelope` + `data` bar message parsing
   - Invalid bar rejection behavior
   - Pre-connect subscription queue behavior
+- **Gateway/Heber Config Mapping Tests**: Added coverage in `tests/unit/test_config_centralization.py` for:
+  - `DATA_GATEWAY_*` env mappings
+  - legacy `GATEWAY_*` alias compatibility
+  - `HEBER_*` env mappings into centralized settings
 
 ### Changed
 
@@ -40,6 +44,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Uses envelope-provided `event_id` when present for idempotency parity
   - Normalizes `symbol`/`ticker` keys into payload for downstream Alpaca bar normalization
   - Queues subscriptions requested before websocket connection and flushes them on startup
+- **Centralized Gateway/Heber Runtime Config**:
+  - Added `system_settings` fields for `data_gateway_url`, `data_gateway_api_key`, `heber_catalog_url`, `heber_data_root`, and `orion_use_gateway`
+  - Added backward-compatible alias support (`GATEWAY_*` -> `DATA_GATEWAY_*`)
+  - Refactored Gateway/Heber callers to use centralized config (`gateway_stream_client`, `heber_reader`, UW enrichment connectors, `sync_earnings`, `main_feature_enrichment`)
+  - Removed hardcoded default Gateway API key fallback in UW connectors
 
 ### Fixed
 

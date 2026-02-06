@@ -6,7 +6,6 @@ Runs as a background service to populate feature tables for ML.
 """
 
 import asyncio
-import os
 import signal
 from datetime import datetime, timezone
 from typing import Any, List
@@ -18,6 +17,7 @@ load_dotenv()
 from sqlalchemy import text
 
 from orion.analysis.regime import MultiAxisRegimeDetector
+from orion.config import system_settings
 from orion.connectors.uw_greek_exposure_connector import UWGreekExposureConnector
 from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
@@ -187,7 +187,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
     await init_db()
 
-    gateway_url = os.environ.get("GATEWAY_URL", "http://localhost:8080")
+    gateway_url = system_settings.data_gateway_url
 
     # Initialize connectors (now using Data Gateway)
     greek_connector = UWGreekExposureConnector(gateway_url=gateway_url)
