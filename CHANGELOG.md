@@ -209,6 +209,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - data-linkage finding: `ExecutionEngine` exit persistence path omits `ExitDecision.candidate_id` even though model/schema expects candidate linkage
   - restart-correctness finding: `PositionManager.initialize` determines open positions via `StrategyDecision.candidate_id` ↔ `ExitDecision.candidate_id` join, which can misclassify exited positions when linkage is missing
   - reliability recommendations for candidate-linked exit writes and restart-resume regression coverage
+- **Gateway/Heber Parity Audit (Pass 47)**: Continued audit with:
+  - execution-concurrency finding: `main_execution.fetch_pending_candidates` uses anti-join polling without atomic claim/lock semantics, allowing duplicate pickup in multi-worker scenarios
+  - idempotency-contract finding: `strategy_decisions` stores `candidate_id` as non-unique, so duplicate decisions per candidate are structurally possible
+  - hardening recommendations for claim-based polling and one-decision-per-candidate constraints/tests
 
 ### Changed
 

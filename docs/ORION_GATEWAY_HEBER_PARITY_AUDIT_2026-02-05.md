@@ -2180,3 +2180,32 @@ P0:
 
 P1:
 1. Backfill/repair recent `ExitDecision` rows with candidate linkage where deterministically resolvable (for example via broker order IDs + order/fill tables).
+
+## 54) Pass 47 Continuation (2026-02-06)
+
+### 54.1 Pending-Candidate Polling Lacks Concurrency-Safe Claiming
+
+Current execution selection path:
+- pending candidates are selected by anti-join on `strategy_decisions` (`src/orion/main_execution.py:59` to `src/orion/main_execution.py:63`),
+- no row-level claiming/locking (`FOR UPDATE SKIP LOCKED`-style) or in-progress state exists before decision persistence.
+
+Risk:
+- concurrent execution workers (intentional scale-out or accidental duplicate processes) can fetch/process the same candidate simultaneously.
+
+### 54.2 `strategy_decisions` Schema Does Not Enforce One Decision Per Candidate
+
+Current schema shape:
+- `StrategyDecision.candidate_id` is indexed but not unique (`src/orion/storage/models_gold.py:86`),
+- duplicate decision rows for one candidate are therefore structurally allowed.
+
+Risk:
+- duplicate executions/skips for the same candidate can be persisted, complicating auditability and downstream lifecycle logic.
+
+### 54.3 Updated Priorities
+
+P0:
+1. Implement atomic candidate claiming (for example transactional claim table/update or `SKIP LOCKED` polling pattern) before policy/execution steps.
+2. Add uniqueness/idempotency guard (`UNIQUE` on decision candidate identity or deterministic upsert) aligned to intended one-decision-per-candidate contract.
+
+P1:
+1. Add multi-worker integration test that runs two execution loops against the same candidate set and asserts single decision/execution outcome per candidate.
