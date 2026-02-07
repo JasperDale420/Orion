@@ -45,6 +45,10 @@ POLL_INTERVAL_SECONDS = 60
 shutdown_event = asyncio.Event()
 
 
+def _legacy_label_pipelines_enabled() -> bool:
+    return os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def handle_shutdown(signum: int, frame: Any) -> None:
     """Handle shutdown signals."""
     logger.info(f"Received signal {signum}, initiating shutdown...")
@@ -183,6 +187,16 @@ async def run_quote_tracker() -> None:
             "replacement_path": "heber.watch.poller + labels_alert_barriers/meta_label_features",
         },
     )
+    if not _legacy_label_pipelines_enabled():
+        logger.warning(
+            "Legacy local option quote tracker disabled by config",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_option_quote_tracker",
+                "control": "ORION_ENABLE_LEGACY_LABEL_PIPELINES=false",
+            },
+        )
+        return
     logger.info("Option Quote Tracker starting...")
 
     connector = AlpacaOptionGreeksConnector()

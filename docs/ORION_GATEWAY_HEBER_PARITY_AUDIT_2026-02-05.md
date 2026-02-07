@@ -4989,3 +4989,23 @@ References:
 
 Residual:
 - warnings are now present, but runtime disable switches / staged shutdown orchestration for these services are still pending the archive-wave implementation.
+
+## 164) Pass 157 Continuation (2026-02-07)
+
+### 164.1 Legacy Label Pipelines Now Support Runtime Disable Control for Staged Decommission
+
+Implemented:
+- Added runtime gate `ORION_ENABLE_LEGACY_LABEL_PIPELINES` (default enabled) to:
+  - `orion.main_option_quote_tracker`
+  - `orion.main_labeler`
+  - `orion.main_price_target_labeler`
+- When set to false, service logs `DEPRECATED_PIPELINE_DISABLED` and exits before processing loop.
+- This enables environment-level staged shutdown without code edits during archive waves.
+
+References:
+- `src/orion/main_option_quote_tracker.py`
+- `src/orion/main_labeler.py`
+- `src/orion/main_price_target_labeler.py`
+
+Residual:
+- runtime gate is global (shared across all legacy label services); per-service kill switches may still be desirable for finer rollout control.

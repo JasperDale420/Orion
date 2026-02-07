@@ -6,6 +6,7 @@ Labels each flow with actual returns at 15m, 30m, 1h, 2h horizons.
 """
 
 import asyncio
+import os
 import signal
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,10 @@ MIN_AGE_MINUTES = 130  # Only label flows older than 2h10m (so 2h price is avail
 FLOW_LOOKBACK_HOURS = 72
 
 _heber_reader = HeberReader()
+
+
+def _legacy_label_pipelines_enabled() -> bool:
+    return os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -357,6 +362,16 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
             "replacement_path": "heber.watch.writer labels_alert_barriers",
         },
     )
+    if not _legacy_label_pipelines_enabled():
+        logger.warning(
+            "Legacy local flow labeler disabled by config",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_labeler",
+                "control": "ORION_ENABLE_LEGACY_LABEL_PIPELINES=false",
+            },
+        )
+        return
     logger.info("Starting Flow Labeling Service...")
 
     total_labeled = 0

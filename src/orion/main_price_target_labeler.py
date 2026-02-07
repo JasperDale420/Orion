@@ -52,6 +52,10 @@ _PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
 _PRICE_TARGET_LABEL_COLUMNS: Optional[Set[str]] = None
 
 
+def _legacy_label_pipelines_enabled() -> bool:
+    return os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _record_price_target_fallback(feature_name: str, error: Optional[Exception] = None, **context: Any) -> None:
     _PRICE_TARGET_FALLBACK_COUNTS[feature_name] += 1
     payload: Dict[str, Any] = {
@@ -2767,6 +2771,16 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
             "replacement_path": "heber.watch datasets (labels_alert_barriers/meta_label_features) after field mapping signoff",
         },
     )
+    if not _legacy_label_pipelines_enabled():
+        logger.warning(
+            "Legacy local price-target labeler disabled by config",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_price_target_labeler",
+                "control": "ORION_ENABLE_LEGACY_LABEL_PIPELINES=false",
+            },
+        )
+        return
     logger.info("Starting Price Target Labeling Service (v2 - comprehensive metrics)...")
 
     total_labeled = 0
