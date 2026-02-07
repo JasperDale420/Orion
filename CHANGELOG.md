@@ -609,6 +609,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - prefers `evidence.premium_usd` over nullable/ambiguous candidate premium
     - bypasses ML prefilter when required context is incomplete to avoid false skips
   - Added focused tests in `tests/unit/test_signal_engine_prefilter_config.py` for payload normalization and threshold-config behavior
+- **HeberReader Timeframe Contract Hardening**:
+  - `src/orion/clients/heber_reader.py` now enforces supported bar timeframes and fails fast for unsupported values instead of silently ignoring `timeframe`
+  - Added unit coverage in `tests/unit/test_heber_reader.py` for unsupported timeframe rejection
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

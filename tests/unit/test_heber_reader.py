@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pandas as pd
+import pytest
 
 from orion.clients.heber_reader import HeberReader
 
@@ -59,6 +60,27 @@ def test_read_bars_filters_instrument_and_asof(tmp_path: Path) -> None:
     assert set(result["instrument_key"]) == {"equity:AAPL"}
     assert "ts_event" in result.columns
     assert set(result["symbol"]) == {"AAPL"}
+
+
+def test_read_bars_rejects_unsupported_timeframe(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    bars = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "bar_start_ts": [base],
+            "ts_available": [base],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [10],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=bars" / "dt=2026-02-05" / "part-0.parquet", bars)
+
+    reader = HeberReader(data_root=tmp_path)
+    with pytest.raises(ValueError, match="Unsupported bars timeframe"):
+        reader.read_bars(symbols=["AAPL"], asof_time=base + timedelta(minutes=1), timeframe="5m")
 
 
 def test_read_flow_applies_min_premium(tmp_path: Path) -> None:

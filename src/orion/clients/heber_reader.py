@@ -26,6 +26,7 @@ logger = structlog.get_logger(__name__)
 _SILVER_BARS_DATASET = "bars"
 _SILVER_FLOW_DATASET = "flow_alerts"
 _SILVER_DARKPOOL_DATASET = "darkpool_trades"
+_SUPPORTED_BAR_TIMEFRAMES = {"1m"}
 
 
 class HeberReader:
@@ -102,10 +103,15 @@ class HeberReader:
     ) -> pd.DataFrame:
         """Read bars from Heber Silver (`feed=bars`) with as-of filtering.
 
-        `timeframe` is kept for interface compatibility. Orion currently reads
-        from the canonical `bars` dataset in Heber.
+        Orion currently supports only canonical 1-minute bars.
+        Unsupported timeframes fail fast to prevent silent granularity mismatches.
         """
-        _ = timeframe  # Reserved for future dataset routing (e.g., bars_5min).
+        normalized_timeframe = timeframe.strip().lower()
+        if normalized_timeframe not in _SUPPORTED_BAR_TIMEFRAMES:
+            raise ValueError(
+                f"Unsupported bars timeframe '{timeframe}'. "
+                f"Supported values: {sorted(_SUPPORTED_BAR_TIMEFRAMES)}"
+            )
 
         instrument_keys = self._to_instrument_keys(symbols)
         df = self._read_silver_dataset(
