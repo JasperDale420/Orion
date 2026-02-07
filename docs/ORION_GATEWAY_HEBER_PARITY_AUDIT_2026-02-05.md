@@ -3395,3 +3395,29 @@ P1:
 
 P2:
 1. Add load-test scenario asserting bounded memory and lag recovery under temporary ingestion stalls.
+
+## 98) Pass 91 Continuation (2026-02-07)
+
+### 98.1 UW Greek Exposure Connector Parses a Different Contract Than Gateway Spot-Exposure Endpoint
+
+Current integration path:
+- Orion connector calls `GET /api/v1/uw/{ticker}/spot-exposures` (`src/orion/connectors/uw_greek_exposure_connector.py:33`),
+- Gateway routes that path to flow-analytics strike endpoint (`../Data-Gateway/gateway/api/uw/flow_analytics.py:21` to `../Data-Gateway/gateway/api/uw/flow_analytics.py:37`),
+- provider normalization for that endpoint emits keys like `gamma_exposure`, `call_volume`, `put_volume`, `call_oi`, `put_oi` (`../Data-Gateway/gateway/providers/uw.py:2563` to `../Data-Gateway/gateway/providers/uw.py:2575`).
+
+Mismatch in Orion parser:
+- connector expects keys such as `call_gamma`, `put_gamma`, `call_vanna`, `put_vanna`, `call_charm`, `put_charm` (`src/orion/connectors/uw_greek_exposure_connector.py:57` to `src/orion/connectors/uw_greek_exposure_connector.py:88`),
+- these fields are not part of the normalized strike response contract above, so parsed aggregate values can silently collapse to zeros/defaults.
+
+Downstream impact:
+- connector persists `gex_oi` / `vex_oi` / `cex_oi` into `silver_greek_exposure` (`src/orion/connectors/uw_greek_exposure_connector.py:93` to `src/orion/connectors/uw_greek_exposure_connector.py:120`),
+- labeling/enrichment consumers read those values directly (`src/orion/main_price_target_labeler.py:478`, `src/orion/ml/flow_enricher.py:228`), so feature quality can degrade without explicit failure signals.
+
+### 98.2 Updated Priorities
+
+P1:
+1. Align connector to a single canonical endpoint+schema (either parse Gateway’s strike `gamma_exposure` contract or switch to an endpoint that returns call/put gamma/vanna/charm fields).
+2. Add strict response-contract validation with explicit error telemetry when expected keys are missing.
+
+P2:
+1. Add integration test with mocked Gateway payloads proving non-zero GEX/VEX extraction under the chosen canonical schema.

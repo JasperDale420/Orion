@@ -385,6 +385,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - buffering finding: stream connectors use unbounded queues while ingestion drains in fixed-size batches per cycle
   - resilience-risk finding: queue-overflow handling path is inert under current unbounded queue configuration, so overload policy is implicit
   - hardening recommendations for bounded buffering, explicit overflow policy, and adaptive drain/backpressure controls
+- **Gateway/Heber Parity Audit (Pass 91)**: Continued audit with:
+  - contract-mismatch finding: `uw_greek_exposure_connector` parses call/put gamma-vanna-charm fields from `/uw/{symbol}/spot-exposures` that the Gateway strike endpoint does not emit
+  - data-quality risk: persisted `silver_greek_exposure` aggregates can silently degrade toward default/zero values under schema mismatch
+  - hardening recommendations for endpoint/schema alignment plus strict response-contract validation tests
 
 ### Changed
 
