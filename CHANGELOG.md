@@ -381,6 +381,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - degradation finding: feature-enrichment ticker discovery silently falls back from Heber to local SQL and then static tickers
   - parity-risk finding: local `silver_uw_flow` fallback can diverge from Heber-first source-of-truth in current centralized ingestion architecture
   - hardening recommendations for explicit fallback telemetry/severity and policy-gated degrade mode
+- **Gateway/Heber Parity Audit (Pass 90)**: Continued audit with:
+  - buffering finding: stream connectors use unbounded queues while ingestion drains in fixed-size batches per cycle
+  - resilience-risk finding: queue-overflow handling path is inert under current unbounded queue configuration, so overload policy is implicit
+  - hardening recommendations for bounded buffering, explicit overflow policy, and adaptive drain/backpressure controls
 
 ### Changed
 

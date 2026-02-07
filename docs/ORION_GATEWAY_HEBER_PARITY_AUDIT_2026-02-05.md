@@ -3365,3 +3365,33 @@ P1:
 
 P2:
 1. Add regression tests for each fallback tier and assert alerting/telemetry behavior when Heber discovery path fails.
+
+## 97) Pass 90 Continuation (2026-02-07)
+
+### 97.1 Streaming Event Buffers Are Unbounded While Drain Is Batch-Limited
+
+Current behavior:
+- `AlpacaStreamConnector` and `GatewayStreamClient` both initialize default unbounded queues (`asyncio.Queue()` with no `maxsize`) (`src/orion/connectors/alpaca_stream_connector.py:60`, `src/orion/connectors/gateway_stream_client.py:67`),
+- drain path consumes at most 1000 events per cycle by default (`src/orion/connectors/alpaca_stream_connector.py:251`, `src/orion/connectors/gateway_stream_client.py:424`),
+- ingestion loop runs on a 60-second cycle (`src/orion/ingestion/service.py:161` to `src/orion/ingestion/service.py:163`) and drains stream events once per cycle (`src/orion/ingestion/service.py:229` to `src/orion/ingestion/service.py:230`).
+
+Risk:
+- during ingest slowdowns or bursty streams, backlog can grow without hard cap, increasing memory pressure and event-latency drift.
+
+### 97.2 Queue Full Handling Is Effectively Inert with Current Queue Construction
+
+Current path:
+- gateway callback path catches `asyncio.QueueFull` on `put_nowait` (`src/orion/connectors/alpaca_stream_connector.py:102` to `src/orion/connectors/alpaca_stream_connector.py:104`),
+- but queue has no max size, so `QueueFull` will not trigger under default implementation.
+
+Risk:
+- intended overload protection does not activate; system behavior under burst load is implicit/unbounded rather than explicit/drop-or-backpressure controlled.
+
+### 97.3 Updated Priorities
+
+P1:
+1. Introduce bounded queue sizes and explicit overflow policy (drop oldest, drop newest, or backpressure) for both stream clients.
+2. Replace fixed `max_events=1000` drain strategy with adaptive draining budget tied to queue depth/processing time budget.
+
+P2:
+1. Add load-test scenario asserting bounded memory and lag recovery under temporary ingestion stalls.
