@@ -635,6 +635,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Alpaca Stream Mode Resolution Fix**:
   - `src/orion/connectors/alpaca_stream_connector.py` now resolves gateway/direct mode at connector initialization time from `system_settings.orion_use_gateway` instead of using an import-time frozen constant
   - Added unit tests in `tests/unit/test_alpaca_stream_mode.py` to verify runtime-setting behavior and explicit override precedence
+- **Earnings Sync Gateway Auth Contract Fix**:
+  - `src/orion/jobs/sync_earnings.py` now fetches earnings directly from Data Gateway REST endpoints using `X-Gateway-Key` auth, removing Bearer-token UW SDK-through-gateway coupling
+  - Daily sync now uses record-level Gateway earnings dates (`data.date`) rather than forcing `date.today()` for all rows
+  - Added focused Gateway-contract tests in `tests/unit/test_sync_earnings_gateway.py` for header wiring, response parsing, daily date semantics, and ticker backfill row handling
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

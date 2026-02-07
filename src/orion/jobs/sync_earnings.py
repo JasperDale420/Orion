@@ -11,6 +11,7 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Optional
 
+import httpx
 from orion.config import system_settings
 from orion.shared.db_utils import db_query
 from sqlalchemy import text
@@ -18,82 +19,144 @@ from sqlalchemy import text
 logger = logging.getLogger("orion.jobs.sync_earnings")
 
 
+def _gateway_base_url() -> str:
+    base_url = (system_settings.data_gateway_url or "").strip()
+    if not base_url:
+        raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
+    return base_url.rstrip("/")
+
+
+def _gateway_headers() -> Dict[str, str]:
+    api_key = (system_settings.data_gateway_api_key or "").strip()
+    if not api_key:
+        raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
+    return {"X-Gateway-Key": api_key}
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_gateway_date(raw: Any) -> Optional[date]:
+    if not raw:
+        return None
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str):
+        from datetime import datetime as dt
+
+        value = raw.strip()
+        if not value:
+            return None
+        try:
+            return dt.strptime(value[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    return None
+
+
+async def _fetch_gateway_earnings(endpoint: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    url = f"{_gateway_base_url()}{endpoint}"
+    headers = _gateway_headers()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, params=params, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+
+    if not isinstance(payload, dict):
+        return []
+
+    data = payload.get("data", [])
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        return [data]
+    return []
+
+
 async def sync_todays_earnings() -> Dict[str, int]:
     """Sync today's earnings via Data Gateway (premarket + afterhours)."""
-    from orion.unusualwhales.api.earnings import get_afterhours_earnings, get_premarket_earnings
-    from orion.unusualwhales.client import UnusualWhalesClient
-
-    gateway_url = system_settings.data_gateway_url
-    client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"synced": 0, "errors": 0}
     today = date.today()
 
     # Fetch both premarket and afterhours earnings
-    await _fetch_and_sync_earnings(get_premarket_earnings.sync, client, today, "premarket", results)
-    await _fetch_and_sync_earnings(get_afterhours_earnings.sync, client, today, "afterhours", results)
+    await _fetch_and_sync_earnings("/api/v1/uw/earnings/premarket", today, "premarket", results)
+    await _fetch_and_sync_earnings("/api/v1/uw/earnings/afterhours", today, "afterhours", results)
 
     logger.info(f"Earnings sync complete: {results}")
     return results
 
 
 async def _fetch_and_sync_earnings(
-    fetch_fn: Any, client: Any, today: date, announce_time: str, results: Dict[str, int]
+    endpoint: str, target_date: date, fallback_announce_time: str, results: Dict[str, int]
 ) -> None:
-    """Fetch earnings using the given function and sync to database."""
-    from orion.unusualwhales.models.earnings_results import EarningsResults
-
+    """Fetch earnings from Data Gateway endpoint and sync to database."""
     try:
-        response = await asyncio.to_thread(fetch_fn, client=client)
-        if isinstance(response, EarningsResults) and response.data:
-            for e in response.data:
-                try:
-                    await _upsert_earnings(e, today, announce_time)
-                    results["synced"] += 1
-                except Exception as ex:
-                    logger.debug(f"Failed to upsert earnings: {ex}")
-                    results["errors"] += 1
+        rows = await _fetch_gateway_earnings(
+            endpoint=endpoint,
+            params={"date": target_date.isoformat(), "limit": 100},
+        )
+        for row in rows:
+            try:
+                await _upsert_earnings_row(row=row, fallback_announce_time=fallback_announce_time)
+                results["synced"] += 1
+            except Exception as ex:
+                logger.debug(f"Failed to upsert earnings row: {ex}")
+                results["errors"] += 1
     except Exception as e:
-        logger.error(f"Failed to fetch {announce_time} earnings: {e}")
+        logger.error(f"Failed to fetch earnings from {endpoint}: {e}")
         results["errors"] += 1
 
 
-async def backfill_ticker_earnings(ticker: str, client: Any) -> int:
+async def backfill_ticker_earnings(ticker: str) -> int:
     """Backfill historical earnings for a single ticker."""
-    from orion.unusualwhales.api.earnings import get_ticker_earnings
-    from orion.unusualwhales.models.earnings_results import EarningsResults
-    from orion.unusualwhales.types import UNSET
-
     count = 0
     try:
-        response = await asyncio.to_thread(get_ticker_earnings.sync, ticker=ticker, client=client)
-        if isinstance(response, EarningsResults) and response.data:
-            for e in response.data:
-                count += await _process_single_earnings_record(ticker, e, UNSET)
+        rows = await _fetch_gateway_earnings(
+            endpoint=f"/api/v1/uw/earnings/{ticker.upper()}",
+            params={"limit": 100},
+        )
+        for row in rows:
+            count += await _process_single_earnings_record(ticker=ticker, row=row)
     except Exception as e:
         logger.debug(f"Failed to fetch earnings for {ticker}: {e}")
 
     return count
 
 
-async def _process_single_earnings_record(ticker: str, e: Any, UNSET: Any) -> int:
+async def _process_single_earnings_record(ticker: str, row: Dict[str, Any]) -> int:
     """Process a single earnings record and upsert to database."""
-    report_date_raw = e.report_date
-    if not report_date_raw or isinstance(report_date_raw, type(UNSET)):
+    report_date = _parse_gateway_date(
+        row.get("date") or row.get("report_date") or row.get("earnings_date")
+    )
+    if report_date is None:
         return 0
 
     try:
-        report_date = _parse_report_date(report_date_raw)
-        announce = _extract_announce_time(e, UNSET)
-        eps_est = _extract_eps_estimate(e, UNSET)
+        announce = (
+            row.get("time")
+            or row.get("announce_time")
+            or row.get("report_time")
+            or row.get("earnings_time")
+        )
 
         await _upsert_earnings_direct(
-            ticker=ticker,
+            ticker=ticker.upper(),
             report_date=report_date,
             announce_time=announce,
-            eps_estimate=eps_est,
-            eps_actual=getattr(e, "eps_actual", None),
-            revenue_estimate=getattr(e, "revenue_estimate", None),
-            revenue_actual=getattr(e, "revenue_actual", None),
+            eps_estimate=_to_float(
+                row.get("eps_estimate")
+                or row.get("street_mean_est")
+                or row.get("eps_mean_est")
+            ),
+            eps_actual=_to_float(row.get("eps_actual")),
+            revenue_estimate=_to_float(row.get("revenue_estimate")),
+            revenue_actual=_to_float(row.get("revenue_actual")),
         )
         return 1
     except Exception as ex:
@@ -135,11 +198,6 @@ def _extract_eps_estimate(e: Any, UNSET: Any) -> Optional[float]:
 
 async def backfill_all_earnings() -> Dict[str, int]:
     """Backfill earnings for all unique tickers via Data Gateway."""
-    from orion.unusualwhales.client import UnusualWhalesClient
-
-    gateway_url = system_settings.data_gateway_url
-    # Use gateway URL with a placeholder token (auth handled by Gateway)
-    client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"tickers": 0, "earnings": 0, "errors": 0}
 
     # Get unique tickers from labels
@@ -153,7 +211,7 @@ async def backfill_all_earnings() -> Dict[str, int]:
 
     for i, ticker in enumerate(tickers):
         try:
-            count = await backfill_ticker_earnings(ticker, client)
+            count = await backfill_ticker_earnings(ticker)
             results["earnings"] += count
             results["tickers"] += 1
             if (i + 1) % 50 == 0:
@@ -184,6 +242,40 @@ async def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: 
         eps_actual=getattr(earnings_obj, "eps_actual", None),
         revenue_estimate=getattr(earnings_obj, "revenue_estimate", None),
         revenue_actual=getattr(earnings_obj, "revenue_actual", None),
+    )
+
+
+async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str) -> None:
+    ticker = (row.get("symbol") or row.get("ticker") or "").strip().upper()
+    if not ticker:
+        return
+
+    report_date = _parse_gateway_date(
+        row.get("date") or row.get("report_date") or row.get("earnings_date")
+    )
+    if report_date is None:
+        return
+
+    announce_time = (
+        row.get("time")
+        or row.get("announce_time")
+        or row.get("report_time")
+        or row.get("earnings_time")
+        or fallback_announce_time
+    )
+
+    await _upsert_earnings_direct(
+        ticker=ticker,
+        report_date=report_date,
+        announce_time=str(announce_time) if announce_time is not None else None,
+        eps_estimate=_to_float(
+            row.get("eps_estimate")
+            or row.get("street_mean_est")
+            or row.get("eps_mean_est")
+        ),
+        eps_actual=_to_float(row.get("eps_actual")),
+        revenue_estimate=_to_float(row.get("revenue_estimate")),
+        revenue_actual=_to_float(row.get("revenue_actual")),
     )
 
 
