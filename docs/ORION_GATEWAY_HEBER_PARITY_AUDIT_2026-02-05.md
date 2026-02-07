@@ -3711,3 +3711,29 @@ P1:
 
 P2:
 1. Add regression tests with mocked earnings payloads covering both model-native (`street_mean_est`) and normalized (`eps_estimate`) shapes to verify persisted parity.
+
+## 111) Pass 104 Continuation (2026-02-07)
+
+### 111.1 HeberReader Health Path Depends on Relative URL Escapes
+
+Current behavior:
+- `HeberReader.health_check()` tries `"/health"` first, then `"../../health"` as fallback (`src/orion/clients/heber_reader.py:69`),
+- default Orion config sets `heber_catalog_url` to `http://localhost:8085/api/v1` (`src/orion/config.py:81` to `src/orion/config.py:83`),
+- Heber catalog exposes health at `/health` and datasets at `/api/v1/datasets` (`../Heber/heber/catalog/api.py:129`, `../Heber/heber/catalog/api.py:135`).
+
+Observed URL-shape coupling:
+- with base URL ending in `/api/v1`, request `"/health"` resolves to `/api/v1/health` (not canonical),
+- fallback `"../../health"` is relied upon to escape path prefix and hit root health endpoint.
+
+Risk:
+- behavior depends on subtle path-join semantics and exact base URL shape,
+- configuration drift (for example changing base URL to root vs `/api/v1`) can make one path family work while another breaks, increasing diagnosis time.
+
+### 111.2 Updated Priorities
+
+P1:
+1. Replace relative traversal fallback with explicit canonical endpoint composition (derive root URL once, then call `/health` and `/api/v1/datasets` deterministically).
+2. Add startup validation that asserts `heber_catalog_url` contract and logs a single actionable misconfiguration error.
+
+P2:
+1. Add unit tests for both supported base URL shapes (`.../api/v1` and root host) to verify deterministic health and dataset endpoint resolution.

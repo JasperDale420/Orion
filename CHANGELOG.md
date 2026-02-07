@@ -437,6 +437,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - schema-mapping finding: daily earnings sync reads `eps_estimate/revenue_*` attributes not defined on the current `Earnings` model
   - data-quality risk: daily earnings writes can persist null fundamentals even when Gateway provides normalized estimate/actual fields
   - hardening recommendations for unified earnings field extraction across daily/backfill paths with explicit mapping tests
+- **Gateway/Heber Parity Audit (Pass 104)**: Continued audit with:
+  - integration-fragility finding: `HeberReader.health_check()` relies on relative path escape (`../../health`) from `/api/v1` base URLs
+  - operability-risk finding: catalog base-url shape changes can break health/dataset calls asymmetrically and mask root-cause configuration drift
+  - hardening recommendations for explicit endpoint construction and startup URL-contract validation
 
 ### Changed
 
