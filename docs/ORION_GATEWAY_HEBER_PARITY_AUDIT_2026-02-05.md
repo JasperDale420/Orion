@@ -4765,3 +4765,77 @@ References:
 
 Residual:
 - Full Heber-driven UW event ingestion inside `IngestionService` is still not implemented; this pass resolves contract clarity and operator visibility, not source unification.
+
+## 157) Pass 150 Continuation (2026-02-07)
+
+### 157.1 Label/Feature Canonical Ownership Is Still Split Across Orion and Heber Runtime Paths
+
+Current behavior:
+- Orion compose still runs local label/quote services:
+  - `orion.main_labeler` (`docker-compose.yml:59`)
+  - `orion.main_price_target_labeler` (`docker-compose.yml:74`)
+  - `orion.main_option_quote_tracker` (`docker-compose.yml:106`)
+- Orion `main_option_quote_tracker` reads `silver_uw_flow` and writes `silver_option_quotes` using `AlpacaOptionGreeksConnector` (direct provider path, not Heber watch path) (`src/orion/main_option_quote_tracker.py:78`, `src/orion/main_option_quote_tracker.py:129`, `src/orion/main_option_quote_tracker.py:172`).
+- Orion `main_price_target_labeler` depends on local silver tables plus direct UW SDK client calls (`src/orion/main_price_target_labeler.py:347`, `src/orion/main_price_target_labeler.py:899`, `src/orion/main_price_target_labeler.py:1629`).
+- Heber watch stack already performs centralized watch outcomes + features:
+  - Gateway quote polling for active watches (`../Heber/heber/watch/poller.py:157`)
+  - Gold label writes to `labels_alert_barriers` (`../Heber/heber/watch/writer.py:30`)
+  - Gold feature writes under `meta_label_features` (`../Heber/heber/ml/datasets.py:24`, `../Heber/heber/watch/features.py:579`)
+
+Surface-area comparison (feature/label parity snapshot):
+- Orion price-target labeler writes a broad local schema (67 distinct `label[...]` keys found in code path).
+- Heber watch label row currently exposes 26 outcome keys (`outcome_to_label_row`).
+- Heber meta-label training feature vector currently exposes 29 numeric features (`AlertFeatures.numeric_feature_names`).
+
+Risk:
+- dual-producer ambiguity (Orion local DB tables vs Heber Gold datasets) creates schema drift and training/inference mismatch risk,
+- backfill collision risk remains if Orion local backfills and Heber pipelines target overlapping business outcomes,
+- migration cannot be declared complete while ownership of “source of truth” for labels/features is undecided.
+
+### 157.2 Updated Priorities
+
+P1:
+1. Decide canonical owner for each outcome domain:
+   - contract outcome labels,
+   - alert meta-label features,
+   - price-target/extended checkpoint labels.
+2. Produce field-level mapping: `Orion price_target_labels` -> `Heber labels_alert_barriers/meta_label_features` with status `equivalent`, `derive`, `drop`.
+3. Freeze net-new Orion-only label columns until mapping and ownership are signed off.
+
+P2:
+1. Add one parity dataset export check that compares row counts and key null-rates between Orion local outputs and Heber Gold outputs over the same date window.
+2. Promote shared feature definitions into one canonical schema artifact to prevent parallel drift.
+
+## 158) Pass 151 Continuation (2026-02-07)
+
+### 158.1 Decommission/Archive Scope Is Identified but Not Yet Executed for Remaining Local-SQL Labeling Stack
+
+Current behavior:
+- The following Orion modules still hard-depend on local silver/gold SQL tables tied to pre-centralization flow:
+  - `src/orion/main_option_quote_tracker.py`
+  - `src/orion/main_price_target_labeler.py`
+  - `src/orion/main_labeler.py`
+  - `src/orion/jobs/backfill_ml_features.py`
+  - `src/orion/jobs/backfill_exit_columns.py`
+  - `src/orion/jobs/window_feature_job.py`
+  - `src/orion/jobs/validate_features.py`
+  - `src/orion/jobs/data_quality_checker.py`
+  - `src/orion/ml/flow_enricher.py`
+  - `src/orion/ml/exit_classifier.py`
+  - `src/orion/ml/pattern_miner.py`
+- Local-table ownership remains partly implicit: repository search shows writes/reads to `price_target_labels` and `flow_labels` in runtime scripts, but no clear table-creation migration in current Alembic history (schema lifecycle governance gap).
+
+Risk:
+- migration debt remains operational (not just documentary), with continued runtime dependence on local legacy tables,
+- decommission later becomes higher-risk if local paths keep evolving while Heber/Gateway contracts evolve independently.
+
+### 158.2 Updated Priorities
+
+P1:
+1. Publish a decommission matrix for each module: `keep`, `migrate-to-heber`, `archive-now`, `archive-after-parity`.
+2. Stop adding new dependencies on `price_target_labels`, `flow_labels`, and `silver_option_quotes` outside explicitly approved migration work.
+3. Add runtime startup warning when deprecated local-label pipelines are enabled, including replacement Heber dataset names.
+
+P2:
+1. Add archive-ready criteria per module (owner, replacement path, rollback plan, parity check passed).
+2. Execute archive wave in small PRs grouped by bounded blast radius (quote tracking first, then label backfills, then consumers).

@@ -606,6 +606,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - remediation confirmation that `sync_earnings` now uses Gateway-native `X-Gateway-Key` calls and record-level earnings dates
   - ingestion source-truth alignment updates documenting externalized UW flow/darkpool ownership and runtime source-profile diagnostics
   - residual note that full Heber-driven UW event ingestion inside `IngestionService` remains a separate implementation step
+- **Gateway/Heber Parity Audit (Pass 150-151)**: Continued audit with:
+  - ownership-split finding that Orion local label/quote services and Heber watch/Gold pipelines still run in parallel without canonical source-of-truth assignment
+  - schema-surface comparison documenting current gap between Orion `price_target_labels` enrichment breadth and Heber watch/meta-label outputs
+  - decommission-readiness inventory of remaining local SQL-coupled labeling/feature modules pending archive waves after ownership signoff
 
 ### Changed
 
