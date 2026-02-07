@@ -545,6 +545,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - window-semantics finding: `window_feature_job` writes processing-time sliding snapshots (`window_end=now`) instead of canonical period-aligned buckets
   - consistency-risk finding: downstream latest-row lookups can vary by scheduler timing rather than true interval boundary semantics
   - hardening recommendations for boundary-aligned window keys and stable per-bucket retrieval tests
+- **Gateway/Heber Parity Audit (Pass 131)**: Continued audit with:
+  - query-pattern finding: `flow_enricher` retrieves 1h/1d/1w window features using a per-period SQL loop (three round-trips per event)
+  - scalability-risk finding: per-event query amplification adds avoidable latency and DB pressure during scoring bursts
+  - hardening recommendations for set-based single-roundtrip retrieval and query-latency instrumentation
 
 ### Changed
 

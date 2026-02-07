@@ -4348,3 +4348,26 @@ P1:
 P2:
 1. Add regression tests asserting stable feature retrieval for events within the same canonical bucket regardless of job runtime second.
 2. Add migration/backfill plan to normalize existing `gold_feature_windows` rows into boundary-aligned windows.
+
+## 138) Pass 131 Continuation (2026-02-07)
+
+### 138.1 `flow_enricher` Fetches Window Context via Per-Period Query Loop (3 Round-Trips per Event)
+
+Current behavior:
+- scoring enrichment executes `_get_window_features(ticker, entry_ts)` for every event (`src/orion/ml/flow_enricher.py:101`),
+- `_get_window_features` loops through periods `["1h", "1d", "1w"]` and runs one SQL query per period (`src/orion/ml/flow_enricher.py:1027` to `src/orion/ml/flow_enricher.py:1042`),
+- each query independently scans/sorts latest rows from `gold_feature_windows` (`src/orion/ml/flow_enricher.py:1030` to `src/orion/ml/flow_enricher.py:1036`).
+
+Risk:
+- high-throughput scoring paths incur avoidable query amplification and extra DB latency per event,
+- under load, this pattern can create contention on `gold_feature_windows` reads and increase end-to-end scoring jitter.
+
+### 138.2 Updated Priorities
+
+P1:
+1. Replace per-period loop with one set-based query (for example `period IN (...)` + `DISTINCT ON (period)` / window function) to fetch all required period rows in one round-trip.
+2. Add request-level timeout and fallback handling that degrades window features as a unit rather than period-by-period partial results.
+
+P2:
+1. Add perf regression benchmark for enrichment latency before/after query consolidation.
+2. Add metrics for window-feature query count and latency percentiles per scored event.
