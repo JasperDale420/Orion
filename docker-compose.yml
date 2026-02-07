@@ -44,31 +44,6 @@ services:
     entrypoint: >
       /bin/sh -c " /usr/bin/mc alias set orion http://minio:9000 minio_admin minio_password; /usr/bin/mc mb orion/lakehouse --ignore-existing; /usr/bin/mc anonymous set public orion/lakehouse; exit 0; "
 
-  ingestion:
-    build: .
-    container_name: orion_ingestion
-    restart: unless-stopped
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-      redpanda:
-        condition: service_healthy
-    volumes:
-      - .:/app
-    environment:
-      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      - REDPANDA_BROKERS=redpanda:29092
-      - UW_API_KEY=${UW_API_KEY}
-      - UW_BASE_URL=${UW_BASE_URL}
-      - ALPACA_API_KEY=${ALPACA_API_KEY}
-      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
-      - ALPACA_PAPER=${ALPACA_PAPER}
-      - ORION_RESET_CIRCUIT_BREAKER_ON_START=true
-      - ORION_ALPACA_LOOKBACK_MINUTES=15
-      - ORION_TRIP_CIRCUIT_BREAKER_ON_LAG=false
-      - ORION_RUN_ID=docker_persistent
-    command: [ "python", "-m", "orion.main_ingest" ]
-
   labeler:
     build: .
     container_name: orion_labeler
@@ -76,8 +51,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -92,8 +65,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -109,8 +80,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -127,8 +96,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -145,9 +112,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        # Execution depends on Ingestion populating data
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -186,8 +150,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
       - ~/.codex:/root/.codex:ro # Mount host codex credentials (read-only)
@@ -260,6 +222,27 @@ services:
       - ORION_RUN_ID=docker_nightly_backfill
       - GATEWAY_URL=http://host.docker.internal:8080
     command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
+
+  quality-guardrails:
+    build: .
+    container_name: orion_quality_guardrails
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      price_target_labeler:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ORION_RUN_ID=docker_quality_guardrails
+      - ORION_GUARDRAIL_LOOP_SECONDS=${ORION_GUARDRAIL_LOOP_SECONDS:-60}
+      - ORION_RECONCILE_INTERVAL_SECONDS=${ORION_RECONCILE_INTERVAL_SECONDS:-3600}
+      - ORION_RECONCILE_LOOKBACK_DAYS=${ORION_RECONCILE_LOOKBACK_DAYS:-7}
+      - ORION_QUALITY_CHECK_INTERVAL_SECONDS=${ORION_QUALITY_CHECK_INTERVAL_SECONDS:-1800}
+      - ORION_FEATURE_VALIDATE_INTERVAL_SECONDS=${ORION_FEATURE_VALIDATE_INTERVAL_SECONDS:-3600}
+    command: [ "python", "-m", "orion.jobs.quality_guardrails" ]
 
   indexer:
     build: .

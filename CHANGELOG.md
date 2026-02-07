@@ -616,6 +616,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `src/orion/jobs/reconcile_backfill.py` now reconciles Bronze vs Silver counts across `ALPACA_BAR_1M`, `UW_FLOW`, and `UW_DARKPOOL` datasets (ticker/day granularity)
   - Added dataset-scoped discrepancy logging and aggregate cross-dataset summary
   - Updated reconciliation unit test in `tests/unit/test_remediation_rules.py` for multi-dataset execution path
+- **Guardrail Job Scheduling Wiring**:
+  - Added `src/orion/jobs/quality_guardrails.py` daemon scheduler that runs:
+    - reconciliation (`run_reconciliation`)
+    - data quality checks (`run_quality_checks`)
+    - feature sanity checks (`run_sanity_checks`)
+  - Added `quality-guardrails` service to `docker-compose.yml` with configurable intervals via env vars
+  - Added focused unit tests for scheduler interval/config helpers in `tests/unit/test_quality_guardrails.py`
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
