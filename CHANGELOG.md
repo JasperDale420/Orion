@@ -509,6 +509,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - runtime-config finding: `price_target_labeler` relies on direct UW metadata client auth (`UW_API_KEY`) while compose wiring only provides Gateway URL
   - feature-quality risk: sector/earnings feature fields can silently degrade for unmapped tickers when UW credentials are absent
   - hardening recommendations for centralized metadata sourcing and feature-completeness telemetry
+- **Gateway/Heber Parity Audit (Pass 122)**: Continued audit with:
+  - data-contract finding: `backfill_ml_features` recomputes `entry_session` using a different bucket taxonomy than live label generation
+  - integrity-risk finding: partial backfills can overwrite existing rows and mix incompatible session vocabularies in `price_target_labels`
+  - hardening recommendations for shared time-feature helpers and overwrite guards on previously-populated fields
 
 ### Changed
 

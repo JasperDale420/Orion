@@ -4127,3 +4127,27 @@ P1:
 P2:
 1. Add startup config validation that fails fast when selected metadata mode requires unavailable credentials.
 2. Add regression tests for label generation on unmapped tickers to assert deterministic fallback behavior and completeness accounting.
+
+## 129) Pass 122 Continuation (2026-02-07)
+
+### 129.1 `backfill_ml_features` Recomputes and Overwrites `entry_session` with a Different Taxonomy Than Live Labeling
+
+Current behavior:
+- live label generation uses session buckets `OPEN/MID/CLOSE` (`src/orion/main_price_target_labeler.py:671` to `src/orion/main_price_target_labeler.py:681`),
+- backfill job defines different buckets (`early/midday/afternoon/late`) in its own `get_entry_time_features` (`src/orion/jobs/backfill_ml_features.py:122` to `src/orion/jobs/backfill_ml_features.py:134`),
+- any row selected for missing non-time features (for example `oi_change_1d IS NULL`) is still updated with backfill time features (`src/orion/jobs/backfill_ml_features.py:288` to `src/orion/jobs/backfill_ml_features.py:290`, `src/orion/jobs/backfill_ml_features.py:309` to `src/orion/jobs/backfill_ml_features.py:310`),
+- update query writes all recomputed fields back to `price_target_labels` (`src/orion/jobs/backfill_ml_features.py:461` to `src/orion/jobs/backfill_ml_features.py:465`).
+
+Risk:
+- identical records can receive different `entry_session` values depending on whether/when backfill touched them,
+- training and analysis consistency degrades because the same feature column mixes incompatible ontologies over time.
+
+### 129.2 Updated Priorities
+
+P1:
+1. Centralize time-feature derivation in one shared helper used by live labeler and backfill jobs.
+2. Prevent backfill from overwriting already-populated time features unless explicitly running a controlled re-derivation migration.
+
+P2:
+1. Add regression tests asserting labeler and backfill produce identical `entry_session` for the same timestamps.
+2. Add data-quality checks to flag mixed session vocabularies in `price_target_labels`.
