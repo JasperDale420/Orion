@@ -489,6 +489,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - earnings-sync contract finding: `sync_earnings` uses UW SDK base/auth conventions (`Authorization`, `/api/earnings/*`) that do not match Gateway contracts
   - integration-risk finding: Gateway expects `X-Gateway-Key` and `/api/v1/uw/earnings/*`, making current request composition prone to repeated fetch failures
   - hardening recommendations for Gateway-native earnings client routing, auth alignment, and completeness telemetry
+- **Gateway/Heber Parity Audit (Pass 117)**: Continued audit with:
+  - endpoint-composition finding: UW enrichment connectors append `/api/v1/uw/...` to raw `DATA_GATEWAY_URL` without canonicalization
+  - stale-data risk: API-prefixed base URLs can double-prefix routes and quietly degrade enrichment output to zero/partial writes
+  - hardening recommendations for shared URL normalization and per-feed freshness/degraded-state telemetry
 
 ### Changed
 

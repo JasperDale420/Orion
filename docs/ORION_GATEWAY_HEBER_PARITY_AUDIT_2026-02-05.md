@@ -4009,3 +4009,27 @@ P1:
 P2:
 1. Add contract tests that verify earnings sync request headers/path shapes against Gateway (premarket, afterhours, historical ticker earnings).
 2. Add integration test coverage for API-prefixed and root Gateway base URL variants to prevent future route-composition regressions.
+
+## 124) Pass 117 Continuation (2026-02-07)
+
+### 124.1 UW Feature-Enrichment Connectors Re-Append `/api/v1` Without Base URL Canonicalization
+
+Current behavior:
+- feature loop injects raw `system_settings.data_gateway_url` into UW connectors (`src/orion/main_feature_enrichment.py:237` to `src/orion/main_feature_enrichment.py:243`),
+- each connector hardcodes endpoint composition as `"{gateway_url}/api/v1/uw/..."` (`src/orion/connectors/uw_market_tide_connector.py:33`, `src/orion/connectors/uw_greek_exposure_connector.py:33`, `src/orion/connectors/uw_max_pain_connector.py:33`, `src/orion/connectors/uw_iv_rank_connector.py:33`),
+- Gateway UW router is already mounted at `/api/v1/uw` (`../Data-Gateway/gateway/api/uw/__init__.py:32`), so API-prefixed base URLs produce doubled paths (for example `/api/v1/api/v1/uw/...`),
+- fetch failures are converted to `None` and loop continues (`src/orion/connectors/uw_market_tide_connector.py:42` to `src/orion/connectors/uw_market_tide_connector.py:44`, `src/orion/connectors/uw_greek_exposure_connector.py:38` to `src/orion/connectors/uw_greek_exposure_connector.py:40`, `src/orion/connectors/uw_max_pain_connector.py:38` to `src/orion/connectors/uw_max_pain_connector.py:40`, `src/orion/connectors/uw_iv_rank_connector.py:38` to `src/orion/connectors/uw_iv_rank_connector.py:40`).
+
+Risk:
+- environment-dependent URL shape can break all four enrichment feeds (market tide, exposure, max pain, IV rank) simultaneously,
+- because connector failures degrade to empty results, enrichment can appear “healthy” while writing zero/partial updates, delaying detection of stale feature tables.
+
+### 124.2 Updated Priorities
+
+P1:
+1. Centralize Gateway HTTP base URL normalization (single helper shared across UW connectors and jobs) so `/api/v1` is appended exactly once.
+2. Add fail-fast degraded-mode signaling when repeated connector fetches return zero records across configured tickers/intervals.
+
+P2:
+1. Add unit tests for URL construction across root and API-prefixed `DATA_GATEWAY_URL` values for all UW enrichment connectors.
+2. Emit per-feed freshness telemetry (last successful fetch timestamp + rows written) to support parity SLO checks against Heber datasets.
