@@ -277,6 +277,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - policy-scope finding: options-specific exit-rule set is applied to all tracked open positions, while execution stack supports both options and equities
   - monitoring-coverage finding: `PositionManager.initialize` rebuilds at most 50 open positions, so larger books can leave older positions outside exit-rule monitoring
   - hardening recommendations for instrument-type rule gating and full open-position reconstruction coverage
+- **Gateway/Heber Parity Audit (Pass 64)**: Continued audit with:
+  - schema-contract finding: UW flow normalizer emits `premium_usd` while `FeatureEngine.process_uw_flow` aggregates only `payload.premium`
+  - feature-integrity finding: in-memory `flow_net_premium_15m` can undercount/zero out on normalized UW flow payloads, impacting downstream flow-derived bar features
+  - hardening recommendations for canonical premium-field access (`premium_usd` first) and cross-stage contract tests
 
 ### Changed
 

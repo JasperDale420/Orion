@@ -2686,3 +2686,28 @@ P0:
 
 P1:
 1. Add integration tests covering mixed option/equity books and >50 open positions to verify correct rule applicability and monitoring completeness.
+
+## 71) Pass 64 Continuation (2026-02-06)
+
+### 71.1 Flow Premium Contract Drift Between Normalizer and Feature Aggregation
+
+Current contract flow:
+- `NormalizationEngine._normalize_uw_flow` writes flow premium to `premium_usd` (not `premium`) (`src/orion/processing/normalizer.py:106` to `src/orion/processing/normalizer.py:113`),
+- `FeatureEngine.process_uw_flow` reads only `e.payload.get("premium")` when populating in-memory `flow_history` (`src/orion/processing/feature_engine.py:271`),
+- rolling flow metrics (`call_premium_15m`, `put_premium_15m`, `flow_net_premium_15m`) sum this in-memory `premium` field (`src/orion/processing/feature_engine.py:374` to `src/orion/processing/feature_engine.py:380`).
+
+Scope nuance:
+- active ingestion cycle currently processes Alpaca bars only (`src/orion/ingestion/service.py:203` to `src/orion/ingestion/service.py:205`),
+- however, the mismatch is live for UW-flow replay paths (`src/orion/jobs/dlq_consumer.py:167`) and is a latent parity break once UW flow is re-enabled in primary runtime.
+
+Risk:
+- normalized UW flow events carrying only `premium_usd` can be recorded as zero premium in in-memory aggregation, biasing flow-derived bar features and downstream decision/rule behavior.
+
+### 71.2 Updated Priorities
+
+P1:
+1. Align `FeatureEngine.process_uw_flow` with canonical flow payload contract by reading `premium_usd` first (fallback to legacy `premium`).
+2. Add contract test asserting normalized UW flow payloads contribute non-zero premium to `flow_history` and `flow_net_premium_15m`.
+
+P2:
+1. Define a single canonical premium-field accessor/helper for flow payloads to avoid repeated `premium` vs `premium_usd` drift across modules.
