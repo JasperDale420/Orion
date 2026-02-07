@@ -4468,3 +4468,26 @@ P1:
 P2:
 1. Add integration test that validates checker execution in deployed compose profile (not just module-level CLI).
 2. Define escalation thresholds (for example stale bars/flow/darkpool) and ensure non-zero exit/alert behavior on breach.
+
+## 143) Pass 136 Continuation (2026-02-07)
+
+### 143.1 `validate_features` Drift-Detection Script Is Not Wired into CI or Scheduled Runtime
+
+Current behavior:
+- `validate_features` provides CLI validation entrypoints (`src/orion/jobs/validate_features.py`),
+- repository references to this module are self-contained/manual; no orchestration path invokes it in normal runtime,
+- compose has no `validate_features` service and nightly orchestration does not call it (`docker-compose.yml`, `src/orion/jobs/nightly_backfill.py:66` to `src/orion/jobs/nightly_backfill.py:71`).
+
+Risk:
+- feature-contract drift (source lineage, ranges, checkpoint consistency) can accumulate without automated detection,
+- migration parity confidence depends on ad-hoc manual runs instead of repeatable enforcement.
+
+### 143.2 Updated Priorities
+
+P1:
+1. Wire `validate_features` into automated cadence (CI gate and/or scheduled post-backfill task) with machine-readable pass/fail output.
+2. Fail pipeline/report degraded status when critical validations regress beyond configured thresholds.
+
+P2:
+1. Split validations into fast smoke checks (every run) and deep audits (scheduled) to keep signal timely and actionable.
+2. Persist validation snapshots for trend analysis of feature-quality drift over time.

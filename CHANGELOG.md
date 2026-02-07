@@ -565,6 +565,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - orchestration finding: `data_quality_checker` exists as a scheduled-quality module but is not wired into compose/runtime job scheduling
   - operations-risk finding: parity and freshness regressions may go undetected unless checker is run manually
   - hardening recommendations for scheduled wiring, alert-channel integration, and deployment-profile execution tests
+- **Gateway/Heber Parity Audit (Pass 136)**: Continued audit with:
+  - governance finding: `validate_features` exists as a migration-critical drift check but is not wired into CI/scheduled runtime
+  - quality-risk finding: feature-contract regressions can persist until manually discovered
+  - hardening recommendations for automated validation cadence, fail gates, and persisted quality snapshots
 
 ### Changed
 
