@@ -361,6 +361,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - cold-start finding: ingestion runtime processes Alpaca bars through `FeatureEngine` without calling history hydration first
   - consistency-risk finding: early-cycle indicator quality can diverge from signal-engine path, which hydrates explicitly on init
   - hardening recommendations for ingestion-time feature-history hydration and cold-start parity tests
+- **Gateway/Heber Parity Audit (Pass 85)**: Continued audit with:
+  - scope-fidelity finding: `FeatureEngine.hydrate_history` hydrates fixed static watchlist while runtime universe is dynamic
+  - readiness-visibility finding: global hydration flag does not represent per-ticker hydration coverage
+  - hardening recommendations for active-universe hydration and ticker-level readiness tracking
 
 ### Changed
 

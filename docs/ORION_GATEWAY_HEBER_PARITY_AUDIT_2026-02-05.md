@@ -3233,3 +3233,33 @@ P1:
 
 P2:
 1. Add startup telemetry for hydration completeness (tickers requested vs hydrated) and alert when below threshold.
+
+## 92) Pass 85 Continuation (2026-02-07)
+
+### 92.1 Feature Hydration Scope Uses Static Watchlist, Not Active Runtime Universe
+
+Current behavior:
+- `FeatureEngine.hydrate_history()` hydrates only `system_settings.static_watchlist` (`src/orion/processing/feature_engine.py:56`),
+- ingestion/runtime bar processing uses dynamic active universe from `UniverseManager.get_active_universe()` (`src/orion/ingestion/service.py:224`),
+- default static list is a fixed symbol set (`src/orion/config.py:96`).
+
+Risk:
+- tickers entering runtime universe outside the static watchlist can start with unhydrated indicator context, causing uneven cold-start feature quality across symbols.
+
+### 92.2 Hydration Completion Flag Does Not Reflect Per-Ticker Coverage
+
+Current state handling:
+- `_hydrated` flips to true after watchlist loop completes (`src/orion/processing/feature_engine.py:64`),
+- this flag is global and does not encode which tickers actually have sufficient history loaded.
+
+Risk:
+- runtime can treat feature engine as “hydrated” even when active-universe coverage is partial, masking cold-start indicator gaps.
+
+### 92.3 Updated Priorities
+
+P1:
+1. Hydrate against active universe (or active-universe union static baseline), not static watchlist alone.
+2. Track hydration readiness per ticker and gate indicator-dependent paths on ticker-level readiness.
+
+P2:
+1. Add regression test where active universe contains non-static ticker and assert hydration/readiness behavior is correct.
