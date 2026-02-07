@@ -358,8 +358,6 @@ async def persist_labels(labels: List[Dict[str, Any]]) -> int:
 
 async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
     """Main labeling loop."""
-    await init_db()
-
     logger.warning(
         "Legacy local flow labeler is active",
         extra={
@@ -378,6 +376,7 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
             },
         )
         return
+    await init_db()
     logger.info("Starting Flow Labeling Service...")
 
     total_labeled = 0

@@ -38,3 +38,31 @@ async def test_option_quote_tracker_returns_early_when_specific_gate_disabled(mo
     monkeypatch.setattr(main_option_quote_tracker, "AlpacaOptionGreeksConnector", _FailIfConstructed)
 
     await asyncio.wait_for(main_option_quote_tracker.run_quote_tracker(), timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_flow_labeler_does_not_init_db_when_specific_gate_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_FLOW_LABELER", "false")
+
+    async def _fail_init_db() -> None:
+        raise AssertionError("init_db should not be called when flow labeler is disabled")
+
+    monkeypatch.setattr(main_labeler, "init_db", _fail_init_db)
+
+    await asyncio.wait_for(main_labeler.run_labeling_loop(asyncio.Event()), timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_does_not_init_db_when_specific_gate_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
+
+    async def _fail_init_db() -> None:
+        raise AssertionError("init_db should not be called when price-target labeler is disabled")
+
+    monkeypatch.setattr(main_price_target_labeler, "init_db", _fail_init_db)
+
+    await asyncio.wait_for(main_price_target_labeler.run_labeling_loop(asyncio.Event()), timeout=0.5)

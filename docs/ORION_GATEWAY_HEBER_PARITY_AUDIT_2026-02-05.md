@@ -5098,3 +5098,22 @@ P1:
 P2:
 1. Add unit tests at config layer verifying precedence semantics (service-specific override > global fallback).
 2. Include these gates in operator docs so rollout controls are discoverable in one place.
+
+## 168) Pass 161 Continuation (2026-02-07)
+
+### 168.1 Disable-Gate Ordering Fixed: No DB Initialization in Disabled Legacy Labeler Modes
+
+Implemented (TDD-backed):
+- Added failing tests that assert disabled services do not call `init_db()`:
+  - `test_flow_labeler_does_not_init_db_when_specific_gate_disabled`
+  - `test_price_target_labeler_does_not_init_db_when_specific_gate_disabled`
+  - file: `tests/unit/test_legacy_label_pipeline_gates.py`.
+- Moved gate checks ahead of DB initialization in:
+  - `src/orion/main_labeler.py:361` to `src/orion/main_labeler.py:379`,
+  - `src/orion/main_price_target_labeler.py:2769` to `src/orion/main_price_target_labeler.py:2788`.
+
+Result:
+- when legacy labelers are disabled via gate, they now return before DB initialization and do not require live DB availability.
+
+Residual:
+- compose restart-loop risk from pass 159 remains until service inclusion/restart-policy handling is updated.

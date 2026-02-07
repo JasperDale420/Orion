@@ -646,6 +646,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - config-governance finding that new legacy label gate env vars are parsed ad hoc in service modules rather than centralized typed settings
   - consistency-risk recommendation to centralize gate ownership/preference semantics in `SystemSettings`
   - config-layer test/documentation recommendation for operator-safe rollout controls
+- **Gateway/Heber Parity Audit (Pass 161)**: Continued audit with:
+  - remediation confirmation that disabled legacy flow/price-target labelers no longer initialize DB before honoring disable gates
+  - TDD coverage expansion for disabled-mode startup ordering (`init_db` must not run when disabled)
+  - residual note that compose restart-loop behavior for disabled services still needs rollout-level remediation
 
 ### Changed
 
@@ -704,6 +708,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - `ORION_ENABLE_LEGACY_FLOW_LABELER`
     - `ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER`
   - Added focused test coverage in `tests/unit/test_legacy_label_pipeline_gates.py` for override precedence and disabled early-return behavior
+- **Disabled-Mode DB Init Guard for Legacy Labelers (TDD)**:
+  - `src/orion/main_labeler.py` and `src/orion/main_price_target_labeler.py` now check disable gates before `init_db()`
+  - Added tests in `tests/unit/test_legacy_label_pipeline_gates.py` to ensure disabled services do not touch DB initialization paths
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
