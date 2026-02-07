@@ -3495,3 +3495,28 @@ P1:
 
 P2:
 1. Add contract test using Gateway normalized max-pain payload to verify non-zero row persistence into `silver_max_pain`.
+
+## 102) Pass 95 Continuation (2026-02-07)
+
+### 102.1 Daily Earnings Sync Persists Batch Date Instead of Record-Level Report Date
+
+Current implementation:
+- `sync_todays_earnings()` computes `today = date.today()` and passes it through batch calls (`src/orion/jobs/sync_earnings.py:29`, `src/orion/jobs/sync_earnings.py:32` to `src/orion/jobs/sync_earnings.py:33`),
+- per-row sync path writes each record via `_upsert_earnings(e, today, announce_time)` (`src/orion/jobs/sync_earnings.py:50`),
+- `_upsert_earnings()` forwards that `report_date` directly into storage (`src/orion/jobs/sync_earnings.py:179` to `src/orion/jobs/sync_earnings.py:181`).
+
+Risk:
+- if API payload includes record-level dates that differ from local batch date (timezone boundaries, schedule shifts, upstream response semantics), `silver_earnings_calendar` can be written with incorrect `report_date`.
+
+Contrast within same module:
+- historical backfill path explicitly parses record-level `e.report_date` before upsert (`src/orion/jobs/sync_earnings.py:80` to `src/orion/jobs/sync_earnings.py:91`),
+- daily sync path does not mirror this per-record date handling.
+
+### 102.2 Updated Priorities
+
+P1:
+1. In daily sync path, derive `report_date` from each earnings record (with controlled fallback to batch date only when missing).
+2. Add telemetry counting rows where fallback date was used.
+
+P2:
+1. Add regression test with mixed record dates to ensure per-record persistence keys `(ticker, report_date)` are correct.

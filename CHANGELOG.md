@@ -401,6 +401,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-drift finding: `uw_max_pain_connector` expects `max_pain` key while Gateway normalized response centers on `max_pain_strike`
   - data-availability risk: valid max-pain rows can be skipped before persistence, leaving downstream distance-to-max-pain features sparse
   - hardening recommendations for key-map alignment (`max_pain_strike` first) and normalized-payload persistence tests
+- **Gateway/Heber Parity Audit (Pass 95)**: Continued audit with:
+  - temporal-integrity finding: daily earnings sync writes batch `today` date as `report_date` for all rows instead of record-level report dates
+  - data-correctness risk: earnings calendar keys can be misdated around timezone/schedule variations despite valid upstream record dates
+  - hardening recommendations for per-record report-date persistence plus fallback-date telemetry and regression tests
 
 ### Changed
 
