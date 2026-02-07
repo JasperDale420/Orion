@@ -3106,3 +3106,28 @@ P0:
 
 P1:
 1. Add mixed-validity regression tests per event type to prove valid rows persist when bad rows are present.
+
+## 87) Pass 80 Continuation (2026-02-07)
+
+### 87.1 Strict Timestamp Resolver Raises Pre-Insert and Is Not Row-Isolated
+
+Current behavior:
+- `_required_event_ts_utc` raises `ValueError` when both event timestamp and payload fallback are missing (`src/orion/processing/persistence.py:53` to `src/orion/processing/persistence.py:54`),
+- it is called inline while building row dicts for flow/bar/darkpool/alert paths (`src/orion/processing/persistence.py:164`, `src/orion/processing/persistence.py:208`, `src/orion/processing/persistence.py:229`, `src/orion/processing/persistence.py:244`),
+- no per-row `try/except` exists around those row-build operations.
+
+Failure propagation:
+- one malformed timestamp can abort `persist_silver_from_bronze` before batch insert loop executes,
+- caller re-raises silver write errors (`src/orion/ingestion/service.py:448` to `src/orion/ingestion/service.py:451`), causing cycle-level failure handling.
+
+Risk:
+- single bad records can repeatedly block persistence and downstream processing for otherwise valid events in the same cycle.
+
+### 87.2 Updated Priorities
+
+P0:
+1. Make timestamp parse failures row-local (skip/quarantine offending row with explicit reason and continue batch build).
+2. Add malformed-timestamp counters by event type and alert on spikes.
+
+P1:
+1. Add regression tests with mixed valid/invalid timestamps for each event type to verify forward progress and explicit bad-row accounting.

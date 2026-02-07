@@ -341,6 +341,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - validation-consistency finding: silver persistence prechecks are incomplete for bars/darkpool/alerts relative to required schema fields
   - resilience-risk finding: malformed non-flow rows can still poison bulk inserts and block valid-row persistence
   - hardening recommendations for uniform required-field validation, bad-row quarantine, and mixed-validity tests across all silver event types
+- **Gateway/Heber Parity Audit (Pass 80)**: Continued audit with:
+  - failure-isolation finding: strict timestamp resolver raises during row-build and is not isolated per record
+  - pipeline-risk finding: single malformed timestamp can abort silver persistence for the whole cycle before bulk insert
+  - hardening recommendations for row-local timestamp quarantine and malformed-timestamp telemetry by event type
 
 ### Changed
 
