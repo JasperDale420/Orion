@@ -485,6 +485,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - endpoint-composition finding: Gateway stream client appends `/ws` directly to configured base URL without stripping API prefixes
   - configuration-risk finding: `DATA_GATEWAY_URL` values containing `/api/v1` produce invalid websocket paths (for example `/api/v1/ws`)
   - hardening recommendations for canonical base-url normalization and websocket-path validation
+- **Gateway/Heber Parity Audit (Pass 116)**: Continued audit with:
+  - earnings-sync contract finding: `sync_earnings` uses UW SDK base/auth conventions (`Authorization`, `/api/earnings/*`) that do not match Gateway contracts
+  - integration-risk finding: Gateway expects `X-Gateway-Key` and `/api/v1/uw/earnings/*`, making current request composition prone to repeated fetch failures
+  - hardening recommendations for Gateway-native earnings client routing, auth alignment, and completeness telemetry
 
 ### Changed
 

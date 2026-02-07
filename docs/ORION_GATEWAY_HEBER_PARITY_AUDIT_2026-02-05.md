@@ -3985,3 +3985,27 @@ P1:
 
 P2:
 1. Add unit tests for gateway URL variants (`host`, `host/api/v1`, `ws://host`) to assert stable `ws_url` derivation.
+
+## 123) Pass 116 Continuation (2026-02-07)
+
+### 123.1 Earnings Sync Uses UW SDK Contract That Does Not Match Gateway Auth/Route Shape
+
+Current behavior:
+- `sync_earnings` constructs `UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")` (`src/orion/jobs/sync_earnings.py:27`, `src/orion/jobs/sync_earnings.py:142`),
+- UW SDK client defaults to `Authorization: Bearer <token>` rather than Gateway `X-Gateway-Key` (`src/orion/unusualwhales/client.py:56`, `src/orion/unusualwhales/client.py:98`),
+- earnings SDK endpoints call `/api/earnings/*` paths (`src/orion/unusualwhales/api/earnings/get_premarket.py:26`, `src/orion/unusualwhales/api/earnings/get_ticker_earnings.py:18`),
+- Gateway requires `X-Gateway-Key` (`../Data-Gateway/gateway/api/deps.py:103` to `../Data-Gateway/gateway/api/deps.py:115`) and exposes earnings routes as `/api/v1/uw/earnings/*` (`../Data-Gateway/gateway/api/uw/earnings.py:21` to `../Data-Gateway/gateway/api/uw/earnings.py:62`).
+
+Risk:
+- earnings sync/backfill can fail against Gateway due to both header-contract and path-contract mismatch (`/api/v1/uw/api/earnings/*`),
+- failure visibility is reduced because ticker-level backfill failures are debug-logged and continue (`src/orion/jobs/sync_earnings.py:72` to `src/orion/jobs/sync_earnings.py:74`), which can leave `silver_earnings_calendar` stale without strong alerts.
+
+### 123.2 Updated Priorities
+
+P1:
+1. Replace `sync_earnings` UW SDK calls with a Gateway-native client path that uses canonical routes (`/api/v1/uw/earnings/*`) and `X-Gateway-Key` auth.
+2. Add fail-fast observability for earnings sync completeness (expected tickers/requested endpoints vs successful upserts), and elevate repeated fetch failures to warning/error with actionable context.
+
+P2:
+1. Add contract tests that verify earnings sync request headers/path shapes against Gateway (premarket, afterhours, historical ticker earnings).
+2. Add integration test coverage for API-prefixed and root Gateway base URL variants to prevent future route-composition regressions.
