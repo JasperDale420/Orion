@@ -3759,3 +3759,27 @@ P1:
 
 P2:
 1. Add regression tests for same-day premarket vs afterhours scenarios to ensure distinct post/pre earnings classification outcomes.
+
+## 113) Pass 106 Continuation (2026-02-07)
+
+### 113.1 Ingestion Can Quietly Bypass Gateway Streaming and Revert to Direct Alpaca Polling
+
+Current behavior:
+- ingestion initializes `AlpacaStreamConnector` when streaming is enabled (`src/orion/ingestion/service.py:74` to `src/orion/ingestion/service.py:82`),
+- Gateway mode is default in connector (`src/orion/connectors/alpaca_stream_connector.py:44`, `src/orion/connectors/alpaca_stream_connector.py:66` to `src/orion/connectors/alpaca_stream_connector.py:67`),
+- Gateway stream client creation hard-fails when `DATA_GATEWAY_API_KEY` is missing (`src/orion/connectors/gateway_stream_client.py:449` to `src/orion/connectors/gateway_stream_client.py:454`),
+- ingestion startup catches stream startup errors and falls back to polling (`src/orion/ingestion/service.py:133` to `src/orion/ingestion/service.py:143`),
+- cycle path then uses polling fallback whenever stream is absent/not running (`src/orion/ingestion/service.py:229` to `src/orion/ingestion/service.py:233`).
+
+Risk:
+- runtime can silently run outside intended centralized Gateway stream path,
+- source parity can drift (Gateway multiplexer/auth/contracts bypassed) while process appears healthy.
+
+### 113.2 Updated Priorities
+
+P1:
+1. In Gateway-enabled mode, treat missing Gateway key/startup failure as explicit degraded-state (or fail fast by policy), not warning-only fallback.
+2. Emit runtime source telemetry (`stream_source=gateway|direct_polling`) and alert when fallback persists.
+
+P2:
+1. Add startup integration test for Gateway-mode + missing-key scenario asserting deterministic degraded/fail-fast behavior.

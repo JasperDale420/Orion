@@ -445,6 +445,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - temporal-semantics finding: earnings proximity lookup uses date-only predicates and ignores stored `announce_time`
   - feature-risk finding: same-day pre/post earnings states can collapse to identical `days_to_earnings/is_post_earnings` outputs
   - hardening recommendations for announce-time-aware proximity logic and boundary-case regression coverage
+- **Gateway/Heber Parity Audit (Pass 106)**: Continued audit with:
+  - integration finding: ingestion stream startup can silently fall back from Gateway mode to direct Alpaca polling on missing Gateway key/config
+  - parity-risk finding: centralized stream path can be bypassed at runtime without explicit degraded-state signaling
+  - hardening recommendations for fail-fast/health-gated Gateway mode and source-of-truth telemetry
 
 ### Changed
 
