@@ -4734,3 +4734,34 @@ Remaining high-priority unresolved items before “migration-complete” status:
 
 Conclusion:
 - migration-critical audit work is finished; remaining work is implementation and controlled decommission, not additional discovery.
+
+## 155) Pass 148 Continuation (2026-02-07)
+
+### 155.1 `sync_earnings` Gateway Auth Contract Remediated
+
+Implemented:
+- `sync_earnings` no longer uses UW SDK Bearer-token calls routed through Gateway.
+- Orion now calls Data Gateway earnings endpoints directly with `X-Gateway-Key` in request headers.
+- Daily sync now persists record-level earnings dates from Gateway payloads instead of overriding all rows to `date.today()`.
+- Added unit coverage for header wiring, response parsing, daily date semantics, and ticker backfill row handling.
+
+References:
+- `src/orion/jobs/sync_earnings.py`
+- `tests/unit/test_sync_earnings_gateway.py`
+
+## 156) Pass 149 Continuation (2026-02-07)
+
+### 156.1 Ingestion Source-Truth Drift Partially Remediated (Runtime Disclosure + Docs Alignment)
+
+Implemented:
+- Removed misleading ingestion-entrypoint claim that this service reads Heber flow/darkpool directly.
+- Added explicit ingestion source-profile reporting at startup, including produced event types and externalized UW flow/darkpool ownership.
+- Updated ingestion-service inline comments to reflect current behavior: this process emits Alpaca bar events; UW flow/darkpool ingestion remains external.
+
+References:
+- `src/orion/ingestion/__main__.py`
+- `src/orion/ingestion/service.py`
+- `tests/unit/test_ingestion_source_profile.py`
+
+Residual:
+- Full Heber-driven UW event ingestion inside `IngestionService` is still not implemented; this pass resolves contract clarity and operator visibility, not source unification.

@@ -602,6 +602,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - unresolved runtime-contract confirmation that `sync_earnings` still uses Bearer-token UW SDK path instead of Gateway `X-Gateway-Key` auth contract
   - ingestion-truth finding that Heber UW ingestion remains documentation/comment intent rather than active ingestion-cycle behavior
   - final migration-close checklist narrowing remaining work to implementation/decommission rather than further discovery
+- **Gateway/Heber Parity Audit (Pass 148-149)**: Continued audit with:
+  - remediation confirmation that `sync_earnings` now uses Gateway-native `X-Gateway-Key` calls and record-level earnings dates
+  - ingestion source-truth alignment updates documenting externalized UW flow/darkpool ownership and runtime source-profile diagnostics
+  - residual note that full Heber-driven UW event ingestion inside `IngestionService` remains a separate implementation step
 
 ### Changed
 
@@ -639,6 +643,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `src/orion/jobs/sync_earnings.py` now fetches earnings directly from Data Gateway REST endpoints using `X-Gateway-Key` auth, removing Bearer-token UW SDK-through-gateway coupling
   - Daily sync now uses record-level Gateway earnings dates (`data.date`) rather than forcing `date.today()` for all rows
   - Added focused Gateway-contract tests in `tests/unit/test_sync_earnings_gateway.py` for header wiring, response parsing, daily date semantics, and ticker backfill row handling
+- **Ingestion Source Profile Alignment**:
+  - `src/orion/ingestion/service.py` now emits explicit startup source-profile diagnostics (`alpaca_mode`, produced event types, external UW-flow/darkpool ownership)
+  - Updated ingestion comments and entrypoint docs to match current runtime behavior (Alpaca event production in-process; UW flow/darkpool ingestion externalized)
+  - Added focused source-profile unit test in `tests/unit/test_ingestion_source_profile.py`
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

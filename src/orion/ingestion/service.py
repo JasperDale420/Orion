@@ -13,9 +13,7 @@ from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.redpanda_producer import RedpandaProducer
-from orion.connectors.uw_alerts_connector import UWAlertsConnector
-from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
-from orion.connectors.uw_flow_connector import UWFlowConnector
+
 from orion.core.health_monitor import CriticalHealthException, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.core.universe_manager import UniverseManager
@@ -53,16 +51,9 @@ class IngestionService:
         self.rule_engine = RuleEngine()
         self.lakehouse = LakehouseWriter()
 
-        # Connectors (using Data Gateway for UW)
-        gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
-
-        # Ensure keys are strings
+        # Alpaca connectors (still used for market data until fully migrated)
         alpaca_key = system_settings.alpaca_api_key or ""
         alpaca_secret = system_settings.alpaca_secret_key or ""
-
-        self.uw_flow = UWFlowConnector(gateway_url=gateway_url)
-        self.uw_dark = UWDarkPoolConnector(gateway_url=gateway_url)
-        self.uw_alerts = UWAlertsConnector(gateway_url=gateway_url)
 
         self.alpaca = AlpacaMarketConnector(
             api_key=alpaca_key,
@@ -143,6 +134,7 @@ class IngestionService:
                 logger.warning(f"Failed to start Alpaca streaming, falling back to polling: {e}")
                 self.alpaca_stream = None
 
+        logger.info("Ingestion source profile", extra={"context": self._active_event_source_profile()})
         logger.info("Ingestion Service Initialized.")
 
     def _handle_shutdown_signals(self) -> None:
@@ -198,9 +190,8 @@ class IngestionService:
         trace_id = str(uuid.uuid4())
         all_events: List[BronzeEvent] = []
 
-        # 1. Poll UW
-        events = await self._poll_uw(trace_id)
-        all_events.extend(events)
+        # UW flow/darkpool ingestion is externalized to Gateway/Heber pipelines.
+        # This service currently emits Alpaca market bars only.
 
         # 2. Get Alpaca bars (streaming preferred, polling as fallback)
         alpaca_events = await self._poll_alpaca_events(trace_id)
@@ -274,25 +265,13 @@ class IngestionService:
                 sleep_seconds -= wait
                 self.health_monitor.update_heartbeat()
 
-    async def _poll_uw(self, trace_id: str) -> List[BronzeEvent]:
-        try:
-            # lookback_seconds only applies on cold start (no watermark); after first poll, watermarks take over
-            flow = await self.uw_flow.poll(lookback_seconds=300)
-            dark = await self.uw_dark.fetch_events(lookback_seconds=300)
-            alert = await self.uw_alerts.fetch_events(lookback_seconds=300)
-            events = flow + dark + alert
-
-            for e in events:
-                await self._check_lag(e)
-                self._tag_ingest_metadata(e, trace_id, e.event_type.lower())
-                e_ticker = e.ticker
-                if e_ticker:
-                    self.universe.update_from_event(e)
-
-            return events
-        except Exception as e:
-            logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id})
-            return []
+    def _active_event_source_profile(self) -> Dict[str, Union[str, bool, List[str]]]:
+        return {
+            "alpaca_streaming_enabled": self._use_streaming,
+            "alpaca_mode": "streaming" if self.alpaca_stream is not None else "polling",
+            "produced_event_types": ["ALPACA_BAR_1M"],
+            "uw_flow_darkpool_ingestion": "external_gateway_heber_pipeline",
+        }
 
     async def _poll_alpaca(self, tickers: List[str], trace_id: str) -> List[BronzeEvent]:
         try:
