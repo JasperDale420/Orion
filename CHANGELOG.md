@@ -473,6 +473,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-scope finding: `HeberReader.read_gold_features()` reads dataset root without project/version filters
   - data-integrity risk: multiple gold projects/versions can be mixed in a single read, weakening reproducibility and parity guarantees
   - hardening recommendations for explicit project/version scoping and version-aware read contracts
+- **Gateway/Heber Parity Audit (Pass 113)**: Continued audit with:
+  - leakage-guard finding: `HeberReader` as-of filter is bypassed when `ts_available` column is missing
+  - integrity-risk finding: gold/silver reads can become unconstrained by availability time without explicit warning, weakening point-in-time guarantees
+  - hardening recommendations for fail-closed as-of enforcement and column-contract validation
 
 ### Changed
 

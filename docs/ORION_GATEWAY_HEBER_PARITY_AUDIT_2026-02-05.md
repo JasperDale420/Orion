@@ -3915,3 +3915,25 @@ P1:
 
 P2:
 1. Add tests with multi-project/multi-version fixture partitions ensuring read path returns only the requested scope.
+
+## 120) Pass 113 Continuation (2026-02-07)
+
+### 120.1 As-Of Filter Becomes No-Op When `ts_available` Is Missing
+
+Current behavior:
+- `read_gold_features(...)` always applies `_apply_asof_filter(...)` after parquet load (`src/orion/clients/heber_reader.py:192` to `src/orion/clients/heber_reader.py:196`),
+- `_apply_asof_filter(...)` returns rows unchanged when `ts_available` is absent (`src/orion/clients/heber_reader.py:245` to `src/orion/clients/heber_reader.py:247`),
+- this path does not emit warnings/errors when as-of semantics are bypassed.
+
+Risk:
+- datasets that drift from Heber column contracts can silently lose point-in-time guarantees,
+- downstream consumers may assume anti-leakage behavior is enforced when it is not.
+
+### 120.2 Updated Priorities
+
+P1:
+1. Enforce fail-closed behavior for as-of reads when `ts_available` is missing (or require explicit override flag with warning telemetry).
+2. Add schema/column-contract validation before read returns for datasets expected to be point-in-time safe.
+
+P2:
+1. Add regression tests asserting as-of reads fail or explicitly flag degraded mode when `ts_available` is absent.
