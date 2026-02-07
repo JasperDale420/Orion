@@ -4202,3 +4202,28 @@ P1:
 P2:
 1. Add regression tests that compare `main_price_target_labeler` outputs against direct `orion.labeler` helper outputs on fixed fixtures.
 2. Add a sector-map parity check test to detect drift between shared constants and runtime labeler mapping.
+
+## 132) Pass 125 Continuation (2026-02-07)
+
+### 132.1 `main_option_quote_tracker` Still Depends on Local `silver_uw_flow` and Truncates Candidate Coverage
+
+Current behavior:
+- option quote tracker candidate discovery reads only local DB table `silver_uw_flow` (`src/orion/main_option_quote_tracker.py:78`),
+- selection is hard-capped at the most recent 1000 rows from the last 24h (`src/orion/main_option_quote_tracker.py:82` to `src/orion/main_option_quote_tracker.py:83`),
+- service has no Heber/Gateway reader path or centralized config usage (`src/orion/main_option_quote_tracker.py:1` to `src/orion/main_option_quote_tracker.py:260`),
+- runtime still launches this tracker as part of compose stack (`docker-compose.yml:92` to `docker-compose.yml:106`),
+- meanwhile main labeler flow/bars ingestion is already Heber-backed (`src/orion/main_labeler.py:21`, `src/orion/main_labeler.py:140`, `src/orion/main_labeler.py:153`).
+
+Risk:
+- centralized ingestion migration can leave quote tracker with missing/empty candidate flow universe when local `silver_uw_flow` is stale or no longer authoritative,
+- high-volume days can silently skip quote tracking beyond the newest 1000 events, creating checkpoint-label coverage bias.
+
+### 132.2 Updated Priorities
+
+P1:
+1. Migrate candidate-event discovery in `main_option_quote_tracker` to centralized Heber/Gateway flow reads (same source contract as `main_labeler`).
+2. Replace fixed `LIMIT 1000` selection with deterministic pagination/watermark progression over the full eligible window.
+
+P2:
+1. Add checkpoint coverage telemetry: eligible events vs quoted events per checkpoint and per polling cycle.
+2. Add regression/integration tests with >1000 synthetic flow events to assert complete progression rather than newest-only truncation.

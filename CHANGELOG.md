@@ -521,6 +521,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - modularity finding: `main_price_target_labeler` imports shared `orion.labeler` helpers/constants, then shadows them with local redefinitions
   - parity-risk finding: local math windows/volatility and sector mapping drift from shared package behavior, causing inconsistent label outputs
   - hardening recommendations for de-shadowing to a single source of truth plus parity regression checks
+- **Gateway/Heber Parity Audit (Pass 125)**: Continued audit with:
+  - integration finding: `main_option_quote_tracker` still sources candidates from local `silver_uw_flow` instead of centralized Heber/Gateway reads
+  - coverage-risk finding: fixed newest-first `LIMIT 1000` can truncate quote checkpoint coverage on high-volume days
+  - hardening recommendations for centralized candidate sourcing, cursor-based progression, and coverage telemetry
 
 ### Changed
 
