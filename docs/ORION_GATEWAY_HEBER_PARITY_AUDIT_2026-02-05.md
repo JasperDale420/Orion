@@ -3783,3 +3783,25 @@ P1:
 
 P2:
 1. Add startup integration test for Gateway-mode + missing-key scenario asserting deterministic degraded/fail-fast behavior.
+
+## 114) Pass 107 Continuation (2026-02-07)
+
+### 114.1 Backfill Announce-Time Extraction Targets `report_time`, Not Gateway-Normalized `time`
+
+Current behavior:
+- ticker-earnings backfill derives announce timing via `_extract_announce_time(...)` (`src/orion/jobs/sync_earnings.py:86`, `src/orion/jobs/sync_earnings.py:113`),
+- extractor checks `additional_properties["report_time"]` and `e.report_time` only (`src/orion/jobs/sync_earnings.py:116` to `src/orion/jobs/sync_earnings.py:121`),
+- Gateway normalized ticker-earnings shape sets timing under `time` (or `timing` upstream alias) (`../Data-Gateway/gateway/providers/uw.py:983`).
+
+Risk:
+- when Orion consumes Gateway-normalized ticker earnings, announce-time can be dropped during backfill despite upstream availability,
+- `silver_earnings_calendar.announce_time` completeness drifts and undermines downstream timing-aware feature logic.
+
+### 114.2 Updated Priorities
+
+P1:
+1. Extend `_extract_announce_time(...)` to read normalized timing keys (`time`, `timing`) in addition to legacy `report_time`.
+2. Add run-level timing-field coverage metrics (records with timing present upstream vs persisted) to detect silent mapping regressions.
+
+P2:
+1. Add regression tests with mocked ticker-earnings payloads covering `report_time` and `time` shapes to enforce announce-time parity.

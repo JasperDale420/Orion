@@ -449,6 +449,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - integration finding: ingestion stream startup can silently fall back from Gateway mode to direct Alpaca polling on missing Gateway key/config
   - parity-risk finding: centralized stream path can be bypassed at runtime without explicit degraded-state signaling
   - hardening recommendations for fail-fast/health-gated Gateway mode and source-of-truth telemetry
+- **Gateway/Heber Parity Audit (Pass 107)**: Continued audit with:
+  - contract-mapping finding: ticker-earnings backfill timing extractor looks for `report_time` while Gateway normalized payload emits `time`
+  - data-consistency risk: historical `announce_time` can be systematically blank/under-populated despite available upstream timing fields
+  - hardening recommendations for normalized time-key support and timing-field coverage metrics
 
 ### Changed
 
