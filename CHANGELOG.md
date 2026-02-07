@@ -501,6 +501,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - regime-input correctness finding: current SQL for “20-bar cumulative return” uses window semantics and row selection that can misstate recent trend
   - model-risk finding: regime detector can receive distorted trend signals, affecting snapshot classification quality
   - hardening recommendations for deterministic 20-bar slice math and regression-tested trend computation
+- **Gateway/Heber Parity Audit (Pass 120)**: Continued audit with:
+  - observability finding: enrichment connectors collapse request failures and true empty-result states into the same `stored 0` loop signal
+  - operations-risk finding: sustained Gateway/auth regressions can masquerade as normal low-activity periods while feature tables go stale
+  - hardening recommendations for failure-state classification, degraded-mode alerting, and freshness-based SLO checks
 
 ### Changed
 

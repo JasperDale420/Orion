@@ -4080,3 +4080,26 @@ P1:
 P2:
 1. Add unit/integration tests for `get_spy_cumulative_return()` covering monotonic-up, monotonic-down, and flat synthetic bar windows.
 2. Add telemetry comparing computed `cum_ret` against a reference in-Python implementation to detect SQL regressions.
+
+## 127) Pass 120 Continuation (2026-02-07)
+
+### 127.1 Feature-Enrichment Loop Treats Connector Failures and “No Data” as the Same Outcome
+
+Current behavior:
+- loop records connector output only as `stored {count}` and advances schedule timers regardless of result (`src/orion/main_feature_enrichment.py:263` to `src/orion/main_feature_enrichment.py:283`),
+- UW connector fetch paths convert request failures into empty returns (`src/orion/connectors/uw_market_tide_connector.py:49` to `src/orion/connectors/uw_market_tide_connector.py:54`, `src/orion/connectors/uw_greek_exposure_connector.py:48` to `src/orion/connectors/uw_greek_exposure_connector.py:54`, `src/orion/connectors/uw_max_pain_connector.py:48` to `src/orion/connectors/uw_max_pain_connector.py:54`, `src/orion/connectors/uw_iv_rank_connector.py:48` to `src/orion/connectors/uw_iv_rank_connector.py:54`),
+- upstream request exceptions are logged in connector scope but the loop-level signal remains an informational zero-count message.
+
+Risk:
+- persistent Gateway contract/auth outages can be mistaken for legitimate low-activity periods,
+- stale enrichment tables can continue without explicit degraded-state alarms, reducing trust in downstream models/features.
+
+### 127.2 Updated Priorities
+
+P1:
+1. Distinguish connector result states (`success_with_rows`, `success_empty`, `request_failed`, `parse_failed`) and propagate them to loop-level logs/metrics.
+2. Trigger degraded-mode alerts when consecutive failure states exceed threshold per feed.
+
+P2:
+1. Add tests that force HTTP/auth failures and verify loop emits failure-classified telemetry rather than generic `stored 0`.
+2. Add per-feed freshness SLO checks tied to last successful write timestamp, not loop heartbeat alone.
