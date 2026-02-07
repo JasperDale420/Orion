@@ -3849,3 +3849,25 @@ P1:
 
 P2:
 1. Add regression tests for ticker-earnings shapes carrying `report_date` vs `date` to guarantee consistent ingestion.
+
+## 117) Pass 110 Continuation (2026-02-07)
+
+### 117.1 Dataset Discovery Endpoint Depends on `HEBER_CATALOG_URL` Shape
+
+Current behavior:
+- `HeberReader.list_datasets()` calls `self.client.get("/datasets")` (`src/orion/clients/heber_reader.py:87`),
+- default Orion config sets `heber_catalog_url` to `http://localhost:8085/api/v1` (`src/orion/config.py:81` to `src/orion/config.py:83`),
+- Heber catalog route is exposed as `/api/v1/datasets` (`../Heber/heber/catalog/api.py:135`).
+
+Risk:
+- when `HEBER_CATALOG_URL` is configured as root host (for example `http://localhost:8085`), list-datasets requests can 404 while health checks still appear healthy,
+- metadata/discovery readiness can diverge by environment despite equivalent endpoint intent.
+
+### 117.2 Updated Priorities
+
+P1:
+1. Construct catalog dataset routes deterministically (explicit `/api/v1/datasets`) independent of base URL shape.
+2. Add startup URL-contract validation that rejects incompatible `HEBER_CATALOG_URL` values with actionable config guidance.
+
+P2:
+1. Add unit tests for root and `/api/v1` base URL variants ensuring `list_datasets()` resolves to the same canonical endpoint.

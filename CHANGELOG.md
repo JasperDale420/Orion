@@ -461,6 +461,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-mapping finding: earnings backfill requires `report_date` field while Gateway-normalized ticker earnings emit `date`
   - completeness-risk finding: backfill rows can be skipped when date values remain in model `additional_properties` instead of `report_date`
   - hardening recommendations for normalized date-key extraction and coverage instrumentation
+- **Gateway/Heber Parity Audit (Pass 110)**: Continued audit with:
+  - endpoint-contract finding: `HeberReader.list_datasets()` targets `/datasets` while catalog routes are mounted at `/api/v1/datasets`
+  - configuration-risk finding: metadata discovery behavior depends on whether `HEBER_CATALOG_URL` includes `/api/v1`, creating asymmetric health vs dataset checks
+  - hardening recommendations for canonical catalog route construction and URL-shape validation
 
 ### Changed
 
