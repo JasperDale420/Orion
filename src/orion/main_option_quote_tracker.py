@@ -175,6 +175,14 @@ async def run_quote_tracker() -> None:
     signal.signal(signal.SIGTERM, handle_shutdown)
     signal.signal(signal.SIGINT, handle_shutdown)
 
+    logger.warning(
+        "Legacy local option quote tracker is active",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_ACTIVE",
+            "pipeline": "orion.main_option_quote_tracker",
+            "replacement_path": "heber.watch.poller + labels_alert_barriers/meta_label_features",
+        },
+    )
     logger.info("Option Quote Tracker starting...")
 
     connector = AlpacaOptionGreeksConnector()

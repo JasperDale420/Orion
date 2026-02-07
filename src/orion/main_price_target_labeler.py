@@ -2759,6 +2759,14 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
     """Main labeling loop."""
     await init_db()
 
+    logger.warning(
+        "Legacy local price-target labeler is active",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_ACTIVE",
+            "pipeline": "orion.main_price_target_labeler",
+            "replacement_path": "heber.watch datasets (labels_alert_barriers/meta_label_features) after field mapping signoff",
+        },
+    )
     logger.info("Starting Price Target Labeling Service (v2 - comprehensive metrics)...")
 
     total_labeled = 0

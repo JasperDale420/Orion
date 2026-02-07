@@ -349,6 +349,14 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
     """Main labeling loop."""
     await init_db()
 
+    logger.warning(
+        "Legacy local flow labeler is active",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_ACTIVE",
+            "pipeline": "orion.main_labeler",
+            "replacement_path": "heber.watch.writer labels_alert_barriers",
+        },
+    )
     logger.info("Starting Flow Labeling Service...")
 
     total_labeled = 0

@@ -626,6 +626,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - remediation confirmation that dynamic `price_target_labels` inserts now use explicit schema validation instead of implicit key filtering
   - observability remediation confirmation that silent enrichment fallbacks now emit structured warning events with counters
   - residual note that alert thresholds/DLQ replay for fallback events remain follow-up work
+- **Gateway/Heber Parity Audit (Pass 156)**: Continued audit with:
+  - decommission-readiness remediation confirmation that legacy local label pipelines now emit explicit startup deprecation warnings
+  - operator-clarity improvement: each warning includes replacement Heber dataset/pipeline ownership hints
+  - residual note that staged service disable/archive controls are still pending implementation
 
 ### Changed
 
@@ -672,6 +676,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `src/orion/main_price_target_labeler.py` now validates label payload keys against live `price_target_labels` schema and fails fast on unknown/missing columns
   - Added structured fallback warning telemetry and counters in `src/orion/main_price_target_labeler.py` and `src/orion/ml/flow_enricher.py` for previously silent enrichment-degradation paths
   - Added focused unit coverage in `tests/unit/test_label_schema_guard.py`
+- **Legacy Label Pipeline Startup Warnings**:
+  - Added runtime startup warnings for `orion.main_option_quote_tracker`, `orion.main_labeler`, and `orion.main_price_target_labeler` when legacy local-label paths are active
+  - Warning payloads now include intended Heber replacement paths to support safer migration operations
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

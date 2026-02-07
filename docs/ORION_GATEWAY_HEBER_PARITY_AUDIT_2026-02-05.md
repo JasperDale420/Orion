@@ -4970,3 +4970,22 @@ References:
 
 Residual:
 - fallback logging is now present, but parity SLO thresholds/alerts and DLQ replay flow are still pending.
+
+## 163) Pass 156 Continuation (2026-02-07)
+
+### 163.1 Deprecated Local Label Pipelines Now Emit Startup Warnings with Centralized Replacement Paths
+
+Implemented:
+- Added explicit startup deprecation warnings for legacy local-label runtime services:
+  - `orion.main_option_quote_tracker`
+  - `orion.main_labeler`
+  - `orion.main_price_target_labeler`
+- Each warning includes an explicit centralized replacement target in Heber datasets/pipelines to reduce operator ambiguity during migration window.
+
+References:
+- `src/orion/main_option_quote_tracker.py`
+- `src/orion/main_labeler.py`
+- `src/orion/main_price_target_labeler.py`
+
+Residual:
+- warnings are now present, but runtime disable switches / staged shutdown orchestration for these services are still pending the archive-wave implementation.
