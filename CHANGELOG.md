@@ -301,6 +301,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - normalization-default finding: missing/invalid UW `put_call` values are coerced to `"C"` during flow normalization
   - directional-bias finding: malformed side data can be silently counted as bullish call flow in downstream premium splits
   - hardening recommendations for strict side validation/quarantine and unknown-side monitoring
+- **Gateway/Heber Parity Audit (Pass 70)**: Continued audit with:
+  - enrichment-coverage finding: pre-persist flow Greeks enrichment truncates option-symbol requests to first 100 rows
+  - data-quality finding: rows beyond that cap are silently written without Alpaca Greeks fields, creating batch-order-dependent sparsity
+  - hardening recommendations for chunked full-coverage enrichment and explicit coverage telemetry
 
 ### Changed
 

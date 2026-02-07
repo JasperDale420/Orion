@@ -2846,3 +2846,27 @@ P1:
 
 P2:
 1. Add DQ monitor on unknown/invalid side-rate to surface upstream contract drift quickly.
+
+## 77) Pass 70 Continuation (2026-02-07)
+
+### 77.1 Flow Greeks Enrichment Truncates Coverage to First 100 Option Symbols Per Persist Batch
+
+Current enrichment path:
+- `persist_silver_from_bronze` runs `_enrich_flows_with_greeks(flow_rows)` before writing flow batch (`src/orion/processing/persistence.py:263` to `src/orion/processing/persistence.py:264`),
+- `_enrich_flows_with_greeks` collects all option chains but calls `get_greeks_batch(symbols[:100])` (`src/orion/processing/persistence.py:118`, `src/orion/processing/persistence.py:123`),
+- Alpaca batch connector itself also caps to first 100 symbols (`src/orion/connectors/alpaca_option_greeks_connector.py:159` to `src/orion/connectors/alpaca_option_greeks_connector.py:160`).
+
+Risk:
+- when a persist cycle has >100 option-chain rows, all rows after the first 100 are silently skipped for Greeks enrichment (`delta_alpaca`, `gamma_alpaca`, etc.), causing non-random feature sparsity tied to batch ordering.
+
+Operational impact:
+- downstream consumers can misinterpret missing Greeks as true data absence instead of enrichment truncation, reducing training/inference consistency.
+
+### 77.2 Updated Priorities
+
+P1:
+1. Chunk symbols in `_enrich_flows_with_greeks` and merge results across all chunks (size <=100 each), rather than truncating the list.
+2. Emit enrichment-coverage metrics (requested symbols vs enriched symbols) and alert when coverage drops below threshold.
+
+P2:
+1. Add regression test with >100 unique option chains asserting enrichment is applied to all rows, not only first page.
