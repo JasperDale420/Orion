@@ -541,6 +541,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-versioning finding: consumers query `gold_feature_windows` without filtering by `feature_set_id` despite versioned primary key design
   - reproducibility-risk finding: mixed-version rows can produce ambiguous or nondeterministic feature selection in scoring/training lookups
   - hardening recommendations for explicit feature-set scoping and version-aware regression coverage
+- **Gateway/Heber Parity Audit (Pass 130)**: Continued audit with:
+  - window-semantics finding: `window_feature_job` writes processing-time sliding snapshots (`window_end=now`) instead of canonical period-aligned buckets
+  - consistency-risk finding: downstream latest-row lookups can vary by scheduler timing rather than true interval boundary semantics
+  - hardening recommendations for boundary-aligned window keys and stable per-bucket retrieval tests
 
 ### Changed
 

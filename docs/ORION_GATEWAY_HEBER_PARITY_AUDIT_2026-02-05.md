@@ -4324,3 +4324,27 @@ P1:
 P2:
 1. Add regression tests with mixed-version fixtures (`v1`, `v2`) proving consumers pull only the configured feature set.
 2. Add observability metric for version mismatches/absence (expected feature set missing for ticker-period-entry tuple).
+
+## 137) Pass 130 Continuation (2026-02-07)
+
+### 137.1 Window Features Use Processing-Time Sliding Windows Instead of Period-Aligned Buckets
+
+Current behavior:
+- each run computes `window_end = now` and `window_start = now - window_size` for every period (`src/orion/jobs/window_feature_job.py:55` to `src/orion/jobs/window_feature_job.py:63`),
+- job default cadence is 60 seconds (`src/orion/jobs/window_feature_job.py:47`),
+- persisted key includes exact `window_end_ts_utc` (`src/orion/jobs/window_feature_job.py:194`, `src/orion/storage/models_gold.py:232`),
+- consumers then pick the latest row `<= entry_ts` rather than a boundary-aligned bucket (`src/orion/ml/flow_enricher.py:1034` to `src/orion/ml/flow_enricher.py:1036`, `src/orion/ml/exit_classifier.py:446` to `src/orion/ml/exit_classifier.py:459`).
+
+Risk:
+- 1h/1d/1w “window features” become moving processing-time snapshots rather than deterministic time-bucket features,
+- two nearby events can get materially different context based on job run timing instead of underlying market interval boundaries, reducing reproducibility and cross-system parity.
+
+### 137.2 Updated Priorities
+
+P1:
+1. Align `window_end` to canonical period boundaries (for example floor-to-5m, top-of-hour, trading-day close boundary) before persistence.
+2. Query/serve window features by boundary key semantics rather than arbitrary latest processing-time snapshot.
+
+P2:
+1. Add regression tests asserting stable feature retrieval for events within the same canonical bucket regardless of job runtime second.
+2. Add migration/backfill plan to normalize existing `gold_feature_windows` rows into boundary-aligned windows.
