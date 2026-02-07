@@ -417,6 +417,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - coverage finding: earnings backfill performs single-call ticker fetches against a paginated Gateway earnings endpoint
   - completeness-risk finding: historical earnings rows can be truncated per symbol when pagination is not consumed
   - hardening recommendations for full pagination handling and per-ticker fetch completeness metrics
+- **Gateway/Heber Parity Audit (Pass 99)**: Continued audit with:
+  - consistency finding: daily earnings sync persists batch-level `announce_time` labels instead of record-level timing fields
+  - semantics-risk finding: `announce_time` persistence rules diverge between daily sync and historical backfill paths
+  - hardening recommendations for unified timing extraction/fallback policy and fallback-rate telemetry
 
 ### Changed
 

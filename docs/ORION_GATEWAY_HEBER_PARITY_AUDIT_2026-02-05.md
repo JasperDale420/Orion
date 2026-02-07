@@ -3593,3 +3593,25 @@ P1:
 
 P2:
 1. Add regression test with multi-page mocked earnings response ensuring full-history ingestion for a ticker.
+
+## 106) Pass 99 Continuation (2026-02-07)
+
+### 106.1 Daily Earnings Sync Uses Batch-Level `announce_time` Instead of Record-Level Timing Fields
+
+Current behavior:
+- daily sync invokes `_fetch_and_sync_earnings(..., announce_time=\"premarket\"|\"afterhours\", ...)` (`src/orion/jobs/sync_earnings.py:32` to `src/orion/jobs/sync_earnings.py:33`),
+- each row is persisted via `_upsert_earnings(e, today, announce_time)` using that batch label (`src/orion/jobs/sync_earnings.py:50`),
+- in contrast, historical backfill path extracts per-record timing (`report_time`) when available (`src/orion/jobs/sync_earnings.py:87`, `src/orion/jobs/sync_earnings.py:113` to `src/orion/jobs/sync_earnings.py:121`).
+
+Risk:
+- daily path can flatten record-level timing nuance to endpoint-level labels,
+- inconsistent timing semantics between daily sync and historical backfill can introduce drift in `silver_earnings_calendar.announce_time`.
+
+### 106.2 Updated Priorities
+
+P1:
+1. Harmonize daily and backfill logic: prefer record-level timing field extraction, with endpoint label as fallback only when missing.
+2. Add telemetry on fallback usage rate for `announce_time`.
+
+P2:
+1. Add regression test with mixed `report_time` availability to verify consistent announce-time persistence rules across daily and backfill paths.
