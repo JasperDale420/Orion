@@ -549,6 +549,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - query-pattern finding: `flow_enricher` retrieves 1h/1d/1w window features using a per-period SQL loop (three round-trips per event)
   - scalability-risk finding: per-event query amplification adds avoidable latency and DB pressure during scoring bursts
   - hardening recommendations for set-based single-roundtrip retrieval and query-latency instrumentation
+- **Gateway/Heber Parity Audit (Pass 132)**: Continued audit with:
+  - producer-consumer drift finding: `window_feature_job` emits `gold_feature_windows` rows for `period='5m'` but active consumers read only `1h/1d/1w`
+  - efficiency-risk finding: dead-period writes add avoidable compute/storage while creating false confidence about 5m feature usage
+  - hardening recommendations for period contract tests and usage telemetry by period
 
 ### Changed
 

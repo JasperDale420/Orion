@@ -4371,3 +4371,28 @@ P1:
 P2:
 1. Add perf regression benchmark for enrichment latency before/after query consolidation.
 2. Add metrics for window-feature query count and latency percentiles per scored event.
+
+## 139) Pass 132 Continuation (2026-02-07)
+
+### 139.1 `gold_feature_windows` Producer Emits `5m` Period Rows That No Active Consumer Reads
+
+Current behavior:
+- window producer defines periods `5m`, `1h`, `1d`, `1w` (`src/orion/jobs/window_feature_job.py:22` to `src/orion/jobs/window_feature_job.py:26`),
+- default runtime period set includes all configured periods (`src/orion/jobs/window_feature_job.py:50`),
+- flow enrichment window consumer fetches only `["1h", "1d", "1w"]` (`src/orion/ml/flow_enricher.py:1027`),
+- exit classifier training joins only `period='1h'`, `period='1d'`, `period='1w'` (`src/orion/ml/exit_classifier.py:445` to `src/orion/ml/exit_classifier.py:458`),
+- no in-repo consumer currently reads `gold_feature_windows` with `period='5m'`.
+
+Risk:
+- unnecessary compute/write/storage overhead persists for an unconsumed feature slice,
+- operators may assume 5m context is influencing models when it is effectively dead data for current scoring/training paths.
+
+### 139.2 Updated Priorities
+
+P1:
+1. Decide whether `5m` window context is required; if yes, wire explicit consumer usage, otherwise remove `5m` from `WindowFeatureJob` default periods.
+2. Add producer-consumer contract test ensuring each emitted period has at least one active consumer path.
+
+P2:
+1. Add table-level usage telemetry (rows written per period vs rows read per period) to detect dead feature slices.
+2. If retained, document exact downstream usage of `5m` period in training/inference specs.
