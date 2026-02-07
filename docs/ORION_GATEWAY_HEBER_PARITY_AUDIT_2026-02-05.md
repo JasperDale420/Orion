@@ -3827,3 +3827,25 @@ P1:
 
 P2:
 1. Add integration test covering execution quote lookup against Gateway contract to verify schema compatibility with sizing logic.
+
+## 116) Pass 109 Continuation (2026-02-07)
+
+### 116.1 Earnings Backfill Expects `report_date` but Gateway-Normalized Records Provide `date`
+
+Current behavior:
+- backfill record processor requires `e.report_date` and skips row when missing/UNSET (`src/orion/jobs/sync_earnings.py:80` to `src/orion/jobs/sync_earnings.py:82`),
+- generated `Earnings` model only maps `report_date` as a first-class field; unknown keys remain in `additional_properties` (`src/orion/unusualwhales/models/earnings.py:65`, `src/orion/unusualwhales/models/earnings.py:186` to `src/orion/unusualwhales/models/earnings.py:194`),
+- Gateway normalized ticker earnings emit `date` as canonical date key (`../Data-Gateway/gateway/providers/uw.py:982`).
+
+Risk:
+- when ticker earnings payloads follow Gateway normalized schema, valid rows can be skipped in Orion backfill,
+- `silver_earnings_calendar` historical completeness can degrade without explicit failure signals.
+
+### 116.2 Updated Priorities
+
+P1:
+1. Add normalized date extraction fallback (`date`, `earnings_date`) in backfill processor when `report_date` is absent.
+2. Track row-skip reasons (missing date key, parse failure, upsert failure) in run metrics to surface coverage regressions.
+
+P2:
+1. Add regression tests for ticker-earnings shapes carrying `report_date` vs `date` to guarantee consistent ingestion.

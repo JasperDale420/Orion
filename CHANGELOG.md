@@ -457,6 +457,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - integration finding: options execution price discovery calls Alpaca snapshots directly instead of Gateway quote endpoints
   - parity-risk finding: live execution bypasses centralized Gateway auth/rate-limit/contract layer used elsewhere in migration
   - hardening recommendations for Gateway-backed quote sourcing in options execution and fallback visibility
+- **Gateway/Heber Parity Audit (Pass 109)**: Continued audit with:
+  - contract-mapping finding: earnings backfill requires `report_date` field while Gateway-normalized ticker earnings emit `date`
+  - completeness-risk finding: backfill rows can be skipped when date values remain in model `additional_properties` instead of `report_date`
+  - hardening recommendations for normalized date-key extraction and coverage instrumentation
 
 ### Changed
 
