@@ -5044,3 +5044,32 @@ P1:
 
 P2:
 1. Add a startup info log for each legacy service summarizing resolved gate values (`global`, `service_specific`, `effective`) to simplify operational cutovers.
+
+## 166) Pass 159 Continuation (2026-02-07)
+
+### 166.1 New Audit Finding: Compose Restart Policy Causes Disable-Loop for Gated Legacy Services
+
+Current behavior:
+- legacy services run with `restart: unless-stopped` in compose (`docker-compose.yml:50`, `docker-compose.yml:64`, `docker-compose.yml:95`),
+- each service now exits early when its legacy gate is disabled:
+  - option quote tracker (`src/orion/main_option_quote_tracker.py:193`, `src/orion/main_option_quote_tracker.py:203`),
+  - flow labeler (`src/orion/main_labeler.py:371`, `src/orion/main_labeler.py:453`),
+  - price-target labeler (`src/orion/main_price_target_labeler.py:2779`, `src/orion/main_price_target_labeler.py:3010`).
+
+Operational implication:
+- in docker-compose deployments, disabling a legacy service via env gate can trigger repeated restart loops (clean exit + `unless-stopped` policy),
+- this creates noisy logs/churn and undermines the intent of “disable service” as a stable rollout state.
+
+Risk:
+- decommission cutovers become noisy and harder to verify,
+- service-disabled state may be misread as a crash/recovery issue by operators.
+
+### 166.2 Updated Priorities
+
+P1:
+1. For legacy services under decommission, move runtime control from “exit early” to compose-level inclusion control (profiles/overrides) so disabled means not launched.
+2. If env-gate disable must remain, avoid restart loops by adjusting restart policy for these services during migration waves.
+
+P2:
+1. Add an operations runbook note for legacy gate usage in compose, including expected container behavior in each rollout mode.
+2. Add a lightweight smoke check in CI/dev scripts asserting disabled legacy services do not churn restart counts under compose defaults.

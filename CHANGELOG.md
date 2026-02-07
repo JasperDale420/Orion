@@ -638,6 +638,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - remediation confirmation that per-service legacy label kill switches are now implemented with global fallback precedence
   - focused rollout-operability finding that compose services do not yet expose per-service gate env controls
   - control-attribution finding that disabled-service logs still reference only the global gate key
+- **Gateway/Heber Parity Audit (Pass 159)**: Continued audit with:
+  - compose lifecycle finding that `restart: unless-stopped` causes restart-loop churn when legacy services are intentionally disabled via env gates
+  - decommission-operations recommendation to shift disable semantics to compose-level inclusion control (profiles/overrides) or adjust restart policy during migration waves
+  - runbook/smoke-check recommendation so disabled legacy services remain stably off in deployment
 
 ### Changed
 
