@@ -4396,3 +4396,28 @@ P1:
 P2:
 1. Add table-level usage telemetry (rows written per period vs rows read per period) to detect dead feature slices.
 2. If retained, document exact downstream usage of `5m` period in training/inference specs.
+
+## 140) Pass 133 Continuation (2026-02-07)
+
+### 140.1 `ORION_USE_GATEWAY` Flag Controls Only Alpaca Streaming Path, Not Overall Gateway/Heber Integration
+
+Current behavior:
+- global setting exists as `orion_use_gateway` / `ORION_USE_GATEWAY` (`src/orion/config.py:70`),
+- repository usage of this setting appears only in Alpaca stream connector (`src/orion/connectors/alpaca_stream_connector.py:23`, `src/orion/connectors/alpaca_stream_connector.py:44`),
+- connector docs imply toggling gateway mode for that stream path (`src/orion/connectors/alpaca_stream_connector.py:33`),
+- UW enrichment connectors still hardwire Data Gateway URL/key regardless of this flag (`src/orion/connectors/uw_market_tide_connector.py:26` to `src/orion/connectors/uw_market_tide_connector.py:27`, `src/orion/connectors/uw_greek_exposure_connector.py:26` to `src/orion/connectors/uw_greek_exposure_connector.py:27`),
+- Heber-backed readers in labeling/enrichment are instantiated unconditionally (`src/orion/main_labeler.py:34`, `src/orion/main_feature_enrichment.py:42`).
+
+Risk:
+- operators can reasonably expect `ORION_USE_GATEWAY=false` to disable or bypass centralized Gateway/Heber dependencies system-wide, but only Alpaca stream transport changes,
+- partial toggle semantics increase migration/cutover confusion and can produce inconsistent mixed-mode runtime behavior.
+
+### 140.2 Updated Priorities
+
+P1:
+1. Rename/scope the existing flag to explicit intent (for example `ORION_USE_GATEWAY_FOR_ALPACA_STREAM`) or implement true system-wide gateway toggle behavior.
+2. Add startup diagnostics that print effective mode per subsystem (Alpaca stream, UW enrichment, Heber readers) to remove ambiguity.
+
+P2:
+1. Add integration tests for configuration mode matrix ensuring documented toggle semantics match runtime behavior.
+2. Update runbooks/env docs to distinguish transport toggles from full data-plane source toggles.

@@ -553,6 +553,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - producer-consumer drift finding: `window_feature_job` emits `gold_feature_windows` rows for `period='5m'` but active consumers read only `1h/1d/1w`
   - efficiency-risk finding: dead-period writes add avoidable compute/storage while creating false confidence about 5m feature usage
   - hardening recommendations for period contract tests and usage telemetry by period
+- **Gateway/Heber Parity Audit (Pass 133)**: Continued audit with:
+  - config-semantics finding: `ORION_USE_GATEWAY` currently affects only Alpaca streaming transport while UW connectors/Heber readers remain gateway-centric
+  - operations-risk finding: partial toggle semantics can cause mixed-mode runtime behavior and confusing cutover expectations
+  - hardening recommendations for explicit flag scoping, subsystem mode diagnostics, and configuration-matrix tests
 
 ### Changed
 
