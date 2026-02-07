@@ -513,6 +513,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - data-contract finding: `backfill_ml_features` recomputes `entry_session` using a different bucket taxonomy than live label generation
   - integrity-risk finding: partial backfills can overwrite existing rows and mix incompatible session vocabularies in `price_target_labels`
   - hardening recommendations for shared time-feature helpers and overwrite guards on previously-populated fields
+- **Gateway/Heber Parity Audit (Pass 123)**: Continued audit with:
+  - backlog-progress finding: `backfill_ml_features` selects rows with `LIMIT` but no deterministic ordering/cursor and retries failed rows without quarantine
+  - completion-risk finding: nightly attempts can recycle the same problematic records while leaving eligible backlog rows untouched
+  - hardening recommendations for cursor-based ordering, retry metadata, and `attempted` vs `updated` vs `completed` run metrics
 
 ### Changed
 

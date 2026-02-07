@@ -4151,3 +4151,27 @@ P1:
 P2:
 1. Add regression tests asserting labeler and backfill produce identical `entry_session` for the same timestamps.
 2. Add data-quality checks to flag mixed session vocabularies in `price_target_labels`.
+
+## 130) Pass 123 Continuation (2026-02-07)
+
+### 130.1 Backfill Record Selection Lacks Deterministic Ordering/Cursor and Can Recycle Failing Rows
+
+Current behavior:
+- `get_records_to_backfill()` uses `LIMIT :limit` without `ORDER BY` or cursor fields (`src/orion/jobs/backfill_ml_features.py:283` to `src/orion/jobs/backfill_ml_features.py:291`),
+- main loop repeatedly fetches the same shape query each cycle (`src/orion/jobs/backfill_ml_features.py:480` to `src/orion/jobs/backfill_ml_features.py:483`),
+- per-record failures are logged but not quarantined/marked (`src/orion/jobs/backfill_ml_features.py:489` to `src/orion/jobs/backfill_ml_features.py:490`),
+- loop termination is tied to processed-attempt count limit, not successful advancement through the backlog (`src/orion/jobs/backfill_ml_features.py:494` to `src/orion/jobs/backfill_ml_features.py:503`).
+
+Risk:
+- problematic rows can be retried repeatedly while other eligible rows remain untouched,
+- nightly runs can report processing activity while making limited forward progress on true feature-completion coverage.
+
+### 130.2 Updated Priorities
+
+P1:
+1. Add deterministic ordering + pagination cursor (for example `ORDER BY entry_ts, event_id`) so each run advances predictably through backlog.
+2. Introduce failure quarantine metadata (retry count / last_error / next_retry_at) to avoid hot-looping the same broken rows.
+
+P2:
+1. Add completion metrics that separate `attempted`, `updated`, and `newly_completed` records per run.
+2. Add regression tests with one synthetic failing row to assert surrounding rows still progress.
