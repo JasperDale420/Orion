@@ -477,6 +477,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - leakage-guard finding: `HeberReader` as-of filter is bypassed when `ts_available` column is missing
   - integrity-risk finding: gold/silver reads can become unconstrained by availability time without explicit warning, weakening point-in-time guarantees
   - hardening recommendations for fail-closed as-of enforcement and column-contract validation
+- **Gateway/Heber Parity Audit (Pass 114)**: Continued audit with:
+  - connection-lifecycle finding: Gateway stream auth/connection failures return without explicit websocket close/reset
+  - resilience-risk finding: repeated failed connect attempts can accumulate stale socket handles/state and obscure root-cause auth failures
+  - hardening recommendations for deterministic close/reset on failed handshake paths and reconnect-state hygiene
 
 ### Changed
 

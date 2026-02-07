@@ -3937,3 +3937,29 @@ P1:
 
 P2:
 1. Add regression tests asserting as-of reads fail or explicitly flag degraded mode when `ts_available` is absent.
+
+## 121) Pass 114 Continuation (2026-02-07)
+
+### 121.1 Gateway Stream Client Does Not Explicitly Close/Reset Socket on Failed Handshake
+
+Current behavior:
+- `connect()` establishes websocket, sends auth, and inspects first response (`src/orion/connectors/gateway_stream_client.py:86` to `src/orion/connectors/gateway_stream_client.py:110`),
+- on auth failure (`status != "ok"`), method returns `False` without explicit `await self._websocket.close()` / handle reset (`src/orion/connectors/gateway_stream_client.py:114` to `src/orion/connectors/gateway_stream_client.py:117`),
+- exception path also returns `False` without deterministic socket cleanup (`src/orion/connectors/gateway_stream_client.py:119` to `src/orion/connectors/gateway_stream_client.py:121`).
+
+Gateway side behavior:
+- server returns auth error payload and then closes unauthenticated connections (`../Data-Gateway/gateway/api/websocket.py:190` to `../Data-Gateway/gateway/api/websocket.py:200`, `../Data-Gateway/gateway/api/websocket.py:50` to `../Data-Gateway/gateway/api/websocket.py:52`),
+- but client-side lifecycle still relies on remote close timing rather than explicit local cleanup.
+
+Risk:
+- reconnect/failure loops can carry stale websocket handles/state longer than intended,
+- troubleshooting auth/key issues becomes noisier when connection-state transitions are implicit.
+
+### 121.2 Updated Priorities
+
+P1:
+1. On any failed handshake path, explicitly close websocket (if open), clear `_websocket`, and reset `_authenticated` before returning.
+2. Add structured metrics/log fields for handshake outcome categories (auth_failed, timeout, transport_error) to improve diagnostics.
+
+P2:
+1. Add unit/integration tests simulating auth-fail and timeout paths to assert deterministic client-side cleanup and stable reconnect behavior.
