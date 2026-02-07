@@ -421,6 +421,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - consistency finding: daily earnings sync persists batch-level `announce_time` labels instead of record-level timing fields
   - semantics-risk finding: `announce_time` persistence rules diverge between daily sync and historical backfill paths
   - hardening recommendations for unified timing extraction/fallback policy and fallback-rate telemetry
+- **Gateway/Heber Parity Audit (Pass 100)**: Continued audit with:
+  - observability finding: earnings backfill swallows per-ticker/per-row exceptions and can report low error counts despite failed processing
+  - integrity-risk finding: sync health signals (`errors`, completion logs) can overstate success during Gateway/contract regressions
+  - hardening recommendations for structured error propagation, per-ticker failure accounting, and ingestion quality telemetry
 
 ### Changed
 

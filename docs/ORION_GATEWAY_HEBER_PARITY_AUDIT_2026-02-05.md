@@ -3615,3 +3615,25 @@ P1:
 
 P2:
 1. Add regression test with mixed `report_time` availability to verify consistent announce-time persistence rules across daily and backfill paths.
+
+## 107) Pass 100 Continuation (2026-02-07)
+
+### 107.1 Earnings Backfill Error Accounting Masks Per-Ticker and Per-Record Failures
+
+Current behavior:
+- `backfill_ticker_earnings()` catches fetch errors, logs at debug, and returns `count` (often `0`) instead of surfacing failure (`src/orion/jobs/sync_earnings.py:67` to `src/orion/jobs/sync_earnings.py:74`),
+- `_process_single_earnings_record()` catches parse/upsert errors per row, logs at debug, and returns `0` (`src/orion/jobs/sync_earnings.py:84` to `src/orion/jobs/sync_earnings.py:101`),
+- `backfill_all_earnings()` increments `results["errors"]` only when outer ticker loop catches exceptions (`src/orion/jobs/sync_earnings.py:154` to `src/orion/jobs/sync_earnings.py:166`), but inner catches prevent most exceptions from bubbling.
+
+Risk:
+- run-level success metrics can overstate data quality (`errors` stays low while rows are dropped/skipped),
+- Gateway/contract regressions can hide behind normal-looking completion logs with reduced earnings coverage.
+
+### 107.2 Updated Priorities
+
+P1:
+1. Replace silent `count=0` failure path with structured ticker result accounting (`fetched`, `inserted`, `skipped`, `errors`) and aggregate it in `backfill_all_earnings()`.
+2. Promote row-level parse/upsert exceptions to counted error metrics (with bounded logging) so data-loss modes are visible.
+
+P2:
+1. Add regression tests asserting that simulated fetch and row-parse failures increment `results["errors"]` and produce deterministic failure counters.
