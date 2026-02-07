@@ -3963,3 +3963,25 @@ P1:
 
 P2:
 1. Add unit/integration tests simulating auth-fail and timeout paths to assert deterministic client-side cleanup and stable reconnect behavior.
+
+## 122) Pass 115 Continuation (2026-02-07)
+
+### 122.1 WebSocket URL Builder Does Not Normalize API-Prefixed Gateway Base URLs
+
+Current behavior:
+- stream client constructs websocket URL by appending `"/ws"` to configured `gateway_url` (`src/orion/connectors/gateway_stream_client.py:48` to `src/orion/connectors/gateway_stream_client.py:55`),
+- Gateway websocket endpoint is mounted at root path `/ws` (`../Data-Gateway/gateway/api/websocket.py:28`),
+- if `DATA_GATEWAY_URL` is set with API prefix (for example `http://host:8080/api/v1`), computed websocket URL becomes `ws://host:8080/api/v1/ws`, which does not match router contract.
+
+Risk:
+- environment-specific base URL settings can break streaming even when HTTP endpoints appear reachable,
+- Orion can fall back to polling mode, reducing parity with intended centralized Gateway stream path.
+
+### 122.2 Updated Priorities
+
+P1:
+1. Normalize Gateway base URL before WS composition (strip API path prefixes, then append `/ws` deterministically).
+2. Add startup validation that rejects/rewrites API-prefixed `DATA_GATEWAY_URL` values for stream mode.
+
+P2:
+1. Add unit tests for gateway URL variants (`host`, `host/api/v1`, `ws://host`) to assert stable `ws_url` derivation.

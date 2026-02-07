@@ -481,6 +481,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - connection-lifecycle finding: Gateway stream auth/connection failures return without explicit websocket close/reset
   - resilience-risk finding: repeated failed connect attempts can accumulate stale socket handles/state and obscure root-cause auth failures
   - hardening recommendations for deterministic close/reset on failed handshake paths and reconnect-state hygiene
+- **Gateway/Heber Parity Audit (Pass 115)**: Continued audit with:
+  - endpoint-composition finding: Gateway stream client appends `/ws` directly to configured base URL without stripping API prefixes
+  - configuration-risk finding: `DATA_GATEWAY_URL` values containing `/api/v1` produce invalid websocket paths (for example `/api/v1/ws`)
+  - hardening recommendations for canonical base-url normalization and websocket-path validation
 
 ### Changed
 
