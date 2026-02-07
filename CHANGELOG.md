@@ -557,6 +557,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - config-semantics finding: `ORION_USE_GATEWAY` currently affects only Alpaca streaming transport while UW connectors/Heber readers remain gateway-centric
   - operations-risk finding: partial toggle semantics can cause mixed-mode runtime behavior and confusing cutover expectations
   - hardening recommendations for explicit flag scoping, subsystem mode diagnostics, and configuration-matrix tests
+- **Gateway/Heber Parity Audit (Pass 134)**: Continued audit with:
+  - config-lifecycle finding: Alpaca stream gateway mode default is captured at module import (`USE_GATEWAY`) rather than resolved per instance
+  - runtime-risk finding: post-import config/env changes may not take effect unless callers pass explicit override
+  - hardening recommendations for constructor-time mode resolution and per-instance mode tests
 
 ### Changed
 

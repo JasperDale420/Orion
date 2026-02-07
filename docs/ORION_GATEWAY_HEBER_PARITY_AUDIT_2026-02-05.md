@@ -4421,3 +4421,26 @@ P1:
 P2:
 1. Add integration tests for configuration mode matrix ensuring documented toggle semantics match runtime behavior.
 2. Update runbooks/env docs to distinguish transport toggles from full data-plane source toggles.
+
+## 141) Pass 134 Continuation (2026-02-07)
+
+### 141.1 Gateway-Mode Toggle for Alpaca Stream Is Bound at Import Time via Module Constant
+
+Current behavior:
+- module defines `USE_GATEWAY = system_settings.orion_use_gateway` at import time (`src/orion/connectors/alpaca_stream_connector.py:23`),
+- constructor default uses that frozen module constant when `use_gateway` arg is omitted (`src/orion/connectors/alpaca_stream_connector.py:44`),
+- factory helper does not pass explicit `use_gateway`, so it inherits import-time value (`src/orion/connectors/alpaca_stream_connector.py:281` to `src/orion/connectors/alpaca_stream_connector.py:283`).
+
+Risk:
+- configuration changes made after module import (runtime config reloads, tests, shell env changes in long-lived process) do not alter connector mode unless explicitly overridden,
+- behavior can diverge from operator expectation that `ORION_USE_GATEWAY` is read at service start time for each connector instance.
+
+### 141.2 Updated Priorities
+
+P1:
+1. Resolve mode dynamically in constructor from `system_settings.orion_use_gateway` (or pass explicit mode from caller), not via import-time module constant.
+2. Add startup logging on connector instantiation showing effective mode source (explicit arg vs config default).
+
+P2:
+1. Add regression tests proving mode changes are respected per-instance without module reload hacks.
+2. Audit other connectors for import-time config snapshots that can freeze runtime behavior unexpectedly.
