@@ -305,6 +305,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - enrichment-coverage finding: pre-persist flow Greeks enrichment truncates option-symbol requests to first 100 rows
   - data-quality finding: rows beyond that cap are silently written without Alpaca Greeks fields, creating batch-order-dependent sparsity
   - hardening recommendations for chunked full-coverage enrichment and explicit coverage telemetry
+- **Gateway/Heber Parity Audit (Pass 71)**: Continued audit with:
+  - schema-contract finding: silver flow/darkpool persistence uses composite conflict targets not backed by declared unique constraints
+  - migration-drift finding: `silver_uw_flow.is_sweep` type differs between Alembic schema (`String`) and ORM runtime model (`Boolean`)
+  - hardening recommendations for conflict-key/column-type contract alignment and startup schema validation
 
 ### Changed
 

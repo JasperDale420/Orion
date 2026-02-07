@@ -2870,3 +2870,37 @@ P1:
 
 P2:
 1. Add regression test with >100 unique option chains asserting enrichment is applied to all rows, not only first page.
+
+## 78) Pass 71 Continuation (2026-02-07)
+
+### 78.1 Silver Flow/Darkpool Upsert Conflict Targets Do Not Match Declared Schema Constraints
+
+Current persistence SQLAlchemy usage:
+- flow writes use `ON CONFLICT DO NOTHING` on `["event_id", "flow_ts_utc"]` (`src/orion/processing/persistence.py:268`),
+- darkpool writes use `ON CONFLICT DO NOTHING` on `["event_id", "dark_ts_utc"]` (`src/orion/processing/persistence.py:280`).
+
+Declared schema contracts:
+- ORM models define primary key only on `event_id` for both `silver_uw_flow` and `silver_uw_darkpool` (`src/orion/storage/models_silver.py:42`, `src/orion/storage/models_silver.py:112`),
+- Alembic migration creates only `event_id` PK plus non-unique ticker/time indexes (`alembic/versions/0006_add_silver_ingest_envelope.py:29`, `alembic/versions/0006_add_silver_ingest_envelope.py:50`, `alembic/versions/0006_add_silver_ingest_envelope.py:61`, `alembic/versions/0006_add_silver_ingest_envelope.py:72`).
+
+Risk:
+- conflict targets that are not backed by matching unique/exclusion constraints can fail at runtime when flow/darkpool writes are exercised, causing batch write failures in replay or future re-enabled UW ingestion paths.
+
+### 78.2 `is_sweep` Type Contract Drifts Between Alembic Schema and ORM/Persistence Expectations
+
+Contract mismatch:
+- Alembic creates `silver_uw_flow.is_sweep` as `String` (`alembic/versions/0006_add_silver_ingest_envelope.py:43`),
+- ORM model defines it as `Boolean` (`src/orion/storage/models_silver.py:65`),
+- persistence path currently writes boolean-coerced values (`src/orion/processing/persistence.py:178`).
+
+Risk:
+- schema/type drift increases migration uncertainty and can produce inconsistent query semantics across environments depending on which schema source was applied.
+
+### 78.3 Updated Priorities
+
+P0:
+1. Align persistence conflict targets with real constraints (use `event_id` target, or add explicit unique constraints if composite keying is required).
+2. Reconcile `is_sweep` type across Alembic + ORM + persistence and add migration to enforce one canonical type.
+
+P1:
+1. Add startup schema-contract checks that fail fast when runtime assumptions (conflict keys, column types) diverge from DB metadata.
