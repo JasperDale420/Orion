@@ -389,6 +389,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-mismatch finding: `uw_greek_exposure_connector` parses call/put gamma-vanna-charm fields from `/uw/{symbol}/spot-exposures` that the Gateway strike endpoint does not emit
   - data-quality risk: persisted `silver_greek_exposure` aggregates can silently degrade toward default/zero values under schema mismatch
   - hardening recommendations for endpoint/schema alignment plus strict response-contract validation tests
+- **Gateway/Heber Parity Audit (Pass 92)**: Continued audit with:
+  - runtime-drift finding: ingestion service constructs/documents Heber flow integration but does not execute any `HeberReader` read path in cycle processing
+  - operability-risk finding: entrypoint/docs still claim Heber flow ingestion, creating source-of-truth ambiguity for live runtime behavior
+  - hardening recommendations for either explicit Heber cycle wiring or dead-code/doc cleanup plus source-capability health signaling
 
 ### Changed
 

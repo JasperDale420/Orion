@@ -3421,3 +3421,28 @@ P1:
 
 P2:
 1. Add integration test with mocked Gateway payloads proving non-zero GEX/VEX extraction under the chosen canonical schema.
+
+## 99) Pass 92 Continuation (2026-02-07)
+
+### 99.1 Ingestion Heber Integration Is Declared in Code/Docs but Not Executed in Runtime Path
+
+Current state:
+- ingestion service constructs `HeberReader` and documents it as the UW source (`src/orion/ingestion/service.py:58` to `src/orion/ingestion/service.py:60`),
+- cycle comments claim UW flow/darkpool comes from Heber (`src/orion/ingestion/service.py:200` to `src/orion/ingestion/service.py:201`),
+- module comments still direct use of `self.heber.read_flow()` / `read_darkpool()` (`src/orion/ingestion/service.py:275` to `src/orion/ingestion/service.py:276`),
+- but ingestion entrypoint/runtime currently only polls Alpaca in-cycle (`src/orion/ingestion/service.py:203` to `src/orion/ingestion/service.py:205`), and no `self.heber.*` calls exist in service code.
+
+Additional drift signal:
+- entrypoint docstring states ingestion “Reads flow/darkpool from Heber” (`src/orion/ingestion/__main__.py:8`) despite missing active runtime call path.
+
+Risk:
+- integration status is ambiguous for operators and future maintainers; dead wiring + stale docs can mask that live UW-driven signal generation is absent in this runtime.
+
+### 99.2 Updated Priorities
+
+P1:
+1. Either wire explicit Heber read/merge path into ingestion cycle or remove dead `HeberReader` wiring and correct runtime docs/comments to match actual behavior.
+2. Add startup capability log/health field that explicitly reports enabled data sources (Alpaca-only vs Alpaca+Heber flow).
+
+P2:
+1. Add regression check that fails when documented ingestion sources diverge from active runtime source wiring.
