@@ -2711,3 +2711,28 @@ P1:
 
 P2:
 1. Define a single canonical premium-field accessor/helper for flow payloads to avoid repeated `premium` vs `premium_usd` drift across modules.
+
+## 72) Pass 65 Continuation (2026-02-07)
+
+### 72.1 Feature-Enrichment Ticker Universe Silently Degrades From Heber to Local SQL to Hardcoded Basket
+
+Current behavior in `get_active_tickers`:
+- attempts Heber flow-driven ticker discovery first (`src/orion/main_feature_enrichment.py:81` to `src/orion/main_feature_enrichment.py:86`),
+- on any exception, silently falls back to Orion-local `silver_uw_flow` SQL (`src/orion/main_feature_enrichment.py:88` to `src/orion/main_feature_enrichment.py:107`),
+- on SQL failure, silently falls back again to static hardcoded tickers (`SPY`, `QQQ`, `TSLA`, etc.) (`src/orion/main_feature_enrichment.py:109` to `src/orion/main_feature_enrichment.py:110`).
+
+Scope/impact:
+- this ticker set drives Greek exposure, max pain, and IV-rank enrichment fetch loops (`src/orion/main_feature_enrichment.py:269`, `src/orion/main_feature_enrichment.py:275`, `src/orion/main_feature_enrichment.py:281`),
+- integration breaks in centralized Heber flow access can be masked by fallback behavior, while enrichment freshness narrows to local/stale/static universes.
+
+Risk:
+- feature coverage can drift away from actual active flow universe without a loud operational signal, reducing parity with centralized Data-Gateway/Heber contracts and weakening downstream model context quality.
+
+### 72.2 Updated Priorities
+
+P1:
+1. Add explicit fallback-state telemetry (counter/alert) for each fallback tier (Heber -> local SQL -> static list), and promote to warning/error severity when static fallback is active.
+2. Move ticker-universe ownership to one canonical source aligned with centralized architecture (Heber/Gateway-backed universe service) rather than local SQL + hardcoded symbols.
+
+P2:
+1. Add integration tests covering failure modes of Heber/local SQL paths and asserting deterministic fallback behavior plus alert emission.

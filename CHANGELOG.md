@@ -281,6 +281,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - schema-contract finding: UW flow normalizer emits `premium_usd` while `FeatureEngine.process_uw_flow` aggregates only `payload.premium`
   - feature-integrity finding: in-memory `flow_net_premium_15m` can undercount/zero out on normalized UW flow payloads, impacting downstream flow-derived bar features
   - hardening recommendations for canonical premium-field access (`premium_usd` first) and cross-stage contract tests
+- **Gateway/Heber Parity Audit (Pass 65)**: Continued audit with:
+  - universe-source finding: `main_feature_enrichment.get_active_tickers` degrades from Heber reads to local `silver_uw_flow` SQL and then to static hardcoded symbols
+  - observability gap finding: fallback tiers are mostly silent, allowing centralized integration failures to masquerade as normal enrichment operation
+  - hardening recommendations for explicit fallback telemetry and canonical Heber/Gateway-backed ticker-universe ownership
 
 ### Changed
 
