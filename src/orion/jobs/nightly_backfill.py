@@ -14,6 +14,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import NoReturn
 
+from orion.core.market_schedule import MarketSchedule
 from orion.jobs.backfill_exit_columns import run_backfill as run_exit_backfill
 from orion.jobs.backfill_ml_features import run_backfill as run_ml_backfill
 from orion.shared.logger import setup_struct_logger
@@ -21,42 +22,50 @@ from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.nightly_backfill")
 
-# Run at 4pm ET daily (1 hour before ML training on Mon/Fri)
-BACKFILL_HOUR_ET = 16
-BACKFILL_MINUTE_ET = 0
+BACKFILL_DELAY_MINUTES = 30
+_MARKET_SCHEDULE = MarketSchedule()
 
 
 def is_trading_day(dt: datetime) -> bool:
-    """Check if date is a trading day (weekday)."""
-    return dt.weekday() <= 4
+    """Check if date has an exchange session."""
+    try:
+        _open, close = _MARKET_SCHEDULE.get_open_close(dt)
+    except RuntimeError:
+        # Calendar unavailable fallback: weekday-only behavior.
+        return dt.weekday() <= 4
+    return close is not None
+
+
+def _session_run_time_utc(dt: datetime) -> datetime | None:
+    """Return session-aware run time for a day (close + delay), or None if no session."""
+    try:
+        _open, close = _MARKET_SCHEDULE.get_open_close(dt)
+    except RuntimeError:
+        if dt.weekday() <= 4:
+            fallback_close_utc = dt.replace(hour=21, minute=0, second=0, microsecond=0)
+            return fallback_close_utc + timedelta(minutes=BACKFILL_DELAY_MINUTES)
+        return None
+
+    if close is None:
+        return None
+    return close + timedelta(minutes=BACKFILL_DELAY_MINUTES)
 
 
 def get_next_run_time() -> datetime:
-    """Get the next scheduled run time (4pm ET daily on trading days)."""
+    """Get the next scheduled run time (session close + delay on trading days)."""
     now_utc = datetime.now(timezone.utc)
+    for day_offset in range(0, 14):
+        candidate_day = now_utc + timedelta(days=day_offset)
+        run_time = _session_run_time_utc(candidate_day)
+        if run_time is not None and run_time > now_utc:
+            return run_time
 
-    # Convert to ET (UTC-5)
-    et_offset = timedelta(hours=-5)
-    now_et = now_utc + et_offset
-
-    # Target time today at 4pm ET
-    target_et = now_et.replace(
-        hour=BACKFILL_HOUR_ET,
-        minute=BACKFILL_MINUTE_ET,
-        second=0,
-        microsecond=0
-    )
-
-    # If we've already passed today's target, move to tomorrow
-    if now_et >= target_et:
-        target_et += timedelta(days=1)
-
-    # Skip weekends
-    while not is_trading_day(target_et):
-        target_et += timedelta(days=1)
-
-    # Convert back to UTC
-    return target_et - et_offset
+    # Defensive fallback if no session found in search window.
+    fallback = now_utc + timedelta(days=1)
+    while not is_trading_day(fallback):
+        fallback += timedelta(days=1)
+    fallback = fallback.replace(hour=21, minute=0, second=0, microsecond=0)
+    return fallback + timedelta(minutes=BACKFILL_DELAY_MINUTES)
 
 
 async def run_nightly_backfill() -> None:

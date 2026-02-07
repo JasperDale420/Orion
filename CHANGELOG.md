@@ -623,6 +623,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - feature sanity checks (`run_sanity_checks`)
   - Added `quality-guardrails` service to `docker-compose.yml` with configurable intervals via env vars
   - Added focused unit tests for scheduler interval/config helpers in `tests/unit/test_quality_guardrails.py`
+- **Nightly Backfill Calendar-Aware Scheduling**:
+  - `src/orion/jobs/nightly_backfill.py` now schedules runs from exchange session close time (+ delay) instead of weekday-only time checks
+  - Added calendar-unavailable fallback behavior to preserve runtime safety
+  - Added unit tests for session-time derivation and next-run selection in `tests/unit/test_nightly_backfill_schedule.py`
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
