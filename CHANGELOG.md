@@ -313,6 +313,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - throughput finding: `main_labeler` performs serial per-flow, per-horizon Heber bar reads (N+1 query pattern)
   - scaling-risk finding: labeling loop work scales with `flows * horizons`, increasing backlog and lakehouse read pressure during busy windows
   - hardening recommendations for batched ticker-window bar reads and bounded-concurrency labeling
+- **Gateway/Heber Parity Audit (Pass 73)**: Continued audit with:
+  - batch-integrity finding: silver flow persistence validates only `option_price` while other non-null columns can still be missing
+  - resilience finding: a single malformed flow row can fail bulk silver insert and abort the full ingestion cycle
+  - hardening recommendations for required-field prevalidation, bad-row quarantine, and mixed-validity regression tests
 
 ### Changed
 

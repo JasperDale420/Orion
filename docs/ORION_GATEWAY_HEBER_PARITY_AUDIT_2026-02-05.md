@@ -2928,3 +2928,35 @@ P1:
 
 P2:
 1. Add performance regression coverage for labeling throughput (flows/min) at representative backlog sizes.
+
+## 80) Pass 73 Continuation (2026-02-07)
+
+### 80.1 Silver Flow Persistence Validates Only `option_price` But Writes Multiple Non-Nullable Columns
+
+Current write path:
+- `persist_silver_from_bronze` skips `UW_FLOW` rows only when `option_price` is missing (`src/orion/processing/persistence.py:156` to `src/orion/processing/persistence.py:158`),
+- same row still writes `put_call`, `expiry`, `strike`, `size_contracts`, `premium_usd` (`src/orion/processing/persistence.py:165` to `src/orion/processing/persistence.py:171`),
+- target silver schema marks those fields non-nullable (`src/orion/storage/models_silver.py:49` to `src/orion/storage/models_silver.py:56`),
+- normalizer can leave `expiry` unset when source payload omits it (`src/orion/processing/normalizer.py:78`).
+
+Failure mode:
+- one malformed flow row can trigger insert failure for the whole flow batch, since rows are inserted in bulk per batch (`src/orion/processing/persistence.py:265` to `src/orion/processing/persistence.py:269`).
+
+### 80.2 Batch Failure Propagates to Full Ingestion Cycle
+
+Current orchestration:
+- `_run_cycle` executes `_persist_events(all_events)` before feature/rule processing (`src/orion/ingestion/service.py:211` to `src/orion/ingestion/service.py:213`),
+- `_save_silver_data` re-raises silver write errors (`src/orion/ingestion/service.py:448` to `src/orion/ingestion/service.py:451`),
+- cycle-level exception handler records crash and backs off (`src/orion/ingestion/service.py:167` to `src/orion/ingestion/service.py:171`).
+
+Risk:
+- single-row contract violations can repeatedly abort the cycle, starving downstream processing for otherwise valid events in the same batch.
+
+### 80.3 Updated Priorities
+
+P0:
+1. Validate all non-null silver flow fields pre-insert and quarantine bad rows (DLQ with reason) instead of failing full batch.
+2. Add per-row safe-write fallback for malformed rows so valid rows still persist and pipeline forward progress is maintained.
+
+P1:
+1. Add regression test with mixed valid/invalid `UW_FLOW` rows proving valid rows persist and invalid rows are isolated with explicit error telemetry.
