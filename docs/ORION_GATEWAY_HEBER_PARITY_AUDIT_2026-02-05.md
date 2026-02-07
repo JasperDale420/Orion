@@ -3160,3 +3160,30 @@ P0:
 
 P1:
 1. Add integration test that simulates silver write failure after bronze commit and verifies automatic recovery path closes the gap without manual intervention.
+
+## 89) Pass 82 Continuation (2026-02-07)
+
+### 89.1 Event-Bus Publish Happens Before Bronze Commit and Uses Best-Effort Error Handling
+
+Current write sequence in `_save_events_to_db`:
+- each event is published to Redpanda first (`produce_event(...)`) (`src/orion/ingestion/service.py:424` to `src/orion/ingestion/service.py:431`),
+- publish failures are logged and ignored (no retry/compensation) (`src/orion/ingestion/service.py:431` to `src/orion/ingestion/service.py:433`),
+- bronze DB persistence happens afterward in a separate transactional call (`src/orion/ingestion/service.py:435` to `src/orion/ingestion/service.py:443`).
+
+Risk modes:
+- **phantom bus event**: publish succeeds, bronze commit later fails -> downstream consumers see event not durably recorded in bronze source-of-truth;
+- **silent bus loss**: publish fails, bronze commit succeeds -> no replay/repair mechanism for missed bus fanout.
+
+Operational impact:
+- cross-sink consistency (stream vs DB) is not guaranteed, complicating replay, observability, and migration-parity validation.
+
+### 89.2 Updated Priorities
+
+P1:
+1. Choose and enforce one ordering contract:
+- transactional outbox (DB-first + async publish), or
+- bus-first with durable publish-failure queue and reconciliation.
+2. Add metrics for publish success/failure parity against bronze commit counts per run.
+
+P2:
+1. Add failure-injection tests for both modes (publish fail, bronze fail) and verify deterministic recovery/reconciliation behavior.

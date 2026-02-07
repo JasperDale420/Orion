@@ -349,6 +349,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - consistency finding: ingestion persists bronze and silver in separate transactions, allowing bronze-success/silver-fail partial states
   - recovery-risk finding: dedupe treats bronze presence as terminally processed, so replayed events can be dropped before silver recovery
   - hardening recommendations for atomic bronze+silver persistence or explicit bronze-to-silver reconciliation workflow
+- **Gateway/Heber Parity Audit (Pass 82)**: Continued audit with:
+  - ordering finding: ingestion publishes to Redpanda before bronze commit and swallows publish failures
+  - consistency-risk finding: stream/DB sinks can diverge (phantom bus events or silent bus loss) without built-in reconciliation
+  - hardening recommendations for transactional outbox-style ordering (or equivalent) plus sink-parity telemetry
 
 ### Changed
 
