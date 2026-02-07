@@ -4649,3 +4649,88 @@ Remaining audit scope before implementation work is low priority:
 
 Conclusion:
 - for Gateway/Heber integration parity plus active-path technical debt, audit scope is now sufficiently complete to begin remediation planning and implementation.
+
+## 151) Pass 144 Continuation (2026-02-07)
+
+### 151.1 Post-Remediation Revalidation Snapshot
+
+Revalidated previously raised migration-critical findings against current code:
+
+- Resolved: Alpaca stream gateway mode now resolves at connector initialization time (no import-time frozen flag) (`src/orion/connectors/alpaca_stream_connector.py:41`).
+- Resolved: Heber bar reader now fails fast on unsupported timeframes instead of silently ignoring `timeframe` (`src/orion/clients/heber_reader.py:109` to `src/orion/clients/heber_reader.py:114`).
+- Resolved: Reconciliation now covers `ALPACA_BAR_1M`, `UW_FLOW`, and `UW_DARKPOOL` (`src/orion/jobs/reconcile_backfill.py:25` to `src/orion/jobs/reconcile_backfill.py:47`).
+- Resolved: Runtime scheduler wiring now exists for reconciliation, data-quality checks, and feature validation (`src/orion/jobs/quality_guardrails.py:18` to `src/orion/jobs/quality_guardrails.py:21`, `docker-compose.yml:226` to `docker-compose.yml:245`).
+- Resolved: Nightly backfill scheduling now uses exchange-session close times via `MarketSchedule` instead of weekday-only checks (`src/orion/jobs/nightly_backfill.py:29` to `src/orion/jobs/nightly_backfill.py:68`).
+
+### 151.2 Updated Priorities
+
+P1:
+1. Keep these revalidated fixes under regression coverage while completing remaining Gateway/Heber contract hardening.
+2. Shift audit focus to unresolved runtime contracts still blocking full migration parity.
+
+P2:
+1. Add one integration smoke test that boots compose services and asserts guardrail job loop execution at least once.
+2. Add release checklist section that explicitly verifies resolved pass-137 to pass-142 items before deploy.
+
+## 152) Pass 145 Continuation (2026-02-07)
+
+### 152.1 `sync_earnings` Still Uses Bearer-Token UW SDK Path Instead of Data Gateway `X-Gateway-Key` Contract
+
+Current behavior:
+- earnings sync/backfill creates `UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")` (`src/orion/jobs/sync_earnings.py:27`, `src/orion/jobs/sync_earnings.py:142`),
+- UW SDK client injects `Authorization: Bearer <token>` by default (`src/orion/unusualwhales/client.py:55` to `src/orion/unusualwhales/client.py:56`, `src/orion/unusualwhales/client.py:98`),
+- Data Gateway auth dependency explicitly requires `X-Gateway-Key` (`../Data-gateway/gateway/api/deps.py:103` to `../Data-gateway/gateway/api/deps.py:115`),
+- ingestion startup still calls daily earnings sync (`src/orion/ingestion/service.py:114` to `src/orion/ingestion/service.py:121`), so this contract mismatch affects runtime initialization.
+
+Risk:
+- earnings sync can fail auth against Gateway-protected routes or depend on permissive behavior that is not contractually guaranteed,
+- startup-path failure degrades calendar freshness and downstream earnings-aware features/labels.
+
+### 152.2 Updated Priorities
+
+P1:
+1. Replace UW-SDK-through-gateway usage in `sync_earnings` with a Gateway-native client path that sends `X-Gateway-Key`.
+2. Add explicit fail-fast logging/alerting when earnings sync auth fails at startup.
+
+P2:
+1. Add integration tests for daily + backfill earnings paths using Gateway auth contract.
+2. Decouple startup from earnings sync success (retry queue or scheduled job) so ingestion boot is not coupled to external earnings fetch health.
+
+## 153) Pass 146 Continuation (2026-02-07)
+
+### 153.1 Ingestion Heber Usage Is Still Declared in Docs/Comments but Not Executed in Cycle Logic
+
+Current behavior:
+- ingestion module entrypoint text claims it “Reads flow/darkpool from Heber” (`src/orion/ingestion/__main__.py:8`),
+- ingestion service comments still indicate Heber as UW source and instantiate `HeberReader` (`src/orion/ingestion/service.py:18` to `src/orion/ingestion/service.py:20`, `src/orion/ingestion/service.py:60`),
+- code path has no active Heber read invocation; `_run_cycle` only appends Alpaca events (`src/orion/ingestion/service.py:200` to `src/orion/ingestion/service.py:205`),
+- file-level note explicitly leaves Heber polling as a comment-only placeholder (`src/orion/ingestion/service.py:275` to `src/orion/ingestion/service.py:277`).
+
+Risk:
+- runtime behavior remains Alpaca-centric while documentation implies UW flow/darkpool ingestion is active,
+- operators can overestimate migration parity and miss that `UW_FLOW`/`UW_DARKPOOL` event production still depends on alternative paths.
+
+### 153.2 Updated Priorities
+
+P1:
+1. Either implement explicit Heber flow/darkpool reads in ingestion cycle or remove implied Heber-ingest claims from runtime entrypoint/docs.
+2. Add startup diagnostics that report actual active event-source families for the running ingestion process.
+
+P2:
+1. Add contract test asserting expected event-type mix (`ALPACA_*` vs `UW_*`) for configured ingestion mode.
+2. Align runbooks with real ingestion behavior until Heber-driven UW ingestion is fully implemented.
+
+## 154) Pass 147 Continuation (2026-02-07)
+
+### 154.1 Active Migration-Scope Audit Completion Status
+
+For Orion runtime paths that matter for Gateway/Heber parity, audit coverage is now complete and revalidated through pass 147.
+
+Remaining high-priority unresolved items before “migration-complete” status:
+1. `sync_earnings` Gateway auth/path contract hardening (`src/orion/jobs/sync_earnings.py`, `src/orion/unusualwhales/client.py`).
+2. Ingestion-source truth alignment (implement Heber UW ingestion or remove misleading Heber-ingest claims) (`src/orion/ingestion/service.py`, `src/orion/ingestion/__main__.py`).
+3. Final canonical ownership decision for label/feature production (`main_price_target_labeler`/`main_option_quote_tracker` vs Heber watch/Gold outputs).
+4. Runtime decommission/archive wave for remaining Orion-local SQL dependency surfaces after parity signoff.
+
+Conclusion:
+- migration-critical audit work is finished; remaining work is implementation and controlled decommission, not additional discovery.

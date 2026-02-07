@@ -597,6 +597,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - closure finding: migration-critical active runtime surfaces now have sufficient audit coverage to move into remediation sequencing
   - residual-scope finding: remaining review items are primarily non-runtime experimental paths and post-fix archive cleanup
   - handoff recommendations for remediation planning against prioritized audit backlog
+- **Gateway/Heber Parity Audit (Pass 144-147)**: Continued audit with:
+  - revalidation snapshot showing pass-137 to pass-142 remediation items now implemented (scheduler wiring, reconciliation scope, timeframe enforcement, stream-mode resolution, calendar-aware nightly scheduling)
+  - unresolved runtime-contract confirmation that `sync_earnings` still uses Bearer-token UW SDK path instead of Gateway `X-Gateway-Key` auth contract
+  - ingestion-truth finding that Heber UW ingestion remains documentation/comment intent rather than active ingestion-cycle behavior
+  - final migration-close checklist narrowing remaining work to implementation/decommission rather than further discovery
 
 ### Changed
 
