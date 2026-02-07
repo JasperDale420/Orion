@@ -373,6 +373,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - lifecycle-gap finding: `UniverseManager` dynamic controls (`update_from_event`/`cleanup`) are defined but not wired into ingestion/runtime call paths
   - subscription-drift risk: Alpaca stream subscriptions are additive-only in ingestion and are not reconciled via `unsubscribe` against active-universe churn
   - hardening recommendations for per-cycle universe lifecycle reconciliation, stale-symbol unsubscribe, and off-universe event suppression tests
+- **Gateway/Heber Parity Audit (Pass 88)**: Continued audit with:
+  - correctness finding: `get_spy_cumulative_return` query window semantics do not enforce a strict latest-20-bar return calculation
+  - regime-risk finding: trend proxy fed into regime snapshots can be biased by full-history/row-frame behavior instead of intended recent-window movement
+  - hardening recommendations for bounded-window query rewrite plus deterministic cumulative-return regression tests
 
 ### Changed
 

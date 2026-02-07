@@ -3316,3 +3316,30 @@ P1:
 
 P2:
 1. Add integration test for universe churn (symbol enters/leaves active set) asserting subscription reconciliation and off-universe event suppression.
+
+## 95) Pass 88 Continuation (2026-02-07)
+
+### 95.1 SPY Cumulative-Return Query Uses Window Semantics That Do Not Match “Past 20 Bars”
+
+Current implementation:
+- `get_spy_cumulative_return()` computes:
+  - `LAST_VALUE(close) OVER (ORDER BY bar_start_ts_utc)`
+  - `FIRST_VALUE(close) OVER (ORDER BY bar_start_ts_utc)`
+  then applies `ORDER BY ... DESC LIMIT 20` (`src/orion/main_feature_enrichment.py:170` to `src/orion/main_feature_enrichment.py:177`).
+
+Why this is risky:
+- window functions are evaluated before final `ORDER BY ... LIMIT`,
+- default `LAST_VALUE` frame semantics are row-relative unless explicitly framed,
+- result can represent cumulative behavior over broader history (or row-dependent values), not a strict “latest 20 bars” return.
+
+Downstream impact:
+- regime detector consumes this value as trend proxy (`src/orion/main_feature_enrichment.py:297`), so trend/risk regime classification can be biased by query-shape artifacts rather than intended recent-window return.
+
+### 95.2 Updated Priorities
+
+P1:
+1. Rewrite cumulative-return logic to explicitly select last 20 bars first (CTE/subquery), then compute `(last_close - first_close) / first_close` on that bounded set.
+2. Add unit/integration test with synthetic bar series verifying exact expected cumulative return for a fixed 20-bar window.
+
+P2:
+1. Add telemetry on computed trend proxy value distribution to catch future regressions in query semantics.
