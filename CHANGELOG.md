@@ -365,6 +365,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - scope-fidelity finding: `FeatureEngine.hydrate_history` hydrates fixed static watchlist while runtime universe is dynamic
   - readiness-visibility finding: global hydration flag does not represent per-ticker hydration coverage
   - hardening recommendations for active-universe hydration and ticker-level readiness tracking
+- **Gateway/Heber Parity Audit (Pass 86)**: Continued audit with:
+  - feature-semantics finding: `flow_count_15m` currently counts mixed `UW_FLOW` + `UW_DARKPOOL` events while premium sums are `UW_FLOW`-only
+  - drift-monitoring risk: downstream distribution checks can move on darkpool mix changes rather than options-flow count changes
+  - hardening recommendations for split counters (or strict flow-only count semantics) plus feature-contract regression tests
 
 ### Changed
 

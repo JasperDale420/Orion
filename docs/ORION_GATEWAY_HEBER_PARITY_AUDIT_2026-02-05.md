@@ -3263,3 +3263,26 @@ P1:
 
 P2:
 1. Add regression test where active universe contains non-static ticker and assert hydration/readiness behavior is correct.
+
+## 93) Pass 86 Continuation (2026-02-07)
+
+### 93.1 `flow_count_15m` Mixes UW Flow and Darkpool Events in a Single Counter
+
+Current aggregation path:
+- `process_uw_flow` appends both `UW_FLOW` and `UW_DARKPOOL` into `flow_history` (`src/orion/processing/feature_engine.py:261` to `src/orion/processing/feature_engine.py:262`, `src/orion/processing/feature_engine.py:277` to `src/orion/processing/feature_engine.py:279`),
+- `_compute_flow_features` filters premiums by `type == "UW_FLOW"` but sets `flow_count_15m = len(valid_events)` across all event types (`src/orion/processing/feature_engine.py:374` to `src/orion/processing/feature_engine.py:375`, `src/orion/processing/feature_engine.py:381`).
+
+Risk:
+- `flow_count_15m` can be inflated by darkpool prints, so feature semantics diverge from its implied “options flow count” meaning.
+
+Downstream impact:
+- drift monitoring consumes `flow_count_15m` directly (`src/orion/agents/eod_review_agent.py:652`), so distribution-shift alerts can be driven by darkpool mix changes rather than true flow-count changes.
+
+### 93.2 Updated Priorities
+
+P1:
+1. Split counters by event family (`flow_count_15m`, `darkpool_count_15m`) or constrain `flow_count_15m` to `UW_FLOW` only.
+2. Add feature-contract tests asserting count semantics by event type composition.
+
+P2:
+1. Rebaseline drift-monitor expectations once counter semantics are corrected.
