@@ -3211,3 +3211,25 @@ P1:
 
 P2:
 1. Add duplicate-bronze replay regression tests covering normalization failure path and asserting deterministic quarantine (no silent fallthrough).
+
+## 91) Pass 84 Continuation (2026-02-07)
+
+### 91.1 Ingestion Runtime Never Hydrates `FeatureEngine` History Before Bar Processing
+
+Current behavior:
+- ingestion service constructs `FeatureEngine` (`src/orion/ingestion/service.py:53`) and processes bars via `process_alpaca_bars(...)` (`src/orion/ingestion/service.py:330`),
+- `FeatureEngine` explicitly tracks hydration state and warns when processing occurs before hydration (`src/orion/processing/feature_engine.py:45`, `src/orion/processing/feature_engine.py:388` to `src/orion/processing/feature_engine.py:392`),
+- ingestion initialization does not call `self.feature_engine.hydrate_history()` (`src/orion/ingestion/service.py:97` to `src/orion/ingestion/service.py:145`),
+- parallel signal-engine path does hydrate explicitly (`src/orion/processing/signal_engine.py:44`).
+
+Risk:
+- after restarts/cold starts, indicator features can be computed with incomplete history in ingestion runtime, reducing early-cycle signal quality and creating path-to-path inconsistency with signal-engine semantics.
+
+### 91.2 Updated Priorities
+
+P1:
+1. Hydrate `FeatureEngine` history during ingestion initialization (or load bounded rolling context per active ticker before first bar batch).
+2. Add cold-start integration test asserting consistent indicator availability between ingestion and signal-engine runtimes.
+
+P2:
+1. Add startup telemetry for hydration completeness (tickers requested vs hydrated) and alert when below threshold.

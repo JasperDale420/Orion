@@ -357,6 +357,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - replay-observability finding: DLQ duplicate-bronze path swallows normalization exceptions and continues with raw events
   - recovery-risk finding: malformed duplicate events can repeatedly fail silver replay without explicit root-cause signaling
   - hardening recommendations for explicit replay error classification and normalization-gated downstream processing
+- **Gateway/Heber Parity Audit (Pass 84)**: Continued audit with:
+  - cold-start finding: ingestion runtime processes Alpaca bars through `FeatureEngine` without calling history hydration first
+  - consistency-risk finding: early-cycle indicator quality can diverge from signal-engine path, which hydrates explicitly on init
+  - hardening recommendations for ingestion-time feature-history hydration and cold-start parity tests
 
 ### Changed
 
