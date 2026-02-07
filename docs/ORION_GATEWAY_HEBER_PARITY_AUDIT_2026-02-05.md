@@ -4103,3 +4103,27 @@ P1:
 P2:
 1. Add tests that force HTTP/auth failures and verify loop emits failure-classified telemetry rather than generic `stored 0`.
 2. Add per-feed freshness SLO checks tied to last successful write timestamp, not loop heartbeat alone.
+
+## 128) Pass 121 Continuation (2026-02-07)
+
+### 128.1 `price_target_labeler` Metadata Features Depend on Direct UW API Credentials Not Wired in Runtime
+
+Current behavior:
+- compose service `price_target_labeler` sets `GATEWAY_URL` but does not provide `UW_API_KEY` (`docker-compose.yml:61` to `docker-compose.yml:74`),
+- labeler metadata fetch path builds direct `UnusualWhalesClient` from `UW_API_KEY` / `UW_BASE_URL` (`src/orion/main_price_target_labeler.py:1624` to `src/orion/main_price_target_labeler.py:1629`),
+- when key is missing, client initialization returns `None` and ticker info falls back to empty cache values (`src/orion/main_price_target_labeler.py:1666` to `src/orion/main_price_target_labeler.py:1668`),
+- those values feed sector/earnings feature columns during label assembly (`src/orion/main_price_target_labeler.py:1772` to `src/orion/main_price_target_labeler.py:1798`, `src/orion/main_price_target_labeler.py:2648` to `src/orion/main_price_target_labeler.py:2654`).
+
+Risk:
+- production label generation can silently emit incomplete sector/earnings feature coverage for non-static-mapped tickers,
+- centralization objective is weakened because this path bypasses Gateway/Heber contracts and depends on undeclared direct-provider credentials.
+
+### 128.2 Updated Priorities
+
+P1:
+1. Replace direct UW client usage in `main_price_target_labeler` with Gateway/Heber-backed metadata source (or a local canonical cache populated from centralized ingestion).
+2. Add explicit feature-completeness telemetry for `sector`, `days_to_earnings`, and `is_post_earnings` with alert thresholds.
+
+P2:
+1. Add startup config validation that fails fast when selected metadata mode requires unavailable credentials.
+2. Add regression tests for label generation on unmapped tickers to assert deterministic fallback behavior and completeness accounting.

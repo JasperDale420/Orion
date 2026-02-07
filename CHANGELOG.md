@@ -505,6 +505,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - observability finding: enrichment connectors collapse request failures and true empty-result states into the same `stored 0` loop signal
   - operations-risk finding: sustained Gateway/auth regressions can masquerade as normal low-activity periods while feature tables go stale
   - hardening recommendations for failure-state classification, degraded-mode alerting, and freshness-based SLO checks
+- **Gateway/Heber Parity Audit (Pass 121)**: Continued audit with:
+  - runtime-config finding: `price_target_labeler` relies on direct UW metadata client auth (`UW_API_KEY`) while compose wiring only provides Gateway URL
+  - feature-quality risk: sector/earnings feature fields can silently degrade for unmapped tickers when UW credentials are absent
+  - hardening recommendations for centralized metadata sourcing and feature-completeness telemetry
 
 ### Changed
 
