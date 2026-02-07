@@ -577,6 +577,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - interface-contract finding: `HeberReader.read_bars` accepts `timeframe` but currently ignores it and always reads default bars dataset
   - integrity-risk finding: non-default timeframe requests can silently receive wrong granularity data
   - hardening recommendations for timeframe validation/routing, fail-fast behavior, and contract tests
+- **Gateway/Heber Parity Audit (Pass 139)**: Continued audit with:
+  - coverage finding: reconciliation job currently checks only Alpaca bronze/silver bar parity, excluding Gateway/Heber-critical datasets
+  - operations-risk finding: reconciliation path is effectively unscheduled (test/manual only), limiting live migration assurance
+  - hardening recommendations for multi-dataset reconciliation scope and scheduled alerting integration
 
 ### Changed
 

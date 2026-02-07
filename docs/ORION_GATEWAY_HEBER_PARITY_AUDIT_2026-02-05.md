@@ -4537,3 +4537,27 @@ P1:
 P2:
 1. Add contract tests that assert requested timeframe and returned bar granularity are consistent.
 2. Document supported timeframe values and fallback semantics in runtime integration docs.
+
+## 146) Pass 139 Continuation (2026-02-07)
+
+### 146.1 Reconciliation Job Is Alpaca-Only and Not Wired into Runtime Orchestration
+
+Current behavior:
+- `run_reconciliation` compares Bronze vs Silver counts only for `ALPACA_BAR_1M` and `SilverAlpacaBar` (`src/orion/jobs/reconcile_backfill.py:40`, `src/orion/jobs/reconcile_backfill.py:47` to `src/orion/jobs/reconcile_backfill.py:53`),
+- UW/Heber datasets are not included in reconciliation scope (no flow/darkpool/silver feature tables in this job),
+- repository references show usage only in module main and a unit test (`src/orion/jobs/reconcile_backfill.py:92`, `tests/unit/test_remediation_rules.py:5`),
+- no compose/runtime service wiring invokes reconciliation automatically.
+
+Risk:
+- data-gap detection focuses on one local Alpaca path while centralized Gateway/Heber migration risk concentrates in flow/darkpool/feature datasets,
+- reconciliation can appear present in codebase but remain operationally inert for live parity assurance.
+
+### 146.2 Updated Priorities
+
+P1:
+1. Expand reconciliation scope to include migration-critical datasets (flow, darkpool, and derived silver/gold tables) with contract-aware comparisons.
+2. Wire reconciliation into scheduled runtime/ops workflow with alerting on detected gaps.
+
+P2:
+1. Add per-dataset discrepancy metrics and severity thresholds (missing rows, orphan rows, lag windows).
+2. Add integration tests for reconciliation over both Alpaca and Gateway/Heber dataset families.
