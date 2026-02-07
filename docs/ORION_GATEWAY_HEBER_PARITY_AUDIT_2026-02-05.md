@@ -3737,3 +3737,25 @@ P1:
 
 P2:
 1. Add unit tests for both supported base URL shapes (`.../api/v1` and root host) to verify deterministic health and dataset endpoint resolution.
+
+## 112) Pass 105 Continuation (2026-02-07)
+
+### 112.1 Earnings Proximity Logic Ignores `announce_time` and Uses Date-Only Boundaries
+
+Current behavior:
+- `get_earnings_for_ticker(ticker, as_of_date)` accepts only a `date` (no time-of-day context) (`src/orion/jobs/sync_earnings.py:247`),
+- next/last earnings lookups filter solely on `report_date` comparisons (`>= :as_of` / `< :as_of`) (`src/orion/jobs/sync_earnings.py:263` to `src/orion/jobs/sync_earnings.py:277`),
+- `announce_time` is selected in both queries but not used in output logic (`src/orion/jobs/sync_earnings.py:263`, `src/orion/jobs/sync_earnings.py:274`, `src/orion/jobs/sync_earnings.py:289` to `src/orion/jobs/sync_earnings.py:297`).
+
+Risk:
+- same-day premarket and afterhours earnings scenarios can collapse to the same `days_to_earnings` / `is_post_earnings` values,
+- intraday feature semantics can drift from intended event-timing behavior despite storing announce-time metadata.
+
+### 112.2 Updated Priorities
+
+P1:
+1. Add announce-time-aware proximity logic (at minimum for same-day boundaries) using entry timestamp + `announce_time` classification.
+2. Keep a deterministic fallback when `announce_time` is missing and emit fallback-rate metrics.
+
+P2:
+1. Add regression tests for same-day premarket vs afterhours scenarios to ensure distinct post/pre earnings classification outcomes.

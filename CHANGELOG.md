@@ -441,6 +441,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - integration-fragility finding: `HeberReader.health_check()` relies on relative path escape (`../../health`) from `/api/v1` base URLs
   - operability-risk finding: catalog base-url shape changes can break health/dataset calls asymmetrically and mask root-cause configuration drift
   - hardening recommendations for explicit endpoint construction and startup URL-contract validation
+- **Gateway/Heber Parity Audit (Pass 105)**: Continued audit with:
+  - temporal-semantics finding: earnings proximity lookup uses date-only predicates and ignores stored `announce_time`
+  - feature-risk finding: same-day pre/post earnings states can collapse to identical `days_to_earnings/is_post_earnings` outputs
+  - hardening recommendations for announce-time-aware proximity logic and boundary-case regression coverage
 
 ### Changed
 
