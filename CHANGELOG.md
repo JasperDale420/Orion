@@ -517,6 +517,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - backlog-progress finding: `backfill_ml_features` selects rows with `LIMIT` but no deterministic ordering/cursor and retries failed rows without quarantine
   - completion-risk finding: nightly attempts can recycle the same problematic records while leaving eligible backlog rows untouched
   - hardening recommendations for cursor-based ordering, retry metadata, and `attempted` vs `updated` vs `completed` run metrics
+- **Gateway/Heber Parity Audit (Pass 124)**: Continued audit with:
+  - modularity finding: `main_price_target_labeler` imports shared `orion.labeler` helpers/constants, then shadows them with local redefinitions
+  - parity-risk finding: local math windows/volatility and sector mapping drift from shared package behavior, causing inconsistent label outputs
+  - hardening recommendations for de-shadowing to a single source of truth plus parity regression checks
 
 ### Changed
 

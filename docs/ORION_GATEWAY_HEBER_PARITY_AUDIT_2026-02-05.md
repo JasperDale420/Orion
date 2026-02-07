@@ -4175,3 +4175,30 @@ P1:
 P2:
 1. Add completion metrics that separate `attempted`, `updated`, and `newly_completed` records per run.
 2. Add regression tests with one synthetic failing row to assert surrounding rows still progress.
+
+## 131) Pass 124 Continuation (2026-02-07)
+
+### 131.1 `main_price_target_labeler` Shadows Shared `orion.labeler` Logic with Divergent Local Implementations
+
+Current behavior:
+- file imports shared constants/helpers from `orion.labeler` (`src/orion/main_price_target_labeler.py:22` to `src/orion/main_price_target_labeler.py:34`),
+- same symbol names are redefined locally in the same module (`src/orion/main_price_target_labeler.py:40`, `src/orion/main_price_target_labeler.py:224`, `src/orion/main_price_target_labeler.py:252`, `src/orion/main_price_target_labeler.py:274`, `src/orion/main_price_target_labeler.py:1831`, `src/orion/main_price_target_labeler.py:1845`, `src/orion/main_price_target_labeler.py:1859`, `src/orion/main_price_target_labeler.py:1873`, `src/orion/main_price_target_labeler.py:1888`),
+- runtime calls resolve to local redefinitions (for example Greeks/checkpoint usage at `src/orion/main_price_target_labeler.py:855` to `src/orion/main_price_target_labeler.py:856`, `src/orion/main_price_target_labeler.py:2314` to `src/orion/main_price_target_labeler.py:2355`),
+- local behavior diverges from shared `orion/labeler` package:
+  - checkpoint tolerances differ (`5m`/`4h`/`30m` windows locally vs tighter shared windows in `src/orion/labeler/checkpoints.py:45` to `src/orion/labeler/checkpoints.py:100`),
+  - volatility calc uses `np.std` locally vs `statistics.stdev` in shared (`src/orion/main_price_target_labeler.py:1873` to `src/orion/main_price_target_labeler.py:1882`, `src/orion/labeler/checkpoints.py:121` to `src/orion/labeler/checkpoints.py:139`),
+  - sector map contents drift (example: `TXN`/`LOW`/`NXPI` present in shared constants, absent in local map; `BMNR` present only locally) (`src/orion/labeler/constants.py:58`, `src/orion/labeler/constants.py:66`, `src/orion/labeler/constants.py:94`, `src/orion/main_price_target_labeler.py:185`).
+
+Risk:
+- consolidation effort into shared labeler modules is effectively bypassed for production label generation,
+- feature outputs can drift between components that rely on shared helpers versus this local shadowed copy, reducing reproducibility and parity with Heber migration work.
+
+### 131.2 Updated Priorities
+
+P1:
+1. Remove shadowed local definitions in `main_price_target_labeler` and consume shared `orion.labeler` functions/constants as single source of truth.
+2. Add startup self-check that asserts no local symbol shadowing for imported labeler helpers/constants.
+
+P2:
+1. Add regression tests that compare `main_price_target_labeler` outputs against direct `orion.labeler` helper outputs on fixed fixtures.
+2. Add a sector-map parity check test to detect drift between shared constants and runtime labeler mapping.
