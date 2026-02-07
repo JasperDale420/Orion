@@ -2960,3 +2960,28 @@ P0:
 
 P1:
 1. Add regression test with mixed valid/invalid `UW_FLOW` rows proving valid rows persist and invalid rows are isolated with explicit error telemetry.
+
+## 81) Pass 74 Continuation (2026-02-07)
+
+### 81.1 Labeler Timestamp Coercion Is Not Row-Isolated; One Bad Value Can Fail Whole Batch Build
+
+Current parsing behavior:
+- `_coerce_dt` calls `pd.Timestamp(value)` without local exception handling (`src/orion/main_labeler.py:55`),
+- `_normalize_flow_df` invokes `_coerce_dt` inside row loop but does not catch parse errors per row (`src/orion/main_labeler.py:84` to `src/orion/main_labeler.py:88`),
+- `get_unlabeled_flows` directly relies on `_normalize_flow_df` output (`src/orion/main_labeler.py:140` to `src/orion/main_labeler.py:145`).
+
+Runtime impact:
+- if one malformed timestamp appears in the fetched frame, normalization can raise before returning any rows for that cycle,
+- loop-level handler logs generic labeling error and retries later (`src/orion/main_labeler.py:393` to `src/orion/main_labeler.py:396`), but problematic data can repeatedly stall progress.
+
+Risk:
+- backlog processing becomes brittle to single-record data quality defects; fresh valid rows may be delayed until offending records age out or data source is corrected.
+
+### 81.2 Updated Priorities
+
+P1:
+1. Make timestamp parsing row-safe (catch parse errors per row, skip+log offending event IDs).
+2. Add bad-row counters/telemetry for Heber input quality to surface recurring malformed timestamp sources.
+
+P2:
+1. Add regression test with mixed valid/invalid timestamp rows confirming valid rows still progress through labeling in same cycle.

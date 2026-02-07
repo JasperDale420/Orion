@@ -317,6 +317,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - batch-integrity finding: silver flow persistence validates only `option_price` while other non-null columns can still be missing
   - resilience finding: a single malformed flow row can fail bulk silver insert and abort the full ingestion cycle
   - hardening recommendations for required-field prevalidation, bad-row quarantine, and mixed-validity regression tests
+- **Gateway/Heber Parity Audit (Pass 74)**: Continued audit with:
+  - input-robustness finding: `main_labeler` timestamp coercion is not row-isolated, so one malformed timestamp can fail whole cycle normalization
+  - throughput-risk finding: repeated malformed source rows can stall labeling progress by forcing retry-loop failures
+  - hardening recommendations for per-row parse isolation, bad-row telemetry, and mixed-quality regression coverage
 
 ### Changed
 
