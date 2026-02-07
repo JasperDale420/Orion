@@ -297,6 +297,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - data-integrity finding: normalized `is_sweep` string payloads are coerced via `bool(...)` during silver persistence, so `"false"` can persist as `True`
   - downstream-risk finding: sweep-dependent flow analytics/rules can be skewed by inverted `silver_uw_flow.is_sweep` values
   - hardening recommendations for explicit boolean parsing and regression coverage on raw+normalized payload contracts
+- **Gateway/Heber Parity Audit (Pass 69)**: Continued audit with:
+  - normalization-default finding: missing/invalid UW `put_call` values are coerced to `"C"` during flow normalization
+  - directional-bias finding: malformed side data can be silently counted as bullish call flow in downstream premium splits
+  - hardening recommendations for strict side validation/quarantine and unknown-side monitoring
 
 ### Changed
 

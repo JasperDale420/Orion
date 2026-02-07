@@ -2820,3 +2820,29 @@ P0:
 
 P1:
 1. Run one-time data quality check/backfill to identify suspicious sweep inflation windows after normalization rollout.
+
+## 76) Pass 69 Continuation (2026-02-07)
+
+### 76.1 UW Flow Normalizer Defaults Missing/Unknown `put_call` to Call (`"C"`)
+
+Current normalization behavior:
+- `put_call` is derived from `payload.put_call` or `payload.type`,
+- if value is missing/unknown, normalizer falls back to `"C"` (`src/orion/processing/normalizer.py:64` to `src/orion/processing/normalizer.py:71`),
+- silver schema requires non-null single-char `put_call` (`src/orion/storage/models_silver.py:49`).
+
+Downstream dependency:
+- multiple feature paths compute directional premium/flow using `put_call='C'` vs `'P'` splits (`src/orion/processing/feature_engine.py:270`, `src/orion/jobs/window_feature_job.py:97` to `src/orion/jobs/window_feature_job.py:99`).
+
+Risk:
+- malformed or side-missing flow rows are silently labeled bullish-call, biasing directional premium metrics instead of being quarantined or explicitly marked unknown.
+
+### 76.2 Updated Priorities
+
+P1:
+1. Replace default-to-call fallback with explicit validation path:
+- either drop/quarantine rows missing valid side,
+- or map to explicit unknown state and exclude from directional aggregations.
+2. Add normalization contract tests for invalid/missing `put_call` inputs to ensure they cannot silently become calls.
+
+P2:
+1. Add DQ monitor on unknown/invalid side-rate to surface upstream contract drift quickly.
