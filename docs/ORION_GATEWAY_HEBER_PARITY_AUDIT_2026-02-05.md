@@ -3637,3 +3637,29 @@ P1:
 
 P2:
 1. Add regression tests asserting that simulated fetch and row-parse failures increment `results["errors"]` and produce deterministic failure counters.
+
+## 108) Pass 101 Continuation (2026-02-07)
+
+### 108.1 Daily Earnings Sync Imports Non-Exported UW Endpoint Symbols
+
+Current behavior:
+- `sync_todays_earnings()` imports `get_afterhours_earnings` and `get_premarket_earnings` from `orion.unusualwhales.api.earnings` (`src/orion/jobs/sync_earnings.py:23`),
+- the earnings package exports module names `get_afterhours`, `get_premarket`, and `get_ticker_earnings` (plus `EarningsEndpoints` helpers), not `*_earnings` aliases (`src/orion/unusualwhales/api/earnings/__init__.py:5`, `src/orion/unusualwhales/api/earnings/__init__.py:8` to `src/orion/unusualwhales/api/earnings/__init__.py:42`),
+- this mismatch raises `ImportError` before any daily fetch call is attempted.
+
+Runtime consequence:
+- ingestion startup wraps `sync_todays_earnings()` in broad exception handling and logs warning on failure (`src/orion/ingestion/service.py:115` to `src/orion/ingestion/service.py:121`),
+- service continues running, but earnings calendar sync is skipped.
+
+Risk:
+- earnings synchronization can be effectively disabled while runtime appears healthy,
+- downstream earnings-dependent features remain stale/incomplete without explicit hard failure.
+
+### 108.2 Updated Priorities
+
+P1:
+1. Replace imports with canonical module names (`get_premarket`, `get_afterhours`) and invoke `.sync` on those modules.
+2. Promote startup earnings-sync failure to explicit health-degraded state/metric (not warning-only best effort).
+
+P2:
+1. Add import-path smoke test and a mocked startup integration test asserting earnings sync executes successfully with expected function bindings.

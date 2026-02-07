@@ -425,6 +425,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - observability finding: earnings backfill swallows per-ticker/per-row exceptions and can report low error counts despite failed processing
   - integrity-risk finding: sync health signals (`errors`, completion logs) can overstate success during Gateway/contract regressions
   - hardening recommendations for structured error propagation, per-ticker failure accounting, and ingestion quality telemetry
+- **Gateway/Heber Parity Audit (Pass 101)**: Continued audit with:
+  - correctness finding: daily earnings sync imports non-exported UW earnings symbols, causing import-time failure before fetch execution
+  - reliability-risk finding: ingestion startup catches this failure as warning, allowing runtime to proceed with stale/missing earnings calendar updates
+  - hardening recommendations for canonical module imports, startup health gating, and import-path smoke coverage
 
 ### Changed
 
