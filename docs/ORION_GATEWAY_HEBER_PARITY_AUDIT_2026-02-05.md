@@ -3080,3 +3080,29 @@ P1:
 
 P2:
 1. Add regression tests with mixed valid/missing underlying prices to assert deterministic fallback or explicit counted drop behavior.
+
+## 86) Pass 79 Continuation (2026-02-07)
+
+### 86.1 Non-Flow Silver Writers Also Lack Full Required-Field Guards
+
+Current persistence checks:
+- bars path validates only `close` before append (`src/orion/processing/persistence.py:201` to `src/orion/processing/persistence.py:204`),
+- darkpool path validates only `trade_price` (`src/orion/processing/persistence.py:220` to `src/orion/processing/persistence.py:223`),
+- alert path has no explicit prevalidation before append (`src/orion/processing/persistence.py:238` to `src/orion/processing/persistence.py:257`).
+
+Schema requirements:
+- `silver_alpaca_bars` requires non-null `open/high/low/close/volume` (`src/orion/storage/models_silver.py:137` to `src/orion/storage/models_silver.py:141`),
+- `silver_uw_darkpool` requires non-null `ticker/dark_ts_utc/trade_price/size_shares` (`src/orion/storage/models_silver.py:114` to `src/orion/storage/models_silver.py:119`),
+- `silver_uw_alerts` requires non-null `ticker/alert_ts_utc` (`src/orion/storage/models_silver.py:157` to `src/orion/storage/models_silver.py:158`).
+
+Risk:
+- malformed rows in these feeds can still poison bulk inserts, causing avoidable batch failures and downstream starvation.
+
+### 86.2 Updated Priorities
+
+P0:
+1. Apply uniform required-field validation + row quarantine across all silver event types (bars, darkpool, alerts, flow).
+2. Ensure malformed rows are isolated with explicit DLQ reasons instead of aborting valid-row persistence.
+
+P1:
+1. Add mixed-validity regression tests per event type to prove valid rows persist when bad rows are present.

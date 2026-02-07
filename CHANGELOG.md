@@ -337,6 +337,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - coverage-integrity finding: `main_labeler` coerces missing underlying entry prices to zero and silently drops those flows from labeling
   - observability-gap finding: skip reasons for entry-price-invalid drops are not surfaced as explicit batch metrics
   - hardening recommendations for drop-reason telemetry and bar-based fallback reconstruction at flow entry time
+- **Gateway/Heber Parity Audit (Pass 79)**: Continued audit with:
+  - validation-consistency finding: silver persistence prechecks are incomplete for bars/darkpool/alerts relative to required schema fields
+  - resilience-risk finding: malformed non-flow rows can still poison bulk inserts and block valid-row persistence
+  - hardening recommendations for uniform required-field validation, bad-row quarantine, and mixed-validity tests across all silver event types
 
 ### Changed
 
