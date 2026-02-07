@@ -4227,3 +4227,28 @@ P1:
 P2:
 1. Add checkpoint coverage telemetry: eligible events vs quoted events per checkpoint and per polling cycle.
 2. Add regression/integration tests with >1000 synthetic flow events to assert complete progression rather than newest-only truncation.
+
+## 133) Pass 126 Continuation (2026-02-07)
+
+### 133.1 `gold_feature_windows` Producer Is Not Wired into Runtime, While Consumers Remain Active
+
+Current behavior:
+- `gold_feature_windows` write path exists only in `WindowFeatureJob` (`src/orion/jobs/window_feature_job.py:189` to `src/orion/jobs/window_feature_job.py:209`),
+- repository references show `WindowFeatureJob` usage only in its own module/`__main__` entrypoint (`src/orion/jobs/window_feature_job.py:32`, `src/orion/jobs/window_feature_job.py:241`),
+- ingestion runtime starts `RollupJob`, not `WindowFeatureJob` (`src/orion/ingestion/service.py:125` to `src/orion/ingestion/service.py:128`),
+- compose does not declare a `window_feature_job` service (`docker-compose.yml`),
+- downstream readers still query `gold_feature_windows` in scoring/training paths (`src/orion/ml/flow_enricher.py:1031` to `src/orion/ml/flow_enricher.py:1036`, `src/orion/ml/exit_classifier.py:444` to `src/orion/ml/exit_classifier.py:456`).
+
+Risk:
+- window-level context features can be stale or absent in production without explicit failure signal,
+- model feature completeness and parity checks can silently degrade because consumers continue operating against outdated `gold_feature_windows` state.
+
+### 133.2 Updated Priorities
+
+P1:
+1. Decide and enforce one producer path for `gold_feature_windows`: wire `WindowFeatureJob` into runtime orchestration or migrate generation into Heber Gold and switch consumers.
+2. Add mandatory freshness checks (`max(window_end_ts_utc)` age threshold) before consumers trust window features.
+
+P2:
+1. Add startup/runtime telemetry that reports producer status for `gold_feature_windows` (enabled source + last successful build).
+2. Add integration tests that fail when consumers run with stale/missing window features beyond allowed SLO.

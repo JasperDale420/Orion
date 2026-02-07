@@ -525,6 +525,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - integration finding: `main_option_quote_tracker` still sources candidates from local `silver_uw_flow` instead of centralized Heber/Gateway reads
   - coverage-risk finding: fixed newest-first `LIMIT 1000` can truncate quote checkpoint coverage on high-volume days
   - hardening recommendations for centralized candidate sourcing, cursor-based progression, and coverage telemetry
+- **Gateway/Heber Parity Audit (Pass 126)**: Continued audit with:
+  - producer-wiring finding: `gold_feature_windows` write path is isolated to `WindowFeatureJob`, but runtime orchestration starts `RollupJob` and compose has no window-feature service
+  - feature-freshness risk: active consumers (`flow_enricher`, `exit_classifier`) can read stale/missing window features without explicit producer-health gating
+  - hardening recommendations for single producer ownership, freshness SLO checks, and producer-status telemetry
 
 ### Changed
 
