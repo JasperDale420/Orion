@@ -2904,3 +2904,27 @@ P0:
 
 P1:
 1. Add startup schema-contract checks that fail fast when runtime assumptions (conflict keys, column types) diverge from DB metadata.
+
+## 79) Pass 72 Continuation (2026-02-07)
+
+### 79.1 Labeler Uses Per-Flow, Per-Horizon Heber Bar Reads (N+1 Pattern) in Serial Loop
+
+Current labeling path:
+- each flow triggers four independent `get_price_at_time(...)` reads (15m/30m/1h/2h) (`src/orion/main_labeler.py:250` to `src/orion/main_labeler.py:253`),
+- each read calls `_heber_reader.read_bars(...)` separately (`src/orion/main_labeler.py:153` to `src/orion/main_labeler.py:158`),
+- batch loop processes flows one-by-one with `await label_flow(flow)` (`src/orion/main_labeler.py:364` to `src/orion/main_labeler.py:367`).
+
+Risk:
+- effective query count scales as `O(flows * horizons)` per poll cycle, creating avoidable lakehouse I/O pressure and slower backlog drain under elevated flow volumes.
+
+Integration impact:
+- centralized data architecture benefits from bulk/window reads, but current path repeatedly re-queries overlapping bar windows per ticker.
+
+### 79.2 Updated Priorities
+
+P1:
+1. Replace per-horizon reads with batched per-ticker bar-window fetches reused across all horizons in the batch.
+2. Parallelize label computation with bounded concurrency (ticker-aware) while preserving deterministic writes.
+
+P2:
+1. Add performance regression coverage for labeling throughput (flows/min) at representative backlog sizes.

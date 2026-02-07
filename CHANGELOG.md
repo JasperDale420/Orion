@@ -309,6 +309,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - schema-contract finding: silver flow/darkpool persistence uses composite conflict targets not backed by declared unique constraints
   - migration-drift finding: `silver_uw_flow.is_sweep` type differs between Alembic schema (`String`) and ORM runtime model (`Boolean`)
   - hardening recommendations for conflict-key/column-type contract alignment and startup schema validation
+- **Gateway/Heber Parity Audit (Pass 72)**: Continued audit with:
+  - throughput finding: `main_labeler` performs serial per-flow, per-horizon Heber bar reads (N+1 query pattern)
+  - scaling-risk finding: labeling loop work scales with `flows * horizons`, increasing backlog and lakehouse read pressure during busy windows
+  - hardening recommendations for batched ticker-window bar reads and bounded-concurrency labeling
 
 ### Changed
 
