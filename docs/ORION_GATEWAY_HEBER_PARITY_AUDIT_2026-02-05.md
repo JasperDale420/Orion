@@ -2794,3 +2794,29 @@ P1:
 
 P2:
 1. Add tests around session-boundary timestamps to ensure upsert keys remain stable across UTC/ET rollover windows.
+
+## 75) Pass 68 Continuation (2026-02-07)
+
+### 75.1 `is_sweep` Boolean Persistence Can Invert False Values After Normalization
+
+Current contract path:
+- normalizer stores `is_sweep` as string `"true"`/`"false"` in payload (`src/orion/processing/normalizer.py:86`),
+- silver persistence coerces using `bool(p.get("is_sweep") or p.get("has_sweep"))` (`src/orion/processing/persistence.py:178`),
+- target silver column is boolean (`src/orion/storage/models_silver.py:65`).
+
+Risk mechanics:
+- when payload contains `"false"` (string), `bool("false")` evaluates to `True`,
+- non-sweep flow can therefore be persisted as sweep, corrupting sweep-dependent downstream analytics/rules.
+
+Impact scope:
+- affects normalized-ingestion and replay paths that persist `UW_FLOW` through `persist_silver_from_bronze`,
+- can distort any logic keyed on sweep intensity or sweep ratio derived from `silver_uw_flow.is_sweep`.
+
+### 75.2 Updated Priorities
+
+P0:
+1. Replace boolean coercion with explicit string-aware parsing (`"true"/"1"/"yes"` true; `"false"/"0"/"no"` false) before writing `silver_uw_flow.is_sweep`.
+2. Add regression tests covering raw bool + normalized string inputs to prevent future coercion regressions.
+
+P1:
+1. Run one-time data quality check/backfill to identify suspicious sweep inflation windows after normalization rollout.

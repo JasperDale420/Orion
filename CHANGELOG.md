@@ -293,6 +293,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - source-of-truth finding: `UWMaxPainConnector` mixes Gateway max-pain payloads with local `silver_alpaca_bars` price lookups for distance calculations
   - date-semantics finding: max-pain daily keying uses host-local `date.today()` rather than market/session-aware date derivation
   - hardening recommendations for canonical price sourcing and ET/session-consistent daily bucketing in max-pain persistence
+- **Gateway/Heber Parity Audit (Pass 68)**: Continued audit with:
+  - data-integrity finding: normalized `is_sweep` string payloads are coerced via `bool(...)` during silver persistence, so `"false"` can persist as `True`
+  - downstream-risk finding: sweep-dependent flow analytics/rules can be skewed by inverted `silver_uw_flow.is_sweep` values
+  - hardening recommendations for explicit boolean parsing and regression coverage on raw+normalized payload contracts
 
 ### Changed
 
