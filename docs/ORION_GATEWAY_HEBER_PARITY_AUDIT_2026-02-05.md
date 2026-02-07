@@ -4252,3 +4252,27 @@ P1:
 P2:
 1. Add startup/runtime telemetry that reports producer status for `gold_feature_windows` (enabled source + last successful build).
 2. Add integration tests that fail when consumers run with stale/missing window features beyond allowed SLO.
+
+## 134) Pass 127 Continuation (2026-02-07)
+
+### 134.1 Zero-Flow Windows Are Not Materialized, So Consumers Can Reuse Stale Historical Context
+
+Current behavior:
+- window aggregation returns `None` when a ticker-period window has zero flow rows (`src/orion/jobs/window_feature_job.py:133` to `src/orion/jobs/window_feature_job.py:135`),
+- when `None`, persistence is skipped for that window (`src/orion/jobs/window_feature_job.py:67` to `src/orion/jobs/window_feature_job.py:72`),
+- scoring/training consumers query latest row `<= entry_ts` per period (`src/orion/ml/flow_enricher.py:1031` to `src/orion/ml/flow_enricher.py:1036`, `src/orion/ml/exit_classifier.py:444` to `src/orion/ml/exit_classifier.py:460`),
+- no max-age freshness condition is applied in those lookups.
+
+Risk:
+- during quiet regimes (or ingestion gaps), models can consume old window context as if current, rather than explicit zero-activity context,
+- feature semantics become time-skewed: “latest known” is treated as “current state,” which can bias signals and training labels.
+
+### 134.2 Updated Priorities
+
+P1:
+1. Materialize explicit zero-activity rows per ticker/period window (for example `flow_count=0`, `total_premium=0`, `sweep_ratio=0`) instead of skipping persistence.
+2. Add freshness gates in consumers so rows older than a period-specific threshold are treated as missing/degraded.
+
+P2:
+1. Add regression tests for no-flow windows that assert consumers receive explicit zero features (or controlled nulls), not arbitrarily old historical rows.
+2. Add telemetry comparing window end-time age against entry-time to detect stale carry-forward usage.

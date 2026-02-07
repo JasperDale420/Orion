@@ -529,6 +529,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - producer-wiring finding: `gold_feature_windows` write path is isolated to `WindowFeatureJob`, but runtime orchestration starts `RollupJob` and compose has no window-feature service
   - feature-freshness risk: active consumers (`flow_enricher`, `exit_classifier`) can read stale/missing window features without explicit producer-health gating
   - hardening recommendations for single producer ownership, freshness SLO checks, and producer-status telemetry
+- **Gateway/Heber Parity Audit (Pass 127)**: Continued audit with:
+  - data-semantics finding: `window_feature_job` skips persisting zero-flow windows, leaving gaps in `gold_feature_windows` timeline
+  - model-risk finding: consumers query “latest <= entry_ts” and can carry forward stale historical window context as if current
+  - hardening recommendations for explicit zero-window materialization and consumer freshness-age guards
 
 ### Changed
 
