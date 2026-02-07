@@ -393,6 +393,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - runtime-drift finding: ingestion service constructs/documents Heber flow integration but does not execute any `HeberReader` read path in cycle processing
   - operability-risk finding: entrypoint/docs still claim Heber flow ingestion, creating source-of-truth ambiguity for live runtime behavior
   - hardening recommendations for either explicit Heber cycle wiring or dead-code/doc cleanup plus source-capability health signaling
+- **Gateway/Heber Parity Audit (Pass 93)**: Continued audit with:
+  - contract-drift finding: `uw_iv_rank_connector` maps `iv_high`/`iv_low` fields while Gateway normalized IV-rank contract emits `one_year_high`/`one_year_low`
+  - data-quality risk: `silver_iv_rank` 52-week high/low features can silently default to zero under key mismatch
+  - hardening recommendations for field-map alignment, missing-key telemetry, and canonical payload integration tests
 
 ### Changed
 

@@ -3446,3 +3446,28 @@ P1:
 
 P2:
 1. Add regression check that fails when documented ingestion sources diverge from active runtime source wiring.
+
+## 100) Pass 93 Continuation (2026-02-07)
+
+### 100.1 IV-Rank Connector Field Mapping Lags Gateway Normalized Contract
+
+Current path:
+- Orion fetches `GET /api/v1/uw/{symbol}/iv-rank` and parses payload into `silver_iv_rank` records (`src/orion/connectors/uw_iv_rank_connector.py:48` to `src/orion/connectors/uw_iv_rank_connector.py:73`),
+- Gateway provider normalizes IV-rank response with fields including `iv_rank`, `iv_percentile`, `current_iv`, `one_year_high`, `one_year_low` (`../Data-Gateway/gateway/providers/uw.py:1546` to `../Data-Gateway/gateway/providers/uw.py:1560`).
+
+Mismatch:
+- Orion connector maps `iv_52w_high` from `iv_high` and `iv_52w_low` from `iv_low` (`src/orion/connectors/uw_iv_rank_connector.py:70` to `src/orion/connectors/uw_iv_rank_connector.py:71`),
+- those key names are not present in the current Gateway normalized object, so 52-week high/low fields can silently default to zero.
+
+Risk:
+- persisted IV feature completeness degrades silently (especially `iv_52w_high`/`iv_52w_low`, and `iv_30d` when absent),
+- downstream consumers treating these columns as populated may operate on defaulted values rather than real IV-context features.
+
+### 100.2 Updated Priorities
+
+P1:
+1. Align connector mapping to Gateway normalized keys (`one_year_high`, `one_year_low`) with backward-compatible aliases as needed.
+2. Enforce key-presence validation and emit warning/error metrics when expected IV context fields are missing.
+
+P2:
+1. Add integration tests with canonical Gateway `iv-rank` payload verifying non-default persistence of 52-week high/low fields.
