@@ -581,6 +581,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - coverage finding: reconciliation job currently checks only Alpaca bronze/silver bar parity, excluding Gateway/Heber-critical datasets
   - operations-risk finding: reconciliation path is effectively unscheduled (test/manual only), limiting live migration assurance
   - hardening recommendations for multi-dataset reconciliation scope and scheduled alerting integration
+- **Gateway/Heber Parity Audit (Pass 140)**: Continued audit with:
+  - scoring-contract finding: SignalEngine ML prefilter uses raw scorer input semantics that mismatch candidate field shapes (`CALL/PUT` vs `C/P`, `strike_price` vs `strike`, premium-scale ambiguity)
+  - quality-risk finding: mismapped prefilter features can false-skip valid candidates before solver evaluation
+  - hardening recommendations for parity-safe normalization or enriched scoring in prefilter path with contract tests
+- **Gateway/Heber Parity Audit (Pass 141)**: Continued audit with:
+  - policy-config finding: ensemble execution gate is hardcoded at `0.5` despite “configurable” intent
+  - operations-risk finding: threshold cannot be tuned per environment/stage without code edits, increasing policy drift risk
+  - hardening recommendations for centralized typed threshold config and stage-aware behavior tests
+- **Gateway/Heber Parity Audit (Pass 142)**: Continued audit with:
+  - config-governance finding: ML prefilter threshold is parsed from ad-hoc env lookup in decision logic, outside centralized settings validation
+  - runtime-risk finding: malformed or out-of-range values can surface only during decision execution
+  - hardening recommendations for typed centralized config ownership, bounds validation, and startup diagnostics
+- **Gateway/Heber Parity Audit (Pass 143)**: Continued audit with:
+  - closure finding: migration-critical active runtime surfaces now have sufficient audit coverage to move into remediation sequencing
+  - residual-scope finding: remaining review items are primarily non-runtime experimental paths and post-fix archive cleanup
+  - handoff recommendations for remediation planning against prioritized audit backlog
 
 ### Changed
 

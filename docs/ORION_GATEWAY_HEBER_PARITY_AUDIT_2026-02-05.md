@@ -4561,3 +4561,91 @@ P1:
 P2:
 1. Add per-dataset discrepancy metrics and severity thresholds (missing rows, orphan rows, lag windows).
 2. Add integration tests for reconciliation over both Alpaca and Gateway/Heber dataset families.
+
+## 147) Pass 140 Continuation (2026-02-07)
+
+### 147.1 SignalEngine ML Prefilter Uses a Raw Scoring Contract That Does Not Match Candidate Field Semantics
+
+Current behavior:
+- `SignalEngine` prefilter builds `flow_dict` with `premium_usd` from `candidate.premium`, `put_call` from `candidate.option_type`, and `strike_price` key (`src/orion/processing/signal_engine.py:107` to `src/orion/processing/signal_engine.py:123`),
+- `MLScorer` raw extraction expects `put_call` in `C/P` form and reads strike from `strike` (not `strike_price`) (`src/orion/ml/scorer.py:151`, `src/orion/ml/scorer.py:178`, `src/orion/ml/scorer.py:267`),
+- ML candidate construction stores `option_type` as `CALL/PUT` and stores per-contract `option_price` into `candidate.premium` while `premium_usd` is kept separately in evidence (`src/orion/ml/flow_processor.py:197`, `src/orion/ml/flow_processor.py:218`, `src/orion/ml/flow_processor.py:221`),
+- `score_enriched` explicitly exists for training/inference parity, but prefilter path uses `score(...)` directly (`src/orion/ml/scorer.py:345` to `src/orion/ml/scorer.py:352`, `src/orion/processing/signal_engine.py:123`).
+
+Risk:
+- ML prefilter can under/over-score candidates due to categorical/value-shape mismatches (`CALL/PUT` vs `C/P`, strike key mismatch, premium scale mismatch),
+- valid candidates can be falsely skipped before solver evaluation, with behavior that diverges from intended enriched-parity scoring.
+
+### 147.2 Updated Priorities
+
+P1:
+1. Replace prefilter scoring call with parity-safe input mapping (or `score_enriched`) so field semantics match scorer expectations.
+2. Add explicit normalization for `put_call`, strike field, and premium scale before any prefilter scoring decision.
+
+P2:
+1. Add contract tests for prefilter inputs using both rule-generated and ML-generated `CandidateTrade` objects.
+2. Emit structured diagnostics for prefilter input completeness/normalization to support production debugging.
+
+## 148) Pass 141 Continuation (2026-02-07)
+
+### 148.1 Ensemble Consensus Threshold Is Hardcoded to `0.5` Despite “Configurable” Intent
+
+Current behavior:
+- decision gate uses `if consensus_score >= 0.5` with hardcoded reject reason text `< 0.5` (`src/orion/processing/signal_engine.py:281`, `src/orion/processing/signal_engine.py:351`),
+- in-code comment says the threshold is configurable, but no runtime read occurs for this value in `SignalEngine` (`src/orion/processing/signal_engine.py:280` to `src/orion/processing/signal_engine.py:282`),
+- centralized `SystemSettings` has no `ensemble_consensus_threshold` field (`src/orion/config.py:58` to `src/orion/config.py:99`).
+
+Risk:
+- operators cannot tune consensus strictness by environment/stage without code edits,
+- policy drift risk increases because comments/docs can imply configurability that runtime does not actually implement.
+
+### 148.2 Updated Priorities
+
+P1:
+1. Add typed config for ensemble consensus threshold in centralized settings and consume it in `SignalEngine`.
+2. Keep decision reason/trace values derived from the resolved threshold to prevent stale hardcoded messaging.
+
+P2:
+1. Add stage-level integration tests that assert threshold overrides affect EXECUTE/SKIP behavior.
+2. Document threshold defaults and allowed ranges alongside other live risk controls.
+
+## 149) Pass 142 Continuation (2026-02-07)
+
+### 149.1 ML Prefilter Threshold Is Managed as an Isolated Env Lookup, Not a Centralized Runtime Setting
+
+Current behavior:
+- prefilter threshold is read via `os.getenv("ORION_ML_PREFILTER_THRESHOLD", "0.5")` inline inside decision logic (`src/orion/processing/signal_engine.py:126` to `src/orion/processing/signal_engine.py:129`),
+- threshold is not modeled in centralized settings (`src/orion/config.py:58` to `src/orion/config.py:99`),
+- no typed validation/range enforcement is applied before converting to float in runtime path (`src/orion/processing/signal_engine.py:128`).
+
+Risk:
+- invalid or out-of-range threshold values can cause runtime surprises at decision time,
+- configuration governance is fragmented (part in centralized settings, part in ad-hoc env lookups), complicating migration-safe operations.
+
+### 149.2 Updated Priorities
+
+P1:
+1. Move ML prefilter threshold into centralized typed settings with bounds validation and single-source ownership.
+2. Remove ad-hoc env parsing from decision logic and read only from validated runtime config.
+
+P2:
+1. Add startup logging of resolved prefilter threshold by stage/profile.
+2. Add negative tests for malformed threshold env values to verify fail-fast behavior.
+
+## 150) Pass 143 Continuation (2026-02-07)
+
+### 150.1 Audit Closure Snapshot for Migration-Critical Scope
+
+Completed audit coverage for active migration-critical surfaces:
+- ingestion/runtime wiring and compose-orchestration paths,
+- Gateway stream contract and Heber read contract usage paths,
+- label/enrichment/feature jobs that drive model and execution context,
+- scoring/decisioning paths (`flow_enricher`, `scorer`, `signal_engine`),
+- reconciliation/validation/scheduling guardrail jobs.
+
+Remaining audit scope before implementation work is low priority:
+- deeper review of non-runtime experimental/research modules not in active deployment path,
+- final archive/delete decisions after fix rollout confirms no residual dependencies.
+
+Conclusion:
+- for Gateway/Heber integration parity plus active-path technical debt, audit scope is now sufficiently complete to begin remediation planning and implementation.
