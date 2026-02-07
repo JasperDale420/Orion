@@ -537,6 +537,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - universe-scope finding: `window_feature_job` computes rows only for static watchlist symbols
   - coverage-risk finding: active off-watchlist flow symbols can miss window-context features entirely in `gold_feature_windows`
   - hardening recommendations for active-universe driven window generation and per-ticker coverage telemetry
+- **Gateway/Heber Parity Audit (Pass 129)**: Continued audit with:
+  - contract-versioning finding: consumers query `gold_feature_windows` without filtering by `feature_set_id` despite versioned primary key design
+  - reproducibility-risk finding: mixed-version rows can produce ambiguous or nondeterministic feature selection in scoring/training lookups
+  - hardening recommendations for explicit feature-set scoping and version-aware regression coverage
 
 ### Changed
 

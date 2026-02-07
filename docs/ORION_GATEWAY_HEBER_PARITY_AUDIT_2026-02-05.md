@@ -4300,3 +4300,27 @@ P1:
 P2:
 1. Add regression tests with flow events on off-watchlist symbols asserting window rows are generated once symbols become active.
 2. Add telemetry dimension (`ticker_in_watchlist`) on window-feature misses to expose structural coverage bias.
+
+## 136) Pass 129 Continuation (2026-02-07)
+
+### 136.1 Window-Feature Consumers Do Not Scope by `feature_set_id` Despite Versioned Table Contract
+
+Current behavior:
+- `gold_feature_windows` schema uses composite identity including `feature_set_id` (`src/orion/storage/models_gold.py:231` to `src/orion/storage/models_gold.py:235`),
+- producer writes versioned rows with `FEATURE_SET_ID = "v1"` and upserts on `(ticker, window_end_ts_utc, period, feature_set_id)` (`src/orion/jobs/window_feature_job.py:29`, `src/orion/jobs/window_feature_job.py:193` to `src/orion/jobs/window_feature_job.py:199`, `src/orion/jobs/window_feature_job.py:208`),
+- `flow_enricher` window lookup omits `feature_set_id` filter and selects only by `(ticker, period, window_end_ts_utc <= entry_ts)` (`src/orion/ml/flow_enricher.py:1031` to `src/orion/ml/flow_enricher.py:1036`),
+- `exit_classifier` training joins similarly omit `feature_set_id` across 1h/1d/1w lateral lookups (`src/orion/ml/exit_classifier.py:444` to `src/orion/ml/exit_classifier.py:460`).
+
+Risk:
+- once multiple feature-set versions coexist (planned by schema design), consumers can select rows from unintended versions at identical timestamps,
+- training/scoring reproducibility degrades because feature semantics become version-ambiguous and query outcomes can be nondeterministic.
+
+### 136.2 Updated Priorities
+
+P1:
+1. Add explicit `feature_set_id` selection in all `gold_feature_windows` consumers (flow enrichment, classifier training, and any API consumers).
+2. Define one canonical configured feature-set version in runtime settings and enforce it at query boundaries.
+
+P2:
+1. Add regression tests with mixed-version fixtures (`v1`, `v2`) proving consumers pull only the configured feature set.
+2. Add observability metric for version mismatches/absence (expected feature set missing for ticker-period-entry tuple).
