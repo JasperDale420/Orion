@@ -3544,3 +3544,27 @@ P1:
 
 P2:
 1. Add regression test confirming symbols outside local label history are still included when present in canonical universe inputs.
+
+## 104) Pass 97 Continuation (2026-02-07)
+
+### 104.1 “Today” Earnings Sync Does Not Pass Date Filter to Gateway Fetch Calls
+
+Current path:
+- `sync_todays_earnings()` defines `today = date.today()` and describes syncing “today’s” premarket/afterhours earnings (`src/orion/jobs/sync_earnings.py:21` to `src/orion/jobs/sync_earnings.py:33`),
+- `_fetch_and_sync_earnings()` invokes SDK fetch functions without a `date` argument (`src/orion/jobs/sync_earnings.py:46`).
+
+Why this is risky:
+- UW/Gateway earnings endpoints support optional `date` and default to current/last market day behavior when omitted,
+- runtime “today sync” semantics become dependent on upstream defaults rather than explicit date targeting.
+
+Operational consequence:
+- on weekends/holidays or date-boundary conditions, fetched set can drift from intended run date while downstream persistence logic still treats the batch as the current sync cycle.
+
+### 104.2 Updated Priorities
+
+P1:
+1. Pass explicit `date=today.isoformat()` in daily premarket/afterhours fetch calls.
+2. Log requested date and returned record-date distribution for each sync run.
+
+P2:
+1. Add regression test asserting date argument propagation in `_fetch_and_sync_earnings` path.

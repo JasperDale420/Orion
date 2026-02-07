@@ -409,6 +409,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - coverage finding: earnings backfill symbol set is derived solely from local `price_target_labels` history
   - parity-risk finding: centralized/runtime-relevant symbols without prior labels can be excluded from earnings backfill coverage
   - hardening recommendations for canonical-universe symbol seeding and per-run source-composition metrics
+- **Gateway/Heber Parity Audit (Pass 97)**: Continued audit with:
+  - query-targeting finding: daily earnings sync does not pass an explicit date parameter to premarket/afterhours Gateway fetches
+  - semantic-risk finding: “today sync” behavior depends on upstream default date rules (current/last market day) instead of explicit run-date intent
+  - hardening recommendations for explicit date propagation and per-run returned-date telemetry
 
 ### Changed
 
