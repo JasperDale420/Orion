@@ -610,6 +610,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - ownership-split finding that Orion local label/quote services and Heber watch/Gold pipelines still run in parallel without canonical source-of-truth assignment
   - schema-surface comparison documenting current gap between Orion `price_target_labels` enrichment breadth and Heber watch/meta-label outputs
   - decommission-readiness inventory of remaining local SQL-coupled labeling/feature modules pending archive waves after ownership signoff
+- **Gateway/Heber Parity Audit (Pass 152)**: Continued audit with:
+  - proposed keep/migrate/archive decision matrix for 11 remaining local SQL-coupled label-stack modules
+  - phased archive order recommendation based on coupling and replacement readiness
+  - explicit blocker list defining what must be decided before archive PR waves can begin safely
 
 ### Changed
 

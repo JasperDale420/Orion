@@ -4839,3 +4839,48 @@ P1:
 P2:
 1. Add archive-ready criteria per module (owner, replacement path, rollback plan, parity check passed).
 2. Execute archive wave in small PRs grouped by bounded blast radius (quote tracking first, then label backfills, then consumers).
+
+## 159) Pass 152 Continuation (2026-02-07)
+
+### 159.1 Proposed Keep/Migrate/Archive Matrix for Remaining Label-Stack Modules
+
+Audit scope for this pass:
+- 11 local SQL-coupled modules identified in active code paths still tied to `silver_uw_*`, `silver_option_quotes`, `flow_labels`, `price_target_labels`, or `gold_feature_windows`.
+- goal is to convert prior “inventory” into an actionable decommission sequence.
+
+Decision matrix (proposed):
+
+| Module | Current Role | Centralized Replacement Path | Recommendation |
+|---|---|---|---|
+| `src/orion/main_option_quote_tracker.py` | Local checkpoint quote collector into `silver_option_quotes` via direct Alpaca connector | Heber watch `SnapshotPoller` + Gateway quotes (`/alpaca/options/quotes`) + Gold outcomes/features | **Migrate, then archive early** |
+| `src/orion/main_labeler.py` | Local flow outcome labeling loop (15m/30m/1h/2h) using Heber flow/bars reads + local `flow_labels` writes | Heber watch label writer (`labels_alert_barriers`) | **Migrate, then archive** |
+| `src/orion/main_price_target_labeler.py` | Extended checkpoint + enrichment label production into `price_target_labels` | Heber watch/meta-label datasets with explicit feature-gap port plan | **Keep temporarily, split & migrate in phases, archive last** |
+| `src/orion/jobs/backfill_exit_columns.py` | Historical backfill for `price_target_labels` exit/checkpoint columns | One-time Heber backfill pipeline after schema mapping | **Archive after parity backfill** |
+| `src/orion/jobs/backfill_ml_features.py` | Historical ML feature backfill on `price_target_labels` | Heber feature recompute/backfill job | **Archive after parity backfill** |
+| `src/orion/jobs/window_feature_job.py` | Builds `gold_feature_windows` from local silver tables | Heber Gold feature materialization | **Migrate, then archive** |
+| `src/orion/jobs/validate_features.py` | Local feature sanity/spot-check tooling for `price_target_labels` | Heber quality checks + dataset parity checks | **Port checks, then archive local-only script** |
+| `src/orion/jobs/data_quality_checker.py` | Local SQL quality checks for flow/darkpool/features | Shared Gateway/Heber quality monitors | **Keep short-term guardrail; retire after monitor parity** |
+| `src/orion/ml/flow_enricher.py` | Feature assembly for scorer from local silver/gold tables | Read normalized features from Heber Gold views | **Migrate read path; keep API surface** |
+| `src/orion/ml/exit_classifier.py` | Trains/uses models against `price_target_labels` | Retrain from Heber canonical outcome/feature datasets | **Migrate training source; keep model logic** |
+| `src/orion/ml/pattern_miner.py` | Pattern mining from `price_target_labels` | Re-point to Heber canonical label/feature datasets | **Migrate data source; keep mining logic** |
+
+### 159.2 Recommended Archive Execution Order
+
+P1 (lowest coupling first):
+1. `main_option_quote_tracker` -> archive after Heber watch quote parity and row-count parity checks pass.
+2. `main_labeler` + `window_feature_job` -> archive after output parity checks on agreed horizons/dimensions.
+3. `backfill_exit_columns` + `backfill_ml_features` -> archive once one-time migration backfills are complete and signed off.
+
+P2 (consumer/source retargeting):
+1. Repoint `flow_enricher`, `exit_classifier`, and `pattern_miner` to Heber canonical datasets.
+2. Decommission local validation scripts (`validate_features`, `data_quality_checker`) once equivalent checks run in centralized pipeline.
+3. Archive `main_price_target_labeler` only after field-level mapping decisions from pass 157 are complete and accepted.
+
+### 159.3 Blocking Decisions Before Archive Wave Can Start
+
+1. Confirm whether Orion’s extended `price_target_labels` enrichment set is strategic and should be ported to Heber, or intentionally reduced.
+2. Approve canonical dataset names/contracts for migrated training inputs (labels + features).
+3. Define acceptance gates for each archive PR:
+   - parity window and metrics,
+   - rollback procedure,
+   - ownership handoff.
