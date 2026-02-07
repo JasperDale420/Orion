@@ -405,6 +405,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - temporal-integrity finding: daily earnings sync writes batch `today` date as `report_date` for all rows instead of record-level report dates
   - data-correctness risk: earnings calendar keys can be misdated around timezone/schedule variations despite valid upstream record dates
   - hardening recommendations for per-record report-date persistence plus fallback-date telemetry and regression tests
+- **Gateway/Heber Parity Audit (Pass 96)**: Continued audit with:
+  - coverage finding: earnings backfill symbol set is derived solely from local `price_target_labels` history
+  - parity-risk finding: centralized/runtime-relevant symbols without prior labels can be excluded from earnings backfill coverage
+  - hardening recommendations for canonical-universe symbol seeding and per-run source-composition metrics
 
 ### Changed
 

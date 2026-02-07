@@ -3520,3 +3520,27 @@ P1:
 
 P2:
 1. Add regression test with mixed record dates to ensure per-record persistence keys `(ticker, report_date)` are correct.
+
+## 103) Pass 96 Continuation (2026-02-07)
+
+### 103.1 Earnings Backfill Universe Is Seeded Only from Local Label Table
+
+Current behavior:
+- `backfill_all_earnings()` selects symbols exclusively from `price_target_labels` (`src/orion/jobs/sync_earnings.py:147`),
+- no union with active universe, watchlist, positions, or centralized catalog-driven symbol sources is applied in this backfill path.
+
+Risk:
+- earnings coverage depends on prior local labeling history instead of current runtime/centralized symbol scope,
+- newly relevant symbols without prior label presence can be omitted from backfill, producing uneven earnings-feature availability.
+
+Context signal:
+- this module otherwise fetches earnings through Data Gateway (`src/orion/jobs/sync_earnings.py:140` to `src/orion/jobs/sync_earnings.py:143`), but symbol-seeding remains local-table coupled.
+
+### 103.2 Updated Priorities
+
+P1:
+1. Build backfill symbol universe from canonical active sources (e.g., current runtime universe + configured watchlist + optional label history union) instead of `price_target_labels` alone.
+2. Add coverage metrics showing symbol-source composition for each backfill run.
+
+P2:
+1. Add regression test confirming symbols outside local label history are still included when present in canonical universe inputs.
