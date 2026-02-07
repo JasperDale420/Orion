@@ -369,6 +369,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - feature-semantics finding: `flow_count_15m` currently counts mixed `UW_FLOW` + `UW_DARKPOOL` events while premium sums are `UW_FLOW`-only
   - drift-monitoring risk: downstream distribution checks can move on darkpool mix changes rather than options-flow count changes
   - hardening recommendations for split counters (or strict flow-only count semantics) plus feature-contract regression tests
+- **Gateway/Heber Parity Audit (Pass 87)**: Continued audit with:
+  - lifecycle-gap finding: `UniverseManager` dynamic controls (`update_from_event`/`cleanup`) are defined but not wired into ingestion/runtime call paths
+  - subscription-drift risk: Alpaca stream subscriptions are additive-only in ingestion and are not reconciled via `unsubscribe` against active-universe churn
+  - hardening recommendations for per-cycle universe lifecycle reconciliation, stale-symbol unsubscribe, and off-universe event suppression tests
 
 ### Changed
 

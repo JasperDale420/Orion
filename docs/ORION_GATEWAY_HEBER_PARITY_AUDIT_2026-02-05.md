@@ -3286,3 +3286,33 @@ P1:
 
 P2:
 1. Rebaseline drift-monitor expectations once counter semantics are corrected.
+
+## 94) Pass 87 Continuation (2026-02-07)
+
+### 94.1 Dynamic Universe Lifecycle Methods Are Defined but Not Invoked
+
+Current state:
+- `UniverseManager` defines dynamic lifecycle controls (`update_from_event`, `update_from_positions`, `cleanup`) (`src/orion/core/universe_manager.py:99`, `src/orion/core/universe_manager.py:93`, `src/orion/core/universe_manager.py:159`),
+- ingestion cycle reads active universe each loop (`src/orion/ingestion/service.py:224`) but does not call any of those lifecycle methods in the cycle path (`src/orion/ingestion/service.py:193` to `src/orion/ingestion/service.py:249`),
+- repository-wide search shows no external call sites for these methods (outside `universe_manager.py`).
+
+Risk:
+- dynamic-universe behavior is effectively stale: event-driven promotions and TTL expiry logic are not active, so runtime symbol selection can diverge from intended PRD behavior.
+
+### 94.2 Streaming Subscription Set Is Additive-Only and Not Pruned
+
+Current behavior:
+- stream drain path only subscribes newly added symbols (`src/orion/ingestion/service.py:238` to `src/orion/ingestion/service.py:240`),
+- `AlpacaStreamConnector` has `unsubscribe()` support (`src/orion/connectors/alpaca_stream_connector.py:182`), but ingestion never calls it.
+
+Risk:
+- as active universe changes, stream subscription can retain stale symbols indefinitely, increasing unnecessary event load and allowing off-universe bars to continue through pipeline processing.
+
+### 94.3 Updated Priorities
+
+P1:
+1. Wire universe lifecycle updates into ingestion loop (event-driven `update_from_event` where applicable and periodic `cleanup` execution).
+2. Reconcile stream subscriptions each cycle: unsubscribe symbols not in current active universe and filter drained events against active set before processing.
+
+P2:
+1. Add integration test for universe churn (symbol enters/leaves active set) asserting subscription reconciliation and off-universe event suppression.
