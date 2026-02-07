@@ -433,6 +433,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - scaling finding: `HeberReader` applies time/as-of filtering after parquet load, while active-ticker discovery reads flow without symbol pushdown
   - performance-risk finding: feature enrichment can devolve into repeated full-feed scans as Heber silver datasets grow
   - hardening recommendations for predicate pushdown/partition pruning and bounded lookback read-paths
+- **Gateway/Heber Parity Audit (Pass 103)**: Continued audit with:
+  - schema-mapping finding: daily earnings sync reads `eps_estimate/revenue_*` attributes not defined on the current `Earnings` model
+  - data-quality risk: daily earnings writes can persist null fundamentals even when Gateway provides normalized estimate/actual fields
+  - hardening recommendations for unified earnings field extraction across daily/backfill paths with explicit mapping tests
 
 ### Changed
 

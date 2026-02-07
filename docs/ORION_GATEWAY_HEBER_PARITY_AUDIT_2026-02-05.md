@@ -3685,3 +3685,29 @@ P1:
 
 P2:
 1. Add performance regression test/benchmark for `read_flow` on large partition sets to enforce bounded read latency and memory footprint.
+
+## 110) Pass 103 Continuation (2026-02-07)
+
+### 110.1 Daily Earnings Sync Uses Attribute Names Not Present on Current `Earnings` Model
+
+Current behavior:
+- daily upsert path reads `eps_estimate`, `eps_actual`, `revenue_estimate`, `revenue_actual` directly via `getattr(...)` on each earnings object (`src/orion/jobs/sync_earnings.py:183` to `src/orion/jobs/sync_earnings.py:186`),
+- current generated `Earnings` model defines fields such as `eps_mean_est` and `street_mean_est` (plus other legacy fields), not those normalized names (`src/orion/unusualwhales/models/earnings.py:57`, `src/orion/unusualwhales/models/earnings.py:68`),
+- backfill path already uses an alternate extraction (`street_mean_est`) via `_extract_eps_estimate(...)` (`src/orion/jobs/sync_earnings.py:124` to `src/orion/jobs/sync_earnings.py:131`).
+
+Cross-service contract signal:
+- Gateway normalized earnings responses use `eps_estimate`, `eps_actual`, `revenue_estimate`, `revenue_actual` (`../Data-Gateway/gateway/providers/uw.py:872` to `../Data-Gateway/gateway/providers/uw.py:887`),
+- without explicit mapping from model/additional-properties to persisted fields, daily sync can miss available fundamentals.
+
+Risk:
+- `silver_earnings_calendar` can receive incomplete EPS/revenue data on daily sync runs,
+- semantics drift remains between daily sync and historical backfill enrichment quality.
+
+### 110.2 Updated Priorities
+
+P1:
+1. Implement one canonical earnings-field extractor shared by daily and backfill paths that resolves both generated-model fields and normalized Gateway keys.
+2. Add counters for field-presence rates (`eps_estimate`, `eps_actual`, `revenue_estimate`, `revenue_actual`) per run to detect silent mapping regressions.
+
+P2:
+1. Add regression tests with mocked earnings payloads covering both model-native (`street_mean_est`) and normalized (`eps_estimate`) shapes to verify persisted parity.
