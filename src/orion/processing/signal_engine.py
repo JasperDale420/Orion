@@ -1,8 +1,9 @@
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from orion.analysis.regime import MultiAxisRegimeDetector, RegimeDetector
-from orion.config import risk_settings
+from orion.config import risk_settings, system_settings
 from orion.core.errors import ErrorCode, FeatureComputationError, ModelInferenceError
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_router import SolverRouter
@@ -57,6 +58,66 @@ class SignalEngine:
         except Exception as e:
             logger.warning(f"Failed to initialize market connector: {e}")
 
+    @staticmethod
+    def _normalize_put_call(option_type: Any) -> str | None:
+        value = str(option_type or "").upper()
+        if value in {"C", "CALL"}:
+            return "C"
+        if value in {"P", "PUT"}:
+            return "P"
+        return None
+
+    @classmethod
+    def _build_ml_prefilter_payload(cls, candidate: CandidateTrade) -> dict[str, Any]:
+        evidence = candidate.evidence or {}
+        execution_params = candidate.execution_params or {}
+
+        put_call = cls._normalize_put_call(candidate.option_type) or cls._normalize_put_call(
+            evidence.get("put_call") or execution_params.get("put_call")
+        )
+
+        premium_usd = evidence.get("premium_usd")
+        if premium_usd in (None, "", 0):
+            premium_usd = candidate.premium
+
+        dte = None
+        if candidate.expiration_date:
+            try:
+                dte = (candidate.expiration_date - candidate.timestamp_utc).days
+                if dte < 0:
+                    dte = 0
+            except Exception:
+                dte = None
+
+        payload = {
+            "ticker": candidate.ticker,
+            "option_symbol": candidate.option_symbol,
+            "premium_usd": premium_usd,
+            "dte": dte,
+            "put_call": put_call,
+            "strike": candidate.strike_price,
+            "underlying_price": candidate.underlying_price,
+            "timestamp_utc": candidate.timestamp_utc,
+            "event_id": evidence.get("event_id"),
+            "aggressor": evidence.get("aggressor"),
+            "is_sweep": evidence.get("is_sweep"),
+            "expiry": candidate.expiration_date.date().isoformat() if candidate.expiration_date else None,
+        }
+        for key, value in execution_params.items():
+            if key not in payload:
+                payload[key] = value
+        return payload
+
+    @staticmethod
+    def _has_minimum_ml_prefilter_context(flow_dict: dict[str, Any]) -> bool:
+        premium = flow_dict.get("premium_usd")
+        put_call = flow_dict.get("put_call")
+        try:
+            premium_value = float(premium)
+        except (TypeError, ValueError):
+            return False
+        return bool(premium_value > 0 and put_call in {"C", "P"})
+
     async def decide(self, candidate: CandidateTrade) -> StrategyDecision:
         """
         Applies deterministic policy to a Candidate.
@@ -103,61 +164,48 @@ class SignalEngine:
         try:
             from orion.ml.scorer import get_scorer
 
-            # Convert CandidateTrade to flow dict for MLScorer
-            flow_dict = {
-                "ticker": candidate.ticker,
-                "option_symbol": candidate.option_symbol,
-                "premium_usd": candidate.premium,
-                "dte": (
-                    (candidate.expiration_date - candidate.timestamp_utc).days if candidate.expiration_date else None
-                ),
-                "put_call": candidate.option_type,
-                "strike_price": candidate.strike_price,
-                "underlying_price": candidate.underlying_price,
-                "timestamp_utc": candidate.timestamp_utc,
-                # Additional fields from execution_params if available
-                **(candidate.execution_params or {}),
-            }
-
-            scorer = get_scorer()
-            ml_score = scorer.score(flow_dict)
-
-            # Pre-filter threshold (configurable via env)
-            import os
-
-            ml_threshold = float(os.getenv("ORION_ML_PREFILTER_THRESHOLD", "0.5"))
-
-            if ml_score < ml_threshold:
-                logger.info(
-                    f"ML pre-filter: {candidate.ticker} rejected (score={ml_score:.2f} < {ml_threshold})",
-                    extra={
-                        "event": "ml_prefilter_skip",
-                        "ticker": candidate.ticker,
-                        "ml_score": ml_score,
-                        "threshold": ml_threshold,
-                    },
+            flow_dict = self._build_ml_prefilter_payload(candidate)
+            if not self._has_minimum_ml_prefilter_context(flow_dict):
+                logger.debug(
+                    "Skipping ML pre-filter due to incomplete candidate context",
+                    extra={"event": "ml_prefilter_bypass_incomplete", "ticker": candidate.ticker},
                 )
-                return StrategyDecision(
-                    decision_id=f"ml_skip_{candidate.candidate_id}",
-                    candidate_id=candidate.candidate_id,
-                    timestamp_utc=candidate.timestamp_utc,
-                    ticker=candidate.ticker,
-                    strategy_version_id="ML_PREFILTER",
-                    model_version=None,
-                    decision="SKIP",
-                    reason=f"ML pre-filter: score {ml_score:.2f} below threshold ({ml_threshold})",
-                    executed_successfully="SKIPPED",
-                    execution_params={},
-                    decision_trace_json={
-                        "ml_prefilter": True,
-                        "ml_score": ml_score,
-                        "threshold": ml_threshold,
-                        "regime_snapshot": {
-                            "trend": regime_snapshot.trend.value,
-                            "vol": regime_snapshot.vol.value,
+            else:
+                scorer = get_scorer()
+                ml_score = scorer.score(flow_dict)
+                ml_threshold = system_settings.ml_prefilter_threshold
+
+                if ml_score < ml_threshold:
+                    logger.info(
+                        f"ML pre-filter: {candidate.ticker} rejected (score={ml_score:.2f} < {ml_threshold})",
+                        extra={
+                            "event": "ml_prefilter_skip",
+                            "ticker": candidate.ticker,
+                            "ml_score": ml_score,
+                            "threshold": ml_threshold,
                         },
-                    },
-                )
+                    )
+                    return StrategyDecision(
+                        decision_id=f"ml_skip_{candidate.candidate_id}",
+                        candidate_id=candidate.candidate_id,
+                        timestamp_utc=candidate.timestamp_utc,
+                        ticker=candidate.ticker,
+                        strategy_version_id="ML_PREFILTER",
+                        model_version=None,
+                        decision="SKIP",
+                        reason=f"ML pre-filter: score {ml_score:.2f} below threshold ({ml_threshold})",
+                        executed_successfully="SKIPPED",
+                        execution_params={},
+                        decision_trace_json={
+                            "ml_prefilter": True,
+                            "ml_score": ml_score,
+                            "threshold": ml_threshold,
+                            "regime_snapshot": {
+                                "trend": regime_snapshot.trend.value,
+                                "vol": regime_snapshot.vol.value,
+                            },
+                        },
+                    )
         except Exception as e:
             # Log but don't block on ML scorer failures - safety fallback
             logger.warning(f"ML pre-filter failed: {e}, continuing with Solver evaluation")
@@ -179,8 +227,6 @@ class SignalEngine:
         self._previous_regime[candidate.ticker] = current_regime_str
 
         # 1. Select Solvers via Router (Ensemble)
-        from orion.config import system_settings
-
         stage_env = system_settings.orion_stage
 
         context = LiveContext(
@@ -276,9 +322,9 @@ class SignalEngine:
                 return decision_record
 
             consensus_score = weighted_vote / total_weight if total_weight > 0 else 0.0
+            ensemble_threshold = system_settings.ensemble_consensus_threshold
 
-            # Consensus Threshold (Configurable, default 0.5)
-            if consensus_score >= 0.5:
+            if consensus_score >= ensemble_threshold:
                 decision_record.decision = "EXECUTE"
                 decision_record.p_take = consensus_score
                 decision_record.strategy_version_id = primary.solver_id
@@ -333,6 +379,7 @@ class SignalEngine:
                     "ensemble_solvers": ensemble_details,
                     "vote_method": "weighted_average_p_take",
                     "weight_method": "info_ratio_capped",
+                    "ensemble_threshold": ensemble_threshold,
                     "primary_solver": primary.solver_id,
                     "expected_return_bp": expected_return_bp,
                     "risk_score": risk_score,
@@ -348,7 +395,7 @@ class SignalEngine:
             else:
                 decision_record.decision = "SKIP"
                 # Who said skip?
-                decision_record.reason = f"Ensemble Rejected ({consensus_score:.2f} < 0.5)"
+                decision_record.reason = f"Ensemble Rejected ({consensus_score:.2f} < {ensemble_threshold})"
         else:
             # Fail-closed but explicit: baseline solver must be configured for PRDv2 fallback.
             logger.warning("Router returned no solvers. Attempting Baseline Fallback.")

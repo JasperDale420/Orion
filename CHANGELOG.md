@@ -600,6 +600,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **SignalEngine Threshold + Prefilter Contract Hardening**:
+  - Added centralized typed runtime settings for `ml_prefilter_threshold` (`ORION_ML_PREFILTER_THRESHOLD`) and `ensemble_consensus_threshold` (`ORION_ENSEMBLE_CONSENSUS_THRESHOLD`) in `src/orion/config.py`
+  - `SignalEngine` now reads both thresholds from centralized config instead of hardcoded/ad-hoc values
+  - Added ML prefilter payload normalization in `src/orion/processing/signal_engine.py`:
+    - normalizes `put_call` to `C/P`
+    - emits scorer-compatible `strike` field
+    - prefers `evidence.premium_usd` over nullable/ambiguous candidate premium
+    - bypasses ML prefilter when required context is incomplete to avoid false skips
+  - Added focused tests in `tests/unit/test_signal_engine_prefilter_config.py` for payload normalization and threshold-config behavior
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

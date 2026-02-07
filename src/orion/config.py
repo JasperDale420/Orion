@@ -68,6 +68,18 @@ class SystemSettings(BaseSettings):
     baseline_solver_id: Optional[str] = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
     orion_use_gateway: bool = Field(default=True, validation_alias="ORION_USE_GATEWAY")
+    ml_prefilter_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        validation_alias="ORION_ML_PREFILTER_THRESHOLD",
+    )
+    ensemble_consensus_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        validation_alias="ORION_ENSEMBLE_CONSENSUS_THRESHOLD",
+    )
 
     # Centralized Gateway + Heber integration settings
     data_gateway_url: str = Field(
