@@ -397,6 +397,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-drift finding: `uw_iv_rank_connector` maps `iv_high`/`iv_low` fields while Gateway normalized IV-rank contract emits `one_year_high`/`one_year_low`
   - data-quality risk: `silver_iv_rank` 52-week high/low features can silently default to zero under key mismatch
   - hardening recommendations for field-map alignment, missing-key telemetry, and canonical payload integration tests
+- **Gateway/Heber Parity Audit (Pass 94)**: Continued audit with:
+  - contract-drift finding: `uw_max_pain_connector` expects `max_pain` key while Gateway normalized response centers on `max_pain_strike`
+  - data-availability risk: valid max-pain rows can be skipped before persistence, leaving downstream distance-to-max-pain features sparse
+  - hardening recommendations for key-map alignment (`max_pain_strike` first) and normalized-payload persistence tests
 
 ### Changed
 

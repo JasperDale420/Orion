@@ -3471,3 +3471,27 @@ P1:
 
 P2:
 1. Add integration tests with canonical Gateway `iv-rank` payload verifying non-default persistence of 52-week high/low fields.
+
+## 101) Pass 94 Continuation (2026-02-07)
+
+### 101.1 Max-Pain Connector Expects Raw Key While Gateway Returns Normalized Key
+
+Current integration:
+- Orion connector reads `max_pain = exp_data.get("max_pain")` and skips row when `max_pain is None` (`src/orion/connectors/uw_max_pain_connector.py:61` to `src/orion/connectors/uw_max_pain_connector.py:65`),
+- Gateway provider normalizes max-pain payload into `max_pain_strike` field (`../Data-Gateway/gateway/providers/uw.py:1492` to `../Data-Gateway/gateway/providers/uw.py:1494`).
+
+Mismatch effect:
+- when Gateway returns normalized objects (common path), `max_pain` key is absent and connector drops otherwise valid rows before persistence.
+
+Downstream impact:
+- `silver_max_pain` can remain sparse/stale (`src/orion/connectors/uw_max_pain_connector.py:115`),
+- feature consumers pulling `distance_to_max_pain_pct` from this table can operate with missing data (`src/orion/main_price_target_labeler.py:522`, `src/orion/ml/flow_enricher.py:315`).
+
+### 101.2 Updated Priorities
+
+P1:
+1. Update connector mapping to accept `max_pain_strike` first (with `max_pain` as backward-compatible alias).
+2. Emit explicit metric/log when payload rows are skipped due to missing strike key.
+
+P2:
+1. Add contract test using Gateway normalized max-pain payload to verify non-zero row persistence into `silver_max_pain`.
