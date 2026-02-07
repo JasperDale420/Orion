@@ -561,6 +561,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - config-lifecycle finding: Alpaca stream gateway mode default is captured at module import (`USE_GATEWAY`) rather than resolved per instance
   - runtime-risk finding: post-import config/env changes may not take effect unless callers pass explicit override
   - hardening recommendations for constructor-time mode resolution and per-instance mode tests
+- **Gateway/Heber Parity Audit (Pass 135)**: Continued audit with:
+  - orchestration finding: `data_quality_checker` exists as a scheduled-quality module but is not wired into compose/runtime job scheduling
+  - operations-risk finding: parity and freshness regressions may go undetected unless checker is run manually
+  - hardening recommendations for scheduled wiring, alert-channel integration, and deployment-profile execution tests
 
 ### Changed
 

@@ -4444,3 +4444,27 @@ P1:
 P2:
 1. Add regression tests proving mode changes are respected per-instance without module reload hacks.
 2. Audit other connectors for import-time config snapshots that can freeze runtime behavior unexpectedly.
+
+## 142) Pass 135 Continuation (2026-02-07)
+
+### 142.1 Data-Quality Checker Is Not Wired into Runtime Scheduling/Compose
+
+Current behavior:
+- `data_quality_checker` provides `run_quality_checks()` entrypoint and is intended as a scheduled quality job (`src/orion/jobs/data_quality_checker.py:433`, `src/orion/jobs/data_quality_checker.py:564`),
+- in-repo references are limited to that module itself (no orchestration import/callers),
+- compose defines a `nightly-backfill` service (`docker-compose.yml:210` to `docker-compose.yml:224`) but no `data_quality_checker` service,
+- nightly orchestrator runs only ML/backfill tasks (`src/orion/jobs/nightly_backfill.py:66` to `src/orion/jobs/nightly_backfill.py:71`).
+
+Risk:
+- critical freshness/quality regressions can go undetected in normal runtime unless operators manually invoke the checker,
+- migration assurance weakens because parity/data-quality guardrails are not continuously enforced.
+
+### 142.2 Updated Priorities
+
+P1:
+1. Add scheduled runtime wiring for `data_quality_checker` (dedicated compose service/cron profile or integrated periodic task with explicit cadence).
+2. Emit structured quality-check outcomes to the same observability channel as ingestion/enrichment health alerts.
+
+P2:
+1. Add integration test that validates checker execution in deployed compose profile (not just module-level CLI).
+2. Define escalation thresholds (for example stale bars/flow/darkpool) and ensure non-zero exit/alert behavior on breach.
