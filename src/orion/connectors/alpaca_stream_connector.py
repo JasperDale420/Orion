@@ -19,9 +19,6 @@ from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
 
-# Feature flag for Gateway mode (default: True to use Gateway)
-USE_GATEWAY = system_settings.orion_use_gateway
-
 
 class AlpacaStreamConnector:
     """
@@ -41,7 +38,7 @@ class AlpacaStreamConnector:
         on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
         use_gateway: Optional[bool] = None,
     ):
-        self._use_gateway = use_gateway if use_gateway is not None else USE_GATEWAY
+        self._use_gateway = use_gateway if use_gateway is not None else bool(system_settings.orion_use_gateway)
         self.on_bar_callback = on_bar_callback
         self.feed = feed
 
