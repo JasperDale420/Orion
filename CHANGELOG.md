@@ -614,6 +614,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - proposed keep/migrate/archive decision matrix for 11 remaining local SQL-coupled label-stack modules
   - phased archive order recommendation based on coupling and replacement readiness
   - explicit blocker list defining what must be decided before archive PR waves can begin safely
+- **Gateway/Heber Parity Audit (Pass 153)**: Continued audit with:
+  - data-quality debt finding that silent exception fallbacks in active feature/label enrichment paths can hide production degradation
+  - schema-governance finding that dynamic label inserts claim schema safety without actual column-existence validation
+  - observability hardening recommendations for per-feature failure telemetry and deterministic insert guards
 
 ### Changed
 

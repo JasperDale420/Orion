@@ -4884,3 +4884,35 @@ P2 (consumer/source retargeting):
    - parity window and metrics,
    - rollback procedure,
    - ownership handoff.
+
+## 160) Pass 153 Continuation (2026-02-07)
+
+### 160.1 Silent Fallback Paths Mask Feature-Calculation Failures in Active ML Enrichment Paths
+
+Current behavior:
+- `main_price_target_labeler` has multiple broad `except Exception` fallbacks that silently skip feature computations (for example sector-flow/correlation and DB sector-cache checks) (`src/orion/main_price_target_labeler.py:1498`, `src/orion/main_price_target_labeler.py:1531`, `src/orion/main_price_target_labeler.py:1656`).
+- `ml/flow_enricher` suppresses feature-calculation failures without structured failure output in key derivations (darkpool windows, IV-vs-HV, OI change) (`src/orion/ml/flow_enricher.py:402`, `src/orion/ml/flow_enricher.py:502`, `src/orion/ml/flow_enricher.py:533`).
+
+Risk:
+- missing features can silently degrade model quality and parity checks without explicit operational signals,
+- troubleshooting becomes reactive because failures are converted to `None` values without consistent alertable telemetry.
+
+### 160.2 Dynamic Label Insert Guard Claims Schema Safety but Does Not Validate Column Existence
+
+Current behavior:
+- `main_price_target_labeler.persist_labels()` comment states it avoids inserting non-existent columns, but column selection only checks `key is not None` (`src/orion/main_price_target_labeler.py:2696` to `src/orion/main_price_target_labeler.py:2699`), which does not validate DB schema membership.
+
+Risk:
+- schema evolution in label dict keys can break runtime writes (`undefined column`) unexpectedly,
+- mismatch between code intent and enforcement increases migration fragility during rapid feature iteration.
+
+### 160.3 Updated Priorities
+
+P1:
+1. Replace silent `pass`/null fallbacks in feature-critical paths with structured error events and per-feature failure counters.
+2. Add explicit schema guard before dynamic inserts (derive allowed columns from DB metadata at startup and reject unknown keys deterministically).
+3. Add runtime feature-fill telemetry (non-null rates for high-impact columns) to detect degradation early.
+
+P2:
+1. Add DLQ/audit sink for failed enrichment records to support replay and root-cause analysis.
+2. Add regression tests that assert failure paths are observable (log/metric) rather than silently ignored.
