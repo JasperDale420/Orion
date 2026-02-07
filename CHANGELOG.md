@@ -333,6 +333,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - coverage-bound finding: `main_labeler` limits unlabeled candidate scans to a rolling 72-hour lookback window
   - recovery-risk finding: outages/backlogs longer than that window can leave historical unlabeled flows permanently unprocessed
   - hardening recommendations for cursor-based unlabeled pagination and oldest-unlabeled lag monitoring
+- **Gateway/Heber Parity Audit (Pass 78)**: Continued audit with:
+  - coverage-integrity finding: `main_labeler` coerces missing underlying entry prices to zero and silently drops those flows from labeling
+  - observability-gap finding: skip reasons for entry-price-invalid drops are not surfaced as explicit batch metrics
+  - hardening recommendations for drop-reason telemetry and bar-based fallback reconstruction at flow entry time
 
 ### Changed
 

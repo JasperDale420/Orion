@@ -3056,3 +3056,27 @@ P1:
 
 P2:
 1. Add outage-recovery regression test simulating >72h gap and verify historical unlabeled rows are still processed.
+
+## 85) Pass 78 Continuation (2026-02-07)
+
+### 85.1 Labeler Silently Drops Flows With Missing/Invalid Underlying Entry Price
+
+Current behavior:
+- flow normalization coerces missing/invalid underlying price to `0.0` (`src/orion/main_labeler.py:93`),
+- `label_flow` immediately returns `None` when `entry_price <= 0` (`src/orion/main_labeler.py:239` to `src/orion/main_labeler.py:242`),
+- dropped rows are not surfaced with per-row reason telemetry.
+
+Risk:
+- label coverage can silently shrink when source flow rows miss `underlying_price` (or parse fails), biasing labeled dataset toward cleaner symbols/providers and masking data-quality regressions.
+
+Integration implication:
+- with centralized Heber/Gateway contracts, transient field sparsity can occur; silent drops reduce parity confidence unless fallback reconstruction is defined.
+
+### 85.2 Updated Priorities
+
+P1:
+1. Add explicit drop-reason counters for label skips (`missing_underlying_price`, etc.) and include in batch logs/metrics.
+2. Add fallback path to reconstruct entry underlying from bars near flow timestamp when flow payload lacks valid spot price.
+
+P2:
+1. Add regression tests with mixed valid/missing underlying prices to assert deterministic fallback or explicit counted drop behavior.
