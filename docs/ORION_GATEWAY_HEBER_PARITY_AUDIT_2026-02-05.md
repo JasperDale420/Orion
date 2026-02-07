@@ -2985,3 +2985,27 @@ P1:
 
 P2:
 1. Add regression test with mixed valid/invalid timestamp rows confirming valid rows still progress through labeling in same cycle.
+
+## 82) Pass 75 Continuation (2026-02-07)
+
+### 82.1 Labeler Checkpoint Price Reads Use `asof_time=now`, Allowing Historical Look-Ahead Leakage
+
+Current behavior:
+- unlabeled flow selection correctly uses `asof_time=now_utc` at batch start (`src/orion/main_labeler.py:140` to `src/orion/main_labeler.py:142`),
+- each checkpoint price lookup calls `read_bars` with `asof_time=datetime.now(timezone.utc)` at lookup time (`src/orion/main_labeler.py:153` to `src/orion/main_labeler.py:156`),
+- label returns (`return_15m/30m/1h/2h`) are then derived from those bars (`src/orion/main_labeler.py:256` to `src/orion/main_labeler.py:259`).
+
+Risk:
+- historical label generation can incorporate bars that became available after the intended decision horizon, violating strict as-of semantics and inflating backtest/train label fidelity.
+
+Integration impact:
+- this conflicts with centralized Heber contract intent around `ts_available`-aware, zero-leakage reads and weakens parity confidence between historical labeling and live-time information boundaries.
+
+### 82.2 Updated Priorities
+
+P1:
+1. Use a deterministic as-of boundary for checkpoint reads (for example `asof_time=target_ts + tolerance`) rather than wall-clock now.
+2. Add invariant checks that selected bars satisfy `ts_available <= chosen_asof_time` where available.
+
+P2:
+1. Add leakage regression tests that simulate late-arriving bars and assert labeler does not consume post-horizon data.

@@ -321,6 +321,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - input-robustness finding: `main_labeler` timestamp coercion is not row-isolated, so one malformed timestamp can fail whole cycle normalization
   - throughput-risk finding: repeated malformed source rows can stall labeling progress by forcing retry-loop failures
   - hardening recommendations for per-row parse isolation, bad-row telemetry, and mixed-quality regression coverage
+- **Gateway/Heber Parity Audit (Pass 75)**: Continued audit with:
+  - temporal-integrity finding: `main_labeler` checkpoint bar reads use `asof_time=now`, not horizon-bounded as-of time
+  - leakage-risk finding: historical labels may consume post-horizon available bars, reducing as-of parity confidence
+  - hardening recommendations for target-time-bounded as-of reads and leakage regression tests
 
 ### Changed
 
