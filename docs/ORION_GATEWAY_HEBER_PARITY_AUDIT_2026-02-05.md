@@ -4276,3 +4276,27 @@ P1:
 P2:
 1. Add regression tests for no-flow windows that assert consumers receive explicit zero features (or controlled nulls), not arbitrarily old historical rows.
 2. Add telemetry comparing window end-time age against entry-time to detect stale carry-forward usage.
+
+## 135) Pass 128 Continuation (2026-02-07)
+
+### 135.1 Window Feature Coverage Is Constrained to Static Watchlist, Not Runtime Active Universe
+
+Current behavior:
+- `WindowFeatureJob` defaults ticker scope to `system_settings.static_watchlist` (`src/orion/jobs/window_feature_job.py:49`),
+- job loops only over that fixed list (`src/orion/jobs/window_feature_job.py:58`),
+- flow enrichment reads window features using the event ticker (dynamic by incoming flow universe) (`src/orion/ml/flow_enricher.py:1017`, `src/orion/ml/flow_enricher.py:1032`),
+- ingestion runtime already maintains a broader active universe lifecycle outside this static list (`src/orion/ingestion/service.py`, `src/orion/core/universe_manager.py`).
+
+Risk:
+- non-watchlist tickers can have valid flow events but never receive `gold_feature_windows` context features,
+- model feature completeness drifts by ticker cohort (watchlist vs non-watchlist), creating silent bias and parity gaps against centralized Gateway/Heber universes.
+
+### 135.2 Updated Priorities
+
+P1:
+1. Source `WindowFeatureJob` ticker scope from canonical active universe (or active-universe + configured baseline union), not static watchlist alone.
+2. Add completeness checks that track per-ticker window-feature availability for tickers seen in recent flow events.
+
+P2:
+1. Add regression tests with flow events on off-watchlist symbols asserting window rows are generated once symbols become active.
+2. Add telemetry dimension (`ticker_in_watchlist`) on window-feature misses to expose structural coverage bias.

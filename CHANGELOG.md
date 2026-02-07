@@ -533,6 +533,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - data-semantics finding: `window_feature_job` skips persisting zero-flow windows, leaving gaps in `gold_feature_windows` timeline
   - model-risk finding: consumers query “latest <= entry_ts” and can carry forward stale historical window context as if current
   - hardening recommendations for explicit zero-window materialization and consumer freshness-age guards
+- **Gateway/Heber Parity Audit (Pass 128)**: Continued audit with:
+  - universe-scope finding: `window_feature_job` computes rows only for static watchlist symbols
+  - coverage-risk finding: active off-watchlist flow symbols can miss window-context features entirely in `gold_feature_windows`
+  - hardening recommendations for active-universe driven window generation and per-ticker coverage telemetry
 
 ### Changed
 
