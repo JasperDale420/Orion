@@ -4491,3 +4491,26 @@ P1:
 P2:
 1. Split validations into fast smoke checks (every run) and deep audits (scheduled) to keep signal timely and actionable.
 2. Persist validation snapshots for trend analysis of feature-quality drift over time.
+
+## 144) Pass 137 Continuation (2026-02-07)
+
+### 144.1 Nightly Backfill Scheduler Uses Weekday-Only Trading-Day Check (No Exchange Holiday Calendar)
+
+Current behavior:
+- scheduler treats “trading day” as `weekday <= 4` only (`src/orion/jobs/nightly_backfill.py:29` to `src/orion/jobs/nightly_backfill.py:31`),
+- next-run logic skips weekends but does not consult exchange holiday calendars (`src/orion/jobs/nightly_backfill.py:54` to `src/orion/jobs/nightly_backfill.py:56`),
+- backfill service is wired as always-on scheduled runtime (`docker-compose.yml:210` to `docker-compose.yml:224`).
+
+Risk:
+- backfill can run on market holidays and partial/irregular sessions as if normal trading days,
+- this wastes runtime capacity and can produce misleading “successful nightly run” signals on days with atypical or absent market data.
+
+### 144.2 Updated Priorities
+
+P1:
+1. Replace weekday-only check with exchange-calendar based session checks (for example NYSE calendar) for run scheduling.
+2. Add explicit holiday/half-day handling policy and runtime logging for skipped vs executed backfill cycles.
+
+P2:
+1. Add scheduler regression tests covering U.S. market holidays and early-close sessions.
+2. Surface next scheduled run in both UTC and ET with exchange-session metadata for operator visibility.

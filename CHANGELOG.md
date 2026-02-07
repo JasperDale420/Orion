@@ -569,6 +569,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - governance finding: `validate_features` exists as a migration-critical drift check but is not wired into CI/scheduled runtime
   - quality-risk finding: feature-contract regressions can persist until manually discovered
   - hardening recommendations for automated validation cadence, fail gates, and persisted quality snapshots
+- **Gateway/Heber Parity Audit (Pass 137)**: Continued audit with:
+  - scheduler-fidelity finding: nightly backfill uses weekday-only trading-day logic and does not consult exchange holiday calendars
+  - operations-risk finding: scheduled runs may execute on non-trading holidays/irregular sessions and report misleading normal-cycle status
+  - hardening recommendations for exchange-calendar scheduling, holiday policy logging, and session-aware scheduler tests
 
 ### Changed
 
