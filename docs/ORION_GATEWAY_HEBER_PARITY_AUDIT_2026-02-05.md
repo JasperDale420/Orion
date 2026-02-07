@@ -3343,3 +3343,25 @@ P1:
 
 P2:
 1. Add telemetry on computed trend proxy value distribution to catch future regressions in query semantics.
+
+## 96) Pass 89 Continuation (2026-02-07)
+
+### 96.1 Feature Enrichment Ticker Discovery Silently Degrades Away from Heber
+
+Current behavior:
+- `get_active_tickers()` attempts Heber flow-based discovery first (`src/orion/main_feature_enrichment.py:81` to `src/orion/main_feature_enrichment.py:87`),
+- on Heber failure it logs only at debug and falls back to Orion-local `silver_uw_flow` SQL (`src/orion/main_feature_enrichment.py:89`, `src/orion/main_feature_enrichment.py:95`),
+- if local query also fails it falls back again to hardcoded tickers (`src/orion/main_feature_enrichment.py:109` to `src/orion/main_feature_enrichment.py:110`).
+
+Why this is risky in current architecture:
+- ingestion runtime explicitly no longer polls UW directly (`src/orion/ingestion/service.py:200` to `src/orion/ingestion/service.py:201`), so reliance on Orion-local `silver_uw_flow` as fallback can be stale or empty relative to Heber-first truth,
+- silent fallback chain can hide Heber integration regressions while enrichment continues with degraded symbol selection quality.
+
+### 96.2 Updated Priorities
+
+P1:
+1. Promote Heber discovery failure to warning/error with explicit metric (e.g., `active_ticker_source=heber|local_db|static_fallback`).
+2. Make fallback policy explicit and gated: only permit local/static fallback under configured degrade mode, otherwise fail fast.
+
+P2:
+1. Add regression tests for each fallback tier and assert alerting/telemetry behavior when Heber discovery path fails.

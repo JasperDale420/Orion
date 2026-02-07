@@ -377,6 +377,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - correctness finding: `get_spy_cumulative_return` query window semantics do not enforce a strict latest-20-bar return calculation
   - regime-risk finding: trend proxy fed into regime snapshots can be biased by full-history/row-frame behavior instead of intended recent-window movement
   - hardening recommendations for bounded-window query rewrite plus deterministic cumulative-return regression tests
+- **Gateway/Heber Parity Audit (Pass 89)**: Continued audit with:
+  - degradation finding: feature-enrichment ticker discovery silently falls back from Heber to local SQL and then static tickers
+  - parity-risk finding: local `silver_uw_flow` fallback can diverge from Heber-first source-of-truth in current centralized ingestion architecture
+  - hardening recommendations for explicit fallback telemetry/severity and policy-gated degrade mode
 
 ### Changed
 
