@@ -413,6 +413,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - query-targeting finding: daily earnings sync does not pass an explicit date parameter to premarket/afterhours Gateway fetches
   - semantic-risk finding: “today sync” behavior depends on upstream default date rules (current/last market day) instead of explicit run-date intent
   - hardening recommendations for explicit date propagation and per-run returned-date telemetry
+- **Gateway/Heber Parity Audit (Pass 98)**: Continued audit with:
+  - coverage finding: earnings backfill performs single-call ticker fetches against a paginated Gateway earnings endpoint
+  - completeness-risk finding: historical earnings rows can be truncated per symbol when pagination is not consumed
+  - hardening recommendations for full pagination handling and per-ticker fetch completeness metrics
 
 ### Changed
 

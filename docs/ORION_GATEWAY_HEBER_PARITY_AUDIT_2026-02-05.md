@@ -3568,3 +3568,28 @@ P1:
 
 P2:
 1. Add regression test asserting date argument propagation in `_fetch_and_sync_earnings` path.
+
+## 105) Pass 98 Continuation (2026-02-07)
+
+### 105.1 Earnings Backfill Uses Single-Page Fetch Against Paginated Gateway Endpoint
+
+Current behavior:
+- backfill loop calls `get_ticker_earnings.sync(ticker=..., client=...)` once per symbol (`src/orion/jobs/sync_earnings.py:68`),
+- Gateway ticker-earnings endpoint is paginated with `limit` (default 50) (`../Data-Gateway/gateway/api/uw/earnings.py:64`, `../Data-Gateway/gateway/api/uw/earnings.py:77`),
+- Orion backfill path does not iterate pages/cursors.
+
+Risk:
+- historical earnings coverage per ticker can be truncated to first page window,
+- long-history symbols may have incomplete earnings rows in `silver_earnings_calendar`.
+
+Downstream implication:
+- derived earnings features (`days_to_earnings`, `is_post_earnings`) can be based on incomplete history set, reducing reliability of date-relative feature logic.
+
+### 105.2 Updated Priorities
+
+P1:
+1. Implement pagination loop for ticker-earnings backfill (consume all pages/cursors from Gateway response).
+2. Add per-ticker completeness telemetry (rows fetched, pages consumed, oldest/newest report dates).
+
+P2:
+1. Add regression test with multi-page mocked earnings response ensuring full-history ingestion for a ticker.
