@@ -3663,3 +3663,25 @@ P1:
 
 P2:
 1. Add import-path smoke test and a mocked startup integration test asserting earnings sync executes successfully with expected function bindings.
+
+## 109) Pass 102 Continuation (2026-02-07)
+
+### 109.1 HeberReader Time/As-Of Filters Are Applied Post-Load (Not as Parquet Predicates)
+
+Current behavior:
+- `_read_silver_dataset()` builds parquet filters only for `instrument_key` when provided (`src/orion/clients/heber_reader.py:210` to `src/orion/clients/heber_reader.py:214`),
+- `start_time`/`end_time` and `asof_time` are applied afterward in pandas (`src/orion/clients/heber_reader.py:218` to `src/orion/clients/heber_reader.py:221`, `src/orion/clients/heber_reader.py:245` to `src/orion/clients/heber_reader.py:277`),
+- one hot path (`get_active_tickers`) calls `read_flow(...)` without symbol filters (`src/orion/main_feature_enrichment.py:81` to `src/orion/main_feature_enrichment.py:84`), so this path can read broad feed data before trimming.
+
+Risk:
+- as Heber Silver grows, active-ticker discovery can degrade toward repeated full-feed scans,
+- latency/memory pressure in feature enrichment can increase and trigger fallback behavior that masks root-cause read-path inefficiency.
+
+### 109.2 Updated Priorities
+
+P1:
+1. Add predicate pushdown for time bounds (and partition-aware pruning where available) inside `_read_silver_dataset()` instead of post-load filtering only.
+2. Bound active-ticker discovery reads with explicit lookback partition filters and row caps before dataframe materialization.
+
+P2:
+1. Add performance regression test/benchmark for `read_flow` on large partition sets to enforce bounded read latency and memory footprint.

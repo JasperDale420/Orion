@@ -429,6 +429,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - correctness finding: daily earnings sync imports non-exported UW earnings symbols, causing import-time failure before fetch execution
   - reliability-risk finding: ingestion startup catches this failure as warning, allowing runtime to proceed with stale/missing earnings calendar updates
   - hardening recommendations for canonical module imports, startup health gating, and import-path smoke coverage
+- **Gateway/Heber Parity Audit (Pass 102)**: Continued audit with:
+  - scaling finding: `HeberReader` applies time/as-of filtering after parquet load, while active-ticker discovery reads flow without symbol pushdown
+  - performance-risk finding: feature enrichment can devolve into repeated full-feed scans as Heber silver datasets grow
+  - hardening recommendations for predicate pushdown/partition pruning and bounded lookback read-paths
 
 ### Changed
 
