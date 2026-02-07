@@ -4514,3 +4514,26 @@ P1:
 P2:
 1. Add scheduler regression tests covering U.S. market holidays and early-close sessions.
 2. Surface next scheduled run in both UTC and ET with exchange-session metadata for operator visibility.
+
+## 145) Pass 138 Continuation (2026-02-07)
+
+### 145.1 `HeberReader.read_bars` Accepts `timeframe` but Silently Ignores It
+
+Current behavior:
+- `read_bars(...)` API exposes `timeframe: str = "1m"` (`src/orion/clients/heber_reader.py:95` to `src/orion/clients/heber_reader.py:102`),
+- implementation explicitly discards the argument (`_ = timeframe`) and always reads the same `bars` dataset (`src/orion/clients/heber_reader.py:105` to `src/orion/clients/heber_reader.py:113`),
+- comments describe this as “interface compatibility” without enforcement or warning when non-default timeframe is requested (`src/orion/clients/heber_reader.py:105` to `src/orion/clients/heber_reader.py:108`).
+
+Risk:
+- callers can request non-1m bars and still receive 1m data with no explicit failure, causing silent feature/label distortions,
+- interface contract is misleading and can hide granularity mismatches during future Gateway/Heber migration steps.
+
+### 145.2 Updated Priorities
+
+P1:
+1. Either implement timeframe-aware routing (for example distinct Heber bar datasets/resampling policy) or fail fast when unsupported timeframe is requested.
+2. Add explicit validation/logging so non-default timeframe requests cannot silently degrade to default behavior.
+
+P2:
+1. Add contract tests that assert requested timeframe and returned bar granularity are consistent.
+2. Document supported timeframe values and fallback semantics in runtime integration docs.

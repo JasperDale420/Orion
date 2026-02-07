@@ -573,6 +573,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - scheduler-fidelity finding: nightly backfill uses weekday-only trading-day logic and does not consult exchange holiday calendars
   - operations-risk finding: scheduled runs may execute on non-trading holidays/irregular sessions and report misleading normal-cycle status
   - hardening recommendations for exchange-calendar scheduling, holiday policy logging, and session-aware scheduler tests
+- **Gateway/Heber Parity Audit (Pass 138)**: Continued audit with:
+  - interface-contract finding: `HeberReader.read_bars` accepts `timeframe` but currently ignores it and always reads default bars dataset
+  - integrity-risk finding: non-default timeframe requests can silently receive wrong granularity data
+  - hardening recommendations for timeframe validation/routing, fail-fast behavior, and contract tests
 
 ### Changed
 
