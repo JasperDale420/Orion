@@ -2628,3 +2628,27 @@ P0:
 
 P1:
 1. Add regression tests asserting `PriceTargetExitRule` can trigger under controlled entry/current price conditions in active execution path.
+
+## 69) Pass 62 Continuation (2026-02-06)
+
+### 69.1 DTE-Bucket Filtering Depends on `position.option_chain`, But Position Construction Does Not Use Canonical `candidate.option_symbol`
+
+Current model/contracts:
+- `CandidateTrade` includes canonical `option_symbol` field (`src/orion/storage/models_gold.py:33`),
+- `PositionManager` builds `OpenPosition.option_chain` from `candidate.evidence["option_chain"]` or `entry_context["option_chain"]`, not from `candidate.option_symbol` (`src/orion/execution/position_manager.py:116`, `src/orion/execution/position_manager.py:150`).
+
+Rule dependency:
+- exit-rule DTE bucketing reads `position.option_chain` and returns `"UNKNOWN"` when missing (`src/orion/processing/rules/exit_rules.py:92` to `src/orion/processing/rules/exit_rules.py:95`),
+- when position bucket is `"UNKNOWN"`, flow DTE filter is effectively disabled (`src/orion/processing/rules/exit_rules.py:117` to `src/orion/processing/rules/exit_rules.py:118`).
+
+Risk:
+- DTE-alignment logic in flow-based exit rules can silently degrade to broad ticker-level matching, increasing mis-scoped exits and reducing strategy parity with intended contract-level behavior.
+
+### 69.2 Updated Priorities
+
+P0:
+1. Populate `OpenPosition.option_chain` from canonical `candidate.option_symbol` by default, with evidence/context only as fallback.
+2. Add validation warnings when option positions are tracked without a contract identifier (cannot enforce DTE/contract filters).
+
+P1:
+1. Add regression tests that assert DTE bucket is deterministically resolved for option positions created from `candidate.option_symbol`.

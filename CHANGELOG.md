@@ -269,6 +269,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - rule-contract finding: `PriceTargetExitRule` is enabled in default exit set but requires `entry_option_price`, which is not present/populated on `OpenPosition`
   - activation-risk finding: target/stop price exits can remain silently inert despite appearing configured
   - hardening recommendations for rule/position contract alignment and rule-activation validation tests
+- **Gateway/Heber Parity Audit (Pass 62)**: Continued audit with:
+  - contract-id propagation finding: `PositionManager` sets `OpenPosition.option_chain` from evidence/context and does not default to canonical `CandidateTrade.option_symbol`
+  - filtering-fidelity finding: exit-rule DTE filtering falls back to `"UNKNOWN"` and broad matching when `option_chain` is missing
+  - hardening recommendations for canonical option-symbol propagation and DTE-bucket validation coverage
 
 ### Changed
 
