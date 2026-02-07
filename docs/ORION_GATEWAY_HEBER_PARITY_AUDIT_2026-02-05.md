@@ -3805,3 +3805,25 @@ P1:
 
 P2:
 1. Add regression tests with mocked ticker-earnings payloads covering `report_time` and `time` shapes to enforce announce-time parity.
+
+## 115) Pass 108 Continuation (2026-02-07)
+
+### 115.1 Options Execution Quote Lookup Bypasses Gateway and Calls Alpaca Directly
+
+Current behavior:
+- execution options path fetches live quote via `self.options_connector.get_option_quote(...)` before sizing (`src/orion/execution/execution_engine.py:198` to `src/orion/execution/execution_engine.py:209`),
+- `AlpacaOptionsConnector.get_option_quote()` issues direct HTTP request to `https://data.alpaca.markets/v1beta1/options/snapshots` with Alpaca keys (`src/orion/connectors/alpaca_options_connector.py:194` to `src/orion/connectors/alpaca_options_connector.py:199`),
+- Gateway already exposes canonical option quote endpoint `GET /api/v1/alpaca/options/{contract}/quotes` with centralized auth/contracts (`../Data-Gateway/gateway/api/alpaca/options.py:157` to `../Data-Gateway/gateway/api/alpaca/options.py:171`).
+
+Risk:
+- options execution runs outside centralized Gateway control plane (auth policy, rate limits, contract normalization),
+- parity and observability drift can emerge between execution-time quotes and other Orion/Heber paths that route through Gateway.
+
+### 115.2 Updated Priorities
+
+P1:
+1. Route options execution quote discovery through Gateway endpoint(s) rather than direct Alpaca HTTP snapshots.
+2. Add explicit degraded/fallback telemetry if direct-provider fallback is retained for break-glass operation.
+
+P2:
+1. Add integration test covering execution quote lookup against Gateway contract to verify schema compatibility with sizing logic.

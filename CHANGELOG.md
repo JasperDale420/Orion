@@ -453,6 +453,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-mapping finding: ticker-earnings backfill timing extractor looks for `report_time` while Gateway normalized payload emits `time`
   - data-consistency risk: historical `announce_time` can be systematically blank/under-populated despite available upstream timing fields
   - hardening recommendations for normalized time-key support and timing-field coverage metrics
+- **Gateway/Heber Parity Audit (Pass 108)**: Continued audit with:
+  - integration finding: options execution price discovery calls Alpaca snapshots directly instead of Gateway quote endpoints
+  - parity-risk finding: live execution bypasses centralized Gateway auth/rate-limit/contract layer used elsewhere in migration
+  - hardening recommendations for Gateway-backed quote sourcing in options execution and fallback visibility
 
 ### Changed
 
