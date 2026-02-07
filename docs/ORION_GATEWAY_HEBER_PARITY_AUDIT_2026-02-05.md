@@ -3131,3 +3131,32 @@ P0:
 
 P1:
 1. Add regression tests with mixed valid/invalid timestamps for each event type to verify forward progress and explicit bad-row accounting.
+
+## 88) Pass 81 Continuation (2026-02-07)
+
+### 88.1 Bronze and Silver Persistence Are Split Across Separate Transactions
+
+Current ingestion write order:
+- `_persist_events` executes `_save_events_to_db(events)` then `_save_silver_data(events)` (`src/orion/ingestion/service.py:312` to `src/orion/ingestion/service.py:315`),
+- each wrapper uses its own `db_write(...)` transaction (`src/orion/ingestion/service.py:443`, `src/orion/ingestion/service.py:453`).
+
+Risk:
+- bronze can commit successfully while silver fails, producing partial state for the same events.
+
+### 88.2 Dedupe Uses Bronze Table Existence as Source of Truth
+
+Current dedupe contract:
+- deduper checks duplicates against `BronzeEvent.event_id` in DB (`src/orion/processing/deduper.py:29` to `src/orion/processing/deduper.py:31`, `src/orion/processing/deduper.py:63` to `src/orion/processing/deduper.py:65`),
+- once bronze row exists, same event ID is filtered as duplicate on future ingest/replay path (`src/orion/processing/deduper.py:71` to `src/orion/processing/deduper.py:75`).
+
+Failure implication:
+- after bronze-success/silver-fail split, repeated delivery of same event ID is likely dropped at dedupe before normal silver processing path, creating persistent silver gaps unless explicitly repaired.
+
+### 88.3 Updated Priorities
+
+P0:
+1. Persist bronze+silver atomically in one transaction (or introduce explicit recovery queue/state machine for bronze-committed/silver-pending events).
+2. Add reconciliation job that detects bronze rows missing corresponding silver materialization and replays them through silver persistence safely.
+
+P1:
+1. Add integration test that simulates silver write failure after bronze commit and verifies automatic recovery path closes the gap without manual intervention.

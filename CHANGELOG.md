@@ -345,6 +345,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - failure-isolation finding: strict timestamp resolver raises during row-build and is not isolated per record
   - pipeline-risk finding: single malformed timestamp can abort silver persistence for the whole cycle before bulk insert
   - hardening recommendations for row-local timestamp quarantine and malformed-timestamp telemetry by event type
+- **Gateway/Heber Parity Audit (Pass 81)**: Continued audit with:
+  - consistency finding: ingestion persists bronze and silver in separate transactions, allowing bronze-success/silver-fail partial states
+  - recovery-risk finding: dedupe treats bronze presence as terminally processed, so replayed events can be dropped before silver recovery
+  - hardening recommendations for atomic bronze+silver persistence or explicit bronze-to-silver reconciliation workflow
 
 ### Changed
 
