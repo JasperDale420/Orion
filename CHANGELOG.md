@@ -325,6 +325,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - temporal-integrity finding: `main_labeler` checkpoint bar reads use `asof_time=now`, not horizon-bounded as-of time
   - leakage-risk finding: historical labels may consume post-horizon available bars, reducing as-of parity confidence
   - hardening recommendations for target-time-bounded as-of reads and leakage regression tests
+- **Gateway/Heber Parity Audit (Pass 76)**: Continued audit with:
+  - semantics-drift finding: market-tide net premium uses inconsistent formulas across enrichment and labeler paths
+  - parity-risk finding: direction labels can diverge across modules unless put-premium sign semantics are explicitly standardized
+  - hardening recommendations for shared canonical net formula and cross-module contract tests
 
 ### Changed
 

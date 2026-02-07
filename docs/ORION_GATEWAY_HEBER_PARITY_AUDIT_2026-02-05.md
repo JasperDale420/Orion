@@ -3009,3 +3009,26 @@ P1:
 
 P2:
 1. Add leakage regression tests that simulate late-arriving bars and assert labeler does not consume post-horizon data.
+
+## 83) Pass 76 Continuation (2026-02-07)
+
+### 83.1 Market-Tide Net-Premium Semantics Drift Across Modules
+
+Current implementations use different formulas:
+- `main_feature_enrichment.get_latest_market_tide` computes net as `net_call_premium - net_put_premium` (`src/orion/main_feature_enrichment.py:148` to `src/orion/main_feature_enrichment.py:149`),
+- `main_price_target_labeler.get_market_tide_before_entry` computes net as `SUM(net_call_premium) + SUM(net_put_premium)` (`src/orion/main_price_target_labeler.py:498`, `src/orion/main_price_target_labeler.py:506`).
+
+Risk:
+- unless `net_put_premium` sign conventions are strictly guaranteed and documented, these paths can produce divergent market-tide direction labels from the same source table.
+
+Impact:
+- cross-service feature consistency degrades (regime context vs label enrichment), weakening parity and model interpretability.
+
+### 83.2 Updated Priorities
+
+P1:
+1. Define one canonical market-tide net formula and encode it in a shared helper used by enrichment and labeler paths.
+2. Add contract tests with controlled sample rows to assert consistent direction output across modules.
+
+P2:
+1. Backfill/validate recent windows for tide-direction divergence after formula standardization.
