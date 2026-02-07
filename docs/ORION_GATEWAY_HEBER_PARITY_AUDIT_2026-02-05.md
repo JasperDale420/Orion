@@ -3032,3 +3032,27 @@ P1:
 
 P2:
 1. Backfill/validate recent windows for tide-direction divergence after formula standardization.
+
+## 84) Pass 77 Continuation (2026-02-07)
+
+### 84.1 Labeler Candidate Fetch Is Hard-Bounded to 72h History, Creating Permanent Label Gaps After Longer Downtime
+
+Current bounds:
+- labeler sets `FLOW_LOOKBACK_HOURS = 72` (`src/orion/main_labeler.py:32`),
+- each poll reads flow from `start_time = cutoff - timedelta(hours=FLOW_LOOKBACK_HOURS)` (`src/orion/main_labeler.py:138`),
+- only rows inside this moving window are considered for unlabeled processing (`src/orion/main_labeler.py:140` to `src/orion/main_labeler.py:145`).
+
+Risk:
+- if service downtime or backlog exceeds ~72h, older unlabeled flows fall outside scan window and can be permanently skipped by this runtime path.
+
+Impact:
+- label completeness can silently diverge from source history, reducing downstream training/evaluation parity and creating unrecoverable holes without separate backfill tooling.
+
+### 84.2 Updated Priorities
+
+P1:
+1. Replace fixed lookback scanning with cursor/checkpoint pagination over unlabeled IDs/timestamps to guarantee eventual coverage regardless of downtime length.
+2. Emit lag metrics for oldest-unlabeled age and alert when it exceeds expected SLA.
+
+P2:
+1. Add outage-recovery regression test simulating >72h gap and verify historical unlabeled rows are still processed.

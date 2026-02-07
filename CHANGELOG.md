@@ -329,6 +329,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - semantics-drift finding: market-tide net premium uses inconsistent formulas across enrichment and labeler paths
   - parity-risk finding: direction labels can diverge across modules unless put-premium sign semantics are explicitly standardized
   - hardening recommendations for shared canonical net formula and cross-module contract tests
+- **Gateway/Heber Parity Audit (Pass 77)**: Continued audit with:
+  - coverage-bound finding: `main_labeler` limits unlabeled candidate scans to a rolling 72-hour lookback window
+  - recovery-risk finding: outages/backlogs longer than that window can leave historical unlabeled flows permanently unprocessed
+  - hardening recommendations for cursor-based unlabeled pagination and oldest-unlabeled lag monitoring
 
 ### Changed
 
