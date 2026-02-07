@@ -285,6 +285,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - universe-source finding: `main_feature_enrichment.get_active_tickers` degrades from Heber reads to local `silver_uw_flow` SQL and then to static hardcoded symbols
   - observability gap finding: fallback tiers are mostly silent, allowing centralized integration failures to masquerade as normal enrichment operation
   - hardening recommendations for explicit fallback telemetry and canonical Heber/Gateway-backed ticker-universe ownership
+- **Gateway/Heber Parity Audit (Pass 66)**: Continued audit with:
+  - cadence-control finding: `main_feature_enrichment` advances poll timers even when connectors return zero records, delaying retry on failed pulls
+  - freshness-integrity finding: regime snapshots consume latest VIX/market-tide rows without max-age checks, allowing stale context to appear current
+  - hardening recommendations for success-gated cadence updates and explicit source freshness SLAs in regime snapshot generation
 
 ### Changed
 

@@ -2736,3 +2736,32 @@ P1:
 
 P2:
 1. Add integration tests covering failure modes of Heber/local SQL paths and asserting deterministic fallback behavior plus alert emission.
+
+## 73) Pass 66 Continuation (2026-02-07)
+
+### 73.1 Feature-Enrichment Poll Cadence Advances Even on Empty/Failed Fetches
+
+Current loop behavior:
+- each enrichment branch updates its last-run timestamp unconditionally after `fetch_and_store` returns (`src/orion/main_feature_enrichment.py:262` to `src/orion/main_feature_enrichment.py:283`),
+- connectors commonly signal “no data / failed fetch” by returning `0` instead of raising (for example `src/orion/connectors/uw_market_tide_connector.py:49` to `src/orion/connectors/uw_market_tide_connector.py:54`, `src/orion/connectors/uw_iv_rank_connector.py:49` to `src/orion/connectors/uw_iv_rank_connector.py:54`).
+
+Risk:
+- transient upstream failures can be treated as successful poll cycles, delaying retries until the next interval and masking sustained data starvation.
+
+### 73.2 Regime Snapshot Uses Latest Stored Context Without Freshness Gates
+
+Current snapshot inputs:
+- `get_latest_vix_data()` and `get_latest_market_tide()` select latest rows with no max-age validation (`src/orion/main_feature_enrichment.py:116` to `src/orion/main_feature_enrichment.py:123`, `src/orion/main_feature_enrichment.py:145` to `src/orion/main_feature_enrichment.py:152`),
+- regime detection consumes these values every snapshot cycle (`src/orion/main_feature_enrichment.py:297` to `src/orion/main_feature_enrichment.py:308`).
+
+Risk:
+- regime labels can be emitted using stale market context while appearing current, reducing trust in downstream policy/risk interpretation.
+
+### 73.3 Updated Priorities
+
+P1:
+1. Gate `last_*` timestamp updates on successful ingestion (`count > 0`) or explicit “healthy empty” states, and emit warnings when zero rows persist across windows.
+2. Add freshness checks (max age per source) for VIX/market-tide inputs before regime detection; mark snapshot degraded when inputs exceed SLA.
+
+P2:
+1. Add failure-mode tests that simulate repeated `fetch_and_store == 0` and assert retry cadence + degraded-state telemetry behavior.
