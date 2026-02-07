@@ -612,6 +612,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **HeberReader Timeframe Contract Hardening**:
   - `src/orion/clients/heber_reader.py` now enforces supported bar timeframes and fails fast for unsupported values instead of silently ignoring `timeframe`
   - Added unit coverage in `tests/unit/test_heber_reader.py` for unsupported timeframe rejection
+- **Reconciliation Scope Expansion**:
+  - `src/orion/jobs/reconcile_backfill.py` now reconciles Bronze vs Silver counts across `ALPACA_BAR_1M`, `UW_FLOW`, and `UW_DARKPOOL` datasets (ticker/day granularity)
+  - Added dataset-scoped discrepancy logging and aggregate cross-dataset summary
+  - Updated reconciliation unit test in `tests/unit/test_remediation_rules.py` for multi-dataset execution path
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

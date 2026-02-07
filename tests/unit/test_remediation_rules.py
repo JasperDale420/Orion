@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from orion.core.solver_schema import SolverConfig
-from orion.jobs.reconcile_backfill import run_reconciliation
+from orion.jobs.reconcile_backfill import DATASET_SPECS, run_reconciliation
 from orion.processing.rule_engine import RuleEngine
 
 
@@ -40,20 +40,21 @@ async def test_reconcile_backfill_logic(mock_session_factory):
     mock_session = AsyncMock()
     mock_session_factory.return_value.__aenter__.return_value = mock_session
 
-    # Setup Mock Results
-    # Bronze: 10 counts
-    mock_bronze_res = MagicMock()
-    mock_bronze_res.all.return_value = [MagicMock(ticker="AAPL", event_date="2025-01-01", count=10)]
+    # Setup Mock Results for each dataset: bronze row + silver row.
+    # Use one gap scenario repeatedly to exercise the loop safely.
+    side_effects = []
+    for _ in DATASET_SPECS:
+        mock_bronze_res = MagicMock()
+        mock_bronze_res.all.return_value = [MagicMock(ticker="AAPL", event_date="2025-01-01", count=10)]
+        mock_silver_res = MagicMock()
+        mock_silver_res.all.return_value = [MagicMock(ticker="AAPL", event_date="2025-01-01", count=8)]
+        side_effects.extend([mock_bronze_res, mock_silver_res])
 
-    # Silver: 8 counts (Gap of 2)
-    mock_silver_res = MagicMock()
-    mock_silver_res.all.return_value = [MagicMock(ticker="AAPL", bar_date="2025-01-01", count=8)]
-
-    mock_session.execute.side_effect = [mock_bronze_res, mock_silver_res]
+    mock_session.execute.side_effect = side_effects
 
     # Run
     await run_reconciliation(lookback_days=1)
 
     # Verify
-    assert mock_session.execute.call_count == 2
+    assert mock_session.execute.call_count == len(DATASET_SPECS) * 2
     # We can't easily assert logging output without caplog, but if it runs without error, logic is roughly correct.
