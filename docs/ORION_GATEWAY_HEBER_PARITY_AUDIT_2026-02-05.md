@@ -4916,3 +4916,26 @@ P1:
 P2:
 1. Add DLQ/audit sink for failed enrichment records to support replay and root-cause analysis.
 2. Add regression tests that assert failure paths are observable (log/metric) rather than silently ignored.
+
+## 161) Pass 154 Continuation (2026-02-07)
+
+### 161.1 Audit Closure Snapshot (Post Pass 153)
+
+Migration-critical audit coverage status:
+- complete for active runtime integration paths (ingestion, feature enrichment, label stack, reconciliation/guardrails),
+- complete for current Gateway/Heber parity blockers at the contract/ownership level,
+- complete for decommission candidate identification and archive-wave ordering.
+
+Open implementation blockers (audited, not yet remediated):
+1. Canonical ownership signoff for label/feature outputs (`price_target_labels` vs Heber watch Gold datasets).
+2. Field-level mapping and parity acceptance criteria for migration of Orion-only enriched features.
+3. Runtime observability hardening for silent enrichment fallbacks.
+4. Deterministic schema guard for dynamic label inserts.
+5. Execution of archive waves from approved matrix (quote tracker -> label loops/backfills -> downstream consumers).
+
+Residual audit scope (non-blocking, lower priority):
+- additional deep review of non-runtime experimental modules not in deployed compose paths,
+- post-remediation verification passes after each archive wave.
+
+Conclusion:
+- the audit itself is no longer the blocker; migration completion now depends on implementation decisions and staged remediation execution.

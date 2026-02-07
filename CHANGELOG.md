@@ -618,6 +618,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - data-quality debt finding that silent exception fallbacks in active feature/label enrichment paths can hide production degradation
   - schema-governance finding that dynamic label inserts claim schema safety without actual column-existence validation
   - observability hardening recommendations for per-feature failure telemetry and deterministic insert guards
+- **Gateway/Heber Parity Audit (Pass 154)**: Continued audit with:
+  - closure snapshot confirming migration-critical audit coverage is complete for active runtime paths
+  - consolidated open implementation blockers (ownership mapping, observability hardening, schema guards, archive execution)
+  - explicit transition from discovery to staged remediation and decommission execution
 
 ### Changed
 
