@@ -469,6 +469,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - fallback-path finding: direct Alpaca polling fetches bars with fixed `limit=10000` and no pagination
   - completeness-risk finding: when Gateway streaming is unavailable, fallback polling can silently truncate high-volume/multi-symbol bar sets
   - hardening recommendations for paginated polling fetches and fallback-volume completeness telemetry
+- **Gateway/Heber Parity Audit (Pass 112)**: Continued audit with:
+  - contract-scope finding: `HeberReader.read_gold_features()` reads dataset root without project/version filters
+  - data-integrity risk: multiple gold projects/versions can be mixed in a single read, weakening reproducibility and parity guarantees
+  - hardening recommendations for explicit project/version scoping and version-aware read contracts
 
 ### Changed
 

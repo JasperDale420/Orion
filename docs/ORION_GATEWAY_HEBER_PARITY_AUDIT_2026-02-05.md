@@ -3893,3 +3893,25 @@ P1:
 
 P2:
 1. Add integration test simulating >10k fallback bar response to ensure pagination drains full result set.
+
+## 119) Pass 112 Continuation (2026-02-07)
+
+### 119.1 Gold Reads Are Unscoped by Project/Version in Orion HeberReader
+
+Current behavior:
+- Orion `read_gold_features(dataset, asof_time, symbols)` loads from `gold/dataset={dataset}` only (`src/orion/clients/heber_reader.py:183`),
+- no `project` or `version` constraint is accepted/applied in this read path (`src/orion/clients/heber_reader.py:176` to `src/orion/clients/heber_reader.py:196`),
+- Heber gold write contract partitions data by `dataset`, `project`, and `version` (`../Heber/heber/sdk/client.py:449` to `../Heber/heber/sdk/client.py:454`).
+
+Risk:
+- reads can blend multiple project/version partitions for the same dataset,
+- model-training/evaluation reproducibility and parity checks can degrade when feature rows are not version-scoped.
+
+### 119.2 Updated Priorities
+
+P1:
+1. Extend Orion gold-read facade to require (or explicitly default) `project` and `version` selectors in path/filter logic.
+2. Emit read-scope telemetry (dataset/project/version cardinality seen per query) to catch accidental cross-version mixing.
+
+P2:
+1. Add tests with multi-project/multi-version fixture partitions ensuring read path returns only the requested scope.
