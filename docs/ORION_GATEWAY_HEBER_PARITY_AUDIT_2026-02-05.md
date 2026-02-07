@@ -4033,3 +4033,27 @@ P1:
 P2:
 1. Add unit tests for URL construction across root and API-prefixed `DATA_GATEWAY_URL` values for all UW enrichment connectors.
 2. Emit per-feed freshness telemetry (last successful fetch timestamp + rows written) to support parity SLO checks against Heber datasets.
+
+## 125) Pass 118 Continuation (2026-02-07)
+
+### 125.1 HeberReader Filter Fallback Drops Symbol Constraints and Reads Full Dataset
+
+Current behavior:
+- Silver reads rely on parquet filter pushdown for instrument scoping (`instrument_key in [...]`) (`src/orion/clients/heber_reader.py:210` to `src/orion/clients/heber_reader.py:214`),
+- if filtered `pq.read_table(...)` raises, `_read_parquet(...)` logs `heber_reader_filter_fallback` and retries without filters (`src/orion/clients/heber_reader.py:285` to `src/orion/clients/heber_reader.py:296`),
+- caller does not re-apply instrument filter after fallback (`src/orion/clients/heber_reader.py:214` to `src/orion/clients/heber_reader.py:223`),
+- `main_labeler.get_price_at_time(...)` assumes symbol-scoped bars from `read_bars(...)` and does not enforce ticker filtering post-read (`src/orion/main_labeler.py:153` to `src/orion/main_labeler.py:182`).
+
+Risk:
+- schema/partition drift that breaks filter pushdown can silently convert targeted reads into full-table scans,
+- correctness can degrade (wrong-symbol bar chosen for label pricing) and runtime cost can spike due to unbounded dataset loads.
+
+### 125.2 Updated Priorities
+
+P1:
+1. Change filter-fallback behavior to fail-closed for symbol-scoped reads (or explicitly re-apply `instrument_key` filter in-memory before returning).
+2. Emit elevated alerts when filter pushdown fails (dataset/feed, filter keys, row counts before/after fallback) and block downstream label writes on unresolved scope mismatch.
+
+P2:
+1. Add regression tests that simulate missing/renamed filter columns and assert no cross-symbol rows can escape from `read_bars(...)`/`read_flow(...)`.
+2. Add bounded-read safeguards (max rows per scoped read + explicit override) to prevent accidental full-dataset loads in live services.

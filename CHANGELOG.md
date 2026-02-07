@@ -493,6 +493,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - endpoint-composition finding: UW enrichment connectors append `/api/v1/uw/...` to raw `DATA_GATEWAY_URL` without canonicalization
   - stale-data risk: API-prefixed base URLs can double-prefix routes and quietly degrade enrichment output to zero/partial writes
   - hardening recommendations for shared URL normalization and per-feed freshness/degraded-state telemetry
+- **Gateway/Heber Parity Audit (Pass 118)**: Continued audit with:
+  - reader-scope finding: `HeberReader` filter fallback retries parquet reads without symbol filters after pushdown failures
+  - data-integrity risk: symbol-scoped consumers can receive cross-symbol rows and full-table scans during schema/partition drift events
+  - hardening recommendations for fail-closed scoped reads, fallback row-scope guards, and filter-failure observability
 
 ### Changed
 
