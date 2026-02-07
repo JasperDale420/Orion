@@ -2652,3 +2652,37 @@ P0:
 
 P1:
 1. Add regression tests that assert DTE bucket is deterministically resolved for option positions created from `candidate.option_symbol`.
+
+## 70) Pass 63 Continuation (2026-02-06)
+
+### 70.1 Options-Specific Exit Policy Is Applied to All Open Positions (Including Equities)
+
+Policy intent:
+- exit-rule module is explicitly scoped to short-term options trades (`src/orion/processing/rules/exit_rules.py:2` to `src/orion/processing/rules/exit_rules.py:5`).
+
+Runtime application:
+- `main_execution` loads default exit rules and applies them to every tracked open position (`src/orion/main_execution.py:224`, `src/orion/main_execution.py:322` to `src/orion/main_execution.py:327`),
+- `PositionManager.initialize` loads executed open positions without filtering to options-only candidates (`src/orion/execution/position_manager.py:72` to `src/orion/execution/position_manager.py:78`),
+- execution supports both options and equities depending on `candidate.option_symbol` presence (`src/orion/execution/execution_engine.py:132` to `src/orion/execution/execution_engine.py:137`),
+- `CandidateTrade.option_symbol` is nullable by model contract (`src/orion/storage/models_gold.py:33`).
+
+Risk:
+- options-flow-driven exit rules can be evaluated against equity positions, creating policy drift and potentially invalid exits for non-options trades.
+
+### 70.2 Position Rehydration Caps Exit Monitoring to Latest 50 Open Decisions
+
+Current startup query:
+- `PositionManager.initialize` limits reconstructed open positions to 50 rows (`src/orion/execution/position_manager.py:80`),
+- monitored set for exit evaluation is exactly `position_manager.get_open_positions()` (`src/orion/main_execution.py:322`).
+
+Risk:
+- when open executed positions exceed 50, older positions can be excluded from exit monitoring and remain unmanaged by rule-based close logic.
+
+### 70.3 Updated Priorities
+
+P0:
+1. Enforce position-type gating for exit-rule families (apply options-flow rules only to option positions, or split policy sets by instrument type).
+2. Remove fixed `LIMIT 50` from open-position reconstruction or replace with complete pagination to ensure full monitoring coverage.
+
+P1:
+1. Add integration tests covering mixed option/equity books and >50 open positions to verify correct rule applicability and monitoring completeness.

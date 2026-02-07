@@ -273,6 +273,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - contract-id propagation finding: `PositionManager` sets `OpenPosition.option_chain` from evidence/context and does not default to canonical `CandidateTrade.option_symbol`
   - filtering-fidelity finding: exit-rule DTE filtering falls back to `"UNKNOWN"` and broad matching when `option_chain` is missing
   - hardening recommendations for canonical option-symbol propagation and DTE-bucket validation coverage
+- **Gateway/Heber Parity Audit (Pass 63)**: Continued audit with:
+  - policy-scope finding: options-specific exit-rule set is applied to all tracked open positions, while execution stack supports both options and equities
+  - monitoring-coverage finding: `PositionManager.initialize` rebuilds at most 50 open positions, so larger books can leave older positions outside exit-rule monitoring
+  - hardening recommendations for instrument-type rule gating and full open-position reconstruction coverage
 
 ### Changed
 
