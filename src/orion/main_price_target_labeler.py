@@ -5,10 +5,10 @@ Tracks option prices over time with comprehensive metrics for ML exit optimizati
 """
 
 import asyncio
-from collections import defaultdict
 import math
 import os
 import signal
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -53,7 +53,11 @@ _PRICE_TARGET_LABEL_COLUMNS: Optional[Set[str]] = None
 
 
 def _legacy_label_pipelines_enabled() -> bool:
-    return os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true").strip().lower() in {"1", "true", "yes", "on"}
+    parse = lambda raw: raw.strip().lower() in {"1", "true", "yes", "on"}
+    specific = os.getenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER")
+    if specific is not None:
+        return parse(specific)
+    return parse(os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true"))
 
 
 def _record_price_target_fallback(feature_name: str, error: Optional[Exception] = None, **context: Any) -> None:
@@ -66,6 +70,7 @@ def _record_price_target_fallback(feature_name: str, error: Optional[Exception] 
         payload["error"] = str(error)
     payload.update(context)
     logger.warning("Price-target fallback applied", extra={"event_type": "PRICE_TARGET_FALLBACK", **payload})
+
 
 # Static sector mapping for reliable feature calculation (avoids unreliable API calls)
 SECTOR_MAPPING: Dict[str, str] = {

@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
 import pandas as pd
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -36,7 +36,11 @@ _heber_reader = HeberReader()
 
 
 def _legacy_label_pipelines_enabled() -> bool:
-    return os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true").strip().lower() in {"1", "true", "yes", "on"}
+    parse = lambda raw: raw.strip().lower() in {"1", "true", "yes", "on"}
+    specific = os.getenv("ORION_ENABLE_LEGACY_FLOW_LABELER")
+    if specific is not None:
+        return parse(specific)
+    return parse(os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true"))
 
 
 @dataclass
@@ -95,7 +99,9 @@ def _normalize_flow_df(raw_df: pd.DataFrame, cutoff: datetime) -> List[FlowRecor
         if flow_ts >= cutoff:
             continue
 
-        underlying_price = _coerce_float(_resolve_series_value(row, ["underlying_price", "spot_px", "spot_price"])) or 0.0
+        underlying_price = (
+            _coerce_float(_resolve_series_value(row, ["underlying_price", "spot_px", "spot_price"])) or 0.0
+        )
 
         rows.append(
             FlowRecord(

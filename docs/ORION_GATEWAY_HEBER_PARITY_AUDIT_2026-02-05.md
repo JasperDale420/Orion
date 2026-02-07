@@ -5009,3 +5009,38 @@ References:
 
 Residual:
 - runtime gate is global (shared across all legacy label services); per-service kill switches may still be desirable for finer rollout control.
+
+## 165) Pass 158 Continuation (2026-02-07)
+
+### 165.1 Per-Service Legacy Label Pipeline Kill Switches Are Now Implemented (TDD-Backed)
+
+Implemented:
+- Added per-service override gates with global fallback:
+  - `ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER` (`src/orion/main_option_quote_tracker.py:50`)
+  - `ORION_ENABLE_LEGACY_FLOW_LABELER` (`src/orion/main_labeler.py:40`)
+  - `ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER` (`src/orion/main_price_target_labeler.py:57`)
+  - fallback remains `ORION_ENABLE_LEGACY_LABEL_PIPELINES` in each service (`src/orion/main_option_quote_tracker.py:53`, `src/orion/main_labeler.py:43`, `src/orion/main_price_target_labeler.py:60`).
+- Added focused unit tests to validate override precedence and disabled early-return behavior:
+  - `tests/unit/test_legacy_label_pipeline_gates.py`.
+
+Result:
+- staged decommission can now disable one legacy service at a time without disabling all legacy label services globally.
+
+### 165.2 New Audit Finding: Compose-Level Rollout Controls Are Not Yet Wired for the New Per-Service Gates
+
+Current behavior:
+- Compose still defines legacy services (`labeler`, `price_target_labeler`, `option_quote_tracker`) without explicit per-service gate env wiring (`docker-compose.yml:47`, `docker-compose.yml:61`, `docker-compose.yml:92`).
+- Disabled log payloads still point to the global control key (`"control": "ORION_ENABLE_LEGACY_LABEL_PIPELINES=false"`) even when a service-specific gate is the effective control (`src/orion/main_option_quote_tracker.py:200`, `src/orion/main_labeler.py:375`, `src/orion/main_price_target_labeler.py:2784`).
+
+Risk:
+- operators can still miss fine-grained rollout intent in default compose deployments,
+- troubleshooting disabled-service behavior is slower because logs do not identify the exact effective control variable.
+
+### 165.3 Updated Priorities
+
+P1:
+1. Add per-service gate env variables to `docker-compose.yml` for `labeler`, `price_target_labeler`, and `option_quote_tracker` (default to enabled for backward compatibility).
+2. Update `DEPRECATED_PIPELINE_DISABLED` log payloads to report the effective control key/value (specific override vs global fallback).
+
+P2:
+1. Add a startup info log for each legacy service summarizing resolved gate values (`global`, `service_specific`, `effective`) to simplify operational cutovers.

@@ -6,12 +6,11 @@ for accurate ML training labels.
 """
 
 import asyncio
-import logging
 import os
 import re
 import signal
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from sqlalchemy import text
 
@@ -46,7 +45,11 @@ shutdown_event = asyncio.Event()
 
 
 def _legacy_label_pipelines_enabled() -> bool:
-    return os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true").strip().lower() in {"1", "true", "yes", "on"}
+    parse = lambda raw: raw.strip().lower() in {"1", "true", "yes", "on"}
+    specific = os.getenv("ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER")
+    if specific is not None:
+        return parse(specific)
+    return parse(os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true"))
 
 
 def handle_shutdown(signum: int, frame: Any) -> None:
@@ -72,10 +75,10 @@ async def get_pending_checkpoints() -> List[Dict[str, Any]]:
         # Construct option symbol from components: TICKER + YYMMDD + C/P + strike*1000 padded
         stmt = text(
             """
-            SELECT 
+            SELECT
                 f.event_id,
                 f.ticker,
-                f.ticker || TO_CHAR(TO_DATE(f.expiry, 'YYYY-MM-DD'), 'YYMMDD') || 
+                f.ticker || TO_CHAR(TO_DATE(f.expiry, 'YYYY-MM-DD'), 'YYMMDD') ||
                     f.put_call || LPAD(CAST((f.strike * 1000)::bigint AS text), 8, '0') as option_symbol,
                 f.flow_ts_utc,
                 EXTRACT(EPOCH FROM (NOW() - f.flow_ts_utc)) / 60 as minutes_since_entry

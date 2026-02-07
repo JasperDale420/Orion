@@ -634,6 +634,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - decommission-control remediation confirmation that legacy label services now support runtime disable via env gate
   - rollout-safety improvement allowing staged shutdown without code edits
   - residual note that per-service kill switches may still be needed for finer-grained cutovers
+- **Gateway/Heber Parity Audit (Pass 158)**: Continued audit with:
+  - remediation confirmation that per-service legacy label kill switches are now implemented with global fallback precedence
+  - focused rollout-operability finding that compose services do not yet expose per-service gate env controls
+  - control-attribution finding that disabled-service logs still reference only the global gate key
 
 ### Changed
 
@@ -686,6 +690,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Legacy Label Pipeline Runtime Gate**:
   - Added `ORION_ENABLE_LEGACY_LABEL_PIPELINES` gate in `src/orion/main_option_quote_tracker.py`, `src/orion/main_labeler.py`, and `src/orion/main_price_target_labeler.py`
   - When disabled, these services emit `DEPRECATED_PIPELINE_DISABLED` and exit before entering active processing loops
+- **Per-Service Legacy Label Runtime Gates (TDD)**:
+  - Added per-service gate overrides:
+    - `ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER`
+    - `ORION_ENABLE_LEGACY_FLOW_LABELER`
+    - `ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER`
+  - Added focused test coverage in `tests/unit/test_legacy_label_pipeline_gates.py` for override precedence and disabled early-return behavior
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
