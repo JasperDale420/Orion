@@ -2604,3 +2604,27 @@ P0:
 
 P1:
 1. Add regression tests with mixed-contract same-ticker flow proving one position’s exits are unaffected by unrelated contract flow.
+
+## 68) Pass 61 Continuation (2026-02-06)
+
+### 68.1 `PriceTargetExitRule` Is Enabled by Default but Lacks Required Position Field
+
+Current wiring:
+- default exit-rule set includes `PriceTargetExitRule` (`src/orion/processing/rules/exit_rules.py:551`),
+- rule requires `entry_option_price` on position plus `current_option_price` in context (`src/orion/processing/rules/exit_rules.py:500` to `src/orion/processing/rules/exit_rules.py:503`),
+- active `OpenPosition` model has `entry_price` but no `entry_option_price` field (`src/orion/execution/position_manager.py:33` to `src/orion/execution/position_manager.py:35`),
+- `PositionManager` populates only `entry_price` from `execution_params.limit_price` (`src/orion/execution/position_manager.py:115`, `src/orion/execution/position_manager.py:149`).
+
+Risk:
+- `PriceTargetExitRule` can remain effectively inert in the `main_execution` exit path regardless of threshold configuration, creating false confidence that target/stop exits are active.
+
+### 68.2 Updated Priorities
+
+P0:
+1. Align position contract with rule requirements:
+- either add and persist `entry_option_price` on tracked positions,
+- or refactor `PriceTargetExitRule` to use canonical available field(s) (`entry_price`) with explicit option/equity semantics.
+2. Add boot-time validation that each enabled exit rule’s required fields are satisfiable by runtime position/context contracts.
+
+P1:
+1. Add regression tests asserting `PriceTargetExitRule` can trigger under controlled entry/current price conditions in active execution path.

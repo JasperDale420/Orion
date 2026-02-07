@@ -265,6 +265,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - flow-scoping finding: `main_execution` fetches exit context by underlying ticker only and feeds that stream to all exit rules
   - contract-integrity finding: several exit rules aggregate flow without option-contract scoping, allowing unrelated expiry/strike flow to influence exits
   - hardening recommendations for contract-aware flow filters and mixed-contract regression coverage
+- **Gateway/Heber Parity Audit (Pass 61)**: Continued audit with:
+  - rule-contract finding: `PriceTargetExitRule` is enabled in default exit set but requires `entry_option_price`, which is not present/populated on `OpenPosition`
+  - activation-risk finding: target/stop price exits can remain silently inert despite appearing configured
+  - hardening recommendations for rule/position contract alignment and rule-activation validation tests
 
 ### Changed
 
