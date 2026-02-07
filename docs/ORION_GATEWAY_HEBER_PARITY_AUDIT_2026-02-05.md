@@ -4057,3 +4057,26 @@ P1:
 P2:
 1. Add regression tests that simulate missing/renamed filter columns and assert no cross-symbol rows can escape from `read_bars(...)`/`read_flow(...)`.
 2. Add bounded-read safeguards (max rows per scoped read + explicit override) to prevent accidental full-dataset loads in live services.
+
+## 126) Pass 119 Continuation (2026-02-07)
+
+### 126.1 Regime Trend Input Uses Incorrect SQL Window Semantics for “20-Bar Cumulative Return”
+
+Current behavior:
+- `get_spy_cumulative_return()` computes trend input with `LAST_VALUE(close) OVER (...)` and `FIRST_VALUE(close) OVER (...)` (`src/orion/main_feature_enrichment.py:171` to `src/orion/main_feature_enrichment.py:173`),
+- query applies `ORDER BY bar_start_ts_utc DESC LIMIT 20` after window expression (`src/orion/main_feature_enrichment.py:176` to `src/orion/main_feature_enrichment.py:177`) and then reads a single row (`src/orion/main_feature_enrichment.py:181`),
+- that value is fed directly into regime detection every cycle (`src/orion/main_feature_enrichment.py:299` to `src/orion/main_feature_enrichment.py:304`).
+
+Inference and risk:
+- with default SQL window frames, `LAST_VALUE(...)` is row-frame sensitive (not automatically “last of final 20-bar slice”); combined with post-window `LIMIT 20` + single-row fetch, this can produce a value that is not the intended recent-20-bar return,
+- regime classification may drift because trend input is derived from inconsistent historical scope, weakening downstream feature and policy decisions.
+
+### 126.2 Updated Priorities
+
+P1:
+1. Replace the query with an explicit two-point calculation on a deterministic 20-bar slice (for example: CTE selecting last 20 SPY bars, then `latest_close` vs `oldest_close`).
+2. Add validation guardrails that log/alert when insufficient bars are available for the intended lookback window.
+
+P2:
+1. Add unit/integration tests for `get_spy_cumulative_return()` covering monotonic-up, monotonic-down, and flat synthetic bar windows.
+2. Add telemetry comparing computed `cum_ret` against a reference in-Python implementation to detect SQL regressions.

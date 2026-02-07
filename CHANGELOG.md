@@ -497,6 +497,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - reader-scope finding: `HeberReader` filter fallback retries parquet reads without symbol filters after pushdown failures
   - data-integrity risk: symbol-scoped consumers can receive cross-symbol rows and full-table scans during schema/partition drift events
   - hardening recommendations for fail-closed scoped reads, fallback row-scope guards, and filter-failure observability
+- **Gateway/Heber Parity Audit (Pass 119)**: Continued audit with:
+  - regime-input correctness finding: current SQL for “20-bar cumulative return” uses window semantics and row selection that can misstate recent trend
+  - model-risk finding: regime detector can receive distorted trend signals, affecting snapshot classification quality
+  - hardening recommendations for deterministic 20-bar slice math and regression-tested trend computation
 
 ### Changed
 
