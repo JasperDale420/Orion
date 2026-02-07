@@ -5073,3 +5073,28 @@ P1:
 P2:
 1. Add an operations runbook note for legacy gate usage in compose, including expected container behavior in each rollout mode.
 2. Add a lightweight smoke check in CI/dev scripts asserting disabled legacy services do not churn restart counts under compose defaults.
+
+## 167) Pass 160 Continuation (2026-02-07)
+
+### 167.1 New Audit Finding: Legacy Gate Config Is Not Centralized in Typed Settings
+
+Current behavior:
+- newly introduced legacy-gate env vars are parsed ad hoc inside runtime modules:
+  - option quote tracker (`src/orion/main_option_quote_tracker.py:49` to `src/orion/main_option_quote_tracker.py:52`),
+  - flow labeler (`src/orion/main_labeler.py:40` to `src/orion/main_labeler.py:43`),
+  - price-target labeler (`src/orion/main_price_target_labeler.py:57` to `src/orion/main_price_target_labeler.py:60`).
+- centralized typed settings (`SystemSettings`) do not define these controls (`src/orion/config.py:58` to `src/orion/config.py:110`).
+
+Risk:
+- config-governance drift: new operational controls bypass typed validation and centralized discoverability,
+- behavior can diverge across services if parsing/default semantics evolve independently.
+
+### 167.2 Updated Priorities
+
+P1:
+1. Move legacy gate definitions into `SystemSettings` with explicit names/defaults and environment aliases.
+2. Replace duplicated ad hoc parsing with a shared helper (or direct `system_settings` fields) used by all legacy label services.
+
+P2:
+1. Add unit tests at config layer verifying precedence semantics (service-specific override > global fallback).
+2. Include these gates in operator docs so rollout controls are discoverable in one place.

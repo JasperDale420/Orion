@@ -642,6 +642,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - compose lifecycle finding that `restart: unless-stopped` causes restart-loop churn when legacy services are intentionally disabled via env gates
   - decommission-operations recommendation to shift disable semantics to compose-level inclusion control (profiles/overrides) or adjust restart policy during migration waves
   - runbook/smoke-check recommendation so disabled legacy services remain stably off in deployment
+- **Gateway/Heber Parity Audit (Pass 160)**: Continued audit with:
+  - config-governance finding that new legacy label gate env vars are parsed ad hoc in service modules rather than centralized typed settings
+  - consistency-risk recommendation to centralize gate ownership/preference semantics in `SystemSettings`
+  - config-layer test/documentation recommendation for operator-safe rollout controls
 
 ### Changed
 
