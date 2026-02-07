@@ -289,6 +289,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - cadence-control finding: `main_feature_enrichment` advances poll timers even when connectors return zero records, delaying retry on failed pulls
   - freshness-integrity finding: regime snapshots consume latest VIX/market-tide rows without max-age checks, allowing stale context to appear current
   - hardening recommendations for success-gated cadence updates and explicit source freshness SLAs in regime snapshot generation
+- **Gateway/Heber Parity Audit (Pass 67)**: Continued audit with:
+  - source-of-truth finding: `UWMaxPainConnector` mixes Gateway max-pain payloads with local `silver_alpaca_bars` price lookups for distance calculations
+  - date-semantics finding: max-pain daily keying uses host-local `date.today()` rather than market/session-aware date derivation
+  - hardening recommendations for canonical price sourcing and ET/session-consistent daily bucketing in max-pain persistence
 
 ### Changed
 

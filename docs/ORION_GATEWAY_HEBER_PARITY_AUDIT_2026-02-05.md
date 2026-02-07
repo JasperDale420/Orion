@@ -2765,3 +2765,32 @@ P1:
 
 P2:
 1. Add failure-mode tests that simulate repeated `fetch_and_store == 0` and assert retry cadence + degraded-state telemetry behavior.
+
+## 74) Pass 67 Continuation (2026-02-07)
+
+### 74.1 Max-Pain Distance Derivation Depends on Orion-Local Bar Table, Not Canonical Gateway/Heber Price Source
+
+Current implementation:
+- `UWMaxPainConnector` fetches max-pain payloads via Gateway but derives `current_price` from local `silver_alpaca_bars` (`src/orion/connectors/uw_max_pain_connector.py:56` to `src/orion/connectors/uw_max_pain_connector.py:63`, `src/orion/connectors/uw_max_pain_connector.py:93` to `src/orion/connectors/uw_max_pain_connector.py:101`),
+- `distance_to_max_pain_pct` is computed from that local DB price (`src/orion/connectors/uw_max_pain_connector.py:72` to `src/orion/connectors/uw_max_pain_connector.py:75`).
+
+Risk:
+- if local bar ingestion is stale/disabled while centralized data remains healthy, stored max-pain distance features can be null or stale even when Gateway max-pain values are fresh.
+
+### 74.2 Max-Pain Record Date Uses Host-Local `date.today()` Instead of Market-Date Semantics
+
+Current implementation:
+- connector stamps records with `today = date.today()` (`src/orion/connectors/uw_max_pain_connector.py:45`),
+- this date participates in upsert identity `(ticker, expiry, date)` (`src/orion/connectors/uw_max_pain_connector.py:79`, `src/orion/connectors/uw_max_pain_connector.py:120`).
+
+Risk:
+- timezone/session boundary drift (for example UTC host past midnight before ET session rollover) can mis-bucket daily max-pain rows and produce duplicate/misaligned day-level records.
+
+### 74.3 Updated Priorities
+
+P1:
+1. Source `current_price` from the same canonical data plane as max-pain pulls (Gateway/Heber market context), with explicit freshness requirements.
+2. Replace `date.today()` with explicit market-date derivation (ET/session-aware) consistent with the rest of pipeline date semantics.
+
+P2:
+1. Add tests around session-boundary timestamps to ensure upsert keys remain stable across UTC/ET rollover windows.
