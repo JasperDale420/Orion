@@ -3187,3 +3187,27 @@ P1:
 
 P2:
 1. Add failure-injection tests for both modes (publish fail, bronze fail) and verify deterministic recovery/reconciliation behavior.
+
+## 90) Pass 83 Continuation (2026-02-07)
+
+### 90.1 DLQ Replay Duplicate-Path Swallows Normalization Errors and Proceeds With Raw Event
+
+Current duplicate-bronze replay path:
+- when dedupe returns empty (`already in bronze`), consumer attempts manual normalization (`src/orion/jobs/dlq_consumer.py:142` to `src/orion/jobs/dlq_consumer.py:149`),
+- if normalization/temporal derivation fails, exception is swallowed (`except Exception: pass`) (`src/orion/jobs/dlq_consumer.py:156` to `src/orion/jobs/dlq_consumer.py:157`),
+- consumer still forces `unique_events = [bronze]` and proceeds to silver persistence (`src/orion/jobs/dlq_consumer.py:158`, `src/orion/jobs/dlq_consumer.py:162`).
+
+Risk:
+- malformed duplicate events can repeatedly reach silver persistence in partially normalized shape, causing noisy replay failures without explicit root-cause telemetry.
+
+Operational consequence:
+- replay success/failure status can become opaque for duplicate-bronze cases, complicating incident recovery for poisoned events.
+
+### 90.2 Updated Priorities
+
+P1:
+1. Replace `except Exception: pass` with explicit error classification and task failure reason update for replay observability.
+2. Only proceed to downstream replay when normalization contract is satisfied; otherwise quarantine with structured reason.
+
+P2:
+1. Add duplicate-bronze replay regression tests covering normalization failure path and asserting deterministic quarantine (no silent fallthrough).

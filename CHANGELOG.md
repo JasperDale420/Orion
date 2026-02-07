@@ -353,6 +353,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - ordering finding: ingestion publishes to Redpanda before bronze commit and swallows publish failures
   - consistency-risk finding: stream/DB sinks can diverge (phantom bus events or silent bus loss) without built-in reconciliation
   - hardening recommendations for transactional outbox-style ordering (or equivalent) plus sink-parity telemetry
+- **Gateway/Heber Parity Audit (Pass 83)**: Continued audit with:
+  - replay-observability finding: DLQ duplicate-bronze path swallows normalization exceptions and continues with raw events
+  - recovery-risk finding: malformed duplicate events can repeatedly fail silver replay without explicit root-cause signaling
+  - hardening recommendations for explicit replay error classification and normalization-gated downstream processing
 
 ### Changed
 
