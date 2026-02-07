@@ -3871,3 +3871,25 @@ P1:
 
 P2:
 1. Add unit tests for root and `/api/v1` base URL variants ensuring `list_datasets()` resolves to the same canonical endpoint.
+
+## 118) Pass 111 Continuation (2026-02-07)
+
+### 118.1 Direct Alpaca Polling Fallback Uses Single Request with Fixed Row Cap
+
+Current behavior:
+- polling connector builds `StockBarsRequest(..., limit=10000, ...)` (`src/orion/connectors/alpaca_market_connector.py:51` to `src/orion/connectors/alpaca_market_connector.py:57`),
+- fetch path performs one `get_stock_bars(req)` call and iterates returned data without page-token loop (`src/orion/connectors/alpaca_market_connector.py:63` to `src/orion/connectors/alpaca_market_connector.py:76`),
+- ingestion falls back to this polling path whenever stream mode is unavailable (`src/orion/ingestion/service.py:232` to `src/orion/ingestion/service.py:233`).
+
+Risk:
+- high-cardinality fallback windows (many symbols / broad lookback overlap) can exceed fixed request cap and drop bars silently,
+- bronze/silver completeness during fallback periods can diverge from intended stream parity.
+
+### 118.2 Updated Priorities
+
+P1:
+1. Implement paginated bar retrieval in `AlpacaMarketConnector.fetch_bars()` (consume all pages within bounded window/timeout policy).
+2. Emit fallback completeness metrics (requested symbols, returned bars, pagination depth, truncation indicators) for operational visibility.
+
+P2:
+1. Add integration test simulating >10k fallback bar response to ensure pagination drains full result set.

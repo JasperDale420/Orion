@@ -465,6 +465,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - endpoint-contract finding: `HeberReader.list_datasets()` targets `/datasets` while catalog routes are mounted at `/api/v1/datasets`
   - configuration-risk finding: metadata discovery behavior depends on whether `HEBER_CATALOG_URL` includes `/api/v1`, creating asymmetric health vs dataset checks
   - hardening recommendations for canonical catalog route construction and URL-shape validation
+- **Gateway/Heber Parity Audit (Pass 111)**: Continued audit with:
+  - fallback-path finding: direct Alpaca polling fetches bars with fixed `limit=10000` and no pagination
+  - completeness-risk finding: when Gateway streaming is unavailable, fallback polling can silently truncate high-volume/multi-symbol bar sets
+  - hardening recommendations for paginated polling fetches and fallback-volume completeness telemetry
 
 ### Changed
 
