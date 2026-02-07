@@ -6,6 +6,7 @@ Used by both the price target labeler (historical) and ML scorer (real-time).
 """
 
 import asyncio
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -13,6 +14,20 @@ from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.flow_enricher")
+
+_FLOW_ENRICHER_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
+
+
+def _record_enricher_fallback(feature_name: str, error: Optional[Exception] = None, **context: Any) -> None:
+    _FLOW_ENRICHER_FALLBACK_COUNTS[feature_name] += 1
+    payload: Dict[str, Any] = {
+        "feature": feature_name,
+        "fallback_count": _FLOW_ENRICHER_FALLBACK_COUNTS[feature_name],
+    }
+    if error is not None:
+        payload["error"] = str(error)
+    payload.update(context)
+    logger.warning("Flow enricher fallback applied", extra={"event_type": "FLOW_ENRICHER_FALLBACK", **payload})
 
 
 async def enrich_flow_for_scoring(
@@ -102,6 +117,22 @@ async def enrich_flow_for_scoring(
     ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
+    task_names = [
+        "gex",
+        "market_tide",
+        "max_pain_distance",
+        "iv_rank",
+        "darkpool_volumes",
+        "regime",
+        "flow_greeks",
+        "vix",
+        "flow_metrics",
+        "market_context",
+        "window_features",
+    ]
+    for task_name, result in zip(task_names, results):
+        if isinstance(result, Exception):
+            _record_enricher_fallback(task_name, result, ticker=ticker, event_id=event_id)
 
     # Unpack results
     gex_data = results[0] if not isinstance(results[0], Exception) else {}
@@ -399,8 +430,9 @@ async def _get_darkpool_volumes(ticker: str, entry_ts: datetime) -> Dict[str, Op
 
         try:
             volumes[name] = await db_query(query)
-        except Exception:
+        except Exception as e:
             volumes[name] = None
+            _record_enricher_fallback("darkpool_volume_window", e, ticker=ticker, window=name)
 
     return volumes
 
@@ -498,8 +530,8 @@ async def _get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
                     hv_row = hv_result.fetchone()
                     if hv_row and hv_row[0] and hv_row[0] > 0:
                         iv_vs_hv = iv / hv_row[0]
-                except Exception:
-                    pass  # Silent fail for HV calculation
+                except Exception as e:
+                    _record_enricher_fallback("iv_vs_hv_ratio", e, ticker=ticker, event_id=event_id)
 
             # Calculate OI change from prior day
             oi_change_1d = None
@@ -529,8 +561,8 @@ async def _get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
                         oi_change_1d = current_oi - prior_oi
                         if prior_oi > 0:
                             oi_change_pct = (current_oi - prior_oi) / prior_oi * 100
-                except Exception:
-                    pass  # Silent fail for OI change
+                except Exception as e:
+                    _record_enricher_fallback("oi_change_1d", e, ticker=ticker, event_id=event_id)
 
             return {
                 "delta": row[0],

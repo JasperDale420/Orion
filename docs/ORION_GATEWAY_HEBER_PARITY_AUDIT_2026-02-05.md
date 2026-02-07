@@ -4939,3 +4939,34 @@ Residual audit scope (non-blocking, lower priority):
 
 Conclusion:
 - the audit itself is no longer the blocker; migration completion now depends on implementation decisions and staged remediation execution.
+
+## 162) Pass 155 Continuation (2026-02-07)
+
+### 162.1 Dynamic Label Insert Now Uses Deterministic Schema Guard
+
+Implemented:
+- Added shared schema-guard utility for runtime insert payload validation:
+  - `fetch_table_columns(...)` reads authoritative table columns from `information_schema`,
+  - `resolve_insert_columns(...)` enforces required keys and rejects unknown columns.
+- `main_price_target_labeler.persist_labels()` now validates each label payload against live `price_target_labels` schema before executing INSERT.
+- Unknown/missing columns now fail fast with structured error context instead of relying on implicit DB exceptions.
+
+References:
+- `src/orion/labeler/schema_guard.py`
+- `src/orion/main_price_target_labeler.py`
+- `tests/unit/test_label_schema_guard.py`
+
+### 162.2 Silent Feature Fallback Paths Now Emit Structured Observability Signals
+
+Implemented:
+- Added fallback counters and structured warning events in:
+  - `main_price_target_labeler` (checkpoint quote lookup, sector/correlation feature fallback paths, sector info lookup),
+  - `ml/flow_enricher` (task-level gather failures, darkpool window fetch fallback, IV-vs-HV fallback, OI-change fallback).
+- Existing behavior still degrades gracefully, but fallback events are now visible for operators and guardrail dashboards.
+
+References:
+- `src/orion/main_price_target_labeler.py`
+- `src/orion/ml/flow_enricher.py`
+
+Residual:
+- fallback logging is now present, but parity SLO thresholds/alerts and DLQ replay flow are still pending.

@@ -5,11 +5,12 @@ Tracks option prices over time with comprehensive metrics for ML exit optimizati
 """
 
 import asyncio
+from collections import defaultdict
 import math
 import os
 import signal
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 from dotenv import load_dotenv
@@ -33,6 +34,11 @@ from orion.labeler import (
     get_price_at_offset_days,
     get_price_at_offset_minutes,
 )
+from orion.labeler.schema_guard import (
+    SchemaValidationError,
+    fetch_table_columns,
+    resolve_insert_columns,
+)
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -41,6 +47,21 @@ from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 
 logger = setup_struct_logger("orion.price_target")
+
+_PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
+_PRICE_TARGET_LABEL_COLUMNS: Optional[Set[str]] = None
+
+
+def _record_price_target_fallback(feature_name: str, error: Optional[Exception] = None, **context: Any) -> None:
+    _PRICE_TARGET_FALLBACK_COUNTS[feature_name] += 1
+    payload: Dict[str, Any] = {
+        "feature": feature_name,
+        "fallback_count": _PRICE_TARGET_FALLBACK_COUNTS[feature_name],
+    }
+    if error is not None:
+        payload["error"] = str(error)
+    payload.update(context)
+    logger.warning("Price-target fallback applied", extra={"event_type": "PRICE_TARGET_FALLBACK", **payload})
 
 # Static sector mapping for reliable feature calculation (avoids unreliable API calls)
 SECTOR_MAPPING: Dict[str, str] = {
@@ -433,7 +454,8 @@ async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optio
 
     try:
         return await db_query(query)
-    except Exception:
+    except Exception as e:
+        _record_price_target_fallback("checkpoint_quote_lookup", e, option_chain=option_chain)
         return {}
 
 
@@ -1495,9 +1517,9 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
             sector_result = await session.execute(sector_stmt, {"ticker": ticker})
             sector_row = sector_result.fetchone()
             sector = sector_row[0] if sector_row else None
-        except Exception:
+        except Exception as e:
             # Table may not exist - skip sector features
-            pass
+            _record_price_target_fallback("sector_lookup", e, ticker=ticker)
 
         if sector:
             try:
@@ -1527,8 +1549,8 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
                     result["sector_flow_direction"] = "BEARISH"
                 else:
                     result["sector_flow_direction"] = "NEUTRAL"
-            except Exception:
-                pass
+            except Exception as e:
+                _record_price_target_fallback("sector_net_premium_1h", e, ticker=ticker, sector=sector)
 
         # SPY return in last hour (market context)
         try:
@@ -1543,9 +1565,9 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
             spy_row = spy_result.fetchone()
             if spy_row and spy_row[0] and spy_row[1] and spy_row[1] > 0:
                 result["spy_return_1h"] = ((spy_row[0] - spy_row[1]) / spy_row[1]) * 100
-        except Exception:
+        except Exception as e:
             # SPY data may not exist for pre-market times - skip this feature
-            pass
+            _record_price_target_fallback("spy_return_1h", e, ticker=ticker)
 
         # 5-day correlation with SPY
         # Get daily returns for ticker and SPY
@@ -1600,9 +1622,9 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
 
                 if t_var > 0 and s_var > 0:
                     result["spy_correlation_5d"] = numerator / ((t_var * s_var) ** 0.5)
-        except Exception:
+        except Exception as e:
             # Correlation data may be incomplete - skip this feature
-            pass
+            _record_price_target_fallback("spy_correlation_5d", e, ticker=ticker)
 
         return result
 
@@ -1652,8 +1674,8 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
             }
             _ticker_info_cache[ticker] = cache_entry
             return cache_entry
-    except Exception:
-        pass  # DB check is optional; continue to API
+    except Exception as e:
+        _record_price_target_fallback("cached_sector_db_lookup", e, ticker=ticker)
 
     # Initialize empty cache entry
     cache_entry: Dict[str, Any] = {
@@ -1784,7 +1806,8 @@ async def get_sector_info(ticker: str) -> Dict[str, Optional[str]]:
     try:
         info = await get_ticker_info(ticker)
         return {"sector": info.get("sector"), "industry": None}
-    except Exception:
+    except Exception as e:
+        _record_price_target_fallback("sector_info_lookup", e, ticker=ticker)
         return {"sector": "Other", "industry": None}
 
 
@@ -2684,17 +2707,33 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 async def persist_labels(labels: List[Dict[str, Any]]) -> int:
     """Persist labeled records to database using dynamic INSERT.
 
-    Automatically includes all keys from label dict, including checkpoint Greeks.
-    New columns added to label dict are automatically persisted without code changes.
+    Includes only schema-validated columns from each label dict.
+    Unknown/missing required columns fail fast.
     """
     if not labels:
         return 0
 
     async def write(session: Any) -> None:
+        global _PRICE_TARGET_LABEL_COLUMNS
+        if _PRICE_TARGET_LABEL_COLUMNS is None:
+            _PRICE_TARGET_LABEL_COLUMNS = await fetch_table_columns(session, "price_target_labels")
+
         for label in labels:
-            # Filter to only include keys that have non-None values or are required
-            # This avoids inserting columns that don't exist in the table
-            columns = [k for k in label.keys() if k is not None]
+            try:
+                columns = resolve_insert_columns(
+                    label,
+                    _PRICE_TARGET_LABEL_COLUMNS,
+                    required_columns={"event_id"},
+                )
+            except SchemaValidationError as e:
+                _record_price_target_fallback(
+                    "label_schema_validation",
+                    e,
+                    event_id=label.get("event_id"),
+                    unknown_columns=list(e.unknown_columns),
+                    missing_columns=list(e.missing_columns),
+                )
+                raise
 
             # Build dynamic INSERT statement
             cols_str = ", ".join(columns)

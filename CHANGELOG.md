@@ -622,6 +622,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - closure snapshot confirming migration-critical audit coverage is complete for active runtime paths
   - consolidated open implementation blockers (ownership mapping, observability hardening, schema guards, archive execution)
   - explicit transition from discovery to staged remediation and decommission execution
+- **Gateway/Heber Parity Audit (Pass 155)**: Continued audit with:
+  - remediation confirmation that dynamic `price_target_labels` inserts now use explicit schema validation instead of implicit key filtering
+  - observability remediation confirmation that silent enrichment fallbacks now emit structured warning events with counters
+  - residual note that alert thresholds/DLQ replay for fallback events remain follow-up work
 
 ### Changed
 
@@ -663,6 +667,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `src/orion/ingestion/service.py` now emits explicit startup source-profile diagnostics (`alpaca_mode`, produced event types, external UW-flow/darkpool ownership)
   - Updated ingestion comments and entrypoint docs to match current runtime behavior (Alpaca event production in-process; UW flow/darkpool ingestion externalized)
   - Added focused source-profile unit test in `tests/unit/test_ingestion_source_profile.py`
+- **Label Insert Schema Guard + Enrichment Fallback Telemetry**:
+  - Added `src/orion/labeler/schema_guard.py` with table-column discovery and deterministic row payload validation (`resolve_insert_columns`)
+  - `src/orion/main_price_target_labeler.py` now validates label payload keys against live `price_target_labels` schema and fails fast on unknown/missing columns
+  - Added structured fallback warning telemetry and counters in `src/orion/main_price_target_labeler.py` and `src/orion/ml/flow_enricher.py` for previously silent enrichment-degradation paths
+  - Added focused unit coverage in `tests/unit/test_label_schema_guard.py`
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
