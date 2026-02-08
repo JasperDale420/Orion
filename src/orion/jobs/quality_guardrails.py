@@ -37,6 +37,18 @@ def _env_int(name: str, default: int) -> int:
     return max(1, value)
 
 
+def _env_nonneg_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid integer env for %s=%s; using default=%s", name, raw, default)
+        return default
+    return max(0, value)
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -68,6 +80,12 @@ def _next_last_run(last_run: datetime | None, succeeded: bool, now: datetime) ->
     if succeeded:
         return now
     return last_run
+
+
+def _failure_backoff_elapsed(last_failure: datetime | None, backoff_seconds: int, now: datetime) -> bool:
+    if last_failure is None or backoff_seconds <= 0:
+        return True
+    return (now - last_failure).total_seconds() >= backoff_seconds
 
 
 def _result_failure_summary(result: object) -> str | None:
@@ -115,6 +133,7 @@ async def run_guardrail_loop() -> None:
     quality_interval = _env_int("ORION_QUALITY_CHECK_INTERVAL_SECONDS", 1800)
     feature_validate_interval = _env_int("ORION_FEATURE_VALIDATE_INTERVAL_SECONDS", 3600)
     reconcile_lookback_days = _env_int("ORION_RECONCILE_LOOKBACK_DAYS", 7)
+    failure_backoff_seconds = _env_nonneg_int("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS", 0)
 
     logger.info(
         "Quality guardrails scheduler started: " "reconcile=%ss quality=%ss validate=%ss sleep=%ss lookback_days=%s",
@@ -128,24 +147,51 @@ async def run_guardrail_loop() -> None:
     last_reconcile: datetime | None = None
     last_quality: datetime | None = None
     last_validate: datetime | None = None
+    last_reconcile_failure: datetime | None = None
+    last_quality_failure: datetime | None = None
+    last_validate_failure: datetime | None = None
 
     while True:
         now = datetime.now(timezone.utc)
 
-        if _should_run(last_reconcile, reconcile_interval, now):
+        if _should_run(last_reconcile, reconcile_interval, now) and _failure_backoff_elapsed(
+            last_reconcile_failure,
+            failure_backoff_seconds,
+            now,
+        ):
             reconcile_ok = await _run_job(
                 "reconciliation",
                 lambda: run_reconciliation(lookback_days=reconcile_lookback_days),
             )
             last_reconcile = _next_last_run(last_reconcile, succeeded=reconcile_ok, now=now)
+            if reconcile_ok:
+                last_reconcile_failure = None
+            else:
+                last_reconcile_failure = now
 
-        if _should_run(last_quality, quality_interval, now):
+        if _should_run(last_quality, quality_interval, now) and _failure_backoff_elapsed(
+            last_quality_failure,
+            failure_backoff_seconds,
+            now,
+        ):
             quality_ok = await _run_job("data_quality_checker", run_quality_checks)
             last_quality = _next_last_run(last_quality, succeeded=quality_ok, now=now)
+            if quality_ok:
+                last_quality_failure = None
+            else:
+                last_quality_failure = now
 
-        if _should_run(last_validate, feature_validate_interval, now):
+        if _should_run(last_validate, feature_validate_interval, now) and _failure_backoff_elapsed(
+            last_validate_failure,
+            failure_backoff_seconds,
+            now,
+        ):
             validate_ok = await _run_job("feature_sanity_validation", run_sanity_checks)
             last_validate = _next_last_run(last_validate, succeeded=validate_ok, now=now)
+            if validate_ok:
+                last_validate_failure = None
+            else:
+                last_validate_failure = now
 
         await asyncio.sleep(loop_sleep_seconds)
 

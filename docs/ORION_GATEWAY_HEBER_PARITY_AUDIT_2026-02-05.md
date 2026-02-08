@@ -5609,3 +5609,26 @@ Result:
 
 Residual:
 - failure retry cadence remains loop-driven without adaptive per-job backoff/jitter controls under prolonged outage conditions.
+
+## 190) Pass 183 Continuation (2026-02-08)
+
+### 190.1 Guardrail Failure Backoff Window Added (TDD-Backed)
+
+Finding:
+- after retry-semantics correction and per-job fail-fast controls, failed guardrail jobs could still rerun immediately on every loop tick during prolonged dependency outages, producing noisy repeated failures.
+
+Implemented:
+- Extended `tests/unit/test_quality_guardrails.py` with:
+  - `test_failure_backoff_elapsed_true_without_failure_timestamp`
+  - `test_failure_backoff_elapsed_respects_backoff_window`
+- Updated `src/orion/jobs/quality_guardrails.py`:
+  - added `_env_nonneg_int()` for non-negative scheduler env parsing,
+  - added `_failure_backoff_elapsed(last_failure, backoff_seconds, now)` helper,
+  - added `ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS` env contract (default `0`),
+  - tracked per-job failure timestamps and gated reruns until the failure backoff window elapses.
+
+Result:
+- guardrail scheduler now throttles repeated failed runs under outage conditions, reducing alert/log storm behavior while preserving normal interval-driven execution when healthy.
+
+Residual:
+- backoff policy is currently global across guardrail jobs; per-job backoff tuning and jitter remain future hardening options if differentiated retry pacing is required.

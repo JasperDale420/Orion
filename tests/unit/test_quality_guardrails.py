@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from orion.jobs.quality_guardrails import _env_int, _next_last_run, _should_run
+from orion.jobs.quality_guardrails import _env_int, _failure_backoff_elapsed, _next_last_run, _should_run
 
 
 def test_env_int_uses_default_for_invalid(monkeypatch) -> None:
@@ -30,3 +30,15 @@ def test_next_last_run_updates_timestamp_only_on_success() -> None:
     prev = now - timedelta(minutes=5)
     assert _next_last_run(prev, succeeded=True, now=now) == now
     assert _next_last_run(prev, succeeded=False, now=now) == prev
+
+
+def test_failure_backoff_elapsed_true_without_failure_timestamp() -> None:
+    now = datetime.now(timezone.utc)
+    assert _failure_backoff_elapsed(last_failure=None, backoff_seconds=120, now=now) is True
+
+
+def test_failure_backoff_elapsed_respects_backoff_window() -> None:
+    now = datetime.now(timezone.utc)
+    last_failure = now - timedelta(seconds=30)
+    assert _failure_backoff_elapsed(last_failure=last_failure, backoff_seconds=60, now=now) is False
+    assert _failure_backoff_elapsed(last_failure=last_failure, backoff_seconds=20, now=now) is True

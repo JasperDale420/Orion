@@ -33,6 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `quality_guardrails._env_csv()` and `quality_guardrails._fail_fast_enabled_for_job()` helpers
   - Added `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES_JOBS` env support (comma-separated job names), while preserving global `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES` override
   - Updated `_run_job()` to apply fail-fast policy per job when configured
+- **Quality-Guardrails Failure Backoff Controls (TDD)**:
+  - Extended `tests/unit/test_quality_guardrails.py` with `_failure_backoff_elapsed()` coverage
+  - Added `quality_guardrails._env_nonneg_int()` and `quality_guardrails._failure_backoff_elapsed()` helpers
+  - Added `ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS` scheduler env support
+  - Updated guardrail loop to defer reruns of failed jobs until the configured backoff window elapses
 - **Quality-Guardrails Retry Semantics Fix (TDD)**:
   - Added `_next_last_run()` helper and tests in `tests/unit/test_quality_guardrails.py`
   - Updated scheduler loop to advance `last_*` timestamps only for successful runs
