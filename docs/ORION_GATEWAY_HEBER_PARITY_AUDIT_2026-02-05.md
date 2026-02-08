@@ -5536,3 +5536,27 @@ Result:
 
 Residual:
 - persisted state is timestamp-only; strict no-duplicate cursor continuity across identical `entry_ts` cohorts still requires durable keyset state (`entry_ts` + `event_id`).
+
+## 188) Pass 181 Continuation (2026-02-08)
+
+### 188.1 `backfill_exit_columns` Partial-Row Selection Gaps Remediated (TDD-Backed)
+
+Finding:
+- velocity backfill candidate selection only targeted `time_to_75_pct_seconds`, which could miss rows where 75% velocity was present but 100%/150% remained null,
+- checkpoint backfill candidate selection only targeted `price_at_15m`, which could miss partially-filled rows in other checkpoint columns.
+
+Implemented:
+- Added `tests/unit/test_backfill_exit_columns_selection.py` with coverage for:
+  - velocity candidate selector including all three velocity fields,
+  - checkpoint selector including all checkpoint price/return fields,
+  - deterministic ordering contract on both queries.
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - widened velocity selector predicate to include null checks for 75/100/150 targets with corresponding hit timestamps,
+  - widened checkpoint selector predicate to include all price/return checkpoint null checks,
+  - added `ORDER BY entry_ts ASC, event_id ASC` before `LIMIT` in both selectors.
+
+Result:
+- backfill now recovers partially-populated velocity/checkpoint rows instead of silently skipping them due single-anchor filters.
+
+Residual:
+- selector correctness is fixed, but the job still fetches a single capped page (`LIMIT`) per phase without iterative pagination/watermark progression; very large backlogs can require repeated runs.

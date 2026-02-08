@@ -77,8 +77,12 @@ async def get_records_to_backfill(limit: int = 1000) -> List[Dict[str, Any]]:
             SELECT event_id, ticker, option_chain, entry_ts, entry_option_price,
                    hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts
             FROM price_target_labels
-            WHERE time_to_75_pct_seconds IS NULL
-              AND hit_75_pct_ts IS NOT NULL
+            WHERE (
+                (time_to_75_pct_seconds IS NULL AND hit_75_pct_ts IS NOT NULL)
+                OR (time_to_100_pct_seconds IS NULL AND hit_100_pct_ts IS NOT NULL)
+                OR (time_to_150_pct_seconds IS NULL AND hit_150_pct_ts IS NOT NULL)
+            )
+            ORDER BY entry_ts ASC, event_id ASC
             LIMIT :limit
         """
         )
@@ -97,7 +101,16 @@ async def get_all_records_for_checkpoints(limit: int = 1000) -> List[Dict[str, A
             """
             SELECT event_id, option_chain, entry_ts, entry_option_price
             FROM price_target_labels
-            WHERE price_at_15m IS NULL
+            WHERE (
+                price_at_15m IS NULL OR return_at_15m IS NULL
+                OR price_at_30m IS NULL OR return_at_30m IS NULL
+                OR price_at_8h IS NULL OR return_at_8h IS NULL
+                OR price_at_1d IS NULL OR return_at_1d IS NULL
+                OR price_at_2d IS NULL OR return_at_2d IS NULL
+                OR price_at_3d IS NULL OR return_at_3d IS NULL
+                OR price_at_1w IS NULL OR return_at_1w IS NULL
+            )
+            ORDER BY entry_ts ASC, event_id ASC
             LIMIT :limit
         """
         )

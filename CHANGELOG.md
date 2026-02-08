@@ -123,6 +123,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented persisted backfill resume timestamp using existing watermark store
   - added TDD coverage for resume-start cursor injection and per-record watermark progression
   - residual guidance to persist full keyset cursor (`entry_ts` + `event_id`) for strict no-duplicate replay semantics
+- **Backfill Exit-Columns Candidate Recovery Hardening (TDD)**:
+  - Added `tests/unit/test_backfill_exit_columns_selection.py` to enforce selection contracts for:
+    - velocity backfill candidates across all three velocity targets (75/100/150)
+    - checkpoint backfill candidates across all price/return checkpoint columns
+  - Updated `src/orion/jobs/backfill_exit_columns.py` candidate SQL to:
+    - include partial-row recovery predicates for all target columns
+    - apply deterministic ordering (`entry_ts`, `event_id`) before `LIMIT`
+  - Prevents silent misses where rows had partial checkpoint/velocity population
+- **Gateway/Heber Parity Audit (Pass 181)**: Continued audit with:
+  - implemented partial-row recovery predicates for `backfill_exit_columns` velocity and checkpoint selectors
+  - added TDD coverage for all-column selection contracts and deterministic ordering
+  - residual guidance to add run-level pagination/progress watermarking for very large checkpoint backfills
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels
