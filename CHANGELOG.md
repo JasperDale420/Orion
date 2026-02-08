@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added canonical `MINUTES_TO_CLOSE_MAX = 390` bound and aligned spot-check + batch sanity validation in `src/orion/jobs/validate_features.py`
   - Extended sanity query to track `ml_ready = false` population and fail checks when incomplete rows are present
   - Added `tests/unit/test_validate_features_guardrails.py` coverage for minutes-to-close bound consistency and incomplete-row guardrail failure behavior
+- **Pattern-Miner Profile Alignment (TDD)**:
+  - Added `test_pattern_miner_is_profiled_with_legacy_label_stack` in `tests/unit/test_compose_legacy_gate_wiring.py`
+  - Added `profiles: [ "legacy-labels" ]` to `pattern-miner` in `docker-compose.yml`
+  - Prevents default runtime from running pattern-miner without its legacy label input stack
 - **Legacy Label Compose Profile Opt-In (TDD)**:
   - Added `test_legacy_label_stack_services_are_profiled_for_opt_in` in `tests/unit/test_compose_legacy_gate_wiring.py`
   - Added `profiles: [ "legacy-labels" ]` for `labeler`, `price_target_labeler`, `option_quote_tracker`, `nightly-backfill`, and `quality-guardrails` in `docker-compose.yml`
@@ -45,6 +49,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented guardrail sanity fix for incomplete-row visibility (`ml_ready = false`) in `validate_features`
   - aligned minutes-to-close validation bounds to a canonical `390` max across spot-check and batch sanity paths
   - residual guidance for operational escalation policy on sustained incomplete-row states
+- **Gateway/Heber Parity Audit (Pass 172)**: Continued audit with:
+  - implemented `pattern-miner` compose profile alignment to legacy label stack dependency
+  - added test coverage to enforce profile coupling at compose-contract level
+  - residual guidance to migrate pattern-miner training source to Heber canon for non-legacy runtime rejoin
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

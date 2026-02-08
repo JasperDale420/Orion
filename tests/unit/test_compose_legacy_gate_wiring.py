@@ -49,3 +49,9 @@ def test_feature_enrichment_wires_gateway_api_key_env() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "feature_enrichment")
     assert "- GATEWAY_API_KEY=${GATEWAY_API_KEY}" in block
+
+
+def test_pattern_miner_is_profiled_with_legacy_label_stack() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "pattern-miner")
+    assert 'profiles: [ "legacy-labels" ]' in block

@@ -206,6 +206,7 @@ services:
   pattern-miner:
     build: .
     container_name: orion_pattern_miner
+    profiles: [ "legacy-labels" ]
     restart: unless-stopped
     depends_on:
       timescaledb:

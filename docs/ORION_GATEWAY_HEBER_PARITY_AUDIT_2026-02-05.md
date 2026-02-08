@@ -5352,3 +5352,19 @@ Result:
 
 Residual:
 - this fix improves detection/reporting; operational response (auto-remediation/escalation) for sustained incomplete-row states is still a follow-up.
+
+## 179) Pass 172 Continuation (2026-02-08)
+
+### 179.1 Runtime Source-Alignment Remediation: `pattern-miner` Now Opt-In with Legacy Label Stack (TDD-Backed)
+
+Implemented:
+- Added compose guardrail test:
+  - `tests/unit/test_compose_legacy_gate_wiring.py::test_pattern_miner_is_profiled_with_legacy_label_stack`.
+- Added `profiles: [ "legacy-labels" ]` to `pattern-miner` service in `docker-compose.yml`.
+
+Result:
+- default compose startup no longer runs pattern mining against potentially stale/empty local `price_target_labels` inputs when legacy label stack is disabled,
+- `pattern-miner` lifecycle now matches its current source dependency boundary.
+
+Residual:
+- this is an alignment stopgap; long-term fix remains migration of pattern-miner training sources to Heber canonical datasets so it can rejoin non-legacy runtime profiles.
