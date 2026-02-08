@@ -110,6 +110,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented remaining-budget fetch sizing in `backfill_ml_features` run pagination loop
   - added TDD coverage for per-iteration fetch-limit contraction and cursor continuity
   - residual guidance to add persisted watermarking for crash-safe restart continuity
+- **Backfill Resume Watermark Persistence (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_selection.py` with:
+    - `test_get_records_to_backfill_supports_timestamp_only_cursor_filter`
+    - `test_run_backfill_resumes_from_watermark_and_persists_progress`
+  - Updated `src/orion/jobs/backfill_ml_features.py` to:
+    - load persisted watermark from `ingest_watermarks` at startup
+    - support timestamp-only cursor filtering (`entry_ts >= watermark_ts`)
+    - persist watermark progress during run processing
+  - Adds crash-safe timestamp resume semantics for ML feature backfills
+- **Gateway/Heber Parity Audit (Pass 180)**: Continued audit with:
+  - implemented persisted backfill resume timestamp using existing watermark store
+  - added TDD coverage for resume-start cursor injection and per-record watermark progression
+  - residual guidance to persist full keyset cursor (`entry_ts` + `event_id`) for strict no-duplicate replay semantics
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

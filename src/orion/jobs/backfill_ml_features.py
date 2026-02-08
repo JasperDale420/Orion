@@ -33,6 +33,7 @@ from orion.main_price_target_labeler import (
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
+from orion.storage.watermarks import get_watermark, upsert_watermark
 from orion.unusualwhales.api.stock import get_info
 from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
@@ -40,6 +41,7 @@ from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 logger = setup_struct_logger("orion.backfill.ml_features")
 
 BATCH_SIZE = 50
+BACKFILL_WATERMARK_KEY = "backfill_ml_features.price_target_labels"
 
 
 def extract_underlying_ticker(option_symbol: str) -> str:
@@ -278,6 +280,11 @@ async def get_records_to_backfill(
             """
             params["after_entry_ts"] = after_entry_ts
             params["after_event_id"] = after_event_id
+        elif after_entry_ts is not None:
+            cursor_clause = """
+              AND p.entry_ts >= :after_entry_ts
+            """
+            params["after_entry_ts"] = after_entry_ts
 
         stmt = text(
             f"""
@@ -298,6 +305,24 @@ async def get_records_to_backfill(
         return [dict(row._mapping) for row in rows]
 
     return await db_query(query)
+
+
+async def _load_backfill_watermark() -> datetime | None:
+    """Load persisted resume timestamp for backfill progress."""
+
+    async def query(session: Any) -> datetime | None:
+        return await get_watermark(session, BACKFILL_WATERMARK_KEY)
+
+    return await db_query(query)
+
+
+async def _save_backfill_watermark(entry_ts: datetime) -> None:
+    """Persist latest processed entry timestamp for crash-safe resume."""
+
+    async def write(session: Any) -> None:
+        await upsert_watermark(session, key=BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
+
+    await db_write(write)
 
 
 async def update_ml_features(record: Dict[str, Any]) -> bool:
@@ -479,8 +504,11 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
 
     total_processed = 0
     total_updated = 0
-    after_entry_ts: datetime | None = None
+    after_entry_ts: datetime | None = await _load_backfill_watermark()
     after_event_id: str | None = None
+
+    if after_entry_ts is not None:
+        logger.info(f"Resuming backfill from persisted watermark {after_entry_ts.isoformat()}")
 
     while True:
         remaining = limit - total_processed
@@ -505,6 +533,8 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             total_processed += 1
             after_entry_ts = record.get("entry_ts")
             after_event_id = record.get("event_id")
+            if after_entry_ts is not None:
+                await _save_backfill_watermark(after_entry_ts)
 
             if total_processed >= limit:
                 break

@@ -5513,3 +5513,26 @@ Result:
 
 Residual:
 - restart continuity is still in-memory for a single run; persisted checkpoints/watermarks remain the next required step for crash-safe resumability across process restarts.
+
+## 187) Pass 180 Continuation (2026-02-08)
+
+### 187.1 Backfill Crash-Resume Watermarking Added (TDD-Backed)
+
+Finding:
+- backfill traversal was monotonic within a single process, but restart continuity was still in-memory only, requiring reruns from the beginning after process interruptions.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_selection.py` with:
+  - `test_get_records_to_backfill_supports_timestamp_only_cursor_filter`
+  - `test_run_backfill_resumes_from_watermark_and_persists_progress`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - added persisted watermark helpers using existing `ingest_watermarks` utilities,
+  - loads startup watermark for resume cursor initialization,
+  - supports timestamp-only cursor predicate (`p.entry_ts >= :after_entry_ts`) when event-id cursor is unavailable,
+  - persists watermark progression during row processing.
+
+Result:
+- backfill now resumes from the latest persisted entry timestamp after restarts, reducing full-run replay and improving operational continuity.
+
+Residual:
+- persisted state is timestamp-only; strict no-duplicate cursor continuity across identical `entry_ts` cohorts still requires durable keyset state (`entry_ts` + `event_id`).
