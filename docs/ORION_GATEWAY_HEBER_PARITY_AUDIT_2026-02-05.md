@@ -5229,3 +5229,27 @@ Risk:
 Recommended next remediation:
 1. Short-term: profile-gate `pattern-miner` with the same `legacy-labels` runtime until training inputs are centralized.
 2. Mid-term: migrate pattern-miner training source from Orion-local `price_target_labels` to Heber canonical label/features datasets, then remove legacy dependency.
+
+## 174) Pass 167 Continuation (2026-02-08)
+
+### 174.1 New Audit Finding: Feature-Enrichment Gateway Auth Is Optional in Code but Missing in Compose, Enabling Silent No-Data Loops
+
+Current behavior:
+- `feature_enrichment` compose wiring provides `GATEWAY_URL` but not `GATEWAY_API_KEY`/`DATA_GATEWAY_API_KEY` (`docker-compose.yml:91` to `docker-compose.yml:96`).
+- Gateway UW connectors build auth headers only when key is present (`self.headers = {"X-Gateway-Key": ...} if self.gateway_key else {}`):
+  - `src/orion/connectors/uw_greek_exposure_connector.py:28`
+  - `src/orion/connectors/uw_market_tide_connector.py:28`
+  - same pattern in max-pain and IV-rank connectors.
+- On request failure, connectors log warning and return `None`/`0` (instead of fail-fast), and the main loop continues:
+  - `src/orion/connectors/uw_greek_exposure_connector.py:38` to `src/orion/connectors/uw_greek_exposure_connector.py:40`
+  - `src/orion/connectors/uw_market_tide_connector.py:42` to `src/orion/connectors/uw_market_tide_connector.py:44`
+  - `src/orion/main_feature_enrichment.py:256` to `src/orion/main_feature_enrichment.py:322`.
+
+Risk:
+- when Gateway auth is required, default compose can run indefinitely with mostly empty enrichment writes and no startup hard failure,
+- operators may misread “service up” as “data fresh” while enrichment features silently degrade.
+
+Recommended next remediation:
+1. Enforce startup contract: fail fast in feature-enrichment if Gateway URL is set but no Gateway API key is configured.
+2. Wire `DATA_GATEWAY_API_KEY` (or alias) in compose for `feature_enrichment`.
+3. Add an integration smoke test that asserts non-zero enrichment writes (or explicit auth error) under configured Gateway mode.
