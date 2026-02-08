@@ -35,12 +35,24 @@ FLOW_LOOKBACK_HOURS = 72
 _heber_reader = HeberReader()
 
 
+def _parse_env_bool(raw: str) -> bool:
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
+    specific_key = "ORION_ENABLE_LEGACY_FLOW_LABELER"
+    specific_raw = os.getenv(specific_key)
+    if specific_raw is not None:
+        return _parse_env_bool(specific_raw), specific_key, specific_raw
+
+    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    global_raw = os.getenv(global_key, "true")
+    return _parse_env_bool(global_raw), global_key, global_raw
+
+
 def _legacy_label_pipelines_enabled() -> bool:
-    parse = lambda raw: raw.strip().lower() in {"1", "true", "yes", "on"}
-    specific = os.getenv("ORION_ENABLE_LEGACY_FLOW_LABELER")
-    if specific is not None:
-        return parse(specific)
-    return parse(os.getenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true"))
+    enabled, _, _ = _legacy_label_pipeline_control()
+    return enabled
 
 
 @dataclass
@@ -366,13 +378,14 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
             "replacement_path": "heber.watch.writer labels_alert_barriers",
         },
     )
-    if not _legacy_label_pipelines_enabled():
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
         logger.warning(
             "Legacy local flow labeler disabled by config",
             extra={
                 "event_type": "DEPRECATED_PIPELINE_DISABLED",
                 "pipeline": "orion.main_labeler",
-                "control": "ORION_ENABLE_LEGACY_LABEL_PIPELINES=false",
+                "control": f"{control_key}={control_raw}",
             },
         )
         return

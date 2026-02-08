@@ -11,6 +11,17 @@ def test_option_quote_tracker_specific_gate_overrides_global_off(monkeypatch: py
     assert main_option_quote_tracker._legacy_label_pipelines_enabled() is False
 
 
+def test_option_quote_tracker_control_key_prefers_specific(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER", "false")
+
+    enabled, key, raw = main_option_quote_tracker._legacy_label_pipeline_control()
+
+    assert enabled is False
+    assert key == "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER"
+    assert raw == "false"
+
+
 def test_flow_labeler_specific_gate_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
     monkeypatch.setenv("ORION_ENABLE_LEGACY_FLOW_LABELER", "false")
@@ -18,11 +29,33 @@ def test_flow_labeler_specific_gate_overrides_global_off(monkeypatch: pytest.Mon
     assert main_labeler._legacy_label_pipelines_enabled() is False
 
 
+def test_flow_labeler_control_key_falls_back_to_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "false")
+    monkeypatch.delenv("ORION_ENABLE_LEGACY_FLOW_LABELER", raising=False)
+
+    enabled, key, raw = main_labeler._legacy_label_pipeline_control()
+
+    assert enabled is False
+    assert key == "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    assert raw == "false"
+
+
 def test_price_target_labeler_specific_gate_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
     monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
 
     assert main_price_target_labeler._legacy_label_pipelines_enabled() is False
+
+
+def test_price_target_labeler_control_key_prefers_specific(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
+
+    enabled, key, raw = main_price_target_labeler._legacy_label_pipeline_control()
+
+    assert enabled is False
+    assert key == "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER"
+    assert raw == "false"
 
 
 @pytest.mark.asyncio

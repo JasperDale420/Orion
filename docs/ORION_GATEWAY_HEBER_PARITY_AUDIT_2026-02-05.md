@@ -5117,3 +5117,31 @@ Result:
 
 Residual:
 - compose restart-loop risk from pass 159 remains until service inclusion/restart-policy handling is updated.
+
+## 169) Pass 162 Continuation (2026-02-08)
+
+### 169.1 Rollout Operability Remediation: Effective Control Attribution + Compose Gate Wiring
+
+Implemented (TDD-backed):
+- Added explicit effective-control helpers for legacy gate resolution in each service:
+  - `src/orion/main_option_quote_tracker.py`
+  - `src/orion/main_labeler.py`
+  - `src/orion/main_price_target_labeler.py`
+- `DEPRECATED_PIPELINE_DISABLED` log payload now reports the actual control key/value that disabled the service (specific override or global fallback), instead of hardcoding the global key.
+- Added targeted tests validating control-key precedence/fallback:
+  - `tests/unit/test_legacy_label_pipeline_gates.py`
+- Wired per-service gate env vars in compose for legacy services:
+  - `ORION_ENABLE_LEGACY_FLOW_LABELER`
+  - `ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER`
+  - `ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER`
+  - plus global fallback `ORION_ENABLE_LEGACY_LABEL_PIPELINES`
+  - file: `docker-compose.yml`
+- Added compose wiring test:
+  - `tests/unit/test_compose_legacy_gate_wiring.py`
+
+Result:
+- operators can disable legacy services with explicit per-service env controls in standard compose workflow,
+- disabled-service logs now identify the exact effective gate source for faster cutover diagnostics.
+
+Residual:
+- restart-loop behavior under `restart: unless-stopped` (pass 159) is still open and requires lifecycle-policy handling beyond env wiring.

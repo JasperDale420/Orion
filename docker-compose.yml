@@ -56,6 +56,8 @@ services:
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_RUN_ID=docker_persistent
+      - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-true}
+      - ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-true}
     command: [ "python", "-m", "orion.main_labeler" ]
 
   price_target_labeler:
@@ -71,6 +73,8 @@ services:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_RUN_ID=docker_persistent
       - GATEWAY_URL=http://host.docker.internal:8080
+      - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-true}
+      - ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-true}
     command: [ "python", "-m", "orion.main_price_target_labeler" ]
 
   feature_enrichment:
@@ -103,6 +107,8 @@ services:
       - ALPACA_API_KEY=${ALPACA_API_KEY}
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
       - ORION_RUN_ID=docker_persistent
+      - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-true}
+      - ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-true}
     command: [ "python", "-m", "orion.main_option_quote_tracker" ]
 
   execution:

@@ -650,6 +650,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - remediation confirmation that disabled legacy flow/price-target labelers no longer initialize DB before honoring disable gates
   - TDD coverage expansion for disabled-mode startup ordering (`init_db` must not run when disabled)
   - residual note that compose restart-loop behavior for disabled services still needs rollout-level remediation
+- **Gateway/Heber Parity Audit (Pass 162)**: Continued audit with:
+  - remediation confirmation that disabled-service logs now attribute the effective legacy control key/value (specific vs global fallback)
+  - compose-operability remediation that per-service legacy gate env controls are now wired in default compose service definitions
+  - residual note that container restart-loop behavior under `restart: unless-stopped` remains a separate lifecycle-policy fix
 
 ### Changed
 
@@ -711,6 +715,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Disabled-Mode DB Init Guard for Legacy Labelers (TDD)**:
   - `src/orion/main_labeler.py` and `src/orion/main_price_target_labeler.py` now check disable gates before `init_db()`
   - Added tests in `tests/unit/test_legacy_label_pipeline_gates.py` to ensure disabled services do not touch DB initialization paths
+- **Legacy Gate Control Attribution + Compose Wiring (TDD)**:
+  - Added effective control-resolution helpers in `src/orion/main_option_quote_tracker.py`, `src/orion/main_labeler.py`, and `src/orion/main_price_target_labeler.py`
+  - `DEPRECATED_PIPELINE_DISABLED` logs now emit the actual control key/value that disabled the service
+  - Added compose env wiring for `ORION_ENABLE_LEGACY_FLOW_LABELER`, `ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER`, and `ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER` in `docker-compose.yml`
+  - Added coverage in `tests/unit/test_legacy_label_pipeline_gates.py` and `tests/unit/test_compose_legacy_gate_wiring.py`
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
