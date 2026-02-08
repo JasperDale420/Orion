@@ -5449,3 +5449,22 @@ Result:
 
 Residual:
 - this resolves taxonomy drift only; broader backfill candidate selection semantics (`LIMIT` without deterministic ordering) remain open in the backlog.
+
+## 184) Pass 177 Continuation (2026-02-08)
+
+### 184.1 Backfill Candidate Selection Made Deterministic (TDD-Backed)
+
+Finding:
+- `get_records_to_backfill()` used `LIMIT :limit` without stable ordering, creating non-deterministic batch composition across runs/retries.
+
+Implemented:
+- Added regression coverage:
+  - `tests/unit/test_backfill_ml_features_selection.py` asserts ordered query contract and limit parameter flow.
+- Updated `src/orion/jobs/backfill_ml_features.py` candidate query to include:
+  - `ORDER BY p.entry_ts ASC, p.event_id ASC` before `LIMIT`.
+
+Result:
+- backfill batch iteration is now stable and repeatable, reducing missed/duplicated candidate churn when processing in slices.
+
+Residual:
+- full resumability still depends on explicit progress watermarking/mark-state strategy; deterministic ordering is a prerequisite hardening step, not the final idempotency model.

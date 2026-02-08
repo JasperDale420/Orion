@@ -272,6 +272,7 @@ async def get_records_to_backfill(limit: int = 1000) -> List[Dict[str, Any]]:
             LEFT JOIN silver_uw_flow f ON p.event_id = f.event_id
             WHERE p.entry_hour IS NULL OR p.overnight_gap_pct IS NULL OR p.gex_at_entry IS NULL
                OR p.oi_change_1d IS NULL
+            ORDER BY p.entry_ts ASC, p.event_id ASC
             LIMIT :limit
         """
         )
