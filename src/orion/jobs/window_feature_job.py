@@ -11,10 +11,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from sqlalchemy import text
-
 from orion.config import system_settings
+from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_query, db_write
+from sqlalchemy import text
 
 logger = logging.getLogger("orion.jobs.window_feature_job")
 
@@ -91,7 +91,8 @@ class WindowFeatureJob:
 
         async def query(session: Any) -> Dict[str, Any] | None:
             # Aggregate flow metrics from silver_uw_flow
-            flow_stmt = text("""
+            flow_stmt = text(
+                """
                 SELECT
                     COUNT(*) as flow_count,
                     SUM(CASE WHEN put_call = 'C' THEN premium_usd ELSE 0 END) as call_premium,
@@ -106,7 +107,8 @@ class WindowFeatureJob:
                 WHERE ticker = :ticker
                 AND flow_ts_utc >= :start_ts
                 AND flow_ts_utc < :end_ts
-            """)
+            """
+            )
             flow_result = await session.execute(
                 flow_stmt,
                 {"ticker": ticker, "start_ts": window_start, "end_ts": window_end},
@@ -114,7 +116,8 @@ class WindowFeatureJob:
             flow_row = flow_result.fetchone()
 
             # Aggregate dark pool from silver_uw_darkpool
-            dp_stmt = text("""
+            dp_stmt = text(
+                """
                 SELECT
                     COUNT(*) as dp_count,
                     SUM(size_shares) as dp_volume,
@@ -123,7 +126,8 @@ class WindowFeatureJob:
                 WHERE ticker = :ticker
                 AND dark_ts_utc >= :start_ts
                 AND dark_ts_utc < :end_ts
-            """)
+            """
+            )
             dp_result = await session.execute(
                 dp_stmt,
                 {"ticker": ticker, "start_ts": window_start, "end_ts": window_end},
@@ -183,13 +187,12 @@ class WindowFeatureJob:
 
         return await db_query(query)
 
-    async def _persist_features(
-        self, ticker: str, window_end: datetime, period: str, features: Dict[str, Any]
-    ) -> None:
+    async def _persist_features(self, ticker: str, window_end: datetime, period: str, features: Dict[str, Any]) -> None:
         """Upsert window features to gold_feature_windows."""
 
         async def write(session: Any) -> None:
-            stmt = text("""
+            stmt = text(
+                """
                 INSERT INTO gold_feature_windows (
                     ticker, window_end_ts_utc, period, feature_set_id, features, created_at_utc
                 ) VALUES (
@@ -198,7 +201,8 @@ class WindowFeatureJob:
                 ON CONFLICT (ticker, window_end_ts_utc, period, feature_set_id) DO UPDATE SET
                     features = EXCLUDED.features,
                     created_at_utc = EXCLUDED.created_at_utc
-            """)
+            """
+            )
             await session.execute(
                 stmt,
                 {
@@ -237,5 +241,5 @@ class WindowFeatureJob:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     asyncio.run(WindowFeatureJob().run_forever())

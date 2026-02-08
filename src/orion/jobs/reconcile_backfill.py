@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
-
+from orion.core.logging_config import setup_logging
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SilverAlpacaBar, SilverDarkPool, SilverOptionFlow
+from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ async def run_reconciliation(lookback_days: int = 7) -> None:
 
 if __name__ == "__main__":
     # Setup simple logging for standalone run
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     try:
         asyncio.run(run_reconciliation(lookback_days=30))
     except (KeyboardInterrupt, SystemExit):

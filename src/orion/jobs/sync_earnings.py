@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from orion.config import system_settings
+from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_query
 from sqlalchemy import text
 
@@ -131,29 +132,18 @@ async def backfill_ticker_earnings(ticker: str) -> int:
 
 async def _process_single_earnings_record(ticker: str, row: Dict[str, Any]) -> int:
     """Process a single earnings record and upsert to database."""
-    report_date = _parse_gateway_date(
-        row.get("date") or row.get("report_date") or row.get("earnings_date")
-    )
+    report_date = _parse_gateway_date(row.get("date") or row.get("report_date") or row.get("earnings_date"))
     if report_date is None:
         return 0
 
     try:
-        announce = (
-            row.get("time")
-            or row.get("announce_time")
-            or row.get("report_time")
-            or row.get("earnings_time")
-        )
+        announce = row.get("time") or row.get("announce_time") or row.get("report_time") or row.get("earnings_time")
 
         await _upsert_earnings_direct(
             ticker=ticker.upper(),
             report_date=report_date,
             announce_time=announce,
-            eps_estimate=_to_float(
-                row.get("eps_estimate")
-                or row.get("street_mean_est")
-                or row.get("eps_mean_est")
-            ),
+            eps_estimate=_to_float(row.get("eps_estimate") or row.get("street_mean_est") or row.get("eps_mean_est")),
             eps_actual=_to_float(row.get("eps_actual")),
             revenue_estimate=_to_float(row.get("revenue_estimate")),
             revenue_actual=_to_float(row.get("revenue_actual")),
@@ -193,7 +183,6 @@ def _extract_eps_estimate(e: Any, UNSET: Any) -> Optional[float]:
         return float(e.street_mean_est) if not isinstance(e.street_mean_est, type(UNSET)) else None
     except (ValueError, TypeError):
         return None
-
 
 
 async def backfill_all_earnings() -> Dict[str, int]:
@@ -250,9 +239,7 @@ async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str)
     if not ticker:
         return
 
-    report_date = _parse_gateway_date(
-        row.get("date") or row.get("report_date") or row.get("earnings_date")
-    )
+    report_date = _parse_gateway_date(row.get("date") or row.get("report_date") or row.get("earnings_date"))
     if report_date is None:
         return
 
@@ -268,11 +255,7 @@ async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str)
         ticker=ticker,
         report_date=report_date,
         announce_time=str(announce_time) if announce_time is not None else None,
-        eps_estimate=_to_float(
-            row.get("eps_estimate")
-            or row.get("street_mean_est")
-            or row.get("eps_mean_est")
-        ),
+        eps_estimate=_to_float(row.get("eps_estimate") or row.get("street_mean_est") or row.get("eps_mean_est")),
         eps_actual=_to_float(row.get("eps_actual")),
         revenue_estimate=_to_float(row.get("revenue_estimate")),
         revenue_actual=_to_float(row.get("revenue_actual")),
@@ -395,7 +378,7 @@ async def get_earnings_for_ticker(ticker: str, as_of_date: date) -> Dict[str, An
 if __name__ == "__main__":
     import sys
 
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
 
     if len(sys.argv) > 1 and sys.argv[1] == "backfill":
         print("Running earnings backfill...")

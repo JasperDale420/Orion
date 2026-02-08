@@ -7,11 +7,11 @@ Uses MarketSchedule to detect trading sessions and runs EODReviewAgent
 """
 
 import asyncio
-import logging
 import signal
 from datetime import datetime, timedelta, timezone
 
 from orion.agents.eod_review_agent import EODReviewAgent
+from orion.core.logging_config import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.shared.logger import setup_struct_logger
 
@@ -338,5 +338,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     asyncio.run(main())

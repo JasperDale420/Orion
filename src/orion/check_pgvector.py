@@ -6,9 +6,10 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 load_dotenv()
+from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_write
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger("check_pgvector")
 
 

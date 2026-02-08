@@ -17,6 +17,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   minio:
     image: minio/minio:latest
@@ -35,6 +40,11 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   createbuckets:
     image: minio/mc
@@ -60,6 +70,11 @@ services:
       - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-true}
       - ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-true}
     command: [ "python", "-m", "orion.main_labeler" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   price_target_labeler:
     build: .
@@ -78,6 +93,11 @@ services:
       - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-true}
       - ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-true}
     command: [ "python", "-m", "orion.main_price_target_labeler" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   feature_enrichment:
     build: .
@@ -95,6 +115,11 @@ services:
       - GATEWAY_URL=http://host.docker.internal:8080
       - GATEWAY_API_KEY=${GATEWAY_API_KEY}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   option_quote_tracker:
     build: .
@@ -114,6 +139,11 @@ services:
       - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-true}
       - ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-true}
     command: [ "python", "-m", "orion.main_option_quote_tracker" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   execution:
     build: .
@@ -132,6 +162,11 @@ services:
       - ORION_RUN_ID=docker_persistent_exec
       - ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false
     command: [ "python", "-m", "orion.main_execution" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   position-monitor:
     build: .
@@ -152,6 +187,11 @@ services:
       - ORION_RUN_ID=docker_position_monitor
       - ORION_MODEL_DIR=/app/models
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   eod-agent:
     build: .
@@ -170,6 +210,11 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-reasoner}
     command: [ "python", "-m", "orion.main_eod" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   meta-search:
     build: .
@@ -184,6 +229,11 @@ services:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     command: [ "python", "-m", "orion.main_meta", "--base-solver", "v1_legacy" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   meta-weekly:
     build: .
@@ -202,6 +252,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
     command: [ "python", "-m", "orion.main_meta_weekly", "--scheduled" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   pattern-miner:
     build: .
@@ -216,6 +271,11 @@ services:
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
     command: [ "python", "-m", "orion.main_pattern_miner" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   nightly-backfill:
     build: .
@@ -234,6 +294,11 @@ services:
       - ORION_RUN_ID=docker_nightly_backfill
       - GATEWAY_URL=http://host.docker.internal:8080
     command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   quality-guardrails:
     build: .
@@ -256,6 +321,11 @@ services:
       - ORION_QUALITY_CHECK_INTERVAL_SECONDS=${ORION_QUALITY_CHECK_INTERVAL_SECONDS:-1800}
       - ORION_FEATURE_VALIDATE_INTERVAL_SECONDS=${ORION_FEATURE_VALIDATE_INTERVAL_SECONDS:-3600}
     command: [ "python", "-m", "orion.jobs.quality_guardrails" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   indexer:
     build: .
@@ -271,6 +341,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     command: [ "python", "-m", "orion.rag.indexer", "--daemon", "--interval", "600" ]
     # 600s = 10 minutes interval
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
@@ -299,6 +374,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   mcp-server:
     build: ../Shared-MCP-Server
@@ -315,7 +395,11 @@ services:
       - APCA_API_SECRET_KEY=${ALPACA_SECRET_KEY}
       - APCA_API_BASE_URL=https://paper-api.alpaca.markets
     # No healthcheck exposed by default, rely on TCP
-
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
 volumes:
   timescaledb_data:

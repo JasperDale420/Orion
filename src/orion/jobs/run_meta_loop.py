@@ -3,9 +3,10 @@ import logging
 import os
 
 from orion.agents.meta_search_agent import MetaSearchAgent
+from orion.core.logging_config import setup_logging
 from orion.storage.db import init_db
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 

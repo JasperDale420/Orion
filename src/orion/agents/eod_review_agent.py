@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import math
 import os
 import uuid
@@ -8,6 +7,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
+from orion.core.logging_config import setup_logging
 from sqlalchemy import select
 from zoneinfo import ZoneInfo
 
@@ -364,7 +364,7 @@ class EODReviewAgent(BaseAgent):
             # Feature drift data: pull sampled daily OHLCV signals and a rolling baseline window (previous 20d)
             # IMPORTANT: Limit to 5000 rows each to prevent OOM (full baseline can be 500K+ rows)
             from sqlalchemy import func
-            
+
             silver_today_stmt = (
                 select(SilverSignal)
                 .where(
@@ -1029,7 +1029,7 @@ Analyze today's performance and identify:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
 
     agent = EODReviewAgent()
     asyncio.run(agent.run_review())

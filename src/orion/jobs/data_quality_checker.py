@@ -18,10 +18,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from sqlalchemy import text
-
+from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_query
 from orion.storage.db import init_db
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -560,5 +560,5 @@ async def run_quality_checks():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    setup_logging()
     asyncio.run(run_quality_checks())

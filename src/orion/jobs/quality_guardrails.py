@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
+from orion.core.logging_config import setup_logging
 from orion.jobs.data_quality_checker import run_quality_checks
 from orion.jobs.reconcile_backfill import run_reconciliation
 from orion.jobs.validate_features import run_sanity_checks
@@ -102,8 +103,7 @@ async def run_guardrail_loop() -> None:
     reconcile_lookback_days = _env_int("ORION_RECONCILE_LOOKBACK_DAYS", 7)
 
     logger.info(
-        "Quality guardrails scheduler started: "
-        "reconcile=%ss quality=%ss validate=%ss sleep=%ss lookback_days=%s",
+        "Quality guardrails scheduler started: " "reconcile=%ss quality=%ss validate=%ss sleep=%ss lookback_days=%s",
         reconcile_interval,
         quality_interval,
         feature_validate_interval,
@@ -137,5 +137,5 @@ async def run_guardrail_loop() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    setup_logging()
     asyncio.run(run_guardrail_loop())

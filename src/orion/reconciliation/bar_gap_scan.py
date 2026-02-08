@@ -4,13 +4,14 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from dotenv import load_dotenv
-from sqlalchemy import select
-
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.models import BronzeEvent
+from sqlalchemy import select
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+from orion.core.logging_config import setup_logging
+
+setup_logging()
 logger = logging.getLogger("orion.recon.bar_scan")
 
 

@@ -15,6 +15,7 @@ from typing import List
 
 import requests
 from dotenv import load_dotenv
+from orion.core.logging_config import setup_logging
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -27,7 +28,7 @@ DB_URL = os.getenv("DB_URL", "")
 if ":5432" in DB_URL:
     DB_URL = DB_URL.replace(":5432", ":5440").replace("@timescaledb", "@localhost")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+setup_logging()
 logger = logging.getLogger("raw_flow_backfill")
 
 # UW API config

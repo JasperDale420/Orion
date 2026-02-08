@@ -8,10 +8,11 @@ from sqlalchemy import desc, select
 # Load env before importing db
 load_dotenv()
 
+from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_query
 from orion.storage.models import BronzeEvent
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger("orion.query")
 
 

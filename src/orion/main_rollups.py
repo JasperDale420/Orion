@@ -4,6 +4,7 @@ import signal
 from types import FrameType
 from typing import Optional
 
+from orion.core.logging_config import setup_logging
 from orion.jobs.rollup_job import RollupJob
 from orion.storage.db import init_db
 
@@ -22,7 +23,7 @@ async def main() -> None:
     signal.signal(signal.SIGINT, handle_sigint)
     signal.signal(signal.SIGTERM, handle_sigint)
 
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     logger.info("Starting Orion Rollup Service...")
 
     await init_db()

@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
+from orion.core.logging_config import setup_logging
 from sqlalchemy import text
 
 # Load env for host access to DB
@@ -11,7 +12,7 @@ load_dotenv()
 if os.getenv("DB_URL"):
     os.environ["DB_URL"] = os.getenv("DB_URL").replace(":5432", ":5440").replace("@timescaledb", "@localhost")
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+setup_logging()
 logger = logging.getLogger("diagnosis")
 
 

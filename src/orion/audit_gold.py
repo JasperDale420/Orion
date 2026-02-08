@@ -10,9 +10,10 @@ from orion.shared.db_utils import db_query
 
 load_dotenv()
 
+from orion.core.logging_config import setup_logging
 from orion.storage.models_gold import CandidateTrade
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger("orion.audit_gold")
 
 

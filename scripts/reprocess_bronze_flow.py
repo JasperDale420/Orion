@@ -8,6 +8,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
+from orion.core.logging_config import setup_logging
 
 load_dotenv()
 
@@ -16,7 +17,7 @@ db_url = os.getenv("DB_URL", "")
 if ":5432" in db_url:
     os.environ["DB_URL"] = db_url.replace(":5432", ":5440").replace("@timescaledb", "@localhost")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+setup_logging()
 logger = logging.getLogger("reprocess")
 
 

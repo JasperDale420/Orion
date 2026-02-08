@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from orion.config import system_settings
+from orion.core.logging_config import setup_logging
 from orion.processing.rollup_builder import RollupBuilder
 from orion.storage.db import async_session_factory
 from orion.storage.watermarks import get_watermark, upsert_watermark
@@ -74,5 +75,5 @@ class RollupJob:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     asyncio.run(RollupJob().run_forever())

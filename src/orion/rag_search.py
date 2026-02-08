@@ -1,12 +1,12 @@
 import asyncio
-import logging
 
 from dotenv import load_dotenv
 
 load_dotenv()
+from orion.core.logging_config import setup_logging
 from orion.rag.vector_store import VectorStore
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 
 
 async def search_demo() -> None:

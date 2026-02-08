@@ -5,11 +5,11 @@ Runs twice weekly (Monday and Friday) after market close to train ML models and 
 """
 
 import asyncio
-import logging
 import signal
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from orion.core.logging_config import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.ml.pattern_miner import run_all_pattern_mining
 from orion.shared.logger import setup_struct_logger
@@ -198,5 +198,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     asyncio.run(main())
