@@ -5190,3 +5190,25 @@ Result:
 
 Residual:
 - longer-term decommission path (profiles/inclusion control vs runtime gating) remains an architectural choice, but the immediate restart-loop operational risk is mitigated.
+
+## 172) Pass 165 Continuation (2026-02-08)
+
+### 172.1 Compose Inclusion Control Enabled: Legacy Label Stack Is Now Opt-In via Profile
+
+Implemented (TDD-backed):
+- Added compose test enforcing profile-based inclusion for legacy label stack:
+  - `tests/unit/test_compose_legacy_gate_wiring.py::test_legacy_label_stack_services_are_profiled_for_opt_in`.
+- Added `profiles: [ "legacy-labels" ]` to:
+  - `labeler`,
+  - `price_target_labeler`,
+  - `option_quote_tracker`,
+  - `nightly-backfill`,
+  - `quality-guardrails`,
+  in `docker-compose.yml`.
+
+Result:
+- default compose startup no longer launches legacy label/backfill/guardrail services unless explicitly requested with `--profile legacy-labels`,
+- runtime disable gates remain available, but compose inclusion is now the primary decommission control plane for this stack.
+
+Residual:
+- operator docs still need explicit runbook examples for profile usage in each rollout mode (default runtime vs legacy-label maintenance runs).

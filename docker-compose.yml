@@ -47,6 +47,7 @@ services:
   labeler:
     build: .
     container_name: orion_labeler
+    profiles: [ "legacy-labels" ]
     restart: on-failure
     depends_on:
       timescaledb:
@@ -63,6 +64,7 @@ services:
   price_target_labeler:
     build: .
     container_name: orion_price_target
+    profiles: [ "legacy-labels" ]
     restart: on-failure
     depends_on:
       timescaledb:
@@ -96,6 +98,7 @@ services:
   option_quote_tracker:
     build: .
     container_name: orion_option_quote_tracker
+    profiles: [ "legacy-labels" ]
     restart: on-failure
     depends_on:
       timescaledb:
@@ -215,6 +218,7 @@ services:
   nightly-backfill:
     build: .
     container_name: orion_nightly_backfill
+    profiles: [ "legacy-labels" ]
     restart: unless-stopped
     depends_on:
       timescaledb:
@@ -232,6 +236,7 @@ services:
   quality-guardrails:
     build: .
     container_name: orion_quality_guardrails
+    profiles: [ "legacy-labels" ]
     restart: unless-stopped
     depends_on:
       timescaledb:
