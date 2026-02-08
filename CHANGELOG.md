@@ -658,6 +658,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - remediation confirmation that legacy gate controls are now centralized in typed `SystemSettings` fields
   - config-governance remediation replacing duplicated service-level env parsing with centralized typed settings resolution
   - residual note that compose restart-loop behavior for disabled services remains open
+- **Gateway/Heber Parity Audit (Pass 164)**: Continued audit with:
+  - remediation confirmation that compose restart-loop churn for intentionally disabled legacy label services is mitigated
+  - lifecycle hardening by moving legacy label services to `restart: on-failure`
+  - residual note that full decommission strategy (profiles/inclusion control) remains a follow-up architectural decision
 
 ### Changed
 
@@ -728,6 +732,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added typed legacy gate settings in `src/orion/config.py` under `SystemSettings`
   - Updated legacy gate resolution in `src/orion/main_option_quote_tracker.py`, `src/orion/main_labeler.py`, and `src/orion/main_price_target_labeler.py` to use centralized settings
   - Added config mapping coverage in `tests/unit/test_config_centralization.py`
+- **Legacy Label Compose Restart Hardening (TDD)**:
+  - Updated `docker-compose.yml` restart policy for `labeler`, `price_target_labeler`, and `option_quote_tracker` to `on-failure`
+  - Added compose policy coverage in `tests/unit/test_compose_legacy_gate_wiring.py`
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

@@ -5170,3 +5170,23 @@ Result:
 
 Residual:
 - compose restart-loop behavior for intentionally disabled services (pass 159) is still unresolved.
+
+## 171) Pass 164 Continuation (2026-02-08)
+
+### 171.1 Compose Restart-Loop Remediation for Disabled Legacy Label Services
+
+Implemented (TDD-backed):
+- Added compose test enforcing restart policy for legacy label services:
+  - `tests/unit/test_compose_legacy_gate_wiring.py::test_legacy_label_services_use_on_failure_restart_policy`.
+- Updated compose restart policy for:
+  - `labeler`,
+  - `price_target_labeler`,
+  - `option_quote_tracker`,
+  from `unless-stopped` to `on-failure` (`docker-compose.yml`).
+
+Result:
+- when legacy service gates intentionally disable a service (clean exit), compose no longer auto-restarts these containers in a churn loop,
+- crash recovery for non-zero failures remains enabled via `on-failure`.
+
+Residual:
+- longer-term decommission path (profiles/inclusion control vs runtime gating) remains an architectural choice, but the immediate restart-loop operational risk is mitigated.

@@ -47,7 +47,7 @@ services:
   labeler:
     build: .
     container_name: orion_labeler
-    restart: unless-stopped
+    restart: on-failure
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -63,7 +63,7 @@ services:
   price_target_labeler:
     build: .
     container_name: orion_price_target
-    restart: unless-stopped
+    restart: on-failure
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -96,7 +96,7 @@ services:
   option_quote_tracker:
     build: .
     container_name: orion_option_quote_tracker
-    restart: unless-stopped
+    restart: on-failure
     depends_on:
       timescaledb:
         condition: service_healthy
