@@ -63,11 +63,46 @@ def _env_csv(name: str) -> set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
+def _env_job_nonneg_int_map(name: str) -> dict[str, int]:
+    raw = os.getenv(name)
+    if raw is None:
+        return {}
+
+    parsed: dict[str, int] = {}
+    for pair in raw.split(","):
+        item = pair.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            logger.warning("Invalid key/value pair in %s=%s; expected job=seconds", name, item)
+            continue
+
+        job_raw, seconds_raw = item.split("=", 1)
+        job_name = job_raw.strip().lower()
+        if not job_name:
+            logger.warning("Invalid key/value pair in %s=%s; missing job name", name, item)
+            continue
+
+        try:
+            seconds = int(seconds_raw.strip())
+        except ValueError:
+            logger.warning("Invalid backoff seconds in %s=%s; skipping", name, item)
+            continue
+
+        parsed[job_name] = max(0, seconds)
+    return parsed
+
+
 def _fail_fast_enabled_for_job(name: str) -> bool:
     if _env_flag("ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES", default=False):
         return True
     listed_jobs = _env_csv("ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES_JOBS")
     return name.strip().lower() in listed_jobs
+
+
+def _job_failure_backoff_seconds(name: str, default_seconds: int) -> int:
+    configured = _env_job_nonneg_int_map("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS")
+    return configured.get(name.strip().lower(), default_seconds)
 
 
 def _should_run(last_run: datetime | None, interval_seconds: int, now: datetime) -> bool:
@@ -134,6 +169,9 @@ async def run_guardrail_loop() -> None:
     feature_validate_interval = _env_int("ORION_FEATURE_VALIDATE_INTERVAL_SECONDS", 3600)
     reconcile_lookback_days = _env_int("ORION_RECONCILE_LOOKBACK_DAYS", 7)
     failure_backoff_seconds = _env_nonneg_int("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS", 0)
+    reconcile_backoff_seconds = _job_failure_backoff_seconds("reconciliation", failure_backoff_seconds)
+    quality_backoff_seconds = _job_failure_backoff_seconds("data_quality_checker", failure_backoff_seconds)
+    validate_backoff_seconds = _job_failure_backoff_seconds("feature_sanity_validation", failure_backoff_seconds)
 
     logger.info(
         "Quality guardrails scheduler started: " "reconcile=%ss quality=%ss validate=%ss sleep=%ss lookback_days=%s",
@@ -156,7 +194,7 @@ async def run_guardrail_loop() -> None:
 
         if _should_run(last_reconcile, reconcile_interval, now) and _failure_backoff_elapsed(
             last_reconcile_failure,
-            failure_backoff_seconds,
+            reconcile_backoff_seconds,
             now,
         ):
             reconcile_ok = await _run_job(
@@ -171,7 +209,7 @@ async def run_guardrail_loop() -> None:
 
         if _should_run(last_quality, quality_interval, now) and _failure_backoff_elapsed(
             last_quality_failure,
-            failure_backoff_seconds,
+            quality_backoff_seconds,
             now,
         ):
             quality_ok = await _run_job("data_quality_checker", run_quality_checks)
@@ -183,7 +221,7 @@ async def run_guardrail_loop() -> None:
 
         if _should_run(last_validate, feature_validate_interval, now) and _failure_backoff_elapsed(
             last_validate_failure,
-            failure_backoff_seconds,
+            validate_backoff_seconds,
             now,
         ):
             validate_ok = await _run_job("feature_sanity_validation", run_sanity_checks)

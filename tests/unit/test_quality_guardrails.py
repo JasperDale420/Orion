@@ -1,6 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
-from orion.jobs.quality_guardrails import _env_int, _failure_backoff_elapsed, _next_last_run, _should_run
+from orion.jobs.quality_guardrails import (
+    _env_int,
+    _failure_backoff_elapsed,
+    _job_failure_backoff_seconds,
+    _next_last_run,
+    _should_run,
+)
 
 
 def test_env_int_uses_default_for_invalid(monkeypatch) -> None:
@@ -42,3 +48,17 @@ def test_failure_backoff_elapsed_respects_backoff_window() -> None:
     last_failure = now - timedelta(seconds=30)
     assert _failure_backoff_elapsed(last_failure=last_failure, backoff_seconds=60, now=now) is False
     assert _failure_backoff_elapsed(last_failure=last_failure, backoff_seconds=20, now=now) is True
+
+
+def test_job_failure_backoff_seconds_uses_global_default_when_not_configured(monkeypatch) -> None:
+    monkeypatch.delenv("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS", raising=False)
+    assert _job_failure_backoff_seconds("feature_sanity_validation", default_seconds=45) == 45
+
+
+def test_job_failure_backoff_seconds_uses_job_specific_override(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS",
+        "reconciliation=15, feature_sanity_validation=120",
+    )
+    assert _job_failure_backoff_seconds("feature_sanity_validation", default_seconds=45) == 120
+    assert _job_failure_backoff_seconds("data_quality_checker", default_seconds=45) == 45

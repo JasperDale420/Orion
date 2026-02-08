@@ -5635,6 +5635,29 @@ Residual:
 
 ## 191) Pass 184 Continuation (2026-02-08)
 
+### 191.1 Guardrail Per-Job Backoff Overrides Added (TDD-Backed)
+
+Finding:
+- failure backoff support was global-only, preventing differentiated retry pacing across guardrail classes with different operational criticality and dependency profiles.
+
+Implemented:
+- Extended `tests/unit/test_quality_guardrails.py` with:
+  - `test_job_failure_backoff_seconds_uses_global_default_when_not_configured`
+  - `test_job_failure_backoff_seconds_uses_job_specific_override`
+- Updated `src/orion/jobs/quality_guardrails.py`:
+  - added `_env_job_nonneg_int_map()` parser for `job=seconds` env entries,
+  - added `_job_failure_backoff_seconds(name, default_seconds)` resolver,
+  - wired per-job backoff resolution for `reconciliation`, `data_quality_checker`, and `feature_sanity_validation`,
+  - added env contract `ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS`.
+
+Result:
+- operators can now retain a global default backoff while overriding retry windows per guardrail job, reducing alert noise where needed without slowing all checks uniformly.
+
+Residual:
+- scheduler currently evaluates a static per-process backoff map from env at startup; runtime hot-reload for backoff policy changes remains future operational hardening.
+
+## 191) Pass 184 Continuation (2026-02-08)
+
 ### 191.1 `backfill_exit_columns` Crash-Resume Watermarking Added (TDD-Backed)
 
 Finding:
