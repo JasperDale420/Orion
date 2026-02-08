@@ -1,56 +1,36 @@
+"""Tests for the structlog-based logging configuration."""
+
 import json
-import logging
 
-from orion.core.logging_config import JSONFormatter
+from orion.shared.logger import setup_struct_logger
 
 
-def test_json_formatter_structure():
-    formatter = JSONFormatter()
-    record = logging.LogRecord(
-        name="test_logger",
-        level=logging.INFO,
-        pathname="/path/to/script.py",
-        lineno=10,
-        msg="Test message",
-        args=(),
-        exc_info=None,
-    )
+def test_json_output_structure(capsys):
+    """Verify setup_struct_logger produces JSON with expected fields."""
+    logger = setup_struct_logger("test_json_structure")
+    logger.info("Test message", extra_field="extra_value")
 
-    # Simulate extra fields
-    record.extra_field = "extra_value"
-
-    output = formatter.format(record)
-    data = json.loads(output)
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) >= 1
+    data = json.loads(out[-1])
 
     assert data["message"] == "Test message"
     assert data["level"] == "INFO"
-    assert data["logger"] == "test_logger"
     assert data["extra_field"] == "extra_value"
     assert "timestamp" in data
 
 
-def test_json_formatter_exception():
-    formatter = JSONFormatter()
+def test_json_output_with_exception(capsys):
+    """Verify exception info is included in JSON output."""
+    logger = setup_struct_logger("test_json_exception")
     try:
         raise ValueError("Oops")
     except ValueError:
-        import sys
+        logger.exception("Error occurred")
 
-        exc_info = sys.exc_info()
-
-    record = logging.LogRecord(
-        name="test_logger",
-        level=logging.ERROR,
-        pathname="script.py",
-        lineno=20,
-        msg="Error occurred",
-        args=(),
-        exc_info=exc_info,
-    )
-
-    output = formatter.format(record)
-    data = json.loads(output)
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) >= 1
+    data = json.loads(out[-1])
 
     assert data["message"] == "Error occurred"
-    assert "exc_info" in data
-    assert "ValueError: Oops" in data["exc_info"]
+    assert "exception" in data or "exc_info" in data

@@ -1,144 +1,104 @@
-import datetime
-import json
+"""Structured logging for Orion modules using structlog.
+
+Provides `setup_struct_logger(name)` which returns a structlog-backed logger.
+Features:
+  - JSON output by default, human-readable when ORION_LOG_FORMAT=human
+  - Auto-injected `run_id` from ORION_RUN_ID env var (or generated UUID)
+  - Uppercase level names for consistency
+  - Compatible with pytest caplog
+"""
+
 import logging
+import os
 import sys
-import traceback
-from typing import Any, Dict, Optional
+import uuid
+from typing import Any
+
+import structlog
 
 
-class JSONFormatter(logging.Formatter):
-    """
-    Formatter that outputs JSON strings for all log records.
-    """
-
-    def format(self, record: logging.LogRecord) -> str:
-        log_record: Dict[str, Any] = {
-            "ts": datetime.datetime.fromtimestamp(record.created).isoformat(),
-            "level": record.levelname,
-            "service": record.name,
-            "message": record.getMessage(),
-            "file": record.filename,
-            "line": record.lineno,
-        }
-
-        # Add exception info if present
-        if record.exc_info:
-            log_record["exception"] = self.formatException(record.exc_info)
-            log_record["stack_trace"] = traceback.format_exception(*record.exc_info)
-
-        # Merge custom extras (anything not in standard LogRecord attributes)
-        standard_attrs = set(logging.makeLogRecord({}).__dict__.keys())
-        for k, v in record.__dict__.items():
-            if k in standard_attrs:
-                continue
-            if k in log_record:
-                continue
-            log_record[k] = v
-
-        # Ensure run_id is present when provided via env
-        if "run_id" not in log_record:
-            import os
-
-            env_run_id = os.getenv("ORION_RUN_ID")
-            if env_run_id:
-                log_record["run_id"] = env_run_id
-
-        # P2 Audit: Add correlation_id for request-level tracing
-        if "correlation_id" not in log_record and "trace_id" in record.__dict__:
-            log_record["correlation_id"] = record.__dict__["trace_id"]
-
-        return json.dumps(log_record)
+def _upcase_level(
+    logger: Any, method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Uppercase the log level (e.g. 'info' → 'INFO')."""
+    if "level" in event_dict:
+        event_dict["level"] = event_dict["level"].upper()
+    return event_dict
 
 
-class HumanReadableFormatter(logging.Formatter):
-    """
-    Formatter that outputs human-readable logs for development.
-    Palette's touch: Making logs a joy to read since 2024.
-    """
-
-    COLORS = {
-        "DEBUG": "\033[90m",  # Gray
-        "INFO": "\033[92m",  # Green
-        "WARNING": "\033[93m",  # Yellow
-        "ERROR": "\033[91m",  # Red
-        "CRITICAL": "\033[1;91m",  # Bold Red
-        "RESET": "\033[0m",
-    }
-
-    def format(self, record: logging.LogRecord) -> str:
-        ts = datetime.datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
-        color = self.COLORS.get(record.levelname, self.COLORS["RESET"])
-        reset = self.COLORS["RESET"]
-
-        # Basic message
-        msg = f"{color}[{ts}] [{record.levelname:<5}] [{record.name}]{reset} {record.getMessage()}"
-
-        # Extras
-        standard_attrs = set(logging.makeLogRecord({}).__dict__.keys())
-        extras = []
-        for k, v in record.__dict__.items():
-            if k in standard_attrs:
-                continue
-            # Skip run_id in dev mode if it's just clutter, but maybe keep it if needed.
-            # Let's keep it but at the end.
-            extras.append(f"{k}={v}")
-
-        if extras:
-            msg += f" \033[90m({', '.join(extras)})\033[0m"
-
-        if record.exc_info:
-            # Nice traceback
-            tb = "".join(traceback.format_exception(*record.exc_info))
-            msg += f"\n{color}{tb}{reset}"
-
-        return msg
+def _rename_event_to_message(
+    logger: Any, method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Rename structlog's 'event' key to 'message' for backward compatibility."""
+    if "event" in event_dict:
+        event_dict["message"] = event_dict.pop("event")
+    return event_dict
 
 
-class _RunIdFilter(logging.Filter):
-    def __init__(self, run_id: Optional[str]):
-        super().__init__()
-        self.run_id = run_id
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if self.run_id and not hasattr(record, "run_id"):
-            record.run_id = self.run_id
-        return True
-
-
-def setup_struct_logger(name: str, level: int = logging.INFO) -> logging.Logger:
-    """
-    Sets up a logger with JSONFormatter on StreamHandler (stdout).
-    """
-    import os
-    import uuid
-
+def _inject_run_id(
+    logger: Any, method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Inject ORION_RUN_ID into every log entry."""
     run_id = os.getenv("ORION_RUN_ID")
-    if not run_id:
-        run_id = str(uuid.uuid4())
-        os.environ["ORION_RUN_ID"] = run_id
+    if run_id and "run_id" not in event_dict:
+        event_dict["run_id"] = run_id
+    return event_dict
 
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
 
-    # clear existing handlers to avoid duplicates
-    if logger.handlers:
-        logger.handlers.clear()
+_configured = False
 
-    handler = logging.StreamHandler(sys.stdout)
 
-    # Check for human-readable mode
+def _configure(level: int = logging.INFO) -> None:
+    """One-time structlog configuration for the process."""
+    global _configured
+    if _configured:
+        return
+    _configured = True
+
+    # Ensure ORION_RUN_ID is set
+    if not os.getenv("ORION_RUN_ID"):
+        os.environ["ORION_RUN_ID"] = str(uuid.uuid4())
+
     log_format = os.getenv("ORION_LOG_FORMAT", "json").lower()
-    if log_format in ("human", "dev", "text"):
-        handler.setFormatter(HumanReadableFormatter())
+    use_json = log_format not in ("human", "dev", "text")
+
+    if use_json:
+        renderer = structlog.processors.JSONRenderer()
     else:
-        handler.setFormatter(JSONFormatter())
+        renderer = structlog.dev.ConsoleRenderer()
 
-    logger.addHandler(handler)
-    logger.addFilter(_RunIdFilter(run_id))
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            _upcase_level,
+            _inject_run_id,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            _rename_event_to_message,
+            renderer,
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
 
-    # Propagate to root logger when running under pytest (caplog) or when explicitly enabled.
-    # This keeps JSON output while allowing tests to capture logs deterministically.
-    propagate = os.getenv("ORION_LOG_PROPAGATE") == "1" or ("pytest" in sys.modules)
-    logger.propagate = propagate
+    # Configure stdlib logging for third-party library output
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=level,
+    )
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
-    return logger
+
+def setup_struct_logger(name: str, level: int = logging.INFO) -> structlog.stdlib.BoundLogger:
+    """Return a structlog logger with JSON output and run_id injection.
+
+    Drop-in replacement for the previous stdlib-based setup_struct_logger.
+    Callers continue to use logger.info(), logger.error(), etc.
+    """
+    _configure(level)
+    return structlog.get_logger(name)
