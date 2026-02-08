@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `test_legacy_label_stack_services_are_profiled_for_opt_in` in `tests/unit/test_compose_legacy_gate_wiring.py`
   - Added `profiles: [ "legacy-labels" ]` for `labeler`, `price_target_labeler`, `option_quote_tracker`, `nightly-backfill`, and `quality-guardrails` in `docker-compose.yml`
   - Default compose runtime now excludes this legacy stack unless `--profile legacy-labels` is explicitly enabled
+- **Gateway/Heber Parity Audit (Pass 166)**: Continued audit with:
+  - runtime source-alignment finding for `pattern-miner` in default compose vs legacy-profile-gated `price_target_labels` source pipeline
+  - stale/empty-input risk framing for model mining when legacy label profile is disabled
+  - staged remediation guidance to either profile-gate `pattern-miner` short-term or migrate to Heber-backed training datasets
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

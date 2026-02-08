@@ -5212,3 +5212,20 @@ Result:
 
 Residual:
 - operator docs still need explicit runbook examples for profile usage in each rollout mode (default runtime vs legacy-label maintenance runs).
+
+## 173) Pass 166 Continuation (2026-02-08)
+
+### 173.1 New Audit Finding: Pattern-Miner Runtime Is No Longer Source-Aligned After Legacy Profile Opt-In
+
+Current behavior:
+- `pattern-miner` remains in default compose runtime without a profile gate (`docker-compose.yml:205` to `docker-compose.yml:216`).
+- Pattern miner training still reads from Orion-local `price_target_labels` (`src/orion/ml/pattern_miner.py:181`, `src/orion/ml/pattern_miner.py:216`), which is maintained by services now gated behind `legacy-labels` profile.
+- When samples are absent, miner emits no-data/insufficient-sample warnings and skips model updates (`src/orion/ml/pattern_miner.py:227`, `src/orion/ml/pattern_miner.py:646`).
+
+Risk:
+- default deployments can run pattern-miner on stale or empty label data with no hard failure,
+- ML refresh expectations become ambiguous because the model-training service is active but its source pipeline is opt-in/off by default.
+
+Recommended next remediation:
+1. Short-term: profile-gate `pattern-miner` with the same `legacy-labels` runtime until training inputs are centralized.
+2. Mid-term: migrate pattern-miner training source from Orion-local `price_target_labels` to Heber canonical label/features datasets, then remove legacy dependency.
