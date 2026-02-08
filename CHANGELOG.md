@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `tests/unit/test_quality_guardrails_results.py` for structured guardrail result handling (`failed`/`issues`) and log-path assertions
   - Added `quality_guardrails._result_failure_summary()` to summarize structured failures
   - Updated `quality_guardrails._run_job()` to log explicit errors for failed-result payloads and avoid false "completed" logs
+- **Quality-Guardrails Fail-Fast Escalation Toggle (TDD)**:
+  - Extended `tests/unit/test_quality_guardrails_results.py` to assert `_run_job()` success/failure return contract and fail-fast behavior
+  - Added `quality_guardrails._env_flag()` and `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES` toggle
+  - Updated `_run_job()` to return `bool` success status and raise `RuntimeError` on structured check failures when fail-fast mode is enabled
 - **Feature-Enrichment Gateway Auth Fail-Fast (TDD)**:
   - Added `main_feature_enrichment._gateway_runtime_contract()` to enforce Gateway URL + API key startup contract
   - Updated feature-enrichment connector wiring to pass resolved `gateway_key` explicitly
@@ -61,6 +65,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented `quality_guardrails` structured-failure signaling to avoid false-green completion logs
   - added TDD coverage for guardrail result summary and failed-result logging behavior
   - residual guidance to define escalation policy for guardrail failures (alert-only vs fail-fast per job class)
+- **Gateway/Heber Parity Audit (Pass 174)**: Continued audit with:
+  - implemented global fail-fast escalation policy toggle for guardrail structured failures
+  - added TDD coverage for `_run_job()` boolean success contract and fail-fast runtime behavior
+  - residual guidance to add per-job escalation policy granularity
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

@@ -36,6 +36,13 @@ def _env_int(name: str, default: int) -> int:
     return max(1, value)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _should_run(last_run: datetime | None, interval_seconds: int, now: datetime) -> bool:
     if last_run is None:
         return True
@@ -57,17 +64,26 @@ def _result_failure_summary(result: object) -> str | None:
     return f"failed_checks={failed_raw} issues={issue_count}"
 
 
-async def _run_job(name: str, job: Callable[[], Awaitable[object]]) -> None:
+async def _run_job(name: str, job: Callable[[], Awaitable[object]]) -> bool:
+    fail_fast_on_check_failures = _env_flag("ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES", default=False)
+
+    result: object
     try:
         logger.info("Starting guardrail job: %s", name)
         result = await job()
-        failure_summary = _result_failure_summary(result)
-        if failure_summary is not None:
-            logger.error("Guardrail job reported failed checks: %s (%s)", name, failure_summary)
-            return
-        logger.info("Completed guardrail job: %s", name)
     except Exception:
         logger.exception("Guardrail job failed: %s", name)
+        return False
+
+    failure_summary = _result_failure_summary(result)
+    if failure_summary is not None:
+        logger.error("Guardrail job reported failed checks: %s (%s)", name, failure_summary)
+        if fail_fast_on_check_failures:
+            raise RuntimeError(f"Guardrail check failures reported by {name}: {failure_summary}")
+        return False
+
+    logger.info("Completed guardrail job: %s", name)
+    return True
 
 
 async def run_guardrail_loop() -> None:

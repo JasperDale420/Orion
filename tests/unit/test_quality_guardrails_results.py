@@ -30,7 +30,8 @@ async def test_run_job_logs_error_when_result_contains_failures(caplog: pytest.L
     async def _job():
         return {"failed": 1, "issues": ["x"]}
 
-    await quality_guardrails._run_job("feature_sanity_validation", _job)
+    success = await quality_guardrails._run_job("feature_sanity_validation", _job)
+    assert success is False
     assert "Guardrail job reported failed checks" in caplog.text
 
 
@@ -41,5 +42,17 @@ async def test_run_job_logs_completed_for_non_failure_result(caplog: pytest.LogC
     async def _job():
         return {"failed": 0, "issues": []}
 
-    await quality_guardrails._run_job("feature_sanity_validation", _job)
+    success = await quality_guardrails._run_job("feature_sanity_validation", _job)
+    assert success is True
     assert "Completed guardrail job" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_job_raises_when_fail_fast_env_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES", "1")
+
+    async def _job():
+        return {"failed": 2, "issues": ["x", "y"]}
+
+    with pytest.raises(RuntimeError, match="feature_sanity_validation"):
+        await quality_guardrails._run_job("feature_sanity_validation", _job)

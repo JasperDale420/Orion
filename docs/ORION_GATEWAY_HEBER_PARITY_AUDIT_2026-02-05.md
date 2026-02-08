@@ -5388,3 +5388,26 @@ Result:
 
 Residual:
 - orchestrator behavior still prefers non-crashing loop continuity over process exit on failed checks; escalation policy (exit vs alert-only by job type) remains a follow-up design decision.
+
+## 181) Pass 174 Continuation (2026-02-08)
+
+### 181.1 Guardrail Failure Escalation Policy Added (TDD-Backed)
+
+Implemented:
+- Extended `tests/unit/test_quality_guardrails_results.py` to assert:
+  - `_run_job()` boolean success contract (`True` clean, `False` failed checks),
+  - opt-in fail-fast escalation on structured check failures.
+- Added `quality_guardrails._env_flag()` and wired new runtime policy flag:
+  - `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES`.
+- Updated `quality_guardrails._run_job()` behavior:
+  - returns `False` for job exceptions and structured failed-check results,
+  - returns `True` only on clean completion,
+  - raises `RuntimeError` for structured failed-check results when fail-fast flag is enabled.
+
+Result:
+- guardrail scheduler now supports explicit operational mode selection:
+  - alert-only mode (default) for resilience,
+  - fail-fast mode for strict CI/ops environments that must stop on validation failures.
+
+Residual:
+- current fail-fast policy is global; per-job escalation granularity (e.g., fail-fast only for reconciliation or feature sanity) remains a follow-up enhancement.
