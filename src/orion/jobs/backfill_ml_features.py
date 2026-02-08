@@ -261,22 +261,39 @@ async def get_phase1_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]
     return await db_query(query)
 
 
-async def get_records_to_backfill(limit: int = 1000) -> List[Dict[str, Any]]:
+async def get_records_to_backfill(
+    limit: int = 1000,
+    after_entry_ts: datetime | None = None,
+    after_event_id: str | None = None,
+) -> List[Dict[str, Any]]:
     """Get records missing ML feature columns."""
 
     async def query(session: Any) -> List[Dict[str, Any]]:
-        stmt = text(
+        params: Dict[str, Any] = {"limit": limit}
+        cursor_clause = ""
+        if after_entry_ts is not None and after_event_id is not None:
+            cursor_clause = """
+              AND (p.entry_ts > :after_entry_ts
+                   OR (p.entry_ts = :after_entry_ts AND p.event_id > :after_event_id))
             """
+            params["after_entry_ts"] = after_entry_ts
+            params["after_event_id"] = after_event_id
+
+        stmt = text(
+            f"""
             SELECT p.event_id, p.ticker, p.entry_ts, p.expiry, p.dte, f.option_chain
             FROM price_target_labels p
             LEFT JOIN silver_uw_flow f ON p.event_id = f.event_id
-            WHERE p.entry_hour IS NULL OR p.overnight_gap_pct IS NULL OR p.gex_at_entry IS NULL
-               OR p.oi_change_1d IS NULL
+            WHERE (
+                p.entry_hour IS NULL OR p.overnight_gap_pct IS NULL OR p.gex_at_entry IS NULL
+                OR p.oi_change_1d IS NULL
+            )
+            {cursor_clause}
             ORDER BY p.entry_ts ASC, p.event_id ASC
             LIMIT :limit
         """
         )
-        result = await session.execute(stmt, {"limit": limit})
+        result = await session.execute(stmt, params)
         rows = result.fetchall()
         return [dict(row._mapping) for row in rows]
 
@@ -462,11 +479,21 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
 
     total_processed = 0
     total_updated = 0
+    after_entry_ts: datetime | None = None
+    after_event_id: str | None = None
 
     while True:
-        records = await get_records_to_backfill(limit=batch_size)
+        records = await get_records_to_backfill(
+            limit=batch_size,
+            after_entry_ts=after_entry_ts,
+            after_event_id=after_event_id,
+        )
         if not records:
             break
+
+        last_record = records[-1]
+        after_entry_ts = last_record.get("entry_ts")
+        after_event_id = last_record.get("event_id")
 
         for record in records:
             try:

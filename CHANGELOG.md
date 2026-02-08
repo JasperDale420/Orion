@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `tests/unit/test_backfill_ml_features_selection.py` to verify deterministic candidate-query ordering
   - Updated `src/orion/jobs/backfill_ml_features.py` to order candidates by `entry_ts,event_id` before `LIMIT`
   - Prevents non-deterministic backfill slice composition across retries/runs
+- **Backfill Cursor Pagination Hardening (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_selection.py` to validate keyset cursor SQL contract and run-loop cursor progression
+  - Updated `src/orion/jobs/backfill_ml_features.py` with `after_entry_ts` / `after_event_id` keyset pagination support
+  - Updated `run_backfill` to advance an in-run cursor between pages for monotonic candidate traversal
 - **Quality-Guardrails Failure Signaling Hardening (TDD)**:
   - Added `tests/unit/test_quality_guardrails_results.py` for structured guardrail result handling (`failed`/`issues`) and log-path assertions
   - Added `quality_guardrails._result_failure_summary()` to summarize structured failures
@@ -93,6 +97,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented deterministic ordering for `backfill_ml_features` candidate selection query
   - added TDD coverage for ordered query contract and limit-parameter handling
   - residual guidance to introduce explicit progress watermarking for full backfill resumability
+- **Gateway/Heber Parity Audit (Pass 178)**: Continued audit with:
+  - implemented keyset cursor pagination in `backfill_ml_features` candidate selection and run loop
+  - added TDD coverage for cursor SQL predicate contract and cursor advancement behavior
+  - residual guidance that persisted watermark state is still needed for crash-safe resumability
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

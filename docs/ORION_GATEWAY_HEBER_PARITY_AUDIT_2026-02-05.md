@@ -5468,3 +5468,25 @@ Result:
 
 Residual:
 - full resumability still depends on explicit progress watermarking/mark-state strategy; deterministic ordering is a prerequisite hardening step, not the final idempotency model.
+
+## 185) Pass 178 Continuation (2026-02-08)
+
+### 185.1 Backfill Pagination Watermark Added for Forward Progress (TDD-Backed)
+
+Finding:
+- even with deterministic ordering, repeated `LIMIT`-window fetches could still revisit earlier rows without explicit cursor progression, especially under partial-update/error scenarios.
+
+Implemented:
+- Added regression coverage in `tests/unit/test_backfill_ml_features_selection.py` for:
+  - cursor predicate SQL contract in `get_records_to_backfill(...)`,
+  - run-loop pagination behavior (`run_backfill`) that advances cursor arguments between fetches.
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - `get_records_to_backfill` now accepts optional cursor args (`after_entry_ts`, `after_event_id`) and applies keyset predicate:
+    - `p.entry_ts > :after_entry_ts OR (p.entry_ts = :after_entry_ts AND p.event_id > :after_event_id)`.
+  - `run_backfill` now carries a per-run cursor based on last row of each fetched page to ensure monotonic traversal through the candidate set.
+
+Result:
+- backfill now has stable forward traversal within a run, reducing re-fetch churn and improving progress guarantees under large candidate sets.
+
+Residual:
+- this remains an in-memory run cursor; crash-safe resumability still requires persisted watermark/checkpoint state if strict exactly-once backfill semantics are needed.
