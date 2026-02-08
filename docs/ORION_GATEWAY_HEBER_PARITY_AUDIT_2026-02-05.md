@@ -5281,3 +5281,28 @@ Scope interpretation:
 - Core runtime decommission controls have been substantially audited and partially remediated (legacy label stack gating, restart policy, compose profile inclusion).
 - Remaining high-volume SQL-coupled debt is now concentrated in validation/backfill/training support jobs plus `main_price_target_labeler`.
 - Audit can now transition from broad discovery to targeted closeout on these concentrated hotspots.
+
+## 176) Pass 169 Continuation (2026-02-08)
+
+### 176.1 New Audit Finding: Guardrail Sanity Checks Ignore Incomplete Label Rows (`ml_ready = false`)
+
+Current behavior:
+- `quality_guardrails` invokes feature sanity validation on schedule (`src/orion/jobs/quality_guardrails.py:90` to `src/orion/jobs/quality_guardrails.py:92`).
+- `run_sanity_checks()` in `validate_features` filters to `WHERE ml_ready` (`src/orion/jobs/validate_features.py:248` to `src/orion/jobs/validate_features.py:249`).
+
+Risk:
+- if backfill/enrichment pipelines stall and records remain `ml_ready = false`, scheduled sanity checks can report green while the pipeline is actually incomplete,
+- this creates a blind spot in the primary operational guardrail loop.
+
+### 176.2 Supporting Consistency Drift: `minutes_to_close` Validation Bounds Diverge Inside Same Module
+
+Observed drift:
+- spot-check path enforces `minutes_to_close` in `[0, 390]` (`src/orion/jobs/validate_features.py:104` to `src/orion/jobs/validate_features.py:109`),
+- batch sanity path enforces `[0, 500]` (`src/orion/jobs/validate_features.py:244`, `src/orion/jobs/validate_features.py:261`).
+
+Risk:
+- contradictory bounds can produce inconsistent pass/fail outcomes across guardrail modes, reducing trust in validation signals.
+
+Recommended next remediation:
+1. Add explicit coverage metrics for `ml_ready = false` rows in guardrail output (count + age + top missing fields).
+2. Align `minutes_to_close` bounds to one canonical market-session contract and enforce it across spot-check and batch sanity paths.

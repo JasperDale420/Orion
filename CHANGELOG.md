@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - refreshed SQL-coupling hotspot counts after legacy-profile rollout controls
   - concentration update identifying remaining heavy debt in `validate_features`, `main_price_target_labeler`, and ML backfill/support jobs
   - transition guidance from broad audit passes to targeted hotspot closeout
+- **Gateway/Heber Parity Audit (Pass 169)**: Continued audit with:
+  - guardrail blind-spot finding: feature sanity checks filter to `ml_ready` rows and can miss stalled/incomplete label populations
+  - validation-consistency finding: `minutes_to_close` bounds diverge between spot-check (`0-390`) and batch sanity (`0-500`) paths
+  - remediation guidance for incomplete-row coverage metrics and canonical validation-bound alignment
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels
