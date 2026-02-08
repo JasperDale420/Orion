@@ -26,6 +26,7 @@ load_dotenv()
 from sqlalchemy import text
 
 from orion.main_price_target_labeler import (
+    get_entry_time_features as get_labeler_entry_time_features,
     get_gex_at_entry,
     get_max_pain_distance,
 )
@@ -120,24 +121,8 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
 
 
 def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
-    """Extract time-based features from entry timestamp."""
-    hour = entry_ts.hour
-    day_of_week = entry_ts.weekday()
-
-    if hour < 10:
-        session = "early"
-    elif hour < 12:
-        session = "midday"
-    elif hour < 14:
-        session = "afternoon"
-    else:
-        session = "late"
-
-    return {
-        "entry_hour": hour,
-        "entry_session": session,
-        "entry_day_of_week": day_of_week,
-    }
+    """Delegate to live labeler logic to keep backfill semantics aligned."""
+    return get_labeler_entry_time_features(entry_ts)
 
 
 async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:

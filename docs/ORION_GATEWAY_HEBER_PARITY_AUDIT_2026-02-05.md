@@ -5429,3 +5429,23 @@ Result:
 
 Residual:
 - with persistent failures, retries will occur every loop tick; optional failure backoff/jitter may be worth adding if guardrail jobs are noisy under prolonged outages.
+
+## 183) Pass 176 Continuation (2026-02-08)
+
+### 183.1 Backfill Session-Taxonomy Drift Removed (TDD-Backed)
+
+Finding:
+- `backfill_ml_features.get_entry_time_features()` used a local bucket contract (`early/midday/afternoon/late`) that diverged from live label generation (`OPEN/MID/CLOSE`).
+
+Implemented:
+- Added regression coverage:
+  - `tests/unit/test_backfill_ml_features_time_alignment.py` validates parity against `main_price_target_labeler.get_entry_time_features()` across OPEN/MID/CLOSE boundary timestamps.
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - removed local session bucketing logic,
+  - delegated time-feature generation directly to labeler’s canonical `get_entry_time_features`.
+
+Result:
+- historical backfill writes now preserve the same entry-session ontology as live label generation, eliminating silent label-feature drift introduced by backfill rewrites.
+
+Residual:
+- this resolves taxonomy drift only; broader backfill candidate selection semantics (`LIMIT` without deterministic ordering) remain open in the backlog.

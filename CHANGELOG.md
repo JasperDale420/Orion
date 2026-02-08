@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Session Taxonomy Alignment (TDD)**:
+  - Added `tests/unit/test_backfill_ml_features_time_alignment.py` to assert backfill entry-session parity with live labeler boundaries (`OPEN/MID/CLOSE`)
+  - Updated `src/orion/jobs/backfill_ml_features.py` to delegate `get_entry_time_features` to `main_price_target_labeler` canonical logic
+  - Prevents backfill from rewriting `price_target_labels.entry_session` with divergent bucket values
 - **Quality-Guardrails Failure Signaling Hardening (TDD)**:
   - Added `tests/unit/test_quality_guardrails_results.py` for structured guardrail result handling (`failed`/`issues`) and log-path assertions
   - Added `quality_guardrails._result_failure_summary()` to summarize structured failures
@@ -77,6 +81,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - fixed guardrail scheduler timestamp advancement to occur only on successful job runs
   - added TDD coverage for success/failure timestamp progression semantics
   - residual guidance to add optional failure backoff for noisy prolonged outage scenarios
+- **Gateway/Heber Parity Audit (Pass 176)**: Continued audit with:
+  - implemented backfill entry-session contract alignment to canonical labeler time-bucketing semantics
+  - added TDD coverage for OPEN/MID/CLOSE boundary parity between backfill and live labeler
+  - residual guidance that deterministic backfill candidate ordering remains to be remediated
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels
