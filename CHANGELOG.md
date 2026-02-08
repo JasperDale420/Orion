@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Extended `tests/unit/test_quality_guardrails_results.py` to assert `_run_job()` success/failure return contract and fail-fast behavior
   - Added `quality_guardrails._env_flag()` and `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES` toggle
   - Updated `_run_job()` to return `bool` success status and raise `RuntimeError` on structured check failures when fail-fast mode is enabled
+- **Quality-Guardrails Retry Semantics Fix (TDD)**:
+  - Added `_next_last_run()` helper and tests in `tests/unit/test_quality_guardrails.py`
+  - Updated scheduler loop to advance `last_*` timestamps only for successful runs
+  - Prevents failed guardrail runs from being incorrectly rate-limited by success-timestamp updates
 - **Feature-Enrichment Gateway Auth Fail-Fast (TDD)**:
   - Added `main_feature_enrichment._gateway_runtime_contract()` to enforce Gateway URL + API key startup contract
   - Updated feature-enrichment connector wiring to pass resolved `gateway_key` explicitly
@@ -69,6 +73,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented global fail-fast escalation policy toggle for guardrail structured failures
   - added TDD coverage for `_run_job()` boolean success contract and fail-fast runtime behavior
   - residual guidance to add per-job escalation policy granularity
+- **Gateway/Heber Parity Audit (Pass 175)**: Continued audit with:
+  - fixed guardrail scheduler timestamp advancement to occur only on successful job runs
+  - added TDD coverage for success/failure timestamp progression semantics
+  - residual guidance to add optional failure backoff for noisy prolonged outage scenarios
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

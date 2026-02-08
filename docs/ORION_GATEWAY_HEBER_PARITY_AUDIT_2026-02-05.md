@@ -5411,3 +5411,21 @@ Result:
 
 Residual:
 - current fail-fast policy is global; per-job escalation granularity (e.g., fail-fast only for reconciliation or feature sanity) remains a follow-up enhancement.
+
+## 182) Pass 175 Continuation (2026-02-08)
+
+### 182.1 Guardrail Scheduler Retry Semantics Corrected (TDD-Backed)
+
+Finding:
+- scheduler timestamps were advanced after each guardrail invocation regardless of success/failure, which delays retries on failing guardrail jobs by a full interval window.
+
+Implemented:
+- Added test coverage in `tests/unit/test_quality_guardrails.py` for `_next_last_run()` timestamp behavior.
+- Added `_next_last_run(last_run, succeeded, now)` helper in `src/orion/jobs/quality_guardrails.py`.
+- Updated `run_guardrail_loop()` to update `last_*` markers only when `_run_job()` succeeds.
+
+Result:
+- failed guardrail jobs are now retried on the next scheduler cycle (subject to loop sleep) instead of being deferred behind interval-based cooldown from false-success timestamp updates.
+
+Residual:
+- with persistent failures, retries will occur every loop tick; optional failure backoff/jitter may be worth adding if guardrail jobs are noisy under prolonged outages.

@@ -49,6 +49,12 @@ def _should_run(last_run: datetime | None, interval_seconds: int, now: datetime)
     return (now - last_run).total_seconds() >= interval_seconds
 
 
+def _next_last_run(last_run: datetime | None, succeeded: bool, now: datetime) -> datetime | None:
+    if succeeded:
+        return now
+    return last_run
+
+
 def _result_failure_summary(result: object) -> str | None:
     if not isinstance(result, dict):
         return None
@@ -113,19 +119,19 @@ async def run_guardrail_loop() -> None:
         now = datetime.now(timezone.utc)
 
         if _should_run(last_reconcile, reconcile_interval, now):
-            await _run_job(
+            reconcile_ok = await _run_job(
                 "reconciliation",
                 lambda: run_reconciliation(lookback_days=reconcile_lookback_days),
             )
-            last_reconcile = now
+            last_reconcile = _next_last_run(last_reconcile, succeeded=reconcile_ok, now=now)
 
         if _should_run(last_quality, quality_interval, now):
-            await _run_job("data_quality_checker", run_quality_checks)
-            last_quality = now
+            quality_ok = await _run_job("data_quality_checker", run_quality_checks)
+            last_quality = _next_last_run(last_quality, succeeded=quality_ok, now=now)
 
         if _should_run(last_validate, feature_validate_interval, now):
-            await _run_job("feature_sanity_validation", run_sanity_checks)
-            last_validate = now
+            validate_ok = await _run_job("feature_sanity_validation", run_sanity_checks)
+            last_validate = _next_last_run(last_validate, succeeded=validate_ok, now=now)
 
         await asyncio.sleep(loop_sleep_seconds)
 
