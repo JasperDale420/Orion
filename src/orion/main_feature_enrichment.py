@@ -42,6 +42,18 @@ VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
 _heber_reader = HeberReader()
 
 
+def _gateway_runtime_contract() -> tuple[str, str]:
+    gateway_url = (system_settings.data_gateway_url or "").strip()
+    if not gateway_url:
+        raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
+
+    gateway_api_key = (system_settings.data_gateway_api_key or "").strip()
+    if not gateway_api_key:
+        raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
+
+    return gateway_url.rstrip("/"), gateway_api_key
+
+
 def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> List[str]:
     if flow_df.empty:
         return []
@@ -232,15 +244,14 @@ async def persist_regime_snapshot(
 
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
+    gateway_url, gateway_api_key = _gateway_runtime_contract()
     await init_db()
 
-    gateway_url = system_settings.data_gateway_url
-
     # Initialize connectors (now using Data Gateway)
-    greek_connector = UWGreekExposureConnector(gateway_url=gateway_url)
-    tide_connector = UWMarketTideConnector(gateway_url=gateway_url)
-    max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url)
-    iv_connector = UWIVRankConnector(gateway_url=gateway_url)
+    greek_connector = UWGreekExposureConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+    tide_connector = UWMarketTideConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+    max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+    iv_connector = UWIVRankConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
     regime_detector = MultiAxisRegimeDetector()
     vix_connector = VIXProxyConnector()  # Uses VIXY bars from silver_alpaca_bars
 

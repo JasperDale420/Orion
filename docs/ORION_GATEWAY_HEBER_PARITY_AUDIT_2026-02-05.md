@@ -5306,3 +5306,25 @@ Risk:
 Recommended next remediation:
 1. Add explicit coverage metrics for `ml_ready = false` rows in guardrail output (count + age + top missing fields).
 2. Align `minutes_to_close` bounds to one canonical market-session contract and enforce it across spot-check and batch sanity paths.
+
+## 177) Pass 170 Continuation (2026-02-08)
+
+### 177.1 Feature-Enrichment Gateway Auth Contract Hardened (TDD-Backed)
+
+Implemented:
+- Added startup contract helper `main_feature_enrichment._gateway_runtime_contract()` that:
+  - requires configured Gateway URL (`DATA_GATEWAY_URL/GATEWAY_URL`),
+  - requires configured Gateway API key (`DATA_GATEWAY_API_KEY/GATEWAY_API_KEY`),
+  - normalizes trailing slash from base URL.
+- Updated `run_feature_loop()` to enforce the contract before connector initialization and pass resolved key explicitly into all UW Gateway connectors.
+- Wired Gateway API key env for `feature_enrichment` in compose:
+  - `GATEWAY_API_KEY=${GATEWAY_API_KEY}`.
+- Added tests:
+  - `tests/unit/test_feature_enrichment_gateway_contract.py`
+  - `tests/unit/test_compose_legacy_gate_wiring.py::test_feature_enrichment_wires_gateway_api_key_env`
+
+Result:
+- feature enrichment now fails fast at startup when Gateway auth is missing instead of silently looping with no/empty enrichment writes.
+
+Residual:
+- connector-level behavior still logs-and-continues on per-request failures; this is acceptable for transient runtime errors, but alerting/SLO policy is still needed for sustained zero-write conditions.

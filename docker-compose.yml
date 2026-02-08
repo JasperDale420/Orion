@@ -93,6 +93,7 @@ services:
       - UW_API_KEY=${UW_API_KEY}
       - ORION_RUN_ID=docker_persistent
       - GATEWAY_URL=http://host.docker.internal:8080
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
 
   option_quote_tracker:
