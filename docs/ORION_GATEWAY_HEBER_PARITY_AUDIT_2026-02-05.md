@@ -5368,3 +5368,23 @@ Result:
 
 Residual:
 - this is an alignment stopgap; long-term fix remains migration of pattern-miner training sources to Heber canonical datasets so it can rejoin non-legacy runtime profiles.
+
+## 180) Pass 173 Continuation (2026-02-08)
+
+### 180.1 Guardrail Orchestrator No Longer Masks Structured Validation Failures (TDD-Backed)
+
+Implemented:
+- Added `tests/unit/test_quality_guardrails_results.py` coverage for:
+  - structured job result parsing (`failed`/`issues`),
+  - error-path logging when guardrail jobs report failed checks,
+  - completion logging only for clean results.
+- Added `_result_failure_summary()` in `src/orion/jobs/quality_guardrails.py` to normalize and summarize structured failure results.
+- Updated `_run_job()` to:
+  - log an explicit error (`Guardrail job reported failed checks`) when a job returns non-zero failures,
+  - avoid logging misleading `Completed guardrail job` for failed-result payloads.
+
+Result:
+- scheduled guardrail orchestration now surfaces contract-level check failures loudly in logs instead of reporting false-green completion messages.
+
+Residual:
+- orchestrator behavior still prefers non-crashing loop continuity over process exit on failed checks; escalation policy (exit vs alert-only by job type) remains a follow-up design decision.

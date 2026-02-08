@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Quality-Guardrails Failure Signaling Hardening (TDD)**:
+  - Added `tests/unit/test_quality_guardrails_results.py` for structured guardrail result handling (`failed`/`issues`) and log-path assertions
+  - Added `quality_guardrails._result_failure_summary()` to summarize structured failures
+  - Updated `quality_guardrails._run_job()` to log explicit errors for failed-result payloads and avoid false "completed" logs
 - **Feature-Enrichment Gateway Auth Fail-Fast (TDD)**:
   - Added `main_feature_enrichment._gateway_runtime_contract()` to enforce Gateway URL + API key startup contract
   - Updated feature-enrichment connector wiring to pass resolved `gateway_key` explicitly
@@ -53,6 +57,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented `pattern-miner` compose profile alignment to legacy label stack dependency
   - added test coverage to enforce profile coupling at compose-contract level
   - residual guidance to migrate pattern-miner training source to Heber canon for non-legacy runtime rejoin
+- **Gateway/Heber Parity Audit (Pass 173)**: Continued audit with:
+  - implemented `quality_guardrails` structured-failure signaling to avoid false-green completion logs
+  - added TDD coverage for guardrail result summary and failed-result logging behavior
+  - residual guidance to define escalation policy for guardrail failures (alert-only vs fail-fast per job class)
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

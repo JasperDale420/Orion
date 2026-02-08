@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
@@ -41,10 +42,29 @@ def _should_run(last_run: datetime | None, interval_seconds: int, now: datetime)
     return (now - last_run).total_seconds() >= interval_seconds
 
 
+def _result_failure_summary(result: object) -> str | None:
+    if not isinstance(result, dict):
+        return None
+
+    failed_raw = result.get("failed")
+    if not isinstance(failed_raw, int):
+        return None
+    if failed_raw <= 0:
+        return None
+
+    issues = result.get("issues")
+    issue_count = len(issues) if isinstance(issues, Sequence) and not isinstance(issues, (str, bytes)) else 0
+    return f"failed_checks={failed_raw} issues={issue_count}"
+
+
 async def _run_job(name: str, job: Callable[[], Awaitable[object]]) -> None:
     try:
         logger.info("Starting guardrail job: %s", name)
-        await job()
+        result = await job()
+        failure_summary = _result_failure_summary(result)
+        if failure_summary is not None:
+            logger.error("Guardrail job reported failed checks: %s (%s)", name, failure_summary)
+            return
         logger.info("Completed guardrail job: %s", name)
     except Exception:
         logger.exception("Guardrail job failed: %s", name)
