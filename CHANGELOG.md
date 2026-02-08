@@ -654,6 +654,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - remediation confirmation that disabled-service logs now attribute the effective legacy control key/value (specific vs global fallback)
   - compose-operability remediation that per-service legacy gate env controls are now wired in default compose service definitions
   - residual note that container restart-loop behavior under `restart: unless-stopped` remains a separate lifecycle-policy fix
+- **Gateway/Heber Parity Audit (Pass 163)**: Continued audit with:
+  - remediation confirmation that legacy gate controls are now centralized in typed `SystemSettings` fields
+  - config-governance remediation replacing duplicated service-level env parsing with centralized typed settings resolution
+  - residual note that compose restart-loop behavior for disabled services remains open
 
 ### Changed
 
@@ -720,6 +724,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `DEPRECATED_PIPELINE_DISABLED` logs now emit the actual control key/value that disabled the service
   - Added compose env wiring for `ORION_ENABLE_LEGACY_FLOW_LABELER`, `ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER`, and `ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER` in `docker-compose.yml`
   - Added coverage in `tests/unit/test_legacy_label_pipeline_gates.py` and `tests/unit/test_compose_legacy_gate_wiring.py`
+- **Legacy Gate Config Centralization (TDD)**:
+  - Added typed legacy gate settings in `src/orion/config.py` under `SystemSettings`
+  - Updated legacy gate resolution in `src/orion/main_option_quote_tracker.py`, `src/orion/main_labeler.py`, and `src/orion/main_price_target_labeler.py` to use centralized settings
+  - Added config mapping coverage in `tests/unit/test_config_centralization.py`
 - **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
   - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
   - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`

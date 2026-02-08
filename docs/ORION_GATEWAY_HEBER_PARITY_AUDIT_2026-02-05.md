@@ -5145,3 +5145,28 @@ Result:
 
 Residual:
 - restart-loop behavior under `restart: unless-stopped` (pass 159) is still open and requires lifecycle-policy handling beyond env wiring.
+
+## 170) Pass 163 Continuation (2026-02-08)
+
+### 170.1 Config-Governance Remediation: Legacy Gate Controls Centralized in Typed Settings
+
+Implemented (TDD-backed):
+- Added typed `SystemSettings` fields for legacy-gate controls:
+  - `legacy_label_pipelines_enabled` (`ORION_ENABLE_LEGACY_LABEL_PIPELINES`)
+  - `legacy_flow_labeler_enabled` (`ORION_ENABLE_LEGACY_FLOW_LABELER`)
+  - `legacy_option_quote_tracker_enabled` (`ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER`)
+  - `legacy_price_target_labeler_enabled` (`ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER`)
+  - file: `src/orion/config.py`.
+- Updated legacy service gate-resolution helpers to derive effective control from `SystemSettings` instead of ad hoc env parsing:
+  - `src/orion/main_option_quote_tracker.py`
+  - `src/orion/main_labeler.py`
+  - `src/orion/main_price_target_labeler.py`
+- Added centralized config mapping test:
+  - `tests/unit/test_config_centralization.py::test_legacy_label_gate_settings_env_mapping`
+
+Result:
+- gate ownership/typing is now centralized in config semantics rather than duplicated across service modules,
+- rollout control behavior remains aligned with service-specific override > global fallback while using typed settings.
+
+Residual:
+- compose restart-loop behavior for intentionally disabled services (pass 159) is still unresolved.

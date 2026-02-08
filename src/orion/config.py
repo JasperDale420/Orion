@@ -68,6 +68,22 @@ class SystemSettings(BaseSettings):
     baseline_solver_id: Optional[str] = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
     orion_use_gateway: bool = Field(default=True, validation_alias="ORION_USE_GATEWAY")
+    legacy_label_pipelines_enabled: bool = Field(
+        default=True,
+        validation_alias="ORION_ENABLE_LEGACY_LABEL_PIPELINES",
+    )
+    legacy_flow_labeler_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_FLOW_LABELER",
+    )
+    legacy_option_quote_tracker_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER",
+    )
+    legacy_price_target_labeler_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER",
+    )
     ml_prefilter_threshold: float = Field(
         default=0.5,
         ge=0.0,

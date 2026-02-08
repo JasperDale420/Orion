@@ -6,7 +6,6 @@ for accurate ML training labels.
 """
 
 import asyncio
-import os
 import re
 import signal
 from datetime import datetime, timedelta, timezone
@@ -14,6 +13,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy import text
 
+from orion.config import SystemSettings
 from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
@@ -44,19 +44,19 @@ POLL_INTERVAL_SECONDS = 60
 shutdown_event = asyncio.Event()
 
 
-def _parse_env_bool(raw: str) -> bool:
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
     specific_key = "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER"
-    specific_raw = os.getenv(specific_key)
-    if specific_raw is not None:
-        return _parse_env_bool(specific_raw), specific_key, specific_raw
+    if settings.legacy_option_quote_tracker_enabled is not None:
+        enabled = settings.legacy_option_quote_tracker_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
 
     global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    global_raw = os.getenv(global_key, "true")
-    return _parse_env_bool(global_raw), global_key, global_raw
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
 
 
 def _legacy_label_pipelines_enabled() -> bool:

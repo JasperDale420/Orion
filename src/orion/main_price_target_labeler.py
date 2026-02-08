@@ -20,6 +20,7 @@ load_dotenv()
 
 from sqlalchemy import text
 
+from orion.config import SystemSettings
 from orion.labeler import (
     BATCH_SIZE,
     CHECKPOINT_OFFSETS,
@@ -52,19 +53,19 @@ _PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
 _PRICE_TARGET_LABEL_COLUMNS: Optional[Set[str]] = None
 
 
-def _parse_env_bool(raw: str) -> bool:
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
     specific_key = "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER"
-    specific_raw = os.getenv(specific_key)
-    if specific_raw is not None:
-        return _parse_env_bool(specific_raw), specific_key, specific_raw
+    if settings.legacy_price_target_labeler_enabled is not None:
+        enabled = settings.legacy_price_target_labeler_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
 
     global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    global_raw = os.getenv(global_key, "true")
-    return _parse_env_bool(global_raw), global_key, global_raw
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
 
 
 def _legacy_label_pipelines_enabled() -> bool:

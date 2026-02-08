@@ -81,6 +81,27 @@ def test_heber_settings_env_mapping():
         assert str(s.heber_data_root) == "/tmp/heber-data"
 
 
+def test_legacy_label_gate_settings_env_mapping():
+    """Verify centralized legacy gate env vars map into typed system settings."""
+    with patch.dict(
+        os.environ,
+        {
+            "ORION_ENABLE_LEGACY_LABEL_PIPELINES": "false",
+            "ORION_ENABLE_LEGACY_FLOW_LABELER": "true",
+            "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER": "false",
+            "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER": "true",
+        },
+        clear=True,
+    ):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.legacy_label_pipelines_enabled is False
+        assert s.legacy_flow_labeler_enabled is True
+        assert s.legacy_option_quote_tracker_enabled is False
+        assert s.legacy_price_target_labeler_enabled is True
+
+
 @pytest.mark.asyncio
 async def test_eod_review_uses_config():
     """Verify EODReviewAgent uses configured paths."""
