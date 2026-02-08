@@ -5490,3 +5490,26 @@ Result:
 
 Residual:
 - this remains an in-memory run cursor; crash-safe resumability still requires persisted watermark/checkpoint state if strict exactly-once backfill semantics are needed.
+
+## 186) Pass 179 Continuation (2026-02-08)
+
+### 186.1 Backfill Fetch-Budget Contraction Added to Eliminate Truncation Overshoot (TDD-Backed)
+
+Finding:
+- `run_backfill` requested full `batch_size` on every page fetch even when only a smaller process budget remained in the current run (`limit - total_processed`),
+- this allows page over-fetch relative to remaining budget and couples cursor state to rows that may never need to be processed in that run slice.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_selection.py` with:
+  - `test_run_backfill_requests_only_remaining_budget` (red/green) to enforce per-iteration fetch-limit contraction.
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - computes `remaining = limit - total_processed` each loop,
+  - requests `get_records_to_backfill(limit=min(batch_size, remaining), ...)`,
+  - advances cursor from each processed row instead of pre-setting from fetched-page tail.
+
+Result:
+- backfill pagination now aligns fetch volume with the exact remaining process budget for the run,
+- removes page over-fetch/truncation risk and hardens cursor semantics around processed progress.
+
+Residual:
+- restart continuity is still in-memory for a single run; persisted checkpoints/watermarks remain the next required step for crash-safe resumability across process restarts.

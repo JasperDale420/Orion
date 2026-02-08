@@ -101,6 +101,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented keyset cursor pagination in `backfill_ml_features` candidate selection and run loop
   - added TDD coverage for cursor SQL predicate contract and cursor advancement behavior
   - residual guidance that persisted watermark state is still needed for crash-safe resumability
+- **Backfill Remaining-Budget Pagination Safety (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_selection.py` with `test_run_backfill_requests_only_remaining_budget`
+  - Updated `src/orion/jobs/backfill_ml_features.py` run loop to request `min(batch_size, remaining_limit)` each iteration
+  - Updated cursor advancement to follow the last processed row (not pre-fetched page tail)
+  - Prevents over-fetching rows beyond the process budget and avoids cursor overshoot conditions
+- **Gateway/Heber Parity Audit (Pass 179)**: Continued audit with:
+  - implemented remaining-budget fetch sizing in `backfill_ml_features` run pagination loop
+  - added TDD coverage for per-iteration fetch-limit contraction and cursor continuity
+  - residual guidance to add persisted watermarking for crash-safe restart continuity
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels

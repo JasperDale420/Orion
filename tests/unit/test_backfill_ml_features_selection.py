@@ -121,3 +121,55 @@ async def test_run_backfill_uses_cursor_to_paginate_batches(
     assert calls[0]["after_event_id"] is None
     assert calls[1]["after_entry_ts"] == second_ts
     assert calls[1]["after_event_id"] == "evt-2"
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_requests_only_remaining_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    second_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        calls.append(
+            {
+                "limit": limit,
+                "after_entry_ts": after_entry_ts,
+                "after_event_id": after_event_id,
+            }
+        )
+        if len(calls) == 1:
+            return [
+                {"event_id": "evt-1", "ticker": "AAPL", "entry_ts": first_ts},
+                {"event_id": "evt-2", "ticker": "MSFT", "entry_ts": second_ts},
+            ]
+        if len(calls) == 2:
+            return [{"event_id": "evt-3", "ticker": "TSLA", "entry_ts": second_ts}]
+        return []
+
+    async def _fake_update_ml_features(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(backfill_ml_features, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_ml_features, "update_ml_features", _fake_update_ml_features)
+    monkeypatch.setattr(backfill_ml_features, "init_db", _fake_init_db)
+    monkeypatch.setattr(backfill_ml_features.asyncio, "sleep", _fake_sleep)
+
+    await backfill_ml_features.run_backfill(batch_size=2, limit=3)
+
+    assert calls[0]["limit"] == 2
+    assert calls[1]["limit"] == 1
+    assert calls[1]["after_entry_ts"] == second_ts
+    assert calls[1]["after_event_id"] == "evt-2"

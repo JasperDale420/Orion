@@ -483,17 +483,17 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
     after_event_id: str | None = None
 
     while True:
+        remaining = limit - total_processed
+        if remaining <= 0:
+            break
+
         records = await get_records_to_backfill(
-            limit=batch_size,
+            limit=min(batch_size, remaining),
             after_entry_ts=after_entry_ts,
             after_event_id=after_event_id,
         )
         if not records:
             break
-
-        last_record = records[-1]
-        after_entry_ts = last_record.get("entry_ts")
-        after_event_id = last_record.get("event_id")
 
         for record in records:
             try:
@@ -503,6 +503,8 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
                 logger.error(f"Failed to update {record['event_id']}: {e}")
 
             total_processed += 1
+            after_entry_ts = record.get("entry_ts")
+            after_event_id = record.get("event_id")
 
             if total_processed >= limit:
                 break
