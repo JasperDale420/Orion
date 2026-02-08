@@ -5632,3 +5632,27 @@ Result:
 
 Residual:
 - backoff policy is currently global across guardrail jobs; per-job backoff tuning and jitter remain future hardening options if differentiated retry pacing is required.
+
+## 191) Pass 184 Continuation (2026-02-08)
+
+### 191.1 `backfill_exit_columns` Crash-Resume Watermarking Added (TDD-Backed)
+
+Finding:
+- `backfill_exit_columns` had deterministic keyset pagination, but restart continuity was still in-memory only for both phases; process restarts resumed from phase start and could re-scan large historical ranges.
+
+Implemented:
+- Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+  - `test_get_records_to_backfill_supports_timestamp_only_cursor_filter`
+  - `test_get_all_records_for_checkpoints_supports_timestamp_only_cursor_filter`
+  - `test_run_backfill_resumes_from_phase_watermarks_and_persists_progress`
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - added per-phase watermark keys for velocity and checkpoint phases,
+  - added load/save helpers backed by existing `ingest_watermarks` storage utilities,
+  - initialized both phase cursors from persisted watermarks at startup,
+  - persisted watermark progression during per-record processing in each phase.
+
+Result:
+- exit-column backfills now resume from the latest persisted phase timestamps after restarts, reducing repeated full-range scans and improving operational continuity for large backlogs.
+
+Residual:
+- resume state is timestamp-only; strict duplicate-free continuity across shared `entry_ts` cohorts still requires durable keyset state (`entry_ts` + `event_id`) per phase.

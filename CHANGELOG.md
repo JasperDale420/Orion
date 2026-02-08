@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Exit-Columns Crash-Resume Watermarks (TDD)**:
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+    - timestamp-only cursor SQL contract tests for velocity/checkpoint selectors
+    - `test_run_backfill_resumes_from_phase_watermarks_and_persists_progress`
+  - Updated `src/orion/jobs/backfill_exit_columns.py` to:
+    - load persisted per-phase watermarks at run start
+    - persist per-record watermark progression for velocity and checkpoint phases
+    - resume selector scans with timestamp-only cursors when event-id state is unavailable
+  - Adds crash-safe timestamp resume behavior to exit-column backfills, aligning with existing ML backfill continuity controls
+- **Gateway/Heber Parity Audit (Pass 184)**: Continued audit with:
+  - implemented persisted per-phase watermark resume flow in `backfill_exit_columns`
+  - added TDD coverage for phase-level resume cursor injection and watermark progression
+  - residual guidance to persist full keyset resume state (`entry_ts` + `event_id`) for strict duplicate-free restart continuity
 - **Backfill Session Taxonomy Alignment (TDD)**:
   - Added `tests/unit/test_backfill_ml_features_time_alignment.py` to assert backfill entry-session parity with live labeler boundaries (`OPEN/MID/CLOSE`)
   - Updated `src/orion/jobs/backfill_ml_features.py` to delegate `get_entry_time_features` to `main_price_target_labeler` canonical logic
