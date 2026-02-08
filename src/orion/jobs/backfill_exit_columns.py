@@ -68,12 +68,31 @@ def get_price_at_offset_days(prices: List[Dict[str, Any]], entry_ts: datetime, d
     return closest
 
 
-async def get_records_to_backfill(limit: int = 1000) -> List[Dict[str, Any]]:
+async def get_records_to_backfill(
+    limit: int = 1000,
+    after_entry_ts: datetime | None = None,
+    after_event_id: str | None = None,
+) -> List[Dict[str, Any]]:
     """Get records missing new velocity columns."""
 
     async def query(session: Any) -> List[Dict[str, Any]]:
-        stmt = text(
+        params: Dict[str, Any] = {"limit": limit}
+        cursor_clause = ""
+        if after_entry_ts is not None and after_event_id is not None:
+            cursor_clause = """
+              AND (entry_ts > :after_entry_ts
+                   OR (entry_ts = :after_entry_ts AND event_id > :after_event_id))
             """
+            params["after_entry_ts"] = after_entry_ts
+            params["after_event_id"] = after_event_id
+        elif after_entry_ts is not None:
+            cursor_clause = """
+              AND entry_ts >= :after_entry_ts
+            """
+            params["after_entry_ts"] = after_entry_ts
+
+        stmt = text(
+            f"""
             SELECT event_id, ticker, option_chain, entry_ts, entry_option_price,
                    hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts
             FROM price_target_labels
@@ -82,23 +101,43 @@ async def get_records_to_backfill(limit: int = 1000) -> List[Dict[str, Any]]:
                 OR (time_to_100_pct_seconds IS NULL AND hit_100_pct_ts IS NOT NULL)
                 OR (time_to_150_pct_seconds IS NULL AND hit_150_pct_ts IS NOT NULL)
             )
+            {cursor_clause}
             ORDER BY entry_ts ASC, event_id ASC
             LIMIT :limit
         """
         )
-        result = await session.execute(stmt, {"limit": limit})
+        result = await session.execute(stmt, params)
         rows = result.fetchall()
         return [dict(row._mapping) for row in rows]
 
     return await db_query(query)
 
 
-async def get_all_records_for_checkpoints(limit: int = 1000) -> List[Dict[str, Any]]:
+async def get_all_records_for_checkpoints(
+    limit: int = 1000,
+    after_entry_ts: datetime | None = None,
+    after_event_id: str | None = None,
+) -> List[Dict[str, Any]]:
     """Get records missing checkpoint columns."""
 
     async def query(session: Any) -> List[Dict[str, Any]]:
-        stmt = text(
+        params: Dict[str, Any] = {"limit": limit}
+        cursor_clause = ""
+        if after_entry_ts is not None and after_event_id is not None:
+            cursor_clause = """
+              AND (entry_ts > :after_entry_ts
+                   OR (entry_ts = :after_entry_ts AND event_id > :after_event_id))
             """
+            params["after_entry_ts"] = after_entry_ts
+            params["after_event_id"] = after_event_id
+        elif after_entry_ts is not None:
+            cursor_clause = """
+              AND entry_ts >= :after_entry_ts
+            """
+            params["after_entry_ts"] = after_entry_ts
+
+        stmt = text(
+            f"""
             SELECT event_id, option_chain, entry_ts, entry_option_price
             FROM price_target_labels
             WHERE (
@@ -110,11 +149,12 @@ async def get_all_records_for_checkpoints(limit: int = 1000) -> List[Dict[str, A
                 OR price_at_3d IS NULL OR return_at_3d IS NULL
                 OR price_at_1w IS NULL OR return_at_1w IS NULL
             )
+            {cursor_clause}
             ORDER BY entry_ts ASC, event_id ASC
             LIMIT :limit
         """
         )
-        result = await session.execute(stmt, {"limit": limit})
+        result = await session.execute(stmt, params)
         rows = result.fetchall()
         return [dict(row._mapping) for row in rows]
 
@@ -234,28 +274,71 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
 
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
     logger.info("Phase 1: Backfilling velocity columns (time_to_75/100/150_pct_seconds)...")
-    velocity_records = await get_records_to_backfill(limit)
     velocity_updated = 0
+    velocity_processed = 0
+    velocity_after_entry_ts: datetime | None = None
+    velocity_after_event_id: str | None = None
 
-    for record in velocity_records:
-        if await update_velocity_columns(record):
-            velocity_updated += 1
+    while True:
+        remaining = limit - velocity_processed
+        if remaining <= 0:
+            break
 
-    logger.info(f"Velocity columns updated: {velocity_updated}/{len(velocity_records)}")
+        velocity_records = await get_records_to_backfill(
+            limit=min(batch_size, remaining),
+            after_entry_ts=velocity_after_entry_ts,
+            after_event_id=velocity_after_event_id,
+        )
+        if not velocity_records:
+            break
+
+        for record in velocity_records:
+            if await update_velocity_columns(record):
+                velocity_updated += 1
+            velocity_processed += 1
+            velocity_after_entry_ts = record.get("entry_ts")
+            velocity_after_event_id = record.get("event_id")
+
+            if velocity_processed >= limit:
+                break
+
+    logger.info(f"Velocity columns updated: {velocity_updated}/{velocity_processed}")
 
     # Phase 2: Checkpoint columns (slower, needs to fetch price history)
     logger.info("Phase 2: Backfilling checkpoint columns (15m/30m/8h/1d/2d/3d/1w)...")
-    checkpoint_records = await get_all_records_for_checkpoints(limit)
     checkpoint_updated = 0
+    checkpoint_processed = 0
+    checkpoint_after_entry_ts: datetime | None = None
+    checkpoint_after_event_id: str | None = None
+    log_checkpoint_every = max(batch_size, 1)
 
-    for i, record in enumerate(checkpoint_records):
-        if await update_checkpoint_columns(record):
-            checkpoint_updated += 1
+    while True:
+        remaining = limit - checkpoint_processed
+        if remaining <= 0:
+            break
 
-        if (i + 1) % batch_size == 0:
-            logger.info(f"Processed {i + 1}/{len(checkpoint_records)} checkpoint records...")
+        checkpoint_records = await get_all_records_for_checkpoints(
+            limit=min(batch_size, remaining),
+            after_entry_ts=checkpoint_after_entry_ts,
+            after_event_id=checkpoint_after_event_id,
+        )
+        if not checkpoint_records:
+            break
 
-    logger.info(f"Checkpoint columns updated: {checkpoint_updated}/{len(checkpoint_records)}")
+        for record in checkpoint_records:
+            if await update_checkpoint_columns(record):
+                checkpoint_updated += 1
+            checkpoint_processed += 1
+            checkpoint_after_entry_ts = record.get("entry_ts")
+            checkpoint_after_event_id = record.get("event_id")
+
+            if checkpoint_processed % log_checkpoint_every == 0:
+                logger.info(f"Processed {checkpoint_processed} checkpoint records...")
+
+            if checkpoint_processed >= limit:
+                break
+
+    logger.info(f"Checkpoint columns updated: {checkpoint_updated}/{checkpoint_processed}")
 
     logger.info("Backfill complete!")
 

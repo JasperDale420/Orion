@@ -44,6 +44,20 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_csv(name: str) -> set[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return set()
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _fail_fast_enabled_for_job(name: str) -> bool:
+    if _env_flag("ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES", default=False):
+        return True
+    listed_jobs = _env_csv("ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES_JOBS")
+    return name.strip().lower() in listed_jobs
+
+
 def _should_run(last_run: datetime | None, interval_seconds: int, now: datetime) -> bool:
     if last_run is None:
         return True
@@ -72,7 +86,7 @@ def _result_failure_summary(result: object) -> str | None:
 
 
 async def _run_job(name: str, job: Callable[[], Awaitable[object]]) -> bool:
-    fail_fast_on_check_failures = _env_flag("ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES", default=False)
+    fail_fast_on_check_failures = _fail_fast_enabled_for_job(name)
 
     result: object
     try:

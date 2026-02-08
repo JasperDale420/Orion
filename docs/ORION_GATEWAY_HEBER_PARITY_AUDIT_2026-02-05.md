@@ -5560,3 +5560,52 @@ Result:
 
 Residual:
 - selector correctness is fixed, but the job still fetches a single capped page (`LIMIT`) per phase without iterative pagination/watermark progression; very large backlogs can require repeated runs.
+
+## 189) Pass 182 Continuation (2026-02-08)
+
+### 189.1 `backfill_exit_columns` Single-Page Phase Limits Replaced with Keyset Pagination (TDD-Backed)
+
+Finding:
+- both velocity and checkpoint phases in `run_backfill` performed a single selector call with `LIMIT`, then processed only that one page,
+- this created truncation behavior for large backlogs and required repeated job reruns for complete processing.
+
+Implemented:
+- Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+  - cursor-filter SQL contract tests for both selectors,
+  - run-loop pagination behavior test validating:
+    - per-iteration `limit=min(batch_size, remaining)`,
+    - cursor advancement across pages for both phases.
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - selectors now accept optional keyset cursor args (`after_entry_ts`, `after_event_id`),
+  - selectors apply cursor predicates and preserve deterministic ordering (`entry_ts`, `event_id`),
+  - run loop now paginates both phases until exhaustion or phase limit.
+
+Result:
+- exit-column backfills now traverse candidate sets deterministically across multiple pages within a single run, instead of stopping after one capped query page.
+
+Residual:
+- unlike ML backfill, exit-column phases still do not persist phase watermarks across process restarts; crash-safe resume remains an open follow-up.
+
+## 189) Pass 182 Continuation (2026-02-08)
+
+### 189.1 Guardrail Fail-Fast Escalation Granularity Added (TDD-Backed)
+
+Finding:
+- fail-fast escalation policy for structured guardrail check failures was global-only (`ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES`), so operators could not enforce strict stop behavior for high-criticality jobs while leaving others in alert-only mode.
+
+Implemented:
+- Extended `tests/unit/test_quality_guardrails_results.py` with:
+  - `test_run_job_raises_when_job_is_listed_for_fail_fast`
+  - `test_run_job_does_not_raise_when_job_not_listed_for_fail_fast`
+- Updated `src/orion/jobs/quality_guardrails.py`:
+  - added `_env_csv()` parser for comma-separated env values,
+  - added `_fail_fast_enabled_for_job(name)` policy helper,
+  - wired new env contract `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES_JOBS`,
+  - updated `_run_job()` to apply per-job fail-fast escalation while preserving global override behavior from `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES`.
+
+Result:
+- guardrail escalation can now be targeted by job class (for example fail-fast only on `feature_sanity_validation` while keeping reconciliation/data-quality in alert-only mode),
+- operational rollout can be stricter where required without globally forcing process exits for all guardrail failures.
+
+Residual:
+- failure retry cadence remains loop-driven without adaptive per-job backoff/jitter controls under prolonged outage conditions.

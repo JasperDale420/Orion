@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Extended `tests/unit/test_quality_guardrails_results.py` to assert `_run_job()` success/failure return contract and fail-fast behavior
   - Added `quality_guardrails._env_flag()` and `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES` toggle
   - Updated `_run_job()` to return `bool` success status and raise `RuntimeError` on structured check failures when fail-fast mode is enabled
+- **Quality-Guardrails Per-Job Fail-Fast Escalation (TDD)**:
+  - Extended `tests/unit/test_quality_guardrails_results.py` to assert selective fail-fast behavior based on guardrail job name
+  - Added `quality_guardrails._env_csv()` and `quality_guardrails._fail_fast_enabled_for_job()` helpers
+  - Added `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES_JOBS` env support (comma-separated job names), while preserving global `ORION_GUARDRAIL_FAIL_ON_CHECK_FAILURES` override
+  - Updated `_run_job()` to apply fail-fast policy per job when configured
 - **Quality-Guardrails Retry Semantics Fix (TDD)**:
   - Added `_next_last_run()` helper and tests in `tests/unit/test_quality_guardrails.py`
   - Updated scheduler loop to advance `last_*` timestamps only for successful runs
@@ -135,6 +140,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - implemented partial-row recovery predicates for `backfill_exit_columns` velocity and checkpoint selectors
   - added TDD coverage for all-column selection contracts and deterministic ordering
   - residual guidance to add run-level pagination/progress watermarking for very large checkpoint backfills
+- **Backfill Exit-Columns Phase Pagination (TDD)**:
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+    - cursor-filter SQL contract tests for velocity/checkpoint selectors
+    - run-loop pagination test across both backfill phases
+  - Updated `src/orion/jobs/backfill_exit_columns.py` to:
+    - support keyset cursor parameters in both selectors
+    - paginate phase processing with `min(batch_size, remaining)` fetch windows
+    - advance per-phase cursors by processed row (`entry_ts`, `event_id`)
+  - Prevents single-page truncation and allows deterministic multi-page traversal for large backfill sets
+- **Gateway/Heber Parity Audit (Pass 182)**: Continued audit with:
+  - implemented multi-page deterministic traversal in `backfill_exit_columns` for both velocity and checkpoint phases
+  - added TDD coverage for selector cursor predicates and per-phase run-loop pagination
+  - residual guidance to add persisted per-phase watermarks for crash-safe resume parity with ML backfill
 - **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
   - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
   - Includes technical debt backlog and keep/migrate/dispose framing for features and labels
