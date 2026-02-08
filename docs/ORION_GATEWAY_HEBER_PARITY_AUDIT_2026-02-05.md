@@ -5328,3 +5328,27 @@ Result:
 
 Residual:
 - connector-level behavior still logs-and-continues on per-request failures; this is acceptable for transient runtime errors, but alerting/SLO policy is still needed for sustained zero-write conditions.
+
+## 178) Pass 171 Continuation (2026-02-08)
+
+### 178.1 Guardrail Sanity Blind Spot Remediated in `validate_features` (TDD-Backed)
+
+Implemented:
+- Added canonical validation constant `MINUTES_TO_CLOSE_MAX = 390` and aligned both:
+  - spot-check time validation,
+  - batch sanity query bounds,
+  in `src/orion/jobs/validate_features.py`.
+- Updated sanity SQL to evaluate bad-feature checks on `ml_ready` rows while also measuring incomplete coverage:
+  - added `not_ready` count for `ml_ready = false` rows.
+- Added explicit sanity failure when incomplete rows are present:
+  - emits issue `ml_ready = false rows present: N` and increments failed-check count.
+- Added tests:
+  - `tests/unit/test_validate_features_guardrails.py::test_run_sanity_checks_query_uses_consistent_minutes_to_close_bound`
+  - `tests/unit/test_validate_features_guardrails.py::test_run_sanity_checks_flags_unready_rows`
+
+Result:
+- scheduled guardrails no longer silently report green while label population is incomplete,
+- time-bound validation semantics are now internally consistent for `minutes_to_close`.
+
+Residual:
+- this fix improves detection/reporting; operational response (auto-remediation/escalation) for sustained incomplete-row states is still a follow-up.

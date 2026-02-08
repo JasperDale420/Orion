@@ -24,6 +24,8 @@ from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.validate_features")
 
+MINUTES_TO_CLOSE_MAX = 390
+
 
 # ============================================================================
 # SPOT-CHECK VALIDATION
@@ -101,12 +103,14 @@ def validate_time_features(label: Dict, entry_ts: datetime) -> Dict[str, List[st
         else:
             failed.append(f"entry_day_of_week mismatch: got {label['entry_day_of_week']}, expected {entry_ts.weekday()}")
 
-    # minutes_to_close should be reasonable (0-390)
+    # minutes_to_close should be within regular US session minutes.
     if label.get("minutes_to_close") is not None:
-        if 0 <= label["minutes_to_close"] <= 390:
+        if 0 <= label["minutes_to_close"] <= MINUTES_TO_CLOSE_MAX:
             passed.append(f"minutes_to_close={label['minutes_to_close']} in range ✓")
         else:
-            failed.append(f"minutes_to_close={label['minutes_to_close']} out of range [0, 390]")
+            failed.append(
+                f"minutes_to_close={label['minutes_to_close']} out of range [0, {MINUTES_TO_CLOSE_MAX}]"
+            )
 
     return {"passed": passed, "failed": failed}
 
@@ -238,15 +242,17 @@ async def run_sanity_checks() -> Dict[str, Any]:
         stmt = text("""
             SELECT
                 COUNT(*) as total,
-                COUNT(*) FILTER (WHERE delta_at_entry < -1 OR delta_at_entry > 1) as bad_delta,
-                COUNT(*) FILTER (WHERE gamma_at_entry < 0) as bad_gamma,
-                COUNT(*) FILTER (WHERE iv_rank_at_entry < 0 OR iv_rank_at_entry > 100) as bad_iv_rank,
-                COUNT(*) FILTER (WHERE minutes_to_close < 0 OR minutes_to_close > 500) as bad_mtc,
-                COUNT(*) FILTER (WHERE entry_hour < 0 OR entry_hour > 23) as bad_hour,
-                COUNT(*) FILTER (WHERE darkpool_volume_1h < 0) as bad_dp,
-                COUNT(*) FILTER (WHERE rvol_1h < 0) as bad_rvol
+                COUNT(*) FILTER (WHERE NOT ml_ready) as not_ready,
+                COUNT(*) FILTER (WHERE ml_ready AND (delta_at_entry < -1 OR delta_at_entry > 1)) as bad_delta,
+                COUNT(*) FILTER (WHERE ml_ready AND gamma_at_entry < 0) as bad_gamma,
+                COUNT(*) FILTER (WHERE ml_ready AND (iv_rank_at_entry < 0 OR iv_rank_at_entry > 100)) as bad_iv_rank,
+                COUNT(*) FILTER (
+                    WHERE ml_ready AND (minutes_to_close < 0 OR minutes_to_close > """ + str(MINUTES_TO_CLOSE_MAX) + """)
+                ) as bad_mtc,
+                COUNT(*) FILTER (WHERE ml_ready AND (entry_hour < 0 OR entry_hour > 23)) as bad_hour,
+                COUNT(*) FILTER (WHERE ml_ready AND darkpool_volume_1h < 0) as bad_dp,
+                COUNT(*) FILTER (WHERE ml_ready AND rvol_1h < 0) as bad_rvol
             FROM price_target_labels
-            WHERE ml_ready
         """)
         result = await session.execute(stmt)
         row = result.fetchone()
@@ -258,7 +264,7 @@ async def run_sanity_checks() -> Dict[str, Any]:
         ("delta_at_entry in [-1, 1]", stats["bad_delta"]),
         ("gamma_at_entry >= 0", stats["bad_gamma"]),
         ("iv_rank_at_entry in [0, 100]", stats["bad_iv_rank"]),
-        ("minutes_to_close in [0, 500]", stats["bad_mtc"]),
+        (f"minutes_to_close in [0, {MINUTES_TO_CLOSE_MAX}]", stats["bad_mtc"]),
         ("entry_hour in [0, 23]", stats["bad_hour"]),
         ("darkpool_volume_1h >= 0", stats["bad_dp"]),
         ("rvol_1h >= 0", stats["bad_rvol"]),
@@ -272,6 +278,16 @@ async def run_sanity_checks() -> Dict[str, Any]:
             results["failed"] += 1
             results["issues"].append(f"✗ {check_name}: {bad_count} violations")
             logger.error(f"✗ {check_name}: {bad_count} violations")
+
+    not_ready = int(stats.get("not_ready") or 0)
+    if not_ready > 0:
+        results["failed"] += 1
+        issue = f"✗ ml_ready = false rows present: {not_ready}"
+        results["issues"].append(issue)
+        logger.error(issue)
+    else:
+        results["passed"] += 1
+        logger.info("✓ ml_ready coverage: no incomplete rows")
 
     return results
 
