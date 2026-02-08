@@ -5253,3 +5253,31 @@ Recommended next remediation:
 1. Enforce startup contract: fail fast in feature-enrichment if Gateway URL is set but no Gateway API key is configured.
 2. Wire `DATA_GATEWAY_API_KEY` (or alias) in compose for `feature_enrichment`.
 3. Add an integration smoke test that asserts non-zero enrichment writes (or explicit auth error) under configured Gateway mode.
+
+## 175) Pass 168 Continuation (2026-02-08)
+
+### 175.1 Remaining Hotspot Snapshot (Post Legacy-Profile Remediation)
+
+Repo scan snapshot (`src/orion`, tokenized local-table dependencies):
+
+| Token | Approx refs |
+| --- | --- |
+| `silver_uw_flow` | 65 |
+| `silver_market_tide` | 11 |
+| `silver_greek_exposure` | 11 |
+| `silver_max_pain` | 8 |
+| `silver_iv_rank` | 3 |
+| `price_target_labels` | 28 |
+
+Top file concentration:
+- `src/orion/jobs/validate_features.py` (53 refs)
+- `src/orion/main_price_target_labeler.py` (27 refs)
+- `src/orion/ml/flow_enricher.py` (11 refs)
+- `src/orion/jobs/backfill_exit_columns.py` (6 refs)
+- `src/orion/jobs/backfill_ml_features.py` (5 refs)
+- `src/orion/jobs/data_quality_checker.py` (5 refs)
+
+Scope interpretation:
+- Core runtime decommission controls have been substantially audited and partially remediated (legacy label stack gating, restart policy, compose profile inclusion).
+- Remaining high-volume SQL-coupled debt is now concentrated in validation/backfill/training support jobs plus `main_price_target_labeler`.
+- Audit can now transition from broad discovery to targeted closeout on these concentrated hotspots.
