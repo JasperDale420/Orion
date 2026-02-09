@@ -7154,3 +7154,38 @@ Result:
 Residual:
 - remaining debt in `backfill_exit_columns` is primarily runtime orchestration behavior (batching/retry/operational controls) rather than duplicated candidate SQL ownership.
 - next high-value remediation target remains classifier/window-query consolidation and broader end-to-end gateway contract behavior under load.
+
+## 236) Pass 234 Continuation (2026-02-09)
+
+### 236.1 Shared Window Query Consolidation in Labeler + Exit Classifier (TDD-Backed)
+
+Finding:
+- window-feature lookup for `1h/1d/1w` context still performed repetitive multi-query patterns in key training/inference paths:
+  - `main_price_target_labeler.get_window_features_at_entry(...)` fetched each period separately,
+  - `ml/exit_classifier.build_bucket_training_data(...)` used three lateral joins (`w1h/w1d/w1w`) per row.
+- this increased query round-trips and widened parity/performance drift risk between training and shared helper behavior.
+
+Implemented:
+- Updated `src/orion/main_price_target_labeler.py`:
+  - `get_window_features_at_entry(...)` now issues one SQL call using `DISTINCT ON (period)` and maps periods from a single result set.
+- Updated `src/orion/ml/exit_classifier.py`:
+  - replaced three per-period lateral joins with one lateral subquery that builds `features_by_period` via `jsonb_object_agg(period, features)`,
+  - preserved existing feature extraction output contract (`1h/1d/1w` field paths).
+- Extended tests:
+  - `tests/unit/test_price_target_labeler_heber_context.py`
+    - `test_get_window_features_at_entry_uses_single_query_and_maps_periods`
+    - `test_get_window_features_at_entry_returns_empty_dict_on_query_error`
+  - `tests/unit/test_exit_classifier_window_query.py`
+    - `test_build_bucket_training_data_uses_single_lateral_window_lookup`
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "window_features_at_entry or velocity_backfill_candidates or checkpoint_backfill_candidates"` passed.
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py` passed.
+- `pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+
+Result:
+- shared window retrieval now uses one query path in labeler helper usage.
+- classifier training query now uses one lateral window lookup instead of three, tightening parity and reducing repeated table scans.
+
+Residual:
+- further parity work should focus on remaining high-cardinality training joins and on extracting additional local SQL paths in model prep into shared helper contracts where stable.

@@ -423,41 +423,34 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
             p.max_return_pct, p.max_drawdown_pct,
 
             -- Window features (1h context at entry)
-            w1h.features->>'call_put_imbalance' as window_call_put_imbalance_1h,
-            w1h.features->>'sweep_ratio' as window_sweep_ratio_1h,
-            w1h.features->>'flow_count' as window_flow_count_1h,
+            w.features_by_period->'1h'->>'call_put_imbalance' as window_call_put_imbalance_1h,
+            w.features_by_period->'1h'->>'sweep_ratio' as window_sweep_ratio_1h,
+            w.features_by_period->'1h'->>'flow_count' as window_flow_count_1h,
 
             -- Window features (1d context at entry)
-            w1d.features->>'call_put_imbalance' as window_call_put_imbalance_1d,
-            w1d.features->>'sweep_ratio' as window_sweep_ratio_1d,
-            w1d.features->>'dp_volume' as window_dp_volume_1d,
-            w1d.features->>'call_put_ratio' as window_call_put_ratio_1d,
+            w.features_by_period->'1d'->>'call_put_imbalance' as window_call_put_imbalance_1d,
+            w.features_by_period->'1d'->>'sweep_ratio' as window_sweep_ratio_1d,
+            w.features_by_period->'1d'->>'dp_volume' as window_dp_volume_1d,
+            w.features_by_period->'1d'->>'call_put_ratio' as window_call_put_ratio_1d,
 
             -- Window features (1w context at entry)
-            w1w.features->>'call_put_imbalance' as window_call_put_imbalance_1w,
-            w1w.features->>'sweep_ratio' as window_sweep_ratio_1w,
-            w1w.features->>'call_put_ratio' as window_call_put_ratio_1w
+            w.features_by_period->'1w'->>'call_put_imbalance' as window_call_put_imbalance_1w,
+            w.features_by_period->'1w'->>'sweep_ratio' as window_sweep_ratio_1w,
+            w.features_by_period->'1w'->>'call_put_ratio' as window_call_put_ratio_1w
 
         FROM price_target_labels p
-        -- Join window features for 1h, 1d, 1w periods
+        -- Join latest window features for 1h, 1d, 1w periods in one lateral lookup
         LEFT JOIN LATERAL (
-            SELECT features FROM gold_feature_windows
-            WHERE ticker = p.ticker AND period = '1h'
-            AND window_end_ts_utc <= p.entry_ts
-            ORDER BY window_end_ts_utc DESC LIMIT 1
-        ) w1h ON true
-        LEFT JOIN LATERAL (
-            SELECT features FROM gold_feature_windows
-            WHERE ticker = p.ticker AND period = '1d'
-            AND window_end_ts_utc <= p.entry_ts
-            ORDER BY window_end_ts_utc DESC LIMIT 1
-        ) w1d ON true
-        LEFT JOIN LATERAL (
-            SELECT features FROM gold_feature_windows
-            WHERE ticker = p.ticker AND period = '1w'
-            AND window_end_ts_utc <= p.entry_ts
-            ORDER BY window_end_ts_utc DESC LIMIT 1
-        ) w1w ON true
+            SELECT jsonb_object_agg(period, features) as features_by_period
+            FROM (
+                SELECT DISTINCT ON (period) period, features
+                FROM gold_feature_windows
+                WHERE ticker = p.ticker
+                  AND period IN ('1h', '1d', '1w')
+                  AND window_end_ts_utc <= p.entry_ts
+                ORDER BY period, window_end_ts_utc DESC
+            ) latest_by_period
+        ) w ON true
         WHERE p.trade_type = '{trade_type}'
         AND p.max_return_pct IS NOT NULL
     """

@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Shared Window-Feature Query Consolidation for Labeler + Exit Classifier (TDD)**:
+  - Updated `src/orion/main_price_target_labeler.py`:
+    - `get_window_features_at_entry(...)` now uses a single `DISTINCT ON (period)` query for `1h/1d/1w` instead of per-period calls.
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - `build_bucket_training_data(...)` now uses one lateral window join with `jsonb_object_agg(period, features)` instead of separate `w1h/w1d/w1w` joins.
+  - Added/updated tests:
+    - `tests/unit/test_price_target_labeler_heber_context.py`
+      - `test_get_window_features_at_entry_uses_single_query_and_maps_periods`
+      - `test_get_window_features_at_entry_returns_empty_dict_on_query_error`
+    - `tests/unit/test_exit_classifier_window_query.py`
+      - `test_build_bucket_training_data_uses_single_lateral_window_lookup`
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "window_features_at_entry or velocity_backfill_candidates or checkpoint_backfill_candidates"`
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py`
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py`
 - **Backfill Exit-Columns Candidate Selection Delegation to Shared Labeler Paths (TDD)**:
   - Updated `tests/unit/test_backfill_exit_columns_selection.py`:
     - `test_get_records_to_backfill_delegates_to_labeler`
