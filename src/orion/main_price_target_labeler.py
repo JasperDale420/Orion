@@ -889,6 +889,41 @@ async def _get_gex_rolling_averages_sql(
     return await db_query(query)
 
 
+async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get latest gold window feature payload by period for a ticker at entry time."""
+
+    async def query(session: Any) -> Dict[str, Any]:
+        features_by_period: Dict[str, Any] = {}
+
+        for period in ["1h", "1d", "1w"]:
+            stmt = text(
+                """
+                SELECT features
+                FROM gold_feature_windows
+                WHERE ticker = :ticker
+                AND period = :period
+                AND window_end_ts_utc <= :entry_ts
+                ORDER BY window_end_ts_utc DESC
+                LIMIT 1
+            """
+            )
+            result = await session.execute(
+                stmt,
+                {"ticker": ticker, "period": period, "entry_ts": entry_ts},
+            )
+            row = result.fetchone()
+            if row and row[0]:
+                features_by_period[period] = row[0]
+
+        return features_by_period
+
+    try:
+        return await db_query(query)
+    except Exception as e:
+        logger.debug(f"Window features lookup failed for {ticker}: {e}")
+        return {}
+
+
 async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
     """Get market tide sum for the period before entry."""
     heber_result = _get_market_tide_before_entry_from_heber(entry_ts, minutes)

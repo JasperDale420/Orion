@@ -7036,6 +7036,34 @@ Residual:
 
 ## 233) Pass 231 Continuation (2026-02-09)
 
+### 233.1 `flow_enricher` Window-Feature Retrieval Delegation (TDD-Backed)
+
+Finding:
+- `src/orion/ml/flow_enricher.py::_get_window_features(...)` still queried `gold_feature_windows` directly.
+- even though this data source is valid, the lookup contract was local to flow-enricher and not reusable by other parity-sensitive paths.
+
+Implemented:
+- Added shared helper in `src/orion/main_price_target_labeler.py`:
+  - `get_window_features_at_entry(ticker, entry_ts)` returning latest `gold_feature_windows` payloads for `1h/1d/1w`.
+- Extended `tests/unit/test_flow_enricher_delegation.py` with:
+  - `test_get_window_features_delegates_to_labeler_and_maps_period_values`
+- Updated `src/orion/ml/flow_enricher.py`:
+  - `_get_window_features(...)` now delegates data retrieval to `get_labeler_window_features_at_entry(...)`,
+  - preserves existing feature mapping/output contract for all period-specific fields.
+
+Verification:
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_window_features_delegates_to_labeler_and_maps_period_values"` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- window-feature retrieval is now centralized behind a shared helper contract, reducing direct query duplication in live enrichment and enabling reuse in future parity refactors.
+
+Residual:
+- remaining notable local SQL in flow-enricher is now mostly intentional/derived aggregation logic rather than raw source lookup duplication.
+- next meaningful combined pass should target `backfill_exit_columns` remaining checkpoint/candidate-selection orchestration debt.
+
+## 233) Pass 231 Continuation (2026-02-09)
+
 ### 233.1 `flow_enricher` GEX Rolling-Average Delegation (TDD-Backed)
 
 Finding:

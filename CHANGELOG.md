@@ -120,6 +120,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_vix_delegates_to_labeler_regime or get_flow_metrics_delegates_context_to_labeler_helpers"`
     - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py`
+- **Flow Enricher Window-Feature Delegation to Shared Labeler Helper (TDD)**:
+  - Added shared helper in `src/orion/main_price_target_labeler.py`:
+    - `get_window_features_at_entry(ticker, entry_ts)` for latest `gold_feature_windows` payloads (`1h`, `1d`, `1w`).
+  - Extended `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_window_features_delegates_to_labeler_and_maps_period_values`
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_window_features(...)` now delegates retrieval to `get_labeler_window_features_at_entry(...)`,
+    - preserves existing downstream key mapping (`call_put_imbalance_*`, `sweep_ratio_*`, `flow_count_*`, `dp_volume_*`, `call_put_ratio_*`, `total_premium_*`).
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_window_features_delegates_to_labeler_and_maps_period_values"`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
     - `test_get_underlying_price_at_entry_delegates_to_labeler`

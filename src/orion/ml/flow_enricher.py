@@ -55,6 +55,9 @@ from orion.main_price_target_labeler import (
 from orion.main_price_target_labeler import (
     get_sector_correlation_features as get_labeler_sector_correlation_features,
 )
+from orion.main_price_target_labeler import (
+    get_window_features_at_entry as get_labeler_window_features_at_entry,
+)
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
@@ -636,39 +639,11 @@ async def _get_market_context(
 
 
 async def _get_window_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get aggregated flow features from gold_feature_windows for multi-timeframe context."""
-    from sqlalchemy import text
-
+    """Get aggregated flow features from shared gold-window helper."""
     result: Dict[str, Any] = {}
 
-    # Query window features for 1h, 1d, 1w periods
-    async def query(session: Any) -> Dict[str, Any]:
-        features_by_period: Dict[str, Any] = {}
-
-        for period in ["1h", "1d", "1w"]:
-            stmt = text(
-                """
-                SELECT features
-                FROM gold_feature_windows
-                WHERE ticker = :ticker
-                AND period = :period
-                AND window_end_ts_utc <= :entry_ts
-                ORDER BY window_end_ts_utc DESC
-                LIMIT 1
-            """
-            )
-            result = await session.execute(
-                stmt,
-                {"ticker": ticker, "period": period, "entry_ts": entry_ts},
-            )
-            row = result.fetchone()
-            if row and row[0]:
-                features_by_period[period] = row[0]
-
-        return features_by_period
-
     try:
-        window_data = await db_query(query)
+        window_data = await get_labeler_window_features_at_entry(ticker, entry_ts)
 
         # Extract key features from each period
         for period in ["1h", "1d", "1w"]:
