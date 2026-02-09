@@ -39,6 +39,17 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
         return default
 
 
+def _is_truthy(val: Any) -> bool:
+    """Normalize bool-like values from DB payloads."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        return val.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return False
+
+
 # Bucket-specific checkpoint configurations
 # Each checkpoint has: (column_suffix, hours_held, description)
 BUCKET_CHECKPOINTS = {
@@ -549,7 +560,7 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                 theta_decay_pct,
                 float(row.get("premium_usd") or 0),
                 int(row.get("dte") or 0),
-                1 if row.get("is_sweep") else 0,
+                1.0 if _is_truthy(row.get("is_sweep")) else 0.0,
                 float(row.get("iv_rank_at_entry") or 50),
                 float(row.get("vix_at_entry") or 20),
                 float(row.get("gex_at_entry") or 0),
@@ -570,6 +581,19 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                 _safe_float(row.get("window_sweep_ratio_1w")),
                 _safe_float(row.get("window_call_put_ratio_1w")),
             ]
+
+            if len(features) != len(feature_names):
+                logger.warning(
+                    "Skipping malformed exit training sample due to feature-size mismatch",
+                    extra={
+                        "event": "exit_training_sample_skipped",
+                        "bucket": bucket,
+                        "expected_feature_count": len(feature_names),
+                        "actual_feature_count": len(features),
+                        "checkpoint": col_suffix,
+                    },
+                )
+                continue
 
             # Target: was this a good exit point?
             # Good exit = captured >= 80% of max return

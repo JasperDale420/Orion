@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Training Robustness: Sweep Normalization + Sample Guard (TDD)**:
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_build_bucket_training_data_unknown_bucket_short_circuits_without_query`
+    - `test_build_bucket_training_data_normalizes_is_sweep_string_false_and_shapes_features`
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - added `_is_truthy(...)` to normalize bool-like payloads (`"false"`, `"0"`, etc.) for training features,
+    - `build_bucket_training_data(...)` now uses normalized sweep encoding (`is_sweep`),
+    - added feature-size mismatch guard to skip malformed samples and log structured warning.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Exit Classifier Training Query Parameter Binding Hardening (TDD)**:
   - Updated `tests/unit/test_exit_classifier_window_query.py`:
     - `test_build_bucket_training_data_binds_trade_type_parameter`

@@ -7215,3 +7215,32 @@ Result:
 
 Residual:
 - next combined pass should target broader classifier training contract validation (feature null-handling, large-sample query performance, and cross-bucket schema drift checks).
+
+## 238) Pass 236 Continuation (2026-02-09)
+
+### 238.1 Exit Classifier Training Robustness (Sweep Normalization + Sample Guard, TDD-Backed)
+
+Finding:
+- in `src/orion/ml/exit_classifier.py::build_bucket_training_data(...)`, `is_sweep` was encoded via Python truthiness (`1 if row.get("is_sweep") else 0`).
+- string payloads like `"false"` were therefore incorrectly encoded as `1`, creating silent label/feature corruption risk during model training.
+- sample construction also lacked an explicit guard for feature-vector length mismatch vs `feature_names`.
+
+Implemented:
+- Extended `tests/unit/test_exit_classifier_window_query.py` with:
+  - `test_build_bucket_training_data_unknown_bucket_short_circuits_without_query`
+  - `test_build_bucket_training_data_normalizes_is_sweep_string_false_and_shapes_features`
+- Updated `src/orion/ml/exit_classifier.py`:
+  - added `_is_truthy(...)` helper to normalize bool-like DB payloads,
+  - switched training sample sweep encoding to normalized boolean conversion,
+  - added feature-count guard that skips malformed samples and logs structured warning metadata.
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- sweep flag handling is now deterministic for string/integer/boolean payload variants, removing a concrete source of training-data drift.
+- training loop now fails-safe on malformed feature vectors instead of silently emitting inconsistent samples.
+
+Residual:
+- next high-value classifier pass should add explicit schema-drift tests around checkpoint column availability and null-heavy row distributions under larger sample sets.
