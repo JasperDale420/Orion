@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price-Target Labeler Heber Context Read Paths (TDD)**:
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py` covering:
+    - Heber-first GEX lookup (`get_gex_at_entry`) with SQL fallback,
+    - Heber-first market-tide lookup (`get_market_tide_before_entry`) with SQL fallback.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` to:
+    - route GEX and market-tide reads through Heber-first helpers,
+    - retain explicit SQL fallback helpers for phased migration safety.
+  - Extended `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py` with:
+    - `read_greek_exposure(...)`,
+    - `read_market_tide(...)`,
+    - `ts_utc` support in generic time-range filtering.
+  - Extended `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_heber_reader.py` with dataset-level tests for the new reader methods.
+- **Price-Target Labeler Market-Tide Flow-Derived Heber Fallback (TDD)**:
+  - Added `tests/unit/test_price_target_labeler_heber_market_tide.py` covering:
+    - net-premium reconstruction from Heber market-tide aggregates,
+    - flow-derived fallback reconstruction (`premium_usd` + `put_call`) when aggregate market-tide dataset is absent/incompatible,
+    - Heber-first tide behavior in both `get_market_tide_before_entry(...)` and `get_regime_at_entry(...)`.
+  - Updated `src/orion/main_price_target_labeler.py` to:
+    - centralize Heber tide math in `_sum_market_tide_from_dataframe(...)`,
+    - add `_get_heber_market_tide_net_premium(...)` with aggregate-read then flow-derived fallback strategy,
+    - reuse that helper in both market-tide feature extraction and regime detection path before SQL fallback.
 - **Legacy Backfill Watermark Cleanup Job + Storage Helper (TDD)**:
   - Added `tests/unit/test_storage_watermarks_cleanup.py` covering:
     - no-op behavior for empty key input,

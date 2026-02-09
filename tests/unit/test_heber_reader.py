@@ -134,3 +134,46 @@ def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:
     assert len(result) == 1
     assert set(result["instrument_key"]) == {"equity:AAPL"}
     assert float(result.iloc[0]["momentum_5d"]) == 0.1
+
+
+def test_read_greek_exposure_filters_symbol_and_asof(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    greek = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
+            "ts_utc": [base, base + timedelta(minutes=5), base],
+            "ts_available": [base, base + timedelta(minutes=10), base],
+            "gex_oi": [10.0, 20.0, 30.0],
+            "vex_oi": [1.0, 2.0, 3.0],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=greek_exposure" / "dt=2026-02-05" / "part-0.parquet", greek)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_greek_exposure(symbols=["AAPL"], asof_time=base + timedelta(minutes=6))
+
+    assert len(result) == 1
+    assert set(result["instrument_key"]) == {"equity:AAPL"}
+    assert float(result.iloc[0]["gex_oi"]) == 10.0
+
+
+def test_read_market_tide_filters_time_and_asof(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    tide = pd.DataFrame(
+        {
+            "ts_utc": [base - timedelta(minutes=30), base, base + timedelta(minutes=10)],
+            "ts_available": [base - timedelta(minutes=30), base, base + timedelta(minutes=20)],
+            "net_call_premium": [100.0, 150.0, 200.0],
+            "net_put_premium": [-50.0, -25.0, -10.0],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=market_tide" / "dt=2026-02-05" / "part-0.parquet", tide)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_market_tide(
+        start_time=base - timedelta(minutes=5),
+        asof_time=base + timedelta(minutes=5),
+    )
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["net_call_premium"]) == 150.0

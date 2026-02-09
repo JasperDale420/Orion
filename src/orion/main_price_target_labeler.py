@@ -695,7 +695,14 @@ async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_
 
 async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     """Get the closest GEX values before entry time."""
+    heber_result = _get_gex_at_entry_from_heber(ticker, entry_ts)
+    if heber_result is not None:
+        return heber_result
 
+    return await _get_gex_at_entry_sql(ticker, entry_ts)
+
+
+async def _get_gex_at_entry_sql(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     async def query(session: Any) -> Dict[str, Any]:
         stmt = text(
             """
@@ -714,6 +721,15 @@ async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
 
 async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
     """Get market tide sum for the period before entry."""
+    heber_result = _get_market_tide_before_entry_from_heber(entry_ts, minutes)
+    if heber_result is not None:
+        return heber_result
+
+    return await _get_market_tide_before_entry_sql(entry_ts, minutes)
+
+
+async def _get_market_tide_before_entry_sql(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
+    """SQL fallback for market tide lookup."""
     start_ts = entry_ts - timedelta(minutes=minutes)
 
     async def query(session: Any) -> Dict[str, Any]:
@@ -733,6 +749,140 @@ async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) ->
         return {"net_premium": None, "direction": None}
 
     return await db_query(query)
+
+
+def _get_gex_at_entry_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
+    try:
+        df = _heber_reader.read_greek_exposure(
+            symbols=[ticker],
+            asof_time=entry_ts,
+            start_time=entry_ts - timedelta(days=30),
+        )
+    except Exception as e:
+        _record_price_target_fallback("gex_heber_lookup", e, ticker=ticker)
+        return None
+
+    if df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(df, ["ts_utc", "ts_event", "timestamp", "created_at"])
+    gex_col = _pick_first_existing_column(df, ["gex_oi", "gex"])
+    vex_col = _pick_first_existing_column(df, ["vex_oi", "vex"])
+    if ts_col is None or gex_col is None:
+        return None
+
+    best_ts: Optional[datetime] = None
+    best_values: Optional[Dict[str, Any]] = None
+    for _, row in df.iterrows():
+        row_ts = _coerce_dt_utc(row.get(ts_col))
+        if row_ts is None or row_ts > entry_ts:
+            continue
+        if best_ts is None or row_ts > best_ts:
+            best_ts = row_ts
+            best_values = {
+                "gex": _coerce_float(row.get(gex_col)),
+                "vex": _coerce_float(row.get(vex_col)) if vex_col is not None else None,
+            }
+
+    return best_values
+
+
+def _get_market_tide_before_entry_from_heber(entry_ts: datetime, minutes: int = 30) -> Optional[Dict[str, Any]]:
+    net_premium = _get_heber_market_tide_net_premium(entry_ts, minutes)
+    if net_premium is None:
+        return None
+
+    return {"net_premium": net_premium, "direction": _market_tide_direction(net_premium)}
+
+
+def _market_tide_direction(net_premium: float) -> str:
+    return "BULLISH" if net_premium > 0 else "BEARISH" if net_premium < 0 else "NEUTRAL"
+
+
+def _normalize_put_call(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    put_call = str(value).strip().upper()
+    if put_call in {"C", "CALL", "CALLS"}:
+        return "C"
+    if put_call in {"P", "PUT", "PUTS"}:
+        return "P"
+    return None
+
+
+def _sum_market_tide_from_dataframe(df: pd.DataFrame, start_ts: datetime, entry_ts: datetime) -> Optional[float]:
+    ts_col = _pick_first_existing_column(df, ["ts_utc", "flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    if ts_col is None:
+        return None
+
+    call_col = _pick_first_existing_column(df, ["net_call_premium"])
+    put_col = _pick_first_existing_column(df, ["net_put_premium"])
+    net_col = _pick_first_existing_column(df, ["net_premium"])
+    premium_col = _pick_first_existing_column(df, ["premium_usd", "premium"])
+    put_call_col = _pick_first_existing_column(df, ["put_call", "option_type", "right"])
+
+    total_net = 0.0
+    seen = False
+    for _, row in df.iterrows():
+        row_ts = _coerce_dt_utc(row.get(ts_col))
+        if row_ts is None or row_ts <= start_ts or row_ts > entry_ts:
+            continue
+
+        if call_col is not None or put_col is not None:
+            call_value = _coerce_float(row.get(call_col)) if call_col is not None else 0.0
+            put_value = _coerce_float(row.get(put_col)) if put_col is not None else 0.0
+            total_net += float(call_value or 0.0) + float(put_value or 0.0)
+            seen = True
+            continue
+
+        if net_col is not None:
+            net_value = _coerce_float(row.get(net_col))
+            total_net += float(net_value or 0.0)
+            seen = True
+            continue
+
+        if premium_col is None or put_call_col is None:
+            return None
+
+        premium = _coerce_float(row.get(premium_col))
+        if premium is None or premium <= 0:
+            continue
+        put_call = _normalize_put_call(row.get(put_call_col))
+        if put_call == "C":
+            total_net += premium
+            seen = True
+        elif put_call == "P":
+            total_net -= premium
+            seen = True
+
+    if not seen:
+        return None
+    return total_net
+
+
+def _get_heber_market_tide_net_premium(entry_ts: datetime, minutes: int = 30) -> Optional[float]:
+    start_ts = entry_ts - timedelta(minutes=minutes)
+    try:
+        tide_df = _heber_reader.read_market_tide(
+            asof_time=entry_ts,
+            start_time=start_ts,
+        )
+        net_from_tide = _sum_market_tide_from_dataframe(tide_df, start_ts, entry_ts)
+        if net_from_tide is not None:
+            return net_from_tide
+    except Exception as e:
+        _record_price_target_fallback("market_tide_heber_lookup", e)
+
+    try:
+        flow_df = _heber_reader.read_flow(
+            asof_time=entry_ts,
+            start_time=start_ts,
+        )
+    except Exception as e:
+        _record_price_target_fallback("market_tide_flow_fallback", e)
+        return None
+
+    return _sum_market_tide_from_dataframe(flow_df, start_ts, entry_ts)
 
 
 async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], entry_ts: datetime) -> Optional[float]:
@@ -872,7 +1022,9 @@ async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
         return float(row[0]) if row and row[0] else None
 
     vix_data = await db_query(query_vix)
-    tide_net = await db_query(query_tide)
+    tide_net = _get_heber_market_tide_net_premium(entry_ts, minutes=30)
+    if tide_net is None:
+        tide_net = await db_query(query_tide)
 
     # Detect regime snapshot
     snapshot = detector.detect(

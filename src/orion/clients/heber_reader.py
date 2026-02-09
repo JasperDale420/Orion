@@ -26,6 +26,8 @@ logger = structlog.get_logger(__name__)
 _SILVER_BARS_DATASET = "bars"
 _SILVER_FLOW_DATASET = "flow_alerts"
 _SILVER_DARKPOOL_DATASET = "darkpool_trades"
+_SILVER_MARKET_TIDE_DATASET = "market_tide"
+_SILVER_GREEK_EXPOSURE_DATASET = "greek_exposure"
 _SUPPORTED_BAR_TIMEFRAMES = {"1m"}
 
 
@@ -179,6 +181,37 @@ class HeberReader:
             asof_time=asof_time,
         )
 
+    def read_market_tide(
+        self,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Read market tide aggregates from Heber Silver (`feed=market_tide`)."""
+        return self._read_silver_dataset(
+            dataset=_SILVER_MARKET_TIDE_DATASET,
+            instrument_keys=None,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
+    def read_greek_exposure(
+        self,
+        symbols: list[str] | None = None,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Read greek exposure snapshots from Heber Silver (`feed=greek_exposure`)."""
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+
+        return self._read_silver_dataset(
+            dataset=_SILVER_GREEK_EXPOSURE_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
     def read_gold_features(
         self,
         dataset: str,
@@ -267,7 +300,7 @@ class HeberReader:
 
         time_column = self._pick_first_existing_column(
             df,
-            ["ts_event", "bar_start_ts", "flow_ts_utc", "dark_ts_utc"],
+            ["ts_event", "bar_start_ts", "flow_ts_utc", "dark_ts_utc", "ts_utc"],
         )
         if time_column is None:
             return df

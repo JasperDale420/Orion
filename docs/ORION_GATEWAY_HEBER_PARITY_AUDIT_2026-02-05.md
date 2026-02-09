@@ -5917,3 +5917,32 @@ Result:
 
 Residual:
 - execute the documented procedure in each active environment and archive evidence artifacts in the team’s runbook/change-management system.
+
+## 201) Pass 195 Continuation (2026-02-09)
+
+### 201.1 Combined `main_price_target_labeler` Heber-First Context Migration (GEX + Market Tide)
+
+Finding:
+- after prior Heber-first migration of entry candidates and underlying prices, `main_price_target_labeler` still relied on local SQL context reads for:
+  - `silver_greek_exposure` (`get_gex_at_entry`),
+  - `silver_market_tide` (`get_market_tide_before_entry`).
+
+Implemented:
+- Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py` to enforce:
+  - Heber-first GEX retrieval with SQL fallback,
+  - Heber-first market-tide aggregation with SQL fallback.
+- Extended `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py` with:
+  - `read_greek_exposure(...)`,
+  - `read_market_tide(...)`,
+  - generic time-range filtering support for `ts_utc`.
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - introduced Heber-first helpers for both context lookups,
+  - split legacy SQL logic into explicit fallback helpers,
+  - preserved fallback behavior to avoid regression during phased rollout.
+- Extended `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_heber_reader.py` with coverage for new Heber reader methods.
+
+Result:
+- four high-use labeler read paths now run Heber-first (`entry_signals`, `subsequent_prices`, `underlying_bars`, `gex`, `market_tide`), materially reducing direct coupling to Orion-local silver SQL tables.
+
+Residual:
+- remaining major SQL-coupled context in `main_price_target_labeler` includes `silver_max_pain` and `silver_iv_rank`; these should be the next combined migration slice.
