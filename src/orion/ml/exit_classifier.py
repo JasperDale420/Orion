@@ -580,7 +580,10 @@ class BucketExitClassifier:
         return [self.predict(f) for f in features_list]
 
 
-async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+async def build_bucket_training_data(
+    bucket: str,
+    force_schema_refresh: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Build training dataset for a specific bucket.
 
@@ -594,7 +597,10 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         return X_empty, y_empty, feature_names
 
     required_columns = _required_price_target_columns_for_bucket(checkpoints)
-    available_columns = await _load_price_target_label_columns()
+    if force_schema_refresh:
+        available_columns = await _load_price_target_label_columns(force_refresh=True)
+    else:
+        available_columns = await _load_price_target_label_columns()
     if available_columns:
         missing_columns = sorted(required_columns - available_columns)
         if missing_columns:
@@ -817,9 +823,15 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
     return np.array(X_list, dtype=float), np.array(y_list, dtype=int), feature_names
 
 
-async def train_bucket_exit_classifier(bucket: str) -> Optional[Dict[str, Any]]:
+async def train_bucket_exit_classifier(
+    bucket: str,
+    force_schema_refresh: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Train exit classifier for a specific bucket."""
-    X, y, feature_names = await build_bucket_training_data(bucket)
+    X, y, feature_names = await build_bucket_training_data(
+        bucket,
+        force_schema_refresh=force_schema_refresh,
+    )
 
     can_train, reason = _can_train_with_labels(y, min_samples=MIN_SAMPLES)
     if not can_train:
@@ -890,8 +902,18 @@ async def train_bucket_exit_classifier(bucket: str) -> Optional[Dict[str, Any]]:
     return model_data
 
 
-async def train_all_exit_classifiers() -> Dict[str, Any]:
+async def train_all_exit_classifiers(force_schema_refresh: bool = False) -> Dict[str, Any]:
     """Train exit classifiers for all buckets."""
+    if force_schema_refresh:
+        refreshed_columns = await _load_price_target_label_columns(force_refresh=True)
+        logger.info(
+            "Forced schema refresh before all-bucket exit training",
+            extra={
+                "event": "exit_training_schema_forced_refresh",
+                "column_count": len(refreshed_columns),
+            },
+        )
+
     results = {}
     for bucket in BUCKET_CHECKPOINTS.keys():
         logger.info(f"Training exit classifier for {bucket}...")

@@ -587,3 +587,65 @@ async def test_build_bucket_training_data_logs_missing_family_counts(
     assert extra["missing_by_family_counts"]["checkpoint_returns"] == 1
     assert extra["missing_by_family_counts"]["checkpoint_greeks"] == 1
     assert extra["missing_by_family_counts"]["checkpoint_time_decay"] == 1
+
+
+@pytest.mark.asyncio
+async def test_train_bucket_exit_classifier_passes_force_schema_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_build_bucket_training_data(bucket: str, force_schema_refresh: bool = False):
+        captured["bucket"] = bucket
+        captured["force_schema_refresh"] = force_schema_refresh
+        return np.empty((0, len(exit_classifier.EXIT_FEATURE_NAMES))), np.empty((0,), dtype=int), list(
+            exit_classifier.EXIT_FEATURE_NAMES
+        )
+
+    monkeypatch.setattr(
+        exit_classifier,
+        "build_bucket_training_data",
+        _fake_build_bucket_training_data,
+        raising=False,
+    )
+
+    result = await exit_classifier.train_bucket_exit_classifier("0DTE", force_schema_refresh=True)
+
+    assert result is None
+    assert captured["bucket"] == "0DTE"
+    assert captured["force_schema_refresh"] is True
+
+
+@pytest.mark.asyncio
+async def test_train_all_exit_classifiers_force_refreshes_schema_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: dict[str, object] = {"refresh_flags": [], "buckets": []}
+
+    async def _fake_load_price_target_label_columns(force_refresh: bool = False) -> set[str]:
+        captured_calls["refresh_flags"].append(force_refresh)
+        return {"ticker", "entry_ts"}
+
+    async def _fake_train_bucket_exit_classifier(bucket: str, force_schema_refresh: bool = False):
+        captured_calls["buckets"].append((bucket, force_schema_refresh))
+        return None
+
+    monkeypatch.setattr(
+        exit_classifier,
+        "_load_price_target_label_columns",
+        _fake_load_price_target_label_columns,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        exit_classifier,
+        "train_bucket_exit_classifier",
+        _fake_train_bucket_exit_classifier,
+        raising=False,
+    )
+
+    results = await exit_classifier.train_all_exit_classifiers(force_schema_refresh=True)
+
+    assert results == {}
+    assert captured_calls["refresh_flags"] == [True]
+    assert len(captured_calls["buckets"]) == len(exit_classifier.BUCKET_CHECKPOINTS)
+    assert all(force is False for _bucket, force in captured_calls["buckets"])

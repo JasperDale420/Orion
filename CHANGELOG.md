@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Orchestration Schema-Refresh Control (TDD)**:
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - `build_bucket_training_data(...)` now accepts `force_schema_refresh` and can force schema metadata refresh before bucket preflight validation,
+    - `train_bucket_exit_classifier(...)` now accepts and forwards `force_schema_refresh`,
+    - `train_all_exit_classifiers(...)` now accepts `force_schema_refresh`; when enabled it performs one explicit schema refresh prior to bucket loop and logs `exit_training_schema_forced_refresh`.
+  - Extended `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_train_bucket_exit_classifier_passes_force_schema_refresh`
+    - `test_train_all_exit_classifiers_force_refreshes_schema_once`
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py -k "force_schema_refresh or force_refreshes_schema_once"`
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Backfill Exit-Columns Dead-Letter Redaction + Rotation Controls (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - added dead-letter payload redaction controls:

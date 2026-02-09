@@ -7609,3 +7609,35 @@ Result:
 
 Residual:
 - add optional gzip compression for rotated dead-letter files if sustained error rates make long-lived archives large.
+
+## 248) Pass 246 Continuation (2026-02-09)
+
+### 248.1 Exit Classifier Forced Schema-Refresh Wiring for Orchestration (TDD-Backed, Combined Pass)
+
+Finding:
+- pass 246 left one operational residual:
+  - force-refresh support existed at the schema probe helper layer, but orchestration-level training entrypoints could not request it explicitly.
+- this limited safe rollout behavior during active schema migrations where workers should re-read metadata before training loops.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - `build_bucket_training_data(...)` now accepts `force_schema_refresh: bool = False`,
+  - `train_bucket_exit_classifier(...)` now accepts and forwards `force_schema_refresh`,
+  - `train_all_exit_classifiers(...)` now accepts `force_schema_refresh`; when enabled:
+    - it performs a one-time forced schema refresh via `_load_price_target_label_columns(force_refresh=True)`,
+    - logs `exit_training_schema_forced_refresh` with refreshed column count,
+    - proceeds through bucket training using the refreshed cached metadata.
+- Extended `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_train_bucket_exit_classifier_passes_force_schema_refresh`
+  - `test_train_all_exit_classifiers_force_refreshes_schema_once`
+
+Verification:
+- `pytest -q tests/unit/test_exit_classifier_window_query.py -k "force_schema_refresh or force_refreshes_schema_once"` passed.
+- `pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- orchestration callers now have an explicit migration-safe switch to refresh schema metadata before exit-model training starts.
+- this closes the pass-246 residual while keeping normal-mode training behavior unchanged.
+
+Residual:
+- evaluate whether nightly automation should set `force_schema_refresh=True` only inside schema rollout windows (feature flag or schedule guard).
