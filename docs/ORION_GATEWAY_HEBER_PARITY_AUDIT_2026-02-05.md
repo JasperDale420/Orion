@@ -6266,3 +6266,29 @@ Result:
 Residual:
 - to close full stream schema/load parity, run the probe during an active market-data flow window (or with seeded replay feed) and capture at least one `type=data` envelope.
 - extend probe to repeated-loop/soak mode for reconnect + transient error behavior under sustained load.
+
+## 211) Pass 205 Continuation (2026-02-09)
+
+### 211.1 Price-Target Labeler RVOL Context Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_rvol_metrics(...)` in `src/orion/main_price_target_labeler.py` remained SQL-only (`silver_alpaca_bars`) and therefore outside the Heber-first migration pattern used by other context features.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_rvol_metrics_prefers_heber_when_available`
+  - `test_get_rvol_metrics_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_rvol_metrics_from_heber(...)` to compute hourly/daily/weekly RVOL aggregates from Heber bars,
+  - extracted existing SQL logic into `_get_rvol_metrics_sql(...)`,
+  - updated `get_rvol_metrics(...)` to use Heber-first lookup with SQL fallback.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k rvol` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py` passed.
+
+Result:
+- RVOL context now follows the same migration pattern as GEX/market-tide/max-pain/IV-rank/darkpool: Heber-first with backward-compatible SQL fallback.
+
+Residual:
+- remaining SQL-coupled feature families in `main_price_target_labeler` (notably sector-correlation and some flow-derived context) still require equivalent Heber-first migration slices.

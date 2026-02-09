@@ -1630,16 +1630,106 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
     - rvol_daily: Today's volume so far / 20-day avg daily volume
     - rvol_weekly: This week's volume / 4-week avg weekly volume (for LEAP)
     """
+    heber_rvol = _get_rvol_metrics_from_heber(ticker, entry_ts)
+    if heber_rvol is not None:
+        return heber_rvol
+
+    return await _get_rvol_metrics_sql(ticker, entry_ts)
+
+
+def _get_rvol_metrics_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+
+    entry_hour_start = entry_utc.replace(minute=0, second=0, microsecond=0)
+    entry_day_start = entry_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    days_since_monday = entry_utc.weekday()
+    entry_week_start = (entry_utc - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+    lookback_start = entry_utc - timedelta(days=20)
+    lookback_4w = entry_utc - timedelta(days=28)
+
+    try:
+        bars_df = _heber_reader.read_bars(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=lookback_4w,
+        )
+    except Exception as e:
+        _record_price_target_fallback("rvol_heber_lookup", e, ticker=ticker)
+        return None
+
+    if bars_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc"])
+    volume_col = _pick_first_existing_column(bars_df, ["volume", "shares", "size"])
+    if ts_col is None or volume_col is None:
+        return None
+
+    ts_series = pd.to_datetime(bars_df[ts_col], utc=True, errors="coerce")
+    volume_series = pd.to_numeric(bars_df[volume_col], errors="coerce")
+    df = pd.DataFrame({"ts": ts_series, "volume": volume_series})
+    df = df.dropna(subset=["ts", "volume"])
+    if df.empty:
+        return None
+
+    df = df[(df["ts"] >= lookback_4w) & (df["ts"] < entry_utc)]
+    if df.empty:
+        return None
+
+    def _sum_range(start: datetime, end: datetime) -> float:
+        window = df[(df["ts"] >= start) & (df["ts"] < end)]
+        return float(window["volume"].sum()) if not window.empty else 0.0
+
+    def _avg_grouped(start: datetime, end: datetime, freq: str) -> float:
+        window = df[(df["ts"] >= start) & (df["ts"] < end)]
+        if window.empty:
+            return 0.0
+        grouped = window.groupby(window["ts"].dt.floor(freq))["volume"].sum()
+        return float(grouped.mean()) if not grouped.empty else 0.0
+
+    def _avg_weekly(start: datetime, end: datetime) -> float:
+        window = df[(df["ts"] >= start) & (df["ts"] < end)]
+        if window.empty:
+            return 0.0
+        week_bucket = (window["ts"] - pd.to_timedelta(window["ts"].dt.weekday, unit="D")).dt.floor("D")
+        grouped = window.groupby(week_bucket)["volume"].sum()
+        return float(grouped.mean()) if not grouped.empty else 0.0
+
+    current_hour_vol = _sum_range(entry_hour_start, entry_utc)
+    avg_hour_vol = _avg_grouped(lookback_start, entry_utc, "h")
+    current_day_vol = _sum_range(entry_day_start, entry_utc)
+    avg_day_vol = _avg_grouped(lookback_start, entry_day_start, "d")
+    current_week_vol = _sum_range(entry_week_start, entry_utc)
+    avg_week_vol = _avg_weekly(lookback_4w, entry_week_start)
+
+    rvol_1h = current_hour_vol / avg_hour_vol if avg_hour_vol > 0 else None
+    rvol_daily = current_day_vol / avg_day_vol if avg_day_vol > 0 else None
+    rvol_weekly = current_week_vol / avg_week_vol if avg_week_vol > 0 else None
+    rvol_30m = (current_hour_vol * 0.5) / (avg_hour_vol * 0.5) if avg_hour_vol > 0 else None
+    rvol_3d = (current_day_vol * 3) / (avg_day_vol * 3) if avg_day_vol > 0 else rvol_daily
+    rvol_monthly = current_week_vol / avg_week_vol if avg_week_vol > 0 else rvol_weekly
+
+    return {
+        "rvol_1h": rvol_1h,
+        "rvol_daily": rvol_daily,
+        "rvol_weekly": rvol_weekly,
+        "rvol_30m": rvol_30m,
+        "rvol_3d": rvol_3d,
+        "rvol_monthly": rvol_monthly,
+    }
+
+
+async def _get_rvol_metrics_sql(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
     entry_hour_start = entry_ts.replace(minute=0, second=0, microsecond=0)
     entry_day_start = entry_ts.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Week starts on Monday
     days_since_monday = entry_ts.weekday()
     entry_week_start = (entry_ts - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
     lookback_start = entry_ts - timedelta(days=20)
     lookback_4w = entry_ts - timedelta(days=28)
 
     async def query(session: Any) -> Dict[str, Optional[float]]:
-        # Current hour volume
         hour_stmt = text(
             """
             SELECT SUM(volume)
@@ -1654,7 +1744,6 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
         )
         current_hour_vol = hour_result.scalar() or 0
 
-        # Avg hourly volume (20 days)
         avg_hour_stmt = text(
             """
             SELECT AVG(hourly_vol) FROM (
@@ -1672,7 +1761,6 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
         )
         avg_hour_vol = avg_result.scalar() or 0
 
-        # Current day volume
         day_stmt = text(
             """
             SELECT SUM(volume)
@@ -1687,7 +1775,6 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
         )
         current_day_vol = day_result.scalar() or 0
 
-        # Avg daily volume (20 days)
         avg_day_stmt = text(
             """
             SELECT AVG(daily_vol) FROM (
@@ -1705,7 +1792,6 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
         )
         avg_day_vol = avg_day_result.scalar() or 0
 
-        # Current week volume (for LEAP trades)
         week_stmt = text(
             """
             SELECT SUM(volume)
@@ -1720,7 +1806,6 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
         )
         current_week_vol = week_result.scalar() or 0
 
-        # Avg weekly volume (4 weeks)
         avg_week_stmt = text(
             """
             SELECT AVG(weekly_vol) FROM (
@@ -1741,13 +1826,8 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
         rvol_1h = current_hour_vol / avg_hour_vol if avg_hour_vol > 0 else None
         rvol_daily = current_day_vol / avg_day_vol if avg_day_vol > 0 else None
         rvol_weekly = current_week_vol / avg_week_vol if avg_week_vol > 0 else None
-
-        # Additional rvol calculations for bucket-specific needs
-        # rvol_30m for 0DTE (using half-hour vs avg)
         rvol_30m = (current_hour_vol * 0.5) / (avg_hour_vol * 0.5) if avg_hour_vol > 0 else None
-        # rvol_3d for POSITION (approximate using 3 days of current vs avg)
         rvol_3d = (current_day_vol * 3) / (avg_day_vol * 3) if avg_day_vol > 0 else rvol_daily
-        # rvol_monthly for LEAP (4 weeks)
         rvol_monthly = current_week_vol / avg_week_vol if avg_week_vol > 0 else rvol_weekly
 
         return {

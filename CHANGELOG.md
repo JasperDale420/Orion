@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Audit pass 203 confirmed this closes a mixed-environment integration drift where catalog requests could misroute when callers configured different `httpx` base URL forms.
   - Extended `tests/unit/test_price_target_labeler_heber_context.py` with Heber-first darkpool volume coverage and SQL fallback expectations.
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first darkpool aggregation (`_get_darkpool_volume_from_heber`) with SQL fallback (`_get_darkpool_volume_sql`) in `get_darkpool_volume(...)`.
+  - Extended `tests/unit/test_price_target_labeler_heber_context.py` with Heber-first RVOL coverage and SQL fallback expectations.
+  - Updated `src/orion/main_price_target_labeler.py` to add Heber-first RVOL aggregation (`_get_rvol_metrics_from_heber`) with extracted SQL fallback (`_get_rvol_metrics_sql`) in `get_rvol_metrics(...)`.
 - **Execution Exit-Policy Contract Hardening (TDD, Combined)**:
   - Added `tests/unit/test_position_manager_execution_contracts.py` covering:
     - canonical `candidate.option_symbol` propagation to tracked `option_chain`,
