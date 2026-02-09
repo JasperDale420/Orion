@@ -2219,13 +2219,166 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
 
 
 async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get sector flow and correlation features.
+    """Get sector flow and correlation features."""
+    heber_result = _get_sector_correlation_features_from_heber(ticker, entry_ts)
+    if heber_result is not None:
+        return heber_result
 
-    - sector_net_premium_1h: Net premium for the ticker's sector in last hour
-    - sector_flow_direction: BULLISH/BEARISH/NEUTRAL based on sector flow
-    - spy_correlation_5d: 5-day price correlation with SPY
-    - spy_return_1h: SPY return in the hour before entry (market context)
-    """
+    return await _get_sector_correlation_features_sql(ticker, entry_ts)
+
+
+def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
+    result: Dict[str, Any] = {
+        "sector_net_premium_1h": None,
+        "sector_flow_direction": None,
+        "spy_correlation_5d": None,
+        "spy_return_1h": None,
+    }
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+
+    ticker_upper = str(ticker).upper()
+    entry_date = entry_utc.date()
+    lookback_1h = entry_utc - timedelta(hours=1)
+    lookback_5d = entry_date - timedelta(days=5)
+
+    try:
+        flow_df = _heber_reader.read_flow(
+            asof_time=entry_utc,
+            start_time=lookback_1h - timedelta(hours=1),
+        )
+    except Exception as e:
+        _record_price_target_fallback("sector_net_premium_1h_heber", e, ticker=ticker)
+        flow_df = pd.DataFrame()
+
+    if not flow_df.empty:
+        ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+        ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+        put_call_col = _pick_first_existing_column(flow_df, ["put_call", "type"])
+        premium_col = _pick_first_existing_column(flow_df, ["premium_usd", "premium"])
+        sector_col = _pick_first_existing_column(flow_df, ["sector", "sector_name"])
+
+        if ts_col and ticker_col and put_call_col and premium_col:
+            ts_series = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+            premium_series = pd.to_numeric(flow_df[premium_col], errors="coerce")
+            temp_df = pd.DataFrame(
+                {
+                    "ts": ts_series,
+                    "ticker": flow_df[ticker_col].astype(str),
+                    "put_call": flow_df[put_call_col].astype(str).str.upper(),
+                    "premium": premium_series,
+                }
+            )
+            if sector_col:
+                temp_df["sector"] = flow_df[sector_col].astype(str)
+            temp_df = temp_df.dropna(subset=["ts", "put_call", "premium"])
+            flow_window = temp_df[(temp_df["ts"] >= lookback_1h) & (temp_df["ts"] < entry_utc)]
+
+            if sector_col and not flow_window.empty:
+                ticker_sector = None
+                ticker_rows = temp_df[temp_df["ticker"].str.upper() == ticker_upper]
+                if not ticker_rows.empty and "sector" in ticker_rows.columns:
+                    sector_values = ticker_rows["sector"].dropna()
+                    if not sector_values.empty:
+                        ticker_sector = str(sector_values.iloc[-1])
+
+                if ticker_sector:
+                    flow_window = flow_window[flow_window["sector"] == ticker_sector]
+
+            if not flow_window.empty:
+                signed = np.where(flow_window["put_call"] == "C", flow_window["premium"], -flow_window["premium"])
+                net_premium = float(np.nansum(signed))
+                result["sector_net_premium_1h"] = net_premium if net_premium != 0 else None
+                if net_premium > 1000000:
+                    result["sector_flow_direction"] = "BULLISH"
+                elif net_premium < -1000000:
+                    result["sector_flow_direction"] = "BEARISH"
+                else:
+                    result["sector_flow_direction"] = "NEUTRAL"
+
+    try:
+        spy_bars_df = _heber_reader.read_bars(
+            symbols=["SPY"],
+            asof_time=entry_utc,
+            start_time=lookback_1h - timedelta(hours=2),
+        )
+    except Exception as e:
+        _record_price_target_fallback("spy_return_1h_heber", e, ticker=ticker)
+        spy_bars_df = pd.DataFrame()
+
+    if not spy_bars_df.empty:
+        ts_col = _pick_first_existing_column(spy_bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc"])
+        close_col = _pick_first_existing_column(spy_bars_df, ["close", "c"])
+        if ts_col and close_col:
+            ts_series = pd.to_datetime(spy_bars_df[ts_col], utc=True, errors="coerce")
+            close_series = pd.to_numeric(spy_bars_df[close_col], errors="coerce")
+            temp_df = pd.DataFrame({"ts": ts_series, "close": close_series}).dropna(subset=["ts", "close"])
+            if not temp_df.empty:
+                current_candidates = temp_df[temp_df["ts"] < entry_utc].sort_values("ts")
+                prior_candidates = temp_df[temp_df["ts"] < lookback_1h].sort_values("ts")
+                if not current_candidates.empty and not prior_candidates.empty:
+                    current_close = float(current_candidates.iloc[-1]["close"])
+                    prior_close = float(prior_candidates.iloc[-1]["close"])
+                    if prior_close > 0:
+                        result["spy_return_1h"] = ((current_close - prior_close) / prior_close) * 100.0
+
+    correlation_start = datetime.combine(lookback_5d, datetime.min.time(), tzinfo=timezone.utc)
+    try:
+        bars_df = _heber_reader.read_bars(
+            symbols=[ticker, "SPY"],
+            asof_time=entry_utc,
+            start_time=correlation_start,
+        )
+    except Exception as e:
+        _record_price_target_fallback("spy_correlation_5d_heber", e, ticker=ticker)
+        bars_df = pd.DataFrame()
+
+    if not bars_df.empty:
+        ts_col = _pick_first_existing_column(bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc"])
+        symbol_col = _pick_first_existing_column(bars_df, ["symbol", "ticker", "underlying"])
+        close_col = _pick_first_existing_column(bars_df, ["close", "c"])
+        if ts_col and symbol_col and close_col:
+            ts_series = pd.to_datetime(bars_df[ts_col], utc=True, errors="coerce")
+            close_series = pd.to_numeric(bars_df[close_col], errors="coerce")
+            temp_df = pd.DataFrame(
+                {
+                    "ts": ts_series,
+                    "symbol": bars_df[symbol_col].astype(str).str.upper(),
+                    "close": close_series,
+                }
+            ).dropna(subset=["ts", "symbol", "close"])
+
+            temp_df = temp_df[(temp_df["ts"] < entry_utc) & (temp_df["symbol"].isin({ticker_upper, "SPY"}))]
+            if not temp_df.empty:
+                temp_df["day"] = temp_df["ts"].dt.date
+                temp_df = temp_df[(temp_df["day"] >= lookback_5d) & (temp_df["day"] < entry_date)]
+                if not temp_df.empty:
+                    daily = (
+                        temp_df.sort_values("ts")
+                        .groupby(["symbol", "day"], as_index=False)["close"]
+                        .last()
+                    )
+                    pivot = daily.pivot(index="day", columns="symbol", values="close").sort_index()
+                    if ticker_upper in pivot.columns and "SPY" in pivot.columns:
+                        returns = pd.DataFrame(
+                            {
+                                "ticker_return": pivot[ticker_upper].pct_change(),
+                                "spy_return": pivot["SPY"].pct_change(),
+                            }
+                        ).dropna()
+                        if len(returns) >= 3:
+                            corr = returns["ticker_return"].corr(returns["spy_return"])
+                            if pd.notna(corr):
+                                result["spy_correlation_5d"] = float(corr)
+
+    if any(value is not None for value in result.values()):
+        return result
+    return None
+
+
+async def _get_sector_correlation_features_sql(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """SQL fallback for sector flow and correlation features."""
     result: Dict[str, Any] = {
         "sector_net_premium_1h": None,
         "sector_flow_direction": None,
@@ -2362,7 +2515,6 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
 
     db_result = await db_query(query)
     result.update(db_result)
-
     return result
 
 

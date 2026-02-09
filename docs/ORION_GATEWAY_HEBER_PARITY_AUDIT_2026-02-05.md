@@ -6292,3 +6292,32 @@ Result:
 
 Residual:
 - remaining SQL-coupled feature families in `main_price_target_labeler` (notably sector-correlation and some flow-derived context) still require equivalent Heber-first migration slices.
+
+## 212) Pass 206 Continuation (2026-02-09)
+
+### 212.1 Price-Target Labeler Sector/Correlation Context Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_sector_correlation_features(...)` in `src/orion/main_price_target_labeler.py` was still SQL-only (sector lookup + SPY return/correlation), leaving a major context feature family outside the Heber-first migration pattern.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_sector_correlation_features_prefers_heber_when_available`
+  - `test_get_sector_correlation_features_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_sector_correlation_features_from_heber(...)` for:
+    - 1h sector net premium + direction from Heber flow (with schema-flexible column mapping),
+    - 1h SPY return from Heber bars,
+    - 5-day ticker/SPY correlation from Heber daily closes,
+  - extracted existing SQL behavior into `_get_sector_correlation_features_sql(...)`,
+  - updated `get_sector_correlation_features(...)` to run Heber-first and fallback to SQL only when Heber yields no usable features.
+
+Verification:
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py -k sector` passed.
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py` passed.
+
+Result:
+- Sector/correlation context now matches the same Heber-first + SQL-fallback migration contract already used for GEX, market tide, max pain, IV-rank, darkpool, and RVOL.
+
+Residual:
+- Full completion of `main_price_target_labeler` migration still requires auditing remaining SQL-coupled reads outside context helpers (for example entry sourcing and legacy lookup paths used in some label backfill/update flows).

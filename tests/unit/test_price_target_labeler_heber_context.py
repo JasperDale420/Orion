@@ -205,3 +205,90 @@ async def test_get_rvol_metrics_falls_back_to_sql_when_heber_empty(monkeypatch: 
     result = await labeler.get_rvol_metrics("AAPL", entry_ts)
 
     assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_get_sector_correlation_features_prefers_heber_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"ts_event": entry_ts - timedelta(minutes=20), "ticker": "AAPL", "put_call": "C", "premium_usd": 1_500_000},
+                    {"ts_event": entry_ts - timedelta(minutes=10), "ticker": "MSFT", "put_call": "P", "premium_usd": 100_000},
+                    {"ts_event": entry_ts - timedelta(hours=2), "ticker": "AAPL", "put_call": "C", "premium_usd": 999_999},
+                ]
+            )
+
+        def read_bars(self, *, symbols: list[str], **_kwargs: Any) -> pd.DataFrame:
+            if symbols == ["SPY"]:
+                return pd.DataFrame(
+                    [
+                        {"ts_event": entry_ts - timedelta(minutes=70), "symbol": "SPY", "close": 100.0},
+                        {"ts_event": entry_ts - timedelta(minutes=5), "symbol": "SPY", "close": 101.0},
+                    ]
+                )
+
+            return pd.DataFrame(
+                [
+                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 100.0},
+                    {"ts_event": datetime(2026, 2, 7, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 102.0},
+                    {"ts_event": datetime(2026, 2, 8, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 104.0},
+                    {"ts_event": datetime(2026, 2, 9, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 106.0},
+                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 108.0},
+                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 200.0},
+                    {"ts_event": datetime(2026, 2, 7, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 202.0},
+                    {"ts_event": datetime(2026, 2, 8, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 204.0},
+                    {"ts_event": datetime(2026, 2, 9, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 206.0},
+                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 208.0},
+                ]
+            )
+
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber has usable sector/correlation data")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_sector_correlation_features_sql", _fail_sql_fallback, raising=False)
+
+    result = await labeler.get_sector_correlation_features("AAPL", entry_ts)
+
+    assert result["sector_net_premium_1h"] == 1_400_000.0
+    assert result["sector_flow_direction"] == "BULLISH"
+    assert result["spy_return_1h"] == pytest.approx(1.0)
+    assert result["spy_correlation_5d"] == pytest.approx(1.0, rel=1e-3)
+
+
+@pytest.mark.asyncio
+async def test_get_sector_correlation_features_falls_back_to_sql_when_heber_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+        def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    expected = {
+        "sector_net_premium_1h": 123.0,
+        "sector_flow_direction": "NEUTRAL",
+        "spy_correlation_5d": 0.44,
+        "spy_return_1h": -0.55,
+    }
+
+    async def _fake_sql_fallback(ticker: str, ts: datetime):
+        assert ticker == "AAPL"
+        assert ts == entry_ts
+        return expected
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_sector_correlation_features_sql", _fake_sql_fallback, raising=False)
+
+    result = await labeler.get_sector_correlation_features("AAPL", entry_ts)
+
+    assert result == expected
