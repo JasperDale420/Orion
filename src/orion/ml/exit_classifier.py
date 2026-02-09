@@ -51,6 +51,22 @@ def _is_truthy(val: Any) -> bool:
     return False
 
 
+def _can_train_with_labels(y: np.ndarray, min_samples: int = 100) -> tuple[bool, str]:
+    """Validate label distribution before train/test split."""
+    sample_count = len(y)
+    if sample_count < min_samples:
+        return False, f"insufficient samples: {sample_count} < {min_samples}"
+
+    unique_values, counts = np.unique(y, return_counts=True)
+    if len(unique_values) < 2:
+        return False, "single class labels"
+
+    if int(np.min(counts)) < 2:
+        return False, "at least one class has fewer than 2 samples"
+
+    return True, ""
+
+
 # Bucket-specific checkpoint configurations
 # Each checkpoint has: (column_suffix, hours_held, description)
 BUCKET_CHECKPOINTS = {
@@ -412,12 +428,19 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
             p.entry_ts,
 
             -- Entry context
-            p.premium_usd, p.dte, p.is_sweep,
-            p.iv_rank_at_entry, p.vix_at_entry,
+            COALESCE(p.premium_usd, 0) as premium_usd,
+            COALESCE(p.dte, 0) as dte,
+            COALESCE(p.is_sweep, false) as is_sweep,
+            COALESCE(p.iv_rank_at_entry, 50) as iv_rank_at_entry,
+            COALESCE(p.vix_at_entry, 20) as vix_at_entry,
             p.trend_regime_at_entry, p.vol_regime_at_entry,
-            p.gex_at_entry, p.market_tide_30m,
-            p.delta_at_entry, p.gamma_at_entry, p.theta_at_entry,
-            p.iv_at_entry, p.ask_side_ratio,
+            COALESCE(p.gex_at_entry, 0) as gex_at_entry,
+            COALESCE(p.market_tide_30m, 0) as market_tide_30m,
+            COALESCE(p.delta_at_entry, 0) as delta_at_entry,
+            COALESCE(p.gamma_at_entry, 0) as gamma_at_entry,
+            COALESCE(p.theta_at_entry, 0) as theta_at_entry,
+            COALESCE(p.iv_at_entry, 0) as iv_at_entry,
+            COALESCE(p.ask_side_ratio, 0) as ask_side_ratio,
 
             -- Returns at bucket-specific checkpoints
             {return_cols},
@@ -435,20 +458,20 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
             p.max_return_pct, p.max_drawdown_pct,
 
             -- Window features (1h context at entry)
-            w.features_by_period->'1h'->>'call_put_imbalance' as window_call_put_imbalance_1h,
-            w.features_by_period->'1h'->>'sweep_ratio' as window_sweep_ratio_1h,
-            w.features_by_period->'1h'->>'flow_count' as window_flow_count_1h,
+            COALESCE(w.features_by_period->'1h'->>'call_put_imbalance', '0') as window_call_put_imbalance_1h,
+            COALESCE(w.features_by_period->'1h'->>'sweep_ratio', '0') as window_sweep_ratio_1h,
+            COALESCE(w.features_by_period->'1h'->>'flow_count', '0') as window_flow_count_1h,
 
             -- Window features (1d context at entry)
-            w.features_by_period->'1d'->>'call_put_imbalance' as window_call_put_imbalance_1d,
-            w.features_by_period->'1d'->>'sweep_ratio' as window_sweep_ratio_1d,
-            w.features_by_period->'1d'->>'dp_volume' as window_dp_volume_1d,
-            w.features_by_period->'1d'->>'call_put_ratio' as window_call_put_ratio_1d,
+            COALESCE(w.features_by_period->'1d'->>'call_put_imbalance', '0') as window_call_put_imbalance_1d,
+            COALESCE(w.features_by_period->'1d'->>'sweep_ratio', '0') as window_sweep_ratio_1d,
+            COALESCE(w.features_by_period->'1d'->>'dp_volume', '0') as window_dp_volume_1d,
+            COALESCE(w.features_by_period->'1d'->>'call_put_ratio', '0') as window_call_put_ratio_1d,
 
             -- Window features (1w context at entry)
-            w.features_by_period->'1w'->>'call_put_imbalance' as window_call_put_imbalance_1w,
-            w.features_by_period->'1w'->>'sweep_ratio' as window_sweep_ratio_1w,
-            w.features_by_period->'1w'->>'call_put_ratio' as window_call_put_ratio_1w
+            COALESCE(w.features_by_period->'1w'->>'call_put_imbalance', '0') as window_call_put_imbalance_1w,
+            COALESCE(w.features_by_period->'1w'->>'sweep_ratio', '0') as window_sweep_ratio_1w,
+            COALESCE(w.features_by_period->'1w'->>'call_put_ratio', '0') as window_call_put_ratio_1w
 
         FROM price_target_labels p
         -- Join latest window features for 1h, 1d, 1w periods in one lateral lookup
@@ -611,19 +634,20 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
 
 async def train_bucket_exit_classifier(bucket: str) -> Optional[Dict[str, Any]]:
     """Train exit classifier for a specific bucket."""
+    X, y, feature_names = await build_bucket_training_data(bucket)
+
+    can_train, reason = _can_train_with_labels(y, min_samples=MIN_SAMPLES)
+    if not can_train:
+        logger.warning(
+            f"Skipping exit classifier training for {bucket}: {reason}",
+            extra={"bucket": bucket, "samples": len(X), "reason": reason},
+        )
+        return None
+
     try:
         from lightgbm import LGBMClassifier
     except ImportError:
         logger.error("LightGBM not installed")
-        return None
-
-    X, y, feature_names = await build_bucket_training_data(bucket)
-
-    if len(X) < MIN_SAMPLES:
-        logger.warning(
-            f"Insufficient exit training data for {bucket}: {len(X)} samples",
-            extra={"bucket": bucket, "samples": len(X)},
-        )
         return None
 
     # Check for class imbalance

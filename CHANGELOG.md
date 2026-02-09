@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Label-Distribution Guard Before Model Fit (TDD)**:
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_can_train_with_labels_rejects_single_class_and_sparse_classes`
+    - `test_build_bucket_training_data_skips_malformed_numeric_rows`
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - added `_can_train_with_labels(...)` and integrated it into `train_bucket_exit_classifier(...)` to avoid invalid stratified splits on single-class/sparse-label datasets,
+    - hardened `build_bucket_training_data(...)` to skip malformed numeric rows while preserving valid samples.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Exit Classifier Training-Data Contract Hardening (TDD)**:
   - Updated `src/orion/ml/exit_classifier.py`:
     - `build_bucket_training_data(...)` now safely handles malformed/missing numeric values via `_safe_float(...)`.

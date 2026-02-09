@@ -7274,3 +7274,30 @@ Result:
 
 Residual:
 - next high-value classifier pass should add explicit schema-drift tests around checkpoint column availability and null-heavy row distributions under larger sample sets.
+
+## 239) Pass 237 Continuation (2026-02-09)
+
+### 239.1 Exit Classifier Label-Distribution Guarding (TDD-Backed)
+
+Finding:
+- `train_bucket_exit_classifier(...)` could still reach stratified train/test split with problematic label distributions (single-class or too-few minority samples), causing avoidable training-time failures.
+- dataset building also needed explicit coverage for mixed malformed/valid numeric rows to ensure partial-data salvage behavior remains stable.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - added `_can_train_with_labels(...)` to validate sample count and class distribution before model fitting,
+  - integrated guard into `train_bucket_exit_classifier(...)` prior to `LightGBM` training path.
+- Extended `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_can_train_with_labels_rejects_single_class_and_sparse_classes`
+  - `test_build_bucket_training_data_skips_malformed_numeric_rows`
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- classifier training now short-circuits cleanly for invalid label distributions instead of failing mid-fit/split.
+- training-data assembly remains resilient by skipping malformed numeric rows while retaining valid samples in the same batch.
+
+Residual:
+- next combined pass should target explicit cross-bucket schema drift checks (checkpoint column availability contracts and large-window query behavior under sparse/null-heavy datasets).
