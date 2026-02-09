@@ -6494,3 +6494,29 @@ Result:
 
 Residual:
 - primary remaining parity debt in `main_price_target_labeler` is now concentrated in broader label backfill/update routines and remaining local-table primary reads outside feature helpers.
+
+## 217) Pass 215 Continuation (2026-02-09)
+
+### 217.1 Price-Target Labeler `get_iv_rank_at_entry(...)` Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_iv_rank_at_entry(...)` in `src/orion/main_price_target_labeler.py` remained SQL-primary (flow-history percentile query) with no direct Heber-first lookup.
+- this left a high-frequency entry enrichment read outside the migration contract used by other labeler feature families.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py` with:
+  - `test_get_iv_rank_at_entry_prefers_heber_when_available`
+  - `test_get_iv_rank_at_entry_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - `get_iv_rank_at_entry(...)` now checks `_get_iv_rank_from_heber(ticker, entry_ts)` first,
+  - retains existing SQL percentile calculation path as fallback when Heber lookup is unavailable/unusable.
+
+Verification:
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k iv_rank_at_entry` passed.
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py` passed.
+
+Result:
+- `iv_rank_at_entry` now follows the same Heber-first + compatibility fallback pattern as other migrated labeler context/feature reads.
+
+Residual:
+- remaining high-volume technical debt is still concentrated in downstream backfill/update/reporting routines and other local-table primary reads outside these entry-time helper migrations.

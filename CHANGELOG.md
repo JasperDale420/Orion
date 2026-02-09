@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price-Target Labeler IV-Rank Entry Heber-First Path (TDD)**:
+  - Extended `tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py` with:
+    - `test_get_iv_rank_at_entry_prefers_heber_when_available`
+    - `test_get_iv_rank_at_entry_falls_back_to_sql_when_heber_empty`
+  - Updated `src/orion/main_price_target_labeler.py` so `get_iv_rank_at_entry(...)` now uses Heber IV-rank lookup first (`_get_iv_rank_from_heber`) and falls back to the existing SQL percentile calculation.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k iv_rank_at_entry`
+    - `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
     - `/health` readiness with bounded retry,

@@ -1125,6 +1125,9 @@ async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[floa
     Calculates IV rank as percentile: (current - min) / (max - min) * 100
     using historical IV data from silver_uw_flow for the same ticker.
     """
+    heber_iv_rank = _get_iv_rank_from_heber(ticker, entry_ts)
+    if heber_iv_rank is not None:
+        return heber_iv_rank
 
     async def query(session: Any) -> Optional[float]:
         # Get current IV and historical IVs for this ticker (last 30 days)
