@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Execution Exit-Policy Contract Hardening (TDD, Combined)**:
+  - Added `tests/unit/test_position_manager_execution_contracts.py` covering:
+    - canonical `candidate.option_symbol` propagation to tracked `option_chain`,
+    - `entry_option_price` wiring for option positions,
+    - startup rehydration loading beyond 50 open positions.
+  - Added `tests/unit/test_main_execution_exit_scope.py` covering:
+    - options-only exit-rule applicability guard semantics.
+  - Updated `src/orion/execution/position_manager.py` to:
+    - add `OpenPosition.entry_option_price`,
+    - resolve option contract identity with precedence: `candidate.option_symbol` -> runtime context -> legacy evidence,
+    - remove the fixed startup `LIMIT 50` cap from open-position rehydration.
+  - Updated `src/orion/main_execution.py` to:
+    - add `_should_apply_options_exit_rules(...)`,
+    - skip options-only exit-rule evaluation for non-option positions.
+  - This closes three audited execution drift points in one slice: inert price-target exit prerequisites, non-canonical option symbol propagation, and incomplete open-position monitoring scope.
+- **Price-Target Labeler Heber VIX-Proxy Regime Path (TDD)**:
+  - Added `tests/unit/test_price_target_labeler_heber_vix_proxy.py` covering:
+    - Heber VIX-proxy snapshot derivation from VIXY bars (`_get_heber_vix_proxy_snapshot_at_or_before(...)`),
+    - Heber-first regime detection behavior in `get_regime_at_entry(...)`,
+    - SQL fallback behavior when Heber VIX proxy data is unavailable.
+  - Updated `src/orion/main_price_target_labeler.py` to:
+    - add `_map_vix_proxy_to_regime(...)` and `_get_heber_vix_proxy_snapshot_at_or_before(...)`,
+    - route `get_regime_at_entry(...)` through Heber-first VIX proxy lookup before existing SQL fallback.
+  - This reduces steady-state dependence on local `silver_vix_data`/`silver_alpaca_bars` SQL reads for regime features while preserving backward-compatible fallback behavior.
 - **Price-Target Labeler Heber Context Read Paths (TDD)**:
   - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py` covering:
     - Heber-first GEX lookup (`get_gex_at_entry`) with SQL fallback,

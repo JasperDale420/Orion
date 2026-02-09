@@ -23,6 +23,14 @@ from orion.storage.models_trade_journal import TradeJournalEntry
 logger = setup_struct_logger("orion.execution")
 
 
+def _should_apply_options_exit_rules(position: Any) -> bool:
+    """Guard options-only exit policy from being applied to equity positions."""
+    option_chain = getattr(position, "option_chain", None)
+    if isinstance(option_chain, str):
+        return bool(option_chain.strip())
+    return bool(option_chain)
+
+
 async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[Any]:
     """Fetch recent flow data for a ticker for exit rule evaluation."""
 
@@ -320,6 +328,13 @@ async def main() -> None:
         # Position Manager: Check exit rules for open positions
         try:
             for position in position_manager.get_open_positions():
+                if not _should_apply_options_exit_rules(position):
+                    logger.debug(
+                        f"Skipping options exit rules for non-option position: {position.ticker}",
+                        extra={"event_type": "EXIT_RULE_SKIP_NON_OPTION", "ticker": position.ticker},
+                    )
+                    continue
+
                 # Fetch recent flow for this ticker (last 30 min)
                 recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
 

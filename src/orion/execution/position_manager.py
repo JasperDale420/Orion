@@ -32,6 +32,7 @@ class OpenPosition:
     # Entry timing
     entry_ts: datetime
     entry_price: float
+    entry_option_price: Optional[float] = None
 
     # Entry context for exit rules
     option_chain: Optional[str] = None  # Full OCC symbol
@@ -77,7 +78,6 @@ class PositionManager:
                         ExitDecision.exit_id.is_(None),
                     )
                     .order_by(StrategyDecision.timestamp_utc.desc())
-                    .limit(50)
                 )
                 result = await session.execute(stmt)
                 return result.all()
@@ -105,6 +105,8 @@ class PositionManager:
         try:
             ep = decision.execution_params or {}
             evidence = candidate.evidence or {}
+            entry_price = float(ep.get("limit_price", 0))
+            option_chain = self._resolve_option_chain(candidate=candidate, entry_context=evidence)
 
             return OpenPosition(
                 ticker=candidate.ticker,
@@ -112,8 +114,9 @@ class PositionManager:
                 candidate_id=candidate.candidate_id,
                 decision_id=decision.decision_id,
                 entry_ts=decision.timestamp_utc,
-                entry_price=float(ep.get("limit_price", 0)),
-                option_chain=evidence.get("option_chain"),
+                entry_price=entry_price,
+                entry_option_price=entry_price if option_chain else None,
+                option_chain=option_chain,
                 entry_iv=evidence.get("iv"),
                 entry_premium_window=float(evidence.get("premium", 0)),
                 entry_oi=evidence.get("open_interest"),
@@ -139,6 +142,11 @@ class PositionManager:
         """
         ctx = entry_context or {}
         ep = decision.execution_params or {}
+        entry_price = float(ep.get("limit_price", 0))
+        option_chain = self._resolve_option_chain(candidate=candidate, entry_context=ctx)
+        entry_option_price = ctx.get("entry_option_price")
+        if entry_option_price is None and option_chain:
+            entry_option_price = entry_price
 
         pos = OpenPosition(
             ticker=candidate.ticker,
@@ -146,8 +154,9 @@ class PositionManager:
             candidate_id=candidate.candidate_id,
             decision_id=decision.decision_id,
             entry_ts=decision.timestamp_utc or datetime.now(timezone.utc),
-            entry_price=float(ep.get("limit_price", 0)),
-            option_chain=ctx.get("option_chain"),
+            entry_price=entry_price,
+            entry_option_price=float(entry_option_price) if entry_option_price is not None else None,
+            option_chain=option_chain,
             entry_iv=ctx.get("iv"),
             entry_premium_window=float(ctx.get("premium_window", 0)),
             entry_sweep_count=int(ctx.get("sweep_count", 0)),
@@ -216,3 +225,25 @@ class PositionManager:
             )
         except Exception as e:
             logger.error(f"Failed to sync with broker: {e}")
+
+    @staticmethod
+    def _resolve_option_chain(candidate: CandidateTrade, entry_context: Dict[str, Any]) -> Optional[str]:
+        """
+        Resolve canonical option contract for tracked positions.
+
+        Priority:
+        1) candidate.option_symbol (canonical model field)
+        2) runtime entry_context.option_chain
+        3) candidate evidence option_chain (legacy payloads)
+        """
+        option_symbol = (getattr(candidate, "option_symbol", None) or "").strip()
+        if option_symbol:
+            return option_symbol
+
+        ctx_chain = (entry_context.get("option_chain") or "").strip()
+        if ctx_chain:
+            return ctx_chain
+
+        evidence = candidate.evidence or {}
+        evidence_chain = (evidence.get("option_chain") or "").strip()
+        return evidence_chain or None

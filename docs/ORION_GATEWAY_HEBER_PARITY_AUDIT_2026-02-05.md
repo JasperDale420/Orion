@@ -6003,3 +6003,61 @@ Result:
 
 Residual:
 - broader labeler SQL dependencies still remain (for example `silver_vix_data`, portions of ticker/market context joins), and should continue to be migrated in incremental, test-backed slices.
+
+## 204) Pass 198 Continuation (2026-02-09)
+
+### 204.1 Combined Execution Exit-Policy Contract Remediation (Options Scope + Position Rehydration)
+
+Findings addressed in this pass:
+- `PriceTargetExitRule` contract expected `entry_option_price`, but tracked positions only persisted `entry_price` (`src/orion/processing/rules/exit_rules.py`, `src/orion/execution/position_manager.py`).
+- option-position identity was sourced from legacy evidence/context instead of canonical `candidate.option_symbol`, weakening DTE/contract-scoped rule behavior (`src/orion/execution/position_manager.py`).
+- `PositionManager.initialize()` limited reconstructed open positions to latest 50 rows, leaving older open positions unmanaged by exit loops (`src/orion/execution/position_manager.py`).
+- options-only exit policy was applied to all open positions, including non-option equities (`src/orion/main_execution.py`, `src/orion/processing/rules/exit_rules.py`).
+
+Implemented (TDD-backed):
+- Added `tests/unit/test_position_manager_execution_contracts.py` enforcing:
+  - canonical option-chain propagation from `candidate.option_symbol`,
+  - `entry_option_price` persistence on tracked option positions,
+  - startup reconstruction of books larger than 50 open positions.
+- Added `tests/unit/test_main_execution_exit_scope.py` enforcing:
+  - options-only exit-rule applicability guard behavior.
+- Updated `src/orion/execution/position_manager.py`:
+  - added `OpenPosition.entry_option_price`,
+  - introduced canonical option-chain resolver precedence (`candidate.option_symbol` -> runtime context -> evidence),
+  - removed fixed `.limit(50)` from open-position rehydration query.
+- Updated `src/orion/main_execution.py`:
+  - added `_should_apply_options_exit_rules(...)`,
+  - now skips options-rule evaluation for non-option positions.
+
+Result:
+- exit-rule prerequisites for option-price target logic are now satisfied in tracked position state,
+- contract identity for options is canonicalized at position creation/rehydration,
+- startup monitoring scope is no longer hard-capped to 50 positions,
+- options-only rule family no longer runs against equity positions by default.
+
+Residual:
+- flow-level contract scoping inside individual exit rules remains broader than strict contract matching (ticker-level flow still feeds rule evaluation), and should be addressed in a dedicated follow-up slice.
+
+## 204) Pass 198 Continuation (2026-02-09)
+
+### 204.1 `main_price_target_labeler` Heber-First VIX Proxy Regime Path Added (TDD-Backed)
+
+Finding:
+- `get_regime_at_entry(...)` still sourced VIX context from SQL (`silver_vix_data` with `silver_alpaca_bars` fallback), keeping regime detection coupled to local Orion tables.
+
+Implemented:
+- Added `tests/unit/test_price_target_labeler_heber_vix_proxy.py` to validate:
+  - Heber VIX proxy snapshot derivation from VIXY bars at-or-before entry,
+  - Heber-first regime path behavior in `get_regime_at_entry(...)`,
+  - SQL fallback behavior when Heber VIX proxy data is unavailable.
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_map_vix_proxy_to_regime(...)`,
+  - added `_get_heber_vix_proxy_snapshot_at_or_before(...)`,
+  - routed `get_regime_at_entry(...)` to use Heber VIX proxy first, preserving existing SQL fallback for compatibility.
+
+Result:
+- regime feature construction now has an active Heber-first VIX path, reducing steady-state dependence on `silver_vix_data`/`silver_alpaca_bars` SQL reads while keeping migration safety through fallback.
+
+Residual:
+- SQL fallback remains enabled and should be retired after Heber VIX data completeness validation in production-like soak runs.
+- next audit/remediation slice should target contract-level validation under load (Gateway e2e schema/retry behavior + SQLite durability/contention).
