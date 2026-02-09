@@ -6434,6 +6434,36 @@ Result:
 Residual:
 - next high-value migration target in this area is `get_p3_features(...)`, which still reads 52w/high + same-expiry activity from local SQL tables as its primary source.
 
+## 216) Pass 209 Continuation (2026-02-09)
+
+### 216.1 Price-Target Labeler P3 Option Features Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_p3_features(...)` in `src/orion/main_price_target_labeler.py` was still SQL-primary for:
+  - 52-week high distance,
+  - same-expiry 1h activity,
+  - spread-leg heuristic.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_p3_features_prefers_heber_when_available`
+  - `test_get_p3_features_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_p3_features_from_heber(...)` to derive:
+    - `high_52w_distance_pct` from Heber bars,
+    - `same_expiry_trades_1h` and `is_spread_leg` from Heber flow scoped by expiry + time window,
+  - extracted SQL implementation into `_get_p3_features_sql(...)`,
+  - updated `get_p3_features(...)` to run Heber-first with SQL fallback.
+
+Verification:
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py` passed (`18 passed`).
+
+Result:
+- P3 option-level feature construction now follows the same Heber-first with compatibility fallback model used by the other migrated labeler feature families.
+
+Residual:
+- Primary remaining SQL-heavy work is now in downstream backfill/update routines and any non-Heberized legacy labeling/reporting paths outside the core per-trade feature helpers.
+
 ## 216) Pass 214 Continuation (2026-02-09)
 
 ### 216.1 Price-Target Labeler P3 Option Features Heber-First Path (TDD-Backed)

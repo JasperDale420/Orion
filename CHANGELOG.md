@@ -45,6 +45,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first P2 option-feature aggregation (`_get_p2_features_from_heber`) with extracted SQL fallback (`_get_p2_features_sql`) in `get_p2_features(...)`.
   - Extended `tests/unit/test_price_target_labeler_heber_context.py` with P3 option-feature Heber-first/fallback coverage.
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first P3 option-feature aggregation (`_get_p3_features_from_heber`) with extracted SQL fallback (`_get_p3_features_sql`) in `get_p3_features(...)`.
+  - Validated P3 Heber-first behavior end-to-end in the consolidated Heber-context suite (`18 passed`) and documented the migration pass in the parity audit.
 - **Execution Exit-Policy Contract Hardening (TDD, Combined)**:
   - Added `tests/unit/test_position_manager_execution_contracts.py` covering:
     - canonical `candidate.option_symbol` propagation to tracked `option_chain`,
