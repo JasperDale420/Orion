@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
 from scipy.stats import norm
 
@@ -20,6 +21,7 @@ load_dotenv()
 
 from sqlalchemy import text
 
+from orion.clients.heber_reader import HeberReader
 from orion.config import SystemSettings
 from orion.labeler import (
     BATCH_SIZE,
@@ -48,6 +50,7 @@ from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 
 logger = setup_struct_logger("orion.price_target")
+_heber_reader = HeberReader()
 
 _PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
 _PRICE_TARGET_LABEL_COLUMNS: Optional[Set[str]] = None
@@ -733,6 +736,9 @@ def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
 
 async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
     """Get underlying stock price at entry time from bars."""
+    heber_price = _get_heber_close_at_or_before(ticker, entry_ts)
+    if heber_price is not None:
+        return heber_price
 
     async def query(session: Any) -> Optional[float]:
         stmt = text(
@@ -755,6 +761,9 @@ async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Opti
 async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> Optional[float]:
     """Get underlying stock price at offset from entry."""
     target_ts = entry_ts + timedelta(hours=hours)
+    heber_price = _get_heber_close_at_or_before(ticker, target_ts)
+    if heber_price is not None:
+        return heber_price
 
     async def query(session: Any) -> Optional[float]:
         stmt = text(
@@ -772,6 +781,67 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
         return row[0] if row else None
 
     return await db_query(query)
+
+
+def _coerce_dt_utc(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.to_pydatetime()
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_heber_close_at_or_before(ticker: str, target_ts: datetime) -> Optional[float]:
+    """Best-effort Heber bars lookup for the latest close at-or-before target time."""
+    ts_utc = target_ts if target_ts.tzinfo is not None else target_ts.replace(tzinfo=timezone.utc)
+    try:
+        bars = _heber_reader.read_bars(
+            symbols=[ticker],
+            asof_time=datetime.now(timezone.utc),
+            start_time=ts_utc - timedelta(days=7),
+            end_time=ts_utc + timedelta(minutes=1),
+        )
+    except Exception as exc:
+        _record_price_target_fallback("heber_bar_lookup", exc, ticker=ticker)
+        return None
+
+    if bars.empty:
+        return None
+
+    ts_col = next((col for col in ("ts_event", "bar_start_ts", "timestamp") if col in bars.columns), None)
+    close_col = next((col for col in ("close", "c") if col in bars.columns), None)
+    if ts_col is None or close_col is None:
+        return None
+
+    candidates: List[tuple[datetime, float]] = []
+    for _, row in bars.iterrows():
+        row_ts = _coerce_dt_utc(row.get(ts_col))
+        row_close = _coerce_float(row.get(close_col))
+        if row_ts is None or row_close is None:
+            continue
+        if row_ts <= ts_utc:
+            candidates.append((row_ts, row_close))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
 
 
 async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:

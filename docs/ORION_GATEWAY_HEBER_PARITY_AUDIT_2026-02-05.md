@@ -5770,3 +5770,25 @@ Result:
 
 Residual:
 - after rollout stabilization, timestamp-only watermark fallback for this job can be retired to simplify resume-state ownership.
+
+## 196) Pass 190 Continuation (2026-02-09)
+
+### 196.1 `main_price_target_labeler` Underlying-Price Lookup Started on Heber Bars (TDD-Backed)
+
+Finding:
+- core underlying-price context in price-target labeling was still sourced directly from Orion-local `silver_alpaca_bars`, increasing migration friction and local SQL dependency.
+
+Implemented:
+- Added `tests/unit/test_price_target_labeler_heber_bars.py` with coverage for:
+  - Heber-first lookup in `get_underlying_price_at_entry(...)`,
+  - SQL fallback when Heber bars are unavailable,
+  - Heber-first lookup in `get_underlying_price_at_offset(...)`.
+- Updated `src/orion/main_price_target_labeler.py`:
+  - introduced Heber reader wiring and `_get_heber_close_at_or_before(...)` helper,
+  - routed entry/offset underlying-price reads through Heber-first lookup with existing SQL fallback preserved.
+
+Result:
+- the price-target labeler now has an active Heber-backed read path for underlying-price context, reducing direct reliance on local bar tables for two frequently used accessors.
+
+Residual:
+- broader `main_price_target_labeler` feature and label calculations still query multiple Orion-local silver tables; remaining functions require phased migration to Heber datasets/access facades.

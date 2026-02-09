@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price-Target Labeler Heber Bar Lookup Fallback (TDD)**:
+  - Added `tests/unit/test_price_target_labeler_heber_bars.py` covering:
+    - Heber-first underlying-price lookup at entry time
+    - SQL fallback when Heber bars are unavailable
+    - offset-price lookup using Heber bars before SQL fallback
+  - Updated `src/orion/main_price_target_labeler.py` to:
+    - add Heber bar lookup helper for latest close at-or-before a target timestamp,
+    - route `get_underlying_price_at_entry` and `get_underlying_price_at_offset` through Heber-first lookup with existing SQL fallback.
+  - This reduces direct dependency on local `silver_alpaca_bars` for core underlying-price context in price-target labeling while preserving backward compatibility.
 - **Backfill ML-Features Durable Keyset Resume State (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_selection.py` with:
     - `test_run_backfill_resumes_with_keyset_cursor_when_available`
