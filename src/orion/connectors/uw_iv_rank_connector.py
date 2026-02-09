@@ -17,6 +17,11 @@ from orion.config import system_settings
 from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
+RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _is_retryable_gateway_status(status_code: Optional[int]) -> bool:
+    return status_code in RETRYABLE_GATEWAY_STATUS_CODES
 
 
 class UWIVRankConnector:
@@ -33,8 +38,25 @@ class UWIVRankConnector:
         url = f"{self.gateway_url}/api/v1/uw/{ticker}/iv-rank"
         try:
             resp = requests.get(url, headers=self.headers, timeout=30)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                if _is_retryable_gateway_status(resp.status_code):
+                    resp.raise_for_status()
+                logger.warning("Non-retryable iv-rank status=%s ticker=%s", resp.status_code, ticker)
+                return None
             return resp.json()
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if _is_retryable_gateway_status(status):
+                logger.warning("Retryable iv-rank HTTP error status=%s ticker=%s", status, ticker)
+                raise
+            logger.warning("Non-retryable iv-rank HTTP error status=%s ticker=%s", status, ticker)
+            return None
+        except (requests.Timeout, requests.ConnectionError) as e:
+            logger.warning(f"Transient network error fetching IV rank for {ticker}: {e}")
+            raise
+        except requests.RequestException as e:
+            logger.warning(f"Failed to fetch IV rank for {ticker}: {e}")
+            return None
         except Exception as e:
             logger.warning(f"Failed to fetch IV rank for {ticker}: {e}")
             return None
@@ -45,7 +67,11 @@ class UWIVRankConnector:
         now = datetime.now(timezone.utc)
 
         for ticker in tickers:
-            data = await asyncio.to_thread(self._fetch_iv_rank, ticker)
+            try:
+                data = await asyncio.to_thread(self._fetch_iv_rank, ticker)
+            except Exception as e:
+                logger.warning(f"IV-rank fetch exhausted retry budget for {ticker}: {e}")
+                continue
             if not data or "data" not in data:
                 continue
 

@@ -17,6 +17,11 @@ from orion.config import system_settings
 from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
+RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _is_retryable_gateway_status(status_code: Optional[int]) -> bool:
+    return status_code in RETRYABLE_GATEWAY_STATUS_CODES
 
 
 class UWMarketTideConnector:
@@ -37,15 +42,36 @@ class UWMarketTideConnector:
 
         try:
             resp = requests.get(url, headers=self.headers, params=params, timeout=30)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                if _is_retryable_gateway_status(resp.status_code):
+                    resp.raise_for_status()
+                logger.warning("Non-retryable market tide status=%s", resp.status_code)
+                return None
             return resp.json()
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if _is_retryable_gateway_status(status):
+                logger.warning("Retryable market tide HTTP error status=%s", status)
+                raise
+            logger.warning("Non-retryable market tide HTTP error status=%s", status)
+            return None
+        except (requests.Timeout, requests.ConnectionError) as e:
+            logger.warning(f"Transient network error fetching market tide: {e}")
+            raise
+        except requests.RequestException as e:
+            logger.warning(f"Failed to fetch market tide: {e}")
+            return None
         except Exception as e:
             logger.warning(f"Failed to fetch market tide: {e}")
             return None
 
     async def fetch_and_store(self, market_date: Optional[date] = None) -> int:
         """Fetch market tide and store all ticks."""
-        data = await asyncio.to_thread(self._fetch_market_tide, market_date)
+        try:
+            data = await asyncio.to_thread(self._fetch_market_tide, market_date)
+        except Exception as e:
+            logger.warning(f"Market tide fetch exhausted retry budget: {e}")
+            return 0
         if not data or "data" not in data:
             return 0
 
