@@ -12,7 +12,10 @@ Usage:
 
 import argparse
 import asyncio
+import json
+import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from orion.main_price_target_labeler import (
@@ -31,6 +34,7 @@ logger = setup_struct_logger("orion.backfill.exit_columns")
 BATCH_SIZE = 50
 MAX_RECORD_RETRIES = 2
 RETRY_SLEEP_SECONDS = 0.25
+DEFAULT_DEAD_LETTER_PATH = os.getenv("ORION_BACKFILL_EXIT_DEAD_LETTER_PATH")
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
@@ -249,21 +253,24 @@ async def _update_record_with_retry(
     record: Dict[str, Any],
     update_fn: Callable[[Dict[str, Any]], Awaitable[bool]],
     phase_name: str,
-) -> tuple[bool, bool, int]:
+    max_retries: int = MAX_RECORD_RETRIES,
+    retry_sleep_seconds: float = RETRY_SLEEP_SECONDS,
+) -> tuple[bool, bool, int, str | None]:
     """Run a record updater with bounded retries.
 
     Returns:
-        (updated, failed, retries_used)
+        (updated, failed, retries_used, error_message)
     """
     retries_used = 0
     event_id = record.get("event_id")
 
-    for attempt in range(MAX_RECORD_RETRIES + 1):
+    for attempt in range(max_retries + 1):
         try:
             updated = await update_fn(record)
-            return updated, False, retries_used
+            return updated, False, retries_used, None
         except Exception as exc:
-            if attempt >= MAX_RECORD_RETRIES:
+            error_message = str(exc)
+            if attempt >= max_retries:
                 logger.error(
                     "Failed %s update for event_id=%s after %s attempt(s): %s",
                     phase_name,
@@ -271,7 +278,7 @@ async def _update_record_with_retry(
                     attempt + 1,
                     exc,
                 )
-                return False, True, retries_used
+                return False, True, retries_used, error_message
 
             retries_used += 1
             logger.warning(
@@ -279,19 +286,47 @@ async def _update_record_with_retry(
                 phase_name,
                 event_id,
                 attempt + 1,
-                MAX_RECORD_RETRIES + 1,
+                max_retries + 1,
                 exc,
             )
-            await asyncio.sleep(RETRY_SLEEP_SECONDS)
+            await asyncio.sleep(retry_sleep_seconds)
 
-    return False, True, retries_used
+    return False, True, retries_used, "unknown error"
 
 
-async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
+def _json_safe(value: Any) -> Any:
+    """Best-effort JSON-safe conversion for dead-letter payloads."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
+def _write_dead_letter_record(dead_letter_path: str, payload: Dict[str, Any]) -> None:
+    """Append a dead-letter payload as JSONL."""
+    path = Path(dead_letter_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, default=_json_safe) + "\n")
+
+
+async def run_backfill(
+    batch_size: int = BATCH_SIZE,
+    limit: int = 1000,
+    max_retries: int = MAX_RECORD_RETRIES,
+    retry_sleep_seconds: float = RETRY_SLEEP_SECONDS,
+    dead_letter_path: str | None = DEFAULT_DEAD_LETTER_PATH,
+) -> Dict[str, Any]:
     """Run the backfill job."""
     await init_db()
 
-    logger.info(f"Starting backfill with batch_size={batch_size}, limit={limit}")
+    logger.info(
+        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s",
+        batch_size,
+        limit,
+        max_retries,
+        retry_sleep_seconds,
+        dead_letter_path,
+    )
 
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
     logger.info("Phase 1: Backfilling velocity columns (time_to_75/100/150_pct_seconds)...")
@@ -299,6 +334,7 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
     velocity_failed = 0
     velocity_retried = 0
     velocity_processed = 0
+    velocity_dead_lettered = 0
     log_velocity_every = max(batch_size, 1)
     velocity_after_entry_ts, velocity_after_event_id = await _load_velocity_backfill_cursor()
 
@@ -323,15 +359,29 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             break
 
         for record in velocity_records:
-            updated, failed, retries = await _update_record_with_retry(
+            updated, failed, retries, error_message = await _update_record_with_retry(
                 record,
                 update_velocity_columns,
                 phase_name="velocity",
+                max_retries=max_retries,
+                retry_sleep_seconds=retry_sleep_seconds,
             )
             if updated:
                 velocity_updated += 1
             if failed:
                 velocity_failed += 1
+                if dead_letter_path:
+                    _write_dead_letter_record(
+                        dead_letter_path,
+                        {
+                            "phase": "velocity",
+                            "event_id": record.get("event_id"),
+                            "entry_ts": record.get("entry_ts"),
+                            "error": error_message or "unknown error",
+                            "retries_used": retries,
+                        },
+                    )
+                    velocity_dead_lettered += 1
             velocity_retried += retries
 
             velocity_processed += 1
@@ -353,11 +403,12 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
                 break
 
     logger.info(
-        "Velocity columns updated: %s/%s | failed=%s | retries=%s",
+        "Velocity columns updated: %s/%s | failed=%s | retries=%s | dead_lettered=%s",
         velocity_updated,
         velocity_processed,
         velocity_failed,
         velocity_retried,
+        velocity_dead_lettered,
     )
 
     # Phase 2: Checkpoint columns (slower, needs to fetch price history)
@@ -366,6 +417,7 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
     checkpoint_failed = 0
     checkpoint_retried = 0
     checkpoint_processed = 0
+    checkpoint_dead_lettered = 0
     checkpoint_after_entry_ts, checkpoint_after_event_id = await _load_checkpoint_backfill_cursor()
     log_checkpoint_every = max(batch_size, 1)
 
@@ -390,15 +442,29 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             break
 
         for record in checkpoint_records:
-            updated, failed, retries = await _update_record_with_retry(
+            updated, failed, retries, error_message = await _update_record_with_retry(
                 record,
                 update_checkpoint_columns,
                 phase_name="checkpoint",
+                max_retries=max_retries,
+                retry_sleep_seconds=retry_sleep_seconds,
             )
             if updated:
                 checkpoint_updated += 1
             if failed:
                 checkpoint_failed += 1
+                if dead_letter_path:
+                    _write_dead_letter_record(
+                        dead_letter_path,
+                        {
+                            "phase": "checkpoint",
+                            "event_id": record.get("event_id"),
+                            "entry_ts": record.get("entry_ts"),
+                            "error": error_message or "unknown error",
+                            "retries_used": retries,
+                        },
+                    )
+                    checkpoint_dead_lettered += 1
             checkpoint_retried += retries
 
             checkpoint_processed += 1
@@ -420,14 +486,38 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
                 break
 
     logger.info(
-        "Checkpoint columns updated: %s/%s | failed=%s | retries=%s",
+        "Checkpoint columns updated: %s/%s | failed=%s | retries=%s | dead_lettered=%s",
         checkpoint_updated,
         checkpoint_processed,
         checkpoint_failed,
         checkpoint_retried,
+        checkpoint_dead_lettered,
     )
 
-    logger.info("Backfill complete!")
+    summary = {
+        "velocity": {
+            "processed": velocity_processed,
+            "updated": velocity_updated,
+            "failed": velocity_failed,
+            "retried": velocity_retried,
+            "dead_lettered": velocity_dead_lettered,
+        },
+        "checkpoint": {
+            "processed": checkpoint_processed,
+            "updated": checkpoint_updated,
+            "failed": checkpoint_failed,
+            "retried": checkpoint_retried,
+            "dead_lettered": checkpoint_dead_lettered,
+        },
+        "total_processed": velocity_processed + checkpoint_processed,
+        "total_updated": velocity_updated + checkpoint_updated,
+        "total_failed": velocity_failed + checkpoint_failed,
+        "total_retried": velocity_retried + checkpoint_retried,
+        "total_dead_lettered": velocity_dead_lettered + checkpoint_dead_lettered,
+        "dead_letter_path": dead_letter_path,
+    }
+    logger.info("Backfill complete! summary=%s", summary)
+    return summary
 
 
 async def main() -> None:
@@ -435,9 +525,33 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill exit classifier columns")
     parser.add_argument("--batch-size", type=int, default=50, help="Batch size for logging")
     parser.add_argument("--limit", type=int, default=1000, help="Max records to process")
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=MAX_RECORD_RETRIES,
+        help="Max retries per record update before marking failed",
+    )
+    parser.add_argument(
+        "--retry-sleep-seconds",
+        type=float,
+        default=RETRY_SLEEP_SECONDS,
+        help="Sleep interval between per-record retry attempts",
+    )
+    parser.add_argument(
+        "--dead-letter-path",
+        type=str,
+        default=DEFAULT_DEAD_LETTER_PATH,
+        help="Optional JSONL file path for exhausted-retry records",
+    )
     args = parser.parse_args()
 
-    await run_backfill(batch_size=args.batch_size, limit=args.limit)
+    await run_backfill(
+        batch_size=args.batch_size,
+        limit=args.limit,
+        max_retries=args.max_retries,
+        retry_sleep_seconds=args.retry_sleep_seconds,
+        dead_letter_path=args.dead_letter_path,
+    )
 
 
 if __name__ == "__main__":

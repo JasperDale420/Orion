@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -653,7 +654,7 @@ async def test_update_record_with_retry_retries_then_succeeds(
 
     monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
 
-    updated, failed, retries = await backfill_exit_columns._update_record_with_retry(
+    updated, failed, retries, error_message = await backfill_exit_columns._update_record_with_retry(
         {"event_id": "evt-1"},
         _flaky_update,
         phase_name="velocity",
@@ -662,6 +663,7 @@ async def test_update_record_with_retry_retries_then_succeeds(
     assert updated is True
     assert failed is False
     assert retries == 1
+    assert error_message is None
     assert attempts["count"] == 2
     assert sleeps == [backfill_exit_columns.RETRY_SLEEP_SECONDS]
 
@@ -682,7 +684,7 @@ async def test_update_record_with_retry_marks_failure_after_max_retries(
 
     monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
 
-    updated, failed, retries = await backfill_exit_columns._update_record_with_retry(
+    updated, failed, retries, error_message = await backfill_exit_columns._update_record_with_retry(
         {"event_id": "evt-2"},
         _always_fail,
         phase_name="checkpoint",
@@ -691,6 +693,7 @@ async def test_update_record_with_retry_marks_failure_after_max_retries(
     assert updated is False
     assert failed is True
     assert retries == backfill_exit_columns.MAX_RECORD_RETRIES
+    assert error_message == "permanent failure"
     assert attempts["count"] == backfill_exit_columns.MAX_RECORD_RETRIES + 1
     assert len(sleeps) == backfill_exit_columns.MAX_RECORD_RETRIES
 
@@ -790,8 +793,110 @@ async def test_run_backfill_continues_when_velocity_update_raises(
     )
     monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
 
-    await backfill_exit_columns.run_backfill(batch_size=2, limit=2)
+    summary = await backfill_exit_columns.run_backfill(batch_size=2, limit=2)
 
     assert attempted_event_ids.count("vel-err") == backfill_exit_columns.MAX_RECORD_RETRIES + 1
     assert "vel-ok" in attempted_event_ids
     assert saved_velocity_cursors == [(ts1, "vel-err"), (ts2, "vel-ok")]
+    assert summary["velocity"]["processed"] == 2
+    assert summary["velocity"]["updated"] == 1
+    assert summary["velocity"]["failed"] == 1
+    assert summary["total_failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_writes_dead_letter_for_exhausted_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if after_entry_ts is None:
+            return [{"event_id": "vel-fail", "entry_ts": ts1}]
+        return []
+
+    async def _fake_get_all_records_for_checkpoints(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return []
+
+    async def _always_fail_velocity(_record: dict[str, Any]) -> bool:
+        raise RuntimeError("dead-letter-me")
+
+    async def _fake_update_checkpoint_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_save_velocity_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    async def _fake_save_checkpoint_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(backfill_exit_columns, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_exit_columns, "get_all_records_for_checkpoints", _fake_get_all_records_for_checkpoints)
+    monkeypatch.setattr(backfill_exit_columns, "update_velocity_columns", _always_fail_velocity)
+    monkeypatch.setattr(backfill_exit_columns, "update_checkpoint_columns", _fake_update_checkpoint_columns)
+    monkeypatch.setattr(backfill_exit_columns, "init_db", _fake_init_db)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_velocity_backfill_cursor",
+        _fake_load_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_checkpoint_backfill_cursor",
+        _fake_load_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_velocity_backfill_cursor",
+        _fake_save_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_checkpoint_backfill_cursor",
+        _fake_save_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
+
+    summary = await backfill_exit_columns.run_backfill(
+        batch_size=1,
+        limit=1,
+        max_retries=1,
+        dead_letter_path=str(dead_letter_path),
+    )
+
+    assert summary["velocity"]["failed"] == 1
+    assert summary["velocity"]["dead_lettered"] == 1
+    assert summary["total_dead_lettered"] == 1
+    lines = dead_letter_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["phase"] == "velocity"
+    assert payload["event_id"] == "vel-fail"
+    assert payload["retries_used"] == 1
+    assert payload["error"] == "dead-letter-me"

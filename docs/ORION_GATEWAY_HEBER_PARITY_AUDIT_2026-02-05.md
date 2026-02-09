@@ -7451,3 +7451,45 @@ Result:
 
 Residual:
 - next pass should focus on actionable diagnostics payloads for missing-column groups (by checkpoint family) and optional metadata caching to reduce repeated schema probes in high-frequency training loops.
+
+## 244) Pass 242 Continuation (2026-02-09)
+
+### 244.1 `backfill_exit_columns` Orchestration Contract Expansion (TDD-Backed, Combined Pass)
+
+Finding:
+- pass 241 left two explicit residuals open:
+  - no dead-letter sink for exhausted retries,
+  - no structured run summary return for orchestration callers.
+- this limited batch post-processing observability and made repeated-failure triage harder in long runs.
+
+Implemented:
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - expanded `_update_record_with_retry(...)` to return terminal error message metadata,
+  - added optional dead-letter JSONL output for exhausted retries:
+    - function arg `dead_letter_path`
+    - env default `ORION_BACKFILL_EXIT_DEAD_LETTER_PATH`
+    - helper `_write_dead_letter_record(...)`,
+  - added configurable retry knobs to function + CLI:
+    - `max_retries`
+    - `retry_sleep_seconds`
+    - `--max-retries`
+    - `--retry-sleep-seconds`
+    - `--dead-letter-path`,
+  - `run_backfill(...)` now returns structured summary payload:
+    - phase counters (`processed`, `updated`, `failed`, `retried`, `dead_lettered`)
+    - aggregate totals.
+- Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+  - updated retry tests for 4-tuple return contract (`error_message`),
+  - `test_run_backfill_writes_dead_letter_for_exhausted_retry`,
+  - strengthened continuation test to assert summary counters.
+
+Verification:
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py -k "update_record_with_retry or dead_letter or continues_when_velocity_update_raises"` passed.
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- backfill orchestration now exposes machine-readable run outcomes and provides an explicit failure capture lane for repeated per-record errors.
+- this closes both pass-241 residuals and improves operational handoff for nightly/managed backfill runs.
+
+Residual:
+- next pass should add optional dead-letter payload redaction controls and a max-file-size rotation policy for prolonged high-error periods.

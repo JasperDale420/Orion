@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Exit Columns Summary + Dead-Letter + Retry Knobs (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - `run_backfill(...)` now returns a structured summary payload (`velocity`, `checkpoint`, and totals),
+    - added optional dead-letter JSONL sink for exhausted retries (`dead_letter_path` / `ORION_BACKFILL_EXIT_DEAD_LETTER_PATH`),
+    - added configurable retry controls for function and CLI:
+      - `max_retries`
+      - `retry_sleep_seconds`
+      - `--max-retries`
+      - `--retry-sleep-seconds`
+      - `--dead-letter-path`
+    - extended `_update_record_with_retry(...)` to return terminal error metadata.
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+    - strengthened retry tests for error payload behavior,
+    - `test_run_backfill_writes_dead_letter_for_exhausted_retry`,
+    - updated continuation test to assert summary counters.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py -k "update_record_with_retry or dead_letter or continues_when_velocity_update_raises"`
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py`
 - **Exit Classifier Schema-Preflight Guard + Query-Failure Degradation (TDD)**:
   - Updated `src/orion/ml/exit_classifier.py`:
     - added `_required_price_target_columns_for_bucket(...)` for bucket-specific checkpoint schema requirements,
