@@ -23,6 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - add `_should_apply_options_exit_rules(...)`,
     - skip options-only exit-rule evaluation for non-option positions.
   - This closes three audited execution drift points in one slice: inert price-target exit prerequisites, non-canonical option symbol propagation, and incomplete open-position monitoring scope.
+- **Execution Exit Flow Contract Scoping (TDD)**:
+  - Extended `tests/unit/test_main_execution_exit_scope.py` with contract-scoping coverage for recent-flow inputs.
+  - Updated `src/orion/main_execution.py` to:
+    - add `_scope_recent_flow_for_position(...)`,
+    - filter same-ticker `recent_flow` to matching `position.option_chain` for option positions,
+    - pass scoped flow into exit-rule evaluation loop.
+  - This reduces cross-contract contamination where one option position could be exited based on unrelated flow for the same underlying ticker.
 - **Price-Target Labeler Heber VIX-Proxy Regime Path (TDD)**:
   - Added `tests/unit/test_price_target_labeler_heber_vix_proxy.py` covering:
     - Heber VIX-proxy snapshot derivation from VIXY bars (`_get_heber_vix_proxy_snapshot_at_or_before(...)`),

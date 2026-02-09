@@ -6038,6 +6038,30 @@ Result:
 Residual:
 - flow-level contract scoping inside individual exit rules remains broader than strict contract matching (ticker-level flow still feeds rule evaluation), and should be addressed in a dedicated follow-up slice.
 
+## 205) Pass 199 Continuation (2026-02-09)
+
+### 205.1 Exit-Rule Input Flow Is Now Contract-Scoped for Option Positions
+
+Finding:
+- even after options-only position gating, `main_execution` still passed ticker-wide `recent_flow` directly into every exit rule.
+- this allowed same-underlying, different-contract flow to influence rule outcomes for a tracked option position.
+
+Implemented (TDD-backed):
+- Extended `tests/unit/test_main_execution_exit_scope.py` with:
+  - contract-matching flow filter behavior for option positions,
+  - pass-through behavior for non-option positions.
+- Updated `src/orion/main_execution.py`:
+  - added `_scope_recent_flow_for_position(position, recent_flow)` helper,
+  - for option positions, keeps only rows whose `flow.option_chain` equals `position.option_chain`,
+  - feeds scoped flow into `rule.should_exit(...)` loop.
+
+Result:
+- contract-level exit decisions are less exposed to unrelated same-ticker flow noise,
+- execution behavior now aligns better with options-contract intent in dynamic exit policy.
+
+Residual:
+- rule internals still primarily use flow-side heuristics (aggressor/put_call/premium) and do not yet enforce explicit expiry/strike neighborhood policies when `option_chain` is missing on flow rows.
+
 ## 204) Pass 198 Continuation (2026-02-09)
 
 ### 204.1 `main_price_target_labeler` Heber-First VIX Proxy Regime Path Added (TDD-Backed)

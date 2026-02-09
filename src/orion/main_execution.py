@@ -31,6 +31,27 @@ def _should_apply_options_exit_rules(position: Any) -> bool:
     return bool(option_chain)
 
 
+def _scope_recent_flow_for_position(position: Any, recent_flow: List[Any]) -> List[Any]:
+    """
+    Scope ticker-level recent flow to the tracked option contract when possible.
+
+    This reduces cross-contract contamination for same-underlying positions.
+    """
+    if not _should_apply_options_exit_rules(position):
+        return recent_flow
+
+    position_chain = (getattr(position, "option_chain", None) or "").strip()
+    if not position_chain:
+        return recent_flow
+
+    scoped = []
+    for flow in recent_flow:
+        flow_chain = (getattr(flow, "option_chain", None) or "").strip()
+        if flow_chain == position_chain:
+            scoped.append(flow)
+    return scoped
+
+
 async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[Any]:
     """Fetch recent flow data for a ticker for exit rule evaluation."""
 
@@ -337,9 +358,10 @@ async def main() -> None:
 
                 # Fetch recent flow for this ticker (last 30 min)
                 recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
+                scoped_flow = _scope_recent_flow_for_position(position, recent_flow)
 
                 for rule in exit_rules:
-                    exit_sig = rule.should_exit(position, recent_flow, context={})
+                    exit_sig = rule.should_exit(position, scoped_flow, context={})
                     if exit_sig:
                         logger.info(
                             f"Exit signal triggered: {position.ticker} - {exit_sig.rule_id}: {exit_sig.reason}",
