@@ -23,6 +23,16 @@ def test_can_train_with_labels_rejects_single_class_and_sparse_classes() -> None
     assert reason == ""
 
 
+def test_required_price_target_columns_for_bucket_includes_checkpoint_families() -> None:
+    required = exit_classifier._required_price_target_columns_for_bucket(exit_classifier.BUCKET_CHECKPOINTS["0DTE"])
+
+    assert "trade_type" in required
+    assert "return_at_5m" in required
+    assert "delta_at_5m" in required
+    assert "time_value_pct_at_5m" in required
+    assert "theta_decay_pct_at_1h" in required
+
+
 @pytest.mark.asyncio
 async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_query(
     monkeypatch: pytest.MonkeyPatch,
@@ -420,6 +430,30 @@ async def test_build_bucket_training_data_returns_empty_with_feature_schema_on_q
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
     assert len(feature_names) > 0
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
+    assert X.dtype == float
+    assert y.dtype == int
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_short_circuits_when_required_columns_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing = {"return_at_5m", "delta_at_5m", "theta_decay_pct_at_5m"}
+
+    async def _fake_columns() -> set[str]:
+        base = exit_classifier._required_price_target_columns_for_bucket(exit_classifier.BUCKET_CHECKPOINTS["0DTE"])
+        return base - missing
+
+    async def _fail_db_query(_operation):
+        raise AssertionError("main training query should not execute when schema preflight fails")
+
+    monkeypatch.setattr(exit_classifier, "_load_price_target_label_columns", _fake_columns, raising=False)
+    monkeypatch.setattr(exit_classifier, "db_query", _fail_db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
     assert X.shape == (0, len(feature_names))
     assert y.shape == (0,)
     assert X.dtype == float

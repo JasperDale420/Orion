@@ -7420,3 +7420,34 @@ Result:
 
 Residual:
 - next high-value pass should add explicit checkpoint-column presence preflight checks so failures can be categorized as “schema missing” before query execution, with actionable remediation metadata.
+
+## 243) Pass 241 Continuation (2026-02-09)
+
+### 243.1 Exit Classifier Schema-Preflight + Missing-Column Degradation (TDD-Backed)
+
+Finding:
+- `build_bucket_training_data(...)` still relied on query-time behavior to reveal schema issues.
+- if checkpoint columns were missing for a bucket, failures occurred late and were not categorized as explicit schema-preflight misses.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - added `_required_price_target_columns_for_bucket(...)` to compute bucket-specific required column set,
+  - added `_load_price_target_label_columns(...)` metadata probe (`information_schema.columns`),
+  - added preflight short-circuit path when required columns are missing:
+    - logs `exit_training_schema_missing_columns`,
+    - returns stable empty arrays with preserved feature schema.
+  - retained query-error fallback path (`exit_training_query_failed`) for runtime query exceptions.
+- Extended tests in `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_required_price_target_columns_for_bucket_includes_checkpoint_families`
+  - `test_build_bucket_training_data_short_circuits_when_required_columns_missing`
+  - `test_build_bucket_training_data_returns_empty_with_feature_schema_on_query_error`
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- classifier training now differentiates schema-missing conditions from generic query failures and degrades safely without interrupting broader remediation workflows.
+
+Residual:
+- next pass should focus on actionable diagnostics payloads for missing-column groups (by checkpoint family) and optional metadata caching to reduce repeated schema probes in high-frequency training loops.

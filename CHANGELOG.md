@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Schema-Preflight Guard + Query-Failure Degradation (TDD)**:
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - added `_required_price_target_columns_for_bucket(...)` for bucket-specific checkpoint schema requirements,
+    - added `_load_price_target_label_columns(...)` metadata probe for `price_target_labels`,
+    - `build_bucket_training_data(...)` now short-circuits with stable empty outputs when required columns are missing,
+    - query failures now degrade safely via `exit_training_query_failed` path instead of propagating exceptions.
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_required_price_target_columns_for_bucket_includes_checkpoint_families`
+    - `test_build_bucket_training_data_short_circuits_when_required_columns_missing`
+    - `test_build_bucket_training_data_returns_empty_with_feature_schema_on_query_error`
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Exit Classifier Query-Error Fallback + Stable Empty Output Contract (TDD)**:
   - Updated `tests/unit/test_exit_classifier_window_query.py`:
     - `test_build_bucket_training_data_returns_empty_with_feature_schema_on_query_error`

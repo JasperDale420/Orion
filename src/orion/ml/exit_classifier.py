@@ -75,6 +75,65 @@ def _empty_training_arrays(feature_count: int) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
+def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float, str]]) -> set[str]:
+    """Build the required column set for a bucket training query."""
+    required = {
+        "ticker",
+        "entry_ts",
+        "premium_usd",
+        "dte",
+        "is_sweep",
+        "iv_rank_at_entry",
+        "vix_at_entry",
+        "trend_regime_at_entry",
+        "vol_regime_at_entry",
+        "gex_at_entry",
+        "market_tide_30m",
+        "delta_at_entry",
+        "gamma_at_entry",
+        "theta_at_entry",
+        "iv_at_entry",
+        "ask_side_ratio",
+        "max_return_pct",
+        "max_drawdown_pct",
+        "trade_type",
+    }
+    for suffix, _hours, _desc in checkpoints:
+        required.add(f"return_at_{suffix}")
+        required.add(f"delta_at_{suffix}")
+        required.add(f"gamma_at_{suffix}")
+        required.add(f"theta_at_{suffix}")
+        required.add(f"iv_at_{suffix}")
+        required.add(f"dte_at_{suffix}")
+        required.add(f"time_value_pct_at_{suffix}")
+        required.add(f"theta_decay_pct_at_{suffix}")
+    return required
+
+
+async def _load_price_target_label_columns() -> set[str]:
+    """Return currently available columns in price_target_labels."""
+
+    async def query(session: Any) -> list[str]:
+        from sqlalchemy import text
+
+        stmt = text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'price_target_labels'
+        """
+        )
+        result = await session.execute(stmt)
+        rows = result.fetchall()
+        return [str(row[0]) for row in rows]
+
+    try:
+        columns = await db_query(query)
+    except Exception:
+        return set()
+    return set(columns or [])
+
+
 # Bucket-specific checkpoint configurations
 # Each checkpoint has: (column_suffix, hours_held, description)
 BUCKET_CHECKPOINTS = {
@@ -409,6 +468,56 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
     if not checkpoints:
         logger.warning(f"No checkpoints defined for bucket {bucket}")
         return np.array([]), np.array([]), []
+
+    required_columns = _required_price_target_columns_for_bucket(checkpoints)
+    available_columns = await _load_price_target_label_columns()
+    if available_columns:
+        missing_columns = sorted(required_columns - available_columns)
+        if missing_columns:
+            logger.warning(
+                "Skipping exit training due to missing price_target_labels columns",
+                extra={
+                    "event": "exit_training_schema_missing_columns",
+                    "bucket": bucket,
+                    "missing_columns": missing_columns,
+                    "missing_count": len(missing_columns),
+                },
+            )
+            # Return with stable schema so orchestrators can continue safely.
+            feature_names = [
+                "current_return_pct",
+                "time_held_hours",
+                "delta_at_checkpoint",
+                "gamma_at_checkpoint",
+                "theta_at_checkpoint",
+                "iv_at_checkpoint",
+                "dte_at_checkpoint",
+                "time_value_pct",
+                "theta_decay_pct",
+                "premium_usd",
+                "dte_at_entry",
+                "is_sweep",
+                "iv_rank_at_entry",
+                "vix_at_entry",
+                "gex_at_entry",
+                "market_tide_30m",
+                "delta_at_entry",
+                "theta_at_entry",
+                "iv_at_entry",
+                "ask_side_ratio",
+                "window_call_put_imbalance_1h",
+                "window_sweep_ratio_1h",
+                "window_flow_count_1h",
+                "window_call_put_imbalance_1d",
+                "window_sweep_ratio_1d",
+                "window_dp_volume_1d",
+                "window_call_put_ratio_1d",
+                "window_call_put_imbalance_1w",
+                "window_sweep_ratio_1w",
+                "window_call_put_ratio_1w",
+            ]
+            X_empty, y_empty = _empty_training_arrays(len(feature_names))
+            return X_empty, y_empty, feature_names
 
     # Build column list for query - include returns, Greeks, IV, and time value at each checkpoint
     return_cols = ", ".join([f"return_at_{cp[0]}" for cp in checkpoints])
