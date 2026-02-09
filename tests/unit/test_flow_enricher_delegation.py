@@ -108,3 +108,114 @@ async def test_get_flow_greeks_skips_p2_when_option_chain_missing(monkeypatch: p
     assert result["oi_change_1d"] is None
     assert result["oi_change_pct"] is None
 
+
+@pytest.mark.asyncio
+async def test_get_market_tide_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_tide(ts: datetime, minutes: int = 30) -> dict[str, Any]:
+        captured["entry_ts"] = ts
+        captured["minutes"] = minutes
+        return {"net_premium": 123.0, "direction": "BULLISH"}
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for market tide enrichment")
+
+    monkeypatch.setattr(enricher, "get_labeler_market_tide_before_entry", _labeler_tide, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_market_tide(entry_ts, minutes=45)
+
+    assert value == {"net_premium": 123.0, "direction": "BULLISH"}
+    assert captured == {"entry_ts": entry_ts, "minutes": 45}
+
+
+@pytest.mark.asyncio
+async def test_get_iv_rank_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_iv_rank(ticker: str, ts: datetime) -> float:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return 77.0
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for iv-rank enrichment")
+
+    monkeypatch.setattr(enricher, "get_labeler_iv_rank_at_entry", _labeler_iv_rank, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_iv_rank("AAPL", entry_ts)
+
+    assert value == pytest.approx(77.0)
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_darkpool_volumes_delegates_to_labeler_and_maps_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_darkpool(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return {
+            "darkpool_30m": 10.0,
+            "darkpool_1h": 20.0,
+            "darkpool_4h": 40.0,
+            "darkpool_1d": 100.0,
+            "darkpool_1w": 700.0,
+        }
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for darkpool enrichment")
+
+    monkeypatch.setattr(enricher, "get_labeler_darkpool_metrics", _labeler_darkpool, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_darkpool_volumes("AAPL", entry_ts)
+
+    assert value == {
+        "30m": 10.0,
+        "1h": 20.0,
+        "4h": 40.0,
+        "1d": 100.0,
+    }
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_regime_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_regime(ts: datetime) -> dict[str, Any]:
+        captured["entry_ts"] = ts
+        return {
+            "trend_regime": "UP",
+            "vol_regime": "MEDIUM",
+            "risk_regime": "ON",
+            "session_regime": "MID",
+            "vix_regime": "NORMAL",
+        }
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for regime enrichment")
+
+    monkeypatch.setattr(enricher, "get_labeler_regime_at_entry", _labeler_regime, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_regime(entry_ts)
+
+    assert value == {
+        "trend_regime": "UP",
+        "vol_regime": "MEDIUM",
+        "risk_regime": "ON",
+        "session_regime": "MID",
+        "vix_regime": "NORMAL",
+    }
+    assert captured == {"entry_ts": entry_ts}

@@ -11,10 +11,22 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from orion.main_price_target_labeler import (
+    get_darkpool_metrics as get_labeler_darkpool_metrics,
+)
+from orion.main_price_target_labeler import (
     get_flow_greeks as get_labeler_flow_greeks,
 )
 from orion.main_price_target_labeler import (
+    get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
+)
+from orion.main_price_target_labeler import (
+    get_market_tide_before_entry as get_labeler_market_tide_before_entry,
+)
+from orion.main_price_target_labeler import (
     get_p2_features as get_labeler_p2_features,
+)
+from orion.main_price_target_labeler import (
+    get_regime_at_entry as get_labeler_regime_at_entry,
 )
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
@@ -310,28 +322,14 @@ async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
 
 async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
     """Get market tide in window before entry."""
-    from sqlalchemy import text
-
-    start_ts = entry_ts - timedelta(minutes=minutes)
-
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT COALESCE(SUM(net_call_premium), 0), COALESCE(SUM(net_put_premium), 0)
-            FROM silver_market_tide
-            WHERE ts_utc > :start_ts AND ts_utc <= :entry_ts
-        """
-        )
-        result = await session.execute(stmt, {"start_ts": start_ts, "entry_ts": entry_ts})
-        row = result.fetchone()
-        if row:
-            net = float(row[0] or 0) + float(row[1] or 0)
-            direction = "BULLISH" if net > 0 else "BEARISH" if net < 0 else "NEUTRAL"
-            return {"net_premium": net, "direction": direction}
-        return {}
-
     try:
-        return await db_query(query)
+        result = await get_labeler_market_tide_before_entry(entry_ts, minutes=minutes)
+        if isinstance(result, dict):
+            return {
+                "net_premium": result.get("net_premium"),
+                "direction": result.get("direction"),
+            }
+        return {}
     except Exception as e:
         logger.debug(f"Market tide lookup failed: {e}")
         return {}
@@ -374,39 +372,8 @@ async def _get_max_pain_distance(ticker: str, entry_ts: datetime, dte: Optional[
 
 async def _get_iv_rank(ticker: str, entry_ts: datetime) -> Optional[float]:
     """Get IV rank at entry."""
-    from sqlalchemy import text
-
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            WITH iv_history AS (
-                SELECT iv FROM silver_uw_flow
-                WHERE ticker = :ticker
-                AND flow_ts_utc BETWEEN :start_ts AND :entry_ts
-                AND iv IS NOT NULL AND iv > 0
-            )
-            SELECT
-                (SELECT iv FROM silver_uw_flow
-                 WHERE ticker = :ticker AND flow_ts_utc <= :entry_ts
-                 AND iv IS NOT NULL AND iv > 0
-                 ORDER BY flow_ts_utc DESC LIMIT 1) as current_iv,
-                MIN(iv) as min_iv,
-                MAX(iv) as max_iv
-            FROM iv_history
-        """
-        )
-        start_ts = entry_ts - timedelta(days=30)
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
-        row = result.fetchone()
-        if row and row[0] and row[1] is not None and row[2] is not None:
-            current_iv, min_iv, max_iv = row[0], row[1], row[2]
-            if max_iv > min_iv:
-                return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100))
-            return 50.0
-        return None
-
     try:
-        return await db_query(query)
+        return await get_labeler_iv_rank_at_entry(ticker, entry_ts)
     except Exception as e:
         logger.debug(f"IV rank lookup failed: {e}")
         return None
@@ -414,73 +381,34 @@ async def _get_iv_rank(ticker: str, entry_ts: datetime) -> Optional[float]:
 
 async def _get_darkpool_volumes(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
     """Get darkpool volumes for multiple windows."""
-    from sqlalchemy import text
-
-    volumes = {}
-    windows = [("30m", 30), ("1h", 60), ("4h", 240), ("1d", 1440)]
-
-    for name, minutes in windows:
-        start_ts = entry_ts - timedelta(minutes=minutes)
-
-        async def query(session: Any, st: datetime = start_ts) -> Optional[float]:
-            stmt = text(
-                """
-                SELECT COALESCE(SUM(size_shares), 0)
-                FROM silver_uw_darkpool
-                WHERE ticker = :ticker AND dark_ts_utc > :start_ts AND dark_ts_utc <= :entry_ts
-            """
-            )
-            result = await session.execute(stmt, {"ticker": ticker, "start_ts": st, "entry_ts": entry_ts})
-            row = result.fetchone()
-            return row[0] if row and row[0] else None
-
-        try:
-            volumes[name] = await db_query(query)
-        except Exception as e:
-            volumes[name] = None
-            _record_enricher_fallback("darkpool_volume_window", e, ticker=ticker, window=name)
-
-    return volumes
+    try:
+        darkpool_metrics = await get_labeler_darkpool_metrics(ticker, entry_ts)
+        if not isinstance(darkpool_metrics, dict):
+            return {}
+        return {
+            "30m": darkpool_metrics.get("darkpool_30m"),
+            "1h": darkpool_metrics.get("darkpool_1h"),
+            "4h": darkpool_metrics.get("darkpool_4h"),
+            "1d": darkpool_metrics.get("darkpool_1d"),
+        }
+    except Exception as e:
+        _record_enricher_fallback("darkpool_volume_window", e, ticker=ticker)
+        return {"30m": None, "1h": None, "4h": None, "1d": None}
 
 
 async def _get_regime(entry_ts: datetime) -> Dict[str, str]:
     """Get regime snapshot at entry."""
-    from sqlalchemy import text
-
-    from orion.analysis.regime import MultiAxisRegimeDetector
-
-    detector = MultiAxisRegimeDetector()
-
-    # Get VIX data
-    async def query_vix(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT vix, vix_1d_change, vix_regime
-            FROM silver_vix_data
-            WHERE ts_utc <= :entry_ts
-            ORDER BY ts_utc DESC LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"entry_ts": entry_ts})
-        row = result.fetchone()
-        if row and row[0]:
-            return {"vix": row[0], "vix_1d_change": row[1], "vix_regime": row[2]}
-        return {}
-
     try:
-        vix_data = await db_query(query_vix)
-        snapshot = detector.detect(
-            ts=entry_ts,
-            vix=vix_data.get("vix"),
-            vix_1d_change=vix_data.get("vix_1d_change"),
-        )
-        return {
-            "trend_regime": snapshot.trend.value,
-            "vol_regime": snapshot.vol.value,
-            "risk_regime": snapshot.risk.value,
-            "session_regime": snapshot.session.value,
-            "vix_regime": snapshot.vix_regime.value,
-        }
+        regime = await get_labeler_regime_at_entry(entry_ts)
+        if isinstance(regime, dict):
+            return {
+                "trend_regime": regime.get("trend_regime"),
+                "vol_regime": regime.get("vol_regime"),
+                "risk_regime": regime.get("risk_regime"),
+                "session_regime": regime.get("session_regime"),
+                "vix_regime": regime.get("vix_regime"),
+            }
+        return {}
     except Exception as e:
         logger.debug(f"Regime lookup failed: {e}")
         return {}

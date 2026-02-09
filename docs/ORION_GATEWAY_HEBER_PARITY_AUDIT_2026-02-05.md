@@ -6880,3 +6880,39 @@ Result:
 Residual:
 - major helper-level wrapper alignment in `backfill_ml_features.py` is now largely complete.
 - remaining debt in this file is primarily runtime behavior and operational concerns (full-load backfill execution characteristics, integration/soak behavior, and broader orchestration complexity rather than helper-source divergence).
+
+## 228) Pass 226 Continuation (2026-02-09)
+
+### 228.1 `flow_enricher` Context Helper Delegation (TDD-Backed)
+
+Finding:
+- after the prior flow-greeks delegation slice, `src/orion/ml/flow_enricher.py` still had direct local SQL paths for:
+  - market tide (`_get_market_tide`),
+  - IV-rank (`_get_iv_rank`),
+  - darkpool windows (`_get_darkpool_volumes`),
+  - regime snapshot (`_get_regime`).
+- this kept inference-side context derivation partly divergent from shared labeler logic and preserved avoidable local table coupling in a high-frequency enrichment path.
+
+Implemented:
+- Extended `tests/unit/test_flow_enricher_delegation.py` with:
+  - `test_get_market_tide_delegates_to_labeler`
+  - `test_get_iv_rank_delegates_to_labeler`
+  - `test_get_darkpool_volumes_delegates_to_labeler_and_maps_windows`
+  - `test_get_regime_delegates_to_labeler`
+- Updated `src/orion/ml/flow_enricher.py` to delegate:
+  - `_get_market_tide(...)` -> `get_labeler_market_tide_before_entry(...)`,
+  - `_get_iv_rank(...)` -> `get_labeler_iv_rank_at_entry(...)`,
+  - `_get_darkpool_volumes(...)` -> `get_labeler_darkpool_metrics(...)` (with explicit mapping to expected `30m/1h/4h/1d` keys),
+  - `_get_regime(...)` -> `get_labeler_regime_at_entry(...)`.
+- preserved existing flow-enricher return contracts while removing these local SQL implementations.
+
+Verification:
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "market_tide_delegates or iv_rank_delegates or darkpool_volumes_delegates or get_regime_delegates"` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- flow-enricher now shares one source contract with labeler helpers across market tide, IV-rank, darkpool windows, and regime context, reducing parity drift risk in live inference enrichment.
+
+Residual:
+- `flow_enricher` still contains local SQL for some context families (for example GEX rolling averages, broader flow metrics, market context, and window aggregations).
+- next recommended `flow_enricher` slice: isolate and delegate GEX base snapshot + retain explicit rolling-average contract as a separate helper-level migration.

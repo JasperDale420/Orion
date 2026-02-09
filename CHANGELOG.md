@@ -36,6 +36,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - removes local SQL-heavy flow-greeks derivation path from this enrichment helper.
   - Verified with:
     - `pytest -q tests/unit/test_flow_enricher_delegation.py`
+- **Flow Enricher Context Helper Delegation to Shared Labeler Paths (TDD)**:
+  - Extended `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_market_tide_delegates_to_labeler`
+    - `test_get_iv_rank_delegates_to_labeler`
+    - `test_get_darkpool_volumes_delegates_to_labeler_and_maps_windows`
+    - `test_get_regime_delegates_to_labeler`
+  - Updated `src/orion/ml/flow_enricher.py` to route:
+    - `_get_market_tide(...)` -> `get_labeler_market_tide_before_entry(...)`,
+    - `_get_iv_rank(...)` -> `get_labeler_iv_rank_at_entry(...)`,
+    - `_get_darkpool_volumes(...)` -> `get_labeler_darkpool_metrics(...)` with `30m/1h/4h/1d` key mapping,
+    - `_get_regime(...)` -> `get_labeler_regime_at_entry(...)`.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "market_tide_delegates or iv_rank_delegates or darkpool_volumes_delegates or get_regime_delegates"`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
     - `test_get_underlying_price_at_entry_delegates_to_labeler`
