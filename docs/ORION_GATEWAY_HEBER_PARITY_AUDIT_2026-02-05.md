@@ -6226,3 +6226,43 @@ Result:
 
 Residual:
 - `main_price_target_labeler` still has other SQL-coupled reads (for example RVOL and sector-correlation sourcing) that need similar Heber-first migration passes.
+
+## 211) Pass 205 Continuation (2026-02-09)
+
+### 211.1 Gateway End-to-End Contract Probe Added + Live Validation Executed (TDD-Backed)
+
+Finding:
+- after websocket URL/auth hardening, Orion still lacked a repeatable contract probe to validate Gateway behavior under real runtime conditions (HTTP health, websocket auth/subscription contract, error-code mapping, and data-event schema presence).
+
+Implemented:
+- Added `src/orion/jobs/gateway_contract_probe.py`:
+  - `run_gateway_contract_probe(...)` for end-to-end checks against a live Gateway instance,
+  - health probe with bounded retry (`/health`),
+  - websocket auth + subscription contract checks,
+  - explicit unknown-action error mapping check (`GW-E3001`),
+  - best-effort data-event envelope/schema validation,
+  - CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`).
+- Added `tests/unit/test_gateway_contract_probe.py` covering:
+  - gateway URL normalization behavior,
+  - happy-path auth/subscription/error/data-flow contract,
+  - health retry behavior,
+  - auth-failure summary behavior.
+- Added `tests/integration/test_gateway_live_contract_probe.py` (env-gated) for repeatable live checks when `ORION_GATEWAY_LIVE_API_KEY` is present.
+
+Verification:
+- `uv run pytest -q tests/unit/test_gateway_contract_probe.py tests/unit/test_gateway_stream_client_contract.py tests/connectors/test_gateway_stream_client.py` passed.
+- `ORION_GATEWAY_LIVE_API_KEY=... PYTHONPATH=src uv run pytest -q tests/integration/test_gateway_live_contract_probe.py` passed locally.
+- Live probe execution against local Gateway (`http://localhost:8080`) returned:
+  - `health_ok=true`,
+  - `auth_ok=true`,
+  - `subscription_ok=true`,
+  - `unknown_action_error_code=GW-E3001`,
+  - `data_event_seen=false` (no stream payload observed during short 2s capture window).
+
+Result:
+- Orion now has a reusable, test-covered contract probe for Gateway integration that can be run in CI-like environments and during staged migration checks.
+- error-code mapping and core websocket contract are now verified against a real Data-Gateway instance, not only mocked unit paths.
+
+Residual:
+- to close full stream schema/load parity, run the probe during an active market-data flow window (or with seeded replay feed) and capture at least one `type=data` envelope.
+- extend probe to repeated-loop/soak mode for reconnect + transient error behavior under sustained load.

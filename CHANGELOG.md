@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Gateway Live Contract Probe (TDD)**:
+  - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
+    - `/health` readiness with bounded retry,
+    - websocket auth + subscription handshake contract,
+    - unknown-action error mapping (`GW-E3001`),
+    - best-effort `type=data` envelope/schema presence.
+  - Added `tests/unit/test_gateway_contract_probe.py` for probe logic and retry/error contracts.
+  - Added `tests/integration/test_gateway_live_contract_probe.py` (env-gated via `ORION_GATEWAY_LIVE_API_KEY`) for repeatable live Gateway validation.
+  - Verified locally against `http://localhost:8080`: health/auth/subscription/error mapping succeeded; no `type=data` frame observed in short capture window.
 - **SQLite Contention Durability Slice (TDD)**:
   - Added `tests/unit/test_db_utils_sqlite_retry.py` to lock down retry semantics for SQLite lock contention in `db_transaction(...)`.
   - Added bounded retry/backoff support to `src/orion/shared/db_utils.py` with env-configurable settings:
