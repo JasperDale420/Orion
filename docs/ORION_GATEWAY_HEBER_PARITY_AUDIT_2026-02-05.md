@@ -5946,3 +5946,30 @@ Result:
 
 Residual:
 - remaining major SQL-coupled context in `main_price_target_labeler` includes `silver_max_pain` and `silver_iv_rank`; these should be the next combined migration slice.
+
+## 202) Pass 196 Continuation (2026-02-09)
+
+### 202.1 Market-Tide Heber Path Hardened with Flow-Derived Fallback + Regime Reuse (TDD-Backed)
+
+Finding:
+- `market_tide` Heber-first path existed, but relied on a single aggregate dataset read.
+- when aggregate parquet shape is incompatible/missing, labeler still fell through to SQL and `get_regime_at_entry(...)` independently queried local `silver_market_tide`, preserving migration coupling and reducing resilience.
+
+Implemented:
+- Added `tests/unit/test_price_target_labeler_heber_market_tide.py` covering:
+  - aggregate market-tide net reconstruction from Heber rows,
+  - flow-derived net reconstruction fallback from Heber flow (`premium_usd` + `put_call`) when aggregate data path is unavailable,
+  - Heber-first market-tide behavior for `get_market_tide_before_entry(...)`,
+  - Heber-first tide injection into `get_regime_at_entry(...)` before SQL fallback.
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_sum_market_tide_from_dataframe(...)` as canonical tide-net aggregator,
+  - added `_get_heber_market_tide_net_premium(...)` with two-step strategy:
+    - attempt `read_market_tide(...)` first,
+    - fallback to `read_flow(...)` net reconstruction when needed,
+  - routed both `get_market_tide_before_entry(...)` and `get_regime_at_entry(...)` through the same Heber tide helper before invoking SQL fallback.
+
+Result:
+- market-tide context is now more resilient to aggregate-dataset availability issues and shared across both feature extraction and regime detection, reducing steady-state dependence on local `silver_market_tide`.
+
+Residual:
+- remaining SQL-coupled labeler context still includes `silver_max_pain` and `silver_iv_rank`; these remain the next combined migration target.
