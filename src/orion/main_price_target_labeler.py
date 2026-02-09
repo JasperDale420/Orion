@@ -1519,6 +1519,51 @@ async def get_darkpool_volume(ticker: str, entry_ts: datetime, window_minutes: i
     - 240 min (4h): POSITION (medium term)
     - 1440 min (1d): LEAP (longer term accumulation)
     """
+    heber_volume = _get_darkpool_volume_from_heber(ticker, entry_ts, window_minutes)
+    if heber_volume is not None:
+        return heber_volume
+
+    return await _get_darkpool_volume_sql(ticker, entry_ts, window_minutes)
+
+
+def _get_darkpool_volume_from_heber(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> Optional[float]:
+    start_ts = entry_ts - timedelta(minutes=window_minutes)
+
+    try:
+        darkpool_df = _heber_reader.read_darkpool(
+            symbols=[ticker],
+            start_time=start_ts,
+            asof_time=entry_ts,
+        )
+    except Exception as e:
+        _record_price_target_fallback("darkpool_heber_lookup", e, ticker=ticker)
+        return None
+
+    if darkpool_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(darkpool_df, ["dark_ts_utc", "ts_utc", "ts_event", "timestamp", "created_at"])
+    size_col = _pick_first_existing_column(darkpool_df, ["size_shares", "size", "shares", "volume"])
+    if ts_col is None or size_col is None:
+        return None
+
+    ts_series = pd.to_datetime(darkpool_df[ts_col], utc=True, errors="coerce")
+    start_utc = _coerce_dt_utc(start_ts)
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if start_utc is None or entry_utc is None:
+        return None
+    in_window = darkpool_df[(ts_series >= start_utc) & (ts_series < entry_utc)]
+    if in_window.empty:
+        return None
+
+    total = pd.to_numeric(in_window[size_col], errors="coerce").sum()
+    if pd.isna(total) or float(total) == 0.0:
+        return None
+
+    return float(total)
+
+
+async def _get_darkpool_volume_sql(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> Optional[float]:
     start_ts = entry_ts - timedelta(minutes=window_minutes)
 
     async def query(session: Any) -> Optional[float]:

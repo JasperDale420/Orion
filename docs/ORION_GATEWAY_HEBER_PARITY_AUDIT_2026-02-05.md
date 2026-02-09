@@ -6200,3 +6200,29 @@ Result:
 
 Residual:
 - continue auditing remaining Heber adoption gaps in `main_price_target_labeler`/`flow_enricher`/backfill jobs where local SQL tables are still used as primary source of truth.
+
+## 210) Pass 204 Continuation (2026-02-09)
+
+### 210.1 Price-Target Labeler Darkpool Context Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_darkpool_volume(...)` in `src/orion/main_price_target_labeler.py` was still SQL-only (`silver_uw_darkpool`), unlike other context features already migrated to Heber-first reads.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_darkpool_volume_prefers_heber_when_available`
+  - `test_get_darkpool_volume_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_darkpool_volume_from_heber(...)` with symbol/time-window filtering and robust column mapping (`dark_ts_utc|ts_utc|ts_event`, `size_shares|size|shares|volume`),
+  - extracted SQL path into `_get_darkpool_volume_sql(...)`,
+  - updated `get_darkpool_volume(...)` to use Heber-first lookup with SQL fallback.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_heber_reader.py` passed.
+
+Result:
+- darkpool volume context in price-target labeling is now aligned with the Heber-first migration pattern already used for GEX, market tide, max pain, and IV-rank.
+- this reduces direct reliance on Orion-local `silver_uw_darkpool` while preserving backward-compatible fallback behavior.
+
+Residual:
+- `main_price_target_labeler` still has other SQL-coupled reads (for example RVOL and sector-correlation sourcing) that need similar Heber-first migration passes.

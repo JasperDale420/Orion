@@ -100,3 +100,50 @@ async def test_get_market_tide_before_entry_falls_back_to_sql_when_heber_shape_m
     result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
 
     assert result == {"net_premium": -50.0, "direction": "BEARISH"}
+
+
+@pytest.mark.asyncio
+async def test_get_darkpool_volume_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"dark_ts_utc": entry_ts - timedelta(minutes=50), "size_shares": 100},
+                    {"dark_ts_utc": entry_ts - timedelta(minutes=10), "size_shares": 250},
+                    {"dark_ts_utc": entry_ts - timedelta(minutes=70), "size_shares": 999},
+                ]
+            )
+
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _window_minutes: int = 60):
+        raise AssertionError("SQL fallback should not run when Heber has usable darkpool data")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_darkpool_volume_sql", _fail_sql_fallback, raising=False)
+
+    result = await labeler.get_darkpool_volume("AAPL", entry_ts, window_minutes=60)
+    assert result == 350.0
+
+
+@pytest.mark.asyncio
+async def test_get_darkpool_volume_falls_back_to_sql_when_heber_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    async def _fake_sql_fallback(ticker: str, ts: datetime, window_minutes: int = 60):
+        assert ticker == "AAPL"
+        assert ts == entry_ts
+        assert window_minutes == 60
+        return 777.0
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_darkpool_volume_sql", _fake_sql_fallback, raising=False)
+
+    result = await labeler.get_darkpool_volume("AAPL", entry_ts, window_minutes=60)
+    assert result == 777.0
