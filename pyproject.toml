@@ -48,7 +48,6 @@ prometheus-client = "^0.21.0"
 lightgbm = "^4.5.0"
 scikit-learn = "^1.6.0"
 
-
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.2"
 pytest-asyncio = "^0.23.2"
@@ -77,15 +76,12 @@ filterwarnings = [
 ]
 
 [tool.ruff]
+extend = "../ruff-base.toml"
 line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]
 ignore = ["E402", "E501", "B008"]
-
-[tool.black]
-line-length = 120
-target-version = ['py312']
 
 [tool.mypy]
 python_version = "3.12"

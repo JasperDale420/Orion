@@ -177,3 +177,48 @@ def test_read_market_tide_filters_time_and_asof(tmp_path: Path) -> None:
 
     assert len(result) == 1
     assert float(result.iloc[0]["net_call_premium"]) == 150.0
+
+
+def test_read_max_pain_filters_symbol_and_asof(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    max_pain = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
+            "date": [base.date(), base.date() + timedelta(days=1), base.date()],
+            "ts_available": [base, base + timedelta(days=1), base],
+            "expiry": [
+                base.date() + timedelta(days=7),
+                base.date() + timedelta(days=7),
+                base.date() + timedelta(days=7),
+            ],
+            "distance_to_max_pain_pct": [1.2, 2.3, 3.4],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=max_pain" / "dt=2026-02-05" / "part-0.parquet", max_pain)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_max_pain(symbols=["AAPL"], asof_time=base + timedelta(hours=1))
+
+    assert len(result) == 1
+    assert set(result["instrument_key"]) == {"equity:AAPL"}
+    assert float(result.iloc[0]["distance_to_max_pain_pct"]) == 1.2
+
+
+def test_read_iv_rank_filters_symbol_and_asof(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    iv_rank = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
+            "ts_utc": [base, base + timedelta(minutes=5), base],
+            "ts_available": [base, base + timedelta(minutes=10), base],
+            "iv_rank": [25.0, 55.0, 75.0],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=iv_rank" / "dt=2026-02-05" / "part-0.parquet", iv_rank)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_iv_rank(symbols=["AAPL"], asof_time=base + timedelta(minutes=6))
+
+    assert len(result) == 1
+    assert set(result["instrument_key"]) == {"equity:AAPL"}
+    assert float(result.iloc[0]["iv_rank"]) == 25.0

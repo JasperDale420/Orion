@@ -1,0 +1,26 @@
+meta:
+  run_id: ab371233-9fc1-4a92-b510-9d2975da163c
+  created_at: '2026-01-21T21:30:32.448201+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-01-21_ab371233-9fc1-4a92-b510-9d2975da163c.json
+  report_path: artifacts/reports/eod_report_2026-01-21.md
+proposal:
+  type: config_patch
+  priority: 1
+  rationale: Data ingestion latency from ALPACA_BAR_1M exceeded 15 minutes, preventing
+    signal generation and execution. System needs resilience to temporary data gaps.
+  evidence_pointers:
+    ingestion_lag:
+      source: ALPACA:ALPACA_BAR_1M
+      lag_max_s: 909.15064
+      max_gap_s: 900.680066
+    trades_executed: 0
+  test_plan:
+  - Simulate data delay in paper environment
+  - Verify signal generation resumes after gap recovery
+  - Monitor for missed opportunities during gaps
+  changes:
+    data_ingestion.max_allowed_gap_seconds: 300
+    data_ingestion.gap_fallback_logic: interpolate_and_skip_signals
+    signals.min_data_recency_seconds: 60

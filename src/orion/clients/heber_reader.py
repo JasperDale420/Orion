@@ -28,6 +28,8 @@ _SILVER_FLOW_DATASET = "flow_alerts"
 _SILVER_DARKPOOL_DATASET = "darkpool_trades"
 _SILVER_MARKET_TIDE_DATASET = "market_tide"
 _SILVER_GREEK_EXPOSURE_DATASET = "greek_exposure"
+_SILVER_MAX_PAIN_DATASET = "max_pain"
+_SILVER_IV_RANK_DATASET = "iv_rank"
 _SUPPORTED_BAR_TIMEFRAMES = {"1m"}
 
 
@@ -206,6 +208,40 @@ class HeberReader:
 
         return self._read_silver_dataset(
             dataset=_SILVER_GREEK_EXPOSURE_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
+    def read_max_pain(
+        self,
+        symbols: list[str] | None = None,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Read max pain snapshots from Heber Silver (`feed=max_pain`)."""
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+
+        return self._read_silver_dataset(
+            dataset=_SILVER_MAX_PAIN_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
+    def read_iv_rank(
+        self,
+        symbols: list[str] | None = None,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Read IV rank snapshots from Heber Silver (`feed=iv_rank`)."""
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+
+        return self._read_silver_dataset(
+            dataset=_SILVER_IV_RANK_DATASET,
             instrument_keys=instrument_keys,
             start_time=start_time,
             end_time=None,

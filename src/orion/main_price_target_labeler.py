@@ -9,7 +9,7 @@ import math
 import os
 import signal
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set
 
@@ -890,6 +890,14 @@ async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], en
     if not expiry_date:
         return None
 
+    heber_distance = _get_max_pain_distance_from_heber(ticker, expiry_date, entry_ts)
+    if heber_distance is not None:
+        return heber_distance
+
+    return await _get_max_pain_distance_sql(ticker, expiry_date, entry_ts)
+
+
+async def _get_max_pain_distance_sql(ticker: str, expiry_date: Any, entry_ts: datetime) -> Optional[float]:
     async def query(session: Any) -> Optional[float]:
         stmt = text(
             """
@@ -910,6 +918,63 @@ async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], en
         return row[0] if row else None
 
     return await db_query(query)
+
+
+def _get_max_pain_distance_from_heber(
+    ticker: str,
+    expiry_date: Any,
+    entry_ts: datetime,
+) -> Optional[float]:
+    entry_date = entry_ts.date()
+    expiry = expiry_date.date() if isinstance(expiry_date, datetime) else expiry_date
+    try:
+        max_pain_df = _heber_reader.read_max_pain(
+            symbols=[ticker],
+            asof_time=entry_ts,
+            start_time=entry_ts - timedelta(days=365),
+        )
+    except Exception as e:
+        _record_price_target_fallback("max_pain_heber_lookup", e, ticker=ticker)
+        return None
+
+    if max_pain_df.empty:
+        return None
+
+    expiry_col = _pick_first_existing_column(max_pain_df, ["expiry", "expiry_date", "expiration"])
+    dist_col = _pick_first_existing_column(
+        max_pain_df,
+        ["distance_to_max_pain_pct", "max_pain_distance_pct", "distance_to_max_pain"],
+    )
+    ts_col = _pick_first_existing_column(max_pain_df, ["date", "ts_utc", "ts_event", "timestamp", "created_at"])
+    if expiry_col is None or dist_col is None or ts_col is None:
+        return None
+
+    best_ts: Optional[datetime] = None
+    best_distance: Optional[float] = None
+    for _, row in max_pain_df.iterrows():
+        row_expiry = _coerce_date(row.get(expiry_col))
+        if row_expiry != expiry:
+            continue
+
+        row_ts = _coerce_dt_utc(row.get(ts_col))
+        if row_ts is None:
+            row_date = _coerce_date(row.get(ts_col))
+            if row_date is None:
+                continue
+            row_ts = datetime.combine(row_date, datetime.min.time(), tzinfo=timezone.utc)
+
+        if row_ts.date() > entry_date:
+            continue
+
+        distance = _coerce_float(row.get(dist_col))
+        if distance is None:
+            continue
+
+        if best_ts is None or row_ts > best_ts:
+            best_ts = row_ts
+            best_distance = distance
+
+    return best_distance
 
 
 async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
@@ -1126,6 +1191,18 @@ def _coerce_dt_utc(value: Any) -> Optional[datetime]:
     return ts.to_pydatetime()
 
 
+def _coerce_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(ts):
+        return None
+    return ts.date()
+
+
 def _coerce_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -1305,6 +1382,57 @@ async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> O
     """Get IV rank at a time offset."""
     target_ts = entry_ts + timedelta(hours=hours)
 
+    heber_iv_rank = _get_iv_rank_from_heber(ticker, target_ts)
+    if heber_iv_rank is not None:
+        return heber_iv_rank
+
+    return await _get_iv_at_offset_sql(ticker, target_ts)
+
+
+def _get_iv_rank_from_heber(ticker: str, target_ts: datetime) -> Optional[float]:
+    try:
+        iv_rank_df = _heber_reader.read_iv_rank(
+            symbols=[ticker],
+            asof_time=target_ts,
+            start_time=target_ts - timedelta(days=365),
+        )
+    except Exception as e:
+        _record_price_target_fallback("iv_rank_heber_lookup", e, ticker=ticker)
+        return None
+
+    if iv_rank_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(iv_rank_df, ["ts_utc", "ts_event", "timestamp", "created_at", "date"])
+    iv_rank_col = _pick_first_existing_column(iv_rank_df, ["iv_rank", "iv_rank_pct"])
+    if ts_col is None or iv_rank_col is None:
+        return None
+
+    best_ts: Optional[datetime] = None
+    best_iv_rank: Optional[float] = None
+    for _, row in iv_rank_df.iterrows():
+        row_ts = _coerce_dt_utc(row.get(ts_col))
+        if row_ts is None:
+            row_date = _coerce_date(row.get(ts_col))
+            if row_date is None:
+                continue
+            row_ts = datetime.combine(row_date, datetime.min.time(), tzinfo=timezone.utc)
+
+        if row_ts > target_ts:
+            continue
+
+        iv_rank = _coerce_float(row.get(iv_rank_col))
+        if iv_rank is None:
+            continue
+
+        if best_ts is None or row_ts > best_ts:
+            best_ts = row_ts
+            best_iv_rank = iv_rank
+
+    return best_iv_rank
+
+
+async def _get_iv_at_offset_sql(ticker: str, target_ts: datetime) -> Optional[float]:
     async def query(session: Any) -> Optional[float]:
         stmt = text(
             """

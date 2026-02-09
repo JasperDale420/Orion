@@ -48,6 +48,3 @@ COPY alembic.ini .
 
 # Set PYTHONPATH
 ENV PYTHONPATH=/app/src
-
-# Default Command (Overridden by Chronos)
-CMD ["python", "-m", "orion.main_ingest"]

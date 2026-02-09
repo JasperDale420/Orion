@@ -1,15 +1,15 @@
 # Orion Codebase
 
-*Generated: 2026-01-21T00:41:56*
+*Generated: 2026-02-06T14:57:03*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Orion
-Files analyzed: 621
+Files analyzed: 604
 
-Estimated tokens: 830.1k
+Estimated tokens: 846.6k
 
 ---
 
@@ -21,6 +21,7 @@ Directory structure:
     ├── README.md
     ├── alembic.ini
     ├── CHANGELOG.md
+    ├── CLAUDE.md
     ├── comprehensive_audit.md
     ├── docker-compose.yml
     ├── Dockerfile
@@ -73,7 +74,9 @@ Directory structure:
     │   └── regime_risk.yaml
     ├── docs/
     │   ├── alerting.md
+    │   ├── DATABASE_SCHEMA.md
     │   ├── disaster_recovery_runbook.md
+    │   ├── ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md
     │   └── runbooks/
     │       ├── README.md
     │       ├── circuit_breaker.md
@@ -86,18 +89,17 @@ Directory structure:
     │   ├── 2026-01-08_113645_solver_edit_paper_v1.yaml
     │   ├── 2026-01-09_054646_config_patch_general.yaml
     │   ├── 2026-01-09_054646_do_not_trade_general.yaml
-    │   └── 2026-01-09_054646_solver_edit_paper_v1.yaml
+    │   ├── 2026-01-09_054646_solver_edit_paper_v1.yaml
+    │   ├── 2026-01-21_213032_config_patch_general.yaml
+    │   └── 2026-01-21_213032_do_not_trade_general.yaml
     ├── scripts/
     │   ├── analyze_todays_flow.py
     │   ├── backfill_features.py
     │   ├── backfill_ml_features.py
-    │   ├── backfill_today.py
     │   ├── backtest_exit_rules.py
     │   ├── backtest_exit_strategies.py
     │   ├── backtest_param_sweep.py
     │   ├── bootstrap_solver.py
-    │   ├── complete_uw_backfill.py
-    │   ├── comprehensive_backfill.py
     │   ├── diagnose_data_gaps.py
     │   ├── import_whalehunter_darkpool_eod.py
     │   ├── import_whalehunter_uw_raw.py
@@ -126,7 +128,6 @@ Directory structure:
     │       ├── main_eod.py
     │       ├── main_execution.py
     │       ├── main_feature_enrichment.py
-    │       ├── main_ingest.py
     │       ├── main_labeler.py
     │       ├── main_meta.py
     │       ├── main_meta_weekly.py
@@ -135,10 +136,8 @@ Directory structure:
     │       ├── main_position_monitor.py
     │       ├── main_price_target_labeler.py
     │       ├── main_rollups.py
-    │       ├── paper_live_harness.py
     │       ├── query_events.py
     │       ├── rag_search.py
-    │       ├── run_agent.py
     │       ├── agents/
     │       │   ├── base.py
     │       │   ├── codex_client.py
@@ -162,6 +161,7 @@ Directory structure:
     │       │   └── schemas.py
     │       ├── clients/
     │       │   ├── __init__.py
+    │       │   ├── heber_reader.py
     │       │   ├── mcp_server.py
     │       │   └── trading_rag.py
     │       ├── connectors/
@@ -175,15 +175,10 @@ Directory structure:
     │       │   ├── gateway_stream_client.py
     │       │   ├── mcp_client.py
     │       │   ├── redpanda_producer.py
-    │       │   ├── uw_alerts_connector.py
-    │       │   ├── uw_darkpool_connector.py
-    │       │   ├── uw_flow_connector.py
     │       │   ├── uw_greek_exposure_connector.py
     │       │   ├── uw_iv_rank_connector.py
     │       │   ├── uw_market_tide_connector.py
     │       │   ├── uw_max_pain_connector.py
-    │       │   ├── uw_socket_connector.py
-    │       │   ├── uw_ticker_info_connector.py
     │       │   ├── vix_connector.py
     │       │   └── vix_proxy_connector.py
     │       ├── core/
@@ -217,19 +212,17 @@ Directory structure:
     │       │   ├── position_monitor.py
     │       │   ├── rate_limiter.py
     │       │   ├── risk_manager.py
-    │       │   ├── service.py
     │       │   └── signal_preflight.py
     │       ├── ingestion/
     │       │   ├── __init__.py
+    │       │   ├── __main__.py
     │       │   └── service.py
     │       ├── jobs/
     │       │   ├── backfill_exit_columns.py
-    │       │   ├── backfill_historical_gex.py
     │       │   ├── backfill_ml_features.py
     │       │   ├── data_quality_checker.py
     │       │   ├── dlq_consumer.py
     │       │   ├── gatekeeper.py
-    │       │   ├── label_job.py
     │       │   ├── monitor_system.py
     │       │   ├── nightly_backfill.py
     │       │   ├── reconcile_backfill.py
@@ -238,8 +231,7 @@ Directory structure:
     │       │   ├── seed_solvers.py
     │       │   ├── sync_earnings.py
     │       │   ├── validate_features.py
-    │       │   ├── window_feature_job.py
-    │       │   └── window_label_job.py
+    │       │   └── window_feature_job.py
     │       ├── labeler/
     │       │   ├── __init__.py
     │       │   ├── checkpoints.py
@@ -281,7 +273,6 @@ Directory structure:
     │       ├── reconciliation/
     │       │   └── bar_gap_scan.py
     │       ├── shared/
-    │       │   ├── candidate_queue.py
     │       │   ├── db_utils.py
     │       │   ├── decorators.py
     │       │   ├── dlq_utils.py
@@ -578,36 +569,29 @@ Directory structure:
     │   │   └── test_trading_rag.py
     │   ├── connectors/
     │   │   ├── test_alpaca_market.py
-    │   │   ├── test_uw_connectors.py
-    │   │   └── test_uw_flow.py
+    │   │   └── test_gateway_stream_client.py
     │   ├── core/
     │   │   ├── test_solver_deterministic.py
     │   │   └── test_universe_manager.py
     │   ├── e2e/
-    │   │   ├── test_full_system_flow.py
-    │   │   └── test_smoke_ingest.py
+    │   │   └── test_full_system_flow.py
     │   ├── integration/
     │   │   ├── test_api_endpoints.py
     │   │   ├── test_backtest_cv.py
     │   │   ├── test_circuit_breaker.py
     │   │   ├── test_circuit_breaker_stale.py
-    │   │   ├── test_connector_dlq.py
     │   │   ├── test_connector_retries.py
     │   │   ├── test_data_hardening.py
-    │   │   ├── test_db_mock.py
     │   │   ├── test_execution_loop.py
     │   │   ├── test_fill_deduplication.py
     │   │   ├── test_graceful_shutdown.py
     │   │   ├── test_meta_search_flow.py
     │   │   ├── test_ml_infrastructure.py
     │   │   ├── test_pipeline_ingest_to_signal.py
-    │   │   ├── test_queue_and_metrics.py
     │   │   ├── test_rate_limiter.py
-    │   │   ├── test_redpanda_robustness.py
     │   │   ├── test_remediation_verify.py
     │   │   ├── test_risk_manager_advanced.py
     │   │   ├── test_risk_manager_restart.py
-    │   │   ├── test_silver_ingest.py
     │   │   └── test_solver_router_integration.py
     │   ├── ml/
     │   │   ├── __init__.py
@@ -625,14 +609,13 @@ Directory structure:
     │   ├── storage/
     │   │   └── test_lakehouse.py
     │   └── unit/
+    │       ├── test_backfill_ml_features_signature.py
     │       ├── test_backtest_cv_strictness.py
     │       ├── test_baseline_fallback.py
-    │       ├── test_candidate_queue.py
     │       ├── test_circuit_breaker_logic.py
     │       ├── test_compliance_engine.py
     │       ├── test_compliance_remediation.py
     │       ├── test_config_centralization.py
-    │       ├── test_config_ingestion.py
     │       ├── test_correlation_adjuster.py
     │       ├── test_cross_validation.py
     │       ├── test_dlq_consumer.py
@@ -640,7 +623,6 @@ Directory structure:
     │       ├── test_dsr.py
     │       ├── test_eod_agent.py
     │       ├── test_eod_agent_proposals.py
-    │       ├── test_eod_wrapper.py
     │       ├── test_errors.py
     │       ├── test_execution_dedupe.py
     │       ├── test_execution_engine_lag.py
@@ -648,13 +630,15 @@ Directory structure:
     │       ├── test_feature_engine_core.py
     │       ├── test_feature_engine_persistence.py
     │       ├── test_feature_engine_v2.py
+    │       ├── test_feature_enrichment_heber_source.py
     │       ├── test_feature_latency.py
     │       ├── test_feature_persistence.py
     │       ├── test_flow_rules.py
     │       ├── test_gatekeeper.py
-    │       ├── test_heartbeat_remediation.py
+    │       ├── test_heber_reader.py
     │       ├── test_indexer_extended.py
     │       ├── test_logging.py
+    │       ├── test_main_labeler_heber_migration.py
     │       ├── test_market_schedule.py
     │       ├── test_meta_agent.py
     │       ├── test_meta_heuristic_fallback.py
@@ -694,8 +678,7 @@ Directory structure:
     │       ├── test_solver_schema.py
     │       ├── test_solver_validation.py
     │       ├── test_universe_persistence.py
-    │       ├── test_utils.py
-    │       └── test_uw_socket.py
+    │       └── test_utils.py
     └── .Jules/
         ├── bolt.md
         └── palette.md
@@ -1144,12 +1127,302 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Gateway/Heber Parity Audit (Pass 1)**: Added a migration-focused audit document at `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md`
+  - Includes integration gap analysis against `../Data-Gateway` and `../Heber`
+  - Includes technical debt backlog and keep/migrate/dispose framing for features and labels
+  - Includes migration sequence and open architecture decisions
+- **HeberReader Contract Tests**: Added `tests/unit/test_heber_reader.py` to cover:
+  - Catalog health endpoint contract (`/health`)
+  - Silver parquet reads with instrument/as-of filtering
+  - Gold parquet reads with symbol/as-of filtering
+- **Parity Matrix Extension**: Expanded `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md` with:
+  - Column-level labels parity table (Orion vs Heber)
+  - Column-level features parity table (Orion vs Heber)
+  - Explicit keep/migrate/dispose decisions per feature/label family
+- **Gateway Stream Contract Tests**: Added `tests/connectors/test_gateway_stream_client.py` to validate:
+  - Gateway `type=data` + `envelope` + `data` bar message parsing
+  - Invalid bar rejection behavior
+  - Pre-connect subscription queue behavior
+- **Gateway/Heber Config Mapping Tests**: Added coverage in `tests/unit/test_config_centralization.py` for:
+  - `DATA_GATEWAY_*` env mappings
+  - legacy `GATEWAY_*` alias compatibility
+  - `HEBER_*` env mappings into centralized settings
+- **Heber Labeler Migration Tests**: Added `tests/unit/test_main_labeler_heber_migration.py` covering:
+  - Heber flow payload normalization into labeler records
+  - Alias-field handling for mixed flow schemas
+- **Heber Feature-Enrichment Source Tests**: Added `tests/unit/test_feature_enrichment_heber_source.py` for:
+  - Top-ticker extraction from Heber flow frames
+  - Recent-window filtering behavior
+  - Graceful handling when expected columns are missing
+- **Gateway/Heber Parity Audit (Pass 3)**: Extended `docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md` with:
+  - 2026-02-06 status updates for completed migration items
+  - Current SQL-coupling technical-debt counts and highest-concentration files
+  - Remaining high-priority integration gaps and wave-2 archive candidates
+- **Gateway/Heber Parity Audit (Pass 4)**: Added deep audit coverage for:
+  - `main_price_target_labeler`, `ml/flow_enricher`, and SQL-coupled backfill/validation jobs
+  - Severity-ranked findings including a concrete backfill runtime bug and train/inference feature-semantics drift
+  - Module-by-module migration readiness and updated P0/P1/P2 backlog
+- **Backfill Signature Regression Test**: Added `tests/unit/test_backfill_ml_features_signature.py` to enforce the `get_sector_correlation_features(ticker, entry_ts)` call contract.
+- **Gateway/Heber Parity Audit (Pass 5)**: Continued audit with:
+  - validation of the backfill runtime bug fix
+  - SQL portability debt findings (`date_trunc`, Postgres casts/operators) in migration-critical modules
+- **Gateway/Heber Parity Audit (Pass 6)**: Added function-level migration map for `main_price_target_labeler`:
+  - source-by-source migration targets into Heber datasets
+  - safe slice order for incremental migration
+  - explicit parity gates before additional archival
+- **Gateway/Heber Parity Audit (Pass 7)**: Continued audit with:
+  - active-service keep/migrate/retire matrix from `docker-compose` runtime wiring
+  - darkpool contract-drift finding (`darkpool` vs `darkpool_trades`) across Data Gateway, Heber, and Orion reader paths
+  - ML dependency mapping for `pattern_miner`, `exit_classifier`, and `nightly_backfill`
+  - refreshed SQL-coupling hotspot heatmap and updated archival readiness wave
+- **Gateway/Heber Parity Audit (Pass 8)**: Continued audit with:
+  - deep review of `validate_features`, `data_quality_checker`, and `window_feature_job` migration readiness
+  - schema/column contract mismatch mapping between legacy Orion SQL assumptions and Heber Silver canon
+  - feature-lineage drift finding in validation mapping vs current checkpoint quote source usage
+  - DST scheduling-risk finding in fixed-offset market-time logic
+- **Gateway/Heber Parity Audit (Pass 9)**: Continued audit with:
+  - live-pipeline gap finding: current runtime wiring does not produce UW-flow signals required by active flow rules
+  - deployment drift finding: compose profile lacks ingestion service entry despite ingestion-based assumptions
+  - dual-write debt finding: Data Gateway pulls are persisted back into Orion-local silver tables
+  - auth-contract mismatch finding in `sync_earnings` (`Authorization` token client vs Gateway `X-Gateway-Key` requirement)
+- **Gateway/Heber Parity Audit (Pass 10)**: Continued audit with:
+  - execution path split-brain finding (`main_execution.py` vs `execution/service.py`) and active deployment path verification
+  - ML prefilter candidate-contract mismatch finding (nullable option fields vs required scorer inputs)
+  - inference enrichment coupling finding (`flow_enricher` still bound to Orion-local `silver_*`/`gold_feature_windows`)
+  - inactive ML flow processor wiring review and archive/consolidation guidance
+- **Gateway/Heber Parity Audit (Pass 11)**: Continued audit with:
+  - runtime entrypoint drift findings across execution queue path, rollup generation, and compose wiring
+  - changelog-to-code mismatch finding for execution consolidation claims vs current deployed codepath
+  - labeling-stack fragmentation analysis (`flow_labels`, `price_target_labels`, and PRD 6.3 label jobs) with archive-wave guidance
+- **Gateway/Heber Parity Audit (Pass 12)**: Continued audit with:
+  - active runtime Gateway auth-contract drift findings (`X-Gateway-Key` requirements vs compose env wiring)
+  - direct-provider bypass finding in option quote tracking (direct Alpaca calls vs Gateway endpoint parity)
+  - explicit keep/migrate/dispose matrix for Orion label/feature families and Heber gold contract gaps
+- **Gateway/Heber Parity Audit (Pass 14)**: Continued audit with:
+  - cross-repo contract gap findings between Heber alert-label option-bar fetch shape and Data Gateway route implementation
+  - cross-repo auth gap findings (Heber alert-label gateway calls missing `X-Gateway-Key`)
+  - concrete keep/migrate/dispose decisions for Orion label families into Heber gold dataset splits
+- **Gateway/Heber Parity Audit (Pass 16)**: Continued audit with:
+  - write-only service finding for `flow_labels`/`main_labeler` in current Orion repo wiring
+  - dependency confirmation that active model-training and backfill paths are centered on `price_target_labels`
+  - decommission gating recommendations for moving `labeler` to opt-in profile pending external-consumer check
+- **Gateway/Heber Parity Audit (Pass 17)**: Continued audit with:
+  - compose env-contract drift findings for Gateway-backed services (missing Gateway key wiring)
+  - direct-UW dependency drift findings in `main_price_target_labeler` versus centralization goals
+  - archival execution notes for orphaned integration modules
+- **Gateway/Heber Parity Audit (Pass 18)**: Continued audit with:
+  - concrete `sync_earnings` contract-break findings (Gateway path shape and auth mismatch)
+  - label-ontology parity findings between Orion `price_target_labels` and current Heber `labels_alert_*` views
+  - migration-split recommendation for outcome labels vs training-fact feature datasets
+- **Gateway/Heber Parity Audit (Pass 19)**: Continued audit with:
+  - `sync_todays_earnings` date-semantic drift finding (`date.today()` override vs provider record dates)
+  - runtime-coupling finding that earnings sync remains tied to ingestion startup path
+  - operational guidance for explicit scheduling and parity verification of earnings calendar freshness
+- **Gateway/Heber Parity Audit (Pass 20)**: Continued audit with:
+  - Heber watch quote-route mismatch findings (`/options/quotes?symbols=` vs Gateway per-contract quote route)
+  - cross-repo auth-gap findings for watch quote pulls (missing Gateway API key contract)
+  - P0 alignment guidance for quote contract and watch service auth wiring
+- **Gateway/Heber Parity Audit (Pass 21)**: Continued audit with:
+  - ops/remediation job inventory findings for currently unwired `src/orion/jobs/*` modules
+  - runtime-vs-repo ownership risk framing for dormant CLI/test-only jobs
+  - operational jobs matrix recommendation before next archive wave decisions
+- **Gateway/Heber Parity Audit (Pass 22)**: Continued audit with:
+  - cross-repo default URL drift findings (`DATA_GATEWAY_URL` defaulting to `:8000` in Heber paths)
+  - deployment-risk finding where Heber default points to lakeFS port rather than Data Gateway
+  - normalization and fail-fast recommendations for Gateway URL contracts
+- **Gateway/Heber Parity Audit (Pass 23)**: Continued audit with:
+  - active Orion ingestion-path finding for direct Alpaca Greeks enrichment in persistence layer
+  - duplicate ownership risk framing for Greeks data across direct-provider and Gateway/Heber contracts
+  - canonicalization recommendations for option Greeks sourcing
+- **Gateway/Heber Parity Audit (Pass 24)**: Continued audit with:
+  - compose/runtime wiring findings for Heber-dependent Orion services lacking explicit Heber data mount/env contracts
+  - deployment-risk finding for silent fallback/empty-read behavior in Heber-backed flows
+  - fail-fast and environment-contract recommendations for Heber runtime access
+- **Gateway/Heber Parity Audit (Pass 25)**: Continued audit with:
+  - duplicate outcome-tracking stack findings across Heber watch labels and Orion local checkpoint-label pipeline
+  - retirement-decision framing for canonical outcome path ownership
+  - parity-bridge recommendations for migrating `price_target_labels`-dependent training fields
+- **Gateway/Heber Parity Audit (Pass 26)**: Continued audit with:
+  - nightly-backfill credential-contract gap findings (`backfill_ml_features` direct UW dependency vs compose env wiring)
+  - scheduler timebase finding for fixed UTC-5 ET conversion (DST drift risk)
+  - enrichment completeness and scheduling-hardening recommendations
+- **Gateway/Heber Parity Audit (Pass 27)**: Continued audit with:
+  - ingestion-runtime parity finding: `IngestionService` documents Heber UW sourcing but still processes Alpaca-only events in active cycle
+  - UW enrichment schema-drift findings across Greek exposure / max pain / IV-rank connector field mappings vs Gateway normalized payloads
+  - feature-enrichment auth-contract finding: Gateway key wiring missing in compose path for API-key-protected UW endpoints
+  - darkpool feed-name drift finding (`darkpool` vs `darkpool_trades`) across Data Gateway poller, Heber Silver partitioning, and Orion `HeberReader`
+- **Gateway/Heber Parity Audit (Pass 28)**: Continued audit with:
+  - Orion Admin API drift finding: `/flows` still reads Orion-local `silver_uw_flow` instead of centralized Gateway/Heber flow interfaces
+  - orphaned-integration finding: Shared MCP client/service stack remains wired with direct provider credentials but has no active runtime consumers
+  - MCP endpoint-contract finding: default `MCP_SERVER_URL` (`localhost:8001`) is misaligned with compose topology (`8090:8001` host mapping / `mcp-server` service DNS)
+- **Gateway/Heber Parity Audit (Pass 29)**: Continued audit with:
+  - MetaSearch regression finding: `_fetch_silver_events` defines but does not execute its data-fetch coroutine, yielding empty evaluation inputs
+  - changelog-to-code drift finding for prior “fixed” meta-search fetch path vs current implementation
+  - adaptive-runtime coupling findings: meta weekly/evolution and EOD analytics still depend on Orion-local ingestion tables while compose omits ingestion service
+- **Gateway/Heber Parity Audit (Pass 30)**: Continued audit with:
+  - repo-hygiene debt finding: `detect-secrets` baseline is coupled to large/generated and archived files, creating commit-loop instability
+  - commit-reliability risk framing tied to tracked `codebase.md` and baseline line-number churn
+  - scheduler-reliability finding: weekly meta evolution runs on exact-minute trigger with no catch-up window
+- **Gateway/Heber Parity Audit (Pass 31)**: Continued audit with:
+  - root-cause integration finding: Orion `HeberReader` hardcodes Silver feed names instead of using Heber catalog feed-resolution contracts
+  - cross-repo naming drift finding: `darkpool` vs `darkpool_trades` inconsistencies persist between Data Gateway producer feeds, Heber writer/storage keys, and catalog inventory
+  - data-quality/scaling finding: `HeberReader` filter fallback re-reads full parquet datasets without re-applying symbol filters
+- **Gateway/Heber Parity Audit (Pass 32)**: Continued audit with:
+  - cross-service URL-contract finding: Heber watch poller/consumer and feature-enrichment build Data Gateway paths with inconsistent `/api/v1` assumptions
+  - endpoint-shape mismatch finding: watch market-context enrichment targets `/alpaca/stocks/bars` while Gateway serves `/api/v1/alpaca/stocks/{symbol}/bars`
+  - auth-contract finding: Heber watch and alert-label pipeline Gateway requests omit required `X-Gateway-Key` header wiring
+  - migration-hardening recommendations for shared URL builders, startup contract validation, and integration tests for watch enrichment paths
+- **Gateway/Heber Parity Audit (Pass 33)**: Continued audit with:
+  - API-surface mismatch finding: Heber watch and label pipelines call batch options routes (`/options/quotes`, `/options/bars`) not exposed by current Gateway Alpaca router
+  - provider/router drift finding: Gateway Alpaca provider has batch options quote/bar support, but router only exposes single-contract paths
+  - discovery-contract drift finding: Gateway `/catalog` advertises stale/nonexistent Alpaca paths (`/options/bars`, `/stocks/bars`) vs actual router exports
+- **Gateway/Heber Parity Audit (Pass 34)**: Continued audit with:
+  - execution-tech-debt finding: `main_execution.py` still contains dead helper paths (`get_pending_candidates`, `update_candidate_status`) that reference non-existent `CandidateTrade` columns
+  - changelog drift finding: removal claim for those helpers is currently false in code
+  - consolidation drift finding: changelog still claims `main_execution.py` is a thin wrapper while runtime module remains a full execution loop
+- **Gateway/Heber Parity Audit (Pass 35)**: Continued audit with:
+  - stream-contract finding: `GatewayStreamClient` mutates local subscription state before ACK and does not surface Gateway `type=error` subscription failures
+  - feed-contract finding: Orion subscribes with legacy `feed=\"bars\"` and relies on Gateway fallback behavior instead of canonical feed IDs (`stock_bars`, etc.)
+  - reliability recommendations for ACK-gated subscription state, explicit WS error handling, and feed-ID contract tests
+- **Gateway/Heber Parity Audit (Pass 36)**: Continued audit with:
+  - data-completeness finding: `backfill_exit_columns` selects rows by `price_at_15m IS NULL` only, which can skip partially-missing checkpoint columns
+  - operational-throughput finding: nightly backfill applies fixed per-run limits with non-deterministic `LIMIT`-only selectors (no stable pagination/order)
+  - scheduling-contract drift finding: `nightly_backfill` docs claim post-close 4:30pm ET while runtime config schedules 4:00pm ET
+- **Gateway/Heber Parity Audit (Pass 37)**: Continued audit with:
+  - label-integrity finding: `main_option_quote_tracker` can write latest-available quotes into overdue historical checkpoints (`ts_utc` backdated), corrupting checkpoint chronology
+  - contract-symbol finding: quote tracker reconstructs OCC symbols from components instead of using canonical `silver_uw_flow.option_chain`
+  - reliability recommendations for checkpoint-timestamp tolerance gating and provenance checks on quote writes
+- **Gateway/Heber Parity Audit (Pass 38)**: Continued audit with:
+  - connector-reliability finding: UW Gateway connectors decorate fetches with `@retry(...)` but swallow exceptions and return `None`, effectively disabling retry/backoff protections
+  - regime-signal correctness finding: `get_spy_cumulative_return` window query computes long-horizon return instead of the intended bounded 20-bar trend input
+  - schema-governance finding: enrichment silver tables (`silver_greek_exposure`, `silver_market_tide`, `silver_max_pain`, `silver_iv_rank`) are written via raw SQL but not represented in canonical silver ORM/docs artifacts
+- **Gateway/Heber Parity Audit (Pass 39)**: Continued audit with:
+  - volatility-metric integrity finding: active `VIXProxyConnector` computes `vix_1d_change` and `vix_5d_ma` from recent 1-minute `silver_alpaca_bars` rows while labeling them as daily-style metrics
+  - regime-input fidelity finding: `main_feature_enrichment` still feeds `MultiAxisRegimeDetector` with hardcoded `realized_vol=0.015` instead of derived live-bar volatility
+  - consolidation finding: direct Alpaca `VIXConnector` remains in repo but is not wired into runtime, leaving duplicate VIX-source paths without a canonical owner
+- **Gateway/Heber Parity Audit (Pass 40)**: Continued audit with:
+  - labeling-progress integrity finding: `main_labeler` checks labeled IDs for only a bounded prefix of candidate records, then filters the full backlog, which can misclassify already-labeled rows as unlabeled
+  - observability finding: `persist_labels` returns attempted label count while insert path uses `ON CONFLICT DO NOTHING`, inflating `total_labeled` progress logs under duplicate retries
+  - reliability recommendations for DB-driven unlabeled pagination and true inserted-row counting in labeler metrics
+- **Gateway/Heber Parity Audit (Pass 41)**: Continued audit with:
+  - drift-baseline correctness finding: `pattern_miner.get_last_week_importance` orders newest-first but collapses duplicate feature rows via dict overwrite, effectively retaining oldest-per-feature values in-window
+  - training-readiness finding: pattern-miner training query gates on `last_tracked_ts` but not `ml_ready`, allowing incomplete/unvalidated rows into model fitting
+  - model-quality recommendations for latest-per-feature baseline selection and explicit readiness gating in training datasets
+- **Gateway/Heber Parity Audit (Pass 42)**: Continued audit with:
+  - model-bias finding: `exit_classifier` training data generation skips `max_return_pct <= 0` trades, introducing winner/survivor bias in exit timing models
+  - readiness-contract finding: exit-classifier training query does not enforce `ml_ready` completeness before building samples
+  - validation-method finding: exit-classifier AUC is evaluated with random `train_test_split` rather than time-aware validation, increasing temporal leakage risk
+- **Gateway/Heber Parity Audit (Pass 43)**: Continued audit with:
+  - runtime split-brain finding: compose runs both `main_execution` and `position_monitor`, each with independent close-position execution paths
+  - exit-feature fidelity finding: `PositionMonitor` initializes `entry_time` from process `now` rather than true entry timestamp, skewing time-held exit signals
+  - context-lookup finding: position monitor resolves entry context via `candidate_trades.ticker` match only, which can miss option-contract positions keyed by `option_symbol`
+- **Gateway/Heber Parity Audit (Pass 44)**: Continued audit with:
+  - observability finding: Admin `/dashboard/*` endpoints are powered by an in-memory `PnLTracker` singleton with no active runtime feed path in repo
+  - source-of-truth drift finding: dashboard path bypasses persisted execution tables (`orders`, `fills`, `positions_snapshots`) and can report stale/empty portfolio state
+  - migration recommendation to anchor dashboard telemetry to durable execution/broker-backed data
+- **Gateway/Heber Parity Audit (Pass 45)**: Continued audit with:
+  - execution-state finding: `PositionManager` add/sync methods are effectively unwired in runtime, so exit-rule position state can go stale after startup
+  - identity-model finding: position tracking is keyed by underlying ticker, which can collapse multiple option contracts on the same symbol
+  - exit-targeting finding: `ExecutionEngine.close_position` uses ticker-only symboling in `main_execution` exit path, lacking explicit option-contract close handling
+- **Gateway/Heber Parity Audit (Pass 46)**: Continued audit with:
+  - data-linkage finding: `ExecutionEngine` exit persistence path omits `ExitDecision.candidate_id` even though model/schema expects candidate linkage
+  - restart-correctness finding: `PositionManager.initialize` determines open positions via `StrategyDecision.candidate_id` ↔ `ExitDecision.candidate_id` join, which can misclassify exited positions when linkage is missing
+  - reliability recommendations for candidate-linked exit writes and restart-resume regression coverage
+- **Gateway/Heber Parity Audit (Pass 47)**: Continued audit with:
+  - execution-concurrency finding: `main_execution.fetch_pending_candidates` uses anti-join polling without atomic claim/lock semantics, allowing duplicate pickup in multi-worker scenarios
+  - idempotency-contract finding: `strategy_decisions` stores `candidate_id` as non-unique, so duplicate decisions per candidate are structurally possible
+  - hardening recommendations for claim-based polling and one-decision-per-candidate constraints/tests
+- **Gateway/Heber Parity Audit (Pass 48)**: Continued audit with:
+  - fill-idempotency finding: execution restart path can reprocess recent fills because dedupe state is process-local (`_partial_fill_tracker`, `processed_fill_ids`) and reset on sync/restart
+  - ordering finding: risk-state mutation happens before DB fill dedupe (`ON CONFLICT DO NOTHING`), so duplicate fill events can still skew risk/equity state
+  - integration-gap finding: DB-backed processed-fill helpers exist in `ExecutionEngine` but are not used by active fill polling flow
+- **Gateway/Heber Parity Audit (Pass 49)**: Continued audit with:
+  - options-risk enforcement finding: live `_execute_options_order` path does not invoke `RiskManager.check_order`/`check_options_order`, so options orders can bypass configured risk/Greeks gates
+  - sizing-contract drift finding: preflight validates options candidates using `calculate_size` + ticker-level `check_order`, but execution submits contracts via `max_option_premium_pct` + connector contract sizing
+  - hardening recommendations for mandatory options risk-gate enforcement and preflight-vs-execution quantity parity tests
+- **Gateway/Heber Parity Audit (Pass 50)**: Continued audit with:
+  - options-unit finding: `RiskManager` share-style cost math (`quantity * price`) conflicts with contract-based options premium semantics (`contracts * price * 100`)
+  - enforcement-gap finding: `check_options_order` delegates to `check_order` and therefore inherits non-contract-aware notional checks
+  - hardening recommendations for contract-normalized risk accounting and options-specific max-order/exposure regression tests
+- **Gateway/Heber Parity Audit (Pass 51)**: Continued audit with:
+  - rollup-source finding: execution preflight and admin `/rollups` endpoints both read Orion-local `gold_ticker_rollup` rather than a centralized Heber-backed rollup contract
+  - deployment finding: rollup production is tied to ingestion-service background startup, while current compose profile runs execution path with rollup requirement disabled
+  - hardening recommendations for canonical rollup ownership, source alignment, and freshness/SLO validation
+- **Gateway/Heber Parity Audit (Pass 52)**: Continued audit with:
+  - infra-runtime finding: compose provisions `redpanda`/`minio` services while active runtime profile does not run Orion ingestion producer path
+  - lakehouse-contract finding: `LakehouseWriter` is disabled unless `ORION_LAKEHOUSE_*` vars are set, but those vars are absent from current compose env blocks
+  - hardening recommendations for canonical transport ownership and fail-fast lakehouse configuration checks
+- **Gateway/Heber Parity Audit (Pass 53)**: Continued audit with:
+  - deployment-coverage finding: FastAPI Admin endpoints are exercised by in-process ASGI tests but no API service is present in the active compose runtime
+  - data-contract finding: API `/flows` and `/rollups` remain coupled to Orion-local silver/gold tables rather than a Gateway/Heber canonical facade
+  - hardening recommendations for explicit API product ownership, deployment smoke checks, and canonical data-source routing
+- **Gateway/Heber Parity Audit (Pass 54)**: Continued audit with:
+  - directional-exit finding: `ExecutionEngine.close_position` hardcodes `OrderSide.SELL` and `main_execution` does not pass position direction, enabling wrong-side closes when shorting is active
+  - path-divergence finding: `position_monitor` uses broker-native `close_position(symbol)` while `main_execution` uses explicit side logic, creating inconsistent close semantics across active runtimes
+  - hardening recommendations for direction-aware close orders and unified close primitive coverage
+- **Gateway/Heber Parity Audit (Pass 55)**: Continued audit with:
+  - position-state finding: `PositionManager` rehydrates/stores exit-rule quantity from `decision.execution_params`, but execution path does not persist submitted `qty` there
+  - exit-reliability finding: `main_execution` uses tracked `position.qty` directly for close orders, so zero/incorrect rehydrated qty can propagate into close attempts
+  - hardening recommendations for persisted quantity source-of-truth and restart qty-parity regression coverage
+- **Gateway/Heber Parity Audit (Pass 56)**: Continued audit with:
+  - auditability finding: execution-time failure reasons are set on the in-memory decision object, but post-execution DB update path persists only `executed_successfully`
+  - observability finding: `strategy_decisions.reason` can remain stale pre-execution text while final status indicates execution failure/skips
+  - hardening recommendations for full post-execution decision-state persistence and failure-reason regression tests
+
+### Changed
+
+- **Legacy UW/Main-Ingest Archival**: Archived inactive pre-migration code, tests, and scripts under `archive/2026-02-05_gateway-heber-migration/`
+  - Archived deprecated ingestion/UW connector implementations to `archive/.../legacy_code/`
+  - Archived legacy tests coupled to removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) to `archive/.../legacy_tests/`
+  - Archived legacy UW backfill scripts to `archive/.../legacy_scripts/`
+  - Added archive manifest: `archive/2026-02-05_gateway-heber-migration/README.md`
+- **Runtime Consolidation Wave 6 Archival**: Archived inactive queue-driven execution path under `archive/2026-02-06_runtime-consolidation-wave6/`
+  - Archived `src/orion/execution/service.py` to `archive/.../legacy_code/execution_service.py`
+  - Archived `src/orion/shared/candidate_queue.py` to `archive/.../legacy_code/candidate_queue.py`
+  - Archived queue-specific unit tests to `archive/.../legacy_tests/test_candidate_queue.py`
+  - Added archive manifest: `archive/2026-02-06_runtime-consolidation-wave6/README.md`
+- **Label Stack Wave 7 Archival**: Archived inactive PRD 6.3 label jobs under `archive/2026-02-06_label-stack-wave7/`
+  - Archived `src/orion/jobs/label_job.py` to `archive/.../legacy_code/label_job.py`
+  - Archived `src/orion/jobs/window_label_job.py` to `archive/.../legacy_code/window_label_job.py`
+  - Added archive manifest: `archive/2026-02-06_label-stack-wave7/README.md`
+- **Integration Debt Wave 8 Archival**: Archived orphaned integration modules under `archive/2026-02-06_integration-debt-wave8/`
+  - Archived `src/orion/connectors/uw_ticker_info_connector.py` to `archive/.../legacy_code/uw_ticker_info_connector.py`
+  - Archived `src/orion/jobs/backfill_historical_gex.py` to `archive/.../legacy_code/backfill_historical_gex.py`
+  - Added archive manifest: `archive/2026-02-06_integration-debt-wave8/README.md`
+- **Runner Debt Wave 9 Archival**: Archived deprecated runner/harness modules under `archive/2026-02-06_runner-debt-wave9/`
+  - Archived `src/orion/run_agent.py` to `archive/.../legacy_code/run_agent.py`
+  - Archived `src/orion/paper_live_harness.py` to `archive/.../legacy_code/paper_live_harness.py`
+  - Added archive manifest: `archive/2026-02-06_runner-debt-wave9/README.md`
+- **HeberReader Data Access Path**: Replaced unsupported HTTP reads (`/silver/read`, `/gold/read`) with Heber-compatible access:
+  - Silver and Gold reads now use Heber parquet layout from `HEBER_DATA_ROOT`
+  - Catalog calls limited to supported endpoints (for example `/health`, `/datasets`)
+- **GatewayStreamClient Message Handling**:
+  - Added support for Data Gateway websocket payload shape (`type=data`, `feed=bars`, `envelope`, `data`)
+  - Uses envelope-provided `event_id` when present for idempotency parity
+  - Normalizes `symbol`/`ticker` keys into payload for downstream Alpaca bar normalization
+  - Queues subscriptions requested before websocket connection and flushes them on startup
+- **Centralized Gateway/Heber Runtime Config**:
+  - Added `system_settings` fields for `data_gateway_url`, `data_gateway_api_key`, `heber_catalog_url`, `heber_data_root`, and `orion_use_gateway`
+  - Added backward-compatible alias support (`GATEWAY_*` -> `DATA_GATEWAY_*`)
+  - Refactored Gateway/Heber callers to use centralized config (`gateway_stream_client`, `heber_reader`, UW enrichment connectors, `sync_earnings`, `main_feature_enrichment`)
+  - Removed hardcoded default Gateway API key fallback in UW connectors
+- **Main Labeler Data Source**:
+  - Migrated `main_labeler.py` read path from local `silver_uw_flow` SQL queries to Heber-backed `HeberReader.read_flow(...)`
+  - Migrated price lookup for label horizons to Heber bars (`HeberReader.read_bars(...)`)
+  - Kept `flow_labels` persistence in local Orion DB for compatibility during transition
+- **Feature Enrichment Active-Ticker Discovery**:
+  - Updated `main_feature_enrichment.py` to source active tickers from Heber flow data first
+  - Retained local SQL discovery as a fallback path for operational safety
+
 ### Fixed
 
 - **Alpaca Connection Limit**: Fixed `connection limit exceeded` error by migrating `AlpacaStreamConnector` to use Data Gateway's WebSocket multiplexer
   - New `GatewayStreamClient` connects to Gateway's `/ws` endpoint instead of directly to Alpaca
   - `ORION_USE_GATEWAY=true` (default) routes all streaming through Gateway
   - Eliminates competing WebSocket connections that exceed Algo Trader Pro's 1-connection limit
+- **Backfill Runtime TypeError**: Fixed wrong-arity call in `backfill_ml_features.py` by updating `get_sector_correlation_features` invocation to match the two-argument function signature.
 
 ### Added
 
@@ -1394,6 +1667,136 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Removed unused `_persist_trade_journal()` method from `ExecutionService` in `service.py`
 - Removed obsolete comments and unused imports (`datetime`, `timezone`)
 - Removed duplicate execution logic from `main_execution.py` (~250 lines of code eliminated)
+
+
+
+================================================
+FILE: CLAUDE.md
+================================================
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Orion is a real-time options trading backend. It ingests market data from Unusual Whales and Alpaca, processes it through a Bronze/Silver/Gold medallion architecture on TimescaleDB, runs feature engineering and ML scoring, and executes trades via Alpaca. Currently in Research/Paper stage.
+
+## Commands
+
+```bash
+# Testing
+make test                    # Run all tests (pytest with --cov=src)
+make test-unit               # Unit tests only (tests/unit/)
+make test-integration        # Integration tests only (tests/integration/)
+make test-eod                # E2E tests only (tests/e2e/)
+make test-coverage           # Tests with HTML/XML coverage reports
+pytest tests/unit/test_foo.py           # Single test file
+pytest tests/unit/test_foo.py::test_bar # Single test function
+
+# Linting
+make lint                    # ruff check + black --check
+ruff check . --fix           # Auto-fix lint issues
+black .                      # Auto-format
+pre-commit run --all-files   # Full suite: ruff, black, mypy, bandit, detect-secrets
+
+# Database migrations
+alembic upgrade head         # Apply all migrations
+alembic revision --autogenerate -m "description"  # New migration
+
+# Docker (local infra)
+docker compose up timescaledb redpanda minio -d   # Start infrastructure
+docker compose up execution -d                     # Start a specific service
+```
+
+## Test Environment
+
+Tests use in-memory SQLite via `aiosqlite` (not Postgres). The `tests/conftest.py` sets critical environment variables **before any orion imports**:
+- `ORION_STAGE=test`, `DB_URL=sqlite+aiosqlite:///:memory:`, mock API keys
+- Autouse fixtures: `setup_test_db` (creates/drops all tables per test), `mock_redpanda_producer` (prevents network calls)
+- All tests are async by default (`asyncio_mode = "auto"`)
+- Unit tests must have NO network calls and NO database I/O
+
+## Code Style
+
+- Line length: 120 (ruff and black)
+- Python 3.12+ target
+- Ruff rules: E, F, I, W, B (ignores E402, E501, B008)
+- Mypy: strict mode with `ignore_missing_imports`
+
+## Architecture
+
+### Data Flow
+
+```
+Ingestion → Bronze (raw JSON) → Silver (normalized) → Features/Signals → Rules → Candidates
+→ Regime + ML Scoring → Solver Ensemble → StrategyDecision → Risk Preflight → Execution
+```
+
+### Medallion Storage (`src/orion/storage/`)
+
+- **Bronze** (`BronzeEvent`): Raw events with JSON payload. Idempotent via `ON CONFLICT DO NOTHING` on `event_id`.
+- **Silver**: Normalized domain models — `SilverOptionFlow`, `SilverAlpacaBar`, `SilverDarkPool`, `SilverUWAlert`, `SilverSignal`, `SilverOptionQuote`.
+- **Gold**: Enriched/aggregated — `CandidateTrade`, `StrategyDecision`, `GoldTickerRollup`, `GoldFeatureEvent`, `CandidateLabel`, `ExitDecision`.
+
+Dual storage: PostgreSQL for operational queries + S3 Parquet lakehouse (partitioned `v1/{source}/{event_type}/date={date}/`) for analytics.
+
+### Services (Entry Points)
+
+Each `src/orion/main_*.py` is a standalone async service run via `python -m orion.main_*`:
+- `main_execution` — Trade execution loop (fetch candidates → decide → risk check → execute)
+- `main_labeler` / `main_price_target_labeler` — ML label generation from forward returns
+- `main_feature_enrichment` — Background GEX, Market Tide, IV Rank, VIX, Regime fetching
+- `main_eod` — End-of-day LLM review agent
+- `main_meta` / `main_meta_weekly` — LLM-driven strategy meta-search
+- `main_pattern_miner` — LightGBM pattern discovery
+- `main_position_monitor` — Open position monitoring loop
+- `main_rollups` — OHLCV aggregation (5m, 1h, 1d)
+- Ingestion runs via `python -m orion.ingestion`
+
+### Solver System (`src/orion/core/`)
+
+Strategies are data, not code. `SolverDSL` defines strategy "DNA" as Pydantic-validated configs (rules, features, model, risk params, exit logic). At runtime:
+1. `SolverRouter.select_solvers()` picks top-k solvers by context (regime, ticker, stage, drawdown)
+2. `SolverPipeline.execute()` runs each solver: rule check → feature generation → model inference
+3. `SignalEngine` combines results via weighted ensemble consensus (`score = Σ(p_take × weight) / Σ(weight)`, threshold 0.5)
+
+Strategies promote through stages: `research → shadow → paper → limited_live → scaled_live` with metric gates.
+
+### Processing Pipeline (`src/orion/processing/`)
+
+- `FeatureEngine`: Maintains in-memory history buffers per ticker, computes RSI/SMA/flow aggregates, produces `SilverSignal` records
+- `RuleEngine`: Evaluates `TradingRule` instances against signals to produce `CandidateTrade`s
+- `SignalEngine`: Top-level orchestrator — regime detection → ML pre-filter → solver ensemble → decision
+- Rules defined in `processing/rules/` (e.g., `ZeroDTESweepRule`, `SwingEntryRule`)
+
+### Execution (`src/orion/execution/`)
+
+- `ExecutionEngine`: Translates decisions to Alpaca orders (equity and options paths)
+- `RiskManager`: Pre-trade checks (daily loss, drawdown kill switch, Greeks limits, sector exposure, 0DTE winddown, correlation sizing). State persisted in `RiskState` table.
+- `SignalPreflight`: Validates data lag, circuit breaker, limit price, rollup availability
+- `CircuitBreaker`: DB-backed global kill switch via `SystemStatus` table
+
+### Connectors (`src/orion/connectors/`)
+
+Protocol-based design: `PollingConnector` and `StreamingConnector` protocols in `base.py`. Implementations: `AlpacaStreamConnector` (WebSocket), `AlpacaMarketConnector` (REST fallback), `GatewayStreamClient` (UW data via WebSocket), `VixConnector`.
+
+### Configuration (`src/orion/config.py`)
+
+Pydantic `BaseSettings` with env var prefixes:
+- `RiskSettings` (prefix `ORION_RISK_`) — trade limits, Greeks, sectors, 0DTE, correlation
+- `SystemSettings` (prefix `ORION_`) — API keys, stage, universe, watchlist
+- `MetaSearchSettings` (prefix `ORION_META_`) — scoring weights
+- `AgentSettings` (prefix `ORION_AGENT_`) — LLM model config
+
+All instantiated as module-level singletons. Copy `.env.example` to `.env` for local development.
+
+### Key Patterns
+
+- **Deterministic IDs**: `CandidateTrade` IDs are SHA256 of `(ticker, timestamp, rule_id)` for idempotency
+- **Retry decorators** (`shared/decorators.py`): `@db_retry` (3 attempts, exp 1-10s), `@api_retry` (3 attempts, exp 2-10s)
+- **Point-in-time fidelity**: Greeks captured at ingestion time, not retroactively computed
+- **Persistence**: All writes use `INSERT ... ON CONFLICT DO NOTHING` in 1000-row batches
+- **Event provenance**: Every event carries `ingest` metadata (connector, run_id, trace_id)
 
 
 
@@ -1969,31 +2372,6 @@ services:
     entrypoint: >
       /bin/sh -c " /usr/bin/mc alias set orion http://minio:9000 minio_admin minio_password; /usr/bin/mc mb orion/lakehouse --ignore-existing; /usr/bin/mc anonymous set public orion/lakehouse; exit 0; "
 
-  ingestion:
-    build: .
-    container_name: orion_ingestion
-    restart: unless-stopped
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-      redpanda:
-        condition: service_healthy
-    volumes:
-      - .:/app
-    environment:
-      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      - REDPANDA_BROKERS=redpanda:29092
-      - UW_API_KEY=${UW_API_KEY}
-      - UW_BASE_URL=${UW_BASE_URL}
-      - ALPACA_API_KEY=${ALPACA_API_KEY}
-      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
-      - ALPACA_PAPER=${ALPACA_PAPER}
-      - ORION_RESET_CIRCUIT_BREAKER_ON_START=true
-      - ORION_ALPACA_LOOKBACK_MINUTES=15
-      - ORION_TRIP_CIRCUIT_BREAKER_ON_LAG=false
-      - ORION_RUN_ID=docker_persistent
-    command: [ "python", "-m", "orion.main_ingest" ]
-
   labeler:
     build: .
     container_name: orion_labeler
@@ -2001,8 +2379,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -2017,8 +2393,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -2034,8 +2408,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -2052,8 +2424,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -2070,9 +2440,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        # Execution depends on Ingestion populating data
-        condition: service_started
     volumes:
       - .:/app
     environment:
@@ -2111,8 +2478,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      ingestion:
-        condition: service_started
     volumes:
       - .:/app
       - ~/.codex:/root/.codex:ro # Mount host codex credentials (read-only)
@@ -2306,9 +2671,6 @@ COPY alembic.ini .
 
 # Set PYTHONPATH
 ENV PYTHONPATH=/app/src
-
-# Default Command (Overridden by Chronos)
-CMD ["python", "-m", "orion.main_ingest"]
 
 
 
@@ -10511,6 +10873,512 @@ See [Runbooks](runbooks/) for detailed response procedures.
 
 
 ================================================
+FILE: docs/DATABASE_SCHEMA.md
+================================================
+# Orion Database Schema Reference
+
+> **Last Updated**: January 2026  
+> **Database**: PostgreSQL with TimescaleDB + pgvector extensions
+
+The Orion database follows a **Medallion Architecture** (Bronze → Silver → Gold) for data quality and lineage tracking.
+
+---
+
+## Architecture Overview
+
+```mermaid
+graph LR
+    A[Data Sources] --> B[Bronze Layer]
+    B --> C[Silver Layer]
+    C --> D[Gold Layer]
+    D --> E[Execution Layer]
+    
+    subgraph "Data Sources"
+        A1[Unusual Whales API]
+        A2[Alpaca Markets API]
+    end
+    
+    subgraph "Bronze - Raw Ingestion"
+        B1[bronze_events]
+    end
+    
+    subgraph "Silver - Normalized"
+        C1[silver_uw_flow]
+        C2[silver_uw_darkpool]
+        C3[silver_alpaca_bars]
+        C4[silver_option_quotes]
+    end
+    
+    subgraph "Gold - Features & ML"
+        D1[candidate_trades]
+        D2[candidate_labels]
+        D3[gold_feature_events]
+    end
+    
+    subgraph "Execution"
+        E1[orders]
+        E2[fills]
+        E3[positions_snapshots]
+    end
+```
+
+---
+
+## Layer Summary
+
+| Layer | Purpose | Table Count | Key Tables |
+|:------|:--------|:-----------:|:-----------|
+| **Bronze** | Raw ingestion, immutable | 3 | `bronze_events`, `system_status`, `ingest_watermarks` |
+| **Silver (Market)** | Normalized OHLCV | 2 | `silver_alpaca_bars`, `silver_option_quotes` |
+| **Silver (Flow)** | Options flow data | 3 | `silver_uw_flow`, `silver_uw_darkpool`, `silver_uw_alerts` |
+| **Gold** | ML features & labels | 6 | `candidate_trades`, `candidate_labels`, `gold_feature_events` |
+| **Execution** | Order management | 3 | `orders`, `fills`, `positions_snapshots` |
+| **ML** | Model registry | 3 | `ml_models`, `ml_dataset_snapshots`, `ml_feature_registry` |
+| **System** | Infrastructure | 3 | `instrument_symbology`, `audit_events`, `dead_letter_queue` |
+
+---
+
+## Bronze Layer (Raw Ingestion)
+
+### `bronze_events`
+
+The **immutable raw event store**. All ingested data is stored here exactly as received from sources before any transformation.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `event_id` | String (PK) | Deterministic unique identifier |
+| `source` | String | Data provider: `UW` (Unusual Whales) or `ALPACA` |
+| `source_event_id` | String | Original ID from the source system |
+| `event_type` | String | Event classification (see table below) |
+| `ticker` | String (indexed) | Stock/option symbol |
+| `trading_date` | Date | Trading date |
+| `session` | String | Market session: `regular`, `extended` |
+| `schema_version` | String | Schema version (default: `v1`) |
+| `event_ts_utc` | DateTime (indexed) | When the event occurred at source |
+| `received_ts_utc` | DateTime | When Orion received the event |
+| **`payload`** | **JSON** | **Raw, unmodified data from source** |
+| **`ingest`** | **JSON** | **Ingestion metadata (run_id, trace_id)** |
+
+**Event Types:**
+
+| Source | Event Type | Description |
+|:-------|:-----------|:------------|
+| `UW` | `UW_FLOW` | Options flow transaction |
+| `UW` | `UW_DARKPOOL` | Dark pool trade |
+| `UW` | `UW_ALERT` | Flow alert signal |
+| `ALPACA` | `ALPACA_BAR_1M` | 1-minute OHLCV bar |
+
+---
+
+### `ingest_watermarks`
+
+Tracks the last processed timestamp for each data source to enable incremental ingestion.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `key` | String (PK) | Watermark identifier (e.g., `UW_FLOW_LAST_TS`) |
+| `last_seen_ts_utc` | DateTime | Last processed event timestamp |
+| `updated_ts_utc` | DateTime | When watermark was updated |
+
+---
+
+## Silver Layer (Normalized Data)
+
+### `silver_uw_flow`
+
+Normalized options flow events from Unusual Whales.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `event_id` | String (PK) | Event identifier |
+| `ticker` | String (indexed) | Underlying symbol |
+| `flow_ts_utc` | DateTime (indexed) | Flow timestamp |
+| `put_call` | String(1) | `C` (Call) or `P` (Put) |
+| `expiry` | String | Expiration date (YYYY-MM-DD) |
+| `strike` | Float | Strike price |
+| `option_price` | Float | Contract price |
+| `size_contracts` | Integer | Number of contracts |
+| `premium_usd` | Float | Total premium |
+| `bid` | Float | Bid price |
+| `ask` | Float | Ask price |
+| `underlying_price` | Float | Stock price at time of trade |
+| `aggressor` | String | `ASK`, `BID`, or `MID` |
+| `is_sweep` | Boolean | Sweep trade indicator |
+| `iv` | Float | Implied volatility |
+| `volume_oi_ratio` | Float | Volume / Open Interest |
+| `delta_alpaca` | Float | Delta (from Alpaca) |
+| `gamma_alpaca` | Float | Gamma (from Alpaca) |
+| `theta_alpaca` | Float | Theta (from Alpaca) |
+| `vega_alpaca` | Float | Vega (from Alpaca) |
+| `ingest` | JSON | Ingestion metadata |
+
+---
+
+### `silver_uw_darkpool`
+
+Dark pool trade data from Unusual Whales.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `event_id` | String (PK) | Event identifier |
+| `ticker` | String (indexed) | Symbol |
+| `dark_ts_utc` | DateTime (indexed) | Trade timestamp |
+| `trade_price` | Float | Execution price |
+| `size_shares` | Float | Share volume |
+| `venue` | String | Dark pool venue |
+| `conditions` | String | Trade conditions |
+
+---
+
+### `silver_alpaca_bars`
+
+1-minute OHLCV bars from Alpaca Markets.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `ticker` | String (PK) | Symbol |
+| `bar_start_ts_utc` | DateTime (PK) | Bar start time |
+| `open` | Float | Open price |
+| `high` | Float | High price |
+| `low` | Float | Low price |
+| `close` | Float | Close price |
+| `volume` | Float | Volume |
+| `vwap` | Float | Volume-weighted average price |
+
+---
+
+### `silver_option_quotes`
+
+Real option quotes captured at checkpoint intervals for ML labeling.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | Integer (PK) | Auto-increment ID |
+| `option_symbol` | String (indexed) | OCC symbol |
+| `underlying_ticker` | String (indexed) | Underlying stock |
+| `flow_event_id` | String (indexed) | Links to flow event |
+| `checkpoint` | String | Time checkpoint: `entry`, `15m`, `30m`, `1h` |
+| `ts_utc` | DateTime | Quote timestamp |
+| `bid_price` | Float | Bid |
+| `ask_price` | Float | Ask |
+| `mid_price` | Float | Mid |
+| `delta` | Float | Delta at checkpoint |
+| `gamma` | Float | Gamma at checkpoint |
+| `theta` | Float | Theta at checkpoint |
+| `vega` | Float | Vega at checkpoint |
+| `iv` | Float | Implied volatility |
+
+---
+
+## Gold Layer (Features & ML)
+
+### `candidate_trades`
+
+Trade candidates identified by rules or ML models.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `candidate_id` | String (PK) | Deterministic ID: `sha256(ticker + ts + rule_id)` |
+| `ticker` | String (indexed) | Symbol |
+| `timestamp_utc` | DateTime (indexed) | Signal timestamp |
+| `rule_id` | String (indexed) | Rule that generated candidate |
+| `direction` | String | `LONG` or `SHORT` |
+| `confidence` | Float | Confidence score (0.0 - 1.0) |
+| `source` | String | Signal source (`UW`, `ALPACA`) |
+| `option_symbol` | String (indexed) | OCC format symbol |
+| `strike_price` | Float | Strike price |
+| `expiration_date` | DateTime | Option expiration |
+| `option_type` | String | `CALL` or `PUT` |
+| `underlying_price` | Float | Stock price at signal |
+| `premium` | Float | Contract premium |
+| `execution_params` | JSON | Limit price, TIF, etc. |
+| `evidence` | JSON | Pointers to signal/event IDs |
+
+---
+
+### `exit_decisions`
+
+Exit decisions triggered by exit rules.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `exit_id` | String (PK) | Exit decision ID |
+| `ticker` | String (indexed) | Symbol |
+| `candidate_id` | String (indexed) | Links to entry candidate |
+| `rule_id` | String | Exit rule that triggered |
+| `exit_reason` | String | Reason for exit |
+| `urgency` | String | `IMMEDIATE`, `SOON`, `CONSIDER` |
+| `confidence` | Float | Confidence score |
+| `details` | JSON | Additional context |
+| `broker_order_id` | String | Broker order ID |
+| `exit_ts_utc` | DateTime | Exit timestamp |
+| `exit_price` | Float | Exit price |
+| `entry_price` | Float | Original entry price |
+| `pnl_usd` | Float | Realized P&L (USD) |
+| `pnl_pct` | Float | Realized P&L (%) |
+
+---
+
+### `strategy_decisions`
+
+Final strategy decisions on whether to execute candidates.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `decision_id` | String (PK) | Decision ID |
+| `candidate_id` | String (indexed) | Links to candidate_trades |
+| `timestamp_utc` | DateTime | Decision timestamp |
+| `ticker` | String | Symbol |
+| `strategy_version_id` | String | Strategy version |
+| `model_version` | String | ML model version |
+| `decision` | String | `EXECUTE` or `SKIP` |
+| `p_take` | Float | Probability of success |
+| `execution_params` | JSON | Limit price, TIF, etc. |
+| `reason` | String | Explanation |
+| `executed_successfully` | String | `TRUE`, `FALSE`, `SKIPPED`, `PENDING` |
+| `decision_trace_json` | JSON | Full decision trace |
+
+---
+
+### `gold_ticker_rollup`
+
+Aggregated OHLCV bars at multiple timeframes (5m, 1h, 1d).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `ticker` | String (PK) | Symbol |
+| `period` | String (PK) | Timeframe: `5m`, `1h`, `1d` |
+| `timestamp_utc` | DateTime (PK) | Bar timestamp |
+| `open` | Float | Open price |
+| `high` | Float | High price |
+| `low` | Float | Low price |
+| `close` | Float | Close price |
+| `volume` | Float | Volume |
+| `vwap` | Float | VWAP |
+
+---
+
+## Labels Tables
+
+### `candidate_labels`
+
+Triple-barrier labels for ML training (trade-level).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `candidate_id` | String (PK) | Links to candidate_trades |
+| `label` | Float | `1` (profit target), `-1` (stop loss), `0` (time exit) |
+| `ret` | Float | Return at barrier |
+| `barrier_hit_ts` | DateTime | When barrier was hit |
+| `time_to_hit_seconds` | Float | Time to barrier |
+| `mfe` | Float | Maximum favorable excursion |
+| `mae` | Float | Maximum adverse excursion |
+
+---
+
+### `labels_event`
+
+Event-level labels with forward returns at multiple horizons.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `candidate_id` | String (PK) | Links to candidate |
+| `ticker` | String (indexed) | Symbol |
+| `event_ts_utc` | DateTime (indexed) | Event timestamp |
+| `forward_returns` | JSON | Returns at horizons: `{"1m": 0.02, "5m": 0.03, "60m": 0.01}` |
+| `label` | Float | Triple-barrier label |
+| `ret` | Float | Return at barrier |
+| `barrier_hit_ts` | DateTime | Barrier hit time |
+| `time_to_hit_seconds` | Float | Time to barrier |
+| `mfe` | Float | Maximum favorable excursion |
+| `mae` | Float | Maximum adverse excursion |
+| `label_config` | JSON | Labeling parameters |
+
+---
+
+### `labels_window`
+
+Window-level labels for aggregated timeframes.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `ticker` | String (PK) | Symbol |
+| `period` | String (PK) | Timeframe: `5m`, `1h`, `1d` |
+| `window_end_ts_utc` | DateTime (PK) | Window end timestamp |
+| `forward_returns` | JSON | Forward returns at horizons |
+| `label_config` | JSON | Labeling parameters |
+
+---
+
+## Feature Tables
+
+### `gold_feature_events`
+
+Point-in-time feature vectors (event-level, 1m resolution).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `ticker` | String (PK) | Symbol |
+| `event_ts_utc` | DateTime (PK) | Feature timestamp |
+| `feature_set_id` | String (PK) | Feature version (e.g., `v1_legacy`) |
+| `features` | JSON | Feature vector |
+
+---
+
+### `gold_feature_windows`
+
+Aggregated/window-level features.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `ticker` | String (PK) | Symbol |
+| `window_end_ts_utc` | DateTime (PK) | Window end timestamp |
+| `period` | String (PK) | Timeframe: `5m`, `1h` |
+| `feature_set_id` | String (PK) | Feature version |
+| `features` | JSON | Feature vector |
+
+---
+
+## Execution Layer
+
+### `orders`
+
+Order records submitted to broker.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Internal order ID |
+| `decision_id` | String (indexed) | Links to strategy_decisions |
+| `candidate_id` | String (indexed) | Links to candidate_trades |
+| `ticker` | String (indexed) | Symbol |
+| `side` | String | `buy` or `sell` |
+| `qty` | Float | Quantity |
+| `limit_price` | Float | Limit price (if applicable) |
+| `client_order_id` | String (indexed) | Client-assigned order ID |
+| `broker_order_id` | String (indexed) | Broker-assigned order ID |
+| `status` | String | Order status |
+| `error_message` | String | Error details (if any) |
+| `raw_json` | JSON | Full broker response |
+
+---
+
+### `fills`
+
+Execution fills from broker.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Fill ID |
+| `ticker` | String (indexed) | Symbol |
+| `broker_order_id` | String (indexed, unique) | Broker order ID |
+| `filled_qty` | Float | Filled quantity |
+| `filled_avg_price` | Float | Average fill price |
+| `side` | String | `buy` or `sell` |
+| `filled_at_utc` | DateTime | Fill timestamp |
+| `raw_json` | JSON | Full broker response |
+
+---
+
+### `positions_snapshots`
+
+Point-in-time position snapshots for P&L tracking.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Snapshot ID |
+| `snapshot_ts_utc` | DateTime (indexed) | Snapshot timestamp |
+| `ticker` | String (indexed) | Symbol |
+| `qty` | Float | Position quantity |
+| `avg_entry_price` | Float | Average entry price |
+| `market_value` | Float | Current market value |
+| `unrealized_pl` | Float | Unrealized P&L |
+| `raw_json` | JSON | Full position data |
+
+---
+
+### `silver_signals`
+
+Calculated technical features derived from 1-minute bars.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `signal_id` | String (PK) | Deterministic ID |
+| `ticker` | String (indexed) | Symbol |
+| `signal_ts_utc` | DateTime (indexed) | Signal timestamp |
+| `signal_type` | String | `OHLCV_1M`, `FLOW_AGG_5M` |
+| `features` | JSON | Calculated features (RSI, VWAP, trend, etc.) |
+
+---
+
+## ML Tables
+
+### `ml_pattern_insights`
+
+Weekly ML pattern mining results for model introspection.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `insight_id` | String (PK) | Insight ID |
+| `model_type` | String (indexed) | `hit_target_50`, `avoid_stop` |
+| `model_version` | String | Model version |
+| `training_window_days` | Integer | Training window (default: 30) |
+| `sample_size` | Integer | Training sample size |
+| `positive_rate` | Float | Positive class rate |
+| `train_auc` | Float | Training AUC |
+| `holdout_auc` | Float | Holdout AUC |
+| `precision_at_50` | Float | Precision at 50% recall |
+| `top_rules_json` | JSON | Extracted decision rules |
+| `top_features_json` | JSON | Top feature importances |
+| `degraded_features_json` | JSON | Features showing drift |
+| `emerging_patterns_json` | JSON | New patterns detected |
+| `metadata_json` | JSON | Full metadata |
+
+---
+
+### `ml_feature_importance_history`
+
+Feature importance tracking over time for drift detection.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Record ID |
+| `model_type` | String (indexed) | Model type |
+| `feature_name` | String (indexed) | Feature name |
+| `importance` | Float | Importance score |
+| `rank` | Integer | Feature rank |
+
+---
+
+## Database Features
+
+- **TimescaleDB**: Hypertable optimization for time-series queries
+- **pgvector**: 768-dimensional embeddings in `vector_documents`
+- **Immutable Audit**: `audit_events` uses hash chain for tamper-evidence
+
+---
+
+## Model Files Location
+
+All SQLAlchemy models are defined in:
+
+```
+src/orion/storage/
+├── models.py           # Bronze layer (BronzeEvent, SystemStatus, IngestWatermark)
+├── models_silver.py    # Silver layer tables
+├── models_gold.py      # Gold layer tables
+├── models_execution.py # Execution layer tables
+├── models_ml.py        # ML registry tables
+├── models_audit.py     # Audit events
+├── models_dlq.py       # Dead letter queue
+├── models_earnings.py  # Earnings data
+├── models_risk.py      # Risk management
+├── models_signals.py   # Signal tables
+└── models_solvers.py   # Solver optimization
+```
+
+
+
+================================================
 FILE: docs/disaster_recovery_runbook.md
 ================================================
 # Disaster Recovery Runbook
@@ -10677,6 +11545,2510 @@ WHERE created_at > NOW() - INTERVAL '24 hours';"
 - [ ] Logs preserved
 - [ ] Fix deployed
 - [ ] Monitoring enhanced if needed
+
+
+
+================================================
+FILE: docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md
+================================================
+# Orion Gateway + Heber Parity Audit (Pass 1)
+
+Date: 2026-02-05
+Scope: `Orion` compared against `../Data-Gateway` and `../Heber`
+Author: Codex audit pass
+
+## 1) Executive Summary
+
+Orion is in a partial migration state. The old UW ingestion path has been removed from active code, but the replacement path is not fully wired.
+
+Current state:
+- Orion ingestion is effectively Alpaca-only in runtime flow (`src/orion/ingestion/service.py`), while flow/darkpool-dependent downstream jobs still assume local UW-backed SQL tables (`silver_uw_flow`, etc.).
+- Orion `HeberReader` contract was aligned on 2026-02-05 to supported Heber access (catalog endpoints + local Silver/Gold parquet layout). The remaining gap is adoption across downstream jobs still tied to local Orion SQL tables.
+- Gateway streaming integration exists, but Orion’s stream client currently does not parse Data Gateway’s actual WebSocket payload shape (`type: data` + `envelope`), creating a high risk of silent data starvation.
+- A significant amount of legacy code/tests/scripts still referenced removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`), blocking test collection and increasing maintenance drag.
+
+Bottom line:
+- We need a two-track migration: 
+  1. Stabilize Orion runtime contracts with Gateway/Heber.
+  2. Decide which Orion-specific feature/label logic should move into Heber vs be retired.
+
+## 2) Architecture Delta (What Changed vs What Still Assumes Old World)
+
+### Intended target architecture
+- Data ingestion centralized in Data Gateway.
+- Durable bronze/silver/gold storage and zero-leakage semantics centralized in Heber.
+- Orion consumes curated datasets/signals, focuses on strategy/risk/execution.
+
+### Actual Orion runtime behavior today
+- Ingestion loop no longer polls UW directly (`src/orion/ingestion/service.py` comment and removed `_poll_uw` path).
+- Ingestion loop currently processes Alpaca bars only (`_poll_alpaca_events` path).
+- Feature/rule code still has UW flow branches (`process_uw_flow`, `process_uw_flow_events`) but runtime never feeds UW events in current ingestion path.
+
+### Remaining old assumptions
+- Labeling/enrichment jobs still query local UW-derived SQL tables:
+  - `silver_uw_flow`, `silver_market_tide`, `silver_greek_exposure`, `silver_max_pain`, `silver_iv_rank`
+  - Primary examples: `src/orion/main_price_target_labeler.py`, `src/orion/main_labeler.py`, `src/orion/main_feature_enrichment.py`, `src/orion/jobs/backfill_ml_features.py`
+
+## 3) Integration Findings (Gateway + Heber)
+
+## High
+
+1. `HeberReader` contract mismatch with Heber APIs (Resolved)
+- Prior state: Orion `HeberReader` called `/silver/read` and `/gold/read`, which are not exposed by Heber catalog API.
+- Current state (commit `6273889`, 2026-02-05): reader now uses supported access paths:
+  - Catalog endpoints for metadata/health (`/health`, `/datasets`)
+  - Heber parquet layout for Silver/Gold reads (`HEBER_DATA_ROOT`)
+- Residual impact: integration consumers still need migration from Orion-local SQL tables to Heber datasets.
+
+2. Gateway WebSocket payload mismatch in Orion client (Resolved)
+- Data Gateway sends stream payloads as `{type: "data", envelope: {...}, data: {...}}` (`../Data-Gateway/gateway/main.py`, `_on_stream_data`).
+- Current state (commit `1185476`, 2026-02-05): `GatewayStreamClient` now parses `type=data` + `feed=bars` messages, consumes `envelope` + `data`, and normalizes symbols before emitting `BronzeEvent`.
+- Residual impact: downstream jobs still need migration off Orion-local SQL feature/label tables.
+
+3. Test suite is structurally broken by removed modules
+- Removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`) are still imported in many tests.
+- Reproduced failures:
+  - `pytest -o addopts='-q' tests/connectors/test_uw_flow.py` -> `ModuleNotFoundError: orion.connectors.uw_flow_connector`
+  - `pytest -o addopts='-q' tests/unit/test_eod_wrapper.py` -> `ModuleNotFoundError: orion.main_ingest`
+- Impact: migration regressions are harder to detect due test noise.
+- Status in this pass: addressed by archiving those legacy tests into `archive/2026-02-05_gateway-heber-migration/legacy_tests/`; replacement tests are still required.
+
+## Medium
+
+4. Environment variable contract drift (Mostly Resolved)
+- Orion uses multiple naming families: `GATEWAY_URL`, `DATA_GATEWAY_URL`, `GATEWAY_API_KEY`, `DATA_GATEWAY_API_KEY`, plus legacy UW vars.
+- Current state (commit `006db38`, 2026-02-05): centralized settings now exist in `src/orion/config.py` (`data_gateway_url`, `data_gateway_api_key`, `heber_catalog_url`, `heber_data_root`, `orion_use_gateway`) with backward-compatible alias support.
+- Residual impact: some non-Gateway legacy env usage remains outside migration scope.
+
+5. Mixed data ownership model (SQL-local vs lakehouse)
+- Orion still writes and depends on local SQL silver tables for UW-derived context while migration intent is Heber ownership.
+- Impact: duplicate sources of truth and schema drift.
+
+6. Hardcoded default gateway key in several connectors (Resolved)
+- Example defaults like `gw_orion_trading_key_55555` in UW connectors.
+- Current state (commit `006db38`, 2026-02-05): active connectors now read centralized settings and fail fast when keys are not configured.
+
+## Low
+
+7. Documentation drift
+- README and historical docs still describe `main_ingest.py` and direct UW connector paths that are no longer current.
+
+## 4) Feature/Label Parity: Orion vs Heber
+
+This is the first pass to frame keep/migrate/dispose decisions.
+
+### Orion strengths worth preserving
+- Rich options-specific label and checkpoint feature space in `main_price_target_labeler.py`:
+  - Checkpoint returns (intraday to multi-week)
+  - Checkpoint greeks/time-decay fields
+  - Flow aggression/rvol/darkpool window features
+  - Regime and sector correlation context
+
+### Heber strengths already in place
+- Canonical envelope + zero-leakage semantics (`ts_available`) in writer/firewall/sdk.
+- Standardized silver schemas for `flow_alerts`, `darkpool`, `market_tide`, `greek_exposure`, etc.
+- Label infrastructure and watch-based barrier labeling path (`heber/watch`, `heber/gold`, feature views).
+
+### Proposed keep/migrate/dispose (initial)
+
+Keep in Orion (for now):
+- Strategy/risk/execution decisioning and solver/meta-agent logic.
+- Any features tightly bound to live execution policy and broker constraints.
+
+Migrate to Heber (recommended):
+- Canonical feature generation currently tied to local SQL UW tables.
+- Core label generation datasets intended for model training.
+- Reference/derived market context tables duplicated from Gateway/Heber feeds.
+
+Dispose or archive in Orion (recommended):
+- Legacy UW polling connector stack and tests depending on removed modules.
+- Legacy backfill scripts that require removed connector imports.
+
+## 5) Archive Actions Completed In This Pass
+
+Archived into:
+- `archive/2026-02-05_gateway-heber-migration/legacy_code/`
+- `archive/2026-02-05_gateway-heber-migration/legacy_tests/`
+- `archive/2026-02-05_gateway-heber-migration/legacy_scripts/`
+
+Code archived:
+- Legacy ingestion entrypoint and UW connector implementations that were already deprecated.
+
+Tests archived:
+- Legacy test files that import removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`, etc.).
+
+Scripts archived:
+- Legacy UW backfill scripts that import removed connector modules.
+
+## 6) Technical Debt Backlog (Migration-Critical)
+
+P0 (Completed in this migration pass):
+1. Gateway stream client message parsing now consumes `type=data` + `envelope` payload shape.
+2. Central config for Gateway/Heber URLs and keys added in `src/orion/config.py`; active callers migrated.
+
+P1:
+1. Refactor remaining label/enrichment jobs to read from Heber datasets (or a single sanctioned data-access layer) instead of local UW silver SQL tables.
+2. Rebuild tests around `orion.ingestion.service` and new integration contracts.
+3. Update README/docs to match new architecture and command paths.
+
+P2:
+1. Define canonical feature/label schema ownership between Orion and Heber (single source of truth per dataset family).
+2. Remove stale generated artifacts/docs that keep reintroducing deprecated paths.
+
+## 7) Recommended Migration Sequence
+
+1. Runtime contract hardening
+- Fix Gateway stream parsing. (Completed 2026-02-05)
+- Fix Heber read client contract. (Completed 2026-02-05)
+
+2. Data-access consolidation
+- Introduce one Orion data-access facade for Gateway/Heber.
+- Migrate `main_feature_enrichment`, `main_labeler`, `main_price_target_labeler`, and `jobs/backfill_ml_features` in that order.
+
+3. Parity validation
+- Build side-by-side checks for key feature columns and label outcomes between Orion legacy and Heber-backed paths.
+
+4. Deletion phase
+- After parity signoff, remove archived legacy code permanently.
+
+## 8) Open Decisions Needed
+
+1. Which label families are canonical going forward?
+- Heber barrier labels vs Orion extensive checkpoint labels vs hybrid.
+
+2. Should Orion keep local SQL silver feature tables at all?
+- Or become a pure consumer of Heber silver/gold datasets.
+
+3. Where should feature engineering live?
+- Keep strategy-specific transforms in Orion; move reusable data transforms and training features to Heber.
+
+## 9) Column-Level Parity Matrix (Pass 2)
+
+Reference sources used for this table:
+- Orion: `src/orion/main_price_target_labeler.py`, `src/orion/main_labeler.py`, `src/orion/jobs/backfill_ml_features.py`
+- Heber: `../Heber/heber/features/templates/*.py`, `../Heber/heber/features/pipelines/alert_labels.py`
+
+### 9.1 Labels Parity
+
+| Orion label columns | Heber equivalent columns | Parity status | Decision |
+| --- | --- | --- | --- |
+| `return_at_5m`, `return_at_10m`, `return_at_15m`, `return_at_30m`, `return_at_1h`, `return_at_2h`, `return_at_4h`, `return_at_8h`, `return_at_1d`, `return_at_2d`, `return_at_3d`, `return_at_1w`, `return_at_2w`, `return_at_3w`, `return_at_4w`, `return_at_eod` | `return_1d`, `return_5d`, `return_10d`, `return_20d` (`labels.py`) | Partial mismatch (Orion has richer intraday+multiweek checkpoint grid) | Keep Orion checkpoint grid short-term; design Heber `labels_alert_checkpoints` dataset if these are still training-critical |
+| `hit_50_pct_ts`, `hit_75_pct_ts`, `hit_100_pct_ts`, `hit_150_pct_ts`, `hit_stop_20_pct_ts`, `first_exit_type` | `hit_tp_first`, `bars_to_hit`, `mfe`, `mae`, `mfe_adj`, `mae_adj` (`alert_labels.py`) | Conceptual overlap but different target semantics | Make Heber barrier labels canonical for model training; treat Orion hit-threshold labels as experimental/strategy-specific |
+| `return_15m`, `return_30m`, `return_1h`, `return_2h`, `label_15m`, `label_30m`, `label_1h`, `label_2h`, `primary_label` (`main_labeler`) | No direct Heber table today | No parity | Decommission `main_labeler` path after Heber-backed replacement is live |
+| `vix_at_entry`, `vix_regime_at_entry` | `vix_at_alert`, `vix_regime` (`alert_labels.py`) | High parity | Migrate to Heber canonical names and remove Orion duplicates |
+
+### 9.2 Feature Parity
+
+| Orion feature columns | Heber equivalent columns | Parity status | Decision |
+| --- | --- | --- | --- |
+| `ask_side_ratio`, `sweep_ratio_1h`, `same_ticker_premium_1h`, `institutional_flow_1w` | `total_premium_24h`, `call_premium_24h`, `put_premium_24h`, `call_put_premium_ratio`, `net_premium_24h`, `sweep_count_24h` (`flow.py`) | Partial mismatch (windowing granularity differs) | Add Orion short-window flow features to Heber flow template v2; retire Orion-local recomputation |
+| `darkpool_15m`, `darkpool_30m`, `darkpool_1h`, `darkpool_4h`, `darkpool_1d`, `darkpool_3d`, `darkpool_1w`, `darkpool_2w`, `darkpool_4w`, `darkpool_volume_1h` | No direct Heber darkpool-window feature template | Gap | Migrate darkpool window feature generation into Heber Gold; then remove Orion SQL-dependent functions |
+| `gex_at_entry`, `vex_at_entry`, `max_pain_distance_pct`, `iv_rank_at_entry`, `market_tide_30m`, `market_tide_direction` | Heber has Silver datasets and feed mapping support, but no canonical Gold template for these columns yet | Gap | Build shared Heber context feature dataset; keep Orion-only copies temporary |
+| `trend_regime_at_entry`, `vol_regime_at_entry`, `risk_regime_at_entry`, `session_regime_at_entry` | No direct multi-axis regime template in Heber features currently | Gap | Keep in Orion short-term; evaluate migration once regime definitions are standardized across projects |
+| `spy_correlation_5d`, `spy_return_1h` | `corr_spy_20d`, `corr_spy_60d`, `beta_60d`, `alpha_20d`, `rel_strength_20d` (`cross_asset.py`) | Partial overlap | Adopt Heber cross-asset features as canonical where possible; only keep Orion 1h-specific tactical variants if needed |
+| `rvol_30m`, `rvol_1h`, `rvol_daily`, `rvol_3d`, `rvol_weekly`, `rvol_monthly` | No direct RVOL template in Heber | Gap | Promote RVOL generation to Heber Gold feature template |
+| `overnight_gap_pct`, `vwap_distance_pct`, `minutes_to_close`, `price_change_5d_prior`, `earnings_in_dte_window` | Partial overlap with Heber momentum/volatility templates (`momentum.py`, `volatility.py`) but not exact columns | Partial mismatch | Preserve in Orion initially; migrate reusable definitions with explicit contracts |
+| `delta_at_entry`, `gamma_at_entry`, `theta_at_entry`, `vega_at_entry`, `rho_at_entry`, `iv_at_entry`, `open_interest_at_entry`, `volume_at_entry`, plus checkpoint Greeks/time-decay families (`delta_at_*`, `gamma_at_*`, `theta_at_*`, `vega_at_*`, `iv_at_*`, `dte_at_*`, `theta_decay_pct_at_*`, `time_value_pct_at_*`) | No direct Heber equivalent today | Major gap | Keep in Orion until Heber defines option-greeks checkpoint schema; then migrate if training value justifies storage cost |
+
+### 9.3 Dispose Candidates (After Parity Signoff)
+
+- Orion-local SQL-only label loop in `src/orion/main_labeler.py`
+- Orion-local backfill logic in `src/orion/jobs/backfill_ml_features.py` that recomputes features already moved to Heber
+- Any duplicated feature columns where Heber canonical datasets provide equal or better definitions
+
+### 9.4 Keep Candidates (Orion-Owned for Now)
+
+- Execution-policy and broker-coupled features
+- Strategy-specific experimental targets not intended for shared training corpora
+- Fast-iteration research labels that have not yet met canonical data quality gates
+
+---
+
+This audit now includes pass-2 column parity mapping and pass-3 migration status. Next pass should execute remaining data-access migration and archive decisions.
+
+## 10) Pass 3 Status Update (2026-02-06)
+
+### 10.1 Completed Since Pass 2
+
+- `main_labeler` now reads flow + bars from Heber (`src/orion/main_labeler.py`) while preserving local `flow_labels` persistence for compatibility.
+- `main_feature_enrichment` now discovers active tickers from Heber flow first, with local SQL fallback (`src/orion/main_feature_enrichment.py`).
+- Gateway/Heber config centralization and websocket envelope parsing are now in production code and covered by new tests.
+
+### 10.2 Current Technical Debt Snapshot (from repo scan)
+
+Observed SQL-coupled references in active code:
+
+| Table token | Approx refs in `src/orion` |
+| --- | --- |
+| `silver_uw_flow` | 67 |
+| `silver_market_tide` | 13 |
+| `silver_greek_exposure` | 15 |
+| `silver_max_pain` | 9 |
+| `silver_iv_rank` | 4 |
+
+Top concentration by file:
+- `src/orion/jobs/validate_features.py` (49 refs)
+- `src/orion/main_price_target_labeler.py` (22 refs)
+- `src/orion/ml/flow_enricher.py` (11 refs)
+
+### 10.3 Remaining Integration Gaps (High Priority)
+
+1. `main_price_target_labeler` remains tightly coupled to Orion-local silver tables.
+- Still queries `silver_uw_flow`, `silver_market_tide`, `silver_greek_exposure`, `silver_max_pain`, `silver_iv_rank` directly.
+- This is the largest single blocker for true Gateway+Heber parity.
+
+2. ML enrichment and backfill path still assumes Orion-local UW SQL data.
+- `src/orion/ml/flow_enricher.py`, `src/orion/jobs/backfill_ml_features.py`, `src/orion/jobs/window_feature_job.py`, and `src/orion/jobs/data_quality_checker.py` are still local-SQL-centric.
+- These jobs need a shared Heber-backed data-access facade to avoid repeated schema logic.
+
+3. Cross-project runtime default mismatch to align.
+- Orion defaults `data_gateway_url` to `http://localhost:8080` (`src/orion/config.py`).
+- Heber alert-label pipeline currently defaults `DATA_GATEWAY_URL` to `http://localhost:8000` (`../Heber/heber/features/pipelines/alert_labels.py`).
+- This should be standardized to prevent environment-specific drift.
+
+### 10.4 Archive Candidates for Step 1 (Do Not Remove Yet)
+
+These are likely removable after migration parity is signed off:
+- `src/orion/main_option_quote_tracker.py` (depends on local `silver_uw_flow` + `silver_option_quotes` checkpoint loop)
+- `src/orion/jobs/backfill_historical_gex.py` (local historical GEX backfill path)
+- `src/orion/jobs/backfill_exit_columns.py` (legacy local backfill path)
+
+Recommendation:
+- Keep these in active tree until Heber-backed replacements are validated in staging.
+- Then archive as a single wave (`archive/2026-02-xx_gateway-heber-migration-wave2/`) to reduce rollback complexity.
+
+## 11) Pass 4 Deep Audit (2026-02-06)
+
+Scope in this pass:
+- `src/orion/main_price_target_labeler.py` (2,944 LOC)
+- `src/orion/ml/flow_enricher.py` (1,069 LOC)
+- `src/orion/jobs/backfill_ml_features.py` (522 LOC)
+- `src/orion/jobs/window_feature_job.py` (241 LOC)
+- `src/orion/jobs/data_quality_checker.py` (564 LOC)
+- `src/orion/jobs/validate_features.py` (507 LOC)
+
+### 11.1 Findings (Ordered by Severity)
+
+#### High
+
+1. Core label pipeline is still fully SQL-coupled and not Heber-backed.
+- `main_price_target_labeler` still queries `silver_uw_flow`, `silver_market_tide`, `silver_greek_exposure`, `silver_max_pain`, `silver_iv_rank`, and `silver_uw_darkpool`.
+- No `HeberReader` usage exists in this file.
+- Impact: largest remaining parity blocker; training labels remain tied to Orion-local silver tables.
+
+2. Concrete runtime bug in backfill path: incorrect function call signature.
+- `src/orion/jobs/backfill_ml_features.py:445` calls `get_sector_correlation_features(ticker, sector, entry_ts)`.
+- `src/orion/main_price_target_labeler.py:1467` defines `get_sector_correlation_features(ticker: str, entry_ts: datetime)`.
+- Impact: raises `TypeError` in backfill execution, causing feature backfill failures for affected records.
+
+3. ML enrichment/backfill stack has zero Heber read-path adoption.
+- `flow_enricher`, `backfill_ml_features`, `window_feature_job`, `data_quality_checker`, and `validate_features` do not use `HeberReader`.
+- All still depend on Orion SQL tables as source-of-truth.
+- Impact: duplicate ownership and schema drift against Heber datasets.
+
+#### Medium
+
+4. Feature semantics diverge across training/inference/backfill paths.
+- `entry_session` classification differs across modules:
+  - `main_price_target_labeler.py:671` uses `OPEN/MID/CLOSE`.
+  - `flow_enricher.py:210` uses `OPEN/MID/CLOSE` but with different cutoff assumptions.
+  - `backfill_ml_features.py:122` uses `early/midday/afternoon/late`.
+- `minutes_to_close` logic diverges (`20:00 UTC` vs `21:00 UTC`) between `main_price_target_labeler.py:1173`, `backfill_ml_features.py:221`, and `flow_enricher.py:202`.
+- Impact: train/inference skew and non-deterministic feature behavior.
+
+5. Validation tooling source-map drift.
+- `validate_features` maps RVOL features to `silver_uw_flow` (`src/orion/jobs/validate_features.py:344-349`) while label computation pulls RVOL from `silver_alpaca_bars` (`src/orion/main_price_target_labeler.py:952`).
+- Impact: false confidence from audit checks and misattributed data lineage.
+
+6. Direct env/SDK lookups remain duplicated outside centralized config.
+- Duplicate `_get_uw_client` env reads in:
+  - `src/orion/main_price_target_labeler.py:1620`
+  - `src/orion/jobs/backfill_ml_features.py:66`
+- Impact: inconsistent runtime behavior and avoidable credential/config drift.
+
+#### Low
+
+7. Significant logic duplication increases migration risk.
+- Shared function names between labeler and backfill include:
+  `_get_uw_client`, `get_entry_time_features`, `get_flow_greeks`, `get_ticker_info`, `get_underlying_price_at_entry`, `get_underlying_price_at_offset`.
+- Impact: high chance of silent divergence during future edits.
+
+### 11.2 Module-Level Migration Readiness
+
+| Module | Current parity status | Keep / migrate / archive |
+| --- | --- | --- |
+| `main_price_target_labeler.py` | Low parity (SQL-coupled, large surface area) | Keep temporarily; migrate read-path to Heber in phases |
+| `ml/flow_enricher.py` | Low parity (SQL-coupled; duplicate logic) | Keep temporarily; consolidate behind Heber data facade |
+| `jobs/backfill_ml_features.py` | Low parity + runtime bug | Keep temporarily; fix bug, then migrate/possibly retire |
+| `jobs/window_feature_job.py` | Medium parity (window logic useful, source is SQL) | Migrate logic to Heber Gold pipeline; archive Orion job after parity |
+| `jobs/data_quality_checker.py` | Low parity (checks local SQL feeds) | Rebuild against Heber dataset coverage + freshness |
+| `jobs/validate_features.py` | Low parity (legacy source map assumptions) | Rewrite validation map for Heber datasets and canonical ownership |
+
+### 11.3 Updated Priority Backlog
+
+P0:
+1. Fix `backfill_ml_features` signature bug (`get_sector_correlation_features` callsite).
+2. Define and implement one Orion read facade that resolves all flow/bar/darkpool/context reads via Heber-first APIs.
+
+P1:
+1. Migrate `main_price_target_labeler` off direct `silver_uw_*` queries using the facade.
+2. Align feature semantics (`entry_session`, `minutes_to_close`) across labeler, enricher, and backfill.
+3. Rewrite `validate_features` source mapping to reflect actual feature lineage and Heber ownership.
+
+P2:
+1. Move reusable window aggregation to Heber Gold features; retire `window_feature_job` in Orion.
+2. Replace SQL-based quality checks with Heber dataset freshness/completeness checks.
+
+### 11.4 Archival Readiness Snapshot (Wave 2)
+
+Not ready to archive yet (still functionally required for parity coverage):
+- `src/orion/main_price_target_labeler.py`
+- `src/orion/ml/flow_enricher.py`
+- `src/orion/jobs/backfill_ml_features.py`
+- `src/orion/jobs/window_feature_job.py`
+- `src/orion/jobs/data_quality_checker.py`
+- `src/orion/jobs/validate_features.py`
+
+Ready to archive after replacement verification remains unchanged from pass 3:
+- `src/orion/main_option_quote_tracker.py`
+- `src/orion/jobs/backfill_historical_gex.py`
+- `src/orion/jobs/backfill_exit_columns.py`
+
+## 12) Pass 5 Continuation (2026-02-06)
+
+### 12.1 What Was Fixed During This Audit Pass
+
+1. Backfill runtime signature bug fixed.
+- Updated `src/orion/jobs/backfill_ml_features.py` to call:
+  `get_sector_correlation_features(ticker, entry_ts)`.
+- Added regression test:
+  `tests/unit/test_backfill_ml_features_signature.py`.
+- This prevents the `TypeError` path identified in pass 4.
+
+### 12.2 Additional Technical-Debt Findings
+
+1. Postgres-specific SQL in core feature code reduces test/runtime portability.
+- `main_price_target_labeler` uses `date_trunc(...)` at:
+  - `src/orion/main_price_target_labeler.py:987`
+  - `src/orion/main_price_target_labeler.py:1020`
+  - `src/orion/main_price_target_labeler.py:1053`
+- Additional Postgres-specific casts/operators exist across critical modules:
+  - `src/orion/main_price_target_labeler.py:344` (`::date`)
+  - `src/orion/ml/flow_enricher.py:665` (`::float`)
+  - `src/orion/ml/flow_enricher.py:667` (`::text`)
+  - `src/orion/jobs/window_feature_job.py:100` (`::text`)
+- Impact: local SQLite-backed test runs or fallback envs can fail with SQL function/operator errors, reducing confidence in migration safety.
+
+### 12.3 Updated Action Priorities
+
+P0 completed:
+- Backfill signature mismatch fix + regression test.
+
+P1 updated:
+1. Normalize SQL portability assumptions for audit-critical jobs.
+- Either enforce Postgres-only execution contract explicitly in tests/docs,
+  or provide compatibility shims for local/SQLite test paths.
+
+2. Continue Heber-first migration for `main_price_target_labeler` via facade.
+
+3. Standardize feature semantics shared across labeler/enricher/backfill:
+- `entry_session` buckets
+- `minutes_to_close` calculation baseline.
+
+## 13) Pass 6 Continuation (2026-02-06)
+
+### 13.1 Function-Level Migration Map (`main_price_target_labeler`)
+
+The primary migration risk is concentrated in `src/orion/main_price_target_labeler.py`.
+To reduce blast radius, migrate by function clusters instead of rewriting the file in one pass.
+
+| Function cluster | Current Orion source | Target source after migration | Decision |
+| --- | --- | --- | --- |
+| `get_entry_signals`, `get_subsequent_prices` | `silver_uw_flow` | Heber Silver `feed=flow_alerts` + option bars path | Migrate first (critical path) |
+| `get_opposing_flow`, `get_flow_aggression`, `get_institutional_flow_1w`, `get_p2_features`, `get_p3_features` | `silver_uw_flow` | Heber Silver `flow_alerts` and derived Gold context datasets | Migrate |
+| `get_gex_at_entry` | `silver_greek_exposure` | Heber Silver Greek exposure feed | Migrate |
+| `get_market_tide_before_entry`, regime tide component | `silver_market_tide` | Heber Silver market tide feed | Migrate |
+| `get_max_pain_distance` | `silver_max_pain` | Heber Silver max-pain feed | Migrate |
+| `get_iv_rank_at_entry` | Derived from `silver_uw_flow.iv` history | Heber flow history (or canonical IV-rank Gold view) | Migrate, then canonicalize |
+| `get_darkpool_volume` / `get_darkpool_metrics` | `silver_uw_darkpool` | Heber Silver `feed=darkpool_trades` | Migrate |
+| `get_underlying_price_at_entry`, `get_underlying_price_at_offset`, RVOL/HV/VWAP/52w calculations | `silver_alpaca_bars` | Heber Silver `feed=bars` | Migrate |
+| `get_real_checkpoint_prices` | `silver_option_quotes` (Orion-local) | Keep local until Heber has canonical checkpoint quote dataset | Keep temporary |
+| `get_ticker_info`, earnings/sector helpers | UW API + `silver_ticker_info` | Prefer Heber-backed reference dataset where available; fallback to API | Migrate partially |
+| `persist_labels` | `price_target_labels` local table | Keep local during transition; later swap to Heber Gold writer | Keep temporary |
+
+### 13.2 Suggested Slice Order for Safe Migration
+
+1. Build `labeler_data_access.py` facade with Heber-backed implementations for:
+- flow, bars, darkpool, gex, market-tide, max-pain.
+
+2. Migrate read-only feature helpers first:
+- no schema writes, easy parity diffing.
+
+3. Migrate label-selection path:
+- `get_entry_signals`, `get_subsequent_prices`, `label_entry`.
+
+4. Keep `persist_labels` local until parity signoff:
+- then evaluate switching to Heber Gold dataset output.
+
+### 13.3 Parity Gate Before Any Further Archival
+
+Do not archive additional labeler/backfill modules until the following are true:
+- Heber-backed labeler output count matches legacy count within tolerance over the same date window.
+- Key label columns (`return_at_*`, `first_exit_type`, `max_drawdown_pct`) pass side-by-side checks.
+- Feature null-rate and range checks match or improve vs legacy baseline.
+
+## 14) Pass 7 Continuation (2026-02-06)
+
+### 14.1 SQL-Coupling Heatmap (Repo-Wide Refresh)
+
+A repo-wide scan of legacy table/dataset names shows remaining coupling concentration in a small set of files:
+
+| File | Legacy refs count |
+| --- | --- |
+| `src/orion/jobs/validate_features.py` | 67 |
+| `src/orion/main_price_target_labeler.py` | 30 |
+| `src/orion/ml/flow_enricher.py` | 14 |
+| `src/orion/jobs/window_feature_job.py` | 7 |
+| `src/orion/jobs/data_quality_checker.py` | 7 |
+| `src/orion/ml/exit_classifier.py` | 6 |
+| `src/orion/jobs/backfill_historical_gex.py` | 6 |
+| `src/orion/jobs/backfill_exit_columns.py` | 6 |
+| `src/orion/jobs/backfill_ml_features.py` | 5 |
+
+Implication:
+- Migration risk is now highly localized. We do not need a whole-repo rewrite to get parity; we need focused migration work on these modules.
+
+### 14.2 Active Runtime Services: Keep/Migrate/Retire Matrix
+
+Current compose wiring confirms these jobs/services are still live and must be included in parity validation:
+- `labeler` -> `orion.main_labeler` (`docker-compose.yml:59`)
+- `price_target_labeler` -> `orion.main_price_target_labeler` (`docker-compose.yml:74`)
+- `feature_enrichment` -> `orion.main_feature_enrichment` (`docker-compose.yml:90`)
+- `option_quote_tracker` -> `orion.main_option_quote_tracker` (`docker-compose.yml:106`)
+- `pattern-miner` -> `orion.main_pattern_miner` (`docker-compose.yml:207`)
+- `nightly-backfill` -> `orion.jobs.nightly_backfill` (`docker-compose.yml:224`)
+
+| Service/module | Current role | Decision | Parity gate before retire/archive |
+| --- | --- | --- | --- |
+| `main_labeler` | Core flow label loop; now Heber-backed for reads | Keep | Verify event-count and label parity by day/ticker |
+| `main_price_target_labeler` | Main label + feature derivation surface | Migrate (high priority) | Complete Heber facade migration + side-by-side label diffs |
+| `main_feature_enrichment` | Context enrichment scheduling | Keep temporarily | Replace SQL fallback dependency and confirm feature-null rates |
+| `main_option_quote_tracker` | Option quote checkpoint input | Keep temporarily | Heber canonical quote/checkpoint dataset exists and is consumed |
+| `jobs/nightly_backfill` | Orchestrates ML/exit backfills | Keep temporarily | Backfill inputs fully Heber-aligned and stable |
+| `main_pattern_miner` | Model training from local labels | Keep temporarily | Downstream training source of truth decision finalized |
+
+### 14.3 Contract Drift: Darkpool Naming Mismatch
+
+Observed naming split across systems:
+- Data Gateway emits darkpool envelopes with `feed="darkpool"` (`../Data-gateway/gateway/core/uw_poller.py:365`).
+- Heber Silver schema keys include `"darkpool"` (`../Heber/heber/schemas/silver.py:122`).
+- Heber writer partitions Silver by `feed={envelope.feed}` and maps darkpool fields under `envelope.feed == "darkpool"` (`../Heber/heber/writer/silver.py:40`, `../Heber/heber/writer/silver.py:76`).
+- Orion `HeberReader` currently reads darkpool from `_SILVER_DARKPOOL_DATASET = "darkpool_trades"` and path `silver/feed={dataset}` (`src/orion/clients/heber_reader.py:28`, `src/orion/clients/heber_reader.py:206`).
+- Heber catalog dataset list still advertises `darkpool_trades` (`../Heber/heber/catalog/datasources.py:178`).
+
+Risk:
+- If Silver partitions are written to `feed=darkpool` (as current Gateway->Heber pipeline implies), Orion reads against `feed=darkpool_trades` will silently return empty DataFrames.
+
+Action:
+1. Normalize on one canonical name (`darkpool` recommended, because it matches envelope/feed and silver schema keying).
+2. Make Orion `HeberReader` darkpool dataset name configurable with backward-compatible aliasing.
+3. Add a contract test that asserts non-empty read path for both accepted aliases during transition.
+
+### 14.4 Downstream ML Coupling Still Tied to Local Label Tables
+
+Critical dependencies still point to Orion-local label/window tables:
+- Exit classifier training joins `price_target_labels` + `gold_feature_windows` (`src/orion/ml/exit_classifier.py:441`, `src/orion/ml/exit_classifier.py:444`).
+- Pattern miner training queries `price_target_labels` directly (`src/orion/ml/pattern_miner.py:216`).
+- Nightly backfill orchestrator runs local backfill jobs (`src/orion/jobs/nightly_backfill.py:17`, `src/orion/jobs/nightly_backfill.py:18`, `src/orion/jobs/nightly_backfill.py:69`, `src/orion/jobs/nightly_backfill.py:74`).
+
+Decision:
+- Keep these training paths in Orion for now, but treat them as transitional data products.
+- Do not archive ML/backfill modules until a source-of-truth decision is made for training labels/features (Orion-local vs Heber Gold).
+
+### 14.5 Updated Archival Readiness (Wave 3)
+
+Ready to archive now:
+- No new modules promoted to "ready now" in this pass.
+
+Candidate to archive after replacement verification:
+- `src/orion/main_option_quote_tracker.py`
+- `src/orion/jobs/backfill_historical_gex.py`
+- `src/orion/jobs/backfill_exit_columns.py`
+
+Explicitly not ready to archive:
+- `src/orion/main_price_target_labeler.py`
+- `src/orion/ml/flow_enricher.py`
+- `src/orion/jobs/backfill_ml_features.py`
+- `src/orion/jobs/window_feature_job.py`
+- `src/orion/jobs/data_quality_checker.py`
+- `src/orion/jobs/validate_features.py`
+- `src/orion/ml/exit_classifier.py`
+- `src/orion/ml/pattern_miner.py`
+
+### 14.6 Decision Inputs Needed Before Step 1 (Archive Execution)
+
+Before we execute additional archival/removal, we need explicit decisions on:
+1. Training source of truth:
+- Keep `price_target_labels` local in Orion, or migrate to a canonical Heber Gold dataset.
+
+2. Darkpool canonical dataset name:
+- `darkpool` vs `darkpool_trades` as the long-term feed/dataset key.
+
+3. Feature ownership split:
+- Which Orion-only derived features should be promoted into Heber Gold versus intentionally retired.
+
+## 15) Pass 8 Continuation (2026-02-06)
+
+### 15.1 Validation/Quality Jobs Are Still Bound to Legacy SQL Contracts
+
+The highest-coupling job modules (`validate_features`, `data_quality_checker`, `window_feature_job`) are still coded against Orion-local legacy table/column contracts:
+- `silver_uw_flow`, `silver_uw_darkpool`, `silver_alpaca_bars` (for example `src/orion/jobs/validate_features.py:286`, `src/orion/jobs/data_quality_checker.py:176`, `src/orion/jobs/window_feature_job.py:105`).
+
+This conflicts with Heber Silver canonical naming and columns:
+- Heber bars schema: `symbol`, `ts_event`, `bar_start_ts`, `open/high/low/close` (`../Heber/heber/schemas/silver.py:9`, `../Heber/heber/schemas/silver.py:25`).
+- Heber flow schema (`flow_alerts`): `symbol/underlying`, `ts_event`, `premium` (`../Heber/heber/schemas/silver.py:80`, `../Heber/heber/schemas/silver.py:95`, `../Heber/heber/schemas/silver.py:100`).
+- Heber darkpool schema (`darkpool`): `symbol/underlying`, `ts_event`, `size`, `price` (`../Heber/heber/schemas/silver.py:122`, `../Heber/heber/schemas/silver.py:137`, `../Heber/heber/schemas/silver.py:138`, `../Heber/heber/schemas/silver.py:139`).
+
+| Legacy assumption in Orion jobs | Heber canonical equivalent | Migration note |
+| --- | --- | --- |
+| `ticker` | `symbol`/`instrument_key` | Add a single normalization helper; stop per-job aliasing |
+| `flow_ts_utc` | `ts_event` | Standardize event-time column in shared facade |
+| `premium_usd` | `premium` | Add compatibility alias during transition |
+| `dark_ts_utc` | `ts_event` | Reuse same event-time adapter |
+| `size_shares` / `trade_price` | `size` / `price` | Required for darkpool feature parity |
+| `bar_start_ts_utc` | `bar_start_ts` | Required for bar gap/staleness checks |
+
+Risk:
+- These jobs can produce false "missing/stale" alerts or incorrect validation outcomes when reading Heber-backed data without compatibility adapters.
+
+### 15.2 Feature-Lineage Mapping Drift in Validation Logic
+
+`validate_features` currently documents return checkpoints as sourced from `silver_uw_flow` (`src/orion/jobs/validate_features.py:351` to `src/orion/jobs/validate_features.py:360`).
+
+But current labeler behavior uses option quote checkpoints:
+- `get_real_checkpoint_prices` reads from `silver_option_quotes` (`src/orion/main_price_target_labeler.py:401`, `src/orion/main_price_target_labeler.py:414`, `src/orion/main_price_target_labeler.py:2279`).
+
+Risk:
+- Validation source audits can report "green" while checking the wrong source lineage.
+
+Action:
+1. Treat `FEATURE_SOURCE_MAPPING` as a migration-controlled artifact and split it into:
+- `source_of_truth_current` (actual runtime lineage)
+- `source_of_truth_target` (post-Heber target lineage).
+2. Add a small CI check that compares mapping entries to actual query helpers used by labeler/backfill modules.
+
+### 15.3 Timezone Scheduling Debt (DST Drift Risk)
+
+Two operational jobs use fixed `UTC-5` math for ET scheduling:
+- `nightly_backfill.get_next_run_time` (`src/orion/jobs/nightly_backfill.py:39`).
+- `data_quality_checker` market-hours constants assume fixed UTC conversion (`src/orion/jobs/data_quality_checker.py:31` to `src/orion/jobs/data_quality_checker.py:33`).
+
+Risk:
+- During daylight saving periods, schedules and market-hours gating can drift by one hour.
+
+Action:
+- Replace fixed offsets with timezone-aware conversions (`America/New_York`) in shared scheduling utilities.
+
+### 15.4 Archive-Execution Guidance for Step 1
+
+For these three hotspot jobs, preserve intent but retire implementation:
+- Keep:
+  - "feature validation" objective
+  - "data quality alerting" objective
+  - "window aggregation for ML context" objective
+- Dispose/archive after replacement:
+  - `src/orion/jobs/validate_features.py`
+  - `src/orion/jobs/data_quality_checker.py`
+  - `src/orion/jobs/window_feature_job.py`
+
+Condition before archival:
+- Heber-native replacements exist and pass side-by-side checks for at least one full trading week.
+
+## 16) Pass 9 Continuation (2026-02-06)
+
+### 16.1 Live Pipeline Gap: UW Strategies Cannot Fire in Current Runtime
+
+Current ingestion runtime behavior is Alpaca-only:
+- `_run_cycle()` only polls Alpaca events (`src/orion/ingestion/service.py:204`).
+- UW polling was removed and only comments remain (`src/orion/ingestion/service.py:275`).
+- `HeberReader` is instantiated but not used for reads (`src/orion/ingestion/service.py:60`).
+
+Rule generation still depends on UW flow signals:
+- Rule engine loads flow entry rules (`src/orion/processing/rule_engine.py:17` to `src/orion/processing/rule_engine.py:47`).
+- Those rules require `signal.signal_type == "UW_FLOW"` (`src/orion/processing/rules/flow_rules.py:23`, `src/orion/processing/rules/flow_rules.py:174`, `src/orion/processing/rules/flow_rules.py:273`).
+- Alpaca bar processing emits `OHLCV_1M` signals (`src/orion/processing/feature_engine.py:513`).
+
+Result:
+- With current runtime wiring, UW-dependent candidate generation is effectively inactive unless UW events are injected out-of-band.
+
+### 16.2 Deployment Drift: Compose Does Not Run Ingestion Service
+
+`docker-compose.yml` currently runs labelers, enrichment, execution, and backfills, but no ingestion service entry:
+- Services include `labeler`, `price_target_labeler`, `feature_enrichment`, `execution`, `pattern-miner`, `nightly-backfill` (`docker-compose.yml:47`, `docker-compose.yml:61`, `docker-compose.yml:76`, `docker-compose.yml:108`, `docker-compose.yml:196`, `docker-compose.yml:209`).
+- No service runs `python -m orion.ingestion`.
+
+At the same time, ingestion entrypoint docs state that it reads Heber flow/darkpool:
+- `src/orion/ingestion/__main__.py:8`.
+- But service implementation does not yet read flow/darkpool from Heber.
+
+Risk:
+- Operational assumptions about "live UW-driven execution" may not match actual running services.
+
+### 16.3 Integration Debt: Dual-Write Shadow Silver in Orion
+
+Feature enrichment currently fetches from Data Gateway and writes back into Orion-local `silver_*` tables:
+- Connector initialization via Gateway in `main_feature_enrichment` (`src/orion/main_feature_enrichment.py:237` to `src/orion/main_feature_enrichment.py:245`).
+- Connectors persist to local tables:
+  - `silver_greek_exposure` (`src/orion/connectors/uw_greek_exposure_connector.py:118`)
+  - `silver_market_tide` (`src/orion/connectors/uw_market_tide_connector.py:86`)
+  - `silver_max_pain` (`src/orion/connectors/uw_max_pain_connector.py:115`)
+  - `silver_iv_rank` (`src/orion/connectors/uw_iv_rank_connector.py:87`)
+
+Given Gateway+Heber already provide canonical feed handling, this creates:
+- duplicate ingestion paths,
+- schema/availability drift risk,
+- extra failure surfaces with unclear source-of-truth.
+
+### 16.4 Sync Earnings Auth-Contract Mismatch
+
+`sync_earnings` builds an `UnusualWhalesClient` against Gateway URL with token `"gateway"`:
+- `src/orion/jobs/sync_earnings.py:27`, `src/orion/jobs/sync_earnings.py:142`.
+
+That client sends `Authorization: Bearer <token>`:
+- `src/orion/unusualwhales/client.py:98`, `src/orion/unusualwhales/client.py:130`.
+
+Gateway UW endpoints require `X-Gateway-Key`:
+- `../Data-gateway/gateway/api/deps.py:103`, `../Data-gateway/gateway/api/deps.py:111`.
+- UW route handlers depend on `require_api_key` (for example `../Data-gateway/gateway/api/uw/earnings.py:26` and `../Data-gateway/gateway/api/uw/options.py:55`).
+
+Risk:
+- Earnings sync can fail authorization in production while appearing as intermittent fetch errors.
+
+### 16.5 Test Coverage Gap for New Integration Boundary
+
+Current tests cover Heber reader basics and ticker extraction, but not end-to-end Gateway auth contracts or live UW signal availability:
+- Heber reader tests: `tests/unit/test_heber_reader.py`
+- Feature enrichment ticker extraction only: `tests/unit/test_feature_enrichment_heber_source.py`
+
+No dedicated tests found for:
+- `sync_earnings` Gateway auth header contract,
+- connector->Gateway endpoint/auth compatibility,
+- runtime guarantee that ingestion produces UW signals when Heber has flow data.
+
+### 16.6 Updated P0 Priorities
+
+P0:
+1. Re-enable UW signal production in runtime by implementing Heber->BronzeEvent ingestion adapters in `IngestionService`.
+2. Add ingestion service to deployment profile (or document intentional non-use explicitly with equivalent replacement path).
+3. Fix `sync_earnings` to use `X-Gateway-Key` auth path compatible with Gateway dependencies.
+
+P1:
+1. Replace dual-write feature enrichment connectors with Heber-first reads where feasible.
+2. Add integration tests for Gateway auth and Heber-backed UW signal pipeline viability.
+
+### 16.7 Archival Readiness Update (Wave 4)
+
+Not ready to archive:
+- `src/orion/processing/rules/flow_rules.py` (still active strategy logic)
+- `src/orion/processing/rule_engine.py` (orchestration still required)
+- `src/orion/ingestion/service.py` (needs completion, not retirement)
+
+Candidate to archive after runtime completion:
+- Legacy UW event persistence branches in `src/orion/processing/persistence.py` that mirror canonical Heber silver once Heber->signal adapters are productionized and validated.
+
+## 17) Pass 10 Continuation (2026-02-06)
+
+### 17.1 Execution Path Split-Brain (Two Live Implementations)
+
+There are two execution-loop implementations with different behavior:
+- `src/orion/main_execution.py` (DB polling style, large monolith).
+- `src/orion/execution/service.py` (queue-driven `ExecutionService`).
+
+Compose currently runs `python -m orion.main_execution`:
+- `docker-compose.yml:124`.
+
+Risk:
+- Fixes/features can be added to one path but not the other, creating silent behavior drift.
+- Operationally, there is no single confirmed source-of-truth execution loop.
+
+### 17.2 ML Prefilter Contract Mismatch Can False-Skip Rule Candidates
+
+`SignalEngine` builds ML prefilter input from `CandidateTrade`:
+- `src/orion/processing/signal_engine.py:106` to `src/orion/processing/signal_engine.py:123`.
+
+It sends:
+- `premium_usd` from `candidate.premium`,
+- `put_call` from `candidate.option_type`,
+- `dte` from `candidate.expiration_date`.
+
+But rule-generated candidates typically do not populate those option fields:
+- base candidate factory sets only core fields (`src/orion/processing/rules/base.py:86` to `src/orion/processing/rules/base.py:94`).
+- flow rules mostly attach context under `evidence` / `execution_params` (`src/orion/processing/rules/flow_rules.py:223` to `src/orion/processing/rules/flow_rules.py:243`).
+- `CandidateTrade` option fields are nullable (`src/orion/storage/models_gold.py:33` to `src/orion/storage/models_gold.py:39`).
+
+Risk:
+- ML prefilter can evaluate incomplete candidate payloads and reject otherwise valid rule signals.
+
+### 17.3 Inference Enrichment Still Uses Orion-Local Silver Contracts
+
+Enrichment used for score parity remains SQL-local:
+- `enrich_flow_for_scoring` hits `silver_uw_flow`, `silver_uw_darkpool`, `silver_alpaca_bars`, `gold_feature_windows` (`src/orion/ml/flow_enricher.py:346`, `src/orion/ml/flow_enricher.py:392`, `src/orion/ml/flow_enricher.py:483`, `src/orion/ml/flow_enricher.py:1018`).
+
+This means inference parity work is still coupled to Orion-local tables rather than Heber canonical datasets.
+
+### 17.4 ML Flow Processor Exists but Is Not Wired Into Active Runtime
+
+`MLFlowProcessor` provides enriched scoring path:
+- `src/orion/ml/flow_processor.py:22`, `src/orion/ml/flow_processor.py:83`.
+
+No active runtime module currently references this processor for ingestion/execution orchestration.
+
+Risk:
+- Parallel "intended" ML-first flow path exists but is not part of deployed service flow, increasing maintenance and confusion.
+
+### 17.5 Updated Priorities
+
+P0:
+1. Standardize on one execution entrypoint (`main_execution` vs `ExecutionService`) and retire the other path.
+2. Fix ML prefilter input contract:
+- either populate option fields on `CandidateTrade` for rule-based candidates,
+- or build prefilter inputs from `candidate.evidence`/source signal payload instead of nullable option columns.
+
+P1:
+1. Move `flow_enricher` queries behind Heber facade equivalents to remove direct `silver_*` coupling.
+2. Decide whether to wire `MLFlowProcessor` into production flow or archive it as inactive.
+
+### 17.6 Archival Readiness Update (Wave 5)
+
+Candidate for archive after entrypoint consolidation:
+- one of:
+  - `src/orion/main_execution.py`
+  - `src/orion/execution/service.py`
+
+Not ready to archive:
+- `src/orion/processing/signal_engine.py`
+- `src/orion/processing/rules/flow_rules.py`
+- `src/orion/ml/flow_enricher.py`
+
+## 18) Pass 11 Continuation (2026-02-06)
+
+### 18.1 Queue-Driven Execution Path Is Unwired in Deployment
+
+Queue-based execution primitives are isolated from the deployed runtime:
+- `CandidateQueue` usage appears only in `src/orion/execution/service.py` (`src/orion/execution/service.py:89`, `src/orion/execution/service.py:180`, `src/orion/execution/service.py:221`).
+- `ExecutionService` is only defined there and not referenced by other runtime modules (`src/orion/execution/service.py:28`).
+- Compose deploys `python -m orion.main_execution`, not `ExecutionService` (`docker-compose.yml:124`).
+- Active execution path polls DB directly for unprocessed candidates (`src/orion/main_execution.py:48`, `src/orion/main_execution.py:254`).
+
+Risk:
+- Queue-specific tests/changes can pass while production behavior remains unaffected.
+- Two execution mental models remain in code, slowing migration and incident response.
+
+### 18.2 Rollup Guardrails Are Soft-Disabled in Current Compose Profile
+
+Rollup generation and rollup enforcement are split across inactive/active paths:
+- Rollup job is started by ingestion service initialization (`src/orion/ingestion/service.py:123` to `src/orion/ingestion/service.py:129`).
+- Compose does not run ingestion service (`docker-compose.yml` service list; no `orion.ingestion` command).
+- Compose execution explicitly disables rollup requirement (`docker-compose.yml:123`).
+- Preflight only hard-rejects on missing rollups when the config flag is enabled (`src/orion/execution/signal_preflight.py:140` to `src/orion/execution/signal_preflight.py:148`).
+
+Risk:
+- Signal preflight can run without intended rollup completeness guarantees, reducing decision-quality safeguards.
+
+### 18.3 Changelog-to-Code Drift on Execution Consolidation
+
+The changelog currently states:
+- "`main_execution.py` is now a thin wrapper (38 lines) that delegates to `ExecutionService.run()`" (`CHANGELOG.md:310`).
+
+Current code state does not match:
+- `main_execution.py` is still a full loop implementation (~363 lines) with candidate polling, preflight, execution, and exit-rule evaluation (`src/orion/main_execution.py:201` to `src/orion/main_execution.py:357`).
+- `ExecutionService` remains separate and unwired to compose (`src/orion/execution/service.py:28`, `docker-compose.yml:124`).
+
+Risk:
+- Operational/debug assumptions based on changelog can target the wrong codepath.
+
+### 18.4 Labeling Stack Fragmentation (Three Parallel Label Pipelines)
+
+Three distinct label stacks coexist:
+1. Heber-read -> `flow_labels` writer:
+- `main_labeler` reads flow from Heber and persists to `flow_labels` (`src/orion/main_labeler.py:140`, `src/orion/main_labeler.py:318`).
+2. Price-target label pipeline:
+- `main_price_target_labeler` builds `price_target_labels` (`src/orion/main_price_target_labeler.py:348`, `src/orion/main_price_target_labeler.py:2705`).
+3. PRD 6.3 candidate/window labels:
+- `label_job` writes `candidate_labels`/`labels_event` (`src/orion/jobs/label_job.py:11`, `src/orion/jobs/label_job.py:162`, `src/orion/jobs/label_job.py:182`).
+- `window_label_job` writes `labels_window` (`src/orion/jobs/window_label_job.py:11`, `src/orion/jobs/window_label_job.py:135`).
+
+Only `price_target_labels` is directly consumed by active ML trainers:
+- `pattern_miner` training query (`src/orion/ml/pattern_miner.py:216`).
+- `exit_classifier` training query (`src/orion/ml/exit_classifier.py:441`).
+
+Risk:
+- Duplicate labeling logic increases maintenance burden and schema drift while only one label family materially drives model training.
+
+### 18.5 Updated Priorities
+
+P0:
+1. Select canonical execution path now (DB polling vs queue) and archive the non-canonical path.
+2. Re-enable rollup guarantees by either:
+- restoring ingestion/rollup runtime, or
+- creating a dedicated rollup service in compose and turning `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE` back on.
+3. Correct changelog drift for execution architecture to prevent operator error.
+
+P1:
+1. Collapse to one label family for model training (`price_target_labels` or Heber-gold successor) and mark others as compatibility-only or archive candidates.
+
+### 18.6 Archival Readiness Update (Wave 6)
+
+Archive candidates after execution decision:
+- If DB-polling path remains canonical:
+  - `src/orion/execution/service.py`
+  - `src/orion/shared/candidate_queue.py`
+  - `tests/unit/test_candidate_queue.py`
+- If queue path becomes canonical:
+  - `src/orion/main_execution.py`
+
+Archive candidates after label consolidation:
+- `src/orion/main_labeler.py` + `flow_labels` path (if `price_target_labels` or Heber-gold labels remain canonical and no external consumer depends on `flow_labels`)
+- `src/orion/jobs/label_job.py`
+- `src/orion/jobs/window_label_job.py`
+
+## 19) Pass 12 Continuation (2026-02-06)
+
+### 19.1 Gateway Auth Contract Drift in Active Feature Enrichment Runtime
+
+Feature-enrichment connectors require Gateway key auth:
+- Connectors build `X-Gateway-Key` from `system_settings.data_gateway_api_key` (`src/orion/connectors/uw_greek_exposure_connector.py:27` to `src/orion/connectors/uw_greek_exposure_connector.py:29`, similarly `src/orion/connectors/uw_market_tide_connector.py:27`, `src/orion/connectors/uw_iv_rank_connector.py:27`, `src/orion/connectors/uw_max_pain_connector.py:27`).
+
+Current compose service config sets `GATEWAY_URL` but not Gateway key env:
+- Feature enrichment env includes `GATEWAY_URL` and `UW_API_KEY` (`docker-compose.yml:87` to `docker-compose.yml:90`).
+- No `DATA_GATEWAY_API_KEY` or `GATEWAY_API_KEY` env is set for that service.
+
+Gateway API enforces key header:
+- `require_api_key` rejects missing `X-Gateway-Key` (`../Data-gateway/gateway/api/deps.py:101` to `../Data-gateway/gateway/api/deps.py:115`).
+
+Risk:
+- Feature enrichment can run while silently persisting little/no fresh data due auth failures.
+
+### 19.2 Direct Alpaca Bypass Still Exists in Option Quote Pipeline
+
+`main_option_quote_tracker` still bypasses Data Gateway:
+- Instantiates `AlpacaOptionGreeksConnector` directly (`src/orion/main_option_quote_tracker.py:180`).
+- Connector calls Alpaca endpoint `https://data.alpaca.markets` using direct APCA headers (`src/orion/connectors/alpaca_option_greeks_connector.py:25`, `src/orion/connectors/alpaca_option_greeks_connector.py:37` to `src/orion/connectors/alpaca_option_greeks_connector.py:39`).
+
+Data Gateway already exposes Alpaca options routes:
+- `/api/v1/alpaca/options/snapshots/{underlying}` and related options endpoints (`../Data-gateway/gateway/api/alpaca/options.py:239`).
+
+Risk:
+- Orion bypasses centralized provider throttling, auth, and observability layers that the migration intended to standardize.
+
+### 19.3 Label/Data Product Decision Matrix (Keep vs Migrate vs Dispose)
+
+| Label/Feature Family | Current Producer Path | Active Consumer Path | Heber/Gateway Integration Status | Decision |
+| --- | --- | --- | --- | --- |
+| `flow_labels` | `main_labeler` (`src/orion/main_labeler.py:318`) | no in-repo consumer found (search references only in producer) | Reads from Heber, but writes local SQL only | **Dispose/Archive candidate** after external consumer check |
+| `price_target_labels` | `main_price_target_labeler` (`src/orion/main_price_target_labeler.py:2705`) | `pattern_miner`, `exit_classifier`, backfills (`src/orion/ml/pattern_miner.py:216`, `src/orion/ml/exit_classifier.py:441`) | Heavy local `silver_*` SQL coupling; no Heber gold write | **Keep + migrate to Heber gold** |
+| `candidate_labels` / `labels_event` / `labels_window` | `label_job` + `window_label_job` (`src/orion/jobs/label_job.py:162`, `src/orion/jobs/window_label_job.py:135`) | no active compose service wiring | Legacy PRD path, not part of current deployed loop | **Archive candidate** after deprecation notice |
+| `gold_feature_windows` | `window_feature_job` / rollup-adjacent jobs (`src/orion/jobs/window_feature_job.py:193`) | `exit_classifier`, `flow_enricher` (`src/orion/ml/exit_classifier.py:444`, `src/orion/ml/flow_enricher.py:1031`) | Consumer-critical, producer wiring unclear in compose | **Keep, but migrate producer to explicit Heber-aligned service** |
+
+### 19.4 Heber Gold Contract Gap for Orion Label Outputs
+
+Heber gold datasets require canonical time/instrument semantics (including `instrument_key`, `ts_event`, `ts_available`) per contract:
+- `../Heber/docs/data_contract.md`.
+
+Current Orion label outputs are local-table schemas keyed around `ticker`, `entry_ts`, and event IDs:
+- `flow_labels` insert shape (`src/orion/main_labeler.py:318`).
+- `price_target_labels` persistence path (`src/orion/main_price_target_labeler.py:2705`).
+
+No `write_gold(...)` integration usage found in Orion runtime modules.
+
+Risk:
+- Even when labels/features are high-value, they are not yet publishable through Heber-native reproducible/as-of semantics.
+
+### 19.5 Updated Priorities
+
+P0:
+1. Fix compose env contract for Gateway-backed connectors (`DATA_GATEWAY_API_KEY`/`GATEWAY_API_KEY`) and add startup fail-fast if key is missing.
+2. Migrate option quote checkpoint pipeline to Gateway-backed Alpaca options endpoints to remove direct provider bypass.
+3. Declare one canonical label family for model training (recommendation: `price_target_labels` lineage), and mark others deprecated.
+
+P1:
+1. Define Heber gold schema for retained label products with `instrument_key` + `ts_event` + `ts_available`.
+2. Move retained label/feature writers behind Heber SDK write paths; keep local SQL only as temporary cache during migration.
+
+### 19.6 Archival Readiness Update (Wave 7)
+
+High-confidence archive candidates (after one explicit stakeholder sign-off on external consumers):
+- `src/orion/main_labeler.py` + `flow_labels` pipeline
+- `src/orion/jobs/label_job.py`
+- `src/orion/jobs/window_label_job.py`
+
+Conditional archive candidates (after Heber-native replacements are live):
+- local dual-write enrichment connectors that persist `silver_greek_exposure` / `silver_market_tide` / `silver_max_pain` / `silver_iv_rank`
+
+## 20) Pass 13 Continuation (2026-02-06)
+
+### 20.1 Archival Executed: Queue-Driven Execution Path (Wave 6)
+
+Wave-6 archive action completed:
+- `src/orion/execution/service.py` -> `archive/2026-02-06_runtime-consolidation-wave6/legacy_code/execution_service.py`
+- `src/orion/shared/candidate_queue.py` -> `archive/2026-02-06_runtime-consolidation-wave6/legacy_code/candidate_queue.py`
+- `tests/unit/test_candidate_queue.py` -> `archive/2026-02-06_runtime-consolidation-wave6/legacy_tests/test_candidate_queue.py`
+- archive manifest added at `archive/2026-02-06_runtime-consolidation-wave6/README.md`
+
+Rationale:
+- compose runtime executes `orion.main_execution` (`docker-compose.yml:124`);
+- no active runtime module referenced `ExecutionService`;
+- `CandidateQueue` usage was isolated to archived service path.
+
+### 20.2 Post-Archive Runtime State
+
+Execution runtime source-of-truth is now unambiguous in repo:
+- `src/orion/main_execution.py` is the active execution entrypoint.
+
+Residual risk:
+- If any future branch expects queue-driven execution, reintroduction should happen only via explicit runtime switch + compose wiring rather than parallel shadow path.
+
+### 20.3 Updated Priorities
+
+P0:
+1. Complete auth-contract hardening for Gateway-backed services (feature enrichment + earnings sync) to prevent silent data starvation.
+2. Start Wave-7 archival decisions for label fragmentation (`flow_labels` and PRD 6.3 label jobs) after external consumer confirmation.
+
+P1:
+1. Migrate retained label and feature writers to Heber-gold contracts (`instrument_key`, `ts_event`, `ts_available`) and deprecate local SQL-only sinks.
+
+## 21) Pass 14 Continuation (2026-02-06)
+
+### 21.1 Heber Already Has Canonical Alert-Label Gold Path (Good News)
+
+Heber provides a first-class alert-label pipeline that already writes to Gold with as-of semantics:
+- Pipeline orchestration: `../Heber/heber/features/pipelines/alert_labels.py:43`.
+- Gold write via SDK contract (`instrument_key`, `ts_event`, `ts_available`): `../Heber/heber/features/pipelines/alert_labels.py:231`, `../Heber/heber/sdk/client.py:409` to `../Heber/heber/sdk/client.py:433`.
+- Label schema includes barrier outcomes and availability timestamps: `../Heber/heber/features/templates/alert_labels.py:474` to `../Heber/heber/features/templates/alert_labels.py:496`.
+
+Implication:
+- Orion `flow_labels` and parts of local label persistence can be retired in favor of Heber-native gold labels once contract gaps below are fixed.
+
+### 21.2 Cross-Repo Contract Gap: Heber Alert Pipeline vs Data Gateway Options API
+
+Heber option-bar fetch currently calls:
+- `GET {gateway}/api/v1/alpaca/options/bars` with `symbols=<csv>` (`../Heber/heber/features/pipelines/alert_labels.py:362` to `../Heber/heber/features/pipelines/alert_labels.py:368`).
+
+Data Gateway currently exposes:
+- `GET /api/v1/alpaca/options/{contract}/bars` (single contract path) (`../Data-gateway/gateway/api/alpaca/options.py:109`).
+- No matching `/options/bars` handler found in gateway routes (catalog lists it, but no route implementation in `gateway/api/alpaca/options.py`).
+
+Risk:
+- Heber contract-label enrichment can fail at runtime due endpoint shape mismatch, blocking parity replacement of Orion checkpoint labeling.
+
+### 21.3 Cross-Repo Auth Gap: Heber Alert Pipeline Missing Gateway Key Header
+
+Data Gateway Alpaca options endpoints require API-key dependency:
+- `client: Client = Depends(require_api_key)` on options routes (`../Data-gateway/gateway/api/alpaca/options.py:116`).
+- `require_api_key` enforces `X-Gateway-Key` (`../Data-gateway/gateway/api/deps.py:103` to `../Data-gateway/gateway/api/deps.py:115`).
+
+Heber alert pipeline gateway calls do not set auth headers:
+- Request call has no `headers=` containing `X-Gateway-Key` (`../Heber/heber/features/pipelines/alert_labels.py:361` to `../Heber/heber/features/pipelines/alert_labels.py:369`).
+
+Risk:
+- Even with endpoint path fixed, pipeline can still fail with 401 in secured environments.
+
+### 21.4 What To Keep and Add to Heber vs Dispose in Orion
+
+Keep and migrate to Heber:
+1. `price_target_labels` outcome semantics used by active trainers (`src/orion/ml/pattern_miner.py:216`, `src/orion/ml/exit_classifier.py:441`), but publish as Heber gold datasets with canonical columns.
+2. Entry-time feature bundle used for model training (`src/orion/ml/pattern_miner.py:36` to `src/orion/ml/pattern_miner.py:106`) as separate Heber gold features dataset.
+3. Checkpoint option-state features used by exit classifier (`src/orion/ml/exit_classifier.py:377` to `src/orion/ml/exit_classifier.py:420`) as optional Heber gold extension dataset.
+
+Dispose/archive in Orion:
+1. `flow_labels` pipeline (already non-consumer in repo) after external-consumer verification.
+2. PRD 6.3 label jobs (`label_job`, `window_label_job`) unless reattached to active runtime and Heber contract.
+
+### 21.5 Updated Priorities
+
+P0:
+1. Align Heber `alert_labels` gateway contract (endpoint shape + `X-Gateway-Key`) before using it as Orion replacement.
+2. Define Heber dataset split for Orion training parity:
+- `labels_alert_barriers` (outcomes),
+- `features_alert_entry` (entry context),
+- `features_alert_checkpoints` (checkpoint Greeks/returns, if retained).
+
+P1:
+1. Decommission Orion-local label sinks once Heber parity datasets satisfy current pattern-miner and exit-classifier queries.
+
+## 22) Pass 15 Continuation (2026-02-06)
+
+### 22.1 Archival Executed: Legacy PRD 6.3 Label Jobs (Wave 7)
+
+Wave-7 archive action completed:
+- `src/orion/jobs/label_job.py` -> `archive/2026-02-06_label-stack-wave7/legacy_code/label_job.py`
+- `src/orion/jobs/window_label_job.py` -> `archive/2026-02-06_label-stack-wave7/legacy_code/window_label_job.py`
+- archive manifest added at `archive/2026-02-06_label-stack-wave7/README.md`
+
+Evidence used:
+- no active compose entrypoints reference these jobs (`docker-compose.yml`).
+- no active `src/` references to these module paths after archival sweep.
+
+### 22.2 Label Stack State After Wave 7
+
+Active label/training path remains:
+- `price_target_labels` via `main_price_target_labeler`.
+
+Archived inactive alternatives:
+- queue-based execution-linked label jobs (`label_job`, `window_label_job`).
+
+Still active but disposal candidate:
+- `main_labeler` (`flow_labels`) pending external-consumer confirmation.
+
+### 22.3 Updated Priorities
+
+P0:
+1. Resolve Data Gateway contract/auth gaps blocking Heber alert-label pipeline parity (`options bars` route shape + `X-Gateway-Key`).
+2. Define and implement Heber gold datasets for retained Orion training columns, then begin controlled retirement of `price_target_labels`.
+
+P1:
+1. Confirm external consumers of `flow_labels`; archive `main_labeler` if no consumer exists.
+
+## 23) Pass 16 Continuation (2026-02-06)
+
+### 23.1 `flow_labels` Appears Write-Only Inside This Repo
+
+Current reference sweep shows:
+- `flow_labels` is read/written only by `main_labeler` itself (`src/orion/main_labeler.py:122`, `src/orion/main_labeler.py:318`).
+- No in-repo API, ML trainer, or job consumer reads `flow_labels`.
+- Compose still deploys the labeler service (`docker-compose.yml:59`).
+
+Risk:
+- Running a write-only service consumes resources and can mislead operators into assuming downstream usage that does not exist.
+
+### 23.2 Active Training Dependencies Are Centered on `price_target_labels`
+
+Active in-repo consumers continue to use `price_target_labels`:
+- pattern mining (`src/orion/ml/pattern_miner.py:216`),
+- exit classifier (`src/orion/ml/exit_classifier.py:441`),
+- backfill/validation jobs (`src/orion/jobs/backfill_ml_features.py:286`, `src/orion/jobs/validate_features.py:248`, `src/orion/jobs/nightly_backfill.py:4`).
+
+Implication:
+- Migration and parity should prioritize `price_target_labels` successor datasets in Heber; `flow_labels` should be considered compatibility-only until proven externally required.
+
+### 23.3 Updated Priorities
+
+P0:
+1. Verify whether any external dashboard/consumer depends on `flow_labels`.
+2. If none, move `labeler` compose service behind an opt-in profile and schedule archival of `main_labeler`.
+
+P1:
+1. Redirect any true `flow_labels` consumer to Heber `labels_alert_barriers` (after Gateway contract/auth fixes) instead of maintaining local Orion table writes.
+
+## 24) Pass 17 Continuation (2026-02-06)
+
+### 24.1 Compose Env Contracts Still Drift from Gateway/Auth Requirements
+
+Feature enrichment runtime:
+- Connectors send `X-Gateway-Key` only when `system_settings.data_gateway_api_key` is set (`src/orion/connectors/uw_greek_exposure_connector.py:27` to `src/orion/connectors/uw_greek_exposure_connector.py:29`, similarly market tide/iv/max pain connectors).
+- Compose service config sets `GATEWAY_URL` but does not set `DATA_GATEWAY_API_KEY`/`GATEWAY_API_KEY` (`docker-compose.yml:86` to `docker-compose.yml:90`).
+
+Price-target labeler runtime:
+- Service config sets `GATEWAY_URL` only (`docker-compose.yml:71` to `docker-compose.yml:74`).
+- Labeler still performs direct UW API lookup via `UW_API_KEY` for ticker/earnings metadata (`src/orion/main_price_target_labeler.py:1624` to `src/orion/main_price_target_labeler.py:1629`), not Gateway.
+
+Risk:
+- Gateway-backed requests can degrade to repeated 401/empty results, while direct-UW fallback behavior remains inconsistent with centralization goals.
+
+### 24.2 Archival Executed: Orphaned Integration Modules (Wave 8)
+
+Wave-8 archive action completed:
+- `src/orion/connectors/uw_ticker_info_connector.py` -> `archive/2026-02-06_integration-debt-wave8/legacy_code/uw_ticker_info_connector.py`
+- `src/orion/jobs/backfill_historical_gex.py` -> `archive/2026-02-06_integration-debt-wave8/legacy_code/backfill_historical_gex.py`
+- archive manifest added at `archive/2026-02-06_integration-debt-wave8/README.md`
+
+Rationale:
+- both modules had no active in-repo runtime wiring in compose/service entrypoints,
+- both represented side-paths that bypass or duplicate current Gateway/Heber migration direction.
+
+### 24.3 Updated Priorities
+
+P0:
+1. Normalize service env contracts in compose:
+- add `DATA_GATEWAY_API_KEY` where Gateway routes are used,
+- decide whether to remove direct `UW_API_KEY` dependencies from `main_price_target_labeler` or wire them explicitly as transitional.
+2. Add startup fail-fast for Gateway-backed services when URL is present but API key is missing.
+
+P1:
+1. Complete migration of ticker/earnings metadata lookups in labeling flow to Gateway/Heber canonical paths and retire remaining direct-UW client usage.
+
+## 25) Pass 18 Continuation (2026-02-06)
+
+### 25.1 `sync_earnings` Gateway Contract Is Broken by Path and Auth Shape
+
+Current Orion implementation:
+- `sync_earnings` builds a UW SDK client using `base_url=f"{gateway_url}/api/v1/uw"` with bearer token auth (`src/orion/jobs/sync_earnings.py:27`, `src/orion/jobs/sync_earnings.py:142`, `src/orion/unusualwhales/client.py:56`, `src/orion/unusualwhales/client.py:98`).
+- Orion UW SDK earnings endpoints are hardcoded as `/api/earnings/...` (`src/orion/unusualwhales/api/earnings/get_premarket.py:26`, `src/orion/unusualwhales/api/earnings/get_afterhours.py:26`, `src/orion/unusualwhales/api/earnings/get_ticker_earnings.py:18`).
+
+Resulting request path shape becomes:
+- `{gateway}/api/v1/uw/api/earnings/...` (extra `/api` segment), not Gateway route shape.
+
+Data Gateway route/auth contract:
+- earnings routes are `/api/v1/uw/earnings/...` (`../Data-gateway/gateway/api/uw/earnings.py:22`, `../Data-gateway/gateway/api/uw/earnings.py:45`, `../Data-gateway/gateway/api/uw/earnings.py:68`),
+- protected by `require_api_key` (Gateway key contract), not UW bearer token (`../Data-gateway/gateway/api/uw/earnings.py:26`, `../Data-gateway/gateway/api/uw/earnings.py:49`, `../Data-gateway/gateway/api/uw/earnings.py:72`).
+
+Risk:
+- daily sync/backfill can fail silently or return empty payloads, producing stale `silver_earnings_calendar` features used by labeling/training.
+
+### 25.2 Label Ontology Drift: Orion `price_target_labels` vs Heber Gold Labels
+
+Heber label contract today:
+- `labels_alert_barriers`/`labels_alert_intraday`/`labels_alert_swing` centered on barrier outcomes and compact context fields (`../Heber/features/feature_views/alert_labels.py:27`, `../Heber/features/feature_views/alert_labels.py:43`, `../Heber/features/feature_views/alert_labels.py:80`, `../Heber/features/feature_views/alert_labels.py:130`).
+
+Orion label contract today:
+- `main_price_target_labeler` builds a wide, checkpoint-heavy + enrichment-heavy row with dynamic insert into `price_target_labels` (`src/orion/main_price_target_labeler.py:2093`, `src/orion/main_price_target_labeler.py:2438`, `src/orion/main_price_target_labeler.py:2528`, `src/orion/main_price_target_labeler.py:2684`, `src/orion/main_price_target_labeler.py:2705`).
+
+Implication:
+- direct replacement of Orion training table with current Heber label views is not parity-complete.
+- migration needs explicit split:
+  1. keep Heber barrier labels as decision/outcome labels,
+  2. migrate Orion ML enrichment/checkpoint columns into Heber feature datasets (or a dedicated training-fact gold dataset),
+  3. then decommission local `price_target_labels`.
+
+### 25.3 Archival Executed: Deprecated Runner Debt (Wave 9)
+
+Wave-9 archive action completed:
+- `src/orion/run_agent.py` -> `archive/2026-02-06_runner-debt-wave9/legacy_code/run_agent.py`
+- `src/orion/paper_live_harness.py` -> `archive/2026-02-06_runner-debt-wave9/legacy_code/paper_live_harness.py`
+- archive manifest added at `archive/2026-02-06_runner-debt-wave9/README.md`
+
+Rationale:
+- neither file is wired in compose/runtime entrypoints,
+- `run_agent.py` is an explicit deprecated stub,
+- harness logic depended on legacy runner assumptions.
+
+### 25.4 Updated Priorities
+
+P0:
+1. Replace `sync_earnings` UW-SDK-through-gateway usage with direct Gateway client calls using canonical routes (`/api/v1/uw/earnings/*`) and `X-Gateway-Key`.
+2. Define the Heber target for Orion `price_target_labels` parity as two artifacts:
+- outcome labels (existing barrier views),
+- training-fact features (checkpoint/entry-context fields currently local to Orion).
+
+P1:
+1. Run a repo-wide cleanup plan for remaining local scripts/jobs that assume deprecated runner paths.
+
+## 26) Pass 19 Continuation (2026-02-06)
+
+### 26.1 `sync_todays_earnings` Overwrites Provider Dates with Local `today`
+
+Current behavior:
+- `sync_todays_earnings` computes `today = date.today()` and passes that value into every upsert call (`src/orion/jobs/sync_earnings.py:29`, `src/orion/jobs/sync_earnings.py:32`, `src/orion/jobs/sync_earnings.py:33`, `src/orion/jobs/sync_earnings.py:50`).
+- Data Gateway provider path emits normalized earnings rows with per-record date from payload (`../Data-gateway/gateway/providers/uw.py:740`, `../Data-gateway/gateway/providers/uw.py:796`, `../Data-gateway/gateway/providers/uw.py:852`).
+
+Risk:
+- when upcoming earnings are not on local `today` (or on non-trading days), Orion can store wrong `report_date` values in `silver_earnings_calendar`, corrupting downstream `days_to_earnings` / post-earnings features.
+
+### 26.2 Earnings Sync Runtime Is Still Coupled to Ingestion Startup Path
+
+Current call graph:
+- `sync_todays_earnings` is invoked from ingestion service init (`src/orion/ingestion/service.py:116` to `src/orion/ingestion/service.py:119`).
+- no other active runtime service path in this repo invokes it directly (only module CLI path remains in the job file itself).
+
+Risk:
+- if ingestion runtime is not active in deployment, earnings calendar freshness can drift even before resolving Gateway contract mismatches.
+
+### 26.3 Updated Priorities
+
+P0:
+1. Fix daily earnings sync semantics to use record-level provider date fields (with strict parse/validation) instead of forcing `date.today()`.
+2. Decouple earnings sync from ingestion startup by scheduling an explicit daily job path (or service profile) so it remains active in current deployment topology.
+
+P1:
+1. Add a parity check job comparing recent `silver_earnings_calendar.report_date` values against Gateway payload dates to detect drift early.
+
+## 27) Pass 20 Continuation (2026-02-06)
+
+### 27.1 Heber Watch Quote Pull Uses Nonexistent/Unauthorized Gateway Contract
+
+Current Heber watch usage:
+- watch consumer requests `GET {gateway}/api/v1/alpaca/options/quotes` with `symbols=<occ>` and no Gateway auth header (`../Heber/heber/watch/consumer.py:417` to `../Heber/heber/watch/consumer.py:420`).
+- snapshot poller uses the same route and query shape for batched symbols (`../Heber/heber/watch/poller.py:164` to `../Heber/heber/watch/poller.py:167`).
+
+Data Gateway contract:
+- options quote route is per-contract path `GET /api/v1/alpaca/options/{contract}/quotes` (`../Data-gateway/gateway/api/alpaca/options.py:157`).
+- route requires API key via `require_api_key` (`../Data-gateway/gateway/api/alpaca/options.py:160`).
+
+Risk:
+- Heber watch/monitoring flow can return 404/401 or empty quote paths, degrading alert-watch label quality and producing silent parity gaps versus intended Gateway-centralized reads.
+
+### 27.2 Updated Priorities
+
+P0:
+1. Align Heber watch quote-fetch contract to Gateway routes (either per-contract fetches or a newly added bulk quotes route in Data Gateway).
+2. Add explicit Gateway auth wiring (`X-Gateway-Key`) for watch consumer/poller HTTP clients.
+
+P1:
+1. Add integration tests in Heber that validate quote-fetch success against live Gateway route catalog to catch route-shape drift early.
+
+## 28) Pass 21 Continuation (2026-02-06)
+
+### 28.1 Ops/Remediation Job Inventory Still Largely Unwired in Active Runtime
+
+Current reference sweep indicates several jobs are not wired through compose/runtime entrypoints and are mainly self-contained CLIs and/or test-only references:
+
+- `dlq_consumer` appears referenced only by itself + unit test (`src/orion/jobs/dlq_consumer.py:129`, `tests/unit/test_dlq_consumer.py:5`).
+- `monitor_system` appears referenced only by unit test (`tests/unit/test_monitor_system.py:10`).
+- `reconcile_backfill` appears referenced only by remediation unit test (`tests/unit/test_remediation_rules.py:5`).
+- `gatekeeper` has no in-repo callers beyond its own module CLI (`src/orion/jobs/gatekeeper.py:198`).
+- `seed_solvers` has no in-repo references in current sweep.
+
+Risk:
+- operator expectations drift: job files exist but are not part of the currently deployed service topology, making incident response and ownership unclear.
+
+### 28.2 Updated Priorities
+
+P0:
+1. Produce an explicit “operational jobs matrix” (owner, trigger path, cadence, required env, runtime profile) for all `src/orion/jobs/*` modules.
+2. For jobs with no active owner/cadence, move to archive wave after sign-off.
+
+P1:
+1. For jobs that are retained, add compose `tools` profile wiring and runbook links so they are intentionally operable instead of implicitly dormant.
+
+## 29) Pass 22 Continuation (2026-02-06)
+
+### 29.1 Cross-Repo Default URL Drift: Heber Uses `:8000` for Data Gateway
+
+Data Gateway canonical local port:
+- Gateway README and compose standardize API at `http://localhost:8080` (`../Data-gateway/README.md:81`, `../Data-gateway/README.md:88`, `../Data-gateway/docker-compose.yml:8`).
+
+Heber defaults still point Data Gateway usage to `http://localhost:8000`:
+- alert-label pipeline default (`../Heber/heber/features/pipelines/alert_labels.py:40`, `../Heber/heber/features/pipelines/alert_labels.py:540`),
+- watch consumer default (`../Heber/heber/watch/consumer.py:35`),
+- watch CLI default (`../Heber/heber/watch/__main__.py:23`),
+- Heber README watch env docs (`../Heber/README.md:78`).
+
+Conflict:
+- In Heber local topology, `:8000` is lakeFS (`../Heber/README.md:27`), not Data Gateway.
+
+Risk:
+- out-of-box runs can silently target the wrong service, causing quote/label pipelines to fail or behave unpredictably even before route/auth fixes are applied.
+
+### 29.2 Updated Priorities
+
+P0:
+1. Normalize Heber Data Gateway defaults to `http://localhost:8080` across code + docs (`alert_labels`, watch modules, README).
+2. Add startup validation in Heber Gateway-dependent services that detects obvious service mismatches (for example lakeFS response signature on expected Gateway URL) and fails fast.
+
+P1:
+1. Add an environment contract test asserting Data Gateway URL consistency between Orion, Heber, and Data Gateway defaults.
+
+## 30) Pass 23 Continuation (2026-02-06)
+
+### 30.1 Orion Flow Persistence Still Performs Direct Alpaca Greeks Calls
+
+Current Orion persistence path:
+- `persist_silver_from_bronze` enriches UW flows via `_enrich_flows_with_greeks` before write (`src/orion/processing/persistence.py:142`, `src/orion/processing/persistence.py:263` to `src/orion/processing/persistence.py:264`).
+- enrichment uses `AlpacaOptionGreeksConnector.get_greeks_batch` (`src/orion/processing/persistence.py:113`, `src/orion/processing/persistence.py:123`).
+- connector calls Alpaca snapshots directly (`https://data.alpaca.markets/v1beta1/options/snapshots`) with Alpaca credentials (`src/orion/connectors/alpaca_option_greeks_connector.py:25`, `src/orion/connectors/alpaca_option_greeks_connector.py:164`).
+
+Active call path evidence:
+- ingestion runtime imports and invokes persistence module (`src/orion/ingestion/service.py:29`, `src/orion/ingestion/service.py:448`).
+- DLQ replay path also reuses same enrichment flow (`src/orion/jobs/dlq_consumer.py:14`, `src/orion/jobs/dlq_consumer.py:162`).
+
+Risk:
+- even where Gateway/Heber are intended as canonical data path, ingestion-side enrichment still depends on direct provider credentials and provider availability from Orion runtime.
+- this can produce contract drift (fields populated from direct provider semantics vs Gateway-normalized semantics) and reintroduce external rate-limit/credential failures into Orion.
+
+### 30.2 Updated Priorities
+
+P0:
+1. Replace ingestion-time direct Alpaca Greeks enrichment with Gateway-backed contract reads (or drop enrichment at ingestion and source Greeks from Heber canonical datasets).
+2. Define one canonical ownership point for option Greeks (Gateway vs Orion local enrichment) and remove duplicate path.
+
+P1:
+1. Add parity checks ensuring Greeks columns in Orion training paths are sourced from the selected canonical contract and not mixed across direct and Gateway paths.
+
+## 31) Pass 24 Continuation (2026-02-06)
+
+### 31.1 Heber-Backed Orion Services Are Not Fully Wired in Compose Runtime
+
+Runtime behavior:
+- `main_labeler` and `main_feature_enrichment` instantiate `HeberReader` (`src/orion/main_labeler.py:21`, `src/orion/main_labeler.py:34`, `src/orion/main_feature_enrichment.py:21`, `src/orion/main_feature_enrichment.py:42`).
+- `HeberReader` defaults `heber_data_root` to `/Volumes/heber/data` (`src/orion/config.py:85` to `src/orion/config.py:87`) and returns empty frames when silver paths are absent (`src/orion/clients/heber_reader.py:206` to `src/orion/clients/heber_reader.py:208`).
+
+Compose wiring:
+- `labeler` and `feature_enrichment` do not set `HEBER_DATA_ROOT` and do not mount Heber data volume; they only mount repo source (`docker-compose.yml:55`, `docker-compose.yml:84`) and set DB/Gateway/UW env.
+
+Observed consequence:
+- Heber read paths can become inert in containerized runtime; `feature_enrichment` then falls back to Orion-local SQL ticker discovery (`src/orion/main_feature_enrichment.py:91` to `src/orion/main_feature_enrichment.py:110`), while `main_labeler` has no local-flow fallback in current path (`src/orion/main_labeler.py:134` to `src/orion/main_labeler.py:145`).
+
+Risk:
+- deployment appears Heber-integrated in code, but runtime behavior can remain local/empty depending on container filesystem wiring.
+
+### 31.2 Updated Priorities
+
+P0:
+1. Wire explicit Heber data access in compose for Heber-dependent services (`HEBER_DATA_ROOT` + volume mount or remote-read strategy).
+2. Add startup checks that fail fast when Heber data root is unreachable for services that require it (`main_labeler`, `main_feature_enrichment`).
+
+P1:
+1. Decide whether `main_feature_enrichment` local SQL fallback is acceptable as a transitional mode; if yes, gate behind explicit flag and emit prominent startup warning.
+
+## 32) Pass 25 Continuation (2026-02-06)
+
+### 32.1 Duplicate Outcome-Tracking Stacks: Orion Local Tables vs Heber Watch Gold Labels
+
+Heber stack:
+- watch service tracks alert outcomes and writes `labels_alert_barriers` into Gold (`../Heber/heber/watch/writer.py:1`, `../Heber/heber/watch/writer.py:30`, `../Heber/heber/watch/writer.py:94` to `../Heber/heber/watch/writer.py:99`).
+
+Orion stack:
+- `main_option_quote_tracker` polls checkpoint quotes and writes `silver_option_quotes` (`src/orion/main_option_quote_tracker.py:63`, `src/orion/main_option_quote_tracker.py:101`, `src/orion/main_option_quote_tracker.py:129`, `src/orion/main_option_quote_tracker.py:180`).
+- `main_price_target_labeler` depends on Orion-local `silver_uw_flow` + `silver_option_quotes` + `price_target_labels` (`src/orion/main_price_target_labeler.py:347` to `src/orion/main_price_target_labeler.py:349`, `src/orion/main_price_target_labeler.py:401` to `src/orion/main_price_target_labeler.py:415`).
+
+Risk:
+- maintaining both stacks increases operational and contract-drift cost, and delays retirement of Orion-local silver/label tables after centralization.
+
+### 32.2 Updated Priorities
+
+P0:
+1. Choose one canonical outcome-tracking path (Heber watch labels vs Orion `main_option_quote_tracker` + `main_price_target_labeler`) and publish retirement criteria for the non-canonical stack.
+2. If Heber watch is canonical, design a parity bridge for Orion models still requiring wide checkpoint features currently in `price_target_labels`.
+
+P1:
+1. Add migration scorecard mapping each `price_target_labels` training field to either Heber watch labels, Heber feature datasets, or explicit deprecation.
+
+## 33) Pass 26 Continuation (2026-02-06)
+
+### 33.1 Nightly Backfill Runtime Still Depends on Direct UW Credentials Not Wired in Compose
+
+Active runtime path:
+- `nightly-backfill` service runs `orion.jobs.nightly_backfill` (`docker-compose.yml:209` to `docker-compose.yml:224`).
+- this orchestrator executes `run_ml_backfill(...)` (`src/orion/jobs/nightly_backfill.py:18`, `src/orion/jobs/nightly_backfill.py:69`).
+- `backfill_ml_features` still fetches ticker metadata via direct UW client requiring `UW_API_KEY` (`src/orion/jobs/backfill_ml_features.py:66` to `src/orion/jobs/backfill_ml_features.py:76`, `src/orion/jobs/backfill_ml_features.py:90` to `src/orion/jobs/backfill_ml_features.py:100`).
+
+Compose gap:
+- `nightly-backfill` env includes `DB_URL` + `GATEWAY_URL` only, no `UW_API_KEY` (`docker-compose.yml:220` to `docker-compose.yml:224`).
+
+Risk:
+- nightly backfill can silently skip/under-populate sector/earnings-related features when UW credentials are absent, reducing training parity and completeness.
+
+### 33.2 Nightly Scheduler Uses Fixed UTC-5 Offset (DST Drift Risk)
+
+Current scheduler logic:
+- computes ET by hardcoding `timedelta(hours=-5)` (`src/orion/jobs/nightly_backfill.py:39` to `src/orion/jobs/nightly_backfill.py:59`).
+
+Risk:
+- run time shifts by one hour during daylight-saving periods, causing off-target operational windows.
+
+### 33.3 Updated Priorities
+
+P0:
+1. Remove direct UW dependency from nightly backfill path (prefer Gateway/Heber metadata source) or wire explicit transitional credentials with hard-fail visibility.
+2. Replace fixed-offset ET scheduling with timezone-aware conversion to avoid DST drift.
+
+P1:
+1. Add completeness checks for nightly backfill outputs (feature population thresholds) and alert when expected enrichment columns regress.
+
+## 34) Pass 27 Continuation (2026-02-06)
+
+### 34.1 Ingestion Runtime Still Does Not Consume Heber Flow/Darkpool Despite Migration Comments
+
+Current behavior:
+- ingestion initializes `HeberReader` and comments that UW data now comes from Heber (`src/orion/ingestion/service.py:57` to `src/orion/ingestion/service.py:60`),
+- but `_run_cycle` only appends Alpaca events and never calls `read_flow` / `read_darkpool` (`src/orion/ingestion/service.py:200` to `src/orion/ingestion/service.py:205`),
+- while downstream rule path still expects `UW_FLOW` events (`src/orion/ingestion/service.py:323` to `src/orion/ingestion/service.py:325`).
+
+Entrypoint/docs drift:
+- ingestion module docstring claims it reads flow/darkpool from Heber (`src/orion/ingestion/__main__.py:7` to `src/orion/ingestion/__main__.py:10`), which is not true in active `_run_cycle` logic.
+
+Risk:
+- UW flow-driven features/rules can be starved in runtime while code/docs imply parity is already achieved.
+
+### 34.2 Gateway Response-Shape Drift in Orion UW Enrichment Connectors
+
+Greek exposure mismatch:
+- Orion connector aggregates `call_gamma`/`put_gamma`/`call_vanna`/`put_vanna`/`call_charm`/`put_charm` (`src/orion/connectors/uw_greek_exposure_connector.py:57` to `src/orion/connectors/uw_greek_exposure_connector.py:73`),
+- Gateway provider returns strike-level rows keyed as `gamma_exposure`, `call_volume`, `put_volume`, `call_oi`, `put_oi` (`../Data-gateway/gateway/providers/uw.py:2434` to `../Data-gateway/gateway/providers/uw.py:2444`).
+
+Max pain mismatch:
+- Orion expects `max_pain` (`src/orion/connectors/uw_max_pain_connector.py:61`),
+- Gateway normalizes as `max_pain_strike` (`../Data-gateway/gateway/providers/uw.py:1362` to `../Data-gateway/gateway/providers/uw.py:1364`).
+
+IV rank mismatch:
+- Orion expects `iv_high`/`iv_low`/`iv_30d` (`src/orion/connectors/uw_iv_rank_connector.py:70` to `src/orion/connectors/uw_iv_rank_connector.py:73`),
+- Gateway provides `one_year_high`/`one_year_low` (and does not expose `iv_30d` in normalized model) (`../Data-gateway/gateway/providers/uw.py:1425` to `../Data-gateway/gateway/providers/uw.py:1430`).
+
+Risk:
+- enrichment tables can silently fill with zeros/null-equivalents, degrading model feature quality while pipelines appear healthy.
+
+### 34.3 Feature-Enrichment Gateway Auth Contract Is Not Wired in Compose
+
+Connector auth behavior:
+- UW connectors only set `X-Gateway-Key` if configured key is present (`src/orion/connectors/uw_greek_exposure_connector.py:25` to `src/orion/connectors/uw_greek_exposure_connector.py:28`).
+
+Runtime wiring:
+- `main_feature_enrichment` instantiates Gateway connectors with URL only (`src/orion/main_feature_enrichment.py:237` to `src/orion/main_feature_enrichment.py:243`),
+- compose `feature_enrichment` sets `GATEWAY_URL` but no gateway API key env (`docker-compose.yml:86` to `docker-compose.yml:90`).
+
+Gateway contract:
+- UW endpoints used by these connectors are API-key protected (`../Data-gateway/gateway/api/uw/flow_analytics.py:24`, `../Data-gateway/gateway/api/uw/market.py:107`).
+
+Risk:
+- connector calls can degrade to repeated 401 paths and near-zero persisted enrichment output.
+
+### 34.4 Darkpool Feed Naming Drift Breaks Orion Heber Read Path
+
+Orion Heber read target:
+- `HeberReader` points darkpool reads to `feed=darkpool_trades` (`src/orion/clients/heber_reader.py:28`, `src/orion/clients/heber_reader.py:165`, `src/orion/clients/heber_reader.py:206`).
+
+Upstream canonical event feed:
+- Gateway UW poller wraps darkpool events with `feed="darkpool"` (`../Data-gateway/gateway/core/uw_poller.py:362` to `../Data-gateway/gateway/core/uw_poller.py:366`),
+- Heber Silver writer partitions by `envelope.feed` (`../Heber/heber/writer/silver.py:33`, `../Heber/heber/writer/silver.py:40`).
+
+Risk:
+- Orion `read_darkpool(...)` can point at a non-existent partition path in the centralized pipeline and return empty data even when darkpool events are being ingested.
+
+### 34.5 Updated Priorities
+
+P0:
+1. Implement actual Heber flow/darkpool ingestion in `IngestionService` (or remove UW-flow pipeline branches and document migration state explicitly).
+2. Fix UW enrichment connector field mappings to Gateway normalized response contracts (`spot-exposures`, `max-pain`, `iv-rank`) and add regression tests for non-zero/expected mappings.
+3. Wire `DATA_GATEWAY_API_KEY`/`GATEWAY_API_KEY` into feature-enrichment runtime and fail fast on missing key when Gateway mode is enabled.
+
+P1:
+1. Resolve darkpool feed naming (`darkpool` vs `darkpool_trades`) with a single canonical dataset alias across Data Gateway -> Heber writer -> Orion `HeberReader`.
+
+## 35) Pass 28 Continuation (2026-02-06)
+
+### 35.1 Orion Admin `/flows` Endpoint Still Bypasses Gateway/Heber Canonical Flow APIs
+
+Current Orion behavior:
+- Orion API imports and queries local `SilverOptionFlow` table directly (`src/orion/api/main.py:24`, `src/orion/api/main.py:495` to `src/orion/api/main.py:531`),
+- `/flows` returns Orion-local row shape from `silver_uw_flow` (`src/orion/api/main.py:479` to `src/orion/api/main.py:556`).
+
+Centralized contract exists upstream:
+- Data Gateway exposes canonical UW flow APIs with auth + pagination/caching (`../Data-gateway/gateway/api/uw/flow.py:23` to `../Data-gateway/gateway/api/uw/flow.py:46`, `../Data-gateway/gateway/api/uw/flow.py:49` to `../Data-gateway/gateway/api/uw/flow.py:75`).
+
+Risk:
+- Orion and Gateway can present divergent flow records/response contracts,
+- local table dependency keeps Orion API coupled to legacy SQL ingestion health instead of centralized data ownership.
+
+### 35.2 Shared MCP Server Stack Appears Orphaned Relative to Active Runtime Paths
+
+Observed state:
+- Orion still includes MCP client surface for Alpaca/UW tools (`src/orion/clients/mcp_server.py:21` to `src/orion/clients/mcp_server.py:200`),
+- client exports remain in package init (`src/orion/clients/__init__.py:11` to `src/orion/clients/__init__.py:20`),
+- runtime usage appears absent outside self/tests (no references beyond `clients/__init__.py` and `tests/clients/test_mcp_server.py`),
+- compose still runs dedicated `mcp-server` with direct provider credentials (`docker-compose.yml:269` to `docker-compose.yml:283`).
+
+Risk:
+- unnecessary operational surface and secret exposure for a path not currently tied to core ingestion/labeling/execution flows,
+- architectural confusion (parallel direct-provider path) during Gateway/Heber centralization.
+
+### 35.3 MCP Endpoint Defaults Are Misaligned With Compose Networking
+
+Current config:
+- MCP client defaults to `http://localhost:8001` (`src/orion/clients/mcp_server.py:18`),
+- compose exposes MCP as host `8090:8001` and service name `mcp-server` (`docker-compose.yml:269` to `docker-compose.yml:275`),
+- no compose-wide `MCP_SERVER_URL` wiring for Orion services.
+
+Risk:
+- if MCP path is reactivated, default connectivity can fail in both common contexts:
+  - host runs (service published on `8090`, not `8001`),
+  - container runs (`localhost` resolves to same container, not `mcp-server`).
+
+### 35.4 Updated Priorities
+
+P0:
+1. Decide whether Orion `/flows` remains a product API; if yes, make it a Gateway-backed proxy (or Heber-backed facade) instead of direct `silver_uw_flow` SQL.
+2. Decide whether Shared MCP Server is still in-scope; if not, archive `orion.clients.mcp_server` + related tests and remove `mcp-server` compose service.
+
+P1:
+1. If MCP is retained, standardize endpoint/auth config (`MCP_SERVER_URL`) and align to centralized Gateway/Heber ownership boundaries.
+
+## 36) Pass 29 Continuation (2026-02-06)
+
+### 36.1 MetaSearch Event Loader Regression: Data Fetch Coroutine Is Defined But Never Executed
+
+Current behavior:
+- `evaluate_variant(...)` relies on `_fetch_silver_events(...)` for bars/flow inputs (`src/orion/agents/meta_search_agent.py:840` to `src/orion/agents/meta_search_agent.py:843`),
+- inside `_fetch_silver_events(...)`, nested `fetch_bars_and_flow(...)` is defined (`src/orion/agents/meta_search_agent.py:996`) but never invoked (no call site in module),
+- function returns default-empty `alpaca_events`, `flow_events`, `price_data` (`src/orion/agents/meta_search_agent.py:992` to `src/orion/agents/meta_search_agent.py:995`, `src/orion/agents/meta_search_agent.py:1094`).
+
+Observed drift:
+- changelog previously marked this bug as fixed (`CHANGELOG.md:403` to `CHANGELOG.md:407`), but current code path still has the no-call regression.
+
+Risk:
+- meta-search evaluation can degrade to persistent `no_data`/no-candidate outcomes, blocking meaningful solver evolution while appearing operational.
+
+### 36.2 MetaSearch/Weekly Evolution Path Is Still Hard-Coupled to Orion Local Silver Tables
+
+Current data contract:
+- `_fetch_silver_events` imports and queries `SilverAlpacaBar` + `SilverOptionFlow` directly (`src/orion/agents/meta_search_agent.py:990`, `src/orion/agents/meta_search_agent.py:998`, `src/orion/agents/meta_search_agent.py:1052`),
+- no HeberReader/Gateway facade use in this path,
+- weekly automation entrypoint runs the same MetaSearchAgent (`src/orion/main_meta_weekly.py:19`, `src/orion/main_meta_weekly.py:61`, `src/orion/main_meta_weekly.py:118`).
+
+Risk:
+- solver evolution/training feedback can drift from centralized Gateway/Heber canonical datasets,
+- migration parity is undermined in adaptive components even if core ingestion paths are eventually centralized.
+
+### 36.3 Analytics Agents Depend on Local Ingestion Tables While Compose Still Omits Ingestion Service
+
+Data dependency:
+- EOD review gathers ingestion health and regime context from local `BronzeEvent` + `SilverAlpacaBar` tables (`src/orion/agents/eod_review_agent.py:358` to `src/orion/agents/eod_review_agent.py:363`, `src/orion/agents/eod_review_agent.py:393` to `src/orion/agents/eod_review_agent.py:399`).
+
+Runtime wiring:
+- compose runs `eod-agent` and `meta-weekly` (`docker-compose.yml:146` to `docker-compose.yml:163`, `docker-compose.yml:178` to `docker-compose.yml:195`),
+- no ingestion service is present in compose service list.
+
+Risk:
+- EOD/weekly analytics can run on stale/sparse local ingestion telemetry, reducing reliability of drift detection and solver mutation decisions.
+
+### 36.4 Updated Priorities
+
+P0:
+1. Fix `_fetch_silver_events` by executing the data-fetch coroutine (and add regression test to prevent recurrence).
+2. Decide canonical data source for MetaSearch evaluation (Gateway/Heber facade vs Orion local silver) and align weekly evolution path to it.
+
+P1:
+1. Either add ingestion service back to compose for analytics correctness, or reroute EOD/weekly analytics to canonical Gateway/Heber-backed datasets with explicit freshness checks.
+
+## 37) Pass 30 Continuation (2026-02-06)
+
+### 37.1 Pre-commit Secret Baseline Is Coupled to Large/Generated and Archived Files (Commit-Loop Instability)
+
+Current hygiene contract:
+- pre-commit runs `detect-secrets` against `.secrets.baseline` (`.pre-commit-config.yaml:24` to `.pre-commit-config.yaml:28`),
+- baseline tracks many findings in large/generated/archived files including `codebase.md` and archived legacy files (`.secrets.baseline:169` to `.secrets.baseline:185`, `.secrets.baseline:185` to `.secrets.baseline:284`).
+
+Observed debt signals:
+- `codebase.md` is very large and mutable (`98302` lines; ~`3.3M`) and is currently tracked (`codebase.md` file stats),
+- baseline line-number entries for these files are high-churn by nature, creating repeated baseline rewrites and non-deterministic commit friction.
+
+Risk:
+- engineering throughput degradation during migration (hook churn, forced retries, frequent manual baseline staging),
+- increased chance of bypassing hooks (`--no-verify`) under schedule pressure, reducing trust in hygiene controls.
+
+### 37.2 Weekly Meta Scheduler Has Exact-Minute Trigger With No Catch-up Window
+
+Current scheduler logic:
+- scheduled mode triggers only when `weekday == Friday` and exact `hour == 17` and `minute == 30` (`src/orion/main_meta_weekly.py:109` to `src/orion/main_meta_weekly.py:114`),
+- polling loop sleeps for 60 seconds between checks (`src/orion/main_meta_weekly.py:133` to `src/orion/main_meta_weekly.py:134`).
+
+Risk:
+- if process restarts late, clock drifts, or loop wake-up misses the exact minute, weekly evolution may skip an entire week with no catch-up execution.
+
+### 37.3 Updated Priorities
+
+P0:
+1. Reduce `.secrets.baseline` volatility by excluding generated/aggregate artifacts (for example `codebase.md`) and archived wave folders from secret-scan scope, then regenerate baseline once.
+2. Add deterministic pre-commit guidance for migration branches (single source of truth for baseline refresh command).
+
+P1:
+1. Replace exact-minute weekly trigger with a bounded execution window/catch-up rule (for example first run after Friday 17:30 ET if not yet executed for current week).
+
+## 38) Pass 31 Continuation (2026-02-06)
+
+### 38.1 HeberReader Hardcodes Silver Feed Names Instead of Using Catalog Feed-Resolution Contract
+
+Current Orion behavior:
+- `HeberReader` pins dataset names in constants (`bars`, `flow_alerts`, `darkpool_trades`) and builds parquet path directly as `silver/feed={dataset}` (`src/orion/clients/heber_reader.py:26` to `src/orion/clients/heber_reader.py:28`, `src/orion/clients/heber_reader.py:206`),
+- no Orion call sites use Heber catalog feed-resolution (`/api/v1/feeds/resolve`) despite catalog support (`../Heber/heber/catalog/api.py:300` to `../Heber/heber/catalog/api.py:306`, `../Heber/heber/catalog/service.py:136` to `../Heber/heber/catalog/service.py:142`).
+
+Cross-repo naming drift context:
+- Data Gateway UW poller emits darkpool as `feed="darkpool"` (`../Data-gateway/gateway/core/uw_poller.py:362` to `../Data-gateway/gateway/core/uw_poller.py:366`),
+- Heber writer/storage schema keys also use `darkpool` (`../Heber/heber/writer/silver.py:76`, `../Heber/heber/storage/iceberg_catalog.py:895`),
+- while Heber catalog datasources and PRD-facing dataset inventory still promote `darkpool_trades` (`../Heber/heber/catalog/datasources.py:178`).
+
+Risk:
+- Orion remains brittle to catalog/producer naming drift and repeats contract mismatch failures already observed in darkpool reads.
+
+### 38.2 HeberReader Filter Fallback Can Silently Drop Instrument Filtering (Data Contamination + Scaling Risk)
+
+Current implementation:
+- `_read_silver_dataset` applies `instrument_key` filters when symbols are provided (`src/orion/clients/heber_reader.py:210` to `src/orion/clients/heber_reader.py:214`),
+- `_read_parquet` fallback path (on filter errors) re-reads entire dataset without filters (`src/orion/clients/heber_reader.py:289` to `src/orion/clients/heber_reader.py:296`),
+- post-read path only applies time/as-of filters, not instrument filter re-application (`src/orion/clients/heber_reader.py:218` to `src/orion/clients/heber_reader.py:223`).
+
+Risk:
+- symbol-scoped reads can expand to whole-feed data under fallback conditions, polluting downstream feature/label computations and increasing memory/latency under larger Silver datasets.
+
+### 38.3 Updated Priorities
+
+P0:
+1. Move Orion Heber feed selection to catalog-resolved mapping (provider+feed -> silver dataset) rather than hardcoded dataset strings.
+2. Add a single canonical darkpool dataset alias policy across Data Gateway, Heber catalog, and Heber writer/storage keys.
+
+P1:
+1. In `HeberReader`, re-apply instrument filtering after fallback full-read (or hard-fail instead of broad fallback) and add guardrail tests for symbol-scoped reads.
+
+## 39) Pass 32 Continuation (2026-02-06)
+
+### 39.1 Heber Watch Builds Data Gateway URLs Inconsistently (`/api/v1` Mixed Inline vs Base URL)
+
+Current Heber watch behavior:
+- poller and consumer hardcode `/api/v1` into quote URLs (`../Heber/heber/watch/poller.py:165`, `../Heber/heber/watch/consumer.py:418`),
+- feature-enrichment paths do not include `/api/v1` and assume provider root under base URL (`../Heber/heber/watch/features.py:319`, `../Heber/heber/watch/features.py:366`, `../Heber/heber/watch/features.py:452`),
+- compose sets `DATA_GATEWAY_URL` without API prefix (`../Heber/docker-compose.yml:268`).
+
+Gateway contract:
+- provider routers are mounted at `/api/v1/uw` and `/api/v1/alpaca` (`../Data-gateway/gateway/api/uw/__init__.py:32`, `../Data-gateway/gateway/api/alpaca/__init__.py:19`).
+
+Risk:
+- with `DATA_GATEWAY_URL=http://host.docker.internal:8080`, watch components still construct incompatible path families (some prefixed, some not), guaranteeing partial request failure;
+- with `DATA_GATEWAY_URL` including `/api/v1`, prefixed call sites become `/api/v1/api/v1/...` and fail.
+
+### 39.2 Market-Context Enrichment Uses a Nonexistent Stock Bars Path Shape
+
+Current Heber watch enrichment request:
+- calls `GET {gateway}/alpaca/stocks/bars` with `symbol` as query param (`../Heber/heber/watch/features.py:452` to `../Heber/heber/watch/features.py:455`).
+
+Gateway stock-bars contract:
+- route is `GET /api/v1/alpaca/stocks/{symbol}/bars` (path param, not query-only symbol) (`../Data-gateway/gateway/api/alpaca/stock.py:25` to `../Data-gateway/gateway/api/alpaca/stock.py:31`).
+
+Risk:
+- market-context enrichment (returns/volatility fields) silently degrades due to repeated non-200 responses and fallback behavior, reducing label-quality parity and feature completeness.
+
+### 39.3 Heber Watch/Label Pipelines Lack Gateway API-Key Injection Despite Required Auth Contract
+
+Gateway auth contract:
+- Gateway endpoints require `X-Gateway-Key` header via `require_api_key` (`../Data-gateway/gateway/api/deps.py:101` to `../Data-gateway/gateway/api/deps.py:116`).
+
+Current Heber call paths:
+- watch consumer/poller/enrichment issue `httpx` requests without auth headers (`../Heber/heber/watch/consumer.py:417` to `../Heber/heber/watch/consumer.py:420`, `../Heber/heber/watch/poller.py:164` to `../Heber/heber/watch/poller.py:167`, `../Heber/heber/watch/features.py:321` to `../Heber/heber/watch/features.py:323`, `../Heber/heber/watch/features.py:374` to `../Heber/heber/watch/features.py:376`, `../Heber/heber/watch/features.py:461` to `../Heber/heber/watch/features.py:463`),
+- alert-labels pipeline option-bars fetch also omits auth headers (`../Heber/heber/features/pipelines/alert_labels.py:361` to `../Heber/heber/features/pipelines/alert_labels.py:369`),
+- watch CLI/config surface exposes `DATA_GATEWAY_URL` but no gateway-key configuration (`../Heber/heber/watch/__main__.py:23`, `../Heber/heber/watch/__main__.py:47`, `../Heber/heber/features/pipelines/alert_labels.py:540`).
+
+Risk:
+- Heber watch labeling and feature enrichment can fail with 401 responses in any environment enforcing Gateway auth, leading to silent parity erosion (missing entry prices, missing enrichment, incomplete contract labels).
+
+### 39.4 Updated Priorities
+
+P0:
+1. Standardize Heber watch Gateway URL contract to one rule: `gateway_base_url` excludes `/api/v1`, and all clients build paths through a shared helper that prepends `/api/v1` exactly once.
+2. Fix watch market-context enrichment path to `GET /api/v1/alpaca/stocks/{symbol}/bars` and add integration tests for bars/chain/iv-rank URL construction.
+3. Add explicit Gateway auth wiring for Heber call paths (`DATA_GATEWAY_KEY` env + `X-Gateway-Key` header injection in shared HTTP client code).
+
+P1:
+1. Add startup validation in Heber watch: fail fast when `gateway_base_url` includes `/api/v1` or when required endpoints return non-contract responses.
+
+## 40) Pass 33 Continuation (2026-02-06)
+
+### 40.1 Heber Watch and Label Pipelines Call Batch Options Endpoints Not Exposed by Data Gateway API Router
+
+Current Heber calls:
+- watch quote polling and entry-price lookups call `GET /api/v1/alpaca/options/quotes?symbols=...` (`../Heber/heber/watch/poller.py:165` to `../Heber/heber/watch/poller.py:167`, `../Heber/heber/watch/consumer.py:418` to `../Heber/heber/watch/consumer.py:420`),
+- alert-label contract labeling calls `GET /api/v1/alpaca/options/bars?symbols=...` (`../Heber/heber/features/pipelines/alert_labels.py:361` to `../Heber/heber/features/pipelines/alert_labels.py:368`).
+
+Current Data Gateway router contract:
+- options bars route is single-contract `GET /api/v1/alpaca/options/{contract}/bars` (`../Data-gateway/gateway/api/alpaca/options.py:109` to `../Data-gateway/gateway/api/alpaca/options.py:116`),
+- options quotes route is single-contract `GET /api/v1/alpaca/options/{contract}/quotes` (`../Data-gateway/gateway/api/alpaca/options.py:157` to `../Data-gateway/gateway/api/alpaca/options.py:161`),
+- no batch `/options/bars` or `/options/quotes` route exists in this router.
+
+Provider capability drift:
+- Alpaca provider already supports batch option bars/quotes internally (`../Data-gateway/gateway/providers/alpaca.py:521` to `../Data-gateway/gateway/providers/alpaca.py:548`, `../Data-gateway/gateway/providers/alpaca.py:572` to `../Data-gateway/gateway/providers/alpaca.py:583`), but router does not surface equivalent batch endpoints.
+
+Risk:
+- watch service cannot reliably fetch live option quotes for watch lifecycle updates/entry pricing through current Gateway API contract,
+- contract-label pipeline cannot fetch option bars through current Gateway API contract,
+- both paths silently degrade label quality and parity when HTTP failures are swallowed.
+
+### 40.2 Data Gateway `/catalog` Endpoint Inventory Is Out of Sync With Implemented Alpaca Routes
+
+Catalog advertises endpoints including `/options/bars` and `/stocks/bars` (`../Data-gateway/gateway/api/catalog.py:34` to `../Data-gateway/gateway/api/catalog.py:35`, `../Data-gateway/gateway/api/catalog.py:47`),
+while Alpaca router currently exposes `/stocks/{symbol}/bars` and `/stocks/bars/latest` plus single-contract option bars/quotes (`../Data-gateway/gateway/api/alpaca/stock.py:25`, `../Data-gateway/gateway/api/alpaca/stock.py:191`, `../Data-gateway/gateway/api/alpaca/options.py:109`, `../Data-gateway/gateway/api/alpaca/options.py:157`).
+
+Risk:
+- integration clients that trust `/catalog` can target stale/nonexistent paths, increasing 404-driven data loss and migration confusion.
+
+### 40.3 Updated Priorities
+
+P0:
+1. Decide and implement canonical batch options API contract at Gateway router level (`/options/quotes` and `/options/bars` with `symbols` query), or immediately patch Heber watch/label clients to single-contract routes with bounded batching.
+2. Add contract tests spanning Heber watch + label pipelines against live Gateway route inventory to prevent silent 404 fallbacks.
+
+P1:
+1. Reconcile `/catalog` endpoint inventory with actual router exports and add CI checks to fail on catalog/router drift.
+
+## 41) Pass 34 Continuation (2026-02-06)
+
+### 41.1 `main_execution.py` Still Contains Broken/Dead Candidate-Status Helpers Contrary to Changelog Removal Claim
+
+Current code state:
+- `main_execution.py` still defines `get_pending_candidates()` and `update_candidate_status()` (`src/orion/main_execution.py:165`, `src/orion/main_execution.py:177`),
+- both functions reference `CandidateTrade.status`/`updated_at_utc` (`src/orion/main_execution.py:170`, `src/orion/main_execution.py:184` to `src/orion/main_execution.py:185`),
+- `CandidateTrade` model does not define `status` or `updated_at_utc` columns (`src/orion/storage/models_gold.py:14` to `src/orion/storage/models_gold.py:52`),
+- active execution loop uses `fetch_pending_candidates()` instead (`src/orion/main_execution.py:48`, `src/orion/main_execution.py:254`).
+
+Changelog mismatch:
+- changelog states these helpers were removed (`CHANGELOG.md:451` to `CHANGELOG.md:452`), but they remain in current runtime module.
+
+Risk:
+- dormant paths become latent runtime faults if reused (SQL/model attribute errors),
+- operators and maintainers cannot rely on changelog statements for current execution-path behavior, increasing migration/debugging time.
+
+### 41.2 Execution-Consolidation Changelog Claim Remains Out of Sync With Live Module Shape
+
+Changelog states:
+- "`main_execution.py` is now a thin wrapper (38 lines) that delegates to `ExecutionService.run()`" (`CHANGELOG.md:413`).
+
+Current code:
+- `main_execution.py` remains a full execution loop module (`363` lines; `src/orion/main_execution.py`), with candidate polling, preflight, execution, and exit-rule loops (`src/orion/main_execution.py:236` to `src/orion/main_execution.py:357`).
+
+Risk:
+- architectural runbooks and migration tasks can target non-existent consolidation state, causing incorrect remediation and duplicated work.
+
+### 41.3 Updated Priorities
+
+P1:
+1. Remove or archive dead helper functions in `main_execution.py` (`get_pending_candidates`, `update_candidate_status`) and add a regression test that forbids references to non-existent `CandidateTrade` columns.
+2. Correct changelog entries to match actual execution architecture and add a simple CI guardrail (for example, assert expected `main_execution.py` size/entrypoint contract when “thin-wrapper” claims are introduced).
+
+## 42) Pass 35 Continuation (2026-02-06)
+
+### 42.1 Orion GatewayStreamClient Treats Subscriptions as Successful Before Server ACK
+
+Current Orion behavior:
+- `_send_subscribe()` sends subscription JSON and immediately updates local subscription state without waiting for server response (`src/orion/connectors/gateway_stream_client.py:149` to `src/orion/connectors/gateway_stream_client.py:162`),
+- `_send_unsubscribe()` similarly mutates local state without confirmation (`src/orion/connectors/gateway_stream_client.py:175` to `src/orion/connectors/gateway_stream_client.py:188`),
+- receive loop discards ack/system frames and has no explicit handling/logging path for `type="error"` responses (`src/orion/connectors/gateway_stream_client.py:294` to `src/orion/connectors/gateway_stream_client.py:300`).
+
+Gateway contract behavior:
+- WebSocket handler returns structured error frames for invalid feeds/symbols/permissions/subscription limits (`../Data-gateway/gateway/api/websocket.py:287` to `../Data-gateway/gateway/api/websocket.py:300`, `../Data-gateway/gateway/api/websocket.py:321` to `../Data-gateway/gateway/api/websocket.py:336`, `../Data-gateway/gateway/api/websocket.py:342` to `../Data-gateway/gateway/api/websocket.py:349`, `../Data-gateway/gateway/api/websocket.py:537` to `../Data-gateway/gateway/api/websocket.py:540`).
+
+Risk:
+- Orion can believe symbols are subscribed while Gateway rejected them, causing silent data starvation and stale universe behavior.
+
+### 42.2 Orion Stream Client Uses Ambiguous Legacy Feed Name (`bars`) Instead of Canonical Feed IDs
+
+Current Orion behavior:
+- subscribes with `feed="bars"` (`src/orion/connectors/gateway_stream_client.py:154`), not canonical feed IDs documented in Gateway discovery.
+
+Gateway discovery contract:
+- `/catalog/feeds` documents canonical IDs such as `stock_bars`, `option_bars`, etc. (`../Data-gateway/gateway/api/catalog.py:596` to `../Data-gateway/gateway/api/catalog.py:607`, `../Data-gateway/gateway/api/catalog.py:644` to `../Data-gateway/gateway/api/catalog.py:649`),
+- stream router currently tolerates legacy feed values via substring matching/fallback logic (`../Data-gateway/gateway/api/websocket.py:364` to `../Data-gateway/gateway/api/websocket.py:366`, `../Data-gateway/gateway/core/stream.py:34` to `../Data-gateway/gateway/core/stream.py:60`).
+
+Risk:
+- integration currently depends on permissive fallback behavior; if feed normalization tightens, Orion subscriptions can fail without obvious client-side error handling.
+
+### 42.3 Updated Priorities
+
+P0:
+1. In `GatewayStreamClient`, wait for and validate subscription/unsubscription ACK responses before mutating local subscription state.
+2. Add explicit handling/logging for `type="error"` WebSocket frames and surface failure back to caller/retry logic.
+
+P1:
+1. Migrate Orion subscription payloads to canonical Gateway feed IDs (`stock_bars` for current usage) and add contract tests against `/catalog/feeds`.
+
+## 43) Pass 36 Continuation (2026-02-06)
+
+### 43.1 `backfill_exit_columns` Uses a Single Anchor Column Filter That Can Skip Partially-Missing Checkpoint Rows
+
+Current selection logic:
+- checkpoint backfill candidates are selected only where `price_at_15m IS NULL` (`src/orion/jobs/backfill_exit_columns.py:100` to `src/orion/jobs/backfill_exit_columns.py:101`),
+- update routine fills many checkpoint columns (`price_at_30m`, `price_at_8h`, `price_at_1d`, `price_at_2d`, `price_at_3d`, `price_at_1w`) once selected (`src/orion/jobs/backfill_exit_columns.py:185` to `src/orion/jobs/backfill_exit_columns.py:200`).
+
+Risk:
+- rows with `price_at_15m` already populated but later checkpoints still null are never selected for remediation, leaving persistent partial feature gaps in `price_target_labels`.
+
+### 43.2 Nightly Backfill Throughput Is Hard-Capped Per Run Without Deterministic Pagination
+
+Current orchestrator/runtime behavior:
+- nightly orchestrator invokes both backfills with fixed `limit=10000` (`src/orion/jobs/nightly_backfill.py:69`, `src/orion/jobs/nightly_backfill.py:74`),
+- backfill selectors rely on `LIMIT :limit` without `ORDER BY` in candidate queries (`src/orion/jobs/backfill_ml_features.py:290` to `src/orion/jobs/backfill_ml_features.py:291`, `src/orion/jobs/backfill_exit_columns.py:82`, `src/orion/jobs/backfill_exit_columns.py:101`).
+
+Risk:
+- backlog processing order is non-deterministic and can repeatedly prioritize the same subset of rows, delaying catch-up and causing long-lived null-feature pockets.
+
+### 43.3 Nightly Scheduler Intent/Config Drift: Declared “After Close (4:30pm ET)” vs Configured 4:00pm ET
+
+Current module contract:
+- module docstring states run “after market close (4:30pm ET)” (`src/orion/jobs/nightly_backfill.py:4`),
+- configured schedule is `BACKFILL_HOUR_ET = 16`, `BACKFILL_MINUTE_ET = 0` (`src/orion/jobs/nightly_backfill.py:25` to `src/orion/jobs/nightly_backfill.py:26`).
+
+Risk:
+- operational expectations and runbook timing can diverge from actual execution window, increasing the chance of running before all intended end-of-day artifacts are finalized.
+
+### 43.4 Updated Priorities
+
+P0:
+1. Update checkpoint-candidate query in `backfill_exit_columns` to target any missing checkpoint field (not only `price_at_15m`) and add regression tests for partial-row recovery.
+2. Introduce deterministic pagination/checkpointing for nightly backfills (stable ordering + last-processed cursor) instead of fixed-limit best effort.
+
+P1:
+1. Align `nightly_backfill` scheduling docs/config to one explicit post-close time and validate it with timezone-aware scheduling rules.
+
+## 44) Pass 37 Continuation (2026-02-06)
+
+### 44.1 Option Quote Tracker Can Persist “Latest-Now” Prices as Historical Checkpoint Quotes
+
+Current tracker behavior:
+- selects any matured checkpoint where `minutes_since_entry >= checkpoint_minutes` (`src/orion/main_option_quote_tracker.py:203`, `src/orion/main_option_quote_tracker.py:212`),
+- fetches current option snapshots via Alpaca snapshot endpoint (latest quote/trade only) (`src/orion/connectors/alpaca_option_greeks_connector.py:164` to `src/orion/connectors/alpaca_option_greeks_connector.py:171`, `src/orion/connectors/alpaca_option_greeks_connector.py:182` to `src/orion/connectors/alpaca_option_greeks_connector.py:199`),
+- writes the fetched current quote into each overdue checkpoint while stamping `ts_utc` to historical checkpoint time (`src/orion/main_option_quote_tracker.py:242` to `src/orion/main_option_quote_tracker.py:252`).
+
+Risk:
+- if tracker is delayed/restarted or backlog exists, historical checkpoints (`15m`, `30m`, `1h`, etc.) can be populated with incorrect later prices, distorting return labels and downstream model training.
+
+### 44.2 Quote Tracker Reconstructs OCC Symbols Instead of Using Canonical `option_chain` Field
+
+Current query path:
+- rebuilds `option_symbol` from ticker/expiry/put_call/strike math in SQL (`src/orion/main_option_quote_tracker.py:74` to `src/orion/main_option_quote_tracker.py:75`),
+- ignores canonical source symbol already stored in flow schema (`src/orion/storage/models_silver.py:79`).
+
+Risk:
+- symbol reconstruction drift (format/rounding/root edge cases) can produce unmapped contracts and silent quote gaps even when canonical OCC symbols are available.
+
+### 44.3 Updated Priorities
+
+P0:
+1. Enforce checkpoint integrity: only persist quote data when fetch time is within a strict tolerance window of target checkpoint timestamp; otherwise mark checkpoint as missed/stale (do not backfill with “latest-now” value).
+2. Replace reconstructed OCC symbol logic with canonical `silver_uw_flow.option_chain` usage in quote tracking selection.
+
+P1:
+1. Add data-quality assertions for checkpoint monotonicity/timing provenance in `silver_option_quotes` (for example `abs(fetched_at - ts_utc)` bounds) and alert on violations.
+
+## 45) Pass 38 Continuation (2026-02-06)
+
+### 45.1 Tenacity Retry Configuration in UW Gateway Connectors Is Effectively Disabled
+
+Current connector behavior:
+- each UW connector fetch method is decorated with `@retry(...)` but catches broad exceptions and returns `None` instead of raising:
+  - `src/orion/connectors/uw_greek_exposure_connector.py:30` to `src/orion/connectors/uw_greek_exposure_connector.py:40`
+  - `src/orion/connectors/uw_market_tide_connector.py:30` to `src/orion/connectors/uw_market_tide_connector.py:44`
+  - `src/orion/connectors/uw_iv_rank_connector.py:30` to `src/orion/connectors/uw_iv_rank_connector.py:40`
+  - `src/orion/connectors/uw_max_pain_connector.py:30` to `src/orion/connectors/uw_max_pain_connector.py:40`
+- feature loop logs stored counts and continues (`src/orion/main_feature_enrichment.py:261` to `src/orion/main_feature_enrichment.py:283`), so transient failures can look like normal low-volume cycles.
+
+Risk:
+- transient Gateway/network failures bypass intended retry/backoff behavior and silently degrade enrichment freshness.
+
+### 45.2 `get_spy_cumulative_return` Computes Long-Horizon Return, Not the Intended “Past 20 Bars”
+
+Current implementation:
+- query uses window functions over full SPY history (`FIRST_VALUE`/`LAST_VALUE`) and then applies `ORDER BY ... DESC LIMIT 20` (`src/orion/main_feature_enrichment.py:168` to `src/orion/main_feature_enrichment.py:178`),
+- function then reads a single row (`fetchone`) as the output (`src/orion/main_feature_enrichment.py:181` to `src/orion/main_feature_enrichment.py:182`),
+- value is fed directly into regime detection (`src/orion/main_feature_enrichment.py:299` to `src/orion/main_feature_enrichment.py:303`).
+
+Risk:
+- trend input to `MultiAxisRegimeDetector` can be materially mis-scaled (anchored to very old history), skewing regime labels and downstream adaptive behavior.
+
+### 45.3 Enrichment Silver Tables Are Written via Raw SQL but Not Represented in Canonical Schema Artifacts
+
+Current write paths:
+- connectors persist into `silver_greek_exposure`, `silver_market_tide`, `silver_max_pain`, and `silver_iv_rank` using raw SQL:
+  - `src/orion/connectors/uw_greek_exposure_connector.py:118` to `src/orion/connectors/uw_greek_exposure_connector.py:129`
+  - `src/orion/connectors/uw_market_tide_connector.py:86` to `src/orion/connectors/uw_market_tide_connector.py:92`
+  - `src/orion/connectors/uw_max_pain_connector.py:115` to `src/orion/connectors/uw_max_pain_connector.py:124`
+  - `src/orion/connectors/uw_iv_rank_connector.py:87` to `src/orion/connectors/uw_iv_rank_connector.py:94`
+- silver ORM model file currently defines only flow/darkpool/bars/alerts/option-quotes tables and ends at line 213 (`src/orion/storage/models_silver.py:1` to `src/orion/storage/models_silver.py:213`).
+- repo schema documentation also omits these enrichment silver tables from layer summary (`docs/DATABASE_SCHEMA.md:55` to `docs/DATABASE_SCHEMA.md:57`).
+
+Risk:
+- schema ownership is fragmented (runtime writes without schema-as-code parity), increasing migration and deployment break risk when table contracts evolve.
+
+### 45.4 Updated Priorities
+
+P0:
+1. Make retry behavior real: re-raise request failures (or configure `retry_if_result` on `None`) in UW connectors and add failure-rate alerting in `main_feature_enrichment`.
+2. Rewrite `get_spy_cumulative_return` with deterministic 20-bar semantics (explicit bounded subquery) and add a regression test for known bar sequences.
+
+P1:
+1. Bring enrichment silver tables under explicit schema governance (ORM + migration + docs), or retire Orion-local copies in favor of canonical Heber datasets.
+
+## 46) Pass 39 Continuation (2026-02-06)
+
+### 46.1 VIX Proxy “Daily” Metrics Are Computed from 1-Minute Bars
+
+Current connector behavior:
+- `VIXProxyConnector` claims to compute from recent daily bars (`src/orion/connectors/vix_proxy_connector.py:84` to `src/orion/connectors/vix_proxy_connector.py:85`),
+- query reads `silver_alpaca_bars` for `ticker='VIXY'` with `ORDER BY ... DESC LIMIT 30` (`src/orion/connectors/vix_proxy_connector.py:90` to `src/orion/connectors/vix_proxy_connector.py:95`),
+- underlying silver bars table is explicitly the 1-minute OHLCV store (`src/orion/storage/models_silver.py:126` to `src/orion/storage/models_silver.py:129`),
+- connector then labels derived metrics as `vix_1d_change` and `vix_5d_ma` (`src/orion/connectors/vix_proxy_connector.py:53` to `src/orion/connectors/vix_proxy_connector.py:65`, `src/orion/connectors/vix_proxy_connector.py:74` to `src/orion/connectors/vix_proxy_connector.py:75`).
+
+Risk:
+- volatility regime inputs are semantically misnamed/misaligned (minute-scale calculations stored as daily-scale fields), which can distort downstream regime and feature interpretation.
+
+### 46.2 Regime Detection Uses Hardcoded Realized Volatility Placeholder
+
+Current runtime behavior:
+- regime snapshots are generated in `main_feature_enrichment` (`src/orion/main_feature_enrichment.py:295`),
+- detector call hardcodes `realized_vol=0.015` (`src/orion/main_feature_enrichment.py:304`) rather than deriving realized volatility from current bar history.
+
+Risk:
+- `silver_regime_history` can encode low-fidelity volatility-state labels that are weakly tied to live market conditions.
+
+### 46.3 Duplicate VIX Ingestion Paths Exist, but Only Proxy Path Is Wired
+
+Current code state:
+- `main_feature_enrichment` wires `VIXProxyConnector` only (`src/orion/main_feature_enrichment.py:27`, `src/orion/main_feature_enrichment.py:245`),
+- legacy direct Alpaca `VIXConnector` exists as standalone class (`src/orion/connectors/vix_connector.py:34`) with no in-repo runtime references (`src/orion/connectors/vix_connector.py` only hit for `VIXConnector` symbol).
+
+Risk:
+- dead/parallel connector paths increase maintenance overhead and ambiguity about canonical VIX source during Gateway/Heber migration.
+
+### 46.4 Updated Priorities
+
+P0:
+1. Correct VIX proxy semantics: either aggregate to daily bars before deriving `vix_1d_change`/`vix_5d_ma`, or rename/store explicitly intraday metrics to avoid false daily semantics.
+2. Replace hardcoded `realized_vol` with computed realized volatility from bounded recent SPY bar windows and add regression checks for known inputs.
+
+P1:
+1. Decide one canonical VIX ingestion path (`VIXProxyConnector` vs `VIXConnector`) and archive the non-canonical path after deployment confirmation.
+
+## 47) Pass 40 Continuation (2026-02-06)
+
+### 47.1 `main_labeler` “Unlabeled” Detection Can Misclassify Already-Labeled Backlog Rows
+
+Current behavior:
+- DB lookup only checks the first `max(limit * 4, limit)` event IDs (`src/orion/main_labeler.py:119` to `src/orion/main_labeler.py:124`),
+- unlabeled filtering is then applied across the full record list (`src/orion/main_labeler.py:130`),
+- records beyond the probed ID window are treated as unlabeled by default even if already present in `flow_labels`.
+
+Risk:
+- the labeler can repeatedly reprocess old/labeled rows under large backlogs, consuming cycles and delaying fresh-flow coverage.
+
+### 47.2 Labeler Write Metrics Overstate Success Because Conflict-Noop Inserts Are Counted as New Labels
+
+Current behavior:
+- insert path uses `ON CONFLICT (event_id) DO NOTHING` (`src/orion/main_labeler.py:337`),
+- `persist_labels` still returns `len(labels)` regardless of actual inserted row count (`src/orion/main_labeler.py:345`),
+- loop aggregates this into `total_labeled` and success logs (`src/orion/main_labeler.py:354`, `src/orion/main_labeler.py:371` to `src/orion/main_labeler.py:380`).
+
+Risk:
+- operational telemetry can report successful labeling progress even when most writes are conflict no-ops, masking backlog/staleness.
+
+### 47.3 Updated Priorities
+
+P0:
+1. Make unlabeled detection exact (query all candidate IDs used for batch selection, or switch to DB-driven anti-join pagination) before selecting the next batch.
+2. Return and log real inserted-row counts from `persist_labels` (for example, via `RETURNING`/rowcount) instead of attempted-label counts.
+
+P1:
+1. Add backlog regression tests that simulate >`limit*4` historical rows with mixed labeled/unlabeled states and assert forward progress on newest unlabeled rows.
+
+## 48) Pass 41 Continuation (2026-02-06)
+
+### 48.1 Pattern-Miner Drift Baseline Uses Oldest-In-Window Importance, Not Latest
+
+Current implementation:
+- `get_last_week_importance` queries all rows ordered by newest first (`src/orion/ml/pattern_miner.py:552` to `src/orion/ml/pattern_miner.py:559`),
+- then converts to a dict with duplicate feature keys (`src/orion/ml/pattern_miner.py:563`), which keeps the last occurrence per key (effectively oldest row in the 7-day window for each feature).
+
+Risk:
+- drift deltas in `run_pattern_mining` compare against stale baseline values instead of most recent production baseline, weakening alert quality for degrading features.
+
+### 48.2 Pattern-Miner Training Query Does Not Gate on `ml_ready`
+
+Current training query:
+- filters `price_target_labels` by `entry_ts >= :cutoff` and `last_tracked_ts IS NOT NULL` (`src/orion/ml/pattern_miner.py:204` to `src/orion/ml/pattern_miner.py:217`),
+- does not require `ml_ready = true` before model fitting.
+
+Risk:
+- model training can include rows that are track-complete but not fully feature-complete/validated under current Orion readiness semantics, increasing label/feature noise.
+
+### 48.3 Updated Priorities
+
+P0:
+1. Fix `get_last_week_importance` to select one latest row per feature (for example `DISTINCT ON (feature_name) ... ORDER BY feature_name, created_at_utc DESC`) before drift delta calculation.
+2. Add explicit `ml_ready` gating (or equivalent completeness predicate) in pattern-miner training queries and enforce with a regression test.
+
+P1:
+1. Add a data-quality metric that reports the fraction of fetched training rows passing readiness/completeness gates over time.
+
+## 49) Pass 42 Continuation (2026-02-06)
+
+### 49.1 Exit-Classifier Training Drops Losing Trades (Survivor Bias)
+
+Current behavior:
+- bucket training rows are fetched from `price_target_labels` (`src/orion/ml/exit_classifier.py:441` to `src/orion/ml/exit_classifier.py:463`),
+- sample construction explicitly skips trades where `max_return_pct <= 0` (`src/orion/ml/exit_classifier.py:520` to `src/orion/ml/exit_classifier.py:522`).
+
+Risk:
+- model is trained primarily on winner trajectories and lacks explicit stop-loss/failed-trade exit patterns, which can bias live exit timing decisions.
+
+### 49.2 Exit-Classifier Training Query Does Not Enforce Label Readiness Gate
+
+Current training filter:
+- query requires only `p.trade_type = ...` and `p.max_return_pct IS NOT NULL` (`src/orion/ml/exit_classifier.py:461` to `src/orion/ml/exit_classifier.py:463`),
+- does not gate on `ml_ready` (or equivalent completeness predicate) before generating training samples.
+
+Risk:
+- checkpoint feature columns may be partially populated or stale while still entering model training.
+
+### 49.3 Exit-Classifier Validation Uses Random Split Instead of Time-Aware Split
+
+Current training path:
+- `train_bucket_exit_classifier` uses `train_test_split(..., stratify=y)` (`src/orion/ml/exit_classifier.py:622`),
+- no time-ordered or walk-forward validation path is used in this module.
+
+Risk:
+- reported AUC can be optimistic due temporal leakage, especially in non-stationary options-flow regimes.
+
+### 49.4 Updated Priorities
+
+P0:
+1. Include losing/stop scenarios in exit-classifier training set (or train explicit “winner-only” and “risk-protect” models with clear runtime routing) to remove survivor bias.
+2. Add `ml_ready` (or strict completeness equivalent) to exit-classifier training query filters.
+3. Replace random split with time-aware validation (walk-forward or anchored split) and report both temporal holdout and training metrics.
+
+P1:
+1. Add per-bucket class-balance dashboards and fail training when class coverage is below minimum thresholds.
+
+## 50) Pass 43 Continuation (2026-02-06)
+
+### 50.1 Exit Orchestration Split-Brain: Two Independent Runtime Loops Can Close the Same Positions
+
+Current runtime wiring:
+- compose runs both `execution` (`python -m orion.main_execution`) and `position-monitor` (`python -m orion.main_position_monitor`) simultaneously (`docker-compose.yml:124`, `docker-compose.yml:144`),
+- `main_execution` evaluates exit rules and executes closes via `execution_engine.close_position(...)` (`src/orion/main_execution.py:320` to `src/orion/main_execution.py:340`),
+- `position_monitor` independently evaluates ML/heuristic exits and calls `connector.close_position(...)` (`src/orion/execution/position_monitor.py:242`, `src/orion/execution/position_monitor.py:315`).
+
+Risk:
+- duplicate/uncoordinated exit attempts can generate conflicting close orders and noisy execution telemetry.
+
+### 50.2 `PositionMonitor` Uses Approximate Entry Time (`now`) Instead of Actual Entry Timestamp
+
+Current behavior:
+- new tracked positions set `entry_time=datetime.now(timezone.utc)` (`src/orion/execution/position_monitor.py:124`),
+- time-held features are derived from this value for exit decisions (`src/orion/execution/position_monitor.py:222` to `src/orion/execution/position_monitor.py:223`),
+- `_fetch_entry_context` query does not return entry timestamp from decision/candidate rows (`src/orion/execution/position_monitor.py:155` to `src/orion/execution/position_monitor.py:173`).
+
+Risk:
+- time-based exit logic (especially bucket urgency) is systematically wrong after monitor restarts or when positions predate process start.
+
+### 50.3 `PositionMonitor` Entry-Context Lookup Uses Ticker Match, Not Option Symbol Match
+
+Current lookup path:
+- context query filters on `ct.ticker = :symbol` (`src/orion/execution/position_monitor.py:168`),
+- but candidate model stores option contracts separately in `candidate_trades.option_symbol` (`src/orion/storage/models_gold.py:33`),
+- if broker position symbol is an option contract, lookup can miss and default to generic `{"bucket": "SWING"}` (`src/orion/execution/position_monitor.py:209`).
+
+Risk:
+- option positions can be misbucketed and evaluated with weak/default context, reducing exit-model reliability.
+
+### 50.4 Updated Priorities
+
+P0:
+1. Consolidate to one canonical exit executor (either `main_execution` exit-rule path or `position_monitor`) and disable the other in active compose runtime.
+2. Populate monitor `entry_time` from authoritative execution timestamps (strategy decision / fill time), not process-time defaults.
+
+P1:
+1. Extend position-context lookup to match option positions by `option_symbol` and fall back to ticker only when appropriate.
+2. Add idempotency guardrails around close-order submission (for example open-close intent table keyed by position + decision window).
+
+## 51) Pass 44 Continuation (2026-02-06)
+
+### 51.1 Admin Dashboard Endpoints Are Backed by In-Memory State, Not Runtime Execution Data
+
+Current behavior:
+- `/dashboard/*` endpoints read from `core.pnl_tracker` singleton (`src/orion/api/main.py:572` to `src/orion/api/main.py:667`),
+- `PnLTracker` stores positions and P&L in process memory only (`src/orion/core/pnl_tracker.py:80` to `src/orion/core/pnl_tracker.py:89`),
+- no in-repo caller updates tracker position state (`update_position` / `close_position`) outside the tracker itself (reference scan shows only definitions in `src/orion/core/pnl_tracker.py:91` and `src/orion/core/pnl_tracker.py:129`).
+
+Risk:
+- dashboard can report empty/stale portfolio state despite active trading, creating false operational confidence.
+
+### 51.2 Dashboard Data Path Bypasses Persisted Execution Sources Already Present in Orion Schema
+
+Current schema/runtime contrast:
+- execution persistence tables exist for `orders`, `fills`, and `positions_snapshots` (`src/orion/storage/models_execution.py:13`, `src/orion/storage/models_execution.py:38`, `src/orion/storage/models_execution.py:65`),
+- dashboard endpoints do not query these tables; they return ephemeral singleton state (`src/orion/api/main.py:562` to `src/orion/api/main.py:667`).
+
+Risk:
+- observability path is disconnected from durable execution truth and cannot be reliably reconciled across restarts/incidents.
+
+### 51.3 Updated Priorities
+
+P0:
+1. Rebase dashboard endpoints onto durable execution sources (`fills`, `positions_snapshots`, and/or broker sync) rather than in-memory tracker state.
+2. Add parity checks that compare dashboard open positions/P&L against broker or persisted fills snapshots and alert on divergence.
+
+P1:
+1. If in-memory tracker is retained for low-latency UI hints, clearly label it as transient and add periodic hydration from persisted execution tables.
+
+## 52) Pass 45 Continuation (2026-02-06)
+
+### 52.1 `PositionManager` Runtime Integration Is Incomplete (Write/Sync Paths Unused)
+
+Current runtime behavior:
+- `main_execution` initializes `PositionManager` and iterates `get_open_positions()` for exit rules (`src/orion/main_execution.py:223`, `src/orion/main_execution.py:322`),
+- but `PositionManager.add_position(...)` has no in-repo call sites (`src/orion/execution/position_manager.py:126`; reference search shows no usage),
+- `PositionManager.sync_with_broker(...)` is also not called (`src/orion/execution/position_manager.py:193`; no runtime usage found).
+
+Risk:
+- exit-rule evaluation set can become stale and miss newly opened positions during process lifetime.
+
+### 52.2 `PositionManager` Keys Positions by Ticker, Collapsing Multi-Position/Options Cases
+
+Current model/state shape:
+- internal store uses `Dict[str, OpenPosition]` keyed by ticker (`src/orion/execution/position_manager.py:63`),
+- `add_position` writes by `candidate.ticker` (`src/orion/execution/position_manager.py:159`),
+- `OpenPosition` has optional `option_chain`, but keying does not include contract identity (`src/orion/execution/position_manager.py:37`).
+
+Risk:
+- multiple open positions on the same underlying (for example different option contracts/legs) can overwrite each other and lose exit context.
+
+### 52.3 Exit Path in `ExecutionEngine.close_position` Uses Ticker-Only Symboling
+
+Current exit execution behavior:
+- `close_position` accepts `ticker` and uses it directly for price lookup and order submission (`src/orion/execution/execution_engine.py:428`, `src/orion/execution/execution_engine.py:451`, `src/orion/execution/execution_engine.py:464`, `src/orion/execution/execution_engine.py:487`),
+- `main_execution` passes `position.ticker` from `PositionManager` into this method (`src/orion/main_execution.py:334` to `src/orion/main_execution.py:336`),
+- no option-symbol branch is present in this exit path despite options fields existing in candidate/position models (`src/orion/storage/models_gold.py:33`, `src/orion/execution/position_manager.py:37`).
+
+Risk:
+- option exits in this path can target the wrong instrument identity (underlying ticker vs option contract), causing failed or incorrect close behavior.
+
+### 52.4 Updated Priorities
+
+P0:
+1. Wire `PositionManager.add_position` on successful executions and invoke periodic `sync_with_broker` to keep tracked positions current.
+2. Re-key tracked positions by stable instrument identity (`option_chain`/broker symbol + side) rather than underlying ticker only.
+3. Add contract-aware close path in `ExecutionEngine.close_position` that uses option symbol when applicable.
+
+P1:
+1. Add integration tests covering simultaneous multi-contract positions on one ticker and correct exit targeting per contract.
+
+## 53) Pass 46 Continuation (2026-02-06)
+
+### 53.1 Exit Decisions Are Persisted Without `candidate_id` Linkage
+
+Current persistence path:
+- `ExecutionEngine._persist_exit_decision(...)` inserts `ExitDecision` rows with `ticker`, rule metadata, and broker IDs but does not populate `candidate_id` (`src/orion/execution/execution_engine.py:530` to `src/orion/execution/execution_engine.py:540`),
+- `ExitDecision` model explicitly includes `candidate_id` as the link back to entry trade (`src/orion/storage/models_gold.py:62`).
+
+Risk:
+- exit records lose deterministic linkage to the originating candidate, weakening auditability and lifecycle reconstruction.
+
+### 53.2 `PositionManager.initialize` Relies on Missing Linkage, So Closed Positions Can Reappear as Open
+
+Current open-position reconstruction:
+- startup query joins `StrategyDecision` to `ExitDecision` on `candidate_id` and keeps rows where no exit join exists (`src/orion/execution/position_manager.py:74` to `src/orion/execution/position_manager.py:78`),
+- because exit rows from runtime close path omit `candidate_id`, this join can fail to match historical closes.
+
+Risk:
+- on restart, already-exited positions can be rehydrated as open and re-enter exit loops, causing noisy/double-close behavior.
+
+### 53.3 Updated Priorities
+
+P0:
+1. Persist `candidate_id` on all `ExitDecision` writes from execution paths (thread through `close_position`/`_persist_exit_decision` call chain).
+2. Add restart-resume integration test: execute open->close cycle, restart `PositionManager.initialize`, assert position is not rehydrated.
+
+P1:
+1. Backfill/repair recent `ExitDecision` rows with candidate linkage where deterministically resolvable (for example via broker order IDs + order/fill tables).
+
+## 54) Pass 47 Continuation (2026-02-06)
+
+### 54.1 Pending-Candidate Polling Lacks Concurrency-Safe Claiming
+
+Current execution selection path:
+- pending candidates are selected by anti-join on `strategy_decisions` (`src/orion/main_execution.py:59` to `src/orion/main_execution.py:63`),
+- no row-level claiming/locking (`FOR UPDATE SKIP LOCKED`-style) or in-progress state exists before decision persistence.
+
+Risk:
+- concurrent execution workers (intentional scale-out or accidental duplicate processes) can fetch/process the same candidate simultaneously.
+
+### 54.2 `strategy_decisions` Schema Does Not Enforce One Decision Per Candidate
+
+Current schema shape:
+- `StrategyDecision.candidate_id` is indexed but not unique (`src/orion/storage/models_gold.py:86`),
+- duplicate decision rows for one candidate are therefore structurally allowed.
+
+Risk:
+- duplicate executions/skips for the same candidate can be persisted, complicating auditability and downstream lifecycle logic.
+
+### 54.3 Updated Priorities
+
+P0:
+1. Implement atomic candidate claiming (for example transactional claim table/update or `SKIP LOCKED` polling pattern) before policy/execution steps.
+2. Add uniqueness/idempotency guard (`UNIQUE` on decision candidate identity or deterministic upsert) aligned to intended one-decision-per-candidate contract.
+
+P1:
+1. Add multi-worker integration test that runs two execution loops against the same candidate set and asserts single decision/execution outcome per candidate.
+
+## 55) Pass 48 Continuation (2026-02-06)
+
+### 55.1 Fill Idempotency Is Process-Local; Restart Path Can Reprocess Recent Fills Into Risk State
+
+Current runtime behavior:
+- fill polling defaults to a 5-minute lookback when `last_fill_poll_ts` is absent (startup/restart path) (`src/orion/execution/execution_engine.py:618` to `src/orion/execution/execution_engine.py:621`),
+- partial-fill dedupe uses in-memory `_partial_fill_tracker` only (`src/orion/execution/execution_engine.py:652` to `src/orion/execution/execution_engine.py:656`),
+- `RiskManager.process_fill` idempotency uses in-memory `processed_fill_ids` set (`src/orion/execution/risk_manager.py:48`, `src/orion/execution/risk_manager.py:767` to `src/orion/execution/risk_manager.py:772`),
+- broker sync explicitly clears processed fill history (`src/orion/execution/risk_manager.py:942` to `src/orion/execution/risk_manager.py:944`).
+
+Risk:
+- after restart, already-accounted fills within lookback can be reapplied to risk state (equity/daily-loss/exposure), causing drift from broker truth.
+
+### 55.2 DB Fill Dedupe Happens After Risk Mutation
+
+Current processing order:
+- `_process_single_fill` mutates risk state first via `risk_manager.process_fill(...)` (`src/orion/execution/execution_engine.py:686` to `src/orion/execution/execution_engine.py:688`),
+- fill DB write uses `ON CONFLICT DO NOTHING` on broker order id (`src/orion/execution/execution_engine.py:946` to `src/orion/execution/execution_engine.py:948`).
+
+Risk:
+- duplicate fill events can still alter risk state even when persistence layer correctly drops duplicate fill rows.
+
+### 55.3 Durable Idempotency Helpers Exist But Are Unused
+
+Current code state:
+- `ExecutionEngine` defines `_is_fill_processed` and `_mark_fill_processed` backed by `ProcessedFill` table (`src/orion/execution/execution_engine.py:785`, `src/orion/execution/execution_engine.py:828`),
+- no runtime call sites invoke these helpers in fill polling path (reference scan shows definitions only).
+
+Risk:
+- durable anti-duplication infrastructure is present but disconnected, leaving runtime behavior dependent on volatile in-memory caches.
+
+### 55.4 Updated Priorities
+
+P0:
+1. Move fill idempotency to durable pre-checks (DB-backed `ProcessedFill` or equivalent) before mutating risk state.
+2. Reorder processing so duplicate detection/persistence claim occurs before `risk_manager.process_fill`.
+
+P1:
+1. Add restart regression test: process fill, restart engine, replay same fill payload, assert risk state unchanged.
+
+## 56) Pass 49 Continuation (2026-02-06)
+
+### 56.1 Options Live Path Bypasses `RiskManager` Order Gates (Including Greeks Limits)
+
+Current runtime behavior:
+- options execution path (`_execute_options_order`) performs system-health/lag preflight, DTE check, quote lookup, and contract sizing, then submits order directly (`src/orion/execution/execution_engine.py:173` to `src/orion/execution/execution_engine.py:224`),
+- no call to `risk_manager.check_order(...)` or `risk_manager.check_options_order(...)` exists in this path,
+- `RiskManager.check_options_order(...)` exists and includes Greeks-limit checks (`src/orion/execution/risk_manager.py:119` to `src/orion/execution/risk_manager.py:156`),
+- current references show `check_options_order` only in unit tests, not active runtime callsites (`tests/unit/test_risk_greeks_v2.py:152`, `tests/unit/test_risk_greeks_v2.py:165`, `tests/unit/test_risk_greeks_v2.py:185`).
+
+Risk:
+- options orders can bypass max-order/ticker exposure and options Greeks constraints in live execution flow, creating production behavior drift from risk-policy intent and tests.
+
+### 56.2 Preflight Risk Sizing Contract Differs From Actual Options Order Sizing
+
+Current flow split:
+- preflight computes `qty` via `risk_manager.calculate_size(entry_price=limit_price, ...)` and validates with `check_order(candidate.ticker, qty, price, side, ...)` (`src/orion/execution/signal_preflight.py:93` to `src/orion/execution/signal_preflight.py:103`),
+- actual options execution later derives contracts from `max_option_premium_pct` and `options_connector.calculate_option_contracts(...)` (`src/orion/execution/execution_engine.py:208` to `src/orion/execution/execution_engine.py:210`).
+
+Risk:
+- preflight approval is not bound to the real contracts submitted, so accepted signals can still produce materially different risk/exposure outcomes at execution time.
+
+### 56.3 Updated Priorities
+
+P0:
+1. Add mandatory risk gate in `_execute_options_order` before submission:
+- use `risk_manager.check_options_order(...)` (or equivalent unified options gate) with contract-aware cost and Greeks inputs.
+2. Unify preflight/execution sizing contracts for options so preflight-validated quantity matches order-submission quantity semantics.
+
+P1:
+1. Add regression tests that fail if options execution submits without a `RiskManager` pass.
+2. Add side-by-side preflight-vs-execution size parity assertions for option candidates.
+
+## 57) Pass 50 Continuation (2026-02-06)
+
+### 57.1 Options Notional Units Are Inconsistent in Risk Sizing Paths
+
+Current implementation contracts:
+- `RiskManager.calculate_size(...)` is share-based (`max_order_qty = floor(max_order_value / entry_price)`) (`src/orion/execution/risk_manager.py:523` to `src/orion/execution/risk_manager.py:556`),
+- `RiskManager.check_order(...)` computes `estimated_cost = quantity * price` (`src/orion/execution/risk_manager.py:71` to `src/orion/execution/risk_manager.py:85`),
+- options contract sizing uses `option_price * 100` in connector logic (`src/orion/connectors/alpaca_options_connector.py:240` to `src/orion/connectors/alpaca_options_connector.py:254`),
+- execution logging also treats options premium as `contracts * option_price * 100` (`src/orion/execution/execution_engine.py:405`).
+
+Risk:
+- options risk checks using share-style `quantity * price` understate true contract notional by ~100x, making max-order/exposure safeguards materially weaker than configured intent.
+
+### 57.2 `check_options_order` Reuses Share-Style `check_order` Cost Math
+
+Current method behavior:
+- `RiskManager.check_options_order(...)` delegates to `check_order(...)` before Greeks checks (`src/orion/execution/risk_manager.py:148` to `src/orion/execution/risk_manager.py:153`),
+- delegated `check_order(...)` uses share-style notional math (`quantity * price`) with no contract multiplier (`src/orion/execution/risk_manager.py:84`).
+
+Risk:
+- even after wiring `check_options_order` into runtime, notional-based limits may still be non-binding for options unless cost semantics are fixed.
+
+### 57.3 Updated Priorities
+
+P0:
+1. Introduce contract-aware cost normalization for options risk checks (for example `notional = contracts * premium * 100`) and apply it consistently in `check_order`/`check_options_order` paths.
+2. Add explicit unit semantics to risk method contracts (`shares` vs `contracts`) to avoid silent misuse across preflight and execution.
+
+P1:
+1. Add risk regression tests that enforce options max-order-size and ticker-exposure rejections at realistic premium/contract sizes.
+2. Add an audit assertion that `check_options_order` and execution premium accounting produce matching notional values for the same order payload.
+
+## 58) Pass 51 Continuation (2026-02-06)
+
+### 58.1 Rollup Consumers Still Depend on Orion-Local `gold_ticker_rollup`
+
+Current rollup read paths:
+- execution preflight resolves rollup evidence from `GoldTickerRollup` ORM rows (`src/orion/execution/signal_preflight.py:118` to `src/orion/execution/signal_preflight.py:124`),
+- admin API `/rollups` and `/rollups/{ticker}/{period}/{timestamp_utc}` query `GoldTickerRollup` directly (`src/orion/api/main.py:392` to `src/orion/api/main.py:442`, `src/orion/api/main.py:445` to `src/orion/api/main.py:476`).
+
+Risk:
+- rollup integrity and observability remain tied to Orion-local SQL state instead of a centralized Gateway/Heber-backed contract, creating divergence risk when local rollup job lags or is not running.
+
+### 58.2 Rollup Production Path Is Not a First-Class Deployed Service
+
+Current production wiring:
+- rollup generation starts only as a background task inside `IngestionService.initialize()` (`src/orion/ingestion/service.py:123` to `src/orion/ingestion/service.py:129`),
+- current compose profile runs execution/label/enrichment services but does not run ingestion service (`docker-compose.yml:47` to `docker-compose.yml:144`),
+- execution service explicitly disables rollup requirement (`docker-compose.yml:123`).
+
+Risk:
+- rollup consumers can operate with stale or absent rollups while still serving API responses and preflight traces, reducing confidence in decision evidence and debugging surfaces.
+
+### 58.3 Updated Priorities
+
+P0:
+1. Decide canonical rollup ownership now:
+- either run rollups as a dedicated always-on service in Orion,
+- or consume rollups from Heber canonical datasets via one data-access facade.
+2. Align execution preflight and admin `/rollups` endpoints to the same canonical source to prevent split-brain rollup views.
+
+P1:
+1. Add freshness SLO checks for rollup datasets used by preflight/API (max allowed staleness, explicit alerting).
+2. Add integration tests that validate rollup availability/shape for execution preflight in the deployed compose profile.
+
+## 59) Pass 52 Continuation (2026-02-06)
+
+### 59.1 Compose Provisions Redpanda/MinIO, but Active Runtime Does Not Execute the Producer Path
+
+Current deployment shape:
+- compose includes `redpanda`, `minio`, and `createbuckets` services (`docker-compose.yml:21` to `docker-compose.yml:46`, `docker-compose.yml:241` to `docker-compose.yml:267`),
+- compose does not run `orion.ingestion` (no ingestion service entry in active service list; execution stack starts at labelers/enrichment/execution) (`docker-compose.yml:47` to `docker-compose.yml:224`),
+- `RedpandaProducer` is only used by `IngestionService` (`src/orion/ingestion/service.py:16`, `src/orion/ingestion/service.py:100`, `src/orion/ingestion/service.py:430`).
+
+Risk:
+- Kafka/lakehouse infrastructure appears “live” in deployment config but receives no Orion-produced event flow in active runtime, obscuring true data-path ownership and incident triage.
+
+### 59.2 Orion Lakehouse Writer Is Config-Gated Off by Default in Current Compose Contract
+
+Current write-path behavior:
+- `IngestionService` initializes `LakehouseWriter` and calls it in cycle processing (`src/orion/ingestion/service.py:55`, `src/orion/ingestion/service.py:213`, `src/orion/ingestion/service.py:343`),
+- `LakehouseWriter` disables itself unless all `ORION_LAKEHOUSE_*` vars are present (`src/orion/storage/lakehouse.py:30` to `src/orion/storage/lakehouse.py:40`),
+- current compose service env blocks do not define `ORION_LAKEHOUSE_ENDPOINT_URL`, `ORION_LAKEHOUSE_ACCESS_KEY`, `ORION_LAKEHOUSE_SECRET_KEY`, or `ORION_LAKEHOUSE_BUCKET` (`docker-compose.yml:56` to `docker-compose.yml:223`).
+
+Risk:
+- even when ingestion is run ad hoc, lakehouse writes can silently no-op under missing env configuration, producing false confidence in bronze archival coverage.
+
+### 59.3 Updated Priorities
+
+P0:
+1. Choose one canonical infra story for Orion runtime:
+- either remove/disable unused local Redpanda/MinIO services from default compose profile,
+- or restore ingestion as a first-class service and wire end-to-end producer/consumer/lakehouse health checks.
+2. Add startup hard-fail (or prominent health-fail state) when lakehouse write path is expected but `ORION_LAKEHOUSE_*` config is incomplete.
+
+P1:
+1. Add compose-level integration check that verifies active event production volume to intended transport (DB-only vs Redpanda/lakehouse) and alerts on drift.
+
+## 60) Pass 53 Continuation (2026-02-06)
+
+### 60.1 Admin API Is Test-Covered but Not Deployed in Current Compose Runtime
+
+Current state:
+- `orion.api.main` defines active Admin endpoints (`/flows`, `/rollups`, `/dashboard/*`) (`src/orion/api/main.py:479` to `src/orion/api/main.py:669`),
+- compose service list has no API/uvicorn service for this app (`docker-compose.yml:47` to `docker-compose.yml:286`),
+- tests exercise API routes in-process via ASGI/TestClient imports of `app` (`tests/integration/test_api_endpoints.py:7`, `tests/api/test_flow_filters.py:5`, `tests/api/test_pointer_endpoints.py:5`).
+
+Risk:
+- endpoint contract tests can pass while the endpoint surface is unavailable in deployed runtime, creating false operational confidence for consumers and runbooks.
+
+### 60.2 API Contract Still Anchored to Orion-Local Tables While Runtime Ownership Is Shifting
+
+Current API data sources:
+- `/flows` reads `SilverOptionFlow` SQL rows (`src/orion/api/main.py:495` to `src/orion/api/main.py:531`),
+- `/rollups` reads `GoldTickerRollup` SQL rows (`src/orion/api/main.py:408` to `src/orion/api/main.py:427`),
+- tests seed/read these same Orion-local tables for endpoint behavior (`tests/api/test_flow_filters.py:7` to `tests/api/test_flow_filters.py:8`, `tests/api/test_pointer_endpoints.py:8`).
+
+Risk:
+- even if API deployment is restored, endpoint semantics remain coupled to Orion-local storage rather than Gateway/Heber canonical data contracts.
+
+### 60.3 Updated Priorities
+
+P0:
+1. Make an explicit product decision for Admin API:
+- deploy it as a first-class service with health checks and auth wiring,
+- or archive API surface/tests from default runtime expectations.
+2. If API remains, route `/flows`/`/rollups` through the same canonical data-access facade used for Gateway/Heber parity work.
+
+P1:
+1. Add a deployment-level smoke test (outside in-process ASGI tests) that verifies API availability in active compose profile.
+
+## 61) Pass 54 Continuation (2026-02-06)
+
+### 61.1 `ExecutionEngine.close_position` Hardcodes Sell-Side Exit, Ignoring Position Direction
+
+Current execution behavior:
+- `ExecutionEngine.close_position(...)` always sets `side = OrderSide.SELL` before submitting exit order (`src/orion/execution/execution_engine.py:458`),
+- `main_execution` calls this path with only `ticker` + `qty` (no direction passed) (`src/orion/main_execution.py:334` to `src/orion/main_execution.py:337`),
+- `PositionManager` tracks `direction` on open positions (`LONG`/`SHORT`) but that field is not consumed in this close path (`src/orion/execution/position_manager.py:28`, `src/orion/execution/position_manager.py:145`).
+
+Risk:
+- if shorting is enabled (`src/orion/config.py:19`) and a short position is tracked, the exit path can submit an additional sell instead of buy-to-cover, increasing exposure instead of closing it.
+
+### 61.2 Exit Semantics Diverge Across the Two Active Close Paths
+
+Current split behavior:
+- `position_monitor` closes via broker-level `connector.close_position(symbol)` which is position-side aware (`src/orion/execution/position_monitor.py:315`),
+- `main_execution` close path uses explicit side selection and currently forces sell (`src/orion/execution/execution_engine.py:458`).
+
+Risk:
+- the same position can receive different close semantics depending on which runtime path handles it, compounding split-brain behavior with directional correctness drift.
+
+### 61.3 Updated Priorities
+
+P0:
+1. Make `ExecutionEngine.close_position` direction-aware (`SELL` for long exits, `BUY` for short cover) and thread position side through call chain.
+2. Add guardrails/tests that fail if close logic for short positions submits sell-side orders.
+
+P1:
+1. Unify close semantics by standardizing on one close primitive across `main_execution` and `position_monitor` (prefer broker-native close-by-symbol if contract identity is reliable).
+
+## 62) Pass 55 Continuation (2026-02-06)
+
+### 62.1 Exit-Rule Position Quantity Can Rehydrate as Zero in `PositionManager`
+
+Current rehydration path:
+- `PositionManager._create_position_from_decision` reconstructs `entry_price` from `decision.execution_params.limit_price` and does not read persisted order tables (`src/orion/execution/position_manager.py:106` to `src/orion/execution/position_manager.py:116`),
+- `PositionManager.add_position` sets `qty` from `decision.execution_params["qty"]` defaulting to `0` (`src/orion/execution/position_manager.py:155`),
+- `ExecutionEngine._submit_order` sets only `client_order_id` in `decision.execution_params` and does not persist `qty` there (`src/orion/execution/execution_engine.py:318` to `src/orion/execution/execution_engine.py:321`),
+- actual executed quantity is persisted in order records (`src/orion/execution/execution_engine.py:873` to `src/orion/execution/execution_engine.py:880`).
+
+Risk:
+- positions tracked for exit-rule orchestration can carry `qty=0`, causing ineffective close attempts and stale “open” state loops despite real broker exposure.
+
+### 62.2 `main_execution` Exit Path Uses Rehydrated `position.qty` Directly
+
+Current close call:
+- `main_execution` passes `position.qty` into `execution_engine.close_position(...)` (`src/orion/main_execution.py:334` to `src/orion/main_execution.py:337`).
+
+Risk:
+- zero/incorrect rehydrated quantity directly propagates into exit order submission path, degrading exit reliability.
+
+### 62.3 Updated Priorities
+
+P0:
+1. Make position quantity source-of-truth explicit:
+- persist executed qty on `StrategyDecision` (or linked execution snapshot),
+- or reconstruct from `OrderRecord`/broker positions during `PositionManager.initialize`.
+2. Add hard guard to block close submissions when tracked qty is non-positive and force broker-side quantity refresh.
+
+P1:
+1. Add restart regression test: execute order with nonzero qty, restart `PositionManager`, assert tracked qty matches persisted/broker qty and exit call uses that qty.
+
+## 63) Pass 56 Continuation (2026-02-06)
+
+### 63.1 Post-Execution Failure Reasons Are Mutated In-Memory but Not Persisted to `strategy_decisions`
+
+Current lifecycle:
+- `main_execution` persists the decision record before execution (`src/orion/main_execution.py:293` to `src/orion/main_execution.py:295`),
+- `ExecutionEngine` mutates `decision.reason` for execution-time failures/rejections (for example broker error, rate limit, risk rejection) (`src/orion/execution/execution_engine.py:161`, `src/orion/execution/execution_engine.py:315`, `src/orion/execution/execution_engine.py:366`, `src/orion/execution/execution_engine.py:423`),
+- post-execution DB update path only sets `executed_successfully` and does not persist updated `reason`/trace fields (`src/orion/main_execution.py:190` to `src/orion/main_execution.py:198`).
+
+Risk:
+- `strategy_decisions` can show final status (`FALSE`/`SKIPPED`) with stale pre-execution reasons, degrading auditability and operator debugging fidelity.
+
+### 63.2 Updated Priorities
+
+P0:
+1. Replace status-only post-execution update with full decision-state persistence (at minimum `executed_successfully`, `reason`, and execution-trace deltas).
+2. Add regression test asserting that broker/risk failures are reflected in persisted `strategy_decisions.reason`.
+
+P1:
+1. Normalize execution failure taxonomy across `strategy_decisions.reason` and `order_records.error_message` so dashboards/alerts can group by canonical failure codes.
 
 
 
@@ -11206,6 +14578,66 @@ proposal:
       - 0DTE
     reasoning: ML shows combined low GEX and VEX relative to average predicts stop
       avoidance with 100% accuracy in historical data.
+
+
+
+================================================
+FILE: proposals/2026-01-21_213032_config_patch_general.yaml
+================================================
+meta:
+  run_id: ab371233-9fc1-4a92-b510-9d2975da163c
+  created_at: '2026-01-21T21:30:32.448201+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-01-21_ab371233-9fc1-4a92-b510-9d2975da163c.json
+  report_path: artifacts/reports/eod_report_2026-01-21.md
+proposal:
+  type: config_patch
+  priority: 1
+  rationale: Data ingestion latency from ALPACA_BAR_1M exceeded 15 minutes, preventing
+    signal generation and execution. System needs resilience to temporary data gaps.
+  evidence_pointers:
+    ingestion_lag:
+      source: ALPACA:ALPACA_BAR_1M
+      lag_max_s: 909.15064
+      max_gap_s: 900.680066
+    trades_executed: 0
+  test_plan:
+  - Simulate data delay in paper environment
+  - Verify signal generation resumes after gap recovery
+  - Monitor for missed opportunities during gaps
+  changes:
+    data_ingestion.max_allowed_gap_seconds: 300
+    data_ingestion.gap_fallback_logic: interpolate_and_skip_signals
+    signals.min_data_recency_seconds: 60
+
+
+
+================================================
+FILE: proposals/2026-01-21_213032_do_not_trade_general.yaml
+================================================
+meta:
+  run_id: ab371233-9fc1-4a92-b510-9d2975da163c
+  created_at: '2026-01-21T21:30:32.551343+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-01-21_ab371233-9fc1-4a92-b510-9d2975da163c.json
+  report_path: artifacts/reports/eod_report_2026-01-21.md
+proposal:
+  type: do_not_trade
+  priority: 2
+  rationale: Critical data source exhibiting extreme latency (>900s). Trading with
+    stale data poses significant market risk.
+  evidence_pointers:
+    ingestion_lag:
+      source: ALPACA:ALPACA_BAR_1M
+      lag_p95_s: 846.944369
+      max_gap_s: 900.680066
+  test_plan:
+  - Monitor ALPACA data latency for 24 hours
+  - Verify lag returns to <30s p95
+  - Run diagnostic on data pipeline
+  recommendation: Pause trading until ALPACA_BAR_1M lag_p95_s < 30
 
 
 
@@ -11797,162 +15229,6 @@ async def main():
     print("\nBackfill complete!")
     print(f"  Updated: {total_updated}")
     print(f"  Failed: {total_failed}")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
-
-================================================
-FILE: scripts/backfill_today.py
-================================================
-import asyncio
-import logging
-import os
-import time
-from datetime import datetime, timezone
-from datetime import time as dt_time
-from typing import List
-
-from dotenv import load_dotenv
-
-# Load env
-load_dotenv()
-os.environ["DB_URL"] = os.getenv("DB_URL").replace(":5432", ":5440").replace("@timescaledb", "@localhost")
-
-from orion.config import system_settings
-from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.core.universe_manager import UniverseManager
-from orion.processing.ingest_pipeline import ingest_bronze_events
-from orion.processing.persistence import persist_silver_from_bronze
-from orion.shared.utils import parse_timestamptz
-from orion.storage.db import async_session_factory, init_db
-from orion.storage.models import BronzeEvent
-
-# Setup Logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("backfill")
-
-RUN_ID = f"backfill_{datetime.now().strftime('%Y%m%d')}"
-
-
-async def backfill_uw(date_target: datetime):
-    logger.info(f"Backfilling UW data for {date_target.date()}...")
-    connector = UWFlowConnector(api_key=system_settings.uw_api_key)
-
-    # Cool down
-    time.sleep(5)
-    system_settings.uw_fetch_limit = 1000
-
-    # Define range (full UTC day)
-    start_ts = datetime.combine(date_target.date(), dt_time.min).replace(tzinfo=timezone.utc)
-    end_ts = datetime.combine(date_target.date(), dt_time.max).replace(tzinfo=timezone.utc)
-
-    # Fetch Raw
-    raw_events = await connector.fetch_raw_events(start_ts, end_ts)
-    logger.info(f"Fetched {len(raw_events)} raw UW events.")
-
-    bronze_events = []
-    seen_event_ids = set()
-
-    # Convert to Bronze (logic adapted from UWFlowConnector.poll)
-    for raw in raw_events:
-        try:
-            # Logic copied from UWFlowConnector.poll
-            ts_str = raw.get("timestamp") or raw.get("created_at")
-            event_ts = parse_timestamptz(ts_str, strict=True)
-
-            event_id = connector._generate_event_id(raw)
-            if event_id in seen_event_ids:
-                continue
-            seen_event_ids.add(event_id)
-
-            # Normalize Payload
-            if "premium" not in raw and "total_premium" in raw:
-                raw["premium"] = raw["total_premium"]
-            if "put_call" not in raw and "type" in raw:
-                t = raw["type"].upper()
-                raw["put_call"] = "C" if t == "CALL" else ("P" if t == "PUT" else t[:1])
-
-            bronze = BronzeEvent(
-                event_id=event_id,
-                source="UW",
-                source_event_id=str(raw.get("id")) if raw.get("id") else None,
-                event_type="UW_FLOW",
-                event_ts_utc=event_ts,
-                received_ts_utc=datetime.now(timezone.utc),
-                payload=raw,
-                session="REG",
-            )
-            bronze_events.append(bronze)
-        except Exception as e:
-            logger.warning(f"Skipping event: {e}")
-
-    return bronze_events
-
-
-async def backfill_alpaca(date_target: datetime, tickers: List[str]):
-    logger.info(f"Backfilling Alpaca bars for {len(tickers)} tickers on {date_target.date()}...")
-    connector = AlpacaMarketConnector(
-        api_key=system_settings.alpaca_api_key, secret_key=system_settings.alpaca_secret_key
-    )
-
-    # Market Hours
-    start_ts = datetime.combine(date_target.date(), dt_time(14, 30)).replace(tzinfo=timezone.utc)  # 09:30 ET
-    end_ts = datetime.combine(date_target.date(), dt_time(21, 0)).replace(tzinfo=timezone.utc)  # 16:00 ET
-
-    # Use fetch_bars
-    events = connector.fetch_bars(tickers, start_ts, end_ts)
-    logger.info(f"Fetched {len(events)} Alpaca bars.")
-    return events
-
-
-async def main():
-    target_date = datetime(2025, 12, 23, tzinfo=timezone.utc)
-
-    await init_db()
-
-    # 1. Universe
-    universe = UniverseManager()
-    await universe.hydrate_from_db()
-    active_tickers = universe.get_active_universe()
-    logger.info(f"Target Universe: {len(active_tickers)} tickers")
-
-    all_events = []
-
-    # 2. UW
-    try:
-        uw_events = await backfill_uw(target_date)
-        all_events.extend(uw_events)
-    except Exception as e:
-        logger.error(f"UW Backfill Failed: {e}")
-
-    # 3. Alpaca
-    if active_tickers:
-        alpaca_events = await backfill_alpaca(target_date, active_tickers)
-        all_events.extend(alpaca_events)
-
-    logger.info(f"Total Bronze Events to Ingest: {len(all_events)}")
-
-    # 4. Ingest & Persist
-    if all_events:
-        async with async_session_factory() as session:
-            # Ingest Pipeline (Dedup/Normalize)
-            unique_events = await ingest_bronze_events(session, all_events, run_id=RUN_ID, trace_id="manual_backfill")
-            logger.info(f"Unique Events after Dedup: {len(unique_events)}")
-
-            # Persist Bronze
-            from orion.processing.persistence import persist_bronze_events
-
-            await persist_bronze_events(session, unique_events)
-
-            # Persist Silver
-            await persist_silver_from_bronze(session, unique_events)
-
-            await session.commit()
-            logger.info("Persistence Complete.")
 
 
 if __name__ == "__main__":
@@ -13066,759 +16342,6 @@ if __name__ == "__main__":
         asyncio.run(bootstrap())
     except KeyboardInterrupt:
         pass
-
-
-
-================================================
-FILE: scripts/complete_uw_backfill.py
-================================================
-import asyncio
-import logging
-import os
-import time
-from datetime import date, datetime, timezone
-
-import requests
-from dotenv import load_dotenv
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
-# Load env and force DB URL for local host access
-load_dotenv()
-db_url = os.getenv("DB_URL", "")
-# Always point to 5440 for Docker's exposed port
-if ":5432" in db_url:
-    os.environ["DB_URL"] = db_url.replace(":5432", ":5440").replace("@timescaledb", "@localhost")
-
-from orion.config import system_settings
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.processing.ingest_pipeline import ingest_bronze_events
-from orion.processing.persistence import persist_silver_from_bronze
-from orion.shared.utils import parse_timestamptz
-from orion.storage.db import async_session_factory, init_db
-from orion.storage.models import BronzeEvent
-
-# Setup Logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("uw_backfill_fix")
-
-RUN_ID = f"backfill_uw_fix_{datetime.now().strftime('%Y%m%d%H%M')}"
-
-
-class RobustUWConnector(UWFlowConnector):
-    """
-    Subclass to override fetch logic with pagination and strict rate limit handling.
-    """
-
-    def fetch_all_pages(self, target_date: date) -> list:
-        all_events = []
-        seen_ids = set()
-        offset = 0
-        limit = 1000
-
-        while True:
-            logger.info(f"Fetching UW offset={offset} limit={limit}...")
-            batch = self._fetch_page(target_date, offset, limit)
-
-            if not batch:
-                logger.info("No more events found.")
-                break
-
-            # Infinite Loop Guard: Check if we just fetched exact duplicates
-            new_in_batch = 0
-            for item in batch:
-                # Assuming 'id' is standard
-                eid = str(item.get("id"))
-                if eid not in seen_ids:
-                    seen_ids.add(eid)
-                    new_in_batch += 1
-
-            if new_in_batch == 0 and len(batch) > 0:
-                logger.warning(
-                    "Fetched batch contains only duplicate IDs. API might ignore offset. Stopping to prevent infinite loop."
-                )
-                break
-
-            all_events.extend(batch)
-            logger.info(f"Got {len(batch)} events ({new_in_batch} new). Total unique: {len(seen_ids)}")
-
-            if len(batch) < limit:
-                logger.info("Batch smaller than limit, incomplete page. Finishing.")
-                break
-
-            offset += limit
-            # Be nice to the API
-            time.sleep(1.0)
-
-        return all_events
-
-    @retry(
-        retry=retry_if_exception_type(requests.exceptions.RequestException),
-        stop=stop_after_attempt(10),
-        wait=wait_exponential(multiplier=2, min=5, max=60),
-    )
-    def _fetch_page(self, target_date: date, offset: int, limit: int) -> list:
-        url = f"{self.base_url}/option-trades/flow-alerts"
-        params = {"date": target_date.strftime("%Y-%m-%d"), "limit": limit, "offset": offset}
-
-        try:
-            response = self.session.get(url, params=params, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-
-            # Extract list
-            if isinstance(data, dict) and "data" in data:
-                return data["data"]
-            elif isinstance(data, list):
-                return data
-            else:
-                logger.warning(f"Unexpected response format: {type(data)}")
-                return []
-
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                logger.warning("Rate Limit Hit (429)! Retrying after backoff...")
-                raise e  # Trigger tenacity
-            raise e
-
-
-async def main():
-    target_date = date(2025, 12, 23)
-    logger.info(f"Starting Robust UW Backfill for {target_date}")
-
-    await init_db()
-
-    connector = RobustUWConnector(api_key=system_settings.uw_api_key)
-
-    # 1. Fetch
-    raw_events = await asyncio.to_thread(connector.fetch_all_pages, target_date)
-    logger.info(f"Total Raw Events Fetched: {len(raw_events)}")
-
-    # 2. Convert to Bronze
-    bronze_events = []
-    seen = set()
-
-    for raw in raw_events:
-        try:
-            # Standard normalization logic
-            event_id = connector._generate_event_id(raw)
-            if event_id in seen:
-                continue
-            seen.add(event_id)
-
-            ts_str = raw.get("timestamp") or raw.get("created_at")
-            event_ts = parse_timestamptz(ts_str, strict=True)
-
-            if "premium" not in raw and "total_premium" in raw:
-                raw["premium"] = raw["total_premium"]
-            if "put_call" not in raw and "type" in raw:
-                t = raw["type"].upper()
-                raw["put_call"] = "C" if t == "CALL" else ("P" if t == "PUT" else t[:1])
-
-            bronze = BronzeEvent(
-                event_id=event_id,
-                source="UW",
-                source_event_id=str(raw.get("id")) if raw.get("id") else None,
-                event_type="UW_FLOW",
-                event_ts_utc=event_ts,
-                received_ts_utc=datetime.now(timezone.utc),
-                payload=raw,
-                session="REG",
-            )
-            bronze_events.append(bronze)
-        except Exception:
-            continue
-
-    logger.info(f"Converted {len(bronze_events)} Bronze Events")
-
-    # 3. Ingest
-    if bronze_events:
-        async with async_session_factory() as session:
-            logger.info("Ingesting events (Dedup + Persist)...")
-            unique_events = await ingest_bronze_events(session, bronze_events, run_id=RUN_ID, trace_id="manual_fix")
-            logger.info(f"Unique new events: {len(unique_events)}")
-
-            from orion.processing.persistence import persist_bronze_events
-
-            await persist_bronze_events(session, unique_events)
-            await persist_silver_from_bronze(session, unique_events)
-
-            await session.commit()
-            logger.info("Done.")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
-
-================================================
-FILE: scripts/comprehensive_backfill.py
-================================================
-import argparse
-import asyncio
-import hashlib
-import logging
-import os
-import time
-from datetime import date, datetime, timedelta, timezone
-from datetime import time as dt_time
-from typing import List
-
-import requests
-from dotenv import load_dotenv
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
-# --- Configuration & Setup ---
-load_dotenv()
-# Robust DB URL handling
-DB_URL = os.getenv("DB_URL", "")
-if ":5432" in DB_URL:
-    DB_URL = DB_URL.replace(":5432", ":5440").replace("@timescaledb", "@localhost")
-
-# Logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("backfill")
-
-# --- Connectors & Models ---
-# We import these AFTER setting env vars if possible, or just rely on them reading env
-from orion.config import system_settings
-from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.processing.ingest_pipeline import ingest_bronze_events
-from orion.processing.persistence import persist_bronze_events, persist_silver_from_bronze
-from orion.shared.utils import parse_timestamptz
-from orion.storage.models import BronzeEvent
-
-RUN_ID = f"comprehensive_backfill_{datetime.now().strftime('%Y%m%d%H%M')}"
-
-# --- Robust Connector Subclasses ---
-
-
-class RobustUWConnector(UWFlowConnector):
-    """Overrides fetch logic to handle cursor pagination for Flow/Alerts.
-
-    UW's `/option-trades/flow-alerts` endpoint is cursor-based (`older_than` / `newer_than`), not offset-based,
-    and its effective max page size appears capped (e.g. 500).
-    """
-
-    def fetch_day(self, target_date: date) -> list[dict]:
-        """
-        Fetch *all* flow alerts for a specific UTC date by paging backwards using `older_than`.
-        """
-        all_events: list[dict] = []
-        seen_ids: set[str] = set()
-
-        limit = 500  # empirically, larger values can be ignored/capped unpredictably
-        # Start just after end-of-day to ensure we capture the full day's range when paging backwards.
-        cursor = datetime.combine(target_date + timedelta(days=1), dt_time(0, 0, tzinfo=timezone.utc)).isoformat()
-
-        while True:
-            logger.info(f"[UW Flow] Fetching older_than={cursor} limit={limit}...")
-            batch = self._fetch_page(older_than=cursor, limit=limit)
-            if not batch:
-                logger.info("[UW Flow] No more events found.")
-                break
-
-            # Determine the next cursor from the oldest timestamp in the batch.
-            # We cannot rely on response-provided cursors (they can reflect server 'now').
-            def _ts(item: dict) -> str:
-                return str(item.get("timestamp") or item.get("created_at") or "")
-
-            oldest_ts = min((_ts(it) for it in batch if _ts(it)), default=None)
-            if not oldest_ts:
-                logger.warning("[UW Flow] Batch missing timestamps; stopping.")
-                break
-
-            # Keep only events that match the requested day; stop once we've paged into earlier dates.
-            batch_dates = {(_ts(it)[:10]) for it in batch if _ts(it)}
-            if batch_dates and min(batch_dates) < target_date.isoformat():
-                # We've crossed into the prior day; still ingest the in-day items and stop.
-                pass
-
-            new_in_batch = 0
-            for item in batch:
-                ts = _ts(item)
-                if not ts or ts[:10] != target_date.isoformat():
-                    continue
-                eid = str(item.get("id") or "")
-                if not eid or eid in seen_ids:
-                    continue
-                seen_ids.add(eid)
-                all_events.append(item)
-                new_in_batch += 1
-
-            logger.info(f"[UW Flow] Batch {len(batch)} items, +{new_in_batch} in-day new, total={len(all_events)}")
-
-            # Stop condition: if the oldest item is already before target day, we've exhausted the day.
-            if oldest_ts[:10] < target_date.isoformat():
-                break
-
-            # Advance cursor backward. If the server treats `older_than` as inclusive, we can get stuck
-            # returning the same oldest record repeatedly. Detect and stop to avoid infinite loops.
-            if oldest_ts == cursor:
-                logger.warning("[UW Flow] Pagination cursor did not advance (inclusive older_than). Stopping.")
-                break
-            cursor = oldest_ts
-
-            # Rate limit niceness
-            time.sleep(0.6)
-
-        return all_events
-
-    @retry(
-        retry=retry_if_exception_type(requests.exceptions.RequestException),
-        stop=stop_after_attempt(10),
-        wait=wait_exponential(multiplier=2, min=5, max=60),
-    )
-    def _fetch_page(self, *, older_than: str, limit: int) -> list:
-        url = f"{self.base_url}/option-trades/flow-alerts"
-        params = {"limit": limit, "older_than": older_than}
-        try:
-            # Strict Rate Limiting: 120 req/min = 2 req/sec => 0.5s interval
-            # Using 0.6s to be safe
-            time.sleep(0.6)
-
-            response = self.session.get(url, params=params, timeout=30)
-
-            # Log Rate Limit Headers at INFO so user can see them
-            daily_count = response.headers.get("x-uw-daily-req-count", "N/A")
-            limit_total = response.headers.get("x-uw-token-req-limit", "N/A")
-            if daily_count != "N/A":
-                logger.info(f"[UW Headers] Daily Count: {daily_count} / {limit_total}")
-
-            response.raise_for_status()
-            data = response.json()
-            if isinstance(data, dict) and "data" in data:
-                return data["data"]
-            return data if isinstance(data, list) else []
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                d_c = e.response.headers.get("x-uw-daily-req-count", "N/A")
-                l_t = e.response.headers.get("x-uw-token-req-limit", "N/A")
-                logger.warning(f"[UW Flow] 429 Rate Limit! Usage: {d_c}/{l_t}. Backing off...")
-                # The @retry decorator handles the wait
-                raise e
-            raise e
-
-
-# --- Raw HTTP helpers (avoid SDK model parsing issues) ---
-
-
-def _uw_headers() -> dict[str, str]:
-    token = system_settings.uw_api_key
-    if not token:
-        raise RuntimeError("Missing UW_API_KEY")
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _uw_base() -> str:
-    return os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api").rstrip("/")
-
-
-@retry(
-    retry=retry_if_exception_type(requests.exceptions.RequestException),
-    stop=stop_after_attempt(10),
-    wait=wait_exponential(multiplier=2, min=2, max=30),
-)
-def _uw_get_json(path: str, *, params: dict[str, object]) -> dict:
-    url = f"{_uw_base()}{path}"
-    resp = requests.get(url, params=params, headers=_uw_headers(), timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, dict):
-        return data
-    return {"data": data}
-
-
-@retry(
-    retry=retry_if_exception_type(requests.exceptions.RequestException),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=5),
-)
-def _uw_get_json_fast(path: str, *, params: dict[str, object]) -> dict:
-    """
-    Faster/shallower retry policy for high-fanout endpoints (e.g., per-ticker darkpool).
-    """
-    url = f"{_uw_base()}{path}"
-    resp = requests.get(url, params=params, headers=_uw_headers(), timeout=15)
-    # Some endpoints return 4xx when there's simply no data for that symbol/date.
-    # Treat these as empty rather than retrying.
-    if resp.status_code in (404, 422):
-        return {"data": []}
-    resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, dict):
-        return data
-    return {"data": data}
-
-
-def fetch_uw_alerts_day(date_target: date) -> list[dict]:
-    """
-    Fetch all UW alerts for a specific UTC date by paging backwards using `older_than`.
-    The endpoint is cursor-based and may not support an explicit `limit`, so we rely on cursor progress.
-    """
-    all_items: list[dict] = []
-    seen_ids: set[str] = set()
-
-    cursor = datetime.combine(date_target + timedelta(days=1), dt_time(0, 0, tzinfo=timezone.utc)).isoformat()
-
-    while True:
-        payload = _uw_get_json("/alerts", params={"older_than": cursor})
-        items = payload.get("data") or []
-        if not isinstance(items, list) or not items:
-            break
-
-        def _ts(it: dict) -> str:
-            return str(it.get("timestamp") or it.get("created_at") or "")
-
-        oldest_ts = min((_ts(it) for it in items if _ts(it)), default=None)
-        if not oldest_ts:
-            break
-
-        new_in_batch = 0
-        for it in items:
-            ts = _ts(it)
-            if not ts or ts[:10] != date_target.isoformat():
-                continue
-            sid = str(it.get("id") or "")
-            if sid and sid in seen_ids:
-                continue
-            if sid:
-                seen_ids.add(sid)
-            all_items.append(it)
-            new_in_batch += 1
-
-        logger.info(f"[UW Alerts] Batch {len(items)} items, +{new_in_batch} in-day new, total={len(all_items)}")
-
-        if oldest_ts[:10] < date_target.isoformat():
-            break
-        if oldest_ts == cursor:
-            logger.warning("[UW Alerts] Pagination cursor did not advance; stopping.")
-            break
-
-        cursor = oldest_ts
-        time.sleep(0.6)
-
-    return all_items
-
-
-def fetch_uw_darkpool_day(date_target: date, tickers: list[str]) -> list[dict]:
-    """
-    Fetch UW darkpool trades for the given tickers for a date.
-    Uses per-ticker endpoint to avoid model parsing issues seen in the SDK.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    all_items: list[dict] = []
-
-    def _fetch_one(ticker: str) -> list[dict]:
-        # UW_BASE_URL here includes `/api`, so per-ticker path is `/darkpool/{ticker}` (no extra `/api`).
-        payload = _uw_get_json_fast(f"/darkpool/{ticker}", params={"date": date_target.isoformat()})
-        items = payload.get("data") or []
-        if not isinstance(items, list):
-            return []
-        out: list[dict] = []
-        for it in items:
-            if isinstance(it, dict):
-                it.setdefault("ticker", ticker)
-                out.append(it)
-        return out
-
-    # Keep workers modest to stay under UW rate limits.
-    max_workers = min(5, max(1, len(tickers)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_fetch_one, t): t for t in tickers}
-        for fut in as_completed(futures):
-            t = futures[fut]
-            try:
-                all_items.extend(fut.result())
-            except Exception as e:
-                logger.warning(f"[UW DarkPool] Failed ticker={t} date={date_target}: {e}")
-
-    return all_items
-
-
-# --- Helpers ---
-
-
-async def get_db_url_and_engine():
-    """Try to connect to DB with various credentials, return working URL and engine."""
-
-    # Prioritize fallback credentials if default is known to fail
-    # Note: If DB_URL already has correct credentials from previous fix, it should work.
-    urls = [
-        os.getenv("DB_URL"),
-        "postgresql+asyncpg://postgres:password@localhost:5440/orion_db",  # pragma: allowlist secret
-        "postgresql+asyncpg://postgres:postgres@localhost:5440/orion_db",  # pragma: allowlist secret
-        "postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db",  # pragma: allowlist secret
-    ]
-
-    for url in urls:
-        if not url:
-            continue
-        try:
-            engine = create_async_engine(url)
-            async with engine.begin() as conn:
-                await conn.execute(text("SELECT 1"))
-            logger.info(f"Connected to DB via: {url.split('@')[-1]}")
-            return url, engine
-        except Exception:
-            # logger.warning(f"Failed {url}: {e}")
-            pass
-    return None, None
-
-
-async def backfill_day(session, date_target: date, active_tickers: List[str]):
-    logger.info(f"=== Starting Backfill for {date_target} ===")
-
-    events_to_ingest = []
-
-    # 1. UW Flow
-    try:
-        uw_conn = RobustUWConnector(api_key=system_settings.uw_api_key)
-        raw_rows = await asyncio.to_thread(uw_conn.fetch_day, date_target)
-
-        for raw in raw_rows:
-            try:
-                # Normalization
-                if "premium" not in raw and "total_premium" in raw:
-                    raw["premium"] = raw["total_premium"]
-                if "put_call" not in raw and "type" in raw:
-                    t = raw["type"].upper()
-                    raw["put_call"] = "C" if t == "CALL" else ("P" if t == "PUT" else t[:1])
-
-                ticker = raw.get("ticker") or raw.get("underlying") or raw.get("underlying_symbol") or raw.get("symbol")
-                if not ticker:
-                    # Silver schema requires ticker; skip malformed records rather than failing the whole batch.
-                    continue
-                # Ensure payload ticker is present (do not use setdefault; API can include ticker=None).
-                raw["ticker"] = ticker
-
-                eid = uw_conn._generate_event_id(raw)
-                ts_str = raw.get("timestamp") or raw.get("created_at")
-
-                events_to_ingest.append(
-                    BronzeEvent(
-                        event_id=eid,
-                        source="UW",
-                        source_event_id=str(raw.get("id")) if raw.get("id") else None,
-                        event_type="UW_FLOW",
-                        ticker=ticker,
-                        event_ts_utc=parse_timestamptz(ts_str, strict=True),
-                        received_ts_utc=datetime.now(timezone.utc),
-                        payload=raw,
-                        session="REG",
-                    )
-                )
-            except Exception:
-                pass
-
-        logger.info(f"[UW Flow] Collected {len(raw_rows)} raw events -> {len(events_to_ingest)} bronze candidates")
-    except Exception as e:
-        logger.error(f"[UW Flow] Failed: {e}")
-
-    # 2. UW Alerts
-    try:
-        current_len = len(events_to_ingest)
-        raw_alerts = await asyncio.to_thread(fetch_uw_alerts_day, date_target)
-        for raw in raw_alerts:
-            try:
-                # Alerts typically have an id
-                sid = raw.get("id")
-                eid = (
-                    hashlib.sha256(f"UW_ALERT_{sid}".encode("utf-8")).hexdigest()
-                    if sid
-                    else hashlib.sha256(str(raw).encode("utf-8")).hexdigest()
-                )
-                ts_str = raw.get("timestamp") or raw.get("created_at")
-                ticker = raw.get("ticker") or raw.get("symbol") or raw.get("underlying") or raw.get("underlying_symbol")
-                events_to_ingest.append(
-                    BronzeEvent(
-                        event_id=eid,
-                        source="UW",
-                        source_event_id=str(sid) if sid is not None else None,
-                        event_type="UW_ALERT",
-                        ticker=ticker,
-                        event_ts_utc=parse_timestamptz(ts_str, strict=True),
-                        received_ts_utc=datetime.now(timezone.utc),
-                        payload=raw,
-                        session="REG",
-                    )
-                )
-            except Exception:
-                pass
-
-        logger.info(
-            f"[UW Alerts] Collected {len(raw_alerts)} raw events -> {len(events_to_ingest) - current_len} added"
-        )
-    except Exception as e:
-        logger.error(f"[UW Alerts] Failed: {e}")
-
-    # 3. UW Dark Pool (per ticker)
-    try:
-        current_len = len(events_to_ingest)
-        raw_dp = await asyncio.to_thread(fetch_uw_darkpool_day, date_target, active_tickers)
-
-        for raw in raw_dp:
-            try:
-                ticker = raw.get("ticker")
-                ts_str = raw.get("executed_at") or raw.get("timestamp") or raw.get("date")
-                # Deterministic hash with (ticker, ts, price, size) if no id.
-                sid = raw.get("id") or raw.get("id_")
-                if sid:
-                    eid = hashlib.sha256(f"UW_DARKPOOL_{sid}".encode("utf-8")).hexdigest()
-                else:
-                    eid = hashlib.sha256(
-                        f"UW_DARKPOOL_{ticker}_{raw.get('price')}_{raw.get('size')}_{ts_str}".encode("utf-8")
-                    ).hexdigest()
-
-                events_to_ingest.append(
-                    BronzeEvent(
-                        event_id=eid,
-                        source="UW",
-                        source_event_id=str(sid) if sid is not None else None,
-                        event_type="UW_DARKPOOL",
-                        ticker=ticker,
-                        event_ts_utc=parse_timestamptz(ts_str, strict=True),
-                        received_ts_utc=datetime.now(timezone.utc),
-                        payload=raw,
-                        session="REG",
-                    )
-                )
-            except Exception:
-                pass
-
-        logger.info(f"[UW DarkPool] Collected {len(raw_dp)} raw events -> {len(events_to_ingest) - current_len} added")
-    except Exception as e:
-        logger.error(f"[UW DarkPool] Failed: {e}")
-
-    # 4. Alpaca Bars
-    if active_tickers:
-        try:
-            current_len = len(events_to_ingest)
-            alpaca_conn = AlpacaMarketConnector(
-                api_key=system_settings.alpaca_api_key,
-                secret_key=system_settings.alpaca_secret_key,
-                paper=system_settings.alpaca_paper,
-            )
-
-            start_ts = datetime.combine(date_target, dt_time(14, 30, tzinfo=timezone.utc))  # 09:30 ET
-            end_ts = datetime.combine(date_target, dt_time(21, 0, tzinfo=timezone.utc))  # 16:00 ET
-
-            # Chunk tickers to avoid size limits
-            chunk_size = 50
-            total_bars = 0
-            for i in range(0, len(active_tickers), chunk_size):
-                chunk = active_tickers[i : i + chunk_size]
-                if not chunk:
-                    continue
-                bars = alpaca_conn.fetch_bars(chunk, start_ts, end_ts)
-                events_to_ingest.extend(bars)
-                total_bars += len(bars)
-                time.sleep(0.2)
-
-            logger.info(f"[Alpaca] Collected {total_bars} bars for {len(active_tickers)} tickers")
-        except Exception as e:
-            logger.error(f"[Alpaca] Failed: {e}")
-
-    # 4. Ingest & Persist
-    if events_to_ingest:
-        logger.info(f"Ingesting {len(events_to_ingest)} total events...")
-        # Ingest (Dedup)
-        unique = await ingest_bronze_events(session, events_to_ingest, run_id=RUN_ID, trace_id=f"bf_{date_target}")
-        logger.info(f"Unique Events: {len(unique)}")
-
-        # Guardrails: Silver schemas require non-null ticker for UW flow/darkpool/alerts and Alpaca bars.
-        # Drop malformed rows rather than failing the whole day.
-        unique = [
-            e
-            for e in unique
-            if (e.event_type not in ("UW_FLOW", "UW_DARKPOOL", "UW_ALERT", "ALPACA_BAR_1M"))
-            or getattr(e, "ticker", None)
-        ]
-
-        # Persist
-        await persist_bronze_events(session, unique)
-        await persist_silver_from_bronze(session, unique)
-        await session.commit()
-        logger.info("Persisted successfully.")
-    else:
-        logger.warning("No events to ingest for this day.")
-
-
-async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--days", type=int, default=7, help="Number of days to backfill")
-    parser.add_argument("--start-date", type=str, help="YYYY-MM-DD start date (optional)")
-    args = parser.parse_args()
-
-    # 1. Establish DB Connection
-    working_url, engine = await get_db_url_and_engine()
-    if not engine:
-        logger.error("Failed to connect to DB. Exiting.")
-        return
-
-    # Patch Environment so downstream components (if any) see the working URL
-    os.environ["DB_URL"] = working_url
-
-    # Hack to inject engine into global session factory if needed,
-    # but we can just use this engine for a local sessionmaker
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy.orm import sessionmaker
-
-    LocalSession = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    # 2. Hydrate Active Universe
-    # Logic adapted from UniverseManager.hydrate_from_db + Static Config
-    from orion.config import STATIC_WATCHLIST
-
-    active_tickers = set(STATIC_WATCHLIST)
-    logger.info(f"Static Watchlist: {len(active_tickers)} tickers")
-
-    async with LocalSession() as session:
-        # Check for active alerts (future expiry) in silver_uw_alerts
-        # We use raw SQL to avoid importing SilverUWAlert if not strictly needed,
-        # but importing it is cleaner if available.
-        # Let's try raw SQL on 'silver_uw_alerts' table
-        try:
-            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            q = text("SELECT DISTINCT ticker FROM silver_uw_alerts WHERE expiry >= :today")
-            res = await session.execute(q, {"today": today_str})
-            db_tickers = {r[0] for r in res if r[0]}
-            logger.info(f"Active Contexts from DB: {len(db_tickers)} tickers")
-            active_tickers.update(db_tickers)
-        except Exception as e:
-            logger.warning(f"Failed to fetch active contexts from DB (skipping dynamic universe): {e}")
-
-    tickers_list = list(active_tickers)
-    logger.info(f"Total Target Universe: {len(tickers_list)} tickers")
-
-    # 3. Determine Dates
-    dates = []
-    if args.start_date:
-        start = datetime.strptime(args.start_date, "%Y-%m-%d").date()
-        for i in range(args.days):
-            dates.append(start + timedelta(days=i))
-    else:
-        end = datetime.now(timezone.utc).date()
-        start = end - timedelta(days=args.days)
-        for i in range(args.days + 1):
-            d = start + timedelta(days=i)
-            if d <= end:
-                dates.append(d)
-
-    logger.info(f"Backfilling Dates: {dates}")
-
-    # 4. Execute Backfill
-    async with LocalSession() as session:
-        for d in dates:
-            await backfill_day(session, d, tickers_list)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
 
 
 
@@ -15940,9 +18463,10 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file if present
 
+from pathlib import Path
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16004,6 +18528,25 @@ class SystemSettings(BaseSettings):
     artifacts_dir: str = Field(default="artifacts", validation_alias="ORION_ARTIFACTS_DIR")
     baseline_solver_id: Optional[str] = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
+    orion_use_gateway: bool = Field(default=True, validation_alias="ORION_USE_GATEWAY")
+
+    # Centralized Gateway + Heber integration settings
+    data_gateway_url: str = Field(
+        default="http://localhost:8080",
+        validation_alias=AliasChoices("DATA_GATEWAY_URL", "GATEWAY_URL"),
+    )
+    data_gateway_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("DATA_GATEWAY_API_KEY", "GATEWAY_API_KEY"),
+    )
+    heber_catalog_url: str = Field(
+        default="http://localhost:8085/api/v1",
+        validation_alias="HEBER_CATALOG_URL",
+    )
+    heber_data_root: Path = Field(
+        default=Path("/Volumes/heber/data"),
+        validation_alias="HEBER_DATA_ROOT",
+    )
 
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
@@ -16769,11 +19312,11 @@ Runs as a background service to populate feature tables for ML.
 """
 
 import asyncio
-import os
 import signal
 from datetime import datetime, timezone
 from typing import Any, List
 
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16781,6 +19324,8 @@ load_dotenv()
 from sqlalchemy import text
 
 from orion.analysis.regime import MultiAxisRegimeDetector
+from orion.clients.heber_reader import HeberReader
+from orion.config import system_settings
 from orion.connectors.uw_greek_exposure_connector import UWGreekExposureConnector
 from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
@@ -16800,9 +19345,54 @@ IV_RANK_INTERVAL = 900  # Every 15 minutes
 REGIME_SNAPSHOT_INTERVAL = 300  # Every 5 minutes
 VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
 
+_heber_reader = HeberReader()
+
+
+def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> List[str]:
+    if flow_df.empty:
+        return []
+
+    ticker_col = None
+    for candidate in ("ticker", "symbol", "underlying"):
+        if candidate in flow_df.columns:
+            ticker_col = candidate
+            break
+
+    if ticker_col is None:
+        return []
+
+    ts_col = None
+    for candidate in ("flow_ts_utc", "ts_event", "timestamp", "created_at"):
+        if candidate in flow_df.columns:
+            ts_col = candidate
+            break
+
+    if ts_col is not None:
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)
+        ts = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+        flow_df = flow_df.loc[ts >= cutoff]
+
+    tickers = flow_df[ticker_col].dropna().astype(str).str.upper().str.strip().replace("", pd.NA).dropna()
+    if tickers.empty:
+        return []
+
+    counts = tickers.value_counts()
+    return counts.head(limit).index.tolist()
+
 
 async def get_active_tickers(limit: int = 20) -> List[str]:
-    """Get tickers with recent flow activity."""
+    """Get tickers with recent flow activity (Heber first, DB fallback)."""
+    try:
+        now_utc = datetime.now(timezone.utc)
+        flow_df = _heber_reader.read_flow(
+            asof_time=now_utc,
+            start_time=now_utc - pd.Timedelta(days=2),
+        )
+        tickers = _extract_top_tickers_from_flow_df(flow_df, limit=limit)
+        if tickers:
+            return tickers
+    except Exception:
+        logger.debug("Heber flow ticker discovery failed, falling back to local DB", exc_info=True)
 
     async def query(session: Any) -> List[str]:
         stmt = text(
@@ -16950,7 +19540,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
     await init_db()
 
-    gateway_url = os.environ.get("GATEWAY_URL", "http://localhost:8080")
+    gateway_url = system_settings.data_gateway_url
 
     # Initialize connectors (now using Data Gateway)
     greek_connector = UWGreekExposureConnector(gateway_url=gateway_url)
@@ -17067,918 +19657,6 @@ if __name__ == "__main__":
 
 
 ================================================
-FILE: src/orion/main_ingest.py
-================================================
-import asyncio
-import os
-import signal
-from datetime import datetime, timedelta, timezone
-from typing import Any, List
-
-import exchange_calendars as xcals
-from dotenv import load_dotenv
-
-# Load env before importing local modules that might read env at module level
-load_dotenv()
-
-import traceback
-import uuid
-
-from orion.config import system_settings
-from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
-from orion.connectors.uw_alerts_connector import UWAlertsConnector
-from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.core.health_monitor import CriticalHealthException, HealthMonitor
-from orion.core.universe_manager import UniverseManager
-from orion.processing.deduper import DeduplicationEngine
-from orion.processing.feature_engine import FeatureEngine
-from orion.processing.persistence import (
-    persist_bronze_events,
-    persist_candidates,
-    persist_silver_from_bronze,
-    persist_silver_signals,
-)
-from orion.processing.rule_engine import RuleEngine
-from orion.shared.db_utils import db_write
-from orion.shared.logger import setup_struct_logger
-from orion.shared.utils import ensure_utc
-from orion.storage.db import async_session_factory, init_db
-from orion.storage.lakehouse import LakehouseWriter
-from orion.storage.models import BronzeEvent
-from orion.storage.models_dlq import DeadLetterQueue
-from orion.storage.models_gold import CandidateTrade
-from orion.storage.models_silver import SilverSignal
-
-# Configure logging
-# logging.basicConfig(...) # Removed in favor of struct logger
-RUN_ID = os.getenv("ORION_RUN_ID") or str(uuid.uuid4())
-os.environ["ORION_RUN_ID"] = RUN_ID
-logger = setup_struct_logger("orion.ingest")
-
-# Initialize metrics
-try:
-    from orion.shared.metrics import Metrics, init_metrics
-
-    _metrics: Metrics | None = None
-except ImportError:
-    _metrics = None
-
-load_dotenv()
-
-# Global flag for EOD tracking
-# SHUTDOWN removed in favor of asyncio.Event in main()
-EOD_TRIGGER_LAST_RUN = None
-QUALITY_CHECK_LOOP_COUNT = 0  # Track loop iterations for hourly quality check
-
-
-from orion.connectors.redpanda_producer import RedpandaProducer
-from orion.shared.decorators import db_retry
-
-
-@db_retry
-async def save_events_to_db(events: List[BronzeEvent]) -> None:
-    if not events:
-        return
-
-    # Dual-write: Produce to Redpanda
-    producer = await RedpandaProducer.get_instance()
-
-    # print(f"DEBUG: Skipping Redpanda, proceeding to DB save for {len(events)} events.")
-    for e in events:
-        try:
-            # Construct a clean dict for JSON serialization
-            payload_dict = {
-                "event_id": e.event_id,
-                "source": e.source,
-                "source_event_id": getattr(e, "source_event_id", None),
-                "event_type": e.event_type,
-                "event_ts_utc": (
-                    e.event_ts_utc.isoformat() if hasattr(e.event_ts_utc, "isoformat") else str(e.event_ts_utc)
-                ),
-                "received_ts_utc": (
-                    e.received_ts_utc.isoformat() if hasattr(e.received_ts_utc, "isoformat") else str(e.received_ts_utc)
-                ),
-                "payload": e.payload,
-                "ticker": e.ticker,
-                "trading_date": str(e.trading_date),
-                "session": e.session,
-                "schema_version": e.schema_version,
-                "ingest": getattr(e, "ingest", None),
-            }
-            # Key by ticker for strict ordering if needed, or event_id
-            key = e.ticker if e.ticker else e.event_id
-
-            # Robust Produce with internal retries
-            await producer.produce_event(topic="orion.events.bronze", key=key, payload=payload_dict)
-        except Exception as prod_err:
-            # Fallback to DLQ if Redpanda fails after retries
-            logger.error(f"Redpanda Produce Failed (DLQ Fallback): {prod_err}")
-            try:
-                from orion.shared.dlq_utils import DLQWriter
-
-                await DLQWriter.write_to_dlq(
-                    error=prod_err,
-                    event_type="REDPANDA_PRODUCE_FAILED",
-                    source="RedpandaProducer",
-                    payload=payload_dict,
-                    context=f"Failed to produce event_id={e.event_id} to topic=orion.events.bronze",
-                    run_id=RUN_ID,
-                    event_id=e.event_id,
-                    ticker=e.ticker,
-                    event_ts_utc=e.event_ts_utc,
-                )
-            except Exception as dlq_err:
-                logger.critical(f"FATAL: Redpanda AND DLQ Failed! Data risk for event {e.event_id}: {dlq_err}")
-
-    # DB write with retry
-    async def persist_events(session: Any) -> None:
-        await persist_bronze_events(session, events)
-
-    try:
-        await db_write(persist_events)
-        logger.info(f"Saved {len(events)} events to Bronze DB.")
-    except Exception as e:
-        logger.error(f"DB Write Error: {e}")
-        traceback.print_exc()
-
-
-@db_retry
-async def save_signals_to_db(signals: List[SilverSignal]) -> None:
-    if not signals:
-        return
-
-    async def persist_signals(session: Any) -> None:
-        await persist_silver_signals(session, signals)
-
-    try:
-        await db_write(persist_signals)
-        logger.info(f"Saved {len(signals)} signals (features) to DB.")
-    except Exception as e:
-        logger.error(f"DB Write Error (Silver): {e}")
-
-
-@db_retry
-async def save_silver_data(events: List[BronzeEvent]) -> None:
-    """
-    Persists normalized events to their respective Silver SQL tables.
-    PRD 6.2 requirement.
-    """
-    if not events:
-        return
-
-    async def persist_silver(session: Any) -> None:
-        await persist_silver_from_bronze(session, events)
-
-    try:
-        await db_write(persist_silver)
-        logger.info(
-            "Saved Silver Data",
-            extra={"event_type": "SILVER_WRITE_OK", "bronze_events": len(events)},
-        )
-    except Exception as e:
-        logger.error(f"DB Write Error (Silver Data): {e}")
-
-
-@db_retry
-async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
-    if not candidates:
-        return
-
-    async def persist_cands(session: Any) -> None:
-        await persist_candidates(session, candidates)
-
-    try:
-        await db_write(persist_cands)
-        logger.info(f"Saved {len(candidates)} candidates (GOLD) to DB.")
-    except Exception as e:
-        logger.error(f"DB Write Error (Gold): {e}")
-        return
-
-    try:
-        from orion.shared.candidate_queue import CandidateQueue
-
-        queue = await CandidateQueue.get_instance()
-        for c in candidates:
-            await queue.push(c.candidate_id)
-    except Exception as e:
-        logger.error(f"Failed to push candidates to queue: {e}")
-
-
-# --- Helper functions for main() to reduce cognitive complexity ---
-
-
-async def _initialize_resources() -> (
-    tuple[
-        "RedpandaProducer",
-        "HealthMonitor",
-        "UWFlowConnector",
-        "UWDarkPoolConnector",
-        "UWAlertsConnector",
-        "UniverseManager",
-        "AlpacaMarketConnector",
-        "AlpacaStreamConnector | None",
-        "FeatureEngine",
-        "RuleEngine",
-        "LakehouseWriter",
-        "Metrics | None",
-    ]
-):
-    """Initialize all resources and connectors."""
-    from orion.core.health_monitor import HealthMonitor
-
-    global _metrics
-
-    logger.info("Starting Orion Ingestion Service...")
-
-    # Initialize metrics
-    if _metrics is None and "init_metrics" in globals():
-        try:
-            _metrics = await init_metrics()  # type: ignore[arg-type]
-        except Exception as metric_err:
-            logger.warning(f"Metrics initialization failed: {metric_err}")
-
-    # Reset circuit breaker if configured
-    if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
-        try:
-            from orion.core.circuit_breaker import CircuitBreaker
-
-            await CircuitBreaker().close()
-        except Exception as cb_err:
-            logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
-
-    # Initialize Redpanda and Health Monitor
-    producer = await RedpandaProducer.get_instance()
-    await producer.start()
-    health_monitor = HealthMonitor()
-
-    # Initialize DB
-    await init_db()
-
-    # Initialize Connectors
-    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
-    uw_flow = UWFlowConnector(gateway_url=gateway_url)
-    uw_dark = UWDarkPoolConnector(gateway_url=gateway_url)
-    uw_alerts = UWAlertsConnector(gateway_url=gateway_url)
-
-    universe = UniverseManager()
-    await universe.hydrate_from_db()
-
-    alpaca = AlpacaMarketConnector(
-        api_key=system_settings.alpaca_api_key,
-        secret_key=system_settings.alpaca_secret_key,
-        paper=system_settings.alpaca_paper,
-    )
-
-    # Initialize streaming connector
-    alpaca_stream: AlpacaStreamConnector | None = None
-    use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
-    if use_streaming:
-        try:
-            alpaca_stream = AlpacaStreamConnector(
-                api_key=system_settings.alpaca_api_key,
-                secret_key=system_settings.alpaca_secret_key,
-                feed="sip",
-            )
-        except Exception as e:
-            logger.warning(f"Failed to create streaming connector, using polling: {e}")
-
-    feature_engine = FeatureEngine()
-    rule_engine = RuleEngine()
-    lakehouse = LakehouseWriter()
-
-    # Initialize Calendar
-    xcals.get_calendar("XNYS")
-
-    logger.info("Connectors initialized. Starting polling loop.")
-
-    return (
-        producer,
-        health_monitor,
-        uw_flow,
-        uw_dark,
-        uw_alerts,
-        universe,
-        alpaca,
-        alpaca_stream,
-        feature_engine,
-        rule_engine,
-        lakehouse,
-        _metrics,
-    )
-
-
-async def _start_background_jobs(alpaca_stream: "AlpacaStreamConnector | None", universe: UniverseManager) -> None:
-    """Start background jobs like rollup and window features."""
-    # Start rollup job
-    try:
-        from orion.jobs.rollup_job import RollupJob
-
-        rollup_job = RollupJob(loop_interval_seconds=60.0)
-        _rollup_task = asyncio.create_task(rollup_job.run_forever())  # noqa: F841
-        logger.info("Rollup job started as background task")
-    except Exception as e:
-        logger.warning(f"Failed to start rollup job: {e}")
-
-    # Start window feature job
-    try:
-        from orion.jobs.window_feature_job import WindowFeatureJob
-
-        window_job = WindowFeatureJob(loop_interval_seconds=300.0)
-        _window_task = asyncio.create_task(window_job.run_forever())  # noqa: F841
-        logger.info("Window feature job started as background task")
-    except Exception as e:
-        logger.warning(f"Failed to start window feature job: {e}")
-
-    # Start Alpaca streaming
-    if alpaca_stream:
-        try:
-            active_tickers = universe.get_active_universe()
-            if active_tickers:
-                await alpaca_stream.subscribe(active_tickers)
-            await alpaca_stream.start()
-            logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
-        except Exception as e:
-            logger.warning(f"Failed to start Alpaca streaming, using polling: {e}")
-
-
-def _get_polling_interval(now_et: datetime) -> float:
-    """Return appropriate polling interval based on market hours."""
-    CORE_HOURS_INTERVAL = 300.0  # 5 minutes
-    EXTENDED_HOURS_INTERVAL = 900.0  # 15 minutes
-
-    hour = now_et.hour
-    minute = now_et.minute
-    # Core hours: 9:30 AM - 4:00 PM ET
-    if (hour == 9 and minute >= 30) or (10 <= hour < 16):
-        return CORE_HOURS_INTERVAL
-    return EXTENDED_HOURS_INTERVAL
-
-
-async def _check_overnight_sleep(
-    now_et: datetime,
-    shutdown_event: asyncio.Event,
-    health_monitor: "HealthMonitor",
-) -> bool:
-    """Check if we should sleep during off-hours. Returns True if should continue main loop."""
-    is_weekday = now_et.weekday() < 5
-    is_active_time = 4 <= now_et.hour < 20
-
-    if is_weekday and is_active_time:
-        return False  # No sleep needed
-
-    # Calculate sleep duration until next 04:00 ET
-    next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0) + timedelta(days=1)
-
-    # Handle early morning weekday case
-    if is_weekday and now_et.hour < 4:
-        next_wake = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
-
-    # Adjust for weekend
-    while next_wake.weekday() >= 5:
-        next_wake += timedelta(days=1)
-
-    sleep_seconds = (next_wake - now_et).total_seconds()
-
-    if sleep_seconds > 0:
-        logger.info(
-            f"Outside active hours (04:00-20:00 ET). Sleeping until {next_wake} ET ({sleep_seconds / 3600:.1f} hours).",
-            extra={"event_type": "SLEEP_OVERNIGHT", "next_wake_et": next_wake.isoformat()},
-        )
-
-        chunk = 60.0
-        while sleep_seconds > 0 and not shutdown_event.is_set():
-            wait = min(chunk, sleep_seconds)
-            await asyncio.sleep(wait)
-            sleep_seconds -= wait
-            health_monitor.update_heartbeat()
-
-    return True  # Should continue to next iteration
-
-
-async def _poll_uw_connectors(
-    uw_flow: UWFlowConnector,
-    uw_dark: UWDarkPoolConnector,
-    uw_alerts: UWAlertsConnector,
-    health_monitor: "HealthMonitor",
-    universe: UniverseManager,
-    trace_id: str,
-) -> List[BronzeEvent]:
-    """Poll all UW connectors and return combined events."""
-    from orion.core.health_monitor import CriticalHealthException
-
-    events: List[BronzeEvent] = []
-
-    try:
-        flow_events = await uw_flow.poll(lookback_seconds=300)
-        dark_events = await uw_dark.fetch_events(lookback_seconds=300)
-        alert_events = await uw_alerts.fetch_events(lookback_seconds=300)
-
-        uw_events = flow_events + dark_events + alert_events
-
-        # Check lag
-        newest = max((e.event_ts_utc for e in uw_events if e.event_ts_utc), default=None)
-        if newest:
-            try:
-                await health_monitor.check_lag(newest)
-            except CriticalHealthException as che:
-                logger.critical(f"HEALTH MONITOR TRIGGERED: {che}")
-
-        # Tag metadata and update universe
-        for evt in uw_events:
-            if not getattr(evt, "ingest", None):
-                connector_name = "uw_flow"
-                if evt.event_type == "UW_DARKPOOL":
-                    connector_name = "uw_darkpool"
-                elif evt.event_type == "UW_ALERT":
-                    connector_name = "uw_alerts"
-                evt.ingest = {
-                    "connector": connector_name,
-                    "run_id": RUN_ID,
-                    "trace_id": trace_id,
-                    "attempt": 1,
-                }
-            universe.update_from_event(evt)
-            events.append(evt)
-
-    except Exception as e:
-        logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id, "event_type": "UW_POLL_ERROR"})
-
-    return events
-
-
-async def _poll_alpaca(
-    alpaca: AlpacaMarketConnector,
-    alpaca_stream: "AlpacaStreamConnector | None",
-    universe: UniverseManager,
-    health_monitor: "HealthMonitor",
-    trace_id: str,
-) -> List[BronzeEvent]:
-    """Poll Alpaca for market data events."""
-    from orion.core.health_monitor import CriticalHealthException
-
-    events: List[BronzeEvent] = []
-    active_tickers = universe.get_active_universe()
-
-    if not active_tickers:
-        return events
-
-    try:
-        # Use streaming if available
-        if alpaca_stream and alpaca_stream.is_running:
-            new_tickers = set(active_tickers) - alpaca_stream.subscribed_tickers
-            if new_tickers:
-                await alpaca_stream.subscribe(list(new_tickers))
-            alpaca_events = await alpaca_stream.drain_events()
-            connector_name = "alpaca_stream"
-        else:
-            alpaca_events = alpaca.poll(
-                active_tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
-            )
-            connector_name = "alpaca_market"
-
-        # Check lag
-        if alpaca_events:
-            newest = max((e.event_ts_utc for e in alpaca_events if e.event_ts_utc), default=None)
-            if newest:
-                try:
-                    await health_monitor.check_lag(newest)
-                except CriticalHealthException as che:
-                    logger.critical(f"HEALTH MONITOR TRIGGERED (Alpaca): {che}")
-
-        for evt in alpaca_events:
-            if not getattr(evt, "ingest", None):
-                evt.ingest = {
-                    "connector": connector_name,
-                    "run_id": RUN_ID,
-                    "trace_id": trace_id,
-                    "attempt": 1,
-                }
-        events.extend(alpaca_events)
-
-    except Exception as e:
-        logger.error(f"Error getting Alpaca bars: {e}", extra={"trace_id": trace_id, "event_type": "ALPACA_ERROR"})
-
-    return events
-
-
-async def _process_and_persist_events(
-    all_events: List[BronzeEvent], trace_id: str, metrics: "Metrics | None"
-) -> List[BronzeEvent]:
-    """Deduplicate, enrich, and persist events to storage."""
-    from orion.core.timekeeping import derive_trading_date_and_session
-
-    async with async_session_factory() as session:
-        deduper = DeduplicationEngine(session)
-        processed_events = []
-
-        for evt in all_events:
-            raw_payload = evt.payload
-
-            if not evt.ticker:
-                evt.ticker = raw_payload.get("ticker") or raw_payload.get("underlying") or raw_payload.get("symbol")
-
-            if evt.event_ts_utc and evt.session is None:
-                evt.event_ts_utc = ensure_utc(evt.event_ts_utc)
-                td, sess = derive_trading_date_and_session(evt.event_ts_utc)
-                evt.trading_date = td
-                evt.session = sess
-
-            if evt.event_ts_utc and evt.trading_date is None:
-                td, _ = derive_trading_date_and_session(evt.event_ts_utc)
-                evt.trading_date = td
-
-            if evt.session is None:
-                evt.session = "CLOSED"
-
-            if getattr(evt, "ingest", None):
-                evt.ingest.setdefault("run_id", RUN_ID)
-                evt.ingest.setdefault("trace_id", trace_id)
-                evt.ingest.setdefault("attempt", 1)
-            else:
-                evt.ingest = {"connector": "unknown", "run_id": RUN_ID, "trace_id": trace_id, "attempt": 1}
-
-            if evt.received_ts_utc is None:
-                evt.received_ts_utc = datetime.now(timezone.utc)
-
-            evt.payload = raw_payload
-            processed_events.append(evt)
-
-        unique_events = await deduper.dedupe_batch(processed_events)
-
-        if unique_events:
-            await save_events_to_db(unique_events)
-            await save_silver_data(unique_events)
-
-            if metrics:
-                for evt in unique_events:
-                    metrics.ingest_events_total.labels(source=evt.source).inc()
-
-        return unique_events
-
-
-async def _run_feature_and_rule_pipelines(
-    all_events: List[BronzeEvent],
-    feature_engine: FeatureEngine,
-    rule_engine: RuleEngine,
-    metrics: "Metrics | None",
-) -> None:
-    """Run feature extraction and rule engine for events."""
-    try:
-        feature_engine.process_uw_flow(all_events)
-    except Exception as e:
-        logger.error(f"Feature Engine (UW Flow State) Error: {e}")
-
-    # Process UW Flow events
-    uw_flow_events = [e for e in all_events if e.event_type == "UW_FLOW"]
-    if uw_flow_events:
-        await _process_uw_flow_pipeline(uw_flow_events, feature_engine, rule_engine, metrics)
-
-    # Process Alpaca events
-    alpaca_events = [e for e in all_events if e.event_type == "ALPACA_BAR_1M"]
-    if alpaca_events:
-        await _process_alpaca_pipeline(alpaca_events, feature_engine, rule_engine, metrics)
-
-
-async def _process_uw_flow_pipeline(
-    events: List[BronzeEvent],
-    feature_engine: FeatureEngine,
-    rule_engine: RuleEngine,
-    metrics: "Metrics | None",
-) -> None:
-    """Process UW flow events through feature and rule pipeline."""
-    try:
-        uw_signals = feature_engine.process_uw_flow_events(events)
-        if uw_signals:
-            await save_signals_to_db(uw_signals)
-            await feature_engine.persist_signal_batch(uw_signals, "v1_legacy")
-
-            # ML Scoring Path
-            try:
-                from orion.ml.flow_processor import MLFlowProcessor
-
-                flow_dicts = []
-                for e in events:
-                    if e.payload:
-                        flow_dict = dict(e.payload)
-                        flow_dict["event_id"] = e.event_id
-                        flow_dicts.append(flow_dict)
-
-                if flow_dicts:
-                    ml_processor = MLFlowProcessor(score_threshold=0.5)
-                    ml_candidates = await ml_processor.process_flows_enriched(flow_dicts)
-                    if ml_candidates:
-                        await save_candidates_to_db(ml_candidates)
-                        logger.info(
-                            f"ML Scorer generated {len(ml_candidates)} candidates (enriched)",
-                            extra={"event": "ml_candidates_enriched", "count": len(ml_candidates)},
-                        )
-                        if metrics:
-                            metrics.ingest_candidates_total.inc(len(ml_candidates))
-            except Exception as ml_err:
-                logger.warning(f"ML Scoring path error (non-fatal): {ml_err}")
-
-            # Legacy Rule Engine
-            try:
-                uw_candidates = rule_engine.process_signals(uw_signals)
-                if uw_candidates:
-                    logger.debug(f"Rule engine generated {len(uw_candidates)} candidates")
-            except Exception as e:
-                logger.error(f"Rule Engine Error (UW): {e}")
-    except Exception as e:
-        logger.error(f"Feature Engine Error (UW): {e}")
-
-
-async def _process_alpaca_pipeline(
-    events: List[BronzeEvent],
-    feature_engine: FeatureEngine,
-    rule_engine: RuleEngine,
-    metrics: "Metrics | None",
-) -> None:
-    """Process Alpaca events through feature and rule pipeline."""
-    try:
-        bar_signals = feature_engine.process_alpaca_bars(events)
-        if bar_signals:
-            await save_signals_to_db(bar_signals)
-            await feature_engine.persist_signal_batch(bar_signals, "v1_legacy")
-
-            try:
-                candidates = rule_engine.process_signals(bar_signals)
-                if candidates:
-                    await save_candidates_to_db(candidates)
-                    if metrics:
-                        metrics.ingest_candidates_total.inc(len(candidates))
-            except Exception as e:
-                logger.error(f"Rule Engine Error: {e}")
-    except Exception as e:
-        logger.error(f"Feature Engine Error: {e}")
-
-
-async def _write_lakehouse(all_events: List[BronzeEvent], lakehouse: LakehouseWriter, trace_id: str) -> None:
-    """Write events to lakehouse."""
-    try:
-        lakehouse.write_events(all_events)
-    except Exception as e:
-        logger.error(f"Lakehouse Write Error: {e}", extra={"event_type": "LAKE_WRITE_FAILED"})
-        try:
-            from orion.shared.dlq_utils import DLQWriter
-
-            await DLQWriter.write_to_dlq(
-                error=e,
-                event_type="LAKE_WRITE_FAILED",
-                source="LakehouseWriter",
-                payload={
-                    "count": len(all_events),
-                    "event_ids": [ev.event_id for ev in all_events[:50]],
-                },
-                context="Failed to write lakehouse batch; see logs for details",
-                run_id=RUN_ID,
-                trace_id=trace_id,
-            )
-        except Exception as dlq_err:
-            logger.critical(f"Failed to DLQ lakehouse write failure: {dlq_err}")
-
-
-def _check_eod_trigger() -> None:
-    """Check if EOD agent should be triggered."""
-    global EOD_TRIGGER_LAST_RUN
-
-    now_utc = datetime.now(timezone.utc)
-    if now_utc.hour == 1 and now_utc.minute >= 5:
-        today_str = now_utc.date().isoformat()
-        if EOD_TRIGGER_LAST_RUN != today_str:
-            logger.info("Triggering EOD Review Agent...")
-            try:
-                _eod_task = asyncio.create_task(run_eod_task())  # noqa: F841
-                EOD_TRIGGER_LAST_RUN = today_str
-            except Exception as e:
-                logger.error(f"Failed to trigger EOD Agent: {e}")
-
-
-def _check_data_quality() -> None:
-    """Check if data quality job should run."""
-    global QUALITY_CHECK_LOOP_COUNT
-
-    QUALITY_CHECK_LOOP_COUNT += 1
-    if QUALITY_CHECK_LOOP_COUNT >= 60:
-        QUALITY_CHECK_LOOP_COUNT = 0
-        try:
-            from orion.jobs.data_quality_checker import run_quality_checks
-
-            _quality_task = asyncio.create_task(run_quality_checks())  # noqa: F841
-            logger.info("Triggered hourly data quality check")
-        except Exception as e:
-            logger.error(f"Failed to run data quality check: {e}")
-
-
-async def _handle_loop_crash(e: Exception) -> None:
-    """Handle crash in main loop by writing to DLQ."""
-    try:
-        async with async_session_factory() as session:
-            dlq_entry = DeadLetterQueue(
-                error_message=str(e),
-                stack_trace=traceback.format_exc(),
-                source="INGEST_LOOP",
-                event_type="UNKNOWN",
-                payload={"context": "Main Loop Crash"},
-            )
-            session.add(dlq_entry)
-            await session.commit()
-    except Exception as dlq_err:
-        logger.critical(f"DLQ Write Failed: {dlq_err}")
-
-
-async def _run_health_check(health_monitor: HealthMonitor) -> None:
-    """Run health check and update DB status."""
-    try:
-        await health_monitor.check_health()
-        await health_monitor.update_db_status(True, "Nominal")
-    except CriticalHealthException as che:
-        logger.critical(f"HEALTH MONITOR HEARTBEAT FAILURE: {che}")
-        await health_monitor.update_db_status(False, str(che))
-
-
-async def _wait_for_next_cycle(shutdown_event: asyncio.Event, sleep_time: float) -> bool:
-    """Wait for next cycle or shutdown. Returns True if shutdown requested."""
-    try:
-        await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
-        return True
-    except asyncio.TimeoutError:
-        return False
-
-
-async def _run_ingestion_cycle(
-    uw_flow: UWFlowConnector,
-    uw_dark: UWDarkPoolConnector,
-    uw_alerts: UWAlertsConnector,
-    universe: UniverseManager,
-    alpaca: AlpacaMarketConnector,
-    alpaca_stream: "AlpacaStreamConnector | None",
-    health_monitor: HealthMonitor,
-    feature_engine: FeatureEngine,
-    rule_engine: RuleEngine,
-    lakehouse: LakehouseWriter,
-    metrics: "Metrics | None",
-    trace_id: str,
-) -> int:
-    """Run a single ingestion cycle. Returns count of processed events."""
-    # Poll UW connectors
-    uw_events = await _poll_uw_connectors(uw_flow, uw_dark, uw_alerts, health_monitor, universe, trace_id)
-
-    # Poll Alpaca
-    alpaca_events = await _poll_alpaca(alpaca, alpaca_stream, universe, health_monitor, trace_id)
-
-    # Combine all events
-    all_events = uw_events + alpaca_events
-
-    if not all_events:
-        return 0
-
-    # Process and persist events
-    unique_events = await _process_and_persist_events(all_events, trace_id, metrics)
-
-    if unique_events:
-        # Run feature and rule pipelines
-        await _run_feature_and_rule_pipelines(unique_events, feature_engine, rule_engine, metrics)
-
-        # Write to lakehouse
-        await _write_lakehouse(unique_events, lakehouse, trace_id)
-
-    return len(unique_events)
-
-
-async def main() -> None:
-    """Main ingestion service entry point."""
-    global EOD_TRIGGER_LAST_RUN
-    global QUALITY_CHECK_LOOP_COUNT
-    global _metrics
-
-    # Graceful Shutdown
-    loop = asyncio.get_running_loop()
-    shutdown_event = asyncio.Event()
-
-    def _signal_handler() -> None:
-        logger.info("Shutdown signal received. Stopping ingestion loop...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
-
-    # Initialize all resources
-    (
-        producer,
-        health_monitor,
-        uw_flow,
-        uw_dark,
-        uw_alerts,
-        universe,
-        alpaca,
-        alpaca_stream,
-        feature_engine,
-        rule_engine,
-        lakehouse,
-        _metrics,
-    ) = await _initialize_resources()
-
-    # Start background jobs
-    await _start_background_jobs(alpaca_stream, universe)
-
-    # Timezone for market hours
-    from zoneinfo import ZoneInfo
-
-    eastern = ZoneInfo("America/New_York")
-
-    # Main polling loop
-    while not shutdown_event.is_set():
-        try:
-            start_time = asyncio.get_running_loop().time()
-            trace_id = str(uuid.uuid4())
-
-            # Check overnight sleep
-            now_utc = datetime.now(timezone.utc)
-            now_et = now_utc.astimezone(eastern)
-            loop_interval = _get_polling_interval(now_et)
-
-            should_continue = await _check_overnight_sleep(now_et, shutdown_event, health_monitor)
-            if should_continue:
-                if shutdown_event.is_set():
-                    break
-                continue
-
-            # Update heartbeat
-            health_monitor.update_heartbeat()
-
-            # Run ingestion cycle
-            processed_count = await _run_ingestion_cycle(
-                uw_flow,
-                uw_dark,
-                uw_alerts,
-                universe,
-                alpaca,
-                alpaca_stream,
-                health_monitor,
-                feature_engine,
-                rule_engine,
-                lakehouse,
-                _metrics,
-                trace_id,
-            )
-
-            # Check EOD trigger
-            _check_eod_trigger()
-
-            # Check data quality
-            _check_data_quality()
-
-            # Metrics and heartbeat
-            elapsed = asyncio.get_running_loop().time() - start_time
-            if _metrics:
-                _metrics.ingest_loop_duration_seconds.observe(elapsed)
-
-            logger.info(
-                "Ingestion heartbeat",
-                extra={"trace_id": trace_id, "context": {"processed_events": processed_count}},
-            )
-
-            # Health check
-            await _run_health_check(health_monitor)
-
-            # Sleep until next cycle
-            sleep_time = max(0.1, loop_interval - elapsed)
-            if await _wait_for_next_cycle(shutdown_event, sleep_time):
-                break
-
-        except Exception as e:
-            logger.error(f"Main Ingestion Loop Error: {e}")
-            await _handle_loop_crash(e)
-            await asyncio.sleep(5.0)
-
-    # Cleanup
-    await producer.stop()
-    logger.info("Ingestion Service Stopped.")
-
-
-async def run_eod_task() -> None:
-    """
-    Wrapper to run EOD Agent.
-    """
-    # Run EOD Review
-    from orion.agents.eod_review_agent import EODReviewAgent
-
-    agent = EODReviewAgent()
-    await agent.run_review()
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-
-
-
-================================================
 FILE: src/orion/main_labeler.py
 ================================================
 """
@@ -17990,15 +19668,18 @@ Labels each flow with actual returns at 15m, 30m, 1h, 2h horizons.
 
 import asyncio
 import signal
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+import pandas as pd
 
 load_dotenv()
 
 from sqlalchemy import text
 
+from orion.clients.heber_reader import HeberReader
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -18009,67 +19690,157 @@ logger = setup_struct_logger("orion.labeler")
 BATCH_SIZE = 100
 POLL_INTERVAL_SECONDS = 60
 MIN_AGE_MINUTES = 130  # Only label flows older than 2h10m (so 2h price is available)
+FLOW_LOOKBACK_HOURS = 72
+
+_heber_reader = HeberReader()
+
+
+@dataclass
+class FlowRecord:
+    event_id: str
+    ticker: str
+    flow_ts_utc: datetime
+    expiry: Optional[str]
+    underlying_price: float
+    option_price: Optional[float]
+    premium_usd: Optional[float]
+    aggressor: Optional[str]
+    put_call: Optional[str]
+    is_sweep: Optional[Any]
+    iv: Optional[float]
+
+
+def _coerce_dt(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.to_pydatetime()
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_series_value(row: pd.Series, keys: List[str]) -> Any:
+    for key in keys:
+        if key in row and pd.notna(row[key]):
+            return row[key]
+    return None
+
+
+def _normalize_flow_df(raw_df: pd.DataFrame, cutoff: datetime) -> List[FlowRecord]:
+    if raw_df.empty:
+        return []
+
+    rows: List[FlowRecord] = []
+    for _, row in raw_df.iterrows():
+        event_id = _resolve_series_value(row, ["event_id", "source_event_id", "id"])
+        ticker = _resolve_series_value(row, ["ticker", "symbol", "underlying"])
+        flow_ts = _coerce_dt(_resolve_series_value(row, ["flow_ts_utc", "ts_event", "timestamp", "created_at"]))
+        if not event_id or not ticker or not flow_ts:
+            continue
+        if flow_ts >= cutoff:
+            continue
+
+        underlying_price = _coerce_float(_resolve_series_value(row, ["underlying_price", "spot_px", "spot_price"])) or 0.0
+
+        rows.append(
+            FlowRecord(
+                event_id=str(event_id),
+                ticker=str(ticker),
+                flow_ts_utc=flow_ts,
+                expiry=_resolve_series_value(row, ["expiry"]),
+                underlying_price=underlying_price,
+                option_price=_coerce_float(_resolve_series_value(row, ["option_price", "price"])),
+                premium_usd=_coerce_float(_resolve_series_value(row, ["premium_usd", "premium"])),
+                aggressor=_resolve_series_value(row, ["aggressor", "side"]),
+                put_call=_resolve_series_value(row, ["put_call", "type"]),
+                is_sweep=_resolve_series_value(row, ["is_sweep", "sweep"]),
+                iv=_coerce_float(_resolve_series_value(row, ["iv", "implied_volatility"])),
+            )
+        )
+
+    rows.sort(key=lambda r: r.flow_ts_utc)
+    return rows
+
+
+async def _filter_unlabeled(records: List[FlowRecord], limit: int) -> List[FlowRecord]:
+    if not records:
+        return []
+
+    candidate_ids = [r.event_id for r in records[: max(limit * 4, limit)]]
+
+    async def query(session: Any) -> set[str]:
+        stmt = text("SELECT event_id FROM flow_labels WHERE event_id = ANY(:event_ids)")
+        result = await session.execute(stmt, {"event_ids": candidate_ids})
+        return {row[0] for row in result.fetchall()}
+
+    labeled_ids = await db_query(query)
+    if not isinstance(labeled_ids, set):
+        labeled_ids = set(labeled_ids or [])
+
+    unlabeled = [r for r in records if r.event_id not in labeled_ids]
+    return unlabeled[:limit]
 
 
 async def get_unlabeled_flows(limit: int = BATCH_SIZE) -> List[Any]:
-    """Get flow records that haven't been labeled yet."""
+    """Get flow records that haven't been labeled yet, sourced from Heber."""
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(minutes=MIN_AGE_MINUTES)
+    start_time = cutoff - timedelta(hours=FLOW_LOOKBACK_HOURS)
 
-    async def query(session: Any) -> List[Any]:
-        # Get flows older than MIN_AGE_MINUTES that aren't in flow_labels yet
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=MIN_AGE_MINUTES)
-
-        stmt = text(
-            """
-            SELECT f.*
-            FROM silver_uw_flow f
-            LEFT JOIN flow_labels l ON f.event_id = l.event_id
-            WHERE l.event_id IS NULL
-            AND f.flow_ts_utc < :cutoff
-            ORDER BY f.flow_ts_utc ASC
-            LIMIT :limit
-        """
-        )
-
-        result = await session.execute(stmt, {"cutoff": cutoff, "limit": limit})
-        return result.fetchall()
-
-    return await db_query(query)
+    raw_df = _heber_reader.read_flow(
+        asof_time=now_utc,
+        start_time=start_time,
+    )
+    records = _normalize_flow_df(raw_df, cutoff=cutoff)
+    return await _filter_unlabeled(records, limit=limit)
 
 
 async def get_price_at_time(ticker: str, target_ts: datetime, tolerance_minutes: int = 10) -> Optional[float]:
-    """Get underlying price at a specific time from flow data (bars have zero prices)."""
+    """Get underlying price near target time using Heber bars."""
+    window_start = target_ts - timedelta(minutes=tolerance_minutes)
+    window_end = target_ts + timedelta(minutes=tolerance_minutes)
 
-    async def query(session: Any) -> Optional[float]:
-        window_start = target_ts - timedelta(minutes=tolerance_minutes)
-        window_end = target_ts + timedelta(minutes=tolerance_minutes)
+    bars = _heber_reader.read_bars(
+        symbols=[ticker],
+        asof_time=datetime.now(timezone.utc),
+        start_time=window_start,
+        end_time=window_end,
+    )
+    if bars.empty:
+        return None
 
-        # Use flow records' underlying_price since bar data is broken
-        stmt = text(
-            """
-            SELECT underlying_price
-            FROM silver_uw_flow
-            WHERE ticker = :ticker
-            AND flow_ts_utc >= :window_start
-            AND flow_ts_utc <= :window_end
-            AND underlying_price > 0
-            ORDER BY ABS(EXTRACT(EPOCH FROM flow_ts_utc - :target_ts))
-            LIMIT 1
-        """
-        )
+    ts_col = None
+    for candidate in ("ts_event", "bar_start_ts", "timestamp"):
+        if candidate in bars.columns:
+            ts_col = candidate
+            break
+    if ts_col is None:
+        return None
 
-        result = await session.execute(
-            stmt,
-            {
-                "ticker": ticker,
-                "window_start": window_start,
-                "window_end": window_end,
-                "target_ts": target_ts,
-            },
-        )
-        row = result.fetchone()
-        return float(row[0]) if row else None
+    close_col = "close" if "close" in bars.columns else ("c" if "c" in bars.columns else None)
+    if close_col is None:
+        return None
 
-    return await db_query(query)
+    bars = bars.copy()
+    bars["__ts"] = pd.to_datetime(bars[ts_col], utc=True, errors="coerce")
+    bars = bars[(bars["__ts"] >= pd.Timestamp(window_start)) & (bars["__ts"] <= pd.Timestamp(window_end))]
+    if bars.empty:
+        return None
+
+    bars["__delta"] = (bars["__ts"] - pd.Timestamp(target_ts)).abs()
+    best = bars.sort_values("__delta").iloc[0]
+    return _coerce_float(best[close_col])
 
 
 def calculate_return(entry_price: float, exit_price: float) -> Optional[float]:
@@ -22075,179 +23846,6 @@ if __name__ == "__main__":
 
 
 ================================================
-FILE: src/orion/paper_live_harness.py
-================================================
-import asyncio
-import logging
-import os
-import uuid
-from datetime import datetime, timezone
-from typing import Any, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
-
-# Configure Env BEFORE imports
-os.environ["ORION_ALPACA_API_KEY"] = "mock_key"
-os.environ["ORION_ALPACA_SECRET_KEY"] = "mock_secret"
-os.environ["ORION_ALPACA_PAPER"] = "True"
-os.environ["ORION_RISK_ENABLE_SHORTING"] = "False"
-
-# --- MOCK DB INFRASTRUCTURE ---
-GLOBAL_DB_STATE = []
-
-
-class MockResult:
-    def __init__(self, data: List[Any]) -> None:
-        self._data = data
-
-    def scalars(self) -> "MockResult":
-        return self
-
-    def all(self) -> List[Any]:
-        return self._data
-
-    def scalar_one_or_none(self) -> Optional[Any]:
-        return self._data[0] if self._data else None
-
-
-class MockAsyncSession:
-    def __init__(self) -> None:
-        self.store = []
-        self.committed = []
-
-    async def __aenter__(self) -> "MockAsyncSession":
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        pass
-
-    def add(self, obj: Any) -> None:
-        self.store.append(obj)
-
-    async def commit(self) -> None:
-        global GLOBAL_DB_STATE
-        GLOBAL_DB_STATE.extend(self.store)
-        self.committed.extend(self.store)
-        self.store = []
-
-    async def execute(self, stmt: Any) -> MockResult:
-        str_stmt = str(stmt)
-        global GLOBAL_DB_STATE
-
-        # Naive Query Parsing for Smoke Test
-        if "candidate_trades" in str_stmt and "strategy_decisions" in str_stmt:
-            cands = [o for o in GLOBAL_DB_STATE if isinstance(o, CandidateTrade)]
-            decs = [o for o in GLOBAL_DB_STATE if isinstance(o, StrategyDecision)]
-            dec_cand_ids = {d.candidate_id for d in decs}
-
-            pending = [c for c in cands if c.candidate_id not in dec_cand_ids]
-            return MockResult(pending)
-
-        if "FROM strategy_decisions" in str_stmt:
-            decs = [o for o in GLOBAL_DB_STATE if isinstance(o, StrategyDecision)]
-            return MockResult(decs)
-
-        return MockResult([])
-
-
-def mock_session_factory() -> MockAsyncSession:
-    return MockAsyncSession()
-
-
-# Import Models
-# (We assume these exist)
-from orion.storage.models_gold import CandidateTrade, StrategyDecision
-
-# Setup Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("smoke_test")
-
-
-async def seed_candidate() -> str:
-    test_id = "smoke_test_" + uuid.uuid4().hex[:8]
-
-    candidate = CandidateTrade(
-        candidate_id=test_id,
-        ticker="SPY",
-        timestamp_utc=datetime.now(timezone.utc),
-        rule_id="smoke_test_rule",
-        direction="LONG",
-        confidence=0.99,
-        evidence={"note": "Created by paper_live_harness.py"},
-    )
-
-    GLOBAL_DB_STATE.append(candidate)
-    logger.info(f"Seeded Candidate: {candidate.candidate_id} for SPY")
-    return test_id
-
-
-async def verify_execution(candidate_id: str) -> None:
-    decisions = [o for o in GLOBAL_DB_STATE if isinstance(o, StrategyDecision) and o.candidate_id == candidate_id]
-
-    if decisions:
-        decision = decisions[0]
-        logger.info(f"VERIFICATION PASS: Found Decision {decision.decision} (Exec: {decision.executed_successfully})")
-        if decision.executed_successfully == "TRUE":
-            logger.info("Order Execution marked SUCCESSFUL.")
-        else:
-            logger.warning(f"Order Execution marked as {decision.executed_successfully}")
-    else:
-        logger.error("VERIFICATION FAIL: No StrategyDecision found for candidate.")
-
-
-async def main() -> None:
-    logger.info("Starting Paper Live Harness Smoke Test (MOCKED DB)...")
-
-    # Seed Data
-    candidate_id = await seed_candidate()
-
-    logger.info("Running Strategist Cycle...")
-
-    # Patch Everything
-    with (
-        patch("orion.run_agent.init_db", new=AsyncMock()),
-        patch("orion.run_agent.async_session_factory", side_effect=mock_session_factory),
-        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockTradingConnector,
-        patch("orion.connectors.alpaca_market_connector.AlpacaMarketConnector") as MockMarketConnector,
-        patch("orion.run_agent.StrategistAgent") as MockStrategist,
-    ):
-        # Mock Trading Connector (Limit Order)
-        trade_instance = MockTradingConnector.return_value
-        # Mock Account for Risk Sync (Equity > 0)
-        mock_account = MagicMock()
-        mock_account.equity = 100000.0
-        mock_account.last_equity = 100000.0
-        mock_account.buying_power = 200000.0
-        mock_account.currency = "USD"
-        trade_instance.client.get_account.return_value = mock_account
-        trade_instance.client.get_all_positions.return_value = []
-
-        trade_instance.submit_limit_order.return_value = MagicMock(id="test_order_id", status="accepted")
-
-        # Mock Market Connector (Price Data)
-        market_instance = MockMarketConnector.return_value
-        market_instance.get_latest_price.return_value = 400.0
-
-        # Mock Strategist Agent (Force Execution)
-        agent_instance = MockStrategist.return_value
-        agent_instance.run = AsyncMock(return_value={"decision": "EXECUTE", "rationale": "Smoke Test Forced Execution"})
-
-        # Import run_agent here
-        from orion.run_agent import run_strategist_cycle
-
-        await run_strategist_cycle()
-
-    # Verify
-    await verify_execution(candidate_id)
-
-    logger.info("Smoke Test Complete.")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
-
-================================================
 FILE: src/orion/query_events.py
 ================================================
 import asyncio
@@ -22318,37 +23916,6 @@ async def search_demo() -> None:
 
 if __name__ == "__main__":
     asyncio.run(search_demo())
-
-
-
-================================================
-FILE: src/orion/run_agent.py
-================================================
-import asyncio
-import logging
-
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from orion.storage.db import init_db
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("orion.runner")
-
-
-async def run_strategist_cycle() -> None:
-    # Ensure tables exist (esp new StrategyDecision)
-    await init_db()
-
-    # TODO: StrategistAgent is not defined. This script appears to be legacy/unused.
-    # Commenting out the broken agent reference until this is properly implemented.
-    logger.warning("This script (run_agent.py) is deprecated. Use main_execution.py instead.")
-    return
-
-
-if __name__ == "__main__":
-    asyncio.run(run_strategist_cycle())
 
 
 
@@ -27438,17 +29005,336 @@ Orion External Clients.
 Clients for external services:
 - TradingRAG: Strategy research Q&A from indexed trading books
 - MCP Server: Alpaca trading/market data and Unusual Whales flow
+- Heber: Data lakehouse for market data with anti-leakage semantics
 """
 
+from orion.clients.heber_reader import HeberReader, get_heber_reader
 from orion.clients.mcp_server import MCPServerClient, get_mcp_client
 from orion.clients.trading_rag import TradingRAGClient, get_rag_client
 
 __all__ = [
+    "HeberReader",
     "MCPServerClient",
     "TradingRAGClient",
+    "get_heber_reader",
     "get_mcp_client",
     "get_rag_client",
 ]
+
+
+
+================================================
+FILE: src/orion/clients/heber_reader.py
+================================================
+"""Heber data reader for Orion.
+
+This adapter follows Heber's supported access model:
+- Catalog metadata and health over HTTP (`/health`, `/api/v1/*`)
+- Silver/Gold data reads from Heber parquet layout on disk
+
+It intentionally avoids unsupported endpoints like `/silver/read` and `/gold/read`.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pandas as pd
+import pyarrow.parquet as pq
+import structlog
+
+from orion.config import system_settings
+
+logger = structlog.get_logger(__name__)
+
+_SILVER_BARS_DATASET = "bars"
+_SILVER_FLOW_DATASET = "flow_alerts"
+_SILVER_DARKPOOL_DATASET = "darkpool_trades"
+
+
+class HeberReader:
+    """Read-only client for Heber datasets used by Orion."""
+
+    def __init__(
+        self,
+        catalog_url: str | None = None,
+        data_root: str | Path | None = None,
+        http_client: httpx.Client | None = None,
+    ):
+        self.catalog_url = catalog_url or system_settings.heber_catalog_url
+        self.data_root = Path(data_root) if data_root is not None else Path(system_settings.heber_data_root)
+        self._client = http_client
+
+    @property
+    def client(self) -> httpx.Client:
+        """Lazy HTTP client initialization for Catalog API calls."""
+        if self._client is None:
+            self._client = httpx.Client(
+                base_url=self.catalog_url,
+                timeout=30.0,
+            )
+        return self._client
+
+    def close(self) -> None:
+        """Close the underlying HTTP client."""
+        if self._client:
+            self._client.close()
+            self._client = None
+
+    def __enter__(self) -> HeberReader:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def health_check(self) -> bool:
+        """Check Heber catalog API health via supported endpoint."""
+        errors: list[str] = []
+        for path in ("/health", "../../health"):
+            try:
+                response = self.client.get(path)
+                if response.status_code == 200:
+                    return True
+            except Exception as exc:
+                errors.append(str(exc))
+
+        if errors:
+            logger.warning("heber_health_check_failed", error=" | ".join(errors))
+        return False
+
+    def list_datasets(self, layer: str | None = None) -> list[dict[str, Any]]:
+        """List datasets from Heber catalog (`/datasets`)."""
+        params: dict[str, str] = {}
+        if layer:
+            params["layer"] = layer
+
+        response = self.client.get("/datasets", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data", [])
+        if isinstance(data, list):
+            return data
+        return []
+
+    def read_bars(
+        self,
+        symbols: list[str],
+        asof_time: datetime,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        timeframe: str = "1m",
+    ) -> pd.DataFrame:
+        """Read bars from Heber Silver (`feed=bars`) with as-of filtering.
+
+        `timeframe` is kept for interface compatibility. Orion currently reads
+        from the canonical `bars` dataset in Heber.
+        """
+        _ = timeframe  # Reserved for future dataset routing (e.g., bars_5min).
+
+        instrument_keys = self._to_instrument_keys(symbols)
+        df = self._read_silver_dataset(
+            dataset=_SILVER_BARS_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=end_time,
+            asof_time=asof_time,
+        )
+
+        if df.empty:
+            return df
+
+        if "bar_start_ts" in df.columns and "ts_event" not in df.columns:
+            df = df.copy()
+            df["ts_event"] = pd.to_datetime(df["bar_start_ts"], utc=True, errors="coerce")
+
+        if "instrument_key" in df.columns and "symbol" not in df.columns:
+            df = df.copy()
+            df["symbol"] = df["instrument_key"].astype(str).str.split(":").str[-1]
+
+        return df
+
+    def read_flow(
+        self,
+        symbols: list[str] | None = None,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+        min_premium: float | None = None,
+    ) -> pd.DataFrame:
+        """Read options flow from Heber Silver (`feed=flow_alerts`)."""
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+
+        df = self._read_silver_dataset(
+            dataset=_SILVER_FLOW_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
+        if df.empty or min_premium is None:
+            return df
+
+        premium_column = self._pick_first_existing_column(df, ["premium", "premium_usd"])
+        if premium_column is None:
+            return df
+
+        return df[df[premium_column] >= min_premium]
+
+    def read_darkpool(
+        self,
+        symbols: list[str] | None = None,
+        asof_time: datetime | None = None,
+        start_time: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Read darkpool prints from Heber Silver (`feed=darkpool_trades`)."""
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+
+        return self._read_silver_dataset(
+            dataset=_SILVER_DARKPOOL_DATASET,
+            instrument_keys=instrument_keys,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+
+    def read_gold_features(
+        self,
+        dataset: str,
+        asof_time: datetime,
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Read Gold features/labels from Heber parquet layout."""
+        gold_path = self.data_root / "gold" / f"dataset={dataset}"
+        if not gold_path.exists():
+            return pd.DataFrame()
+
+        instrument_keys = self._to_instrument_keys(symbols) if symbols else None
+        filters: list[tuple[str, str, Any]] = []
+        if instrument_keys:
+            filters.append(("instrument_key", "in", instrument_keys))
+
+        df = self._read_parquet(gold_path, filters=filters)
+        if df.empty:
+            return df
+
+        return self._apply_asof_filter(df, asof_time)
+
+    def _read_silver_dataset(
+        self,
+        dataset: str,
+        instrument_keys: list[str] | None,
+        start_time: datetime | None,
+        end_time: datetime | None,
+        asof_time: datetime | None,
+    ) -> pd.DataFrame:
+        silver_path = self.data_root / "silver" / f"feed={dataset}"
+        if not silver_path.exists():
+            return pd.DataFrame()
+
+        filters: list[tuple[str, str, Any]] = []
+        if instrument_keys:
+            filters.append(("instrument_key", "in", instrument_keys))
+
+        df = self._read_parquet(silver_path, filters=filters)
+        if df.empty:
+            return df
+
+        df = self._apply_time_range_filter(df, start_time=start_time, end_time=end_time)
+
+        if asof_time is not None:
+            df = self._apply_asof_filter(df, asof_time)
+
+        return df
+
+    @staticmethod
+    def _to_instrument_keys(symbols: list[str] | None) -> list[str]:
+        if not symbols:
+            return []
+        return [f"equity:{symbol.upper()}" for symbol in symbols if symbol]
+
+    @staticmethod
+    def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
+        for column in columns:
+            if column in df.columns:
+                return column
+        return None
+
+    @staticmethod
+    def _to_utc_timestamp(value: datetime) -> pd.Timestamp:
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            return ts.tz_localize("UTC")
+        return ts.tz_convert("UTC")
+
+    def _apply_asof_filter(self, df: pd.DataFrame, asof_time: datetime) -> pd.DataFrame:
+        if "ts_available" not in df.columns:
+            return df
+
+        asof_ts = self._to_utc_timestamp(asof_time)
+        available = pd.to_datetime(df["ts_available"], utc=True, errors="coerce")
+        return df[available <= asof_ts]
+
+    def _apply_time_range_filter(
+        self,
+        df: pd.DataFrame,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> pd.DataFrame:
+        if start_time is None and end_time is None:
+            return df
+
+        time_column = self._pick_first_existing_column(
+            df,
+            ["ts_event", "bar_start_ts", "flow_ts_utc", "dark_ts_utc"],
+        )
+        if time_column is None:
+            return df
+
+        series = pd.to_datetime(df[time_column], utc=True, errors="coerce")
+        mask = pd.Series(True, index=df.index)
+
+        if start_time is not None:
+            mask = mask & (series >= self._to_utc_timestamp(start_time))
+        if end_time is not None:
+            mask = mask & (series <= self._to_utc_timestamp(end_time))
+
+        return df[mask]
+
+    def _read_parquet(
+        self,
+        path: Path,
+        columns: list[str] | None = None,
+        filters: list[tuple[str, str, Any]] | None = None,
+    ) -> pd.DataFrame:
+        try:
+            table = pq.read_table(path, columns=columns, filters=filters if filters else None)
+            return table.to_pandas()
+        except Exception as exc:
+            if filters:
+                logger.warning(
+                    "heber_reader_filter_fallback",
+                    path=str(path),
+                    error=str(exc),
+                )
+                table = pq.read_table(path, columns=columns)
+                return table.to_pandas()
+
+            logger.error(
+                "heber_read_failed",
+                path=str(path),
+                error=str(exc),
+            )
+            return pd.DataFrame()
+
+
+@lru_cache
+def get_heber_reader() -> HeberReader:
+    """Get singleton HeberReader instance."""
+    return HeberReader()
 
 
 
@@ -27820,13 +29706,26 @@ def get_rag_client() -> TradingRAGClient:
 ================================================
 FILE: src/orion/connectors/__init__.py
 ================================================
+"""Orion Connectors.
+
+Connectors for external data sources:
+- Alpaca: Market data and trading
+- Gateway: Centralized data via Data-Gateway
+
+DEPRECATED: legacy UW connectors archived under archive/2026-02-05_gateway-heber-migration/.
+Data-Gateway now handles flow/darkpool ingestion -> Heber.
+"""
+
 from .alpaca_market_connector import AlpacaMarketConnector
 from .alpaca_stream_connector import AlpacaStreamConnector
-from .uw_alerts_connector import UWAlertsConnector
-from .uw_darkpool_connector import UWDarkPoolConnector
-from .uw_flow_connector import UWFlowConnector
+from .gateway_stream_client import GatewayStreamClient, create_gateway_stream_client
 
-__all__ = ["UWFlowConnector", "AlpacaMarketConnector", "AlpacaStreamConnector", "UWDarkPoolConnector", "UWAlertsConnector"]
+__all__ = [
+    "AlpacaMarketConnector",
+    "AlpacaStreamConnector",
+    "GatewayStreamClient",
+    "create_gateway_stream_client",
+]
 
 
 
@@ -28564,13 +30463,14 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from orion.config import system_settings
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
 
 # Feature flag for Gateway mode (default: True to use Gateway)
-USE_GATEWAY = os.getenv("ORION_USE_GATEWAY", "true").lower() == "true"
+USE_GATEWAY = system_settings.orion_use_gateway
 
 
 class AlpacaStreamConnector:
@@ -29100,14 +31000,15 @@ leveraging the Gateway's multiplexer to avoid connection limit issues.
 
 import asyncio
 import hashlib
+import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from orion.config import system_settings
 from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
@@ -29164,7 +31065,11 @@ class GatewayStreamClient:
 
     def _generate_event_id(self, symbol: str, payload: Dict[str, Any]) -> str:
         """Generate deterministic event ID for deduplication."""
-        raw_str = f"ALPACA_BAR_1M_{symbol}_{payload.get('t', '')}_{payload.get('v', '')}"
+        raw_str = (
+            f"ALPACA_BAR_1M_{symbol}_"
+            f"{payload.get('t', payload.get('timestamp', ''))}_"
+            f"{payload.get('v', payload.get('volume', ''))}"
+        )
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
 
     async def connect(self) -> bool:
@@ -29178,11 +31083,13 @@ class GatewayStreamClient:
             )
 
             # Send authentication
-            await self._websocket.send_json(
-                {
-                    "action": "auth",
-                    "key": self.api_key,
-                }
+            await self._websocket.send(
+                json.dumps(
+                    {
+                        "action": "auth",
+                        "key": self.api_key,
+                    }
+                )
             )
 
             # Wait for auth response
@@ -29190,8 +31097,6 @@ class GatewayStreamClient:
                 self._websocket.recv(),
                 timeout=10.0,
             )
-
-            import json
 
             auth_result = json.loads(response)
 
@@ -29234,8 +31139,6 @@ class GatewayStreamClient:
             return False
 
         try:
-            import json
-
             await self._websocket.send(
                 json.dumps(
                     {
@@ -29247,21 +31150,10 @@ class GatewayStreamClient:
                 )
             )
 
-            # Wait for ack
-            response = await asyncio.wait_for(
-                self._websocket.recv(),
-                timeout=5.0,
-            )
-            result = json.loads(response)
-
-            if result.get("type") == "subscription_ack":
-                subscribed = result.get("subscribed", [])
-                self._subscribed_symbols.update(subscribed)
-                logger.info(f"Subscribed to {len(subscribed)} symbols via Gateway")
-                return True
-            else:
-                logger.warning(f"Unexpected subscribe response: {result}")
-                return False
+            # We do not wait for ack here because receive loop may already be active.
+            self._subscribed_symbols.update(symbols)
+            logger.info(f"Sent subscribe for {len(symbols)} symbols via Gateway")
+            return True
 
         except Exception as e:
             logger.error(f"Subscribe failed: {e}", exc_info=True)
@@ -29273,8 +31165,6 @@ class GatewayStreamClient:
             return False
 
         try:
-            import json
-
             await self._websocket.send(
                 json.dumps(
                     {
@@ -29286,18 +31176,10 @@ class GatewayStreamClient:
                 )
             )
 
-            response = await asyncio.wait_for(
-                self._websocket.recv(),
-                timeout=5.0,
-            )
-            result = json.loads(response)
-
-            if result.get("type") == "unsubscription_ack":
-                unsubscribed = result.get("unsubscribed", [])
-                self._subscribed_symbols -= set(unsubscribed)
-                logger.info(f"Unsubscribed from {len(unsubscribed)} symbols")
-                return True
-            return False
+            # Do not block on ack while receive loop may be active.
+            self._subscribed_symbols -= set(symbols)
+            logger.info(f"Sent unsubscribe for {len(symbols)} symbols")
+            return True
 
         except Exception as e:
             logger.error(f"Unsubscribe failed: {e}", exc_info=True)
@@ -29309,8 +31191,16 @@ class GatewayStreamClient:
             return
 
         new_symbols = [s for s in symbols if s not in self._subscribed_symbols]
-        if new_symbols:
+        if not new_symbols:
+            return
+
+        # Track desired subscriptions even before connection is live.
+        self._subscribed_symbols.update(new_symbols)
+
+        if self._websocket and self._authenticated:
             await self._send_subscribe(new_symbols)
+        else:
+            logger.debug(f"Queued {len(new_symbols)} subscriptions until Gateway connection is ready")
 
     async def unsubscribe(self, symbols: List[str]) -> None:
         """Unsubscribe from bar updates for the given symbols."""
@@ -29318,13 +31208,63 @@ class GatewayStreamClient:
             return
 
         to_remove = [s for s in symbols if s in self._subscribed_symbols]
-        if to_remove:
+        if not to_remove:
+            return
+
+        # Remove from desired set immediately.
+        self._subscribed_symbols -= set(to_remove)
+
+        if self._websocket and self._authenticated:
             await self._send_unsubscribe(to_remove)
+        else:
+            logger.debug(f"Removed {len(to_remove)} queued subscriptions before Gateway connection")
+
+    @staticmethod
+    def _loads_message(message: Any) -> Dict[str, Any]:
+        """Decode a websocket frame into a JSON object."""
+        if isinstance(message, bytes):
+            return json.loads(message.decode("utf-8"))
+        if isinstance(message, str):
+            return json.loads(message)
+        if isinstance(message, dict):
+            return message
+        raise ValueError(f"Unsupported websocket frame type: {type(message)}")
+
+    @staticmethod
+    def _is_bar_message(data: Dict[str, Any]) -> bool:
+        """Return True when message contains bar data in any supported Gateway shape."""
+        msg_type = str(data.get("type") or data.get("event_type") or "").lower()
+        feed = str(data.get("feed") or "").lower()
+
+        if msg_type in ("alpaca_bar_1m", "bar"):
+            return True
+
+        if msg_type == "data" and feed in ("bars", "stock_bars", "bar", "alpaca_bar_1m"):
+            return True
+
+        return False
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime:
+        """Parse provider timestamp values to UTC datetime."""
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _to_float(value: Any) -> Optional[float]:
+        """Best-effort numeric parsing."""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     async def _receive_loop(self) -> None:
         """Main loop for receiving messages from Gateway."""
-        import json
-
         while self._running:
             try:
                 if not self._websocket:
@@ -29334,7 +31274,7 @@ class GatewayStreamClient:
                     continue
 
                 message = await self._websocket.recv()
-                data = json.loads(message)
+                data = self._loads_message(message)
 
                 msg_type = data.get("type") or data.get("event_type")
 
@@ -29343,8 +31283,12 @@ class GatewayStreamClient:
                     await self._websocket.send(json.dumps({"action": "heartbeat"}))
                     continue
 
+                # Ack/system messages
+                if msg_type in ("auth_result", "subscription_ack", "unsubscription_ack", "heartbeat_ack", "pong"):
+                    continue
+
                 # Handle market data
-                if msg_type in ("ALPACA_BAR_1M", "bar"):
+                if self._is_bar_message(data):
                     await self._process_bar_message(data)
 
             except ConnectionClosed:
@@ -29363,30 +31307,56 @@ class GatewayStreamClient:
     async def _process_bar_message(self, data: Dict[str, Any]) -> None:
         """Process incoming bar data and convert to BronzeEvent."""
         try:
-            # Extract payload (Gateway EventEnvelope format)
-            payload = data.get("payload", data)
-            symbol = data.get("instrument_key", "").replace("equity:", "") or payload.get("S", "")
+            envelope = data.get("envelope", {})
+            if not isinstance(envelope, dict):
+                envelope = {}
+
+            # Gateway wraps market data as type=data with raw bar under "data".
+            payload = data.get("data")
+            if not isinstance(payload, dict):
+                payload = data.get("payload")
+            if not isinstance(payload, dict):
+                payload = envelope.get("payload")
+            if not isinstance(payload, dict):
+                payload = data
+
+            instrument_key = (
+                data.get("instrument_key")
+                or envelope.get("instrument_key")
+                or payload.get("instrument_key")
+                or ""
+            )
+            top_symbol = data.get("symbol") or envelope.get("symbol")
+            payload_symbol = payload.get("symbol") or payload.get("S")
+            symbol = top_symbol or payload_symbol or instrument_key.replace("equity:", "")
 
             if not symbol:
                 return
 
             # Validate data quality
-            close_price = payload.get("c") or payload.get("close")
-            if not close_price or close_price <= 0:
+            close_price = self._to_float(payload.get("c", payload.get("close")))
+            if close_price is None or close_price <= 0:
                 logger.warning(f"Rejecting invalid bar for {symbol}: close={close_price}")
                 return
 
             # Parse timestamp
-            timestamp_str = payload.get("t") or payload.get("timestamp")
-            if timestamp_str:
-                if isinstance(timestamp_str, str):
-                    event_ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                else:
-                    event_ts = timestamp_str
-            else:
-                event_ts = datetime.now(timezone.utc)
+            timestamp_value = (
+                payload.get("t")
+                or payload.get("timestamp")
+                or envelope.get("ts_event")
+                or data.get("ts_event")
+            )
+            event_ts = self._parse_timestamp(timestamp_value)
 
-            event_id = self._generate_event_id(symbol, payload)
+            # Use Gateway envelope idempotency id when available.
+            event_id = data.get("event_id") or envelope.get("event_id") or self._generate_event_id(symbol, payload)
+
+            # Add normalized symbol keys for downstream normalizer compatibility.
+            normalized_payload = dict(payload)
+            normalized_payload.setdefault("symbol", symbol)
+            normalized_payload.setdefault("ticker", symbol)
+            if instrument_key:
+                normalized_payload.setdefault("instrument_key", instrument_key)
 
             event = BronzeEvent(
                 event_id=event_id,
@@ -29394,7 +31364,7 @@ class GatewayStreamClient:
                 event_type="ALPACA_BAR_1M",
                 event_ts_utc=event_ts,
                 received_ts_utc=datetime.now(timezone.utc),
-                payload=payload,
+                payload=normalized_payload,
             )
 
             if self.on_bar_callback:
@@ -29417,6 +31387,10 @@ class GatewayStreamClient:
 
         if not await self.connect():
             raise ConnectionError("Failed to connect to Gateway WebSocket")
+
+        # Flush queued subscriptions that were requested before startup.
+        if self._subscribed_symbols:
+            await self._send_subscribe(list(self._subscribed_symbols))
 
         self._receive_task = asyncio.create_task(self._receive_loop())
         logger.info("Gateway stream client started")
@@ -29463,14 +31437,14 @@ class GatewayStreamClient:
 def create_gateway_stream_client(
     on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
 ) -> GatewayStreamClient:
-    """Create GatewayStreamClient from environment variables."""
-    gateway_url = os.getenv("DATA_GATEWAY_URL")
-    api_key = os.getenv("DATA_GATEWAY_API_KEY")
+    """Create GatewayStreamClient from centralized system settings."""
+    gateway_url = system_settings.data_gateway_url
+    api_key = system_settings.data_gateway_api_key
 
     if not gateway_url:
-        raise ValueError("DATA_GATEWAY_URL environment variable not set")
+        raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
     if not api_key:
-        raise ValueError("DATA_GATEWAY_API_KEY environment variable not set")
+        raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
 
     return GatewayStreamClient(
         gateway_url=gateway_url,
@@ -29687,898 +31661,6 @@ class RedpandaProducer(AsyncSingleton):
 
 
 ================================================
-FILE: src/orion/connectors/uw_alerts_connector.py
-================================================
-import asyncio
-import hashlib
-import logging
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
-
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-from orion.shared.db_utils import db_query, db_write
-from orion.shared.utils import parse_timestamptz
-from orion.storage.models import BronzeEvent
-from orion.storage.watermarks import get_watermark, upsert_watermark
-from orion.unusualwhales.api.alerts import get_alerts
-from orion.unusualwhales.client import UnusualWhalesClient
-
-logger = logging.getLogger(__name__)
-
-
-class UWAlertsConnector:
-    """
-    Connects to Data Gateway to poll for Unusual Whales Flow Alerts.
-    """
-
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        # Use Gateway URL for UW endpoints (auth handled by Gateway)
-        self.client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token=gateway_key)
-        self.last_seen_id: Optional[str] = None
-        self.last_poll_ts: Optional[datetime] = None
-        self._watermark_loaded: bool = False
-        self._watermark_key: str = "uw_alerts"
-
-    def _generate_event_id(self, event_data: dict[str, Any]) -> str:
-        """
-        Generates a deterministic event ID.
-        """
-        source_id = event_data.get("id")
-        if source_id:
-            return hashlib.sha256(f"UW_ALERT_{source_id}".encode("utf-8")).hexdigest()
-
-        raw_str = f"UW_ALERT_{event_data.get('ticker')}_{event_data.get('timestamp')}_{event_data.get('strike')}"
-        return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _resolve_ticker(item: dict[str, Any]) -> str | None:
-        """Extract ticker from various possible payload fields."""
-        return (
-            item.get("ticker")
-            or item.get("symbol")
-            or item.get("underlying")
-            or item.get("underlying_symbol")
-            or item.get("stock")
-        )
-
-    @staticmethod
-    def _normalize_put_call(item: dict[str, Any]) -> None:
-        """Normalize put_call field to C/P format in-place."""
-        raw_value: str | None = None
-        if "put_call" in item:
-            raw_value = item["put_call"]
-        elif "type" in item:
-            raw_value = item["type"]
-
-        if raw_value:
-            upper = raw_value.upper()
-            if upper == "CALL":
-                item["put_call"] = "C"
-            elif upper == "PUT":
-                item["put_call"] = "P"
-            else:
-                item["put_call"] = upper[:1] if upper else None
-
-    async def _check_circuit_breaker(self) -> bool:
-        """Check if circuit breaker is open. Returns True if should skip fetch."""
-        from orion.core.circuit_breaker import CircuitBreaker
-
-        if await CircuitBreaker().is_open():
-            logger.warning(
-                "Circuit breaker OPEN, skipping UW alerts fetch",
-                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_ALERTS"},
-            )
-            return True
-        return False
-
-    def _extract_response_data(self, response: Any) -> list[dict[str, Any]] | None:
-        """Extract list data from response, handling various formats."""
-        if not response:
-            return None
-
-        data = response
-        if isinstance(response, dict) and "data" in response:
-            data = response["data"]
-
-        if not isinstance(data, list):
-            logger.warning(f"Unexpected response format from UW Alerts: {type(data)}")
-            return None
-
-        return data
-
-    def _parse_single_item(self, item: dict[str, Any], fetch_start: datetime, seen_ids: set[str]) -> BronzeEvent | None:
-        """Parse a single raw item into a BronzeEvent, or return None if invalid."""
-        event_id = self._generate_event_id(item)
-        if event_id in seen_ids:
-            return None
-        seen_ids.add(event_id)
-
-        ts_str = item.get("timestamp") or item.get("created_at")
-        if not ts_str:
-            raise ValueError("Missing timestamp/created_at in UW alert payload")
-
-        events_ts = parse_timestamptz(ts_str, strict=True)
-        if events_ts < fetch_start:
-            return None
-
-        self._normalize_put_call(item)
-
-        ticker = self._resolve_ticker(item)
-        if not ticker:
-            logger.warning(
-                f"Skipping UW alert without ticker: id={item.get('id')}",
-                extra={"event_type": "UW_ALERT_MISSING_TICKER"},
-            )
-            return None
-
-        if not item.get("ticker"):
-            item["ticker"] = ticker
-
-        source_event_id = item.get("id")
-        return BronzeEvent(
-            event_id=event_id,
-            source="UW",
-            source_event_id=str(source_event_id) if source_event_id is not None else None,
-            event_type="UW_ALERT",
-            ticker=ticker,
-            event_ts_utc=events_ts,
-            payload=item,
-            session="REG",
-        )
-
-    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
-        """Update watermark based on processed events."""
-        if events:
-            candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
-            if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                self.last_poll_ts = candidate
-                await self._persist_watermark(self.last_poll_ts)
-        elif self.last_poll_ts is None:
-            self.last_poll_ts = now
-            await self._persist_watermark(self.last_poll_ts)
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """Fetches latest flow alerts."""
-        if await self._check_circuit_breaker():
-            return []
-
-        await asyncio.sleep(0.6)  # Rate limit
-
-        try:
-            await self._ensure_watermark_loaded()
-
-            now = datetime.now(timezone.utc)
-            poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
-            fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
-
-            response = await self._fetch_raw_events(newer_than=fetch_start)
-            data = self._extract_response_data(response)
-            if data is None:
-                return []
-
-            events: List[BronzeEvent] = []
-            seen_event_ids: set[str] = set()
-
-            for item in data:
-                try:
-                    event = self._parse_single_item(item, fetch_start, seen_event_ids)
-                    if event:
-                        events.append(event)
-                except Exception as e:
-                    from orion.shared.dlq_utils import DLQWriter
-
-                    await DLQWriter.write_to_dlq(
-                        error=e,
-                        event_type="UW_ALERT_PARSE_ERROR",
-                        source="UWAlertsConnector",
-                        payload=item,
-                        context="Failed to parse raw event in fetch loop",
-                        source_event_id=str(item.get("id")) if item.get("id") is not None else None,
-                        ticker=item.get("ticker"),
-                        event_ts_utc=parse_timestamptz(item.get("timestamp") or item.get("created_at"), strict=False),
-                    )
-
-            await self._update_watermark(events, now)
-            return events
-
-        except Exception as e:
-            logger.error(f"Error fetching UW Alerts: {e}")
-            raise e
-
-    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """
-        PRDv2 7.2: Polling interface shim (fetch_since).
-        UW alerts endpoint supports newer_than; we still keep an overlap window.
-        """
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        self.last_poll_ts = ts
-        return await self.fetch_events(lookback_seconds=0, overlap_seconds=overlap_seconds)
-
-    async def _ensure_watermark_loaded(self) -> None:
-        if self._watermark_loaded:
-            return
-
-        async def fetch_watermark(session: Any) -> None:
-            return await get_watermark(session, key=self._watermark_key)
-
-        wm = await db_query(fetch_watermark)
-        if wm is not None:
-            self.last_poll_ts = wm
-        self._watermark_loaded = True
-
-    async def _persist_watermark(self, ts: datetime) -> None:
-        async def update_watermark(session: Any) -> None:
-            await upsert_watermark(session, key=self._watermark_key, last_seen_ts_utc=ts)
-
-        await db_write(update_watermark)
-
-    async def _fetch_raw_events(self, *, newer_than: datetime) -> object:
-        import asyncio
-
-        return await asyncio.to_thread(
-            get_alerts.sync,
-            client=self.client,
-            newer_than=newer_than.isoformat(),
-        )
-
-
-
-================================================
-FILE: src/orion/connectors/uw_darkpool_connector.py
-================================================
-import asyncio
-import hashlib
-import logging
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
-
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-from orion.shared.db_utils import db_query, db_write
-from orion.shared.utils import parse_timestamptz
-from orion.storage.models import BronzeEvent
-from orion.storage.watermarks import get_watermark, upsert_watermark
-from orion.unusualwhales.api.darkpool import get_trades_by_date
-from orion.unusualwhales.client import UnusualWhalesClient
-
-logger = logging.getLogger(__name__)
-
-
-class UWDarkPoolConnector:
-    """
-    Connects to Data Gateway to poll for Unusual Whales Dark Pool prints.
-    """
-
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        # Use Gateway URL for UW endpoints (auth handled by Gateway)
-        self.client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token=gateway_key)
-        self.last_seen_id: Optional[str] = None
-        self.last_poll_ts: Optional[datetime] = None
-        self._watermark_loaded: bool = False
-        self._watermark_key: str = "uw_darkpool"
-
-    def _generate_event_id(self, event_data: dict[str, Any]) -> str:
-        """
-        Generates a deterministic event ID.
-        Prefer source event ID if available, otherwise hash content.
-        """
-        # Dark pool prints usually have an 'id' field?
-        # Let's check the endpoint response structure if possible, but assuming standard flow.
-        # If 'id' or 'id_' exists, use it.
-        source_id = event_data.get("id") or event_data.get("id_")
-        if source_id:
-            return hashlib.sha256(f"UW_DARKPOOL_{source_id}".encode("utf-8")).hexdigest()
-
-        # Fallback: Hash content
-        # Use stable subset: ticker, price, size, timestamp
-        raw_str = f"UW_DARKPOOL_{event_data.get('ticker')}_{event_data.get('price')}_{event_data.get('size')}_{event_data.get('timestamp')}"
-        return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
-
-    async def _check_circuit_breaker(self) -> bool:
-        """Check if circuit breaker is open. Returns True if should skip fetch."""
-        from orion.core.circuit_breaker import CircuitBreaker
-
-        if await CircuitBreaker().is_open():
-            logger.warning(
-                "Circuit breaker OPEN, skipping UW darkpool fetch",
-                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_DARKPOOL"},
-            )
-            return True
-        return False
-
-    @staticmethod
-    def _resolve_ticker(item: dict[str, Any]) -> str | None:
-        """Extract ticker from various possible payload fields."""
-        return item.get("ticker") or item.get("symbol")
-
-    def _parse_single_item(self, item: dict[str, Any], fetch_start: datetime, seen_ids: set[str]) -> BronzeEvent | None:
-        """Parse a single raw item into a BronzeEvent, or return None if invalid."""
-        event_id = self._generate_event_id(item)
-        if event_id in seen_ids:
-            return None
-        seen_ids.add(event_id)
-
-        ts_str = item.get("executed_at") or item.get("timestamp") or item.get("date")
-        if not ts_str:
-            raise ValueError("Missing executed_at/timestamp/date in UW darkpool payload")
-
-        events_ts = parse_timestamptz(ts_str, strict=True)
-        if events_ts < fetch_start:
-            return None
-
-        ticker = self._resolve_ticker(item)
-        if not ticker:
-            logger.warning(
-                f"Skipping UW darkpool without ticker: id={item.get('id') or item.get('id_')}",
-                extra={"event_type": "UW_DARKPOOL_MISSING_TICKER"},
-            )
-            return None
-
-        source_event_id = item.get("id") or item.get("id_")
-        return BronzeEvent(
-            event_id=event_id,
-            source="UW",
-            source_event_id=str(source_event_id) if source_event_id is not None else None,
-            event_type="UW_DARKPOOL",
-            ticker=ticker,
-            event_ts_utc=events_ts,
-            payload=item,
-            session="REG",
-        )
-
-    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
-        """Update watermark based on processed events."""
-        if events:
-            candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
-            if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                self.last_poll_ts = candidate
-                await self._persist_watermark(self.last_poll_ts)
-        elif self.last_poll_ts is None:
-            self.last_poll_ts = now
-            await self._persist_watermark(self.last_poll_ts)
-
-    async def _fetch_all_raw_for_date_range(self, start_date: datetime, end_date: datetime) -> list[dict[str, Any]]:
-        """Fetch raw events for a date range."""
-        all_raw: list[dict[str, Any]] = []
-        cursor = start_date.date()
-        end = end_date.date()
-        while cursor <= end:
-            all_raw.extend(await self._fetch_raw_for_date(cursor.strftime("%Y-%m-%d")))
-            cursor = cursor + timedelta(days=1)
-        return all_raw
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """Fetches latest dark pool prints."""
-        if await self._check_circuit_breaker():
-            return []
-
-        await asyncio.sleep(0.6)  # Rate limit
-
-        try:
-            await self._ensure_watermark_loaded()
-
-            now = datetime.now(timezone.utc)
-            poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
-            fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
-
-            all_raw = await self._fetch_all_raw_for_date_range(fetch_start, now)
-
-            events: List[BronzeEvent] = []
-            seen_event_ids: set[str] = set()
-
-            for item in all_raw:
-                try:
-                    event = self._parse_single_item(item, fetch_start, seen_event_ids)
-                    if event:
-                        events.append(event)
-                except Exception as e:
-                    from orion.shared.dlq_utils import DLQWriter
-
-                    source_id = item.get("id") or item.get("id_")
-                    await DLQWriter.write_to_dlq(
-                        error=e,
-                        event_type="UW_DARKPOOL_PARSE_ERROR",
-                        source="UWDarkPoolConnector",
-                        payload=item,
-                        context="Failed to parse raw event in fetch loop",
-                        source_event_id=str(source_id) if source_id is not None else None,
-                        ticker=item.get("ticker"),
-                        event_ts_utc=parse_timestamptz(
-                            item.get("executed_at") or item.get("timestamp") or item.get("date"), strict=False
-                        ),
-                    )
-
-            await self._update_watermark(events, now)
-            return events
-
-        except Exception as e:
-            logger.error(f"Error fetching UW Dark Pool prints: {e}")
-            raise
-
-    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """
-        PRDv2 7.2: Polling interface shim (fetch_since).
-        UW darkpool endpoint is date-based; we filter client-side using timestamps.
-        """
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        self.last_poll_ts = ts
-        return await self.fetch_events(lookback_seconds=0, overlap_seconds=overlap_seconds)
-
-    async def _ensure_watermark_loaded(self) -> None:
-        if self._watermark_loaded:
-            return
-
-        async def fetch_watermark(session: Any) -> None:
-            return await get_watermark(session, key=self._watermark_key)
-
-        wm = await db_query(fetch_watermark)
-        if wm is not None:
-            self.last_poll_ts = wm
-        self._watermark_loaded = True
-
-    async def _persist_watermark(self, ts: datetime) -> None:
-        async def update_watermark(session: Any) -> None:
-            await upsert_watermark(session, key=self._watermark_key, last_seen_ts_utc=ts)
-
-        await db_write(update_watermark)
-
-    async def _fetch_raw_for_date(self, date_str: str) -> list[dict[str, Any]]:
-        import asyncio
-
-        try:
-            response = await asyncio.to_thread(
-                get_trades_by_date.sync,
-                client=self.client,
-                date=date_str,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to fetch UW Dark Pool for {date_str}: {e}")
-            return []
-
-        if not response:
-            return []
-
-        # Handle ErrorMessage responses (rate limiting, auth errors, etc.)
-        if hasattr(response, "message") or (
-            hasattr(response, "__class__") and "ErrorMessage" in response.__class__.__name__
-        ):
-            error_msg = getattr(response, "message", None) or str(response)
-            logger.warning(
-                f"UW Dark Pool API error for {date_str}: {error_msg}",
-                extra={"event_type": "UW_DARKPOOL_API_ERROR", "error": error_msg},
-            )
-            return []
-
-        # Handle Object Response (DarkpoolTradeResponse)
-        if hasattr(response, "data") and isinstance(response.data, list):
-            # Convert list of DarkpoolTrade objects to list of dicts
-            return [item.to_dict() for item in response.data]
-
-        data = response
-        if isinstance(response, dict) and "data" in response:
-            data = response["data"]
-
-        if isinstance(data, list):
-            # Ensure items are dicts (if list of dicts)
-            return data
-
-        logger.warning(f"Unexpected response format from UW Dark Pool: {type(data)}")
-        return []
-
-
-
-================================================
-FILE: src/orion/connectors/uw_flow_connector.py
-================================================
-import asyncio
-import hashlib
-import logging
-import os
-import time
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-
-import requests
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
-
-from orion.core.errors import ErrorCode, ProviderError
-from orion.shared.db_utils import db_query, db_write
-from orion.shared.utils import parse_timestamptz
-from orion.storage.models import BronzeEvent
-
-logger = logging.getLogger(__name__)
-
-
-class UWFlowConnector:
-    """
-    Connects to the Data Gateway to poll for Unusual Whales options flow events.
-    Implements watermark polling and deduplication.
-    """
-
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-
-        self.session = requests.Session()
-        self.session.headers.update({"X-Gateway-Key": self.gateway_key, "User-Agent": "Orion/0.1.0"})
-
-        # State tracking
-        self.last_poll_ts: Optional[datetime] = None
-        self._watermark_loaded: bool = False
-        self._watermark_key: str = "uw_flow"
-
-    def _generate_event_id(self, event_data: Dict[str, Any]) -> str:
-        """
-        Generates a deterministic event ID based on the event content.
-        PRD Rule 6.1: if provider gives unique ID use it, else hash(source + type + ticker + ts + payload).
-        UW usually provides an 'id', but we'll encompass that logic here.
-        """
-        # Assuming UW provides an 'id' field in their flow object
-        if "id" in event_data:
-            unique_str = f"UW_FLOW_{event_data['id']}"
-        else:
-            # Fallback for robustness
-            stable_payload = f"{event_data.get('ticker')}_{event_data.get('timestamp')}_{event_data.get('premium')}"
-            unique_str = f"UW_FLOW_HASH_{stable_payload}"
-
-        return hashlib.sha256(unique_str.encode()).hexdigest()
-
-    @staticmethod
-    def _is_retryable_fetch_error(exc: BaseException) -> bool:
-        if isinstance(exc, requests.RequestException):
-            return True
-        if isinstance(exc, ProviderError) and exc.code in {
-            ErrorCode.PROVIDER_RATE_LIMIT,
-            ErrorCode.PROVIDER_TIMEOUT,
-        }:
-            return True
-        return False
-
-    async def _check_circuit_breaker(self) -> bool:
-        """Check if circuit breaker is open. Returns True if should skip fetch."""
-        from orion.core.circuit_breaker import CircuitBreaker
-
-        if await CircuitBreaker().is_open():
-            logger.warning(
-                "Circuit breaker OPEN, skipping UW flow poll",
-                extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_FLOW"},
-            )
-            return True
-        return False
-
-    @staticmethod
-    def _normalize_put_call(raw: Dict[str, Any]) -> None:
-        """Normalize put_call field to C/P format in-place."""
-        if "put_call" not in raw and "type" in raw:
-            t = raw["type"].upper()
-            if t == "CALL":
-                raw["put_call"] = "C"
-            elif t == "PUT":
-                raw["put_call"] = "P"
-            else:
-                raw["put_call"] = t[:1] if t else None
-
-    @staticmethod
-    def _normalize_premium(raw: Dict[str, Any]) -> None:
-        """Normalize premium field from total_premium if needed."""
-        if "premium" not in raw and "total_premium" in raw:
-            raw["premium"] = raw["total_premium"]
-
-    def _parse_single_event(
-        self, raw: Dict[str, Any], fetch_start: datetime, now: datetime, seen_ids: set[str]
-    ) -> BronzeEvent | None:
-        """Parse a single raw event into a BronzeEvent, or return None if invalid."""
-        ts_str = raw.get("timestamp") or raw.get("created_at")
-        event_ts = parse_timestamptz(ts_str, strict=True)
-
-        if event_ts < fetch_start:
-            return None
-
-        event_id = self._generate_event_id(raw)
-        if event_id in seen_ids:
-            return None
-        seen_ids.add(event_id)
-
-        source_event_id = str(raw.get("id")) if raw.get("id") is not None else None
-
-        self._normalize_premium(raw)
-        self._normalize_put_call(raw)
-
-        return BronzeEvent(
-            event_id=event_id,
-            source="UW",
-            source_event_id=source_event_id,
-            event_type="UW_FLOW",
-            event_ts_utc=event_ts,
-            received_ts_utc=now,
-            payload=raw,
-            session="REG",
-        )
-
-    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
-        """Update watermark based on processed events."""
-        if events:
-            candidate = max(e.event_ts_utc for e in events)
-            if self.last_poll_ts is None or candidate > self.last_poll_ts:
-                self.last_poll_ts = candidate
-                await self._persist_watermark(self.last_poll_ts)
-        elif self.last_poll_ts is None:
-            self.last_poll_ts = now
-            await self._persist_watermark(self.last_poll_ts)
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception(_is_retryable_fetch_error),
-    )
-    def fetch_flow_for_date(self, trading_date: date) -> List[Dict[str, Any]]:
-        """
-        Fetches flow events for a given trading date (UTC).
-        """
-        # Enforce Rate Limit (120/min = 1/0.5s). Sleep 0.6s to be safe.
-        time.sleep(0.6)
-
-        try:
-            # Use Data Gateway flow endpoint
-            url = f"{self.gateway_url}/api/v1/uw/flow/all"
-            from orion.config import system_settings
-
-            params = {"date": trading_date.strftime("%Y-%m-%d"), "limit": system_settings.uw_fetch_limit}
-
-            response = self.session.get(url, params=params, timeout=30)
-            response.raise_for_status()
-
-            # Log API usage headers for quota monitoring
-            daily_count = response.headers.get("x-uw-daily-req-count")
-            daily_limit = response.headers.get("x-uw-token-req-limit")
-            if daily_count and daily_limit:
-                usage_pct = round(100 * int(daily_count) / int(daily_limit), 1)
-                logger.info(
-                    f"UW API usage: {daily_count}/{daily_limit} ({usage_pct}%)",
-                    extra={
-                        "event_type": "UW_API_USAGE",
-                        "daily_count": int(daily_count),
-                        "daily_limit": int(daily_limit),
-                        "usage_pct": usage_pct,
-                    },
-                )
-
-            data = response.json()
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                code = ErrorCode.PROVIDER_AUTH_FAILED
-            elif e.response.status_code == 429:
-                code = ErrorCode.PROVIDER_RATE_LIMIT
-            else:
-                code = ErrorCode.PROVIDER_TIMEOUT  # approximation for generic HTTP error
-
-            logger.error(
-                "UW API Request Failed",
-                extra={
-                    "event_type": "UW_FLOW_FETCH_ERROR",
-                    "error_code": code.value,
-                    "status_code": e.response.status_code,
-                },
-            )
-            raise ProviderError(f"HTTP Error: {e}", code=code) from e
-        except Exception as e:
-            logger.error(
-                "UW API Connection Failed",
-                extra={
-                    "event_type": "UW_FLOW_FETCH_ERROR",
-                    "error_code": ErrorCode.PROVIDER_TIMEOUT.value,
-                    "error_details": str(e),
-                },
-            )
-            raise ProviderError(f"Connection Error: {e}", code=ErrorCode.PROVIDER_TIMEOUT) from e
-
-        # Strict Check: If dict, MUST have 'data' key which is a list.
-        events = None
-        if isinstance(data, list):
-            events = data
-        elif isinstance(data, dict):
-            if "data" in data:
-                events = data["data"]
-            else:
-                events = None
-
-        if not isinstance(events, list):
-            logger.error(
-                "UW Parse Error",
-                extra={
-                    "event_type": "UW_FLOW_PARSE_ERROR",
-                    "error_code": ErrorCode.PROVIDER_SCHEMA_DRIFT.value,
-                    "payload_snippet": str(data)[:200],
-                },
-            )
-            raise ProviderError(
-                f"Invalid UW Flow API response format: {type(data)}", code=ErrorCode.PROVIDER_SCHEMA_DRIFT
-            )
-
-        from orion.config import system_settings
-
-        if len(events) >= system_settings.uw_fetch_limit:
-            logger.warning(
-                "UW flow fetch hit configured limit; results may be truncated",
-                extra={
-                    "event_type": "UW_FLOW_FETCH_TRUNCATED",
-                    "date": trading_date.strftime("%Y-%m-%d"),
-                    "limit": system_settings.uw_fetch_limit,
-                    "count": len(events),
-                },
-            )
-
-        return events
-
-    async def _ensure_watermark_loaded(self) -> None:
-        if self._watermark_loaded:
-            return
-        from orion.storage.watermarks import get_watermark
-
-        async def fetch_watermark(session: Any) -> None:
-            return await get_watermark(session, key=self._watermark_key)
-
-        wm = await db_query(fetch_watermark)
-        if wm is not None:
-            self.last_poll_ts = wm
-        self._watermark_loaded = True
-
-    async def _persist_watermark(self, ts: datetime) -> None:
-        from orion.storage.watermarks import upsert_watermark
-
-        async def update_watermark(session: Any) -> None:
-            await upsert_watermark(session, key=self._watermark_key, last_seen_ts_utc=ts)
-
-        await db_write(update_watermark)
-
-    def _fetch_raw_events_sync(self, start_ts: datetime, end_ts: datetime) -> List[Dict[str, Any]]:
-        """
-        Fetch raw events for a [start_ts, end_ts] window.
-        The UW flow endpoint used here is date-based; we fetch by UTC dates and filter client-side.
-        """
-        if start_ts.tzinfo is None:
-            start_ts = start_ts.replace(tzinfo=timezone.utc)
-        if end_ts.tzinfo is None:
-            end_ts = end_ts.replace(tzinfo=timezone.utc)
-
-        start_date = start_ts.astimezone(timezone.utc).date()
-        end_date = end_ts.astimezone(timezone.utc).date()
-
-        all_raw: List[Dict[str, Any]] = []
-        cursor = start_date
-        while cursor <= end_date:
-            all_raw.extend(self.fetch_flow_for_date(cursor))
-            cursor = cursor + timedelta(days=1)
-
-        return all_raw
-
-    async def fetch_raw_events(self, start_ts: datetime, end_ts: datetime) -> List[Dict[str, Any]]:
-        return await asyncio.to_thread(self._fetch_raw_events_sync, start_ts, end_ts)
-
-    async def send_heartbeat_async(self) -> None:
-        """
-        Upserts heartbeat to SystemStatus table.
-        PRD 8.1 / 15.4: Ingestion heartbeat to DB.
-        """
-        from sqlalchemy import select
-
-        from orion.storage.db import async_session_factory
-        from orion.storage.models import SystemStatus
-
-        try:
-            # Also log standard event for log ingestion tools
-            logger.info(
-                "HEARTBEAT",
-                extra={
-                    "event_type": "HEARTBEAT",
-                    "component": "UW_FLOW",
-                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-
-            async with async_session_factory() as session:
-                stmt = select(SystemStatus).where(SystemStatus.key == "global_health")
-                result = await session.execute(stmt)
-                record = result.scalars().first()
-
-                if not record:
-                    record = SystemStatus(key="global_health", status="HEALTHY")
-                    session.add(record)
-
-                record.status = "HEALTHY"
-                record.last_updated_utc = datetime.now(timezone.utc)
-                record.details = "UW Flow Connector Active"
-
-                await session.commit()
-
-        except Exception as e:
-            logger.error(
-                f"Failed to update DB Heartbeat: {e}", extra={"event_type": "HEARTBEAT_DB_ERROR", "error": str(e)}
-            )
-
-    async def poll(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """
-        Polls for new events (Async).
-        PRD 7.1: request events after (last_seen_ts - overlap_margin).
-        """
-        if await self._check_circuit_breaker():
-            return []
-
-        await self._ensure_watermark_loaded()
-        await self.send_heartbeat_async()
-
-        now = datetime.now(timezone.utc)
-        poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
-        fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
-
-        try:
-            t0 = time.perf_counter()
-            raw_events = await self.fetch_raw_events(fetch_start, now)
-            duration_ms = (time.perf_counter() - t0) * 1000
-
-            logger.info(
-                f"Fetched {len(raw_events)} events in {duration_ms:.2f}ms",
-                extra={"event_type": "FETCH_SUCCESS", "duration_ms": duration_ms, "count": len(raw_events)},
-            )
-
-        except ProviderError as e:
-            logger.warning(
-                f"Provider error during UW flow fetch: {e}",
-                extra={"event_type": "UW_FLOW_PROVIDER_ERROR", "error": str(e)},
-            )
-            raise
-
-        bronze_events = []
-        seen_event_ids: set[str] = set()
-
-        for raw in raw_events:
-            try:
-                event = self._parse_single_event(raw, fetch_start, now, seen_event_ids)
-                if event:
-                    bronze_events.append(event)
-            except Exception as e:
-                from orion.shared.dlq_utils import DLQWriter
-
-                await DLQWriter.write_to_dlq(
-                    error=e,
-                    event_type="UW_FLOW_PARSE_ERROR",
-                    source="UWFlowConnector",
-                    payload=raw,
-                    context="Failed to parse raw event in poll loop",
-                    source_event_id=str(raw.get("id")) if raw.get("id") is not None else None,
-                    ticker=raw.get("ticker"),
-                    event_ts_utc=(
-                        parse_timestamptz(raw.get("timestamp"), strict=False) if raw.get("timestamp") else None
-                    ),
-                )
-
-        await self._update_watermark(bronze_events, now)
-        return bronze_events
-
-    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
-        """
-        PRDv2 7.2: Polling interface shim (fetch_since) so downstream code can stay stable
-        when swapping transport (polling vs websocket).
-        """
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        self.last_poll_ts = ts
-        return await self.poll(lookback_seconds=0, overlap_seconds=overlap_seconds)
-
-
-
-================================================
 FILE: src/orion/connectors/uw_greek_exposure_connector.py
 ================================================
 """
@@ -30589,7 +31671,6 @@ Fetches GEX (Gamma), VEX (Vanna), CEX (Charm) exposure data via Data Gateway.
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -30597,6 +31678,7 @@ import requests
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
@@ -30606,9 +31688,9 @@ class UWGreekExposureConnector:
     """Fetches Greek exposure (GEX, Vanna, Charm) via Data Gateway."""
 
     def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        self.headers = {"X-Gateway-Key": self.gateway_key}
+        self.gateway_url = gateway_url or system_settings.data_gateway_url
+        self.gateway_key = gateway_key or system_settings.data_gateway_api_key
+        self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_greek_exposure(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -30728,7 +31810,6 @@ Fetches IV rank and percentile via Data Gateway.
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -30736,6 +31817,7 @@ import requests
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
@@ -30745,9 +31827,9 @@ class UWIVRankConnector:
     """Fetches IV rank/percentile via Data Gateway."""
 
     def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        self.headers = {"X-Gateway-Key": self.gateway_key}
+        self.gateway_url = gateway_url or system_settings.data_gateway_url
+        self.gateway_key = gateway_key or system_settings.data_gateway_api_key
+        self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_iv_rank(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -30832,7 +31914,6 @@ Fetches market-wide options flow sentiment (net call/put premium) via Data Gatew
 
 import asyncio
 import logging
-import os
 from datetime import date, datetime
 from typing import Any, Dict, Optional
 
@@ -30840,6 +31921,7 @@ import requests
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
@@ -30849,9 +31931,9 @@ class UWMarketTideConnector:
     """Fetches market tide (net premium intraday) via Data Gateway."""
 
     def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        self.headers = {"X-Gateway-Key": self.gateway_key}
+        self.gateway_url = gateway_url or system_settings.data_gateway_url
+        self.gateway_key = gateway_key or system_settings.data_gateway_api_key
+        self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_market_tide(self, market_date: Optional[date] = None) -> Optional[Dict[str, Any]]:
@@ -30934,7 +32016,6 @@ Fetches max pain strike levels by expiry via Data Gateway.
 
 import asyncio
 import logging
-import os
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -30942,6 +32023,7 @@ import requests
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_query, db_write
 
 logger = logging.getLogger(__name__)
@@ -30951,9 +32033,9 @@ class UWMaxPainConnector:
     """Fetches max pain strikes via Data Gateway."""
 
     def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        self.headers = {"X-Gateway-Key": self.gateway_key}
+        self.gateway_url = gateway_url or system_settings.data_gateway_url
+        self.gateway_key = gateway_key or system_settings.data_gateway_api_key
+        self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_max_pain(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -31054,276 +32136,6 @@ class UWMaxPainConnector:
             await session.execute(stmt, record)
 
         await db_write(write)
-
-
-
-================================================
-FILE: src/orion/connectors/uw_socket_connector.py
-================================================
-import asyncio
-import hashlib
-import json
-import logging
-import os
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
-
-import websockets
-
-from orion.core.errors import ErrorCode, ProviderError
-from orion.storage.models import BronzeEvent
-
-logger = logging.getLogger(__name__)
-
-
-class UWWebsocketConnector:
-    """
-    Connects to the Unusual Whales Websocket API (V2).
-    Provides real-time streaming of options flow events.
-
-    NOTE: This is currently a latent capability. The system uses Polling (V1) by default.
-    """
-
-    WS_URL = os.getenv("UW_WS_URL", "wss://api.unusualwhales.com/socket")
-
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("UW_API_KEY")
-        if not self.api_key:
-            raise ProviderError("UW_API_KEY is required.", code=ErrorCode.PROVIDER_AUTH_FAILED)
-
-    def _generate_event_id(self, event_data: Dict[str, Any]) -> str:
-        """
-        Generates deterministic event ID.
-        Matches logic in Poll Connector for consistency.
-        """
-        if "id" in event_data:
-            unique_str = f"UW_FLOW_{event_data['id']}"
-        else:
-            stable_payload = f"{event_data.get('ticker')}_{event_data.get('timestamp')}_{event_data.get('premium')}"
-            unique_str = f"UW_FLOW_HASH_{stable_payload}"
-
-        return hashlib.sha256(unique_str.encode()).hexdigest()
-
-    async def _authenticate(self, ws: Any) -> None:
-        """
-        Sends auth message if required by protocol.
-        """
-        # Assuming standard Bearer token auth via message or query param.
-        # If URL doesn't support query param auth, we send a message.
-        # For now, we'll try sending an auth frame.
-        auth_msg = {"type": "auth", "token": self.api_key}
-        await ws.send(json.dumps(auth_msg))
-        logger.info("Sent Websocket Auth")
-
-    async def stream(self, channels: List[str] | None = None) -> AsyncGenerator[BronzeEvent, None]:
-        """
-        Yields BronzeEvents from the websocket stream.
-        Handles reconnection automatically via explicit loop.
-        """
-        channels = channels or ["flow"]
-        backoff = 2
-
-        logger.info(f"Connecting to UW Websocket: {self.WS_URL}")
-
-        while True:
-            try:
-                async with websockets.connect(self.WS_URL) as websocket:
-                    # Reset backoff on successful connection
-                    backoff = 2
-
-                    await self._authenticate(websocket)
-
-                    # Subscribe
-                    sub_msg = {"type": "subscribe", "channels": channels}
-                    await websocket.send(json.dumps(sub_msg))
-                    logger.info(f"Subscribed to {channels}")
-
-                    while True:
-                        msg = await websocket.recv()
-                        data = json.loads(msg)
-
-                        # Handle Heartbeats/System messages
-                        if data.get("type") in ["ping", "heartbeat"]:
-                            continue
-
-                        if data.get("type") == "error":
-                            logger.error(f"Websocket Error: {data}")
-                            continue
-
-                        # Process Flow Event
-                        event_payload = data.get("data", data)
-
-                        # Basic validation
-                        if not isinstance(event_payload, dict):
-                            continue
-
-                        now = datetime.now(timezone.utc)
-
-                        # Attempt timestamp parse
-                        ts_str = event_payload.get("timestamp")
-                        try:
-                            # Parse ISO format or just use now if missing/invalid
-                            event_ts = datetime.fromisoformat(str(ts_str)) if ts_str else now
-                        except ValueError:
-                            event_ts = now
-
-                        if event_ts.tzinfo is None:
-                            event_ts = event_ts.replace(tzinfo=timezone.utc)
-
-                        event_id = self._generate_event_id(event_payload)
-
-                        bronze = BronzeEvent(
-                            event_id=event_id,
-                            source="UW",
-                            event_type="UW_FLOW",
-                            event_ts_utc=event_ts,
-                            received_ts_utc=now,
-                            payload=event_payload,
-                        )
-
-                        yield bronze
-
-            except (websockets.ConnectionClosed, OSError, asyncio.TimeoutError) as e:
-                logger.warning(f"Websocket connection lost: {e}. Retrying in {backoff}s...")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60)
-            except Exception as e:
-                logger.error(f"Unexpected Websocket Error: {e}. Retrying in {backoff}s...")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60)
-
-
-
-================================================
-FILE: src/orion/connectors/uw_ticker_info_connector.py
-================================================
-"""
-UW Ticker Info Connector.
-
-Fetches ticker information (sector, industry, market cap) from Data Gateway.
-Caches results in silver_ticker_info to avoid repeated API calls.
-"""
-
-import asyncio
-import logging
-import os
-from typing import Any, Dict, Optional
-
-import requests
-from sqlalchemy import text
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-from orion.shared.db_utils import db_query, db_write
-
-logger = logging.getLogger(__name__)
-
-
-class UWTickerInfoConnector:
-    """Fetches and caches ticker info via Data Gateway."""
-
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
-        self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
-        self.headers = {"X-Gateway-Key": self.gateway_key}
-        self._cache: Dict[str, Dict[str, Any]] = {}
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _fetch_ticker_info(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch ticker info via Data Gateway."""
-        url = f"{self.gateway_url}/api/v1/uw/stock/{ticker}/info"
-        try:
-            resp = requests.get(url, headers=self.headers, timeout=30)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.warning(f"Failed to fetch ticker info for {ticker}: {e}")
-            return None
-
-    async def get_ticker_info(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Get ticker info from cache, database, or API (in that order)."""
-        if ticker in self._cache:
-            return self._cache[ticker]
-
-        db_info = await self._get_from_db(ticker)
-        if db_info:
-            self._cache[ticker] = db_info
-            return db_info
-
-        api_info = await self._fetch_and_store(ticker)
-        if api_info:
-            self._cache[ticker] = api_info
-            return api_info
-
-        return None
-
-    async def _get_from_db(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Check if ticker info exists in database."""
-
-        async def query(session: Any) -> Optional[Dict[str, Any]]:
-            stmt = text(
-                """
-                SELECT ticker, company_name, sector, industry, market_cap, exchange
-                FROM silver_ticker_info WHERE ticker = :ticker
-            """
-            )
-            result = await session.execute(stmt, {"ticker": ticker})
-            row = result.fetchone()
-            if row:
-                return {
-                    "ticker": row[0],
-                    "company_name": row[1],
-                    "sector": row[2],
-                    "industry": row[3],
-                    "market_cap": row[4],
-                    "exchange": row[5],
-                }
-            return None
-
-        return await db_query(query)
-
-    async def _fetch_and_store(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch from API and store in database."""
-        data = await asyncio.to_thread(self._fetch_ticker_info, ticker)
-        if not data or "data" not in data:
-            return None
-
-        info = data["data"]
-        record = {
-            "ticker": ticker,
-            "company_name": info.get("full_name"),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "market_cap": int(info.get("marketcap", 0)) if info.get("marketcap") else None,
-            "exchange": info.get("exchange"),
-        }
-
-        await self._persist(record)
-        return record
-
-    async def _persist(self, record: Dict[str, Any]) -> None:
-        """Persist ticker info to database."""
-
-        async def write(session: Any) -> None:
-            stmt = text(
-                """
-                INSERT INTO silver_ticker_info (
-                    ticker, company_name, sector, industry, market_cap, exchange, last_updated
-                ) VALUES (
-                    :ticker, :company_name, :sector, :industry, :market_cap, :exchange, NOW()
-                )
-                ON CONFLICT (ticker) DO UPDATE SET
-                    company_name = EXCLUDED.company_name,
-                    sector = EXCLUDED.sector,
-                    industry = EXCLUDED.industry,
-                    market_cap = EXCLUDED.market_cap,
-                    exchange = EXCLUDED.exchange,
-                    last_updated = NOW()
-            """
-            )
-            await session.execute(stmt, record)
-
-        await db_write(write)
-        logger.info(f"Stored ticker info for {record['ticker']}: sector={record.get('sector')}")
 
 
 
@@ -37451,390 +38263,6 @@ class RiskManager:
 
 
 ================================================
-FILE: src/orion/execution/service.py
-================================================
-import asyncio
-import signal
-from typing import Any, List, Sequence
-
-from sqlalchemy import select
-
-from orion.execution.execution_engine import ExecutionEngine
-from orion.processing.signal_engine import SignalEngine
-from orion.shared.db_utils import db_query, db_write
-from orion.shared.decorators import db_retry
-from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
-from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from orion.storage.models_signals import SignalLive
-from orion.storage.models_trade_journal import TradeJournalEntry
-
-logger = setup_struct_logger("orion.execution")
-
-# Initialize metrics
-try:
-    from orion.shared.metrics import init_metrics
-
-    _metrics = init_metrics()
-except ImportError:
-    _metrics = None
-
-
-class ExecutionService:
-    def __init__(self) -> None:
-        self.shutdown_event = asyncio.Event()
-        self.signal_engine = SignalEngine()
-        self.execution_engine = ExecutionEngine()
-
-    async def run(self) -> None:
-        # Graceful Shutdown Setup
-        loop = asyncio.get_running_loop()
-
-        def _signal_handler() -> None:
-            logger.info("Shutdown signal received. Stopping execution loop...")
-            self.shutdown_event.set()
-
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, _signal_handler)
-
-        logger.info("Starting Orion Execution Service (V1 Deterministic)...")
-
-        # Initialize Engines
-        await self.execution_engine.initialize()
-        await self.signal_engine.initialize()
-        await init_db()
-
-        logger.info("Engines Initialized. Entering Service Loop.")
-
-        # Backfill queue with unprocessed candidates (restart recovery)
-        await self._backfill_queue()
-
-        while not self.shutdown_event.is_set():
-            start_time = loop.time()
-            try:
-                await self._run_cycle()
-            except Exception as e:
-                logger.error(f"Main Loop Error: {e}")
-                await asyncio.sleep(5.0)
-
-            elapsed = loop.time() - start_time
-            sleep_time = max(0.1, 1.0 - elapsed)
-
-            try:
-                await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
-            except asyncio.TimeoutError:
-                pass
-
-        logger.info("Execution Service Stopped.")
-
-    async def _run_cycle(self) -> None:
-        # 1. Poll Fills
-        await self.execution_engine.poll_fills()
-
-        # 2. Check Circuit Breaker
-        if await self._check_circuit_breaker():
-            await asyncio.sleep(5.0)
-            return
-
-        # 3. Poll Pending Candidates
-        candidates = await self._fetch_pending_candidates()
-
-        # Metrics: track queue depth
-        if _metrics:
-            from orion.shared.candidate_queue import CandidateQueue
-
-            queue = await CandidateQueue.get_instance()
-            _metrics.execution_queue_depth.set(queue.qsize())
-
-        if not candidates:
-            await asyncio.sleep(1.0)
-            return
-
-        logger.info(f"Processing {len(candidates)} new candidates...")
-        for candidate in candidates:
-            await self._process_candidate(candidate)
-
-    async def _check_circuit_breaker(self) -> bool:
-        from orion.core.circuit_breaker import CircuitBreaker
-
-        cb = CircuitBreaker()
-        if await cb.is_open():
-            state = await cb.get_state()
-            logger.warning(f"CIRCUIT BREAKER OPEN: {state.get('reason')}. Pausing execution.")
-            return True
-        return False
-
-    async def _process_candidate(self, candidate: CandidateTrade) -> None:
-        # Track latency from candidate creation to processing
-        import time
-
-        start_time = time.time()
-
-        # Policy Execution
-        decision = await self.signal_engine.decide(candidate)
-
-        # Preflight
-        if decision.decision == "EXECUTE":
-            await self._run_preflight(candidate, decision)
-
-        # Save Decision Draft
-        await self._save_decision(decision)
-
-        # Execute
-        exec_status = "SKIPPED"
-        if decision.decision == "EXECUTE":
-            try:
-                await self.execution_engine.execute_order(decision, candidate)
-                if decision.executed_successfully == "TRUE":
-                    exec_status = "TRUE"
-                else:
-                    exec_status = "FALSE"
-            except Exception as exe:
-                logger.error(f"Execution Exception: {exe}")
-                exec_status = "FALSE"
-
-        # Update Decision
-        await self._update_decision_status(decision.decision_id, exec_status)
-
-        # Metrics: track decisions and orders
-        if _metrics:
-            _metrics.execution_decisions_total.labels(decision_type=decision.decision).inc()
-            if decision.decision == "EXECUTE":
-                status_label = "success" if exec_status == "TRUE" else "failure"
-                _metrics.execution_orders_total.labels(status=status_label).inc()
-
-            # Track latency
-            latency = time.time() - start_time
-            _metrics.execution_latency_seconds.labels(ticker=candidate.ticker).observe(latency)
-
-    async def _run_preflight(self, candidate: CandidateTrade, decision: StrategyDecision) -> None:
-        from orion.execution.signal_preflight import preflight_live_signal
-
-        async def run_check(session: Any) -> Any:
-            return await preflight_live_signal(
-                session,
-                candidate=candidate,
-                decision=decision,
-                risk_manager=self.execution_engine.risk_manager,
-            )
-
-        pre = await db_query(run_check)
-
-        if not pre.ok:
-            decision.decision = "SKIP"
-            decision.executed_successfully = "SKIPPED"
-            decision.reason = f"Preflight reject: {pre.reason}"
-            decision.decision_trace_json = decision.decision_trace_json or {}
-            decision.decision_trace_json["preflight_reject"] = {"reason": pre.reason, **(pre.extra or {})}
-        else:
-            decision.decision_trace_json = decision.decision_trace_json or {}
-            decision.decision_trace_json["rollups"] = (pre.extra or {}).get("rollups", {})
-            decision.decision_trace_json["preflight"] = {k: v for k, v in (pre.extra or {}).items() if k != "rollups"}
-
-    async def _fetch_pending_candidates(self, limit: int = 100) -> Sequence[CandidateTrade]:
-        from orion.shared.candidate_queue import CandidateQueue
-
-        queue = await CandidateQueue.get_instance()
-        candidate_ids = []
-
-        # Drain queue up to limit
-        for _ in range(limit):
-            cid = await queue.pop(timeout=0.1)
-            if cid is None:
-                break
-            candidate_ids.append(cid)
-
-        if not candidate_ids:
-            return []
-
-        async def fetch_by_ids(session: Any) -> List[Any]:
-            stmt = select(CandidateTrade).where(CandidateTrade.candidate_id.in_(candidate_ids))
-            result = await session.execute(stmt)
-            return result.scalars().all()
-
-        return await db_query(fetch_by_ids)
-
-    async def _backfill_queue(self) -> None:
-        """Backfill queue with unprocessed candidates on startup."""
-
-        try:
-
-            async def fetch_unprocessed(session: Any) -> List[Any]:
-                # Find candidates without decisions
-                stmt = (
-                    select(CandidateTrade)
-                    .outerjoin(StrategyDecision, CandidateTrade.candidate_id == StrategyDecision.candidate_id)
-                    .where(StrategyDecision.candidate_id.is_(None))
-                    .order_by(CandidateTrade.timestamp_utc.asc())
-                    .limit(1000)  # Limit backfill to avoid overwhelming queue
-                )
-                result = await session.execute(stmt)
-                return result.scalars().all()
-
-            candidates = await db_query(fetch_unprocessed)
-
-            from orion.shared.candidate_queue import CandidateQueue
-
-            queue = await CandidateQueue.get_instance()
-            for c in candidates:
-                await queue.push(c.candidate_id)
-            logger.info(
-                f"Backfilled queue with {len(candidates)} unprocessed candidates",
-                extra={"event_type": "QUEUE_BACKFILL", "count": len(candidates)},
-            )
-        except Exception as e:
-            logger.error(f"Failed to backfill queue: {e}")
-
-    @db_retry
-    async def _save_decision(self, decision: StrategyDecision) -> None:
-        """
-        Persist decision to DB.
-        """
-        if decision.decision == "EXECUTE":
-            self._validate_execute_fields(decision)
-
-        async def save_op(session: Any) -> None:
-            session.add(decision)
-            logger.info(
-                f"Saved decision {decision.decision_id} ({decision.decision})",
-                extra={"event_type": "DECISION_SAVED", "decision_id": decision.decision_id},
-            )
-
-        await db_write(save_op)
-
-        # The logic for _persist_signal_live needs to be moved to _process_candidate
-        # or another method that has access to both decision and candidate.
-        # This change only implements the requested modification to _save_decision.
-
-    def _validate_execute_fields(self, decision: StrategyDecision) -> None:
-        expected_return = None
-        risk_score = None
-        if isinstance(decision.decision_trace_json, dict):
-            expected_return = decision.decision_trace_json.get("expected_return_bp")
-            risk_score = decision.decision_trace_json.get("risk_score")
-        if expected_return is None or risk_score is None or decision.p_take is None:
-            decision.decision = "SKIP"
-            decision.reason = "Missing required signal fields (expected_return/risk_score/p_take)"
-
-    @db_retry
-    async def _persist_signal_live(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        expected_return = None
-        risk_score = None
-        if isinstance(decision.decision_trace_json, dict):
-            expected_return = decision.decision_trace_json.get("expected_return_bp")
-            risk_score = decision.decision_trace_json.get("risk_score")
-
-        if expected_return is None or risk_score is None or decision.p_take is None:
-            logger.error(f"EXECUTE decision missing required fields, skipping persistence: {candidate.ticker}")
-            decision.decision = "SKIP"
-            decision.reason = "Missing required signal fields"
-
-            # Log rejection to TradeJournal
-            from datetime import datetime, timezone
-
-            async def log_rejection(session: Any) -> None:
-                session.add(
-                    TradeJournalEntry(
-                        journal_id=f"reject_{candidate.candidate_id}",
-                        signal_id=None,
-                        candidate_id=candidate.candidate_id,
-                        ticker=candidate.ticker,
-                        direction=candidate.direction,
-                        entry_time=datetime.now(timezone.utc),
-                        entry_price=None,
-                        position_size=None,
-                        exit_time=None,
-                        exit_price=None,
-                        realized_pnl_usd=None,
-                        fees_usd=None,
-                        net_pnl_usd=None,
-                        trade_metadata={"rejection_reason": decision.reason},
-                    )
-                )
-
-            await db_write(log_rejection)
-            return
-
-        try:
-
-            async def log_skip(session: Any) -> None:
-                session.add(
-                    TradeJournalEntry(
-                        journal_id=f"skip_{candidate.candidate_id}",
-                        signal_id=None,
-                        candidate_id=candidate.candidate_id,
-                        ticker=candidate.ticker,
-                        direction=candidate.direction,
-                        entry_time=datetime.now(timezone.utc),
-                        entry_price=None,
-                        position_size=None,
-                        exit_time=None,
-                        exit_price=None,
-                        realized_pnl_usd=None,
-                        fees_usd=None,
-                        net_pnl_usd=None,
-                        trade_metadata={"skip_reason": "preflight_failed"},
-                    )
-                )
-
-            await db_write(log_skip)
-        except Exception as e:
-            logger.error(f"Failed to log preflight skip: {e}")
-        """
-        Copy relevant decision trace and params to signals_live for downstream consumers.
-        """
-
-        async def save_signal(session: Any) -> None:
-            sig = SignalLive(
-                signal_id=f"live_{decision.decision_id}",
-                ticker=decision.ticker,
-                timestamp_utc=decision.timestamp_utc,
-                decision_id=decision.decision_id,
-                candidate_id=decision.candidate_id,
-                solver_id=decision.strategy_version_id,
-                decision_trace_json=decision.decision_trace_json or {},
-                execution_params=decision.execution_params or {},
-            )
-            session.add(sig)
-            logger.info(f"Emitted Signal Live for {decision.ticker} ({decision.decision_id})")
-
-        await db_write(save_signal)
-
-    @db_retry
-    async def _persist_trade_journal(self, decision: StrategyDecision, exec_status: str, notes: str) -> None:
-        """
-        Log execution outcome to trade journal.
-        """
-
-        async def save_journal(session: Any) -> None:
-            entry = TradeJournalEntry(
-                ticker=decision.ticker,
-                timestamp_utc=decision.timestamp_utc,
-                decision_id=decision.decision_id,
-                exec_status=exec_status,
-                notes=notes,
-            )
-            session.add(entry)
-
-        await db_write(save_journal)
-
-    @db_retry
-    async def _update_decision_status(self, decision_id: str, status: str) -> None:
-        async def update_status(session: Any) -> None:
-            stmt = select(StrategyDecision).where(StrategyDecision.decision_id == decision_id)
-            result = await session.execute(stmt)
-            record = result.scalars().first()
-            if record:
-                record.executed_successfully = status
-
-        try:
-            await db_write(update_status)
-        except Exception as e:
-            logger.error(f"Failed to update execution status: {e}")
-
-
-
-================================================
 FILE: src/orion/execution/signal_preflight.py
 ================================================
 from __future__ import annotations
@@ -38011,6 +38439,37 @@ __all__ = ["IngestionService"]
 
 
 ================================================
+FILE: src/orion/ingestion/__main__.py
+================================================
+"""Ingestion Service Entry Point.
+
+Usage:
+    python -m orion.ingestion
+
+This runs the modern IngestionService which:
+- Polls Alpaca for market data (bars, streams)
+- Reads flow/darkpool from Heber (via HeberReader)
+- Processes features and rules
+- Writes to Bronze/Silver layers
+"""
+
+import asyncio
+
+from orion.ingestion.service import IngestionService
+
+
+def main() -> None:
+    """Start the ingestion service."""
+    service = IngestionService()
+    asyncio.run(service.run())
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
 FILE: src/orion/ingestion/service.py
 ================================================
 import asyncio
@@ -38025,12 +38484,13 @@ import exchange_calendars as xcals
 from zoneinfo import ZoneInfo
 
 from orion.config import system_settings
+from orion.clients.heber_reader import HeberReader
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.redpanda_producer import RedpandaProducer
-from orion.connectors.uw_alerts_connector import UWAlertsConnector
-from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
-from orion.connectors.uw_flow_connector import UWFlowConnector
+
+# DEPRECATED: UW connectors removed - Data-Gateway now handles flow/darkpool
+# ingestion via Heber lakehouse. Use HeberReader to read flow/darkpool data.
 from orion.core.health_monitor import CriticalHealthException, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.core.universe_manager import UniverseManager
@@ -38069,15 +38529,13 @@ class IngestionService:
         self.lakehouse = LakehouseWriter()
 
         # Connectors (using Data Gateway for UW)
-        gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
+        # UW connectors deprecated - use HeberReader for flow/darkpool data
+        # Data-Gateway -> Redis -> Heber handles ingestion centrally
+        self.heber = HeberReader()
 
-        # Ensure keys are strings
+        # Alpaca connectors (still used for market data until fully migrated)
         alpaca_key = system_settings.alpaca_api_key or ""
         alpaca_secret = system_settings.alpaca_secret_key or ""
-
-        self.uw_flow = UWFlowConnector(gateway_url=gateway_url)
-        self.uw_dark = UWDarkPoolConnector(gateway_url=gateway_url)
-        self.uw_alerts = UWAlertsConnector(gateway_url=gateway_url)
 
         self.alpaca = AlpacaMarketConnector(
             api_key=alpaca_key,
@@ -38213,9 +38671,8 @@ class IngestionService:
         trace_id = str(uuid.uuid4())
         all_events: List[BronzeEvent] = []
 
-        # 1. Poll UW
-        events = await self._poll_uw(trace_id)
-        all_events.extend(events)
+        # 1. UW data now comes from Heber (via Data-Gateway ingestion)
+        # No polling needed - Heber consumer ingests from Data-Gateway Redis
 
         # 2. Get Alpaca bars (streaming preferred, polling as fallback)
         alpaca_events = await self._poll_alpaca_events(trace_id)
@@ -38289,25 +38746,8 @@ class IngestionService:
                 sleep_seconds -= wait
                 self.health_monitor.update_heartbeat()
 
-    async def _poll_uw(self, trace_id: str) -> List[BronzeEvent]:
-        try:
-            # lookback_seconds only applies on cold start (no watermark); after first poll, watermarks take over
-            flow = await self.uw_flow.poll(lookback_seconds=300)
-            dark = await self.uw_dark.fetch_events(lookback_seconds=300)
-            alert = await self.uw_alerts.fetch_events(lookback_seconds=300)
-            events = flow + dark + alert
-
-            for e in events:
-                await self._check_lag(e)
-                self._tag_ingest_metadata(e, trace_id, e.event_type.lower())
-                e_ticker = e.ticker
-                if e_ticker:
-                    self.universe.update_from_event(e)
-
-            return events
-        except Exception as e:
-            logger.error(f"Error polling UW: {e}", extra={"trace_id": trace_id})
-            return []
+    # _poll_uw removed - Data-Gateway handles UW ingestion via Heber
+    # Use self.heber.read_flow() or self.heber.read_darkpool() to access data
 
     async def _poll_alpaca(self, tickers: List[str], trace_id: str) -> List[BronzeEvent]:
         try:
@@ -38833,266 +39273,6 @@ if __name__ == "__main__":
 
 
 ================================================
-FILE: src/orion/jobs/backfill_historical_gex.py
-================================================
-"""
-Historical GEX Backfill Job.
-
-Fetches historical greek exposure (GEX/VEX) data from Unusual Whales API
-for dates where we have price_target_labels but no source data.
-
-Usage:
-    python -m orion.jobs.backfill_historical_gex
-"""
-
-import asyncio
-import os
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set
-
-import requests
-from sqlalchemy import text
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-from orion.shared.db_utils import db_query, db_write
-from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
-
-logger = setup_struct_logger("orion.backfill_historical_gex")
-
-BASE_URL = "https://api.unusualwhales.com"
-
-
-async def get_dates_needing_gex() -> List[date]:
-    """Find trading dates where we have labels but no GEX data."""
-
-    async def query(session: Any) -> List[Any]:
-        stmt = text("""
-            SELECT DISTINCT DATE(entry_ts) as trading_date
-            FROM price_target_labels
-            WHERE ml_ready = true
-            ORDER BY trading_date
-        """)
-        result = await session.execute(stmt)
-        return result.fetchall()
-
-    label_dates = await db_query(query)
-
-    async def query_gex_dates(session: Any) -> List[Any]:
-        stmt = text("""
-            SELECT DISTINCT DATE(ts_utc) as trading_date
-            FROM silver_greek_exposure
-        """)
-        result = await session.execute(stmt)
-        return result.fetchall()
-
-    gex_dates = await db_query(query_gex_dates)
-    gex_date_set = {row[0] for row in gex_dates}
-
-    missing_dates = []
-    for row in label_dates:
-        if row[0] not in gex_date_set:
-            missing_dates.append(row[0])
-
-    return missing_dates
-
-
-async def get_tickers_for_date(trading_date: date) -> Set[str]:
-    """Get unique underlying tickers from labels for a specific date."""
-
-    async def query(session: Any) -> List[Any]:
-        start_ts = datetime.combine(trading_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        end_ts = start_ts + timedelta(days=1)
-
-        stmt = text("""
-            SELECT DISTINCT ticker
-            FROM price_target_labels
-            WHERE entry_ts >= :start_ts
-            AND entry_ts < :end_ts
-            AND ticker IS NOT NULL
-        """)
-        result = await session.execute(stmt, {"start_ts": start_ts, "end_ts": end_ts})
-        return result.fetchall()
-
-    rows = await db_query(query)
-
-    # Extract underlying ticker from option symbol (e.g., "AAPL250117C00150000" -> "AAPL")
-    tickers = set()
-    for row in rows:
-        ticker = row[0]
-        underlying = ""
-        for c in ticker:
-            if c.isalpha():
-                underlying += c
-            else:
-                break
-        if underlying:
-            tickers.add(underlying)
-
-    return tickers
-
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-def fetch_gex_for_date(ticker: str, trading_date: date, api_key: str) -> Optional[Dict[str, Any]]:
-    """Fetch GEX for a ticker on a specific historical date."""
-    date_str = trading_date.strftime("%Y-%m-%d")
-    url = f"{BASE_URL}/api/stock/{ticker}/greek-exposure"
-    headers = {"Authorization": f"Bearer {api_key}"}
-    params = {"date": date_str}
-
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.warning(f"Failed to fetch GEX for {ticker} on {date_str}: {e}")
-        return None
-
-
-async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) -> bool:
-    """Store GEX data in silver_greek_exposure table."""
-
-    exposure_data = data.get("data")
-    if not exposure_data:
-        return False
-
-    # Handle list response (multiple dates) or single dict
-    # API returns: call_gamma, put_gamma, call_vanna, put_vanna, call_charm, put_charm
-    # GEX = call_gamma + put_gamma (net gamma exposure)
-    # VEX = call_vanna + put_vanna (net vanna exposure)
-    if isinstance(exposure_data, list):
-        if not exposure_data:
-            return False
-        # Sum up all dates for aggregate exposure
-        total_gex_oi = sum(
-            float(e.get("call_gamma") or 0) + float(e.get("put_gamma") or 0)
-            for e in exposure_data
-        )
-        total_gex_vol = 0
-        total_vex_oi = sum(
-            float(e.get("call_vanna") or 0) + float(e.get("put_vanna") or 0)
-            for e in exposure_data
-        )
-        total_vex_vol = 0
-        total_cex_oi = sum(
-            float(e.get("call_charm") or 0) + float(e.get("put_charm") or 0)
-            for e in exposure_data
-        )
-        total_cex_vol = 0
-        call_delta = sum(float(e.get("call_delta") or 0) for e in exposure_data)
-        put_delta = sum(float(e.get("put_delta") or 0) for e in exposure_data)
-        spot = 0
-    else:
-        # Single dict response
-        total_gex_oi = float(exposure_data.get("call_gamma") or 0) + float(exposure_data.get("put_gamma") or 0)
-        total_gex_vol = 0
-        total_vex_oi = float(exposure_data.get("call_vanna") or 0) + float(exposure_data.get("put_vanna") or 0)
-        total_vex_vol = 0
-        total_cex_oi = float(exposure_data.get("call_charm") or 0) + float(exposure_data.get("put_charm") or 0)
-        total_cex_vol = 0
-        call_delta = float(exposure_data.get("call_delta") or 0)
-        put_delta = float(exposure_data.get("put_delta") or 0)
-        spot = 0
-
-    # Use midday timestamp for the historical record
-    ts_utc = datetime.combine(trading_date, datetime.min.time()).replace(hour=12, tzinfo=timezone.utc)
-
-    async def write(session: Any) -> None:
-        stmt = text("""
-            INSERT INTO silver_greek_exposure (
-                ticker, ts_utc, gex_oi, gex_volume,
-                vex_oi, vex_volume, cex_oi, cex_volume,
-                call_delta, put_delta, call_fill_delta, put_fill_delta,
-                spot_price
-            ) VALUES (
-                :ticker, :ts_utc, :gex_oi, :gex_volume,
-                :vex_oi, :vex_volume, :cex_oi, :cex_volume,
-                :call_delta, :put_delta, 0, 0,
-                :spot_price
-            )
-            ON CONFLICT DO NOTHING
-        """)
-        await session.execute(stmt, {
-            "ticker": ticker,
-            "ts_utc": ts_utc,
-            "gex_oi": total_gex_oi,
-            "gex_volume": total_gex_vol,
-            "vex_oi": total_vex_oi,
-            "vex_volume": total_vex_vol,
-            "cex_oi": total_cex_oi,
-            "cex_volume": total_cex_vol,
-            "call_delta": call_delta,
-            "put_delta": put_delta,
-            "spot_price": spot,
-        })
-
-    await db_write(write)
-    logger.info(f"Stored GEX for {ticker} on {trading_date}: gex_oi={total_gex_oi:.2f}")
-    return True
-
-
-async def run_backfill() -> Dict[str, Any]:
-    """Run the historical GEX backfill."""
-
-    await init_db()
-
-    # Get API key from environment
-    api_key = os.getenv("UW_API_KEY")
-    if not api_key:
-        logger.error("UW_API_KEY not set")
-        return {"error": "UW_API_KEY not set", "dates_processed": 0}
-
-    # Get dates needing backfill
-    missing_dates = await get_dates_needing_gex()
-
-    if not missing_dates:
-        logger.info("No dates need GEX backfill")
-        return {"dates_processed": 0, "tickers_fetched": 0, "success_count": 0}
-
-    logger.info(f"Found {len(missing_dates)} dates needing GEX backfill: {missing_dates}")
-
-    total_fetched = 0
-    total_success = 0
-
-    for trading_date in missing_dates:
-        tickers = await get_tickers_for_date(trading_date)
-        logger.info(f"Processing {trading_date} with {len(tickers)} tickers")
-
-        for ticker in tickers:
-            # Fetch from API (runs in thread pool)
-            data = await asyncio.to_thread(fetch_gex_for_date, ticker, trading_date, api_key)
-            total_fetched += 1
-
-            if data:
-                success = await store_gex_data(ticker, trading_date, data)
-                if success:
-                    total_success += 1
-
-            # Rate limiting
-            await asyncio.sleep(0.5)
-
-        logger.info(f"Completed {trading_date}: {total_success}/{total_fetched} successful")
-
-    summary = {
-        "dates_processed": len(missing_dates),
-        "tickers_fetched": total_fetched,
-        "success_count": total_success,
-    }
-
-    logger.info(f"Backfill complete: {summary}")
-    return summary
-
-
-async def main() -> None:
-    await run_backfill()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-
-
-================================================
 FILE: src/orion/jobs/backfill_ml_features.py
 ================================================
 """
@@ -39539,7 +39719,7 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
     # Sector correlation and flow features
     sector = updates.get("sector")
     if sector:
-        sector_corr = await get_sector_correlation_features(ticker, sector, entry_ts)
+        sector_corr = await get_sector_correlation_features(ticker, entry_ts)
         updates["sector_net_premium_1h"] = sector_corr.get("sector_net_premium_1h")
         updates["sector_flow_direction"] = sector_corr.get("sector_flow_direction")
         updates["spy_correlation_5d"] = sector_corr.get("spy_correlation_5d")
@@ -40607,229 +40787,6 @@ if __name__ == "__main__":
 
 
 ================================================
-FILE: src/orion/jobs/label_job.py
-================================================
-import asyncio
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
-
-import pandas as pd
-from sqlalchemy import select
-
-from orion.processing.label_engine import TripleBarrierLabeling
-from orion.storage.models import CandidateTrade, GoldTickerRollup
-from orion.storage.models_gold import CandidateLabel
-
-logger = logging.getLogger("orion.jobs.label_job")
-
-
-class LabelingJob:
-    """
-    Periodic job to label older candidates once their outcome is known.
-    """
-
-    def __init__(self) -> None:
-        self.labeler = TripleBarrierLabeling(upper_barrier=0.015, lower_barrier=0.010, time_barrier_bars=60)
-        self.forward_horizons_min = self._parse_forward_horizons()
-
-    @staticmethod
-    def _parse_forward_horizons() -> List[int]:
-        """
-        PRD 6.3: forward returns (1m/5m/1h/1d/3d etc; configurable).
-        Config via env `ORION_LABEL_FORWARD_HORIZONS_MIN` as comma-separated minutes.
-        """
-        import os
-
-        raw = os.getenv("ORION_LABEL_FORWARD_HORIZONS_MIN", "1,5,60,390,1170")
-        out: List[int] = []
-        for part in raw.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                val = int(part)
-            except ValueError:
-                continue
-            if val > 0:
-                out.append(val)
-        # Deterministic order
-        return sorted(set(out))
-
-    @staticmethod
-    def _compute_forward_returns(
-        close_series: pd.Series, entry_ts: pd.Timestamp, horizons_min: List[int]
-    ) -> Dict[str, float | None]:
-        """
-        Computes forward returns for the given horizons from a close price series.
-        Returns dict keyed by '<minutes>m' (e.g., '5m') with float returns or None if unavailable.
-        """
-        if close_series.empty:
-            return {f"{h}m": None for h in horizons_min}
-
-        prices = close_series.sort_index()
-        if entry_ts not in prices.index:
-            idx = prices.index.get_indexer([entry_ts], method="bfill")
-            if idx is None or len(idx) == 0 or idx[0] < 0:
-                return {f"{h}m": None for h in horizons_min}
-            entry_ts = prices.index[idx[0]]
-
-        p0 = float(prices.loc[entry_ts])
-        if p0 == 0:
-            return {f"{h}m": None for h in horizons_min}
-
-        out: Dict[str, float | None] = {}
-        for h in horizons_min:
-            target_ts = entry_ts + pd.Timedelta(minutes=h)
-            idx = prices.index.get_indexer([target_ts], method="bfill")
-            if idx is None or len(idx) == 0 or idx[0] < 0:
-                out[f"{h}m"] = None
-                continue
-            ts_h = prices.index[idx[0]]
-            try:
-                ph = float(prices.loc[ts_h])
-                out[f"{h}m"] = (ph - p0) / p0
-            except Exception:
-                out[f"{h}m"] = None
-        return out
-
-    async def run_once(self) -> None:
-        """
-        Process batch of unlabeled candidates.
-        """
-
-        async def _process_and_save(session: Any) -> None:
-            # 1. potential candidates: > 60 mins old, not in candidate_labels
-            # Simplified for v1: Just grab some recent candidates and check if label exists
-            # Ideally: Left join where label is null
-            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=65)
-
-            # Select candidates created before cutoff
-            # That don't have a label
-            # Subquery exists?
-
-            stmt = (
-                select(CandidateTrade)
-                .outerjoin(CandidateLabel, CandidateTrade.candidate_id == CandidateLabel.candidate_id)
-                .where(CandidateTrade.timestamp_utc < cutoff_time)
-                .where(CandidateLabel.candidate_id is None)
-                .limit(50)
-            )
-
-            result = await session.execute(stmt)
-            candidates = result.scalars().all()
-
-            if not candidates:
-                logger.info("No candidates pending labeling.")
-                return
-
-            logger.info(f"Labeling {len(candidates)} candidates...")
-
-            for cand in candidates:
-                # 2. Fetch Price Data
-                # Need bars from cand.timestamp_utc to +65 mins
-                start_ts = cand.timestamp_utc
-                end_ts = start_ts + timedelta(minutes=70)
-
-                # Fetch 1m bars? GoldTickerRollup usually 1m if period='1m'
-                # Assuming GoldTickerRollup has period='1m'
-                bar_stmt = (
-                    select(GoldTickerRollup)
-                    .where(GoldTickerRollup.ticker == cand.ticker)
-                    .where(GoldTickerRollup.period == "1m")  # Assuming '1m' string
-                    .where(GoldTickerRollup.timestamp_utc >= start_ts)
-                    .where(GoldTickerRollup.timestamp_utc <= end_ts)
-                    .order_by(GoldTickerRollup.timestamp_utc.asc())
-                )
-
-                bar_res = await session.execute(bar_stmt)
-                bars = bar_res.scalars().all()
-
-                if not bars:
-                    # Data missing? Skip
-                    continue
-
-                # Convert to Series
-                # TripleBarrierLabeling.compute_labels expects Series with DatetimeIndex
-                # and 'close'
-
-                df = pd.DataFrame([{"ts": b.timestamp_utc, "close": b.close} for b in bars])
-                if df.empty:
-                    continue
-
-                df.set_index("ts", inplace=True)
-                df.sort_index(inplace=True)
-
-                # 3. Compute Label
-                # We are labeling a single event here
-                outcome_df = self.labeler.compute_labels(df["close"], pd.DatetimeIndex([cand.timestamp_utc]))
-
-                if not outcome_df.empty:
-                    row = outcome_df.iloc[0]
-                    entry_ts = pd.Timestamp(cand.timestamp_utc)
-                    entry_ts = entry_ts.tz_convert("UTC") if entry_ts.tzinfo else entry_ts.tz_localize("UTC")
-                    fwd = self._compute_forward_returns(df["close"], entry_ts, self.forward_horizons_min)
-                    # Persist
-                    lbl = CandidateLabel(
-                        candidate_id=cand.candidate_id,
-                        label=float(row["label"]),
-                        ret=float(row["ret"]),
-                        barrier_hit_ts=row["barrier_hit_ts"].to_pydatetime(),
-                        time_to_hit_seconds=(
-                            float(row.get("time_to_hit_seconds"))
-                            if row.get("time_to_hit_seconds") is not None
-                            else None
-                        ),
-                        mfe=(float(row.get("mfe")) if row.get("mfe") is not None else None),
-                        mae=(float(row.get("mae")) if row.get("mae") is not None else None),
-                    )
-                    session.add(lbl)
-                    logger.info(f"Labeled {cand.ticker}: {row['label']} (Ret: {row['ret']:.4f})")
-
-                    # PRD labels_event: persist forward returns + triple-barrier fields
-                    try:
-                        from orion.storage.models_gold import LabelEvent
-
-                        le = LabelEvent(
-                            candidate_id=cand.candidate_id,
-                            ticker=cand.ticker,
-                            event_ts_utc=cand.timestamp_utc,
-                            forward_returns=fwd,
-                            label=float(row["label"]),
-                            ret=float(row["ret"]),
-                            barrier_hit_ts=row["barrier_hit_ts"].to_pydatetime(),
-                            time_to_hit_seconds=(
-                                float(row.get("time_to_hit_seconds"))
-                                if row.get("time_to_hit_seconds") is not None
-                                else None
-                            ),
-                            mfe=(float(row.get("mfe")) if row.get("mfe") is not None else None),
-                            mae=(float(row.get("mae")) if row.get("mae") is not None else None),
-                            label_config={
-                                "type": "triple_barrier",
-                                "upper_barrier": float(self.labeler.upper_barrier),
-                                "lower_barrier": float(self.labeler.lower_barrier),
-                                "time_barrier_bars": int(self.labeler.time_barrier_bars),
-                                "forward_horizons_min": list(self.forward_horizons_min),
-                                "price_source": "gold_ticker_rollup:1m",
-                            },
-                        )
-                        await session.merge(le)
-                    except Exception as e:
-                        logger.warning(f"Failed to persist labels_event for {cand.candidate_id}: {e}")
-
-            await session.commit()
-            logger.info("Batch labeling complete.")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    job = LabelingJob()
-    asyncio.run(job.run_once())
-
-
-
-================================================
 FILE: src/orion/jobs/monitor_system.py
 ================================================
 import asyncio
@@ -41422,6 +41379,7 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Optional
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_query
 from sqlalchemy import text
 
@@ -41430,12 +41388,10 @@ logger = logging.getLogger("orion.jobs.sync_earnings")
 
 async def sync_todays_earnings() -> Dict[str, int]:
     """Sync today's earnings via Data Gateway (premarket + afterhours)."""
-    import os
-
     from orion.unusualwhales.api.earnings import get_afterhours_earnings, get_premarket_earnings
     from orion.unusualwhales.client import UnusualWhalesClient
 
-    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
+    gateway_url = system_settings.data_gateway_url
     client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"synced": 0, "errors": 0}
     today = date.today()
@@ -41471,8 +41427,6 @@ async def _fetch_and_sync_earnings(
 
 async def backfill_ticker_earnings(ticker: str, client: Any) -> int:
     """Backfill historical earnings for a single ticker."""
-    from datetime import datetime as dt
-
     from orion.unusualwhales.api.earnings import get_ticker_earnings
     from orion.unusualwhales.models.earnings_results import EarningsResults
     from orion.unusualwhales.types import UNSET
@@ -41482,59 +41436,76 @@ async def backfill_ticker_earnings(ticker: str, client: Any) -> int:
         response = await asyncio.to_thread(get_ticker_earnings.sync, ticker=ticker, client=client)
         if isinstance(response, EarningsResults) and response.data:
             for e in response.data:
-                report_date_raw = e.report_date
-                if report_date_raw and not isinstance(report_date_raw, type(UNSET)):
-                    try:
-                        # Parse string date to date object
-                        if isinstance(report_date_raw, str):
-                            report_date = dt.strptime(report_date_raw, "%Y-%m-%d").date()
-                        else:
-                            report_date = report_date_raw
-
-                        # Get announce time from additional_properties
-                        announce = None
-                        if hasattr(e, "additional_properties") and e.additional_properties:
-                            announce = e.additional_properties.get("report_time")
-                        elif hasattr(e, "report_time") and e.report_time and not isinstance(e.report_time, type(UNSET)):
-                            announce = (
-                                str(e.report_time.value) if hasattr(e.report_time, "value") else str(e.report_time)
-                            )
-
-                        # Get EPS from street_mean_est (it's the estimate)
-                        eps_est = None
-                        if hasattr(e, "street_mean_est") and e.street_mean_est:
-                            try:
-                                eps_est = (
-                                    float(e.street_mean_est) if not isinstance(e.street_mean_est, type(UNSET)) else None
-                                )
-                            except (ValueError, TypeError):
-                                pass
-
-                        await _upsert_earnings_direct(
-                            ticker=ticker,
-                            report_date=report_date,
-                            announce_time=announce,
-                            eps_estimate=eps_est,
-                            eps_actual=getattr(e, "eps_actual", None),
-                            revenue_estimate=getattr(e, "revenue_estimate", None),
-                            revenue_actual=getattr(e, "revenue_actual", None),
-                        )
-                        count += 1
-                    except Exception as ex:
-                        logger.debug(f"Failed to upsert earnings for {ticker}: {ex}")
+                count += await _process_single_earnings_record(ticker, e, UNSET)
     except Exception as e:
         logger.debug(f"Failed to fetch earnings for {ticker}: {e}")
 
     return count
 
 
+async def _process_single_earnings_record(ticker: str, e: Any, UNSET: Any) -> int:
+    """Process a single earnings record and upsert to database."""
+    report_date_raw = e.report_date
+    if not report_date_raw or isinstance(report_date_raw, type(UNSET)):
+        return 0
+
+    try:
+        report_date = _parse_report_date(report_date_raw)
+        announce = _extract_announce_time(e, UNSET)
+        eps_est = _extract_eps_estimate(e, UNSET)
+
+        await _upsert_earnings_direct(
+            ticker=ticker,
+            report_date=report_date,
+            announce_time=announce,
+            eps_estimate=eps_est,
+            eps_actual=getattr(e, "eps_actual", None),
+            revenue_estimate=getattr(e, "revenue_estimate", None),
+            revenue_actual=getattr(e, "revenue_actual", None),
+        )
+        return 1
+    except Exception as ex:
+        logger.debug(f"Failed to upsert earnings for {ticker}: {ex}")
+        return 0
+
+
+def _parse_report_date(report_date_raw: Any) -> date:
+    """Parse report date from string or date object."""
+    from datetime import datetime as dt
+
+    if isinstance(report_date_raw, str):
+        return dt.strptime(report_date_raw, "%Y-%m-%d").date()
+    return report_date_raw
+
+
+def _extract_announce_time(e: Any, UNSET: Any) -> Optional[str]:
+    """Extract announce time from earnings record."""
+    if hasattr(e, "additional_properties") and e.additional_properties:
+        return e.additional_properties.get("report_time")
+
+    if hasattr(e, "report_time") and e.report_time and not isinstance(e.report_time, type(UNSET)):
+        return str(e.report_time.value) if hasattr(e.report_time, "value") else str(e.report_time)
+
+    return None
+
+
+def _extract_eps_estimate(e: Any, UNSET: Any) -> Optional[float]:
+    """Extract EPS estimate from earnings record."""
+    if not hasattr(e, "street_mean_est") or not e.street_mean_est:
+        return None
+
+    try:
+        return float(e.street_mean_est) if not isinstance(e.street_mean_est, type(UNSET)) else None
+    except (ValueError, TypeError):
+        return None
+
+
+
 async def backfill_all_earnings() -> Dict[str, int]:
     """Backfill earnings for all unique tickers via Data Gateway."""
-    import os
-
     from orion.unusualwhales.client import UnusualWhalesClient
 
-    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
+    gateway_url = system_settings.data_gateway_url
     # Use gateway URL with a placeholder token (auth handled by Gateway)
     client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token="gateway")
     results = {"tickers": 0, "earnings": 0, "errors": 0}
@@ -42470,169 +42441,6 @@ class WindowFeatureJob:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(WindowFeatureJob().run_forever())
-
-
-
-================================================
-FILE: src/orion/jobs/window_label_job.py
-================================================
-import asyncio
-import logging
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
-
-import pandas as pd
-from sqlalchemy import select
-
-from orion.shared.db_utils import db_write
-from orion.storage.models_gold import GoldTickerRollup, LabelWindow
-
-logger = logging.getLogger("orion.jobs.window_label_job")
-
-
-class WindowLabelingJob:
-    """
-    PRD 6.3: labels_window
-    Computes forward returns for rollup windows (period-based), storing into labels_window.
-    """
-
-    def __init__(self, *, period: str = "5m"):
-        self.period = period
-        self.forward_horizons_min = self._parse_forward_horizons()
-
-    @staticmethod
-    def _parse_forward_horizons() -> List[int]:
-        raw = os.getenv("ORION_WINDOW_LABEL_FORWARD_HORIZONS_MIN", "5,15,60,390")
-        out: List[int] = []
-        for part in raw.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                val = int(part)
-            except ValueError:
-                continue
-            if val > 0:
-                out.append(val)
-        return sorted(set(out))
-
-    @staticmethod
-    def _compute_forward_returns(
-        close_series: pd.Series, entry_ts: pd.Timestamp, horizons_min: List[int]
-    ) -> Dict[str, float | None]:
-        prices = close_series.sort_index()
-        if prices.empty:
-            return {f"{h}m": None for h in horizons_min}
-
-        if entry_ts not in prices.index:
-            idx = prices.index.get_indexer([entry_ts], method="bfill")
-            if idx is None or len(idx) == 0 or idx[0] < 0:
-                return {f"{h}m": None for h in horizons_min}
-            entry_ts = prices.index[idx[0]]
-
-        p0 = float(prices.loc[entry_ts])
-        if p0 == 0:
-            return {f"{h}m": None for h in horizons_min}
-
-        out: Dict[str, float | None] = {}
-        for h in horizons_min:
-            target_ts = entry_ts + pd.Timedelta(minutes=h)
-            idx = prices.index.get_indexer([target_ts], method="bfill")
-            if idx is None or len(idx) == 0 or idx[0] < 0:
-                out[f"{h}m"] = None
-                continue
-            ts_h = prices.index[idx[0]]
-            try:
-                ph = float(prices.loc[ts_h])
-                out[f"{h}m"] = (ph - p0) / p0
-            except Exception:
-                out[f"{h}m"] = None
-        return out
-
-    async def run_once(self, *, lookback_hours: int = 24, limit: int = 2000) -> int:
-        """
-        Labels recent rollup windows for the configured period.
-        """
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-
-        # This part of the provided edit was malformed and incomplete.
-        # Assuming the intent was to replace the original logic with a call to LabelEngine
-        # and db_write, but the specific parameters for label_signals_in_window (ticker, start, end, now)
-        # are not provided in the context of the original run_once method.
-        # The original run_once iterates over tickers and their rows.
-        # Without a clear definition of how `LabelEngine` should be used with the existing
-        # `GoldTickerRollup` fetching logic, I will interpret the instruction as
-        # replacing the *db interaction pattern* with db_query/db_write, while
-        # preserving the core logic of fetching and processing rows.
-        # The provided edit snippet for `run_once` was syntactically incorrect and
-        # seemed to mix new and old logic in a broken way.
-        # I will apply the import changes and then attempt to refactor the existing
-        # `run_once` to use `db_query` and `db_write` for its database operations,
-        # as that aligns with the instruction "Convert the window label job pattern to use db_query and db_write."
-        # The `LabelEngine` part seems to be a separate, more complex refactoring
-        # that isn't fully specified by the provided `Code Edit` for `run_once`.
-
-        # Original logic refactored to use db_query and db_write where appropriate.
-        # The `db_write` function typically takes a callable that receives a session.
-        # The original `run_once` performs both reads and writes.
-        # A single `db_write` call can encapsulate both if the reads are part of the transaction.
-
-        async def process_and_label_windows(session: Any) -> int:
-            stmt = (
-                select(GoldTickerRollup)
-                .where(GoldTickerRollup.period == self.period)
-                .where(GoldTickerRollup.timestamp_utc >= cutoff)
-                .order_by(GoldTickerRollup.timestamp_utc.asc())
-                .limit(limit)
-            )
-            rows = (await session.execute(stmt)).scalars().all()
-            if not rows:
-                return 0
-
-            # Group per ticker for efficient series ops.
-            by_ticker: Dict[str, List[GoldTickerRollup]] = {}
-            for r in rows:
-                by_ticker.setdefault(r.ticker, []).append(r)
-
-            written = 0
-            for ticker, ticker_rows in by_ticker.items():
-                df = pd.DataFrame(
-                    [{"ts": r.timestamp_utc, "close": r.close} for r in ticker_rows if r.close is not None]
-                )
-                if df.empty:
-                    continue
-                df["ts"] = pd.to_datetime(df["ts"], utc=True)
-                df = df.set_index("ts").sort_index()
-                close = df["close"]
-
-                for r in ticker_rows:
-                    ts = pd.Timestamp(r.timestamp_utc)
-                    ts = ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC")
-                    fwd = self._compute_forward_returns(close, ts, self.forward_horizons_min)
-                    lw = LabelWindow(
-                        ticker=ticker,
-                        period=self.period,
-                        window_end_ts_utc=r.timestamp_utc,
-                        forward_returns=fwd,
-                        label_config={
-                            "forward_horizons_min": list(self.forward_horizons_min),
-                            "price_source": f"gold_ticker_rollup:{self.period}",
-                        },
-                    )
-                    session.add(lw)
-                    written += 1
-
-            return written
-
-        return await db_write(process_and_label_windows)
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    job = WindowLabelingJob(period=os.getenv("ORION_WINDOW_LABEL_PERIOD", "5m"))
-    count = asyncio.run(job.run_once())
-    logger.info("Window labeling complete", extra={"event_type": "LABELS_WINDOW_COMPLETE", "count": count})
 
 
 
@@ -52191,56 +51999,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
-================================================
-FILE: src/orion/shared/candidate_queue.py
-================================================
-import asyncio
-import logging
-from typing import Optional
-
-from orion.shared.patterns import AsyncSingleton
-
-logger = logging.getLogger(__name__)
-
-
-class CandidateQueue(AsyncSingleton):
-    """
-    Singleton in-memory queue for passing candidate IDs from ingestion to execution.
-
-    This replaces expensive DB polling with a fast in-memory handoff.
-    On restart, execution will backfill from DB for unprocessed candidates.
-    """
-
-    def __init__(self) -> None:
-        self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10000)
-        self.dropped_count: int = 0
-        logger.info("CandidateQueue initialized", extra={"event_type": "QUEUE_INIT"})
-
-    async def push(self, candidate_id: str) -> None:
-        """Push a candidate ID to the queue. Drops if full."""
-        try:
-            self.queue.put_nowait(candidate_id)
-        except asyncio.QueueFull:
-            self.dropped_count += 1
-            if self.dropped_count % 100 == 0:
-                logger.warning(
-                    f"CandidateQueue full, dropped {self.dropped_count} candidates total",
-                    extra={"event_type": "QUEUE_FULL", "dropped_total": self.dropped_count},
-                )
-
-    async def pop(self, timeout: float = 0.1) -> Optional[str]:
-        """Pop a candidate ID from the queue. Returns None if timeout."""
-        try:
-            return await asyncio.wait_for(self.queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return None
-
-    def qsize(self) -> int:
-        """Current queue depth."""
-        return self.queue.qsize()
 
 
 
@@ -88794,202 +88552,106 @@ class TestAlpacaMarketConnector(unittest.TestCase):
 
 
 ================================================
-FILE: tests/connectors/test_uw_connectors.py
+FILE: tests/connectors/test_gateway_stream_client.py
 ================================================
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
-from orion.connectors.uw_alerts_connector import UWAlertsConnector
-from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
-from orion.storage.db import async_session_factory
-from orion.storage.models import IngestWatermark
-from orion.storage.watermarks import get_watermark
+
+from orion.connectors.gateway_stream_client import GatewayStreamClient
 
 
 @pytest.mark.asyncio
-async def test_darkpool_fetch():
-    connector = UWDarkPoolConnector(api_key="test_key", base_url="http://test.url")
-    base_now = datetime.now(timezone.utc)
-    prior_wm = base_now - timedelta(seconds=10)
+async def test_processes_gateway_data_envelope_bar_message() -> None:
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
 
-    async with async_session_factory() as session:
-        session.add(IngestWatermark(key="uw_darkpool", last_seen_ts_utc=prior_wm))
-        await session.commit()
-
-    async def fake_fetch_raw_for_date(_date_str: str):
-        return [
-            {
-                "id": "dp_old",
-                "ticker": "SPY",
-                "price": 400.0,
-                "size": 1000,
-                "executed_at": (base_now - timedelta(seconds=200)).isoformat(),
+    msg = {
+        "type": "data",
+        "feed": "bars",
+        "symbol": "AAPL",
+        "event_id": "evt-123",
+        "envelope": {
+            "event_id": "evt-123",
+            "instrument_key": "equity:AAPL",
+            "ts_event": "2026-02-05T14:31:00Z",
+            "payload": {
+                "T": "b",
+                "S": "AAPL",
+                "t": "2026-02-05T14:31:00Z",
+                "o": 190.0,
+                "h": 191.0,
+                "l": 189.0,
+                "c": 190.5,
+                "v": 1200,
             },
-            {
-                "id": "dp_1",
-                "ticker": "SPY",
-                "price": 401.0,
-                "size": 1000,
-                "executed_at": (base_now - timedelta(seconds=3)).isoformat(),
-            },
-        ]
+        },
+        "data": {
+            "T": "b",
+            "S": "AAPL",
+            "t": "2026-02-05T14:31:00Z",
+            "o": 190.0,
+            "h": 191.0,
+            "l": 189.0,
+            "c": 190.5,
+            "v": 1200,
+        },
+    }
 
-    connector._fetch_raw_for_date = fake_fetch_raw_for_date  # type: ignore[assignment]
+    await client._process_bar_message(msg)
 
-    events = await connector.fetch_events(lookback_seconds=0, overlap_seconds=120)
-
+    events = client.drain_events()
     assert len(events) == 1
-    assert events[0].event_type == "UW_DARKPOOL"
-    assert events[0].payload["ticker"] == "SPY"
+    event = events[0]
 
-    async with async_session_factory() as session:
-        persisted = await get_watermark(session, key="uw_darkpool")
-        assert persisted is not None
-        assert persisted >= base_now - timedelta(seconds=3)
-
-
-@pytest.mark.asyncio
-async def test_alerts_fetch():
-    connector = UWAlertsConnector(api_key="test_key", base_url="http://test.url")
-    base_now = datetime.now(timezone.utc)
-    prior_wm = base_now - timedelta(seconds=10)
-
-    async with async_session_factory() as session:
-        session.add(IngestWatermark(key="uw_alerts", last_seen_ts_utc=prior_wm))
-        await session.commit()
-
-    async def fake_fetch_raw_events(*, newer_than: datetime):
-        assert newer_than <= prior_wm
-        return {
-            "data": [
-                {
-                    "id": "alert_old",
-                    "ticker": "TSLA",
-                    "msg": "Old",
-                    "timestamp": (base_now - timedelta(seconds=200)).isoformat(),
-                },
-                {
-                    "id": "alert_1",
-                    "ticker": "TSLA",
-                    "msg": "Bullish",
-                    "timestamp": (base_now - timedelta(seconds=2)).isoformat(),
-                },
-            ]
-        }
-
-    connector._fetch_raw_events = fake_fetch_raw_events  # type: ignore[assignment]
-
-    events = await connector.fetch_events(lookback_seconds=0, overlap_seconds=120)
-
-    assert len(events) == 1
-    assert events[0].event_type == "UW_ALERT"
-    assert events[0].payload["ticker"] == "TSLA"
-
-    async with async_session_factory() as session:
-        persisted = await get_watermark(session, key="uw_alerts")
-        assert persisted is not None
-        assert persisted >= base_now - timedelta(seconds=2)
-
-
-
-================================================
-FILE: tests/connectors/test_uw_flow.py
-================================================
-from datetime import datetime, timedelta, timezone
-
-import pytest
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.core.errors import ProviderError
-from orion.storage.db import async_session_factory
-from orion.storage.models import IngestWatermark
-from orion.storage.watermarks import get_watermark
-
-
-@pytest.fixture
-def mock_env(monkeypatch):
-    monkeypatch.setenv("UW_API_KEY", "test_key")
-
-
-def test_init_raises_without_api_key(monkeypatch):
-    monkeypatch.delenv("UW_API_KEY", raising=False)
-    with pytest.raises(ProviderError, match="UW_API_KEY is required"):
-        UWFlowConnector()
+    assert event.event_id == "evt-123"
+    assert event.event_type == "ALPACA_BAR_1M"
+    assert event.source == "ALPACA"
+    assert event.payload["symbol"] == "AAPL"
+    assert event.payload["ticker"] == "AAPL"
+    assert event.payload["instrument_key"] == "equity:AAPL"
+    assert event.event_ts_utc == datetime(2026, 2, 5, 14, 31, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
-async def test_poll_uses_db_watermark_and_persists_updates(mock_env):
-    base_now = datetime.now(timezone.utc)
-    prior_wm = base_now - timedelta(seconds=10)
+async def test_rejects_invalid_close_price() -> None:
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
 
-    async with async_session_factory() as session:
-        session.add(IngestWatermark(key="uw_flow", last_seen_ts_utc=prior_wm))
-        await session.commit()
+    msg = {
+        "type": "data",
+        "feed": "bars",
+        "symbol": "AAPL",
+        "data": {
+            "T": "b",
+            "S": "AAPL",
+            "t": "2026-02-05T14:31:00Z",
+            "o": 190.0,
+            "h": 191.0,
+            "l": 189.0,
+            "c": 0,
+            "v": 1200,
+        },
+    }
 
-    connector = UWFlowConnector()
-    captured: dict = {}
+    await client._process_bar_message(msg)
 
-    async def fake_fetch_raw_events(start_ts: datetime, end_ts: datetime):
-        captured["start_ts"] = start_ts
-        captured["end_ts"] = end_ts
-        return [
-            {"id": "old", "ticker": "AAPL", "premium": 1, "timestamp": (base_now - timedelta(seconds=200)).isoformat()},
-            {"id": "dup", "ticker": "AAPL", "premium": 2, "timestamp": (base_now - timedelta(seconds=5)).isoformat()},
-            {"id": "dup", "ticker": "AAPL", "premium": 2, "timestamp": (base_now - timedelta(seconds=5)).isoformat()},
-            {"id": "new", "ticker": "TSLA", "premium": 3, "timestamp": (base_now - timedelta(seconds=3)).isoformat()},
-        ]
-
-    connector.fetch_raw_events = fake_fetch_raw_events  # type: ignore[assignment]
-
-    events = await connector.poll(lookback_seconds=0, overlap_seconds=120)
-
-    assert captured["start_ts"] <= prior_wm - timedelta(seconds=120) + timedelta(seconds=1)
-    assert captured["start_ts"] >= prior_wm - timedelta(seconds=120) - timedelta(seconds=1)
-
-    # "old" is older than the fetch window and should be filtered out; "dup" should be deduped.
-    assert len(events) == 2
-    ids = {e.source_event_id for e in events}
-    assert ids == {"dup", "new"}
-
-    async with async_session_factory() as session:
-        persisted = await get_watermark(session, key="uw_flow")
-        assert persisted is not None
-        assert persisted >= base_now - timedelta(seconds=3)
+    assert client.drain_events() == []
 
 
 @pytest.mark.asyncio
-async def test_watermark_persists_across_instances(mock_env):
-    base_now = datetime.now(timezone.utc)
-    prior_wm = base_now - timedelta(seconds=30)
+async def test_subscribe_before_connection_is_queued() -> None:
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
 
-    async with async_session_factory() as session:
-        session.add(IngestWatermark(key="uw_flow", last_seen_ts_utc=prior_wm))
-        await session.commit()
+    await client.subscribe(["AAPL", "MSFT"])
 
-    connector1 = UWFlowConnector()
+    assert client.subscribed_symbols == {"AAPL", "MSFT"}
 
-    async def fetch_for_first(_start: datetime, _end: datetime):
-        return [{"id": "x", "ticker": "SPY", "premium": 1, "timestamp": (base_now - timedelta(seconds=1)).isoformat()}]
 
-    connector1.fetch_raw_events = fetch_for_first  # type: ignore[assignment]
-    await connector1.poll(lookback_seconds=0, overlap_seconds=120)
-
-    connector2 = UWFlowConnector()
-    captured: dict = {}
-
-    async def fetch_for_second(start: datetime, end: datetime):
-        captured["start"] = start
-        captured["end"] = end
-        return []
-
-    connector2.fetch_raw_events = fetch_for_second  # type: ignore[assignment]
-    await connector2.poll(lookback_seconds=0, overlap_seconds=120)
-
-    async with async_session_factory() as session:
-        persisted = await get_watermark(session, key="uw_flow")
-        assert persisted is not None
-
-    assert captured["start"] >= persisted - timedelta(seconds=120) - timedelta(seconds=1)
-    assert captured["start"] <= persisted - timedelta(seconds=120) + timedelta(seconds=1)
+def test_bar_message_detection_handles_gateway_shape() -> None:
+    assert GatewayStreamClient._is_bar_message({"type": "data", "feed": "bars"}) is True
+    assert GatewayStreamClient._is_bar_message({"type": "ALPACA_BAR_1M"}) is True
+    assert GatewayStreamClient._is_bar_message({"type": "data", "feed": "quotes"}) is False
 
 
 
@@ -89398,116 +89060,6 @@ async def test_full_system_flow():
         # But verifying OrderRecord exists is sufficient for this vertical slice check.
 
     await test_engine.dispose()
-
-
-
-================================================
-FILE: tests/e2e/test_smoke_ingest.py
-================================================
-import asyncio
-from contextlib import ExitStack
-from unittest.mock import AsyncMock, patch
-
-import orion.main_ingest as main_app
-import pytest
-
-
-@pytest.mark.asyncio
-async def test_ingest_service_smoke_run():
-    """Run the main loop for a short time and ensure it shuts down cleanly."""
-
-    with ExitStack() as stack:
-        # 1. Setup Class/Factory mocks
-        MockProducerCls = stack.enter_context(patch("orion.main_ingest.RedpandaProducer"))
-        stack.enter_context(patch("orion.main_ingest.async_session_factory"))
-        stack.enter_context(patch("orion.main_ingest.init_db", new_callable=AsyncMock))
-        MockHealthMonitorCls = stack.enter_context(patch("orion.core.health_monitor.HealthMonitor"))
-
-        # 2. Setup Connector Mocks
-        MockUWFlow = stack.enter_context(patch("orion.main_ingest.UWFlowConnector"))
-        MockUWDark = stack.enter_context(patch("orion.main_ingest.UWDarkPoolConnector"))
-        MockUWAlerts = stack.enter_context(patch("orion.main_ingest.UWAlertsConnector"))
-        MockUniverse = stack.enter_context(patch("orion.main_ingest.UniverseManager"))
-        stack.enter_context(patch("orion.main_ingest.AlpacaMarketConnector"))
-
-        # 3. Setup Processing/Logic Mocks
-        stack.enter_context(patch("orion.main_ingest.FeatureEngine"))
-        stack.enter_context(patch("orion.main_ingest.RuleEngine"))
-        stack.enter_context(patch("orion.main_ingest.LakehouseWriter"))
-        MockDeduper = stack.enter_context(patch("orion.main_ingest.DeduplicationEngine"))
-        stack.enter_context(patch("orion.main_ingest.NormalizationEngine"))
-
-        # 4. Setup Persistence Mocks (CRITICAL: Must be AsyncMock)
-        stack.enter_context(patch("orion.main_ingest.persist_bronze_events", new_callable=AsyncMock))
-        stack.enter_context(patch("orion.main_ingest.persist_silver_from_bronze", new_callable=AsyncMock))
-        stack.enter_context(patch("orion.main_ingest.persist_silver_signals", new_callable=AsyncMock))
-        stack.enter_context(patch("orion.main_ingest.persist_candidates", new_callable=AsyncMock))
-
-        # 5. Setup Asyncio Sleep
-        stack.enter_context(patch("orion.main_ingest.asyncio.sleep", new_callable=AsyncMock))
-
-        # --- Configure Mocks ---
-
-        # Producer
-        mock_producer = AsyncMock()
-        mock_producer.start = AsyncMock()
-        mock_producer.stop = AsyncMock()
-        mock_producer.produce_event = AsyncMock()
-        mock_producer.produce_event.return_value = None
-        MockProducerCls.get_instance = AsyncMock(return_value=mock_producer)
-
-        # Connectors (Async Polls)
-        # Note: We must ensure the INSTANCES returned by the constructors have async methods
-        MockUWFlow.return_value.poll = AsyncMock(return_value=[])
-        MockUWDark.return_value.fetch_events = AsyncMock(return_value=[])
-        MockUWAlerts.return_value.fetch_events = AsyncMock(return_value=[])
-
-        # Health Monitor
-        MockHealthMonitorCls.return_value.check_lag = AsyncMock()
-        MockHealthMonitorCls.return_value.check_health = AsyncMock()
-        MockHealthMonitorCls.return_value.update_db_status = AsyncMock()
-        MockUWAlerts.return_value.fetch_events = AsyncMock(return_value=[])
-
-        # Universe Manager
-        MockUniverse.return_value.hydrate_from_db = AsyncMock()
-        # Deduplication
-        MockDeduper.return_value.dedupe_batch = AsyncMock(return_value=[])
-
-        # Feature Engine (Sync? Check usage. If sync, MagicMock is fine. If async, need fix)
-        # main_ingest.py: "e.enrichment = feature_engine.process_event(...)" -> Sync.
-        # But wait, "enriched = await feature_engine.process_uw_flow(events)"?
-        # Let's mock it as AsyncMock just in case, or leave as MagicMock if validation says sync.
-        # Previous errors were unrelated.
-
-        # --- Run Test Logic ---
-
-        main_app.SHUTDOWN = False
-        task = asyncio.create_task(main_app.main())
-
-        # Allow main loop to tick
-        await asyncio.sleep(0.1)
-
-        # Trigger Shutdown
-        main_app.SHUTDOWN = True
-
-        try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except asyncio.TimeoutError:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            pytest.fail("Ingest Service did not shut down in time")
-
-        if task.done() and not task.cancelled():
-            exc = task.exception()
-            if exc:
-                raise exc
-
-        # Assertions
-        mock_producer.start.assert_called_once()
-        mock_producer.stop.assert_called_once()
 
 
 
@@ -89934,147 +89486,6 @@ if __name__ == "__main__":
 
 
 ================================================
-FILE: tests/integration/test_connector_dlq.py
-================================================
-from datetime import datetime, timezone
-from unittest.mock import patch
-
-import pytest
-from orion.connectors.uw_darkpool_connector import UWDarkPoolConnector
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.storage import db
-from orion.storage.models_dlq import DeadLetterQueue
-from sqlalchemy import delete, select
-
-# Mock response data
-VALID_FLOW = {
-    "id": "FLOW_TEST_1",
-    "ticker": "AAPL",
-    "timestamp": datetime.now(timezone.utc).isoformat(),
-    "premium": 1000,
-    "strike_price": 150,
-    "expiry": "2025-01-17",
-    "put_call": "C",
-}
-
-# Malformed event (invalid timestamp)
-MALFORMED_FLOW = {"id": "FLOW_TEST_BAD", "ticker": "MSFT", "timestamp": "NOT_A_TIMESTAMP", "premium": 500}
-
-
-@pytest.fixture
-async def cleanup_dlq():
-    """Cleanup DLQ before and after test using isolated in-memory DB"""
-    import orion.storage.db
-    from orion.storage.db import Base
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-    from sqlalchemy.pool import StaticPool
-
-    # Create isolated in-memory DB
-    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False, poolclass=StaticPool)
-    test_session_factory = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
-
-    # Patch the global engine/session factory
-    # We must patch before creating tables so models are bound if needed (though Base is unbound)
-    with (
-        patch.object(orion.storage.db, "engine", test_engine),
-        patch.object(orion.storage.db, "async_session_factory", test_session_factory),
-    ):
-        # Create Tables
-        async with test_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-        async with test_session_factory() as session:
-            await session.execute(delete(DeadLetterQueue))
-            await session.commit()
-
-        yield
-
-        # Cleanup (optional for in-memory)
-
-
-@pytest.mark.asyncio
-async def test_uw_flow_dlq_integration(cleanup_dlq, mocker):
-    """
-    Verifies that UWFlowConnector processes valid events AND logs malformed events to DLQ.
-    """
-    # Mock network call
-    connector = UWFlowConnector(api_key="verify_test_key")
-
-    # Mocking sync session.get or fetch_flow?
-    # fetch_flow is sync, wrapped in thread.
-    # Easier to mock fetch_flow to return the mixed list
-
-    # Mock fetch_raw_events directly as it's the external boundary for this test
-    # ensuring it returns the mix of valid and invalid payloads.
-    # Note: fetch_raw_events in source is async.
-    mock_fetch = mocker.AsyncMock(return_value=[VALID_FLOW, MALFORMED_FLOW])
-    mocker.patch.object(connector, "fetch_raw_events", side_effect=mock_fetch)
-
-    # Act
-    events = await connector.poll()
-
-    # Assert
-    assert len(events) == 1
-    assert events[0].event_id == connector._generate_event_id(VALID_FLOW)
-
-    # Verify DLQ
-    async with db.async_session_factory() as session:
-        stmt = select(DeadLetterQueue).where(DeadLetterQueue.source == "UWFlowConnector")
-        result = await session.execute(stmt)
-        entries = result.scalars().all()
-
-        assert len(entries) == 1
-        dlq_entry = entries[0]
-        assert dlq_entry.event_type == "UW_FLOW_PARSE_ERROR"
-        assert dlq_entry.payload == MALFORMED_FLOW
-        # parse_timestamptz raises ValueError: "Failed to parse timestamp..."
-        assert "Failed to parse timestamp" in str(dlq_entry.error_message)
-
-
-@pytest.mark.asyncio
-async def test_uw_darkpool_dlq_integration(cleanup_dlq, mocker):
-    """
-    Verifies UWDarkPoolConnector DLQ logic.
-    """
-    connector = UWDarkPoolConnector(api_key="verify_test_key", base_url="http://mock")
-
-    mock_response = {
-        "data": [
-            {
-                "id": "DARK_TEST_1",
-                "ticker": "TSLA",
-                "executed_at": datetime.now(timezone.utc).isoformat(),
-                "price": 200,
-                "size": 100,
-            },
-            {"id": "DARK_TEST_BAD", "ticker": "NVDA", "executed_at": "GARBAGE_DATE", "price": 500},
-        ]
-    }
-
-    # Patch the function imported in the module, not a property of the client
-    # source: from orion.unusualwhales.api.darkpool import get_trades_by_date
-    mock_sync = mocker.MagicMock(return_value=mock_response)
-    mocker.patch("orion.connectors.uw_darkpool_connector.get_trades_by_date.sync", side_effect=mock_sync)
-
-    # Act
-    events = await connector.fetch_events()
-
-    # Assert
-    assert len(events) == 1
-    assert events[0].ticker == "TSLA"  # Payload access
-
-    # Verify DLQ
-    async with db.async_session_factory() as session:
-        stmt = select(DeadLetterQueue).where(DeadLetterQueue.source == "UWDarkPoolConnector")
-        result = await session.execute(stmt)
-        entries = result.scalars().all()
-
-        assert len(entries) == 1
-        assert entries[0].payload["ticker"] == "NVDA"
-
-
-
-================================================
 FILE: tests/integration/test_connector_retries.py
 ================================================
 from unittest.mock import MagicMock, patch
@@ -90258,76 +89669,6 @@ async def test_pagination_logic():
 
         # Verify call arguments to ensure offset was updated
         assert mock_session.execute.call_count == 3
-
-
-
-================================================
-FILE: tests/integration/test_db_mock.py
-================================================
-from unittest.mock import AsyncMock, patch
-
-import pytest
-from orion.storage.models import BronzeEvent
-from sqlalchemy.ext.asyncio import AsyncSession
-
-
-@pytest.mark.asyncio
-async def test_db_session_factory_mock():
-    """Verify that we can mock the session interaction."""
-    with patch("orion.storage.db.async_session_factory") as mock_factory:
-        mock_session = AsyncMock(spec=AsyncSession)
-        mock_factory.return_value.__aenter__.return_value = mock_session
-
-        # Simulate usage
-        async with mock_factory() as session:
-            await session.execute("SELECT 1")
-            await session.commit()
-
-        # Verify calls
-        assert session.execute.called
-        assert session.commit.called
-
-
-@pytest.mark.asyncio
-async def test_save_events_mock():
-    """Verify save_events_to_db logic using mocked DB."""
-    # We need to import the function. It's in main_ingest.py
-    # But main_ingest.py has global code that runs on import (which might fail if not mocked).
-    # We mocked pandas_ta in conftest, so hopefully safe.
-    # Also RedpandaProducer is used. We might need to mock that too.
-
-    from orion.main_ingest import save_events_to_db
-
-    events = [
-        BronzeEvent(
-            event_id="evt_1",
-            source="TEST",
-            event_type="TEST",
-            payload={"foo": "bar"},
-            # timestamps need to be handled if strictly constrained
-        )
-    ]
-    # We mock out RedpandaProducer.get_instance().produce_event AND db session
-
-    with (
-        patch("orion.main_ingest.RedpandaProducer") as MockProducerCls,
-        patch("orion.main_ingest.async_session_factory") as mock_db_factory,
-    ):
-        mock_producer = AsyncMock()
-        mock_producer.produce_event = AsyncMock()
-        MockProducerCls.get_instance = AsyncMock(return_value=mock_producer)
-
-        mock_session = AsyncMock(spec=AsyncSession)
-        mock_db_factory.return_value.__aenter__.return_value = mock_session
-
-        await save_events_to_db(events)
-
-        # Check Producer call
-        assert mock_producer.produce_event.called
-
-        # Check DB interact
-        assert mock_session.execute.called
-        assert mock_session.commit.called
 
 
 
@@ -91271,141 +90612,6 @@ async def test_pipeline_ingest_to_signal_live_row():
 
 
 ================================================
-FILE: tests/integration/test_queue_and_metrics.py
-================================================
-"""
-Integration test for queue optimization and metrics integration (Refactor Slices 2 & 3).
-Tests candidate queue flow from ingestion to execution.
-"""
-from datetime import datetime, timezone
-
-import pytest
-from orion.main_ingest import save_candidates_to_db
-from orion.shared.candidate_queue import CandidateQueue
-from orion.shared.metrics import Metrics
-from orion.storage.db import async_session_factory
-from orion.storage.models_gold import CandidateTrade
-
-
-@pytest.mark.asyncio
-async def test_candidate_queue_and_metrics():
-    """
-    Test the candidate queue integration:
-    1. Create candidates
-    2. Save to DB (should push to queue)
-    3. Verify queue contains candidate IDs
-    4. Verify metrics are tracked (if enabled)
-    """
-    now = datetime.now(timezone.utc)
-
-    # Create test candidates
-    candidates = [
-        CandidateTrade(
-            candidate_id=f"test_cand_{i}",
-            timestamp_utc=now,
-            ticker="SPY",
-            direction="LONG",
-            rule_id="test_rule",
-            signal_ids=[f"sig_{i}"],
-            model_version="test_v1",
-            expected_return=10.0,
-            p_take=0.6,
-            risk_score=0.3,
-            entry_logic={"order_type": "LIMIT", "limit_price": 500.0},
-            exit_rules={"stop_loss_pct": 0.02},
-            evidence={},
-        )
-        for i in range(5)
-    ]
-
-    # Save candidates (should push to queue)
-    await save_candidates_to_db(candidates)
-
-    # Verify queue contains candidate IDs
-    queue = await CandidateQueue.get_instance()
-    queue_size = queue.qsize()
-    assert queue_size == 5, f"Expected 5 candidates in queue, got {queue_size}"
-
-    # Drain queue and verify IDs match
-    popped_ids = []
-    for _ in range(5):
-        cid = await queue.pop(timeout=0.1)
-        assert cid is not None
-        popped_ids.append(cid)
-
-    expected_ids = {c.candidate_id for c in candidates}
-    assert set(popped_ids) == expected_ids
-
-    # Verify queue is empty
-    assert queue.qsize() == 0
-    empty_pop = await queue.pop(timeout=0.1)
-    assert empty_pop is None
-
-    # Test metrics (if enabled)
-    try:
-        metrics = await Metrics.get_instance()
-        # Verify metrics exist (we don't check values as they depend on test order)
-        assert hasattr(metrics, "execution_queue_depth")
-        assert hasattr(metrics, "risk_equity")
-    except ImportError:
-        # Metrics not available, skip
-        pass
-
-
-@pytest.mark.asyncio
-async def test_queue_backfill():
-    """
-    Test queue backfill on restart:
-    1. Create candidates in DB without queue
-    2. Simulate backfill logic
-    3. Verify queue is populated
-    """
-    from orion.execution.service import ExecutionService
-    from sqlalchemy import delete
-
-    now = datetime.now(timezone.utc)
-    test_candidate_id = "backfill_test_cand"
-
-    # Create unprocessed candidate (no decision)
-    candidate = CandidateTrade(
-        candidate_id=test_candidate_id,
-        timestamp_utc=now,
-        ticker="SPY",
-        direction="LONG",
-        rule_id="test_rule",
-        signal_ids=["sig_1"],
-        model_version="test_v1",
-        expected_return=10.0,
-        p_take=0.6,
-        risk_score=0.3,
-        entry_logic={"order_type": "LIMIT", "limit_price": 500.0},
-        exit_rules={"stop_loss_pct": 0.02},
-        evidence={},
-    )
-
-    try:
-        # Save directly to DB (bypass queue push)
-        async with async_session_factory() as session:
-            session.add(candidate)
-            await session.commit()
-
-        # Backfill queue
-        service = ExecutionService()
-        await service._backfill_queue()
-
-        # Verify queue contains the candidate
-        queue = await CandidateQueue.get_instance()
-        cid = await queue.pop(timeout=0.1)
-        assert cid == test_candidate_id
-    finally:
-        # M8 remediation: Clean up test data to prevent pollution
-        async with async_session_factory() as session:
-            await session.execute(delete(CandidateTrade).where(CandidateTrade.candidate_id == test_candidate_id))
-            await session.commit()
-
-
-
-================================================
 FILE: tests/integration/test_rate_limiter.py
 ================================================
 """
@@ -91533,147 +90739,6 @@ class TestGlobalRateLimiter:
         # After reset, getting limiter again should have clean state
         limiter = get_order_rate_limiter()
         assert limiter.requests_in_window == 0
-
-
-
-================================================
-FILE: tests/integration/test_redpanda_robustness.py
-================================================
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
-
-import pytest
-from aiokafka.errors import KafkaError
-from orion.connectors.redpanda_producer import RedpandaProducer
-from orion.storage.models import BronzeEvent
-
-# Note: We need to use 'with patch' to mock the AIOKafkaProducer inside RedpandaProducer
-
-
-@pytest.fixture
-async def redpanda_producer():
-    # Reset singleton
-    RedpandaProducer._reset_instance()
-    producer = await RedpandaProducer.get_instance()
-    yield producer
-    await producer.stop()
-    RedpandaProducer._reset_instance()
-
-
-@pytest.mark.asyncio
-async def test_redpanda_idempotence_config():
-    """Verify that AIOKafkaProducer is initialized with idempotence=True and acks='all'."""
-
-    # Reload module to bypass conftest global mock of get_instance
-    import importlib
-
-    import orion.connectors.redpanda_producer
-
-    importlib.reload(orion.connectors.redpanda_producer)
-    from orion.connectors.redpanda_producer import RedpandaProducer
-
-    # Ensure fresh start
-    RedpandaProducer._reset_instance()
-
-    with patch("orion.connectors.redpanda_producer.AIOKafkaProducer") as MockKafka:
-        mock_instance = AsyncMock()
-        MockKafka.return_value = mock_instance
-
-        producer = await RedpandaProducer.get_instance()
-        await producer.start()
-
-        # Check constructor args
-        MockKafka.assert_called_once()
-        call_kwargs = MockKafka.call_args.kwargs
-
-        assert call_kwargs.get("enable_idempotence") is True, "Idempotence must be enabled"
-        assert call_kwargs.get("acks") == "all", "Acks must be 'all'"
-
-    RedpandaProducer._reset_instance()
-
-
-@pytest.mark.asyncio
-async def test_redpanda_retry_logic():
-    """Verify that send_and_wait retries on transient errors."""
-    # Reload module to bypass conftest global mock
-    import importlib
-
-    import orion.connectors.redpanda_producer
-
-    importlib.reload(orion.connectors.redpanda_producer)
-    from orion.connectors.redpanda_producer import RedpandaProducer
-
-    RedpandaProducer._reset_instance()
-
-    with patch("orion.connectors.redpanda_producer.AIOKafkaProducer") as MockKafka:
-        mock_kafka_instance = AsyncMock()
-        MockKafka.return_value = mock_kafka_instance
-
-        # Start the producer (fixture yields it, but we need to start it or ensure internal client is mock)
-        # The fixture calls get_instance which calls __init__.
-        # But we are patching AIOKafkaProducer inside this test scope.
-        # If get_instance was called BEFORE this patch, the internal client is already created.
-        # The fixture creates `producer` before yielding.
-        # So we need to inject the mock into the existing producer instance.
-
-        # Setup mock to raise Exception then succeed
-        mock_kafka_instance.send_and_wait.side_effect = [
-            KafkaError("Transient"),
-            None,  # Success on retry
-        ]
-
-        producer = await RedpandaProducer.get_instance()
-        producer.client = mock_kafka_instance  # Inject mock client
-
-        # Test
-        await producer.produce_event("test_topic", "key", {"foo": "bar"})
-
-        assert mock_kafka_instance.send_and_wait.call_count == 2, "Should have retried once"
-
-
-@pytest.mark.asyncio
-async def test_main_ingest_dlq_fallback():
-    """Verify that main_ingest writes to DLQ if Redpanda fails exhaustively."""
-    from orion.main_ingest import save_events_to_db
-
-    # Create sample event
-    event = BronzeEvent(
-        event_id="test_evt_1",
-        source="TEST",
-        event_type="TEST_TYPE",
-        payload={"data": 123},
-        event_ts_utc=datetime.now(timezone.utc),
-        received_ts_utc=datetime.now(timezone.utc),
-        trading_date="2025-01-01",
-        session="REG",
-        schema_version="v1",
-    )
-
-    # Patch RedpandaProducer.get_instance to return a mock
-    mock_producer = AsyncMock()
-    mock_producer.produce_event.side_effect = Exception("Kafka Down")
-
-    # Patch the RedpandaProducer imported in main_ingest to handle potential stale references due to reloads
-    with (
-        patch("orion.main_ingest.RedpandaProducer.get_instance", new_callable=AsyncMock, return_value=mock_producer),
-        patch("orion.shared.dlq_utils.DLQWriter.write_to_dlq", new_callable=AsyncMock) as mock_dlq,
-        patch("orion.main_ingest.persist_bronze_events", new_callable=AsyncMock),
-        patch("orion.main_ingest.async_session_factory") as mock_session_factory,
-    ):
-        # Mock session context manager
-        mock_session = AsyncMock()
-        mock_session_factory.return_value.__aenter__.return_value = mock_session
-
-        await save_events_to_db([event])
-
-        # Verify produce called
-        assert mock_producer.produce_event.called
-
-        # Verify DLQ called
-        assert mock_dlq.called
-        args, kwargs = mock_dlq.call_args
-        assert kwargs["event_type"] == "REDPANDA_PRODUCE_FAILED"
-        assert kwargs["event_id"] == "test_evt_1"
 
 
 
@@ -92224,125 +91289,6 @@ if __name__ == "__main__":
     import asyncio
 
     asyncio.run(test_risk_manager_restart_pending_orders())
-
-
-
-================================================
-FILE: tests/integration/test_silver_ingest.py
-================================================
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
-
-import pytest
-from orion.main_ingest import save_silver_data
-from orion.processing.normalizer import NormalizationEngine
-from orion.storage.models import BronzeEvent
-
-
-@pytest.mark.asyncio
-async def test_silver_persistence_flow():
-    # 1. Mock Data
-    payload = {
-        "ticker": "AAPL",
-        "timestamp": "2023-10-27T14:30:00Z",
-        "put_call": "C",
-        "expiry": "2023-11-03",
-        "strike_price": 150.0,
-        "price": 2.5,
-        "size": 100,
-        "bid": 2.4,
-        "ask": 2.6,
-        "underlying_price": 145.0,
-        "aggressor": "ASK",
-        "sweep": True,
-        "trade_type": "BLOCK",
-        "open_interest": 5000,
-        "volume": 1000,
-        "premium": 25000.0,
-        "multi_leg": False,
-    }
-
-    norm_payload = NormalizationEngine.normalize_event("UW", "UW_FLOW", payload)
-
-    event = BronzeEvent(
-        event_id="test_flow_001",
-        source="UW",
-        event_type="UW_FLOW",
-        ticker="AAPL",
-        trading_date=datetime.now(),
-        session="REG",
-        event_ts_utc=datetime.now(timezone.utc),
-        payload=norm_payload,
-    )
-
-    # 2. Patch async_session_factory
-    with patch("orion.main_ingest.async_session_factory") as mock_factory:
-        mock_session = AsyncMock()
-        mock_factory.return_value.__aenter__.return_value = mock_session
-
-        # 3. Call Function
-        await save_silver_data([event])
-
-        # 4. Verify Call
-        assert mock_session.execute.called
-        assert mock_session.commit.called
-
-        # Inspect the Insert statement
-        # call_args[0][0] is the statement
-        call_args = mock_session.execute.call_args
-        stmt = call_args[0][0]
-
-        # Check if it inserts into SilverOptionFlow
-        assert stmt.table.name == "silver_uw_flow"
-
-        # Check values
-        # stmt.parameters is usually list of dicts for executemany, or we can check logic
-        # For 'values(list_of_dicts)', SQLAlchemy compiles it.
-        # We can check compiled params if accessible, or just rely on 'called' for this smoke test.
-        # But let's verify parameters passed to values()
-        # The 'values' are stored in stmt.parameters usually?
-        # For insert().values([...]), it's in stmt._values usually (internal) or we inspect the construct.
-
-        # Simple check: The function didn't error and called execute.
-        pass
-
-
-@pytest.mark.asyncio
-async def test_silver_persistence_bar():
-    # 1. Mock Alpaca Bar
-    payload = {
-        "t": "2023-10-27T14:31:00Z",
-        "o": 100.0,
-        "h": 101.0,
-        "l": 99.5,
-        "c": 100.5,
-        "v": 5000,
-        "vw": 100.2,
-        "symbol": "TSLA",
-    }
-
-    norm_payload = NormalizationEngine.normalize_event("ALPACA", "ALPACA_BAR_1M", payload)
-
-    event = BronzeEvent(
-        event_id="test_bar_001",
-        source="ALPACA",
-        event_type="ALPACA_BAR_1M",
-        ticker="TSLA",
-        trading_date=datetime.now(),
-        session="REG",
-        event_ts_utc=datetime.now(timezone.utc),
-        payload=norm_payload,
-    )
-
-    with patch("orion.main_ingest.async_session_factory") as mock_factory:
-        mock_session = AsyncMock()
-        mock_factory.return_value.__aenter__.return_value = mock_session
-
-        await save_silver_data([event])
-
-        assert mock_session.execute.called
-        stmt = mock_session.execute.call_args[0][0]
-        assert stmt.table.name == "silver_alpaca_bars"
 
 
 
@@ -93727,6 +92673,94 @@ class TestLakehouseWriter(unittest.TestCase):
 
 
 ================================================
+FILE: tests/unit/test_backfill_ml_features_signature.py
+================================================
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+import orion.jobs.backfill_ml_features as backfill
+import orion.main_price_target_labeler as labeler
+
+
+def _async_return(value):
+    async def _inner(*_args, **_kwargs):
+        return value
+
+    return _inner
+
+
+@pytest.mark.asyncio
+async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = {
+        "event_id": "evt-1",
+        "ticker": "AAPL",
+        "entry_ts": datetime(2026, 2, 6, 16, 0, tzinfo=timezone.utc),
+        "expiry": "2026-02-21",
+        "dte": 15,
+        "option_chain": "AAPL260221C00100000",
+    }
+
+    # Local backfill helpers
+    monkeypatch.setattr(backfill, "get_flow_greeks", _async_return({"delta": 0.1, "gamma": 0.01, "volume": 10, "open_interest": 50, "iv": 0.4}))
+    monkeypatch.setattr(backfill, "get_underlying_price_at_entry", _async_return(100.0))
+    monkeypatch.setattr(backfill, "get_underlying_price_at_offset", _async_return(101.0))
+    monkeypatch.setattr(backfill, "get_ticker_info", _async_return({"sector": "Technology", "next_earnings_date": None}))
+    monkeypatch.setattr(backfill, "get_gex_at_entry", _async_return({"gex": 1.0, "vex": 2.0}))
+    monkeypatch.setattr(backfill, "get_max_pain_distance", _async_return(0.5))
+    monkeypatch.setattr(backfill, "db_write", _async_return(None))
+
+    # Labeler helpers imported inside update_ml_features
+    monkeypatch.setattr(labeler, "get_phase1_bucket_features", _async_return({"overnight_gap_pct": 0.1, "vwap_distance_pct": 0.2, "minutes_to_close": 60, "price_change_5d_prior": 1.2, "earnings_in_dte_window": False}))
+    monkeypatch.setattr(labeler, "get_darkpool_metrics", _async_return({"darkpool_1h": 1, "darkpool_15m": 1, "darkpool_30m": 1, "darkpool_4h": 1, "darkpool_1d": 1, "darkpool_3d": 1, "darkpool_1w": 1, "darkpool_2w": 1, "darkpool_4w": 1}))
+    monkeypatch.setattr(
+        labeler,
+        "get_rvol_metrics",
+        _async_return(
+            {
+                "rvol_1h": 1.0,
+                "rvol_daily": 1.0,
+                "rvol_weekly": 1.0,
+                "rvol_30m": 1.0,
+                "rvol_3d": 1.0,
+                "rvol_monthly": 1.0,
+            }
+        ),
+    )
+    monkeypatch.setattr(labeler, "get_flow_aggression", _async_return({"ask_side_ratio": 0.7, "sweep_ratio_1h": 0.2, "same_ticker_premium_1h": 10000}))
+    monkeypatch.setattr(labeler, "get_institutional_flow_1w", _async_return(100000))
+    monkeypatch.setattr(labeler, "get_market_tide_before_entry", _async_return({"net_premium": 123.0, "direction": "BULLISH"}))
+    monkeypatch.setattr(labeler, "get_regime_at_entry", _async_return({"trend_regime": "UP", "vol_regime": "NORMAL", "risk_regime": "ON", "session_regime": "MID", "vix_at_entry": 18.0, "vix_regime": "NORMAL"}))
+    monkeypatch.setattr(labeler, "get_p2_features", _async_return({"oi_change_1d": 1.0, "oi_change_pct": 2.0, "iv_vs_hv_ratio": 1.1}))
+    monkeypatch.setattr(labeler, "get_p3_features", _async_return({"high_52w_distance_pct": 3.0, "is_spread_leg": False, "same_expiry_trades_1h": 1}))
+    monkeypatch.setattr(labeler, "get_iv_rank_at_entry", _async_return(55.0))
+
+    captured: dict[str, object] = {}
+
+    async def _sector_corr(ticker: str, entry_ts: datetime) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = entry_ts
+        return {
+            "sector_net_premium_1h": 10.0,
+            "sector_flow_direction": "BULLISH",
+            "spy_correlation_5d": 0.5,
+            "spy_return_1h": 0.2,
+        }
+
+    # Regression guard: this stub accepts exactly 2 args.
+    monkeypatch.setattr(labeler, "get_sector_correlation_features", _sector_corr)
+
+    ok = await backfill.update_ml_features(record)
+
+    assert ok is True
+    assert captured["ticker"] == "AAPL"
+    assert captured["entry_ts"] == record["entry_ts"]
+
+
+
+================================================
 FILE: tests/unit/test_backtest_cv_strictness.py
 ================================================
 from datetime import datetime, timedelta, timezone
@@ -93865,86 +92899,6 @@ async def test_baseline_solver_executes_when_selected(monkeypatch):
     assert decision.p_take is not None and decision.p_take >= 0.5
     assert isinstance(decision.decision_trace_json, dict)
     assert decision.decision_trace_json.get("primary_solver") == "baseline_solver"
-
-
-
-================================================
-FILE: tests/unit/test_candidate_queue.py
-================================================
-"""
-Unit tests for CandidateQueue module (Refactor Slice 2).
-"""
-
-import pytest
-from orion.shared.candidate_queue import CandidateQueue
-
-
-@pytest.mark.asyncio
-async def test_candidate_queue_singleton():
-    """Test queue is a singleton."""
-    queue1 = await CandidateQueue.get_instance()
-    queue2 = await CandidateQueue.get_instance()
-    assert queue1 is queue2
-
-
-@pytest.mark.asyncio
-async def test_queue_push_and_pop():
-    """Test basic push and pop operations."""
-    queue = await CandidateQueue.get_instance()
-
-    # Clear queue first
-    while queue.qsize() > 0:
-        await queue.pop(timeout=0.1)
-
-    # Push candidates
-    await queue.push("cand_1")
-    await queue.push("cand_2")
-    await queue.push("cand_3")
-
-    assert queue.qsize() == 3
-
-    # Pop in order
-    assert await queue.pop(timeout=0.1) == "cand_1"
-    assert await queue.pop(timeout=0.1) == "cand_2"
-    assert await queue.pop(timeout=0.1) == "cand_3"
-    assert queue.qsize() == 0
-
-
-@pytest.mark.asyncio
-async def test_queue_pop_timeout():
-    """Test pop timeout when queue is empty."""
-    queue = await CandidateQueue.get_instance()
-
-    # Clear queue
-    while queue.qsize() > 0:
-        await queue.pop(timeout=0.1)
-
-    # Pop from empty queue should return None after timeout
-    result = await queue.pop(timeout=0.1)
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_queue_full_drops_candidates():
-    """Test that queue drops candidates when full."""
-    # Create fresh instance for this test
-    test_queue = CandidateQueue()
-
-    # Fill queue to max (10000)
-    for i in range(10000):
-        await test_queue.push(f"cand_{i}")
-
-    assert test_queue.qsize() == 10000
-
-    # Try to push more (should be dropped)
-    initial_drops = test_queue.dropped_count
-    await test_queue.push("overflow_1")
-    await test_queue.push("overflow_2")
-
-    # Queue size should still be 10000
-    assert test_queue.qsize() == 10000
-    # Dropped count should increase
-    assert test_queue.dropped_count > initial_drops
 
 
 
@@ -94312,6 +93266,59 @@ def test_agent_settings_env_mapping():
         assert s.openai_api_key == "sk-test-123"
 
 
+def test_gateway_settings_env_mapping_primary_names():
+    """Verify DATA_GATEWAY_* env vars map into centralized system settings."""
+    with patch.dict(
+        os.environ,
+        {
+            "DATA_GATEWAY_URL": "http://gateway.internal:8080",
+            "DATA_GATEWAY_API_KEY": "gw-key-123",
+            "ORION_USE_GATEWAY": "false",
+        },
+        clear=True,
+    ):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.data_gateway_url == "http://gateway.internal:8080"
+        assert s.data_gateway_api_key == "gw-key-123"
+        assert s.orion_use_gateway is False
+
+
+def test_gateway_settings_env_mapping_legacy_aliases():
+    """Verify legacy GATEWAY_* env vars are still accepted."""
+    with patch.dict(
+        os.environ,
+        {
+            "GATEWAY_URL": "http://legacy-gateway:8080",
+            "GATEWAY_API_KEY": "legacy-key",
+        },
+        clear=True,
+    ):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.data_gateway_url == "http://legacy-gateway:8080"
+        assert s.data_gateway_api_key == "legacy-key"
+
+
+def test_heber_settings_env_mapping():
+    """Verify Heber env vars map into centralized system settings."""
+    with patch.dict(
+        os.environ,
+        {
+            "HEBER_CATALOG_URL": "http://heber-catalog:8085/api/v1",
+            "HEBER_DATA_ROOT": "/tmp/heber-data",
+        },
+        clear=True,
+    ):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.heber_catalog_url == "http://heber-catalog:8085/api/v1"
+        assert str(s.heber_data_root) == "/tmp/heber-data"
+
+
 @pytest.mark.asyncio
 async def test_eod_review_uses_config():
     """Verify EODReviewAgent uses configured paths."""
@@ -94347,53 +93354,6 @@ async def test_eod_review_uses_config():
                 # Verify makedirs called with correct path
                 expected_dir = "/tmp/mock_artifacts/reports"
                 mock_makedirs.assert_called_with(expected_dir, exist_ok=True)
-
-
-
-================================================
-FILE: tests/unit/test_config_ingestion.py
-================================================
-from datetime import date
-from unittest.mock import MagicMock, patch
-
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.core.errors import ProviderError
-
-
-def test_fetch_limit_config_usage():
-    """
-    Verify that UWFlowConnector uses the limit defined in system_settings.
-    """
-    # Patch system settings
-    with patch("orion.config.system_settings") as mock_settings:
-        mock_settings.uw_fetch_limit = 999
-
-        # Instantiate Connector (mock api key to pass init check)
-        connector = UWFlowConnector(api_key="test_key")
-
-        # Mock Session
-        connector.session = MagicMock()
-        mock_response = MagicMock()
-        mock_response.json.return_value = [{"data": []}]
-        mock_response.status_code = 200
-        connector.session.get.return_value = mock_response
-        mock_response.raise_for_status.return_value = None
-
-        # Call fetch_flow_for_date
-        try:
-            connector.fetch_flow_for_date(date(2025, 1, 1))
-        except ProviderError:
-            pass
-        except Exception:
-            pass
-
-        # Verify call args
-        call_args = connector.session.get.call_args
-        assert call_args is not None
-        _, kwargs = call_args
-        params = kwargs.get("params", {})
-
-        assert params["limit"] == 999
 
 
 
@@ -94984,29 +93944,6 @@ async def test_eod_review_writes_report_input_and_proposal(tmp_path, monkeypatch
     assert artifact["proposal"]["type"] == "solver_edit"
     assert "evidence_pointers" in artifact["proposal"]
     assert isinstance(artifact["proposal"]["test_plan"], list)
-
-
-
-================================================
-FILE: tests/unit/test_eod_wrapper.py
-================================================
-from unittest.mock import AsyncMock, patch
-
-import pytest
-from orion.main_ingest import run_eod_task
-
-
-@pytest.mark.asyncio
-async def test_run_eod_task_wrapper():
-    with patch("orion.agents.eod_review_agent.EODReviewAgent") as MockAgent:
-        mock_agent_instance = AsyncMock()
-        MockAgent.return_value = mock_agent_instance
-
-        await run_eod_task()
-
-        # Verify instantiation and run
-        assert MockAgent.called
-        assert mock_agent_instance.run_review.called
 
 
 
@@ -95763,6 +94700,49 @@ async def test_feature_engine_unknown_set_fallback():
 
 
 ================================================
+FILE: tests/unit/test_feature_enrichment_heber_source.py
+================================================
+from __future__ import annotations
+
+import pandas as pd
+from orion.main_feature_enrichment import _extract_top_tickers_from_flow_df
+
+
+def test_extract_top_tickers_prefers_most_frequent() -> None:
+    now = pd.Timestamp.now(tz="UTC")
+    df = pd.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT", "AAPL", "SPY", "AAPL", "MSFT"],
+            "ts_event": [now] * 6,
+        }
+    )
+
+    out = _extract_top_tickers_from_flow_df(df, limit=2)
+    assert out == ["AAPL", "MSFT"]
+
+
+def test_extract_top_tickers_filters_old_rows() -> None:
+    now = pd.Timestamp.now(tz="UTC")
+    old = now - pd.Timedelta(days=3)
+    df = pd.DataFrame(
+        {
+            "underlying": ["SPY", "QQQ"],
+            "flow_ts_utc": [now, old],
+        }
+    )
+
+    out = _extract_top_tickers_from_flow_df(df, limit=5)
+    assert out == ["SPY"]
+
+
+def test_extract_top_tickers_handles_missing_columns() -> None:
+    df = pd.DataFrame({"foo": [1, 2, 3]})
+    out = _extract_top_tickers_from_flow_df(df, limit=3)
+    assert out == []
+
+
+
+================================================
 FILE: tests/unit/test_feature_latency.py
 ================================================
 import asyncio
@@ -96027,70 +95007,122 @@ def test_live_promotion_rules():
 
 
 ================================================
-FILE: tests/unit/test_heartbeat_remediation.py
+FILE: tests/unit/test_heber_reader.py
 ================================================
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
 
-import pytest
-from orion.connectors.uw_flow_connector import UWFlowConnector
-from orion.storage.models import SystemStatus
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-# Mock data
-MOCK_FLOW_RESPONSE = [
-    {
-        "id": "123",
-        "ticker": "AAPL",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "premium": 50000,
-        "put_call": "C",
-    }
-]
+import httpx
+import pandas as pd
+
+from orion.clients.heber_reader import HeberReader
 
 
-@pytest.mark.asyncio
-async def test_uw_flow_connector_poll_updates_db_heartbeat():
-    # Patch the class method
-    with patch.object(UWFlowConnector, "fetch_raw_events", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = MOCK_FLOW_RESPONSE
+def _write_parquet(path: Path, df: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False)
 
-        # Mock DB Session
-        with patch("orion.storage.db.async_session_factory") as mock_session_factory:
-            mock_session = AsyncMock()
-            mock_session_factory.return_value.__aenter__.return_value = mock_session
 
-            # Setup mock for select(SystemStatus)
-            mock_result = MagicMock()
-            mock_record = SystemStatus(key="global_health", status="OLD_STATUS")
-            mock_result.scalars.return_value.first.return_value = mock_record
-            mock_session.execute.return_value = mock_result
-            mock_session.commit = AsyncMock()
+def test_health_check_uses_supported_endpoint() -> None:
+    seen_paths: list[str] = []
 
-            # Mock Watermark functions to avoid interference with session.execute mock
-            with (
-                patch("orion.storage.watermarks.get_watermark", new_callable=AsyncMock) as mock_get_wm,
-                patch("orion.storage.watermarks.upsert_watermark", new_callable=AsyncMock),
-            ):
-                mock_get_wm.return_value = None
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "healthy"})
+        return httpx.Response(404, json={"detail": "not found"})
 
-                connector = UWFlowConnector(gateway_url="http://localhost:8080")
-                # Manually mock the instance method to ensure interception
-                connector.fetch_raw_events = AsyncMock(return_value=MOCK_FLOW_RESPONSE)
-                # Ensure we bypass any validation that might check api key via property
+    client = httpx.Client(
+        base_url="http://localhost:8085/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    reader = HeberReader(http_client=client)
 
-                # Execute Poll
-                events = await connector.poll(lookback_seconds=60)
+    try:
+        assert reader.health_check() is True
+        assert "/health" in seen_paths
+    finally:
+        reader.close()
 
-                # Verify Fetch was called
-                assert connector.fetch_raw_events.call_count >= 1, "fetch_raw_events should be called"
 
-                # Verify DB Heartbeat Update
-                assert mock_record.status == "HEALTHY"
-                assert mock_session.commit.call_count >= 1
+def test_read_bars_filters_instrument_and_asof(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    bars = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
+            "bar_start_ts": [base, base + timedelta(minutes=1), base],
+            "ts_available": [base, base + timedelta(minutes=4), base],
+            "open": [100.0, 101.0, 200.0],
+            "high": [101.0, 102.0, 201.0],
+            "low": [99.0, 100.0, 199.0],
+            "close": [100.5, 101.5, 200.5],
+            "volume": [10, 20, 30],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=bars" / "dt=2026-02-05" / "part-0.parquet", bars)
 
-                # Verify Event Parsing
-                assert len(events) == 1
-                assert events[0].payload["ticker"] == "AAPL"
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_bars(symbols=["AAPL"], asof_time=base + timedelta(minutes=2))
+
+    assert len(result) == 1
+    assert set(result["instrument_key"]) == {"equity:AAPL"}
+    assert "ts_event" in result.columns
+    assert set(result["symbol"]) == {"AAPL"}
+
+
+def test_read_flow_applies_min_premium(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    flow = pd.DataFrame(
+        {
+            "instrument_key": ["equity:SPY", "equity:SPY", "equity:QQQ"],
+            "ts_event": [base, base + timedelta(minutes=1), base],
+            "ts_available": [base, base + timedelta(minutes=1), base],
+            "premium": [40_000.0, 120_000.0, 300_000.0],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=flow_alerts" / "dt=2026-02-05" / "part-0.parquet", flow)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_flow(symbols=["SPY"], asof_time=base + timedelta(minutes=3), min_premium=100_000)
+
+    assert len(result) == 1
+    assert result.iloc[0]["instrument_key"] == "equity:SPY"
+    assert float(result.iloc[0]["premium"]) == 120_000.0
+
+
+def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    gold = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
+            "ts_event": [base, base + timedelta(days=1), base],
+            "ts_available": [base, base + timedelta(days=2), base],
+            "momentum_5d": [0.1, 0.2, 0.3],
+        }
+    )
+    _write_parquet(
+        tmp_path
+        / "gold"
+        / "dataset=momentum_features"
+        / "project=quant"
+        / "version=v1"
+        / "dt=2026-02-05"
+        / "part-0.parquet",
+        gold,
+    )
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=base + timedelta(hours=1),
+        symbols=["AAPL"],
+    )
+
+    assert len(result) == 1
+    assert set(result["instrument_key"]) == {"equity:AAPL"}
+    assert float(result.iloc[0]["momentum_5d"]) == 0.1
 
 
 
@@ -96245,6 +95277,81 @@ def test_json_formatter_exception():
     assert data["message"] == "Error occurred"
     assert "exc_info" in data
     assert "ValueError: Oops" in data["exc_info"]
+
+
+
+================================================
+FILE: tests/unit/test_main_labeler_heber_migration.py
+================================================
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pandas as pd
+
+from orion.main_labeler import FlowRecord, _normalize_flow_df
+
+
+def test_normalize_flow_df_builds_records_from_heber_shape() -> None:
+    cutoff = datetime(2026, 2, 6, 15, 0, tzinfo=timezone.utc)
+    df = pd.DataFrame(
+        {
+            "event_id": ["evt-1", "evt-2"],
+            "ticker": ["AAPL", "MSFT"],
+            "ts_event": ["2026-02-06T12:00:00Z", "2026-02-06T16:00:00Z"],
+            "underlying_price": [100.5, 200.0],
+            "option_price": [1.2, 2.3],
+            "premium_usd": [50000, 60000],
+            "aggressor": ["ASK", "BID"],
+            "put_call": ["C", "P"],
+            "is_sweep": [True, False],
+            "iv": [0.45, 0.35],
+            "expiry": ["2026-02-21", "2026-02-21"],
+        }
+    )
+
+    records = _normalize_flow_df(df, cutoff)
+
+    assert len(records) == 1
+    rec = records[0]
+    assert isinstance(rec, FlowRecord)
+    assert rec.event_id == "evt-1"
+    assert rec.ticker == "AAPL"
+    assert rec.flow_ts_utc == datetime(2026, 2, 6, 12, 0, tzinfo=timezone.utc)
+    assert rec.underlying_price == 100.5
+    assert rec.option_price == 1.2
+
+
+def test_normalize_flow_df_supports_alias_columns() -> None:
+    cutoff = datetime(2026, 2, 6, 15, 0, tzinfo=timezone.utc)
+    df = pd.DataFrame(
+        {
+            "source_event_id": ["src-1"],
+            "underlying": ["SPY"],
+            "timestamp": ["2026-02-06T10:00:00Z"],
+            "spot_px": [501.25],
+            "price": [9.8],
+            "premium": [120000],
+            "side": ["ASK"],
+            "type": ["CALL"],
+            "sweep": ["true"],
+            "implied_volatility": [0.22],
+        }
+    )
+
+    records = _normalize_flow_df(df, cutoff)
+
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.event_id == "src-1"
+    assert rec.ticker == "SPY"
+    assert rec.underlying_price == 501.25
+    assert rec.option_price == 9.8
+    assert rec.premium_usd == 120000.0
+    assert rec.aggressor == "ASK"
+    assert rec.put_call == "CALL"
+    assert rec.is_sweep == "true"
+    assert rec.iv == 0.22
 
 
 
@@ -100149,92 +99256,6 @@ class TestParseTimestamptz:
         dt = parse_timestamptz("invalid", strict=False)
         assert isinstance(dt, datetime)
         assert dt.tzinfo == timezone.utc
-
-
-
-================================================
-FILE: tests/unit/test_uw_socket.py
-================================================
-import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from orion.connectors.uw_socket_connector import UWWebsocketConnector
-
-
-@pytest.mark.asyncio
-async def test_websocket_stream_flow():
-    """
-    Verifies that the connector:
-    1. Connects and Authenticates
-    2. Subscribes
-    3. Yields BronzeEvents from messages
-    """
-
-    mock_ws = AsyncMock()
-
-    # Mock recv() sequence:
-    # 1. Heartbeat
-    # 2. Flow Event
-    # 3. Simulate StopIteration to break the inner loop gracefully (or raise Exception)
-    # Raising ExitException to break the 'while True' loop in test without retry
-
-    flow_event = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "ticker": "AAPL",
-        "premium": 50000,
-        "type": "trade",
-    }
-
-    class BreakTest(BaseException):
-        pass
-
-    mock_ws.recv.side_effect = [
-        json.dumps({"type": "heartbeat"}),
-        json.dumps({"type": "message", "data": flow_event}),
-        BreakTest("Done"),
-    ]
-
-    with patch("websockets.connect", new_callable=MagicMock) as mock_connect:
-        # Mocking async with: return an object that has __aenter__ returning mock_ws
-        mock_connect.return_value.__aenter__.return_value = mock_ws
-
-        connector = UWWebsocketConnector(api_key="test_key")
-        connector = UWWebsocketConnector(api_key="test_key")
-        # connector.stream.retry = None # Ensure no tenacity interference (removed anyway)
-
-        events = []
-        try:
-            async for event in connector.stream():
-                events.append(event)
-        except BreakTest:
-            pass
-
-        # Verify Auth Sent
-        auth_call = json.loads(mock_ws.send.call_args_list[0][0][0])
-        assert auth_call["type"] == "auth"
-        assert auth_call["token"] == "test_key"
-
-        # Verify Subscription
-        sub_call = json.loads(mock_ws.send.call_args_list[1][0][0])
-        assert sub_call["type"] == "subscribe"
-        assert sub_call["channels"] == ["flow"]
-
-        # Verify Event Yielded
-        assert len(events) >= 1
-        check_event = events[0]
-        assert check_event.source == "UW"
-        assert check_event.event_type == "UW_FLOW"
-        assert check_event.payload["ticker"] == "AAPL"
-
-
-@pytest.mark.asyncio
-async def test_websocket_reconnection_logic():
-    pass
-    # Logic in strict loop is harder to test without infinite loop risk in mock.
-    # We validated the structure by observing the catch block in implementation.
-    # For now, simplistic stream flow test covers the happy path + interface.
 
 
 
