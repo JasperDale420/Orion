@@ -13,8 +13,9 @@ Buckets and their time horizons:
 
 import os
 import pickle
-from math import isnan
+import time
 from dataclasses import dataclass
+from math import isnan
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,6 +29,43 @@ from orion.shared.logger import setup_struct_logger
 logger = setup_struct_logger("orion.ml.exit_classifier")
 
 MODEL_DIR = Path(os.getenv("ORION_MODEL_DIR", "/app/models"))
+SCHEMA_CACHE_TTL_SECONDS = 60.0
+
+_schema_cache_columns: Optional[set[str]] = None
+_schema_cache_loaded_at: float = 0.0
+
+EXIT_FEATURE_NAMES: tuple[str, ...] = (
+    "current_return_pct",
+    "time_held_hours",
+    "delta_at_checkpoint",
+    "gamma_at_checkpoint",
+    "theta_at_checkpoint",
+    "iv_at_checkpoint",
+    "dte_at_checkpoint",
+    "time_value_pct",
+    "theta_decay_pct",
+    "premium_usd",
+    "dte_at_entry",
+    "is_sweep",
+    "iv_rank_at_entry",
+    "vix_at_entry",
+    "gex_at_entry",
+    "market_tide_30m",
+    "delta_at_entry",
+    "theta_at_entry",
+    "iv_at_entry",
+    "ask_side_ratio",
+    "window_call_put_imbalance_1h",
+    "window_sweep_ratio_1h",
+    "window_flow_count_1h",
+    "window_call_put_imbalance_1d",
+    "window_sweep_ratio_1d",
+    "window_dp_volume_1d",
+    "window_call_put_ratio_1d",
+    "window_call_put_imbalance_1w",
+    "window_sweep_ratio_1w",
+    "window_call_put_ratio_1w",
+)
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -75,6 +113,13 @@ def _empty_training_arrays(feature_count: int) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
+def _clear_price_target_label_schema_cache() -> None:
+    """Reset schema metadata cache (test/support helper)."""
+    global _schema_cache_columns, _schema_cache_loaded_at
+    _schema_cache_columns = None
+    _schema_cache_loaded_at = 0.0
+
+
 def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float, str]]) -> set[str]:
     """Build the required column set for a bucket training query."""
     required = {
@@ -112,6 +157,11 @@ def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float
 
 async def _load_price_target_label_columns() -> set[str]:
     """Return currently available columns in price_target_labels."""
+    global _schema_cache_columns, _schema_cache_loaded_at
+
+    now = time.monotonic()
+    if _schema_cache_columns is not None and (now - _schema_cache_loaded_at) < SCHEMA_CACHE_TTL_SECONDS:
+        return set(_schema_cache_columns)
 
     async def query(session: Any) -> list[str]:
         from sqlalchemy import text
@@ -131,7 +181,70 @@ async def _load_price_target_label_columns() -> set[str]:
         columns = await db_query(query)
     except Exception:
         return set()
-    return set(columns or [])
+    _schema_cache_columns = set(columns or [])
+    _schema_cache_loaded_at = now
+    return set(_schema_cache_columns)
+
+
+def _group_missing_columns_by_family(
+    missing_columns: set[str], checkpoints: list[tuple[str, float, str]]
+) -> dict[str, list[str]]:
+    """Group missing columns into actionable diagnostics families."""
+    grouped: dict[str, set[str]] = {
+        "entry_context": set(),
+        "outcome": set(),
+        "checkpoint_returns": set(),
+        "checkpoint_greeks": set(),
+        "checkpoint_time_decay": set(),
+        "other": set(),
+    }
+    checkpoint_suffixes = {suffix for suffix, _hours, _desc in checkpoints}
+
+    for column in missing_columns:
+        if column in {"max_return_pct", "max_drawdown_pct"}:
+            grouped["outcome"].add(column)
+            continue
+        if column in {
+            "ticker",
+            "entry_ts",
+            "premium_usd",
+            "dte",
+            "is_sweep",
+            "iv_rank_at_entry",
+            "vix_at_entry",
+            "trend_regime_at_entry",
+            "vol_regime_at_entry",
+            "gex_at_entry",
+            "market_tide_30m",
+            "delta_at_entry",
+            "gamma_at_entry",
+            "theta_at_entry",
+            "iv_at_entry",
+            "ask_side_ratio",
+            "trade_type",
+        }:
+            grouped["entry_context"].add(column)
+            continue
+        if any(column == f"return_at_{suffix}" for suffix in checkpoint_suffixes):
+            grouped["checkpoint_returns"].add(column)
+            continue
+        if any(
+            column == f"{prefix}_at_{suffix}"
+            for suffix in checkpoint_suffixes
+            for prefix in ("delta", "gamma", "theta", "iv", "dte")
+        ):
+            grouped["checkpoint_greeks"].add(column)
+            continue
+        if any(
+            column == f"{prefix}_at_{suffix}"
+            for suffix in checkpoint_suffixes
+            for prefix in ("time_value_pct", "theta_decay_pct")
+        ):
+            grouped["checkpoint_time_decay"].add(column)
+            continue
+        grouped["other"].add(column)
+
+    return {key: sorted(values) for key, values in grouped.items() if values}
 
 
 # Bucket-specific checkpoint configurations
@@ -464,16 +577,19 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
 
     Uses bucket-appropriate checkpoints from price_target_labels.
     """
+    feature_names = list(EXIT_FEATURE_NAMES)
     checkpoints = BUCKET_CHECKPOINTS.get(bucket, [])
     if not checkpoints:
         logger.warning(f"No checkpoints defined for bucket {bucket}")
-        return np.array([]), np.array([]), []
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
 
     required_columns = _required_price_target_columns_for_bucket(checkpoints)
     available_columns = await _load_price_target_label_columns()
     if available_columns:
         missing_columns = sorted(required_columns - available_columns)
         if missing_columns:
+            missing_by_family = _group_missing_columns_by_family(set(missing_columns), checkpoints)
             logger.warning(
                 "Skipping exit training due to missing price_target_labels columns",
                 extra={
@@ -481,41 +597,9 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                     "bucket": bucket,
                     "missing_columns": missing_columns,
                     "missing_count": len(missing_columns),
+                    "missing_by_family": missing_by_family,
                 },
             )
-            # Return with stable schema so orchestrators can continue safely.
-            feature_names = [
-                "current_return_pct",
-                "time_held_hours",
-                "delta_at_checkpoint",
-                "gamma_at_checkpoint",
-                "theta_at_checkpoint",
-                "iv_at_checkpoint",
-                "dte_at_checkpoint",
-                "time_value_pct",
-                "theta_decay_pct",
-                "premium_usd",
-                "dte_at_entry",
-                "is_sweep",
-                "iv_rank_at_entry",
-                "vix_at_entry",
-                "gex_at_entry",
-                "market_tide_30m",
-                "delta_at_entry",
-                "theta_at_entry",
-                "iv_at_entry",
-                "ask_side_ratio",
-                "window_call_put_imbalance_1h",
-                "window_sweep_ratio_1h",
-                "window_flow_count_1h",
-                "window_call_put_imbalance_1d",
-                "window_sweep_ratio_1d",
-                "window_dp_volume_1d",
-                "window_call_put_ratio_1d",
-                "window_call_put_imbalance_1w",
-                "window_sweep_ratio_1w",
-                "window_call_put_ratio_1w",
-            ]
             X_empty, y_empty = _empty_training_arrays(len(feature_names))
             return X_empty, y_empty, feature_names
 
@@ -607,45 +691,6 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         AND p.max_return_pct IS NOT NULL
     """
 
-    # Expanded feature names - includes checkpoint-specific features and window features
-    feature_names = [
-        # Position state at checkpoint
-        "current_return_pct",
-        "time_held_hours",
-        # Greeks evolution
-        "delta_at_checkpoint",
-        "gamma_at_checkpoint",
-        "theta_at_checkpoint",
-        "iv_at_checkpoint",
-        "dte_at_checkpoint",
-        # Time value decay
-        "time_value_pct",
-        "theta_decay_pct",
-        # Entry context
-        "premium_usd",
-        "dte_at_entry",
-        "is_sweep",
-        "iv_rank_at_entry",
-        "vix_at_entry",
-        "gex_at_entry",
-        "market_tide_30m",
-        "delta_at_entry",
-        "theta_at_entry",
-        "iv_at_entry",
-        "ask_side_ratio",
-        # Window features (multi-timeframe flow context)
-        "window_call_put_imbalance_1h",
-        "window_sweep_ratio_1h",
-        "window_flow_count_1h",
-        "window_call_put_imbalance_1d",
-        "window_sweep_ratio_1d",
-        "window_dp_volume_1d",
-        "window_call_put_ratio_1d",
-        "window_call_put_imbalance_1w",
-        "window_sweep_ratio_1w",
-        "window_call_put_ratio_1w",
-    ]
-
     async def run_query(session: Any) -> List[Any]:
         from sqlalchemy import text
 
@@ -664,7 +709,8 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
 
     if not rows:
         logger.warning(f"No training data for bucket {bucket}")
-        return np.array([]), np.array([]), []
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
 
     X_list = []
     y_list = []

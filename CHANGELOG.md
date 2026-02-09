@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Empty-Dataset Contract + Schema Cache + Missing-Column Family Diagnostics (TDD)**:
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - introduced `EXIT_FEATURE_NAMES` as a single feature-schema source-of-truth for training data output contracts,
+    - `build_bucket_training_data(...)` now returns stable empty matrices with schema for:
+      - unknown bucket names,
+      - valid buckets with zero query rows,
+    - added schema metadata TTL cache (`SCHEMA_CACHE_TTL_SECONDS`) for `price_target_labels` column probes to reduce repeated metadata reads during frequent training loops,
+    - added `_group_missing_columns_by_family(...)` and enriched `exit_training_schema_missing_columns` logs with grouped diagnostics (`entry_context`, `outcome`, `checkpoint_returns`, `checkpoint_greeks`, `checkpoint_time_decay`, `other`).
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_group_missing_columns_by_family_assigns_expected_buckets`
+    - `test_load_price_target_label_columns_uses_ttl_cache`
+    - strengthened no-row/unknown-bucket contract assertions to require stable empty shapes with feature schema.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Backfill Exit Columns Summary + Dead-Letter + Retry Knobs (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - `run_backfill(...)` now returns a structured summary payload (`velocity`, `checkpoint`, and totals),

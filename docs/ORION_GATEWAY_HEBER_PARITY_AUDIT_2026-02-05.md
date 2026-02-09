@@ -7493,3 +7493,43 @@ Result:
 
 Residual:
 - next pass should add optional dead-letter payload redaction controls and a max-file-size rotation policy for prolonged high-error periods.
+
+## 245) Pass 243 Continuation (2026-02-09)
+
+### 245.1 Exit Classifier Empty-Contract + Diagnostics Bundling (TDD-Backed)
+
+Finding:
+- exit-classifier training data had mixed empty-output contracts:
+  - unknown bucket and no-row paths returned empty arrays without feature schema,
+  - schema/query failure paths returned stable empty arrays with feature schema.
+- this made orchestrator behavior and downstream validation inconsistent.
+- schema-preflight logs had full missing-column lists but lacked grouped families for fast triage.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - promoted canonical training feature names to `EXIT_FEATURE_NAMES`,
+  - normalized `build_bucket_training_data(...)` to always return stable empty arrays + schema for:
+    - unknown bucket names,
+    - valid buckets with no rows,
+    - schema preflight failures,
+    - query exceptions,
+  - added schema metadata TTL caching for column probes:
+    - `SCHEMA_CACHE_TTL_SECONDS`
+    - `_clear_price_target_label_schema_cache()` test/support reset helper,
+  - added `_group_missing_columns_by_family(...)` and attached grouped diagnostics to `exit_training_schema_missing_columns` logs.
+- Extended `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_group_missing_columns_by_family_assigns_expected_buckets`
+  - `test_load_price_target_label_columns_uses_ttl_cache`
+  - strengthened unknown-bucket/no-row contract tests to enforce stable empty shape + feature schema.
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- training-data builders now expose one consistent empty-dataset contract regardless of failure/empty mode.
+- schema-preflight diagnostics are now triage-friendly and cheaper under repeated execution due to metadata caching.
+
+Residual:
+- add optional `force_schema_refresh` control for long-lived workers during active migrations.
+- add a lightweight metric counter for each `missing_by_family` group to improve runbook-driven alerting.

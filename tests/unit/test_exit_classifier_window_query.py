@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
-
 import orion.ml.exit_classifier as exit_classifier
+import pytest
 
 
 def test_can_train_with_labels_rejects_single_class_and_sparse_classes() -> None:
@@ -33,6 +32,28 @@ def test_required_price_target_columns_for_bucket_includes_checkpoint_families()
     assert "theta_decay_pct_at_1h" in required
 
 
+def test_group_missing_columns_by_family_assigns_expected_buckets() -> None:
+    checkpoints = exit_classifier.BUCKET_CHECKPOINTS["0DTE"]
+    grouped = exit_classifier._group_missing_columns_by_family(
+        {
+            "ticker",
+            "max_return_pct",
+            "return_at_5m",
+            "delta_at_5m",
+            "time_value_pct_at_5m",
+            "unknown_column",
+        },
+        checkpoints,
+    )
+
+    assert grouped["entry_context"] == ["ticker"]
+    assert grouped["outcome"] == ["max_return_pct"]
+    assert grouped["checkpoint_returns"] == ["return_at_5m"]
+    assert grouped["checkpoint_greeks"] == ["delta_at_5m"]
+    assert grouped["checkpoint_time_decay"] == ["time_value_pct_at_5m"]
+    assert grouped["other"] == ["unknown_column"]
+
+
 @pytest.mark.asyncio
 async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_query(
     monkeypatch: pytest.MonkeyPatch,
@@ -48,7 +69,9 @@ async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_
     assert isinstance(y, np.ndarray)
     assert X.size == 0
     assert y.size == 0
-    assert feature_names == []
+    assert len(feature_names) > 0
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
 
 
 @pytest.mark.asyncio
@@ -81,7 +104,9 @@ async def test_build_bucket_training_data_uses_single_lateral_window_lookup(
     assert isinstance(y, np.ndarray)
     assert X.size == 0
     assert y.size == 0
-    assert feature_names == []
+    assert len(feature_names) > 0
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
 
     sql = captured["sql"]
     assert "LEFT JOIN LATERAL" in sql
@@ -121,7 +146,9 @@ async def test_build_bucket_training_data_binds_trade_type_parameter(
 
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
-    assert feature_names == []
+    assert len(feature_names) > 0
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
     assert "p.trade_type = :trade_type" in str(captured["sql"])
     assert captured["params"] == {"trade_type": "0DTE"}
 
@@ -372,7 +399,9 @@ async def test_build_bucket_training_data_query_contract_per_bucket(
 
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
-    assert feature_names == []
+    assert len(feature_names) > 0
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
     assert captured["params"] == {"trade_type": bucket}
     sql = str(captured["sql"])
     for col in expected_cols:
@@ -458,3 +487,39 @@ async def test_build_bucket_training_data_short_circuits_when_required_columns_m
     assert y.shape == (0,)
     assert X.dtype == float
     assert y.dtype == int
+
+
+@pytest.mark.asyncio
+async def test_load_price_target_label_columns_uses_ttl_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    exit_classifier._clear_price_target_label_schema_cache()
+    call_count = 0
+    clock = {"now": 100.0}
+
+    class _Result:
+        def fetchall(self) -> list[tuple[str]]:
+            return [("ticker",), ("entry_ts",)]
+
+    class _Session:
+        async def execute(self, _stmt) -> _Result:
+            nonlocal call_count
+            call_count += 1
+            return _Result()
+
+    async def _db_query(operation):
+        return await operation(_Session())
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+    monkeypatch.setattr(exit_classifier.time, "monotonic", lambda: clock["now"], raising=False)
+
+    first = await exit_classifier._load_price_target_label_columns()
+    second = await exit_classifier._load_price_target_label_columns()
+
+    assert first == {"ticker", "entry_ts"}
+    assert second == {"ticker", "entry_ts"}
+    assert call_count == 1
+
+    clock["now"] = 100.0 + exit_classifier.SCHEMA_CACHE_TTL_SECONDS + 1.0
+    third = await exit_classifier._load_price_target_label_columns()
+
+    assert third == {"ticker", "entry_ts"}
+    assert call_count == 2
