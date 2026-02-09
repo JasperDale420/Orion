@@ -21,6 +21,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - `cleanup_legacy_backfill_watermarks(dry_run=...)`,
     - CLI support via `python -m orion.jobs.cleanup_legacy_backfill_watermarks [--dry-run]`.
   - Added `delete_watermarks(...)` helper in `src/orion/storage/watermarks.py` and tightened `upsert_watermark(...)` timezone typing guard.
+- **Legacy Backfill Watermark Cleanup Runbook Procedure**:
+  - Updated `docs/runbooks/database_ops.md` with:
+    - legacy-key inspection SQL against `ingest_watermarks`,
+    - dry-run + execution commands for `cleanup_legacy_backfill_watermarks`,
+    - before/after evidence-capture checklist for operational traceability.
 - **Price-Target Labeler Heber Flow Read Path (TDD)**:
   - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py` covering:
     - Heber-first entry candidate sourcing in `get_entry_signals(...)`

@@ -5897,3 +5897,23 @@ Result:
 
 Residual:
 - once executed in each environment, document completion evidence (row counts before/after) in operations runbook and retire any now-obsolete manual SQL cleanup notes.
+
+## 200) Pass 194 Continuation (2026-02-09)
+
+### 200.1 Legacy Watermark Cleanup Operational Evidence Runbook Added
+
+Finding:
+- cleanup execution path existed, but operator evidence capture (pre/post row snapshots + dry-run count logging) was not yet formalized in runbooks.
+
+Implemented:
+- Updated `docs/runbooks/database_ops.md` with:
+  - explicit SQL for legacy-key verification in `ingest_watermarks`,
+  - dry-run and execution commands for `python -m orion.jobs.cleanup_legacy_backfill_watermarks`,
+  - evidence checklist for before/after capture in ops logs.
+- corrected watermark table references in the same runbook to `ingest_watermarks` for consistency with actual storage model.
+
+Result:
+- operations now have a deterministic, documented procedure to execute and prove completion of legacy watermark cleanup across environments.
+
+Residual:
+- execute the documented procedure in each active environment and archive evidence artifacts in the team’s runbook/change-management system.

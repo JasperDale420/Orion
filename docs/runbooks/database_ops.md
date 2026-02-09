@@ -22,11 +22,25 @@ ORDER BY created_at_utc DESC
 LIMIT 10;
 ```
 
+### Check Legacy Backfill Watermark Rows
+
+```sql
+-- Legacy backfill watermark keys retired in 2026-02 cleanup pass
+SELECT key, last_seen_ts_utc, updated_ts_utc
+FROM ingest_watermarks
+WHERE key IN (
+  'backfill_ml_features.price_target_labels',
+  'backfill_exit_columns.velocity',
+  'backfill_exit_columns.checkpoint'
+)
+ORDER BY key;
+```
+
 ### Check Watermarks
 
 ```sql
--- View all watermarks (connector progress)
-SELECT * FROM watermarks ORDER BY last_seen_ts_utc DESC;
+-- View all ingestion watermarks (connector progress + legacy artifacts)
+SELECT * FROM ingest_watermarks ORDER BY last_seen_ts_utc DESC;
 ```
 
 ### Check DLQ (Dead Letter Queue)
@@ -62,10 +76,25 @@ VACUUM ANALYZE gold_feature_events;
 
 ```sql
 -- Reset UW flow watermark to 24 hours ago
-UPDATE watermarks 
+UPDATE ingest_watermarks 
 SET last_seen_ts_utc = NOW() - INTERVAL '24 hours'
 WHERE key = 'uw_flow';
 ```
+
+### Cleanup Legacy Backfill Watermark Rows
+
+```bash
+# 1) Dry-run: count matching rows (no delete)
+uv run python -m orion.jobs.cleanup_legacy_backfill_watermarks --dry-run
+
+# 2) Execute delete
+uv run python -m orion.jobs.cleanup_legacy_backfill_watermarks
+```
+
+Evidence capture checklist:
+1. Save dry-run count result in the change ticket.
+2. Run SQL query from "Check Legacy Backfill Watermark Rows" before and after delete.
+3. Record before/after row snapshots and execution timestamp in the ops log.
 
 ## Backup
 
