@@ -140,6 +140,25 @@ def get_quick_winner_target(seconds_threshold: int) -> str:
 
 def _exit_classifier_schema_refresh_config_from_env() -> tuple[bool, bool]:
     """Read schema-refresh strategy flags for exit-classifier training orchestration."""
+    strategy = os.getenv(
+        "ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY",
+        "",
+    ).strip().lower()
+    if strategy:
+        if strategy in {"off", "disabled", "none", "false"}:
+            return False, False
+        if strategy in {"prefetch_once", "once"}:
+            return True, False
+        if strategy in {"per_bucket", "each_bucket", "each"}:
+            return True, True
+        logger.warning(
+            "Invalid ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY; falling back to legacy flags",
+            extra={
+                "event": "exit_training_schema_refresh_strategy_invalid",
+                "strategy": strategy,
+            },
+        )
+
     force_schema_refresh = os.getenv(
         "ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH",
         "false",

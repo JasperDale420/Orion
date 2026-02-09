@@ -7718,3 +7718,32 @@ Result:
 
 Residual:
 - add a runbook note defining when to use `refresh_each_bucket=true` versus one-time prefetch in schema rollout playbooks.
+
+## 250) Pass 248 Continuation (2026-02-09)
+
+### 250.1 Pattern Miner Strategy Env Consolidation for Exit-Refresh Controls (TDD-Backed)
+
+Finding:
+- exit-refresh orchestration controls in pattern miner required two boolean env vars, which increased operator misconfiguration risk and did not provide a single declarative strategy switch.
+
+Implemented:
+- Updated `src/orion/ml/pattern_miner.py`:
+  - added strategy env support:
+    - `ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY`
+  - supported modes:
+    - `off|disabled|none|false` => no forced refresh,
+    - `prefetch_once|once` => one-time prefetch refresh,
+    - `per_bucket|each_bucket|each` => force refresh per bucket,
+  - precedence:
+    - valid strategy env overrides legacy flags,
+    - invalid strategy env logs `exit_training_schema_refresh_strategy_invalid` and falls back to legacy flags.
+- Updated tests in `tests/unit/test_pattern_miner_exit_refresh_config.py`:
+  - `test_exit_classifier_schema_refresh_strategy_per_bucket_overrides_legacy`
+  - `test_exit_classifier_schema_refresh_strategy_invalid_falls_back_to_legacy`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py` passed.
+- `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py` passed.
+
+Result:
+- orchestration now supports one declarative refresh strategy switch with backward-compatible fallback behavior, reducing rollout configuration mistakes.

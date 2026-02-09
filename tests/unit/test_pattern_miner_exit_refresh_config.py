@@ -6,6 +6,7 @@ import orion.ml.pattern_miner as pattern_miner
 
 
 def test_exit_classifier_schema_refresh_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY", raising=False)
     monkeypatch.delenv("ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH", raising=False)
     monkeypatch.delenv("ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET", raising=False)
 
@@ -17,6 +18,7 @@ def test_exit_classifier_schema_refresh_config_defaults(monkeypatch: pytest.Monk
 
 def test_exit_classifier_schema_refresh_config_disables_invalid_each_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
+    monkeypatch.delenv("ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY", raising=False)
     monkeypatch.setenv("ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH", "false")
     monkeypatch.setenv("ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET", "true")
 
@@ -35,6 +37,39 @@ def test_exit_classifier_schema_refresh_config_disables_invalid_each_bucket(monk
         "force_schema_refresh": False,
         "refresh_each_bucket": True,
     }
+
+
+def test_exit_classifier_schema_refresh_strategy_per_bucket_overrides_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY", "per_bucket")
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH", "false")
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET", "false")
+
+    force_refresh, refresh_each_bucket = pattern_miner._exit_classifier_schema_refresh_config_from_env()
+
+    assert force_refresh is True
+    assert refresh_each_bucket is True
+
+
+def test_exit_classifier_schema_refresh_strategy_invalid_falls_back_to_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY", "not-a-real-mode")
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH", "true")
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET", "false")
+
+    def _fake_warning(_message: str, *, extra: dict[str, object]) -> None:
+        captured.append(extra)
+
+    monkeypatch.setattr(pattern_miner.logger, "warning", _fake_warning, raising=False)
+
+    force_refresh, refresh_each_bucket = pattern_miner._exit_classifier_schema_refresh_config_from_env()
+
+    assert force_refresh is True
+    assert refresh_each_bucket is False
+    assert any(item.get("event") == "exit_training_schema_refresh_strategy_invalid" for item in captured)
 
 
 @pytest.mark.asyncio

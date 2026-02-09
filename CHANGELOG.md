@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Pattern Miner Exit-Refresh Strategy Env Unification (TDD)**:
+  - Updated `src/orion/ml/pattern_miner.py`:
+    - added `ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY` with supported modes:
+      - `off|disabled|none|false`
+      - `prefetch_once|once`
+      - `per_bucket|each_bucket|each`
+    - strategy env takes precedence over legacy bool flags when valid,
+    - invalid strategy values log `exit_training_schema_refresh_strategy_invalid` and fall back to legacy env flags.
+  - Updated `tests/unit/test_pattern_miner_exit_refresh_config.py`:
+    - `test_exit_classifier_schema_refresh_strategy_per_bucket_overrides_legacy`
+    - `test_exit_classifier_schema_refresh_strategy_invalid_falls_back_to_legacy`
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py`
 - **Combined Pass: Dead-Letter Gzip Rotation + Exit-Training Refresh Env Wiring (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - added optional gzip compression for rotated dead-letter files:
