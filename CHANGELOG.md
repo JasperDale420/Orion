@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill ML-Features Durable Keyset Resume State (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_selection.py` with:
+    - `test_run_backfill_resumes_with_keyset_cursor_when_available`
+  - Updated `src/orion/jobs/backfill_ml_features.py` to:
+    - persist resume cursor state using `entry_ts` + `event_id`,
+    - load keyset cursor state on startup with timestamp-watermark fallback,
+    - persist both keyset cursor and legacy watermark during progress updates.
+  - `backfill_ml_features` now resumes with strict keyset continuity when available while preserving backward compatibility with existing timestamp-only state.
 - **Backfill Exit-Columns Keyset Resume State (TDD)**:
   - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
     - `test_run_backfill_resumes_with_keyset_cursor_when_available`

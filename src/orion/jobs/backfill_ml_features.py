@@ -33,7 +33,7 @@ from orion.main_price_target_labeler import (
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
-from orion.storage.watermarks import get_watermark, upsert_watermark
+from orion.storage.watermarks import get_cursor_state, get_watermark, upsert_cursor_state, upsert_watermark
 from orion.unusualwhales.api.stock import get_info
 from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
@@ -42,6 +42,7 @@ logger = setup_struct_logger("orion.backfill.ml_features")
 
 BATCH_SIZE = 50
 BACKFILL_WATERMARK_KEY = "backfill_ml_features.price_target_labels"
+BACKFILL_CURSOR_KEY = "backfill_ml_features.price_target_labels.cursor"
 
 
 def extract_underlying_ticker(option_symbol: str) -> str:
@@ -325,6 +326,34 @@ async def _save_backfill_watermark(entry_ts: datetime) -> None:
     await db_write(write)
 
 
+async def _load_backfill_cursor() -> tuple[datetime | None, str | None]:
+    """Load persisted resume cursor (timestamp + event_id)."""
+
+    async def query(session: Any) -> tuple[datetime | None, str | None]:
+        cursor = await get_cursor_state(session, BACKFILL_CURSOR_KEY)
+        if cursor is not None:
+            return cursor.last_seen_ts_utc, cursor.last_seen_id
+        ts = await get_watermark(session, BACKFILL_WATERMARK_KEY)
+        return ts, None
+
+    return await db_query(query)
+
+
+async def _save_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
+    """Persist resume cursor and legacy timestamp watermark."""
+
+    async def write(session: Any) -> None:
+        await upsert_cursor_state(
+            session,
+            key=BACKFILL_CURSOR_KEY,
+            last_seen_ts_utc=entry_ts,
+            last_seen_id=event_id,
+        )
+        await upsert_watermark(session, key=BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
+
+    await db_write(write)
+
+
 async def update_ml_features(record: Dict[str, Any]) -> bool:
     """Update ML feature columns for a record."""
     event_id = record["event_id"]
@@ -504,11 +533,14 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
 
     total_processed = 0
     total_updated = 0
-    after_entry_ts: datetime | None = await _load_backfill_watermark()
-    after_event_id: str | None = None
+    after_entry_ts, after_event_id = await _load_backfill_cursor()
 
     if after_entry_ts is not None:
-        logger.info(f"Resuming backfill from persisted watermark {after_entry_ts.isoformat()}")
+        logger.info(
+            "Resuming backfill from persisted cursor ts=%s event_id=%s",
+            after_entry_ts.isoformat(),
+            after_event_id,
+        )
 
     while True:
         remaining = limit - total_processed
@@ -534,7 +566,7 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             after_entry_ts = record.get("entry_ts")
             after_event_id = record.get("event_id")
             if after_entry_ts is not None:
-                await _save_backfill_watermark(after_entry_ts)
+                await _save_backfill_cursor(after_entry_ts, after_event_id)
 
             if total_processed >= limit:
                 break

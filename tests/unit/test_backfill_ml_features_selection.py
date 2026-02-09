@@ -247,21 +247,77 @@ async def test_run_backfill_resumes_from_watermark_and_persists_progress(
     async def _fake_sleep(_seconds: float) -> None:
         return None
 
-    async def _fake_load_backfill_watermark() -> datetime | None:
-        return resumed_ts
+    async def _fake_load_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return resumed_ts, None
 
-    async def _fake_save_backfill_watermark(ts: datetime) -> None:
-        saved_watermarks.append(ts)
+    async def _fake_save_backfill_cursor(entry_ts: datetime, _event_id: str | None) -> None:
+        saved_watermarks.append(entry_ts)
 
     monkeypatch.setattr(backfill_ml_features, "get_records_to_backfill", _fake_get_records_to_backfill)
     monkeypatch.setattr(backfill_ml_features, "update_ml_features", _fake_update_ml_features)
     monkeypatch.setattr(backfill_ml_features, "init_db", _fake_init_db)
     monkeypatch.setattr(backfill_ml_features.asyncio, "sleep", _fake_sleep)
-    monkeypatch.setattr(backfill_ml_features, "_load_backfill_watermark", _fake_load_backfill_watermark, raising=False)
-    monkeypatch.setattr(backfill_ml_features, "_save_backfill_watermark", _fake_save_backfill_watermark, raising=False)
+    monkeypatch.setattr(backfill_ml_features, "_load_backfill_cursor", _fake_load_backfill_cursor, raising=False)
+    monkeypatch.setattr(backfill_ml_features, "_save_backfill_cursor", _fake_save_backfill_cursor, raising=False)
 
     await backfill_ml_features.run_backfill(batch_size=2, limit=2)
 
     assert calls[0]["after_entry_ts"] == resumed_ts
     assert calls[0]["after_event_id"] is None
     assert saved_watermarks == [first_ts, second_ts]
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_resumes_with_keyset_cursor_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    saved_cursors: list[tuple[datetime, str]] = []
+
+    resumed_ts = datetime(2026, 2, 9, 13, 0, tzinfo=timezone.utc)
+    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        calls.append(
+            {
+                "limit": limit,
+                "after_entry_ts": after_entry_ts,
+                "after_event_id": after_event_id,
+            }
+        )
+        if len(calls) == 1:
+            return [{"event_id": "evt-200", "ticker": "AAPL", "entry_ts": first_ts}]
+        return []
+
+    async def _fake_update_ml_features(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    async def _fake_load_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return resumed_ts, "evt-150"
+
+    async def _fake_save_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
+        assert event_id is not None
+        saved_cursors.append((entry_ts, event_id))
+
+    monkeypatch.setattr(backfill_ml_features, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_ml_features, "update_ml_features", _fake_update_ml_features)
+    monkeypatch.setattr(backfill_ml_features, "init_db", _fake_init_db)
+    monkeypatch.setattr(backfill_ml_features.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(backfill_ml_features, "_load_backfill_cursor", _fake_load_backfill_cursor, raising=False)
+    monkeypatch.setattr(backfill_ml_features, "_save_backfill_cursor", _fake_save_backfill_cursor, raising=False)
+
+    await backfill_ml_features.run_backfill(batch_size=2, limit=1)
+
+    assert calls[0]["after_entry_ts"] == resumed_ts
+    assert calls[0]["after_event_id"] == "evt-150"
+    assert saved_cursors == [(first_ts, "evt-200")]

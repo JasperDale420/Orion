@@ -5748,3 +5748,25 @@ Result:
 
 Residual:
 - configuration still relies on polling env state each loop; if stronger dynamic config controls are needed, migrate policy source to a centralized runtime config table/watch channel.
+
+## 195) Pass 189 Continuation (2026-02-09)
+
+### 195.1 `backfill_ml_features` Durable Keyset Resume State Added (TDD-Backed)
+
+Finding:
+- `backfill_ml_features` resume continuity persisted only timestamp watermarks; restart during shared `entry_ts` cohorts could replay same-timestamp rows because `event_id` ordering state was not durable.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_selection.py` with:
+  - `test_run_backfill_resumes_with_keyset_cursor_when_available`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - added `BACKFILL_CURSOR_KEY` and durable cursor load/save helpers using `job_cursor_state`,
+  - startup resume now loads `entry_ts` + `event_id` keyset cursor when available,
+  - retained fallback to legacy timestamp watermark for backward compatibility,
+  - per-record progress now persists both keyset cursor state and legacy timestamp watermark.
+
+Result:
+- ML feature backfill restart behavior now supports strict keyset continuation, reducing duplicate replay risk across same-timestamp candidate cohorts.
+
+Residual:
+- after rollout stabilization, timestamp-only watermark fallback for this job can be retired to simplify resume-state ownership.
