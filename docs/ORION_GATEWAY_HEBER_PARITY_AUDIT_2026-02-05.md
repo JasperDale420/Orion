@@ -7747,3 +7747,33 @@ Verification:
 
 Result:
 - orchestration now supports one declarative refresh strategy switch with backward-compatible fallback behavior, reducing rollout configuration mistakes.
+
+## 251) Pass 249 Continuation (2026-02-09)
+
+### 251.1 Combined Remediation: Dead-Letter Rotation Retention Cap + Refresh Strategy Runbook Note (TDD-Backed)
+
+Finding:
+- pass 249 left two operational gaps:
+  - rotated dead-letter files could still grow unbounded in file count during sustained failure periods,
+  - strategy guidance for `prefetch_once` vs `per_bucket` refresh mode was not captured in runbooks.
+
+Implemented:
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - added `ORION_BACKFILL_EXIT_DEAD_LETTER_MAX_ROTATED_FILES`,
+  - added `dead_letter_max_rotated_files` through function/runtime summary/CLI surfaces,
+  - added pruning helper behavior that deletes oldest rotated files (`.jsonl.N` and `.jsonl.N.gz`) before creating a new rotation when cap is reached.
+- Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+  - `test_write_dead_letter_record_prunes_oldest_rotation_when_cap_reached`
+  - `test_write_dead_letter_record_prunes_oldest_gzip_rotation_when_cap_reached`
+- Added runbook guidance:
+  - `docs/runbooks/schema_rollout.md` with explicit strategy selection criteria for:
+    - `ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY=prefetch_once`
+    - `ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY=per_bucket`
+  - linked from `docs/runbooks/README.md`.
+
+Verification:
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_pattern_miner_exit_refresh_config.py` passed.
+
+Result:
+- dead-letter rotation is now bounded by both file size and retained-file count.
+- rollout operators now have an explicit runbook for schema-refresh strategy selection during migration windows.

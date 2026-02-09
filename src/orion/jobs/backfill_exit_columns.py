@@ -47,6 +47,7 @@ DEFAULT_DEAD_LETTER_REDACT_FIELDS = {
     for field in os.getenv("ORION_BACKFILL_EXIT_DEAD_LETTER_REDACT_FIELDS", "").split(",")
     if field.strip()
 }
+DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES = int(os.getenv("ORION_BACKFILL_EXIT_DEAD_LETTER_MAX_ROTATED_FILES", "0"))
 DEFAULT_DEAD_LETTER_COMPRESS_ROTATED = os.getenv(
     "ORION_BACKFILL_EXIT_DEAD_LETTER_COMPRESS_ROTATED",
     "false",
@@ -332,10 +333,44 @@ def _gzip_dead_letter_rotation_file(source_path: Path) -> None:
     source_path.unlink(missing_ok=True)
 
 
+def _existing_dead_letter_rotation_files(dead_letter_file: Path) -> list[tuple[int, Path]]:
+    """Return existing rotated dead-letter files keyed by numeric suffix."""
+    prefix = f"{dead_letter_file.name}."
+    rotations: list[tuple[int, Path]] = []
+    for candidate in dead_letter_file.parent.glob(f"{dead_letter_file.name}.*"):
+        name = candidate.name
+        if not name.startswith(prefix):
+            continue
+        suffix = name[len(prefix) :]
+        if suffix.endswith(".gz"):
+            suffix = suffix[: -len(".gz")]
+        if not suffix.isdigit():
+            continue
+        rotations.append((int(suffix), candidate))
+    rotations.sort(key=lambda item: (item[0], item[1].name))
+    return rotations
+
+
+def _prune_dead_letter_rotations(dead_letter_file: Path, max_rotated_files: int) -> int:
+    """Prune oldest rotation files before adding a new rotation."""
+    if max_rotated_files <= 0:
+        return 0
+
+    existing = _existing_dead_letter_rotation_files(dead_letter_file)
+    delete_count = max(0, len(existing) - max_rotated_files + 1)
+    if delete_count <= 0:
+        return 0
+
+    for _suffix, path in existing[:delete_count]:
+        path.unlink(missing_ok=True)
+    return delete_count
+
+
 def _rotate_dead_letter_file_if_needed(
     dead_letter_file: Path,
     max_bytes: int,
     compress_rotated: bool = False,
+    max_rotated_files: int = DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES,
 ) -> bool:
     """Rotate dead-letter file when size exceeds threshold."""
     if max_bytes <= 0 or not dead_letter_file.exists():
@@ -343,23 +378,24 @@ def _rotate_dead_letter_file_if_needed(
     if dead_letter_file.stat().st_size < max_bytes:
         return False
 
-    suffix = 1
-    while True:
-        candidate = dead_letter_file.with_name(f"{dead_letter_file.name}.{suffix}")
-        candidate_gz = dead_letter_file.with_name(f"{dead_letter_file.name}.{suffix}.gz")
-        if not candidate.exists() and (not compress_rotated or not candidate_gz.exists()):
-            dead_letter_file.rename(candidate)
-            if compress_rotated:
-                try:
-                    _gzip_dead_letter_rotation_file(candidate)
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to gzip rotated dead-letter file %s: %s",
-                        candidate,
-                        exc,
-                    )
-            return True
-        suffix += 1
+    pruned = _prune_dead_letter_rotations(dead_letter_file, max_rotated_files)
+    if pruned > 0:
+        logger.info("Pruned %s dead-letter rotation file(s) before rotate", pruned)
+
+    existing = _existing_dead_letter_rotation_files(dead_letter_file)
+    next_suffix = (max((suffix for suffix, _path in existing), default=0)) + 1
+    candidate = dead_letter_file.with_name(f"{dead_letter_file.name}.{next_suffix}")
+    dead_letter_file.rename(candidate)
+    if compress_rotated:
+        try:
+            _gzip_dead_letter_rotation_file(candidate)
+        except Exception as exc:
+            logger.warning(
+                "Failed to gzip rotated dead-letter file %s: %s",
+                candidate,
+                exc,
+            )
+    return True
 
 
 def _write_dead_letter_record(
@@ -367,13 +403,19 @@ def _write_dead_letter_record(
     payload: Dict[str, Any],
     max_bytes: int = DEFAULT_DEAD_LETTER_MAX_BYTES,
     redact_fields: set[str] | None = None,
+    max_rotated_files: int = DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES,
     compress_rotated: bool = DEFAULT_DEAD_LETTER_COMPRESS_ROTATED,
 ) -> bool:
     """Append a dead-letter payload as JSONL."""
     path = Path(dead_letter_path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     redacted_payload = _apply_dead_letter_redaction(payload, redact_fields or set())
-    rotated = _rotate_dead_letter_file_if_needed(path, max_bytes, compress_rotated=compress_rotated)
+    rotated = _rotate_dead_letter_file_if_needed(
+        path,
+        max_bytes,
+        compress_rotated=compress_rotated,
+        max_rotated_files=max_rotated_files,
+    )
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(redacted_payload, default=_json_safe) + "\n")
     return rotated
@@ -387,6 +429,7 @@ async def run_backfill(
     dead_letter_path: str | None = DEFAULT_DEAD_LETTER_PATH,
     dead_letter_max_bytes: int = DEFAULT_DEAD_LETTER_MAX_BYTES,
     dead_letter_redact_fields: set[str] | None = None,
+    dead_letter_max_rotated_files: int = DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES,
     dead_letter_compress_rotated: bool = DEFAULT_DEAD_LETTER_COMPRESS_ROTATED,
 ) -> Dict[str, Any]:
     """Run the backfill job."""
@@ -394,7 +437,7 @@ async def run_backfill(
     dead_letter_redact_fields = dead_letter_redact_fields or DEFAULT_DEAD_LETTER_REDACT_FIELDS
 
     logger.info(
-        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_compress_rotated=%s",
+        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_max_rotated_files=%s, dead_letter_compress_rotated=%s",
         batch_size,
         limit,
         max_retries,
@@ -402,6 +445,7 @@ async def run_backfill(
         dead_letter_path,
         dead_letter_max_bytes,
         sorted(dead_letter_redact_fields),
+        dead_letter_max_rotated_files,
         dead_letter_compress_rotated,
     )
 
@@ -461,6 +505,7 @@ async def run_backfill(
                         },
                         max_bytes=dead_letter_max_bytes,
                         redact_fields=dead_letter_redact_fields,
+                        max_rotated_files=dead_letter_max_rotated_files,
                         compress_rotated=dead_letter_compress_rotated,
                     )
                     velocity_dead_lettered += 1
@@ -551,6 +596,7 @@ async def run_backfill(
                         },
                         max_bytes=dead_letter_max_bytes,
                         redact_fields=dead_letter_redact_fields,
+                        max_rotated_files=dead_letter_max_rotated_files,
                         compress_rotated=dead_letter_compress_rotated,
                     )
                     checkpoint_dead_lettered += 1
@@ -614,6 +660,7 @@ async def run_backfill(
         "dead_letter_path": dead_letter_path,
         "dead_letter_max_bytes": dead_letter_max_bytes,
         "dead_letter_redact_fields": sorted(dead_letter_redact_fields),
+        "dead_letter_max_rotated_files": dead_letter_max_rotated_files,
         "dead_letter_compress_rotated": dead_letter_compress_rotated,
     }
     logger.info("Backfill complete! summary=%s", summary)
@@ -656,6 +703,12 @@ async def main() -> None:
         help="Comma-separated dead-letter payload fields to redact",
     )
     parser.add_argument(
+        "--dead-letter-max-rotated-files",
+        type=int,
+        default=DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES,
+        help="Max number of rotated dead-letter files to retain (0 = unlimited)",
+    )
+    parser.add_argument(
         "--dead-letter-compress-rotated",
         dest="dead_letter_compress_rotated",
         action="store_true",
@@ -679,6 +732,7 @@ async def main() -> None:
         dead_letter_path=args.dead_letter_path,
         dead_letter_max_bytes=args.dead_letter_max_bytes,
         dead_letter_redact_fields=redact_fields,
+        dead_letter_max_rotated_files=args.dead_letter_max_rotated_files,
         dead_letter_compress_rotated=args.dead_letter_compress_rotated,
     )
 

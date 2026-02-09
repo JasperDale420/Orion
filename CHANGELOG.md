@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Dead-Letter Rotation Retention Cap + Schema-Refresh Runbook Note (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - added rotation-retention cap for dead-letter archives:
+      - env default: `ORION_BACKFILL_EXIT_DEAD_LETTER_MAX_ROTATED_FILES`,
+      - runtime arg: `dead_letter_max_rotated_files`,
+      - CLI flag: `--dead-letter-max-rotated-files`,
+    - rotates with monotonic suffixing and prunes oldest `.jsonl.N` / `.jsonl.N.gz` files when cap is reached.
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+    - `test_write_dead_letter_record_prunes_oldest_rotation_when_cap_reached`
+    - `test_write_dead_letter_record_prunes_oldest_gzip_rotation_when_cap_reached`
+  - Added schema rollout guidance:
+    - `docs/runbooks/schema_rollout.md`
+    - `docs/runbooks/README.md` runbook index entry.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_pattern_miner_exit_refresh_config.py`
 - **Pattern Miner Exit-Refresh Strategy Env Unification (TDD)**:
   - Updated `src/orion/ml/pattern_miner.py`:
     - added `ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY` with supported modes:

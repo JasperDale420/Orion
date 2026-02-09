@@ -963,6 +963,55 @@ def test_write_dead_letter_record_rotates_and_gzips_when_enabled(tmp_path) -> No
     assert rotated_payload["error"] == "boom-1"
 
 
+def test_write_dead_letter_record_prunes_oldest_rotation_when_cap_reached(tmp_path) -> None:
+    dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
+    dead_letter_path.write_text('{"phase":"seed"}\n', encoding="utf-8")
+    (tmp_path / "exit_backfill_dead_letter.jsonl.1").write_text('{"phase":"old-1"}\n', encoding="utf-8")
+    (tmp_path / "exit_backfill_dead_letter.jsonl.2").write_text('{"phase":"old-2"}\n', encoding="utf-8")
+
+    rotated = backfill_exit_columns._write_dead_letter_record(
+        str(dead_letter_path),
+        {"phase": "velocity", "event_id": "evt-3", "error": "boom-3", "retries_used": 0},
+        max_bytes=1,
+        max_rotated_files=2,
+    )
+    assert rotated is True
+    assert not (tmp_path / "exit_backfill_dead_letter.jsonl.1").exists()
+
+    rotated_files = sorted(tmp_path.glob("exit_backfill_dead_letter.jsonl.[0-9]*"))
+    assert len(rotated_files) == 2
+    assert {path.name for path in rotated_files} == {
+        "exit_backfill_dead_letter.jsonl.2",
+        "exit_backfill_dead_letter.jsonl.3",
+    }
+
+
+def test_write_dead_letter_record_prunes_oldest_gzip_rotation_when_cap_reached(tmp_path) -> None:
+    dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
+    dead_letter_path.write_text('{"phase":"seed"}\n', encoding="utf-8")
+    with gzip.open(tmp_path / "exit_backfill_dead_letter.jsonl.1.gz", "wt", encoding="utf-8") as handle:
+        handle.write('{"phase":"old-1"}\n')
+    with gzip.open(tmp_path / "exit_backfill_dead_letter.jsonl.2.gz", "wt", encoding="utf-8") as handle:
+        handle.write('{"phase":"old-2"}\n')
+
+    rotated = backfill_exit_columns._write_dead_letter_record(
+        str(dead_letter_path),
+        {"phase": "velocity", "event_id": "evt-4", "error": "boom-4", "retries_used": 0},
+        max_bytes=1,
+        max_rotated_files=2,
+        compress_rotated=True,
+    )
+    assert rotated is True
+    assert not (tmp_path / "exit_backfill_dead_letter.jsonl.1.gz").exists()
+
+    rotated_files = sorted(tmp_path.glob("exit_backfill_dead_letter.jsonl.*.gz"))
+    assert len(rotated_files) == 2
+    assert {path.name for path in rotated_files} == {
+        "exit_backfill_dead_letter.jsonl.2.gz",
+        "exit_backfill_dead_letter.jsonl.3.gz",
+    }
+
+
 @pytest.mark.asyncio
 async def test_run_backfill_dead_letter_redaction_and_rotation(
     monkeypatch: pytest.MonkeyPatch,
