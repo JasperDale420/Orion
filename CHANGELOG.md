@@ -23,6 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - validates ticker source transition logging semantics.
   - Verified with:
     - `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_gateway_contract.py tests/unit/test_feature_enrichment_heber_source.py`
+- **Gateway/Heber Parity Audit Inventory Refresh**:
+  - Updated `/docs/ORION_GATEWAY_HEBER_PARITY_AUDIT_2026-02-05.md` with a quantified remaining dependency inventory for local `silver_*` table usage:
+    - per-table file/reference counts,
+    - hotspot ranking by file,
+    - implementation-first migration sequencing for step 1.
 - **Combined Pass: Backfill Fail-Fast Threshold + Elapsed-Time Telemetry (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - added failure circuit-breaker threshold:

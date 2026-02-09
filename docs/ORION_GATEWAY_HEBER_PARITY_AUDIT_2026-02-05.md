@@ -7847,3 +7847,54 @@ Result:
 - feature enrichment now exposes runtime degradations that directly matter for Gateway/Heber migration readiness:
   - ticker-source drift away from Heber is observable,
   - sustained zero-write cycles per feed trigger operational warnings instead of remaining silent.
+
+## 254) Pass 252 Continuation (2026-02-09)
+
+### 254.1 Remaining Orion-Local Silver Dependency Inventory (Audit-Only, Combined Pass)
+
+Finding:
+- despite Gateway/Heber integration progress, Orion still contains broad direct coupling to local SQL `silver_*` tables.
+- this coupling is concentrated in two large surfaces and keeps migration risk high because parity validation remains table-schema specific rather than contract-driven.
+
+Inventory snapshot (`src/orion`, code search):
+- table usage breadth:
+  - `silver_uw_flow`: 8 files / 56 refs
+  - `silver_uw_darkpool`: 5 files / 20 refs
+  - `silver_market_tide`: 4 files / 10 refs
+  - `silver_greek_exposure`: 4 files / 10 refs
+  - `silver_max_pain`: 3 files / 7 refs
+  - `silver_iv_rank`: 2 files / 3 refs
+  - `silver_vix_data`: 5 files / 14 refs
+  - `silver_regime_history`: 2 files / 10 refs
+  - `silver_option_quotes`: 3 files / 6 refs
+  - `silver_alpaca_bars`: 7 files / 46 refs
+  - `silver_ticker_info`: 1 file / 7 refs
+  - `silver_earnings_calendar`: 2 files / 9 refs
+- top hotspots by reference count:
+  - `src/orion/jobs/validate_features.py`: 87 refs
+  - `src/orion/main_price_target_labeler.py`: 59 refs
+  - `src/orion/main_feature_enrichment.py`: 8 refs
+  - `src/orion/jobs/sync_earnings.py`: 8 refs
+  - `src/orion/jobs/data_quality_checker.py`: 8 refs
+
+Assessment:
+- highest migration leverage is to break direct table dependencies in:
+  - `main_price_target_labeler.py` (label/feature parity correctness path),
+  - `jobs/validate_features.py` (operational confidence/reporting path).
+- connector/storage modules can remain temporarily while contract adapters are introduced; immediate archival here is high-risk until parity checks move upstream.
+
+Proposed sequencing for step 1 (implementation phase):
+1. Introduce read-contract adapters (Heber/Gateway first, local SQL fallback) for:
+   - flow,
+   - darkpool,
+   - market tide,
+   - greek exposure,
+   - max pain,
+   - iv rank,
+   - vix/regime snapshots.
+2. Migrate `main_price_target_labeler.py` queries to adapter calls behind a feature flag.
+3. Migrate `jobs/validate_features.py` to adapter-backed dataset checks (contract-level validation).
+4. After parity burn-in, archive obsolete direct-SQL query paths and corresponding legacy validation branches.
+
+Result:
+- we now have a quantified, file-level dependency map that defines exactly where remaining migration work is concentrated and what should be prioritized before broad archival.
