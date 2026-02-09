@@ -6916,3 +6916,28 @@ Result:
 Residual:
 - `flow_enricher` still contains local SQL for some context families (for example GEX rolling averages, broader flow metrics, market context, and window aggregations).
 - next recommended `flow_enricher` slice: isolate and delegate GEX base snapshot + retain explicit rolling-average contract as a separate helper-level migration.
+
+## 229) Pass 227 Continuation (2026-02-09)
+
+### 229.1 `backfill_exit_columns` Subsequent-Price Lookup Delegation (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/backfill_exit_columns.py::get_subsequent_prices(...)` still queried local `silver_uw_flow` directly.
+- this preserved an extra local-source lookup path in backfill processing even though equivalent subsequent-price lookup logic already exists in shared labeler helpers.
+
+Implemented:
+- Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+  - `test_get_subsequent_prices_delegates_to_labeler`
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - imported `get_subsequent_prices` from `main_price_target_labeler` as `get_labeler_subsequent_prices`,
+  - replaced local SQL query implementation with direct delegation to shared helper.
+
+Verification:
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py -k subsequent_prices` passed.
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- backfill exit-column subsequent-price retrieval now shares a single helper contract with label generation paths, reducing duplicated SQL and parity drift risk.
+
+Residual:
+- `backfill_exit_columns` still has remaining local SQL in checkpoint/velocity update and candidate selection paths; continue staged delegation where a canonical shared helper exists and retain local SQL only for true backfill-only orchestration concerns.

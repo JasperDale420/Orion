@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
-
 from orion.jobs import backfill_exit_columns
 
 
@@ -79,6 +78,40 @@ async def test_get_all_records_for_checkpoints_targets_any_missing_checkpoint_co
     assert "return_at_1w IS NULL" in captured["sql"]
     assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
     assert captured["params"]["limit"] == 25
+
+
+@pytest.mark.asyncio
+async def test_get_subsequent_prices_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+    expected = [
+        {"price": 1.25, "ts": datetime(2026, 2, 9, 15, 5, tzinfo=timezone.utc)},
+        {"price": 1.31, "ts": datetime(2026, 2, 9, 15, 10, tzinfo=timezone.utc)},
+    ]
+
+    async def _labeler_subsequent_prices(option_chain: str, ts: datetime) -> list[dict[str, Any]]:
+        captured["option_chain"] = option_chain
+        captured["entry_ts"] = ts
+        return expected
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for subsequent price lookup")
+
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "get_labeler_subsequent_prices",
+        _labeler_subsequent_prices,
+        raising=False,
+    )
+    monkeypatch.setattr(backfill_exit_columns, "db_query", _fail_db_query, raising=False)
+
+    value = await backfill_exit_columns.get_subsequent_prices("AAPL260221C00100000", entry_ts)
+
+    assert value == expected
+    assert captured == {
+        "option_chain": "AAPL260221C00100000",
+        "entry_ts": entry_ts,
+    }
 
 
 @pytest.mark.asyncio

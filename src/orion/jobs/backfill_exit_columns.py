@@ -15,18 +15,21 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import text
-
+from orion.main_price_target_labeler import (
+    get_subsequent_prices as get_labeler_subsequent_prices,
+)
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
+from sqlalchemy import text
 
 logger = setup_struct_logger("orion.backfill.exit_columns")
 
 BATCH_SIZE = 50
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
+
 
 async def _load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
     """Load persisted velocity-phase resume cursor (timestamp + event_id)."""
@@ -216,23 +219,8 @@ async def get_all_records_for_checkpoints(
 
 
 async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
-    """Get subsequent prices for an option chain from flow data."""
-
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        stmt = text(
-            """
-            SELECT option_price, flow_ts_utc
-            FROM silver_uw_flow
-            WHERE option_chain = :option_chain
-              AND flow_ts_utc > :entry_ts
-              AND option_price > 0
-            ORDER BY flow_ts_utc ASC
-        """
-        )
-        result = await session.execute(stmt, {"option_chain": option_chain, "entry_ts": entry_ts})
-        return [{"price": row[0], "ts": row[1]} for row in result.fetchall()]
-
-    return await db_query(query)
+    """Get subsequent prices via shared labeler helper."""
+    return await get_labeler_subsequent_prices(option_chain, entry_ts)
 
 
 async def update_velocity_columns(record: Dict[str, Any]) -> bool:

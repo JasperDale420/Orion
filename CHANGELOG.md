@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Exit-Columns Subsequent-Price Delegation to Shared Labeler Path (TDD)**:
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+    - `test_get_subsequent_prices_delegates_to_labeler`
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - `get_subsequent_prices(...)` now delegates to shared labeler helper (`get_labeler_subsequent_prices`) instead of running a local `silver_uw_flow` query.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py -k subsequent_prices`
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py`
 - **Price-Target Labeler IV-Rank Entry Heber-First Path (TDD)**:
   - Extended `tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py` with:
     - `test_get_iv_rank_at_entry_prefers_heber_when_available`
