@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Exit-Columns Keyset Resume State (TDD)**:
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+    - `test_run_backfill_resumes_with_keyset_cursor_when_available`
+  - Added durable cursor state support (`entry_ts` + `event_id`) in:
+    - `src/orion/storage/models.py` (`job_cursor_state` table)
+    - `src/orion/storage/watermarks.py` (`get_cursor_state`, `upsert_cursor_state`)
+    - `src/orion/jobs/backfill_exit_columns.py` (per-phase cursor load/save wiring)
+  - `backfill_exit_columns` now resumes with full keyset cursor when available, with backward-compatible timestamp-watermark fallback
+- **Gateway/Heber Parity Audit (Pass 186)**: Continued audit with:
+  - implemented strict keyset resume state for exit backfill phases to avoid same-timestamp duplicate replay after restarts
+  - retained legacy timestamp watermark compatibility during transition
+  - residual guidance to run a one-time cleanup for legacy-only watermark keys after rollout stabilization
 - **Backfill Exit-Columns Crash-Resume Watermarks (TDD)**:
   - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
     - timestamp-only cursor SQL contract tests for velocity/checkpoint selectors

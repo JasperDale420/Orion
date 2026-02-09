@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
-from orion.storage.watermarks import get_watermark, upsert_watermark
+from orion.storage.watermarks import get_cursor_state, get_watermark, upsert_cursor_state, upsert_watermark
 from sqlalchemy import text
 
 logger = setup_struct_logger("orion.backfill.exit_columns")
@@ -26,6 +26,8 @@ logger = setup_struct_logger("orion.backfill.exit_columns")
 BATCH_SIZE = 50
 VELOCITY_BACKFILL_WATERMARK_KEY = "backfill_exit_columns.velocity"
 CHECKPOINT_BACKFILL_WATERMARK_KEY = "backfill_exit_columns.checkpoint"
+VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
+CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
 
 async def _load_velocity_backfill_watermark() -> datetime | None:
@@ -68,6 +70,62 @@ async def _save_checkpoint_backfill_watermark(entry_ts: datetime) -> None:
             key=CHECKPOINT_BACKFILL_WATERMARK_KEY,
             last_seen_ts_utc=entry_ts,
         )
+
+    await db_write(write)
+
+
+async def _load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+    """Load persisted velocity-phase resume cursor (timestamp + event_id)."""
+
+    async def query(session: Any) -> tuple[datetime | None, str | None]:
+        cursor = await get_cursor_state(session, VELOCITY_BACKFILL_CURSOR_KEY)
+        if cursor is not None:
+            return cursor.last_seen_ts_utc, cursor.last_seen_id
+        ts = await get_watermark(session, VELOCITY_BACKFILL_WATERMARK_KEY)
+        return ts, None
+
+    return await db_query(query)
+
+
+async def _save_velocity_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
+    """Persist velocity-phase cursor and legacy timestamp watermark."""
+
+    async def write(session: Any) -> None:
+        await upsert_cursor_state(
+            session,
+            key=VELOCITY_BACKFILL_CURSOR_KEY,
+            last_seen_ts_utc=entry_ts,
+            last_seen_id=event_id,
+        )
+        await upsert_watermark(session, key=VELOCITY_BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
+
+    await db_write(write)
+
+
+async def _load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+    """Load persisted checkpoint-phase resume cursor (timestamp + event_id)."""
+
+    async def query(session: Any) -> tuple[datetime | None, str | None]:
+        cursor = await get_cursor_state(session, CHECKPOINT_BACKFILL_CURSOR_KEY)
+        if cursor is not None:
+            return cursor.last_seen_ts_utc, cursor.last_seen_id
+        ts = await get_watermark(session, CHECKPOINT_BACKFILL_WATERMARK_KEY)
+        return ts, None
+
+    return await db_query(query)
+
+
+async def _save_checkpoint_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
+    """Persist checkpoint-phase cursor and legacy timestamp watermark."""
+
+    async def write(session: Any) -> None:
+        await upsert_cursor_state(
+            session,
+            key=CHECKPOINT_BACKFILL_CURSOR_KEY,
+            last_seen_ts_utc=entry_ts,
+            last_seen_id=event_id,
+        )
+        await upsert_watermark(session, key=CHECKPOINT_BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
 
     await db_write(write)
 
@@ -322,11 +380,14 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
     logger.info("Phase 1: Backfilling velocity columns (time_to_75/100/150_pct_seconds)...")
     velocity_updated = 0
     velocity_processed = 0
-    velocity_after_entry_ts: datetime | None = await _load_velocity_backfill_watermark()
-    velocity_after_event_id: str | None = None
+    velocity_after_entry_ts, velocity_after_event_id = await _load_velocity_backfill_cursor()
 
     if velocity_after_entry_ts is not None:
-        logger.info(f"Resuming velocity backfill from persisted watermark {velocity_after_entry_ts.isoformat()}")
+        logger.info(
+            "Resuming velocity backfill from persisted cursor ts=%s event_id=%s",
+            velocity_after_entry_ts.isoformat(),
+            velocity_after_event_id,
+        )
 
     while True:
         remaining = limit - velocity_processed
@@ -348,7 +409,7 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             velocity_after_entry_ts = record.get("entry_ts")
             velocity_after_event_id = record.get("event_id")
             if velocity_after_entry_ts is not None:
-                await _save_velocity_backfill_watermark(velocity_after_entry_ts)
+                await _save_velocity_backfill_cursor(velocity_after_entry_ts, velocity_after_event_id)
 
             if velocity_processed >= limit:
                 break
@@ -359,12 +420,15 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
     logger.info("Phase 2: Backfilling checkpoint columns (15m/30m/8h/1d/2d/3d/1w)...")
     checkpoint_updated = 0
     checkpoint_processed = 0
-    checkpoint_after_entry_ts: datetime | None = await _load_checkpoint_backfill_watermark()
-    checkpoint_after_event_id: str | None = None
+    checkpoint_after_entry_ts, checkpoint_after_event_id = await _load_checkpoint_backfill_cursor()
     log_checkpoint_every = max(batch_size, 1)
 
     if checkpoint_after_entry_ts is not None:
-        logger.info(f"Resuming checkpoint backfill from persisted watermark {checkpoint_after_entry_ts.isoformat()}")
+        logger.info(
+            "Resuming checkpoint backfill from persisted cursor ts=%s event_id=%s",
+            checkpoint_after_entry_ts.isoformat(),
+            checkpoint_after_event_id,
+        )
 
     while True:
         remaining = limit - checkpoint_processed
@@ -386,7 +450,7 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             checkpoint_after_entry_ts = record.get("entry_ts")
             checkpoint_after_event_id = record.get("event_id")
             if checkpoint_after_entry_ts is not None:
-                await _save_checkpoint_backfill_watermark(checkpoint_after_entry_ts)
+                await _save_checkpoint_backfill_cursor(checkpoint_after_entry_ts, checkpoint_after_event_id)
 
             if checkpoint_processed % log_checkpoint_every == 0:
                 logger.info(f"Processed {checkpoint_processed} checkpoint records...")

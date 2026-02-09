@@ -55,3 +55,17 @@ class IngestWatermark(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class JobCursorState(Base):
+    __tablename__ = "job_cursor_state"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    last_seen_ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_ts_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )

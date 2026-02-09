@@ -361,17 +361,17 @@ async def test_run_backfill_resumes_from_phase_watermarks_and_persists_progress(
     async def _fake_init_db() -> None:
         return None
 
-    async def _fake_load_velocity_backfill_watermark() -> datetime | None:
-        return resumed_velocity_ts
+    async def _fake_load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return resumed_velocity_ts, None
 
-    async def _fake_save_velocity_backfill_watermark(ts: datetime) -> None:
-        saved_velocity_watermarks.append(ts)
+    async def _fake_save_velocity_backfill_cursor(entry_ts: datetime, _event_id: str | None) -> None:
+        saved_velocity_watermarks.append(entry_ts)
 
-    async def _fake_load_checkpoint_backfill_watermark() -> datetime | None:
-        return resumed_checkpoint_ts
+    async def _fake_load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return resumed_checkpoint_ts, None
 
-    async def _fake_save_checkpoint_backfill_watermark(ts: datetime) -> None:
-        saved_checkpoint_watermarks.append(ts)
+    async def _fake_save_checkpoint_backfill_cursor(entry_ts: datetime, _event_id: str | None) -> None:
+        saved_checkpoint_watermarks.append(entry_ts)
 
     monkeypatch.setattr(backfill_exit_columns, "get_records_to_backfill", _fake_get_records_to_backfill)
     monkeypatch.setattr(backfill_exit_columns, "get_all_records_for_checkpoints", _fake_get_all_records_for_checkpoints)
@@ -380,26 +380,26 @@ async def test_run_backfill_resumes_from_phase_watermarks_and_persists_progress(
     monkeypatch.setattr(backfill_exit_columns, "init_db", _fake_init_db)
     monkeypatch.setattr(
         backfill_exit_columns,
-        "_load_velocity_backfill_watermark",
-        _fake_load_velocity_backfill_watermark,
+        "_load_velocity_backfill_cursor",
+        _fake_load_velocity_backfill_cursor,
         raising=False,
     )
     monkeypatch.setattr(
         backfill_exit_columns,
-        "_save_velocity_backfill_watermark",
-        _fake_save_velocity_backfill_watermark,
+        "_save_velocity_backfill_cursor",
+        _fake_save_velocity_backfill_cursor,
         raising=False,
     )
     monkeypatch.setattr(
         backfill_exit_columns,
-        "_load_checkpoint_backfill_watermark",
-        _fake_load_checkpoint_backfill_watermark,
+        "_load_checkpoint_backfill_cursor",
+        _fake_load_checkpoint_backfill_cursor,
         raising=False,
     )
     monkeypatch.setattr(
         backfill_exit_columns,
-        "_save_checkpoint_backfill_watermark",
-        _fake_save_checkpoint_backfill_watermark,
+        "_save_checkpoint_backfill_cursor",
+        _fake_save_checkpoint_backfill_cursor,
         raising=False,
     )
 
@@ -411,3 +411,112 @@ async def test_run_backfill_resumes_from_phase_watermarks_and_persists_progress(
     assert checkpoint_calls[0]["after_event_id"] is None
     assert saved_velocity_watermarks == [vel_ts1, vel_ts2]
     assert saved_checkpoint_watermarks == [cp_ts1, cp_ts2]
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_resumes_with_keyset_cursor_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    velocity_calls: list[dict[str, Any]] = []
+    checkpoint_calls: list[dict[str, Any]] = []
+    saved_velocity_cursors: list[tuple[datetime, str]] = []
+    saved_checkpoint_cursors: list[tuple[datetime, str]] = []
+
+    resumed_velocity_ts = datetime(2026, 2, 9, 13, 0, tzinfo=timezone.utc)
+    resumed_checkpoint_ts = datetime(2026, 2, 9, 13, 30, tzinfo=timezone.utc)
+    vel_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    cp_ts = datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        velocity_calls.append(
+            {
+                "limit": limit,
+                "after_entry_ts": after_entry_ts,
+                "after_event_id": after_event_id,
+            }
+        )
+        if len(velocity_calls) == 1:
+            return [{"event_id": "vel-200", "entry_ts": vel_ts}]
+        return []
+
+    async def _fake_get_all_records_for_checkpoints(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        checkpoint_calls.append(
+            {
+                "limit": limit,
+                "after_entry_ts": after_entry_ts,
+                "after_event_id": after_event_id,
+            }
+        )
+        if len(checkpoint_calls) == 1:
+            return [{"event_id": "cp-200", "entry_ts": cp_ts, "option_chain": "AAPL", "entry_option_price": 1.0}]
+        return []
+
+    async def _fake_update_velocity_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_update_checkpoint_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return resumed_velocity_ts, "vel-150"
+
+    async def _fake_load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return resumed_checkpoint_ts, "cp-150"
+
+    async def _fake_save_velocity_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
+        assert event_id is not None
+        saved_velocity_cursors.append((entry_ts, event_id))
+
+    async def _fake_save_checkpoint_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
+        assert event_id is not None
+        saved_checkpoint_cursors.append((entry_ts, event_id))
+
+    monkeypatch.setattr(backfill_exit_columns, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_exit_columns, "get_all_records_for_checkpoints", _fake_get_all_records_for_checkpoints)
+    monkeypatch.setattr(backfill_exit_columns, "update_velocity_columns", _fake_update_velocity_columns)
+    monkeypatch.setattr(backfill_exit_columns, "update_checkpoint_columns", _fake_update_checkpoint_columns)
+    monkeypatch.setattr(backfill_exit_columns, "init_db", _fake_init_db)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_velocity_backfill_cursor",
+        _fake_load_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_checkpoint_backfill_cursor",
+        _fake_load_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_velocity_backfill_cursor",
+        _fake_save_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_checkpoint_backfill_cursor",
+        _fake_save_checkpoint_backfill_cursor,
+        raising=False,
+    )
+
+    await backfill_exit_columns.run_backfill(batch_size=2, limit=1)
+
+    assert velocity_calls[0]["after_entry_ts"] == resumed_velocity_ts
+    assert velocity_calls[0]["after_event_id"] == "vel-150"
+    assert checkpoint_calls[0]["after_entry_ts"] == resumed_checkpoint_ts
+    assert checkpoint_calls[0]["after_event_id"] == "cp-150"
+    assert saved_velocity_cursors == [(vel_ts, "vel-200")]
+    assert saved_checkpoint_cursors == [(cp_ts, "cp-200")]

@@ -5680,9 +5680,34 @@ Result:
 Residual:
 - resume state is timestamp-only; strict duplicate-free continuity across shared `entry_ts` cohorts still requires durable keyset state (`entry_ts` + `event_id`) per phase.
 
-## 192) Pass 185 Continuation (2026-02-09)
+## 192) Pass 186 Continuation (2026-02-09)
 
-### 192.1 Guardrail Backoff Policy Runtime Hot-Reload Added (TDD-Backed)
+### 192.1 `backfill_exit_columns` Durable Keyset Resume State Added (TDD-Backed)
+
+Finding:
+- resume continuity for `backfill_exit_columns` was timestamp-only, so restarts during shared `entry_ts` cohorts could replay same-timestamp rows and produce duplicate processing churn.
+
+Implemented:
+- Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+  - `test_run_backfill_resumes_with_keyset_cursor_when_available`
+- Added durable cursor state primitives:
+  - `src/orion/storage/models.py`: new `job_cursor_state` table (`key`, `last_seen_ts_utc`, `last_seen_id`)
+  - `src/orion/storage/watermarks.py`: `get_cursor_state(...)`, `upsert_cursor_state(...)`
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - per-phase cursor keys for velocity and checkpoint phases,
+  - startup resume now prefers keyset cursor (`entry_ts` + `event_id`) when available,
+  - per-record progress now persists keyset cursor state,
+  - retained backward-compatible fallback to legacy timestamp-only watermarks.
+
+Result:
+- exit backfill restart behavior now supports strict keyset continuation, reducing duplicate replay risk across same-timestamp candidate cohorts.
+
+Residual:
+- after rollout stabilization, legacy timestamp-only watermark keys can be cleaned up in a controlled migration to simplify cursor-state ownership.
+
+## 193) Pass 187 Continuation (2026-02-09)
+
+### 193.1 Guardrail Backoff Policy Runtime Hot-Reload Added (TDD-Backed)
 
 Finding:
 - per-job backoff overrides existed, but scheduler resolved them only once at startup, so env changes required a process restart to take effect.
