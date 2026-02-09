@@ -8,6 +8,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Feature Enrichment Runtime Signal Hardening (TDD)**:
+  - Updated `src/orion/main_feature_enrichment.py`:
+    - added source-aware ticker discovery via `get_active_tickers_with_source(...)` (`heber`, `local_db`, `static_fallback`),
+    - added ticker-source transition telemetry with structured events:
+      - `feature_enrichment_ticker_source_changed`,
+    - added consecutive zero-write streak monitoring per feed with configurable warning threshold:
+      - env: `ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK`
+      - events: `feature_enrichment_zero_write_streak` and `feature_enrichment_zero_write_warn_streak_invalid`,
+    - preserved `get_active_tickers(...)` as a compatibility wrapper.
+  - Added `tests/unit/test_feature_enrichment_runtime_signals.py`:
+    - validates Heber/local/static fallback behavior,
+    - validates zero-write streak warn/reset semantics,
+    - validates ticker source transition logging semantics.
+  - Verified with:
+    - `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_gateway_contract.py tests/unit/test_feature_enrichment_heber_source.py`
+- **Combined Pass: Backfill Fail-Fast Threshold + Elapsed-Time Telemetry (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - added failure circuit-breaker threshold:
+      - env default `ORION_BACKFILL_EXIT_MAX_FAILED_RECORDS`,
+      - runtime arg `max_failed_records`,
+      - CLI flag `--max-failed-records`,
+    - backfill now aborts safely when total failed records reaches threshold and reports:
+      - `aborted`
+      - `abort_reason`
+      - `max_failed_records`,
+    - added elapsed-time telemetry in summary payload:
+      - `velocity.elapsed_seconds`
+      - `checkpoint.elapsed_seconds`
+      - `total_elapsed_seconds`.
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+    - `test_run_backfill_aborts_when_max_failed_records_reached`
+    - `test_run_backfill_summary_includes_elapsed_seconds`.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py`
 - **Pattern Miner Exit-Refresh Resolution Telemetry (TDD)**:
   - Updated `src/orion/ml/pattern_miner.py`:
     - added `_exit_classifier_schema_refresh_config_details_from_env()` to return resolved flags with source metadata,

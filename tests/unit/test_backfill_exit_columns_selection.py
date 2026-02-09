@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import itertools
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -1217,3 +1218,186 @@ async def test_run_backfill_dead_letter_rotation_tracks_compressed_files(
     assert summary["total_dead_letter_compressed"] >= 1
     assert summary["dead_letter_compress_rotated"] is True
     assert (tmp_path / "exit_backfill_dead_letter.jsonl.1.gz").exists()
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_aborts_when_max_failed_records_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=timezone.utc)
+    checkpoint_calls = {"count": 0}
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if after_entry_ts is None:
+            return [
+                {"event_id": "vel-fail-1", "entry_ts": ts1},
+                {"event_id": "vel-fail-2", "entry_ts": ts2},
+            ]
+        return []
+
+    async def _fake_get_all_records_for_checkpoints(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        checkpoint_calls["count"] += 1
+        return []
+
+    async def _always_fail_velocity(_record: dict[str, Any]) -> bool:
+        raise RuntimeError("velocity failure")
+
+    async def _fake_update_checkpoint_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_save_velocity_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    async def _fake_save_checkpoint_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(backfill_exit_columns, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_exit_columns, "get_all_records_for_checkpoints", _fake_get_all_records_for_checkpoints)
+    monkeypatch.setattr(backfill_exit_columns, "update_velocity_columns", _always_fail_velocity)
+    monkeypatch.setattr(backfill_exit_columns, "update_checkpoint_columns", _fake_update_checkpoint_columns)
+    monkeypatch.setattr(backfill_exit_columns, "init_db", _fake_init_db)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_velocity_backfill_cursor",
+        _fake_load_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_checkpoint_backfill_cursor",
+        _fake_load_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_velocity_backfill_cursor",
+        _fake_save_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_checkpoint_backfill_cursor",
+        _fake_save_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
+
+    summary = await backfill_exit_columns.run_backfill(
+        batch_size=2,
+        limit=2,
+        max_retries=0,
+        max_failed_records=1,
+    )
+
+    assert summary["aborted"] is True
+    assert summary["abort_reason"] == "max_failed_records_reached"
+    assert summary["max_failed_records"] == 1
+    assert summary["velocity"]["failed"] == 1
+    assert summary["checkpoint"]["processed"] == 0
+    assert checkpoint_calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_summary_includes_elapsed_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if after_entry_ts is None:
+            return [{"event_id": "vel-1", "entry_ts": ts1}]
+        return []
+
+    async def _fake_get_all_records_for_checkpoints(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if after_entry_ts is None:
+            return [{"event_id": "cp-1", "entry_ts": ts1, "option_chain": "AAPL", "entry_option_price": 1.0}]
+        return []
+
+    async def _fake_update_velocity_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_update_checkpoint_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_save_velocity_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    async def _fake_save_checkpoint_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    clock_values = itertools.chain([10.0, 11.5, 13.0, 14.0, 14.5, 15.0], itertools.repeat(15.0))
+    monkeypatch.setattr(backfill_exit_columns.time, "perf_counter", lambda: next(clock_values), raising=False)
+
+    monkeypatch.setattr(backfill_exit_columns, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_exit_columns, "get_all_records_for_checkpoints", _fake_get_all_records_for_checkpoints)
+    monkeypatch.setattr(backfill_exit_columns, "update_velocity_columns", _fake_update_velocity_columns)
+    monkeypatch.setattr(backfill_exit_columns, "update_checkpoint_columns", _fake_update_checkpoint_columns)
+    monkeypatch.setattr(backfill_exit_columns, "init_db", _fake_init_db)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_velocity_backfill_cursor",
+        _fake_load_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_checkpoint_backfill_cursor",
+        _fake_load_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_velocity_backfill_cursor",
+        _fake_save_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_checkpoint_backfill_cursor",
+        _fake_save_checkpoint_backfill_cursor,
+        raising=False,
+    )
+
+    summary = await backfill_exit_columns.run_backfill(batch_size=1, limit=1)
+
+    assert summary["velocity"]["elapsed_seconds"] == pytest.approx(1.5)
+    assert summary["checkpoint"]["elapsed_seconds"] == pytest.approx(0.5)
+    assert summary["total_elapsed_seconds"] == pytest.approx(5.0)

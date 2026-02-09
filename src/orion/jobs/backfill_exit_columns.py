@@ -16,6 +16,7 @@ import gzip
 import json
 import os
 import shutil
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -52,6 +53,7 @@ DEFAULT_DEAD_LETTER_COMPRESS_ROTATED = os.getenv(
     "ORION_BACKFILL_EXIT_DEAD_LETTER_COMPRESS_ROTATED",
     "false",
 ).strip().lower() in {"1", "true", "yes", "y", "on"}
+DEFAULT_MAX_FAILED_RECORDS = int(os.getenv("ORION_BACKFILL_EXIT_MAX_FAILED_RECORDS", "0"))
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
@@ -431,13 +433,19 @@ async def run_backfill(
     dead_letter_redact_fields: set[str] | None = None,
     dead_letter_max_rotated_files: int = DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES,
     dead_letter_compress_rotated: bool = DEFAULT_DEAD_LETTER_COMPRESS_ROTATED,
+    max_failed_records: int = DEFAULT_MAX_FAILED_RECORDS,
 ) -> Dict[str, Any]:
     """Run the backfill job."""
+    run_started_at = time.perf_counter()
     await init_db()
     dead_letter_redact_fields = dead_letter_redact_fields or DEFAULT_DEAD_LETTER_REDACT_FIELDS
+    failure_threshold = max(0, max_failed_records)
+    aborted = False
+    abort_reason: str | None = None
+    total_failed_count = 0
 
     logger.info(
-        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_max_rotated_files=%s, dead_letter_compress_rotated=%s",
+        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_max_rotated_files=%s, dead_letter_compress_rotated=%s, max_failed_records=%s",
         batch_size,
         limit,
         max_retries,
@@ -447,9 +455,11 @@ async def run_backfill(
         sorted(dead_letter_redact_fields),
         dead_letter_max_rotated_files,
         dead_letter_compress_rotated,
+        failure_threshold,
     )
 
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
+    velocity_started_at = time.perf_counter()
     logger.info("Phase 1: Backfilling velocity columns (time_to_75/100/150_pct_seconds)...")
     velocity_updated = 0
     velocity_failed = 0
@@ -493,6 +503,7 @@ async def run_backfill(
                 velocity_updated += 1
             if failed:
                 velocity_failed += 1
+                total_failed_count += 1
                 if dead_letter_path:
                     rotated = _write_dead_letter_record(
                         dead_letter_path,
@@ -512,6 +523,14 @@ async def run_backfill(
                     velocity_dead_letter_rotated += int(rotated)
                     velocity_dead_letter_compressed += int(rotated and dead_letter_compress_rotated)
             velocity_retried += retries
+            if failure_threshold > 0 and total_failed_count >= failure_threshold:
+                aborted = True
+                abort_reason = "max_failed_records_reached"
+                logger.error(
+                    "Aborting backfill: reached max_failed_records=%s",
+                    failure_threshold,
+                )
+                break
 
             velocity_processed += 1
             velocity_after_entry_ts = record.get("entry_ts")
@@ -530,7 +549,10 @@ async def run_backfill(
 
             if velocity_processed >= limit:
                 break
+        if aborted:
+            break
 
+    velocity_elapsed_seconds = time.perf_counter() - velocity_started_at
     logger.info(
         "Velocity columns updated: %s/%s | failed=%s | retries=%s | dead_lettered=%s",
         velocity_updated,
@@ -541,7 +563,9 @@ async def run_backfill(
     )
 
     # Phase 2: Checkpoint columns (slower, needs to fetch price history)
-    logger.info("Phase 2: Backfilling checkpoint columns (15m/30m/8h/1d/2d/3d/1w)...")
+    checkpoint_started_at = time.perf_counter()
+    if not aborted:
+        logger.info("Phase 2: Backfilling checkpoint columns (15m/30m/8h/1d/2d/3d/1w)...")
     checkpoint_updated = 0
     checkpoint_failed = 0
     checkpoint_retried = 0
@@ -559,7 +583,7 @@ async def run_backfill(
             checkpoint_after_event_id,
         )
 
-    while True:
+    while not aborted:
         remaining = limit - checkpoint_processed
         if remaining <= 0:
             break
@@ -584,6 +608,7 @@ async def run_backfill(
                 checkpoint_updated += 1
             if failed:
                 checkpoint_failed += 1
+                total_failed_count += 1
                 if dead_letter_path:
                     rotated = _write_dead_letter_record(
                         dead_letter_path,
@@ -603,6 +628,14 @@ async def run_backfill(
                     checkpoint_dead_letter_rotated += int(rotated)
                     checkpoint_dead_letter_compressed += int(rotated and dead_letter_compress_rotated)
             checkpoint_retried += retries
+            if failure_threshold > 0 and total_failed_count >= failure_threshold:
+                aborted = True
+                abort_reason = "max_failed_records_reached"
+                logger.error(
+                    "Aborting backfill: reached max_failed_records=%s",
+                    failure_threshold,
+                )
+                break
 
             checkpoint_processed += 1
             checkpoint_after_entry_ts = record.get("entry_ts")
@@ -621,7 +654,10 @@ async def run_backfill(
 
             if checkpoint_processed >= limit:
                 break
+        if aborted:
+            break
 
+    checkpoint_elapsed_seconds = time.perf_counter() - checkpoint_started_at
     logger.info(
         "Checkpoint columns updated: %s/%s | failed=%s | retries=%s | dead_lettered=%s",
         checkpoint_updated,
@@ -631,6 +667,7 @@ async def run_backfill(
         checkpoint_dead_lettered,
     )
 
+    total_elapsed_seconds = time.perf_counter() - run_started_at
     summary = {
         "velocity": {
             "processed": velocity_processed,
@@ -640,6 +677,7 @@ async def run_backfill(
             "dead_lettered": velocity_dead_lettered,
             "dead_letter_rotated": velocity_dead_letter_rotated,
             "dead_letter_compressed": velocity_dead_letter_compressed,
+            "elapsed_seconds": velocity_elapsed_seconds,
         },
         "checkpoint": {
             "processed": checkpoint_processed,
@@ -649,6 +687,7 @@ async def run_backfill(
             "dead_lettered": checkpoint_dead_lettered,
             "dead_letter_rotated": checkpoint_dead_letter_rotated,
             "dead_letter_compressed": checkpoint_dead_letter_compressed,
+            "elapsed_seconds": checkpoint_elapsed_seconds,
         },
         "total_processed": velocity_processed + checkpoint_processed,
         "total_updated": velocity_updated + checkpoint_updated,
@@ -662,6 +701,10 @@ async def run_backfill(
         "dead_letter_redact_fields": sorted(dead_letter_redact_fields),
         "dead_letter_max_rotated_files": dead_letter_max_rotated_files,
         "dead_letter_compress_rotated": dead_letter_compress_rotated,
+        "max_failed_records": failure_threshold,
+        "aborted": aborted,
+        "abort_reason": abort_reason,
+        "total_elapsed_seconds": total_elapsed_seconds,
     }
     logger.info("Backfill complete! summary=%s", summary)
     return summary
@@ -720,6 +763,12 @@ async def main() -> None:
         action="store_false",
         help="Keep rotated dead-letter files uncompressed",
     )
+    parser.add_argument(
+        "--max-failed-records",
+        type=int,
+        default=DEFAULT_MAX_FAILED_RECORDS,
+        help="Abort run after this many failed records across phases (0 = disabled)",
+    )
     parser.set_defaults(dead_letter_compress_rotated=DEFAULT_DEAD_LETTER_COMPRESS_ROTATED)
     args = parser.parse_args()
     redact_fields = {field.strip() for field in args.dead_letter_redact_fields.split(",") if field.strip()}
@@ -734,6 +783,7 @@ async def main() -> None:
         dead_letter_redact_fields=redact_fields,
         dead_letter_max_rotated_files=args.dead_letter_max_rotated_files,
         dead_letter_compress_rotated=args.dead_letter_compress_rotated,
+        max_failed_records=args.max_failed_records,
     )
 
 
