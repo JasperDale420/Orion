@@ -5726,3 +5726,25 @@ Result:
 
 Residual:
 - env parsing now occurs each loop iteration; if loop cadence is reduced significantly, consider caching + change-detection to avoid unnecessary parse work.
+
+## 194) Pass 188 Continuation (2026-02-09)
+
+### 194.1 Guardrail Backoff Policy Cache + Change Detection Added (TDD-Backed)
+
+Finding:
+- runtime hot-reload remediated restart dependency, but scheduler still reparsed backoff env config on every loop iteration even when unchanged.
+
+Implemented:
+- Extended `tests/unit/test_quality_guardrails.py` with:
+  - `test_resolve_job_failure_backoff_policy_cached_reuses_policy_when_env_unchanged`
+  - `test_resolve_job_failure_backoff_policy_cached_rebuilds_on_env_change`
+- Updated `src/orion/jobs/quality_guardrails.py`:
+  - added `_parse_job_nonneg_int_map(raw, env_name)` parser helper,
+  - added `_resolve_job_failure_backoff_policy_cached(default_seconds, cached_raw, cached_policy)` cache-aware resolver,
+  - updated `run_guardrail_loop()` to hold cached raw/policy state and only rebuild policy when env input changes.
+
+Result:
+- scheduler now preserves runtime hot-reload behavior while avoiding redundant parse work when policy env remains unchanged across ticks.
+
+Residual:
+- configuration still relies on polling env state each loop; if stronger dynamic config controls are needed, migrate policy source to a centralized runtime config table/watch channel.

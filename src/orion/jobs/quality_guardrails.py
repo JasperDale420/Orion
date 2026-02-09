@@ -23,6 +23,7 @@ from orion.jobs.validate_features import run_sanity_checks
 from orion.storage.db import init_db
 
 logger = logging.getLogger(__name__)
+JOB_BACKOFF_ENV = "ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -63,8 +64,7 @@ def _env_csv(name: str) -> set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
-def _env_job_nonneg_int_map(name: str) -> dict[str, int]:
-    raw = os.getenv(name)
+def _parse_job_nonneg_int_map(raw: str | None, env_name: str) -> dict[str, int]:
     if raw is None:
         return {}
 
@@ -74,23 +74,27 @@ def _env_job_nonneg_int_map(name: str) -> dict[str, int]:
         if not item:
             continue
         if "=" not in item:
-            logger.warning("Invalid key/value pair in %s=%s; expected job=seconds", name, item)
+            logger.warning("Invalid key/value pair in %s=%s; expected job=seconds", env_name, item)
             continue
 
         job_raw, seconds_raw = item.split("=", 1)
         job_name = job_raw.strip().lower()
         if not job_name:
-            logger.warning("Invalid key/value pair in %s=%s; missing job name", name, item)
+            logger.warning("Invalid key/value pair in %s=%s; missing job name", env_name, item)
             continue
 
         try:
             seconds = int(seconds_raw.strip())
         except ValueError:
-            logger.warning("Invalid backoff seconds in %s=%s; skipping", name, item)
+            logger.warning("Invalid backoff seconds in %s=%s; skipping", env_name, item)
             continue
 
         parsed[job_name] = max(0, seconds)
     return parsed
+
+
+def _env_job_nonneg_int_map(name: str) -> dict[str, int]:
+    return _parse_job_nonneg_int_map(os.getenv(name), env_name=name)
 
 
 def _fail_fast_enabled_for_job(name: str) -> bool:
@@ -101,16 +105,35 @@ def _fail_fast_enabled_for_job(name: str) -> bool:
 
 
 def _job_failure_backoff_seconds(name: str, default_seconds: int) -> int:
-    configured = _env_job_nonneg_int_map("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS")
+    configured = _env_job_nonneg_int_map(JOB_BACKOFF_ENV)
     return configured.get(name.strip().lower(), default_seconds)
 
 
 def _resolve_job_failure_backoff_policy(default_seconds: int) -> dict[str, int]:
+    configured = _env_job_nonneg_int_map(JOB_BACKOFF_ENV)
     return {
-        "reconciliation": _job_failure_backoff_seconds("reconciliation", default_seconds),
-        "data_quality_checker": _job_failure_backoff_seconds("data_quality_checker", default_seconds),
-        "feature_sanity_validation": _job_failure_backoff_seconds("feature_sanity_validation", default_seconds),
+        "reconciliation": configured.get("reconciliation", default_seconds),
+        "data_quality_checker": configured.get("data_quality_checker", default_seconds),
+        "feature_sanity_validation": configured.get("feature_sanity_validation", default_seconds),
     }
+
+
+def _resolve_job_failure_backoff_policy_cached(
+    default_seconds: int,
+    cached_raw: str | None,
+    cached_policy: dict[str, int] | None,
+) -> tuple[str | None, dict[str, int]]:
+    current_raw = os.getenv(JOB_BACKOFF_ENV)
+    if cached_policy is not None and current_raw == cached_raw:
+        return cached_raw, cached_policy
+
+    configured = _parse_job_nonneg_int_map(current_raw, env_name=JOB_BACKOFF_ENV)
+    policy = {
+        "reconciliation": configured.get("reconciliation", default_seconds),
+        "data_quality_checker": configured.get("data_quality_checker", default_seconds),
+        "feature_sanity_validation": configured.get("feature_sanity_validation", default_seconds),
+    }
+    return current_raw, policy
 
 
 def _should_run(last_run: datetime | None, interval_seconds: int, now: datetime) -> bool:
@@ -193,10 +216,16 @@ async def run_guardrail_loop() -> None:
     last_reconcile_failure: datetime | None = None
     last_quality_failure: datetime | None = None
     last_validate_failure: datetime | None = None
+    backoff_policy_raw: str | None = None
+    backoff_policy: dict[str, int] | None = None
 
     while True:
         now = datetime.now(timezone.utc)
-        backoff_policy = _resolve_job_failure_backoff_policy(default_seconds=failure_backoff_seconds)
+        backoff_policy_raw, backoff_policy = _resolve_job_failure_backoff_policy_cached(
+            default_seconds=failure_backoff_seconds,
+            cached_raw=backoff_policy_raw,
+            cached_policy=backoff_policy,
+        )
 
         if _should_run(last_reconcile, reconcile_interval, now) and _failure_backoff_elapsed(
             last_reconcile_failure,

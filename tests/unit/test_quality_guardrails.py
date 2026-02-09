@@ -6,6 +6,7 @@ from orion.jobs.quality_guardrails import (
     _job_failure_backoff_seconds,
     _next_last_run,
     _resolve_job_failure_backoff_policy,
+    _resolve_job_failure_backoff_policy_cached,
     _should_run,
 )
 
@@ -84,3 +85,40 @@ def test_resolve_job_failure_backoff_policy_reloads_env_each_call(monkeypatch) -
 
     assert first["reconciliation"] == 10
     assert second["reconciliation"] == 90
+
+
+def test_resolve_job_failure_backoff_policy_cached_reuses_policy_when_env_unchanged(monkeypatch) -> None:
+    monkeypatch.setenv("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS", "reconciliation=10")
+    raw1, policy1 = _resolve_job_failure_backoff_policy_cached(
+        default_seconds=30,
+        cached_raw=None,
+        cached_policy=None,
+    )
+    raw2, policy2 = _resolve_job_failure_backoff_policy_cached(
+        default_seconds=30,
+        cached_raw=raw1,
+        cached_policy=policy1,
+    )
+
+    assert raw1 == raw2
+    assert policy2 is policy1
+
+
+def test_resolve_job_failure_backoff_policy_cached_rebuilds_on_env_change(monkeypatch) -> None:
+    monkeypatch.setenv("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS", "reconciliation=10")
+    raw1, policy1 = _resolve_job_failure_backoff_policy_cached(
+        default_seconds=30,
+        cached_raw=None,
+        cached_policy=None,
+    )
+
+    monkeypatch.setenv("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS", "reconciliation=90")
+    raw2, policy2 = _resolve_job_failure_backoff_policy_cached(
+        default_seconds=30,
+        cached_raw=raw1,
+        cached_policy=policy1,
+    )
+
+    assert raw1 != raw2
+    assert policy2 is not policy1
+    assert policy2["reconciliation"] == 90
