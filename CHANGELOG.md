@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **SQLite Contention Durability Slice (TDD)**:
+  - Added `tests/unit/test_db_utils_sqlite_retry.py` to lock down retry semantics for SQLite lock contention in `db_transaction(...)`.
+  - Added bounded retry/backoff support to `src/orion/shared/db_utils.py` with env-configurable settings:
+    - `ORION_SQLITE_LOCK_RETRY_ATTEMPTS`
+    - `ORION_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS`
+    - `ORION_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS`
+  - Added `src/orion/jobs/sqlite_contention_soak.py` with `run_sqlite_contention_soak(...)` and CLI entrypoint (`python -m orion.jobs.sqlite_contention_soak`) to stress concurrent writes and report contention outcomes.
+  - Added `tests/unit/test_sqlite_contention_soak.py` to verify soak summary accounting (`attempted = successful + failed`) and persisted counter correctness.
+  - Extended `tests/unit/test_heber_reader.py` with catalog URL-shape contract coverage for both host-root and `/api/v1`-suffixed client base URLs.
+  - Updated `src/orion/clients/heber_reader.py` to build explicit catalog-origin URLs for `/health` and `/api/v1/datasets`, removing ambiguous `httpx` path-join behavior across different base URL shapes.
 - **Execution Exit-Policy Contract Hardening (TDD, Combined)**:
   - Added `tests/unit/test_position_manager_execution_contracts.py` covering:
     - canonical `candidate.option_symbol` propagation to tracked `option_chain`,

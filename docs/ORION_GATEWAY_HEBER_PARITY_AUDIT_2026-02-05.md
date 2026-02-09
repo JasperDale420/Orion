@@ -6134,3 +6134,42 @@ Result:
 Residual:
 - SQL fallback remains enabled and should be retired after Heber VIX data completeness validation in production-like soak runs.
 - next audit/remediation slice should target contract-level validation under load (Gateway e2e schema/retry behavior + SQLite durability/contention).
+
+## 208) Pass 202 Continuation (2026-02-09)
+
+### 208.1 SQLite Lock-Contention Retry + Soak Harness Remediation (TDD-Backed)
+
+Finding:
+- `db_transaction(...)` failed fast on transient SQLite lock contention (`database is locked`/`SQLITE_BUSY`) with no bounded retry behavior.
+- there was no dedicated contract-level harness to validate write-attempt accounting and successful-write persistence under concurrent SQLite contention.
+
+Implemented:
+- Added `tests/unit/test_db_utils_sqlite_retry.py` covering:
+  - retry-and-succeed behavior on transient SQLite lock contention,
+  - non-retry behavior for non-lock errors,
+  - non-retry behavior for non-SQLite dialects,
+  - retry-budget exhaustion behavior.
+- Updated `src/orion/shared/db_utils.py`:
+  - added bounded SQLite lock retry support in `db_transaction(...)`,
+  - added retry config env vars:
+    - `ORION_SQLITE_LOCK_RETRY_ATTEMPTS`,
+    - `ORION_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS`,
+    - `ORION_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS`,
+  - implemented exponential backoff with max-delay clamp and retryability guards scoped to SQLite lock signatures.
+- Added `src/orion/jobs/sqlite_contention_soak.py`:
+  - `run_sqlite_contention_soak(...)` concurrent write harness with summary metrics (`attempted_writes`, `successful_writes`, `failed_writes`, `final_counter_value`, elapsed),
+  - CLI entrypoint (`python -m orion.jobs.sqlite_contention_soak`),
+  - uses `orion_soak_counter` table (avoids reserved `sqlite_*` internal namespace).
+- Added `tests/unit/test_sqlite_contention_soak.py` validating consistency between attempted/success/failure totals and persisted counter value.
+
+Verification:
+- `uv run pytest -q tests/unit/test_db_utils_sqlite_retry.py tests/unit/test_sqlite_contention_soak.py` passed.
+- `uv run ruff check src/orion/shared/db_utils.py src/orion/jobs/sqlite_contention_soak.py tests/unit/test_db_utils_sqlite_retry.py tests/unit/test_sqlite_contention_soak.py` passed.
+
+Result:
+- Orion now has bounded, test-covered resilience for transient SQLite lock contention in shared transaction helpers.
+- a deterministic soak harness is available to quantify contention behavior and validate retry outcomes before and after config tuning.
+
+Residual:
+- execute longer-duration soak runs in production-like conditions and record retry/failure ratios for baseline thresholds.
+- next contract-under-load slice remains Gateway end-to-end schema/error/retry validation against a live Data-Gateway instance.
