@@ -13,6 +13,7 @@ Buckets and their time horizons:
 
 import os
 import pickle
+from math import isnan
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -521,7 +522,7 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
     y_list = []
 
     for row in rows:
-        max_return = float(row["max_return_pct"] or 0)
+        max_return = _safe_float(row.get("max_return_pct"))
         if max_return <= 0:
             continue  # Skip losing trades for exit timing
 
@@ -530,20 +531,18 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         # Create sample for each checkpoint
         for col_suffix, hours, _desc in checkpoints:
             col_name = f"return_at_{col_suffix}"
-            checkpoint_return = row.get(col_name)
-            if checkpoint_return is None:
+            checkpoint_return = _safe_float(row.get(col_name), default=float("nan"))
+            if isnan(checkpoint_return):
                 continue
 
-            checkpoint_return = float(checkpoint_return)
-
             # Get checkpoint-specific Greeks (safely)
-            delta = float(row.get(f"delta_at_{col_suffix}") or 0)
-            gamma = float(row.get(f"gamma_at_{col_suffix}") or 0)
-            theta = float(row.get(f"theta_at_{col_suffix}") or 0)
-            iv = float(row.get(f"iv_at_{col_suffix}") or 0)
-            dte_cp = float(row.get(f"dte_at_{col_suffix}") or 0)
-            time_value_pct = float(row.get(f"time_value_pct_at_{col_suffix}") or 0)
-            theta_decay_pct = float(row.get(f"theta_decay_pct_at_{col_suffix}") or 0)
+            delta = _safe_float(row.get(f"delta_at_{col_suffix}"))
+            gamma = _safe_float(row.get(f"gamma_at_{col_suffix}"))
+            theta = _safe_float(row.get(f"theta_at_{col_suffix}"))
+            iv = _safe_float(row.get(f"iv_at_{col_suffix}"))
+            dte_cp = _safe_float(row.get(f"dte_at_{col_suffix}"))
+            time_value_pct = _safe_float(row.get(f"time_value_pct_at_{col_suffix}"))
+            theta_decay_pct = _safe_float(row.get(f"theta_decay_pct_at_{col_suffix}"))
 
             # Features
             features = [
@@ -558,17 +557,17 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                 # Time value
                 time_value_pct,
                 theta_decay_pct,
-                float(row.get("premium_usd") or 0),
-                int(row.get("dte") or 0),
+                _safe_float(row.get("premium_usd")),
+                int(_safe_float(row.get("dte"))),
                 1.0 if _is_truthy(row.get("is_sweep")) else 0.0,
-                float(row.get("iv_rank_at_entry") or 50),
-                float(row.get("vix_at_entry") or 20),
-                float(row.get("gex_at_entry") or 0),
-                float(row.get("market_tide_30m") or 0),
-                float(row.get("delta_at_entry") or 0),
-                float(row.get("theta_at_entry") or 0),
-                float(row.get("iv_at_entry") or 0),
-                float(row.get("ask_side_ratio") or 0),
+                _safe_float(row.get("iv_rank_at_entry"), default=50),
+                _safe_float(row.get("vix_at_entry"), default=20),
+                _safe_float(row.get("gex_at_entry")),
+                _safe_float(row.get("market_tide_30m")),
+                _safe_float(row.get("delta_at_entry")),
+                _safe_float(row.get("theta_at_entry")),
+                _safe_float(row.get("iv_at_entry")),
+                _safe_float(row.get("ask_side_ratio")),
                 # Window features (multi-timeframe flow context)
                 _safe_float(row.get("window_call_put_imbalance_1h")),
                 _safe_float(row.get("window_sweep_ratio_1h")),

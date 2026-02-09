@@ -7218,6 +7218,36 @@ Residual:
 
 ## 238) Pass 236 Continuation (2026-02-09)
 
+### 238.1 Exit Classifier Training-Data Contract Hardening (TDD-Backed)
+
+Finding:
+- `src/orion/ml/exit_classifier.py::build_bucket_training_data(...)` still relied on direct `float(...)` casts and direct key lookup for some fields:
+  - non-numeric checkpoint return values raised `ValueError`,
+  - missing `max_return_pct` key raised `KeyError`.
+- this made training brittle to schema/value drift in large historical datasets and reduced reliability under backfill/contract evolution.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - switched max-return extraction to safe lookup/conversion (`_safe_float(row.get("max_return_pct"))`),
+  - switched checkpoint return conversion to safe numeric parsing with explicit skip for non-numeric values,
+  - replaced remaining direct numeric casts in checkpoint/entry feature assembly with `_safe_float(...)` defaults.
+- Extended `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_build_bucket_training_data_skips_non_numeric_checkpoint_returns`
+  - `test_build_bucket_training_data_handles_missing_max_return_pct_key`
+
+Verification:
+- `pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_price_target_labeler_heber_context.py -k "velocity_backfill_candidates or checkpoint_backfill_candidates or window_features_at_entry"` passed.
+
+Result:
+- exit-classifier training-data build now degrades gracefully on malformed row values and minor schema drift.
+- this reduces training interruptions and makes bucket model generation more robust during parity migration and backfill phases.
+
+Residual:
+- next combined classifier pass should target explicit cross-bucket column-contract assertions and optional query-time feature null normalization for higher-volume training runs.
+
+## 238) Pass 236 Continuation (2026-02-09)
+
 ### 238.1 Exit Classifier Training Robustness (Sweep Normalization + Sample Guard, TDD-Backed)
 
 Finding:

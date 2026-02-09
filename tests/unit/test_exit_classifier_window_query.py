@@ -135,3 +135,78 @@ async def test_build_bucket_training_data_normalizes_is_sweep_string_false_and_s
     assert y.shape[0] == 1
     assert y[0] == 1
     assert X[0][11] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_skips_non_numeric_checkpoint_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        "premium_usd": "125000.0",
+        "dte": "0",
+        "is_sweep": "true",
+        "max_return_pct": "100.0",
+        "return_at_5m": "not-a-number",
+        "return_at_10m": "85.0",
+        "delta_at_10m": "bad-delta",
+    }
+
+    class _Result:
+        def mappings(self) -> "_Result":
+            return self
+
+        def all(self) -> list[dict[str, object]]:
+            return [row]
+
+    class _Session:
+        async def execute(self, _stmt, _params=None) -> _Result:
+            return _Result()
+
+    async def _db_query(operation):
+        return await operation(_Session())
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert X.shape[0] == 1
+    assert X.shape[1] == len(feature_names)
+    assert y.shape[0] == 1
+    assert y[0] == 1
+    assert X[0][2] == 0.0  # bad delta_at_10m safely normalized
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_handles_missing_max_return_pct_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        "premium_usd": 100000.0,
+        "dte": 0,
+        "is_sweep": True,
+        "return_at_5m": 20.0,
+    }
+
+    class _Result:
+        def mappings(self) -> "_Result":
+            return self
+
+        def all(self) -> list[dict[str, object]]:
+            return [row]
+
+    class _Session:
+        async def execute(self, _stmt, _params=None) -> _Result:
+            return _Result()
+
+    async def _db_query(operation):
+        return await operation(_Session())
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert isinstance(X, np.ndarray)
+    assert isinstance(y, np.ndarray)
+    assert X.size == 0
+    assert y.size == 0
+    assert len(feature_names) > 0

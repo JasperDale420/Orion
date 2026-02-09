@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Training-Data Contract Hardening (TDD)**:
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - `build_bucket_training_data(...)` now safely handles malformed/missing numeric values via `_safe_float(...)`.
+    - skips non-numeric checkpoint returns instead of raising conversion errors.
+    - tolerates missing `max_return_pct` by skipping invalid rows.
+  - Extended `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_build_bucket_training_data_skips_non_numeric_checkpoint_returns`
+    - `test_build_bucket_training_data_handles_missing_max_return_pct_key`
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_price_target_labeler_heber_context.py -k "velocity_backfill_candidates or checkpoint_backfill_candidates or window_features_at_entry"`
 - **Exit Classifier Training Robustness: Sweep Normalization + Sample Guard (TDD)**:
   - Updated `tests/unit/test_exit_classifier_window_query.py`:
     - `test_build_bucket_training_data_unknown_bucket_short_circuits_without_query`
