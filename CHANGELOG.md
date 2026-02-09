@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Force-Refresh Schema Probe + Missing-Family Metrics (TDD)**:
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - `_load_price_target_label_columns(...)` now supports `force_refresh=True` to bypass schema cache in long-lived workers during active migrations,
+    - added `_group_count_map(...)` and now emits `missing_by_family_counts` alongside `missing_by_family` in `exit_training_schema_missing_columns` logs.
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_load_price_target_label_columns_force_refresh_bypasses_cache`
+    - `test_build_bucket_training_data_logs_missing_family_counts`
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Exit Classifier Empty-Dataset Contract + Schema Cache + Missing-Column Family Diagnostics (TDD)**:
   - Updated `src/orion/ml/exit_classifier.py`:
     - introduced `EXIT_FEATURE_NAMES` as a single feature-schema source-of-truth for training data output contracts,

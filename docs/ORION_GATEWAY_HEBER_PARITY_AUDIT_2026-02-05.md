@@ -7533,3 +7533,34 @@ Result:
 Residual:
 - add optional `force_schema_refresh` control for long-lived workers during active migrations.
 - add a lightweight metric counter for each `missing_by_family` group to improve runbook-driven alerting.
+
+## 246) Pass 244 Continuation (2026-02-09)
+
+### 246.1 Exit Classifier Schema Refresh Control + Family Metric Counters (TDD-Backed)
+
+Finding:
+- pass 245 identified two remaining operational gaps:
+  - no explicit cache-bypass control for schema metadata in long-lived processes,
+  - grouped missing-column diagnostics had no compact per-family counters for alert runbooks.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - `_load_price_target_label_columns(force_refresh: bool = False)` now supports explicit cache bypass when set to `True`,
+  - added `_group_count_map(...)` to derive `missing_by_family_counts`,
+  - enriched `exit_training_schema_missing_columns` structured logs with:
+    - `missing_by_family`
+    - `missing_by_family_counts`.
+- Extended `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_load_price_target_label_columns_force_refresh_bypasses_cache`
+  - `test_build_bucket_training_data_logs_missing_family_counts`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- long-lived workers can force schema re-probe during active DB migrations.
+- alerting/runbook flows can now key off compact family counters instead of parsing full missing-column arrays.
+
+Residual:
+- wire `force_refresh=True` into selected orchestration paths where schema rollout windows are expected.

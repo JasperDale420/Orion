@@ -155,12 +155,16 @@ def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float
     return required
 
 
-async def _load_price_target_label_columns() -> set[str]:
+async def _load_price_target_label_columns(force_refresh: bool = False) -> set[str]:
     """Return currently available columns in price_target_labels."""
     global _schema_cache_columns, _schema_cache_loaded_at
 
     now = time.monotonic()
-    if _schema_cache_columns is not None and (now - _schema_cache_loaded_at) < SCHEMA_CACHE_TTL_SECONDS:
+    if (
+        not force_refresh
+        and _schema_cache_columns is not None
+        and (now - _schema_cache_loaded_at) < SCHEMA_CACHE_TTL_SECONDS
+    ):
         return set(_schema_cache_columns)
 
     async def query(session: Any) -> list[str]:
@@ -245,6 +249,11 @@ def _group_missing_columns_by_family(
         grouped["other"].add(column)
 
     return {key: sorted(values) for key, values in grouped.items() if values}
+
+
+def _group_count_map(grouped_columns: dict[str, list[str]]) -> dict[str, int]:
+    """Return grouped missing-column counts for lightweight metrics/alerts."""
+    return {group: len(columns) for group, columns in grouped_columns.items()}
 
 
 # Bucket-specific checkpoint configurations
@@ -598,6 +607,7 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                     "missing_columns": missing_columns,
                     "missing_count": len(missing_columns),
                     "missing_by_family": missing_by_family,
+                    "missing_by_family_counts": _group_count_map(missing_by_family),
                 },
             )
             X_empty, y_empty = _empty_training_arrays(len(feature_names))

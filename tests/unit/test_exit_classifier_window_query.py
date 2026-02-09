@@ -523,3 +523,67 @@ async def test_load_price_target_label_columns_uses_ttl_cache(monkeypatch: pytes
 
     assert third == {"ticker", "entry_ts"}
     assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_load_price_target_label_columns_force_refresh_bypasses_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    exit_classifier._clear_price_target_label_schema_cache()
+    call_count = 0
+
+    class _Result:
+        def __init__(self, rows: list[tuple[str]]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple[str]]:
+            return self._rows
+
+    class _Session:
+        async def execute(self, _stmt) -> _Result:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _Result([("ticker",)])
+            return _Result([("ticker",), ("entry_ts",)])
+
+    async def _db_query(operation):
+        return await operation(_Session())
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+    monkeypatch.setattr(exit_classifier.time, "monotonic", lambda: 200.0, raising=False)
+
+    first = await exit_classifier._load_price_target_label_columns()
+    second = await exit_classifier._load_price_target_label_columns()
+    refreshed = await exit_classifier._load_price_target_label_columns(force_refresh=True)
+
+    assert first == {"ticker"}
+    assert second == {"ticker"}
+    assert refreshed == {"ticker", "entry_ts"}
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_logs_missing_family_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing = {"return_at_5m", "delta_at_5m", "theta_decay_pct_at_5m"}
+    captured_warning: dict[str, object] = {}
+
+    async def _fake_columns() -> set[str]:
+        base = exit_classifier._required_price_target_columns_for_bucket(exit_classifier.BUCKET_CHECKPOINTS["0DTE"])
+        return base - missing
+
+    def _fake_warning(_message: str, *, extra: dict[str, object]) -> None:
+        captured_warning["extra"] = extra
+
+    monkeypatch.setattr(exit_classifier, "_load_price_target_label_columns", _fake_columns, raising=False)
+    monkeypatch.setattr(exit_classifier.logger, "warning", _fake_warning, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
+    extra = captured_warning["extra"]
+    assert extra["event"] == "exit_training_schema_missing_columns"
+    assert extra["missing_by_family_counts"]["checkpoint_returns"] == 1
+    assert extra["missing_by_family_counts"]["checkpoint_greeks"] == 1
+    assert extra["missing_by_family_counts"]["checkpoint_time_decay"] == 1
