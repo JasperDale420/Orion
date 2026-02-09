@@ -3,9 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-import pytest
-
 import orion.ml.flow_enricher as enricher
+import pytest
 
 
 @pytest.mark.asyncio
@@ -400,3 +399,85 @@ async def test_get_max_pain_distance_returns_none_without_dte(monkeypatch: pytes
     )
 
     assert value is None
+
+
+@pytest.mark.asyncio
+async def test_get_market_context_delegates_to_labeler_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_rvol(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["rvol"] = (ticker, ts)
+        return {"rvol_1h": 1.22, "rvol_daily": 0.91}
+
+    async def _labeler_phase1(ticker: str, ts: datetime, dte: int) -> dict[str, Any]:
+        captured["phase1"] = (ticker, ts, dte)
+        return {"overnight_gap_pct": -0.44, "vwap_distance_pct": 0.83}
+
+    async def _labeler_p3(ticker: str, option_chain: str, expiry: datetime, ts: datetime) -> dict[str, Any]:
+        captured["p3"] = (ticker, option_chain, expiry, ts)
+        return {"high_52w_distance_pct": 11.5}
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for delegated market context")
+
+    monkeypatch.setattr(enricher, "get_labeler_rvol_metrics", _labeler_rvol, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_phase1_bucket_features", _labeler_phase1, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_p3_features", _labeler_p3, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_market_context(
+        "AAPL",
+        entry_ts,
+        dte=7,
+        option_chain="AAPL260221C00190000",
+        expiry="2026-02-21",
+    )
+
+    assert value == {
+        "rvol_1h": pytest.approx(1.22),
+        "rvol_daily": pytest.approx(0.91),
+        "overnight_gap_pct": pytest.approx(-0.44),
+        "high_52w_distance_pct": pytest.approx(11.5),
+        "vwap_distance_pct": pytest.approx(0.83),
+    }
+    assert captured["rvol"] == ("AAPL", entry_ts)
+    assert captured["phase1"] == ("AAPL", entry_ts, 7)
+    assert captured["p3"][0] == "AAPL"
+    assert captured["p3"][1] == "AAPL260221C00190000"
+    assert captured["p3"][3] == entry_ts
+    assert captured["p3"][2].date().isoformat() == "2026-02-21"
+
+
+@pytest.mark.asyncio
+async def test_get_market_context_defaults_phase1_dte_and_skips_p3_without_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_rvol(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["rvol"] = (ticker, ts)
+        return {"rvol_1h": 0.8, "rvol_daily": 0.7}
+
+    async def _labeler_phase1(ticker: str, ts: datetime, dte: int) -> dict[str, Any]:
+        captured["phase1"] = (ticker, ts, dte)
+        return {"overnight_gap_pct": None, "vwap_distance_pct": 0.4}
+
+    async def _fail_p3(*_args, **_kwargs):
+        raise AssertionError("p3 helper should not be called without expiry context")
+
+    monkeypatch.setattr(enricher, "get_labeler_rvol_metrics", _labeler_rvol, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_phase1_bucket_features", _labeler_phase1, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_p3_features", _fail_p3, raising=False)
+
+    value = await enricher._get_market_context("AAPL", entry_ts)
+
+    assert value["rvol_1h"] == pytest.approx(0.8)
+    assert value["rvol_daily"] == pytest.approx(0.7)
+    assert value["overnight_gap_pct"] is None
+    assert value["vwap_distance_pct"] == pytest.approx(0.4)
+    assert value["high_52w_distance_pct"] is None
+    assert captured["phase1"] == ("AAPL", entry_ts, 0)

@@ -220,6 +220,7 @@ This audit now includes pass-2 column parity mapping and pass-3 migration status
 - `main_labeler` now reads flow + bars from Heber (`src/orion/main_labeler.py`) while preserving local `flow_labels` persistence for compatibility.
 - `main_feature_enrichment` now discovers active tickers from Heber flow first, with local SQL fallback (`src/orion/main_feature_enrichment.py`).
 - Gateway/Heber config centralization and websocket envelope parsing are now in production code and covered by new tests.
+- `flow_enricher` market-context path is now delegated to shared labeler helpers (`get_rvol_metrics`, `get_phase1_bucket_features`, `get_p3_features`) in `src/orion/ml/flow_enricher.py`, removing local SQL-heavy market-context queries and keeping parity logic centralized.
 
 ### 10.2 Current Technical Debt Snapshot (from repo scan)
 
@@ -237,6 +238,9 @@ Top concentration by file:
 - `src/orion/jobs/validate_features.py` (49 refs)
 - `src/orion/main_price_target_labeler.py` (22 refs)
 - `src/orion/ml/flow_enricher.py` (11 refs)
+
+Targeted update (2026-02-09):
+- `src/orion/ml/flow_enricher.py` now has only one direct high-priority `silver_*` dependency (`silver_greek_exposure` for rolling GEX averages); market-context SQL references were removed in favor of labeler helper delegation.
 
 ### 10.3 Remaining Integration Gaps (High Priority)
 

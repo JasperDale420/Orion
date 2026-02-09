@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Flow Enricher Market-Context Delegation to Shared Labeler Paths (TDD)**:
+  - Extended `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_market_context_delegates_to_labeler_helpers`
+    - `test_get_market_context_defaults_phase1_dte_and_skips_p3_without_expiry`
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_market_context(...)` now delegates to shared labeler helpers:
+      - `get_labeler_rvol_metrics(...)`
+      - `get_labeler_phase1_bucket_features(...)`
+      - `get_labeler_p3_features(...)`
+    - added expiry normalization helper and routed `enrich_flow_for_scoring(...)` to pass `dte`, `option_chain`, and `expiry` into `_get_market_context(...)`.
+    - removed local SQL-heavy market-context queries from flow enricher.
+  - Verified with:
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py -k "market_context_delegates or market_context_defaults"`
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Backfill Exit-Columns Subsequent-Price Delegation to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
     - `test_get_subsequent_prices_delegates_to_labeler`

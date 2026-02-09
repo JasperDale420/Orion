@@ -29,16 +29,25 @@ from orion.main_price_target_labeler import (
     get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
 )
 from orion.main_price_target_labeler import (
-    get_max_pain_distance as get_labeler_max_pain_distance,
+    get_market_tide_before_entry as get_labeler_market_tide_before_entry,
 )
 from orion.main_price_target_labeler import (
-    get_market_tide_before_entry as get_labeler_market_tide_before_entry,
+    get_max_pain_distance as get_labeler_max_pain_distance,
 )
 from orion.main_price_target_labeler import (
     get_p2_features as get_labeler_p2_features,
 )
 from orion.main_price_target_labeler import (
+    get_p3_features as get_labeler_p3_features,
+)
+from orion.main_price_target_labeler import (
+    get_phase1_bucket_features as get_labeler_phase1_bucket_features,
+)
+from orion.main_price_target_labeler import (
     get_regime_at_entry as get_labeler_regime_at_entry,
+)
+from orion.main_price_target_labeler import (
+    get_rvol_metrics as get_labeler_rvol_metrics,
 )
 from orion.main_price_target_labeler import (
     get_sector_correlation_features as get_labeler_sector_correlation_features,
@@ -104,22 +113,23 @@ async def enrich_flow_for_scoring(
     if dte is None and expiry is not None:
         try:
             from dateutil.parser import parse as parse_date
+
             if isinstance(expiry, str):
                 expiry_date = parse_date(expiry).date()
-            elif hasattr(expiry, 'date'):
+            elif hasattr(expiry, "date"):
                 expiry_date = expiry.date() if callable(expiry.date) else expiry
             else:
                 expiry_date = expiry
-            
+
             # Use entry_ts date for DTE calculation
-            entry_date = entry_ts.date() if hasattr(entry_ts, 'date') else entry_ts
+            entry_date = entry_ts.date() if hasattr(entry_ts, "date") else entry_ts
             dte = (expiry_date - entry_date).days
             if dte < 0:
                 dte = 0  # Expired options
         except Exception as e:
             logger.debug(f"Failed to calculate DTE from expiry {expiry}: {e}")
             dte = None
-    
+
     # Start with basic flow data
     enriched = {
         "ticker": ticker,
@@ -142,10 +152,12 @@ async def enrich_flow_for_scoring(
         _get_iv_rank(ticker, entry_ts),
         _get_darkpool_volumes(ticker, entry_ts),
         _get_regime(entry_ts),
-        _get_flow_greeks(event_id, ticker=ticker, entry_ts=entry_ts, option_chain=option_chain) if event_id else _empty_greeks(),
+        _get_flow_greeks(event_id, ticker=ticker, entry_ts=entry_ts, option_chain=option_chain)
+        if event_id
+        else _empty_greeks(),
         _get_vix(entry_ts),
         _get_flow_metrics(ticker, entry_ts, dte),
-        _get_market_context(ticker, entry_ts),
+        _get_market_context(ticker, entry_ts, dte=dte, option_chain=option_chain, expiry=expiry),
         _get_window_features(ticker, entry_ts),  # Multi-timeframe flow context
     ]
 
@@ -315,15 +327,13 @@ async def _get_gex_rolling_averages(ticker: str, entry_ts: datetime) -> Dict[str
             """
             SELECT AVG(gex_oi), AVG(vex_oi)
             FROM silver_greek_exposure
-            WHERE ticker = :ticker 
-              AND ts_utc <= :entry_ts 
+            WHERE ticker = :ticker
+              AND ts_utc <= :entry_ts
               AND ts_utc > :start_ts
         """
         )
         start_ts = entry_ts - timedelta(days=20)
-        avg_result = await session.execute(
-            avg_stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts}
-        )
+        avg_result = await session.execute(avg_stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
         avg_row = avg_result.fetchone()
 
         return {
@@ -570,11 +580,7 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: Optional[int] 
             result["days_to_earnings"] = days_to_earnings
             result["is_post_earnings"] = is_post_earnings
 
-            if (
-                dte is not None
-                and isinstance(days_to_earnings, (int, float))
-                and 0 <= days_to_earnings <= dte
-            ):
+            if dte is not None and isinstance(days_to_earnings, (int, float)) and 0 <= days_to_earnings <= dte:
                 result["earnings_in_dte_window"] = True
     except Exception as e:
         logger.debug(f"Earnings lookup failed: {e}")
@@ -582,10 +588,37 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: Optional[int] 
     return result
 
 
-async def _get_market_context(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get market context features: rvol, overnight_gap, 52w_high distance."""
-    from sqlalchemy import text
+def _coerce_expiry_datetime(expiry: Any, entry_ts: datetime, dte: Optional[int]) -> Optional[datetime]:
+    """Normalize expiry input to datetime for delegation helpers."""
+    expiry_dt: Optional[datetime] = None
+    if isinstance(expiry, datetime):
+        expiry_dt = expiry
+    elif hasattr(expiry, "year") and hasattr(expiry, "month") and hasattr(expiry, "day"):
+        expiry_dt = datetime(expiry.year, expiry.month, expiry.day)
+    elif isinstance(expiry, str):
+        try:
+            parsed = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+            expiry_dt = parsed if parsed.tzinfo else parsed.replace(tzinfo=entry_ts.tzinfo)
+        except ValueError:
+            expiry_dt = None
 
+    if expiry_dt is None and dte is not None:
+        expiry_dt = entry_ts + timedelta(days=dte)
+
+    if expiry_dt and expiry_dt.tzinfo is None and entry_ts.tzinfo is not None:
+        expiry_dt = expiry_dt.replace(tzinfo=entry_ts.tzinfo)
+
+    return expiry_dt
+
+
+async def _get_market_context(
+    ticker: str,
+    entry_ts: datetime,
+    dte: Optional[int] = None,
+    option_chain: Optional[str] = None,
+    expiry: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Get market context features via labeler helpers for parity with training."""
     result = {
         "rvol_1h": None,
         "rvol_daily": None,
@@ -594,196 +627,32 @@ async def _get_market_context(ticker: str, entry_ts: datetime) -> Dict[str, Any]
         "vwap_distance_pct": None,
     }
 
-    # Get rvol (current volume / average volume)
     try:
-
-        async def query_rvol(session: Any) -> Dict[str, Optional[float]]:
-            stmt = text(
-                """
-                WITH current_vol AS (
-                    SELECT COALESCE(SUM(volume), 0) as vol
-                    FROM silver_alpaca_bars
-                    WHERE ticker = :ticker
-                    AND bar_start_ts_utc > :start_1h AND bar_start_ts_utc <= :entry_ts
-                ),
-                avg_vol AS (
-                    SELECT COALESCE(AVG(daily_vol), 1) as avg_daily
-                    FROM (
-                        SELECT DATE(bar_start_ts_utc) as day, SUM(volume) as daily_vol
-                        FROM silver_alpaca_bars
-                        WHERE ticker = :ticker
-                        AND bar_start_ts_utc > :start_20d AND bar_start_ts_utc <= :entry_ts
-                        GROUP BY DATE(bar_start_ts_utc)
-                    ) daily
-                )
-                SELECT
-                    (SELECT vol FROM current_vol) / NULLIF((SELECT avg_daily FROM avg_vol) / 6.5, 0) as rvol_1h,
-                    (SELECT vol FROM current_vol) * 6.5 / NULLIF((SELECT avg_daily FROM avg_vol), 0) as rvol_daily
-            """
-            )
-            start_1h = entry_ts - timedelta(hours=1)
-            start_20d = entry_ts - timedelta(days=20)
-            res = await session.execute(
-                stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_1h": start_1h, "start_20d": start_20d}
-            )
-            row = res.fetchone()
-            if row:
-                return {"rvol_1h": row[0], "rvol_daily": row[1]}
-            return {}
-
-        rvol = await db_query(query_rvol)
-        result.update(rvol)
+        rvol = await get_labeler_rvol_metrics(ticker, entry_ts)
+        if isinstance(rvol, dict):
+            result["rvol_1h"] = rvol.get("rvol_1h")
+            result["rvol_daily"] = rvol.get("rvol_daily")
     except Exception as e:
-        logger.debug(f"RVOL lookup failed: {e}")
+        logger.debug(f"RVOL helper lookup failed: {e}")
 
-    # Get overnight gap
     try:
-
-        async def query_overnight_gap(session: Any) -> Optional[float]:
-            stmt = text(
-                """
-                WITH prev_close AS (
-                    SELECT close FROM silver_alpaca_bars
-                    WHERE ticker = :ticker
-                    AND bar_start_ts_utc < DATE(:entry_date)
-                    ORDER BY bar_start_ts_utc DESC LIMIT 1
-                ),
-                today_open AS (
-                    SELECT open FROM silver_alpaca_bars
-                    WHERE ticker = :ticker
-                    AND DATE(bar_start_ts_utc) = DATE(:entry_date)
-                    ORDER BY bar_start_ts_utc ASC LIMIT 1
-                )
-                SELECT
-                    ((SELECT open FROM today_open) / NULLIF((SELECT close FROM prev_close), 0) - 1) * 100
-            """
-            )
-            res = await session.execute(stmt, {"ticker": ticker, "entry_date": entry_ts})
-            row = res.fetchone()
-            return row[0] if row and row[0] else None
-
-        overnight = await db_query(query_overnight_gap)
-        if overnight is not None:
-            result["overnight_gap_pct"] = overnight
+        phase1 = await get_labeler_phase1_bucket_features(ticker, entry_ts, dte if dte is not None else 0)
+        if isinstance(phase1, dict):
+            result["overnight_gap_pct"] = phase1.get("overnight_gap_pct")
+            result["vwap_distance_pct"] = phase1.get("vwap_distance_pct")
     except Exception as e:
-        logger.debug(f"Overnight gap lookup failed: {e}")
+        logger.debug(f"Phase1 helper lookup failed: {e}")
 
-    # Get 52-week high distance
+    expiry_dt = _coerce_expiry_datetime(expiry, entry_ts, dte)
+    if expiry_dt is None:
+        return result
+
     try:
-
-        async def query_52w_high(session: Any) -> Optional[float]:
-            stmt = text(
-                """
-                WITH high_52w AS (
-                    SELECT MAX(high) as max_high FROM silver_alpaca_bars
-                    WHERE ticker = :ticker
-                    AND bar_start_ts_utc > :start_52w AND bar_start_ts_utc <= :entry_ts
-                ),
-                current_price AS (
-                    SELECT close FROM silver_alpaca_bars
-                    WHERE ticker = :ticker AND bar_start_ts_utc <= :entry_ts
-                    ORDER BY bar_start_ts_utc DESC LIMIT 1
-                )
-                SELECT
-                    ((SELECT close FROM current_price) / NULLIF((SELECT max_high FROM high_52w), 0) - 1) * 100
-            """
-            )
-            start_52w = entry_ts - timedelta(weeks=52)
-            res = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_52w": start_52w})
-            row = res.fetchone()
-            return row[0] if row and row[0] else None
-
-        high_dist = await db_query(query_52w_high)
-        if high_dist is not None:
-            result["high_52w_distance_pct"] = high_dist
+        p3 = await get_labeler_p3_features(ticker, option_chain or "", expiry_dt, entry_ts)
+        if isinstance(p3, dict):
+            result["high_52w_distance_pct"] = p3.get("high_52w_distance_pct")
     except Exception as e:
-        logger.debug(f"52w high lookup failed: {e}")
-
-    # Get VWAP distance (intraday VWAP vs current price)
-    try:
-
-        async def query_vwap(session: Any) -> Optional[float]:
-            stmt = text(
-                """
-                WITH today_bars AS (
-                    SELECT close, volume, high, low
-                    FROM silver_alpaca_bars
-                    WHERE ticker = :ticker
-                    AND DATE(bar_start_ts_utc) = DATE(:entry_ts)
-                ),
-                vwap_calc AS (
-                    SELECT
-                        SUM((high + low + close) / 3 * volume) / NULLIF(SUM(volume), 0) as vwap
-                    FROM today_bars
-                ),
-                current_price AS (
-                    SELECT close FROM silver_alpaca_bars
-                    WHERE ticker = :ticker AND bar_start_ts_utc <= :entry_ts
-                    ORDER BY bar_start_ts_utc DESC LIMIT 1
-                )
-                SELECT
-                    ((SELECT close FROM current_price) / NULLIF((SELECT vwap FROM vwap_calc), 0) - 1) * 100
-            """
-            )
-            res = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
-            row = res.fetchone()
-            return row[0] if row and row[0] else None
-
-        vwap_dist = await db_query(query_vwap)
-        if vwap_dist is not None:
-            result["vwap_distance_pct"] = vwap_dist
-    except Exception as e:
-        logger.debug(f"VWAP lookup failed: {e}")
-
-    # Get SPY correlation (5-day rolling correlation of daily returns)
-    try:
-
-        async def query_spy_correlation(session: Any) -> Optional[float]:
-            stmt = text(
-                """
-                WITH ticker_returns AS (
-                    SELECT
-                        DATE(bar_start_ts_utc) as day,
-                        MAX(close) as close
-                    FROM silver_alpaca_bars
-                    WHERE ticker = :ticker
-                    AND bar_start_ts_utc > :start_5d AND bar_start_ts_utc <= :entry_ts
-                    GROUP BY DATE(bar_start_ts_utc)
-                    ORDER BY day
-                ),
-                spy_returns AS (
-                    SELECT
-                        DATE(bar_start_ts_utc) as day,
-                        MAX(close) as close
-                    FROM silver_alpaca_bars
-                    WHERE ticker = 'SPY'
-                    AND bar_start_ts_utc > :start_5d AND bar_start_ts_utc <= :entry_ts
-                    GROUP BY DATE(bar_start_ts_utc)
-                    ORDER BY day
-                ),
-                combined AS (
-                    SELECT
-                        t.day,
-                        t.close / NULLIF(LAG(t.close) OVER (ORDER BY t.day), 0) - 1 as ticker_ret,
-                        s.close / NULLIF(LAG(s.close) OVER (ORDER BY s.day), 0) - 1 as spy_ret
-                    FROM ticker_returns t
-                    JOIN spy_returns s ON t.day = s.day
-                )
-                SELECT CORR(ticker_ret, spy_ret)
-                FROM combined
-                WHERE ticker_ret IS NOT NULL AND spy_ret IS NOT NULL
-            """
-            )
-            start_5d = entry_ts - timedelta(days=7)  # 7 calendar days = ~5 trading
-            res = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_5d": start_5d})
-            row = res.fetchone()
-            return row[0] if row and row[0] else None
-
-        spy_corr = await db_query(query_spy_correlation)
-        if spy_corr is not None:
-            result["spy_correlation_5d"] = spy_corr
-    except Exception as e:
-        logger.debug(f"SPY correlation lookup failed: {e}")
+        logger.debug(f"P3 helper lookup failed: {e}")
 
     return result
 
