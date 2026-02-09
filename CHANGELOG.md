@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Legacy Backfill Watermark Cleanup Job + Storage Helper (TDD)**:
+  - Added `tests/unit/test_storage_watermarks_cleanup.py` covering:
+    - no-op behavior for empty key input,
+    - count-only behavior when no matching rows exist,
+    - delete execution behavior when matching rows exist.
+  - Added `tests/unit/test_cleanup_legacy_backfill_watermarks.py` covering:
+    - one-shot deletion path for known legacy backfill keys,
+    - dry-run path that reports matches without deleting.
+  - Added `src/orion/jobs/cleanup_legacy_backfill_watermarks.py` with:
+    - explicit legacy-key set for retired backfill watermark paths,
+    - `cleanup_legacy_backfill_watermarks(dry_run=...)`,
+    - CLI support via `python -m orion.jobs.cleanup_legacy_backfill_watermarks [--dry-run]`.
+  - Added `delete_watermarks(...)` helper in `src/orion/storage/watermarks.py` and tightened `upsert_watermark(...)` timezone typing guard.
 - **Price-Target Labeler Heber Flow Read Path (TDD)**:
   - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py` covering:
     - Heber-first entry candidate sourcing in `get_entry_signals(...)`

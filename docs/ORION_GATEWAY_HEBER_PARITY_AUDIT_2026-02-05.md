@@ -5868,3 +5868,32 @@ Result:
 
 Residual:
 - run a one-time cleanup migration to remove obsolete legacy watermark keys from `ingest_watermarks` for retired backfill paths.
+
+## 199) Pass 193 Continuation (2026-02-09)
+
+### 199.1 One-Time Legacy Backfill Watermark Cleanup Path Implemented (TDD-Backed)
+
+Finding:
+- after retiring legacy timestamp-watermark fallback reads/writes for `backfill_ml_features` and `backfill_exit_columns`, obsolete key rows in `ingest_watermarks` remained as cleanup debt.
+
+Implemented:
+- Added `tests/unit/test_storage_watermarks_cleanup.py` covering delete-helper behavior for:
+  - empty-key no-op,
+  - no-match count-only path,
+  - matching-row delete path.
+- Added `tests/unit/test_cleanup_legacy_backfill_watermarks.py` covering:
+  - cleanup delete path for known legacy keys,
+  - dry-run count path with delete suppression.
+- Added `src/orion/jobs/cleanup_legacy_backfill_watermarks.py`:
+  - defines `LEGACY_BACKFILL_WATERMARK_KEYS`,
+  - exposes `cleanup_legacy_backfill_watermarks(dry_run=...)`,
+  - supports direct execution (`python -m orion.jobs.cleanup_legacy_backfill_watermarks [--dry-run]`).
+- Updated `src/orion/storage/watermarks.py`:
+  - added `delete_watermarks(session, keys)` helper for targeted multi-key cleanup,
+  - tightened `upsert_watermark(...)` timezone typing/validation guard.
+
+Result:
+- obsolete backfill watermark rows can now be audited (`--dry-run`) and removed deterministically via a dedicated, test-covered cleanup path.
+
+Residual:
+- once executed in each environment, document completion evidence (row counts before/after) in operations runbook and retire any now-obsolete manual SQL cleanup notes.

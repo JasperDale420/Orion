@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orion.shared.utils import ensure_utc
@@ -45,23 +46,26 @@ async def get_watermark(session: AsyncSession, key: str) -> datetime | None:
 
 async def upsert_watermark(session: AsyncSession, key: str, last_seen_ts_utc: datetime) -> datetime:
     """Update or insert a watermark for the given key."""
-    last_seen_ts_utc = ensure_utc(last_seen_ts_utc)
+    normalized_ts = ensure_utc(last_seen_ts_utc)
+    if normalized_ts is None:
+        raise ValueError("last_seen_ts_utc must be timezone-aware")
 
     stmt = select(IngestWatermark).where(IngestWatermark.key == key)
     result = await session.execute(stmt)
     row = result.scalars().first()
 
     if row is None:
-        row = IngestWatermark(key=key, last_seen_ts_utc=last_seen_ts_utc)
+        row = IngestWatermark(key=key, last_seen_ts_utc=normalized_ts)
         session.add(row)
-        return last_seen_ts_utc
+        return normalized_ts
 
-    if row.last_seen_ts_utc is None or ensure_utc(row.last_seen_ts_utc) < last_seen_ts_utc:
-        row.last_seen_ts_utc = last_seen_ts_utc
+    row_ts = ensure_utc(row.last_seen_ts_utc)
+    if row_ts is None or row_ts < normalized_ts:
+        row.last_seen_ts_utc = normalized_ts
 
     result_ts = ensure_utc(row.last_seen_ts_utc)
     if result_ts is None:
-        return last_seen_ts_utc
+        return normalized_ts
     return result_ts
 
 
@@ -111,3 +115,20 @@ async def upsert_cursor_state(
     if result_ts is None:
         result_ts = incoming_ts
     return CursorState(last_seen_ts_utc=result_ts, last_seen_id=row.last_seen_id)
+
+
+async def delete_watermarks(session: AsyncSession, keys: Sequence[str]) -> int:
+    """Delete watermark rows for the provided keys and return deleted count."""
+    deduped_keys = tuple(dict.fromkeys(k for k in keys if k))
+    if not deduped_keys:
+        return 0
+
+    count_stmt = select(func.count()).select_from(IngestWatermark).where(IngestWatermark.key.in_(deduped_keys))
+    count_result = await session.execute(count_stmt)
+    delete_count = int(count_result.scalar_one())
+    if delete_count <= 0:
+        return 0
+
+    delete_stmt = delete(IngestWatermark).where(IngestWatermark.key.in_(deduped_keys))
+    await session.execute(delete_stmt)
+    return delete_count
