@@ -222,6 +222,84 @@ async def test_get_regime_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_get_vix_delegates_to_labeler_regime(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_regime(ts: datetime) -> dict[str, Any]:
+        captured["entry_ts"] = ts
+        return {"vix_at_entry": 18.75}
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for vix enrichment")
+
+    monkeypatch.setattr(enricher, "get_labeler_regime_at_entry", _labeler_regime, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_vix(entry_ts)
+
+    assert value == pytest.approx(18.75)
+    assert captured == {"entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_flow_metrics_delegates_context_to_labeler_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_flow_agg(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["flow_agg"] = (ticker, ts)
+        return {
+            "ask_side_ratio": 0.65,
+            "sweep_ratio_1h": 0.22,
+            "same_ticker_premium_1h": 145000.0,
+        }
+
+    async def _labeler_sector_corr(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["sector_corr"] = (ticker, ts)
+        return {
+            "sector_net_premium_1h": 52000.0,
+            "sector_flow_direction": "BULLISH",
+            "spy_correlation_5d": 0.44,
+            "spy_return_1h": 0.0032,
+        }
+
+    async def _labeler_earnings(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["earnings"] = (ticker, ts)
+        return {"days_to_earnings": 3, "is_post_earnings": False}
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for delegated flow metrics")
+
+    monkeypatch.setattr(enricher, "get_labeler_flow_aggression", _labeler_flow_agg, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_sector_correlation_features", _labeler_sector_corr, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_earnings_proximity", _labeler_earnings, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_flow_metrics("AAPL", entry_ts, dte=5)
+
+    assert value["sector"] == "Technology"
+    assert value["industry"] == "Technology"
+    assert value["ask_side_ratio"] == pytest.approx(0.65)
+    assert value["sweep_ratio_1h"] == pytest.approx(0.22)
+    assert value["same_ticker_premium_1h"] == pytest.approx(145000.0)
+    assert value["sector_net_premium_1h"] == pytest.approx(52000.0)
+    assert value["sector_flow_direction"] == "BULLISH"
+    assert value["spy_correlation_5d"] == pytest.approx(0.44)
+    assert value["spy_return_1h"] == pytest.approx(0.0032)
+    assert value["days_to_earnings"] == 3
+    assert value["is_post_earnings"] is False
+    assert value["earnings_in_dte_window"] is True
+    assert captured == {
+        "flow_agg": ("AAPL", entry_ts),
+        "sector_corr": ("AAPL", entry_ts),
+        "earnings": ("AAPL", entry_ts),
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

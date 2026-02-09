@@ -79,6 +79,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `pytest -q tests/unit/test_flow_enricher_delegation.py -k max_pain_distance`
     - `pytest -q tests/unit/test_flow_enricher_delegation.py`
+- **Flow Enricher Combined Flow-Context + VIX Delegation Pass (TDD)**:
+  - Extended `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_vix_delegates_to_labeler_regime`
+    - `test_get_flow_metrics_delegates_context_to_labeler_helpers`
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_vix(...)` now delegates to `get_labeler_regime_at_entry(...)` and reads `vix_at_entry`,
+    - `_get_flow_metrics(...)` now delegates:
+      - flow aggression to `get_labeler_flow_aggression(...)`,
+      - sector/spy context to `get_labeler_sector_correlation_features(...)`,
+      - earnings proximity to `get_labeler_earnings_proximity(...)`,
+    - preserves existing output shape and DTE-window flag behavior.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_vix_delegates_to_labeler_regime or get_flow_metrics_delegates_context_to_labeler_helpers"`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
     - `test_get_underlying_price_at_entry_delegates_to_labeler`

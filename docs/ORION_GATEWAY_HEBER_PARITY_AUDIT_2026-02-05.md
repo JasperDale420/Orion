@@ -6996,3 +6996,36 @@ Result:
 
 Residual:
 - remaining `flow_enricher` local SQL debt is concentrated in broader market/window aggregation helpers and should be migrated in the same helper-level TDD pattern.
+
+## 232) Pass 230 Continuation (2026-02-09)
+
+### 232.1 `flow_enricher` Combined Flow-Context + VIX Delegation (TDD-Backed)
+
+Finding:
+- after GEX and max-pain delegation, `flow_enricher` still had:
+  - local SQL VIX lookup in `_get_vix(...)`,
+  - local SQL flow-context assembly in `_get_flow_metrics(...)` (flow aggression, sector premium direction, SPY return, earnings proximity).
+- these paths were good candidates to combine in one pass because they produce related context features for the same enrichment payload.
+
+Implemented:
+- Extended `tests/unit/test_flow_enricher_delegation.py` with:
+  - `test_get_vix_delegates_to_labeler_regime`
+  - `test_get_flow_metrics_delegates_context_to_labeler_helpers`
+- Updated `src/orion/ml/flow_enricher.py`:
+  - `_get_vix(...)` now delegates to `get_labeler_regime_at_entry(...)` and returns `vix_at_entry`,
+  - `_get_flow_metrics(...)` now delegates:
+    - flow aggression metrics to `get_labeler_flow_aggression(...)`,
+    - sector/spy metrics to `get_labeler_sector_correlation_features(...)`,
+    - earnings proximity to `get_labeler_earnings_proximity(...)`,
+  - retained output contract and DTE window derivation (`earnings_in_dte_window` from `days_to_earnings` + `dte`).
+
+Verification:
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_vix_delegates_to_labeler_regime or get_flow_metrics_delegates_context_to_labeler_helpers"` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- one combined pass removed another chunk of local SQL coupling in live enrichment and tightened parity by reusing shared labeler contracts for VIX + flow context fields.
+
+Residual:
+- `flow_enricher` still has local SQL in broader market/window feature families (`_get_market_context(...)`, `_get_window_features(...)`, and GEX rolling averages).
+- next combined pass recommendation: delegate RVOL/overnight-gap/52w-high context to shared helpers where available, then isolate remaining window aggregation SQL as explicit backfill-only/local-derivation contracts.

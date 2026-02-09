@@ -14,6 +14,12 @@ from orion.main_price_target_labeler import (
     get_darkpool_metrics as get_labeler_darkpool_metrics,
 )
 from orion.main_price_target_labeler import (
+    get_earnings_proximity as get_labeler_earnings_proximity,
+)
+from orion.main_price_target_labeler import (
+    get_flow_aggression as get_labeler_flow_aggression,
+)
+from orion.main_price_target_labeler import (
     get_flow_greeks as get_labeler_flow_greeks,
 )
 from orion.main_price_target_labeler import (
@@ -33,6 +39,9 @@ from orion.main_price_target_labeler import (
 )
 from orion.main_price_target_labeler import (
     get_regime_at_entry as get_labeler_regime_at_entry,
+)
+from orion.main_price_target_labeler import (
+    get_sector_correlation_features as get_labeler_sector_correlation_features,
 )
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
@@ -448,22 +457,11 @@ async def _get_flow_greeks(
 
 async def _get_vix(entry_ts: datetime) -> Optional[float]:
     """Get VIX at entry."""
-    from sqlalchemy import text
-
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT vix FROM silver_vix_data
-            WHERE ts_utc <= :entry_ts
-            ORDER BY ts_utc DESC LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"entry_ts": entry_ts})
-        row = result.fetchone()
-        return row[0] if row else None
-
     try:
-        return await db_query(query)
+        regime = await get_labeler_regime_at_entry(entry_ts)
+        if isinstance(regime, dict):
+            return regime.get("vix_at_entry")
+        return None
     except Exception as e:
         logger.debug(f"VIX lookup failed: {e}")
         return None
@@ -471,8 +469,6 @@ async def _get_vix(entry_ts: datetime) -> Optional[float]:
 
 async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: Optional[int] = None) -> Dict[str, Any]:
     """Get additional flow metrics - sector, earnings, flow ratios."""
-    from sqlalchemy import text
-
     # Sector mapping (same as labeler)
     TICKER_SECTORS = {
         "AAPL": "Technology",
@@ -547,154 +543,39 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: Optional[int] 
         "sector_flow_direction": None,
     }
 
-    # Get flow ratios from recent 1h flow data
     try:
-        start_ts = entry_ts - timedelta(hours=1)
-
-        async def query_flow_ratios(session: Any) -> Dict[str, Any]:
-            stmt = text(
-                """
-                SELECT
-                    COUNT(CASE WHEN aggressor = 'ASK' THEN 1 END)::float /
-                        NULLIF(COUNT(*), 0) as ask_ratio,
-                    COUNT(CASE WHEN is_sweep::text = 'true' OR is_sweep::text = 'True' THEN 1 END)::float /
-                        NULLIF(COUNT(*), 0) as sweep_ratio,
-                    COALESCE(SUM(premium_usd), 0) as total_premium
-                FROM silver_uw_flow
-                WHERE ticker = :ticker
-                AND flow_ts_utc > :start_ts AND flow_ts_utc <= :entry_ts
-            """
-            )
-            res = await session.execute(stmt, {"ticker": ticker, "start_ts": start_ts, "entry_ts": entry_ts})
-            row = res.fetchone()
-            if row:
-                return {
-                    "ask_side_ratio": row[0],
-                    "sweep_ratio_1h": row[1],
-                    "same_ticker_premium_1h": row[2],
-                }
-            return {}
-
-        flow_ratios = await db_query(query_flow_ratios)
-        result.update(flow_ratios)
+        flow_aggression = await get_labeler_flow_aggression(ticker, entry_ts)
+        if isinstance(flow_aggression, dict):
+            result["ask_side_ratio"] = flow_aggression.get("ask_side_ratio")
+            result["sweep_ratio_1h"] = flow_aggression.get("sweep_ratio_1h")
+            result["same_ticker_premium_1h"] = flow_aggression.get("same_ticker_premium_1h")
     except Exception as e:
-        logger.debug(f"Flow ratios lookup failed: {e}")
+        logger.debug(f"Flow aggression lookup failed: {e}")
 
-    # Get SPY return for market context
     try:
-        start_ts = entry_ts - timedelta(hours=1)
-
-        async def query_spy_return(session: Any) -> Optional[float]:
-            stmt = text(
-                """
-                WITH spy_prices AS (
-                    SELECT close, bar_start_ts_utc
-                    FROM silver_alpaca_bars
-                    WHERE ticker = 'SPY'
-                    AND bar_start_ts_utc BETWEEN :start_ts AND :entry_ts
-                    ORDER BY bar_start_ts_utc
-                )
-                SELECT
-                    (SELECT close FROM spy_prices ORDER BY bar_start_ts_utc DESC LIMIT 1) /
-                    NULLIF((SELECT close FROM spy_prices ORDER BY bar_start_ts_utc ASC LIMIT 1), 0) - 1
-                    as return_1h
-            """
-            )
-            res = await session.execute(stmt, {"start_ts": start_ts, "entry_ts": entry_ts})
-            row = res.fetchone()
-            return row[0] if row and row[0] else None
-
-        spy_ret = await db_query(query_spy_return)
-        if spy_ret is not None:
-            result["spy_return_1h"] = spy_ret
+        sector_corr = await get_labeler_sector_correlation_features(ticker, entry_ts)
+        if isinstance(sector_corr, dict):
+            result["sector_net_premium_1h"] = sector_corr.get("sector_net_premium_1h")
+            result["sector_flow_direction"] = sector_corr.get("sector_flow_direction")
+            result["spy_correlation_5d"] = sector_corr.get("spy_correlation_5d")
+            result["spy_return_1h"] = sector_corr.get("spy_return_1h")
     except Exception as e:
-        logger.debug(f"SPY return lookup failed: {e}")
+        logger.debug(f"Sector-correlation lookup failed: {e}")
 
-    # Get sector net premium (for sector-level flow direction)
-    if sector:
-        try:
-            start_ts = entry_ts - timedelta(hours=1)
-            sector_tickers = [t for t, s in TICKER_SECTORS.items() if s == sector]
-
-            if sector_tickers:
-
-                async def query_sector_premium(session: Any) -> Dict[str, Any]:
-                    # Use ANY for array matching
-                    stmt = text(
-                        """
-                        SELECT
-                            COALESCE(SUM(CASE WHEN aggressor = 'ASK' THEN premium_usd ELSE 0 END), 0) as call_premium,
-                            COALESCE(SUM(CASE WHEN aggressor = 'BID' THEN premium_usd ELSE 0 END), 0) as put_premium
-                        FROM silver_uw_flow
-                        WHERE ticker = ANY(:tickers)
-                        AND flow_ts_utc > :start_ts AND flow_ts_utc <= :entry_ts
-                    """
-                    )
-                    res = await session.execute(
-                        stmt, {"tickers": sector_tickers, "start_ts": start_ts, "entry_ts": entry_ts}
-                    )
-                    row = res.fetchone()
-                    if row:
-                        call_prem = row[0] or 0
-                        put_prem = row[1] or 0
-                        net = call_prem - put_prem
-                        direction = "BULLISH" if net > 0 else "BEARISH" if net < 0 else "NEUTRAL"
-                        return {
-                            "sector_net_premium_1h": net,
-                            "sector_flow_direction": direction,
-                        }
-                    return {}
-
-                sector_flow = await db_query(query_sector_premium)
-                result.update(sector_flow)
-        except Exception as e:
-            logger.debug(f"Sector premium lookup failed: {e}")
-
-    # Get earnings info from calendar
     try:
-        entry_date = entry_ts.date()
+        earnings = await get_labeler_earnings_proximity(ticker, entry_ts)
+        if isinstance(earnings, dict):
+            days_to_earnings = earnings.get("days_to_earnings")
+            is_post_earnings = bool(earnings.get("is_post_earnings", False))
+            result["days_to_earnings"] = days_to_earnings
+            result["is_post_earnings"] = is_post_earnings
 
-        async def query_earnings(session: Any) -> Dict[str, Any]:
-            # Get next earnings (future)
-            next_stmt = text(
-                """
-                SELECT report_date FROM silver_earnings_calendar
-                WHERE ticker = :ticker AND report_date >= :as_of
-                ORDER BY report_date ASC LIMIT 1
-            """
-            )
-            next_result = await session.execute(next_stmt, {"ticker": ticker, "as_of": entry_date})
-            next_row = next_result.fetchone()
-
-            # Get last earnings (past)
-            last_stmt = text(
-                """
-                SELECT report_date FROM silver_earnings_calendar
-                WHERE ticker = :ticker AND report_date < :as_of
-                ORDER BY report_date DESC LIMIT 1
-            """
-            )
-            last_result = await session.execute(last_stmt, {"ticker": ticker, "as_of": entry_date})
-            last_row = last_result.fetchone()
-
-            earnings_result = {}
-
-            if next_row:
-                days_to = (next_row[0] - entry_date).days
-                earnings_result["days_to_earnings"] = days_to
-                # Check if earnings within DTE window
-                if dte is not None and days_to <= dte:
-                    earnings_result["earnings_in_dte_window"] = True
-
-            if last_row:
-                days_since = (entry_date - last_row[0]).days
-                if 0 <= days_since <= 5:
-                    earnings_result["is_post_earnings"] = True
-
-            return earnings_result
-
-        earnings_data = await db_query(query_earnings)
-        result.update(earnings_data)
+            if (
+                dte is not None
+                and isinstance(days_to_earnings, (int, float))
+                and 0 <= days_to_earnings <= dte
+            ):
+                result["earnings_in_dte_window"] = True
     except Exception as e:
         logger.debug(f"Earnings lookup failed: {e}")
 
