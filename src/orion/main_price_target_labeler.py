@@ -1796,7 +1796,9 @@ def _get_rvol_metrics_from_heber(ticker: str, entry_ts: datetime) -> Optional[Di
     entry_hour_start = entry_utc.replace(minute=0, second=0, microsecond=0)
     entry_day_start = entry_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     days_since_monday = entry_utc.weekday()
-    entry_week_start = (entry_utc - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+    entry_week_start = (entry_utc - timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     lookback_start = entry_utc - timedelta(days=20)
     lookback_4w = entry_utc - timedelta(days=28)
 
@@ -2067,11 +2069,7 @@ def _get_flow_aggression_from_heber(ticker: str, entry_ts: datetime) -> Optional
         return None
 
     ticker_upper = str(ticker).upper()
-    filtered = temp_df[
-        (temp_df["ticker"] == ticker_upper)
-        & (temp_df["ts"] >= start_utc)
-        & (temp_df["ts"] < entry_utc)
-    ]
+    filtered = temp_df[(temp_df["ticker"] == ticker_upper) & (temp_df["ts"] >= start_utc) & (temp_df["ts"] < entry_utc)]
 
     if filtered.empty:
         return {"ask_side_ratio": None, "sweep_ratio_1h": None, "same_ticker_premium_1h": None}
@@ -2443,7 +2441,9 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
     return await _get_p2_features_sql(ticker, option_chain, entry_ts)
 
 
-def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
+def _get_p2_features_from_heber(
+    ticker: str, option_chain: str, entry_ts: datetime
+) -> Optional[Dict[str, Optional[float]]]:
     result: Dict[str, Optional[float]] = {
         "oi_change_1d": None,
         "oi_change_pct": None,
@@ -2470,7 +2470,9 @@ def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: dateti
         return None
 
     flow_ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
-    flow_chain_col = _pick_first_existing_column(flow_df, ["option_chain", "option_symbol", "contract_symbol", "instrument_key"])
+    flow_chain_col = _pick_first_existing_column(
+        flow_df, ["option_chain", "option_symbol", "contract_symbol", "instrument_key"]
+    )
     oi_col = _pick_first_existing_column(flow_df, ["open_interest", "oi"])
     iv_col = _pick_first_existing_column(flow_df, ["iv", "implied_volatility"])
     if flow_ts_col is None or flow_chain_col is None:
@@ -2478,12 +2480,16 @@ def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: dateti
 
     flow_ts = pd.to_datetime(flow_df[flow_ts_col], utc=True, errors="coerce")
     flow_chain = flow_df[flow_chain_col].astype(str).str.upper().str.split(":").str[-1]
-    flow_oi = pd.to_numeric(flow_df[oi_col], errors="coerce") if oi_col is not None else pd.Series([np.nan] * len(flow_df))
-    flow_iv = pd.to_numeric(flow_df[iv_col], errors="coerce") if iv_col is not None else pd.Series([np.nan] * len(flow_df))
-
-    normalized_flow = pd.DataFrame({"ts": flow_ts, "option_chain": flow_chain, "open_interest": flow_oi, "iv": flow_iv}).dropna(
-        subset=["ts"]
+    flow_oi = (
+        pd.to_numeric(flow_df[oi_col], errors="coerce") if oi_col is not None else pd.Series([np.nan] * len(flow_df))
     )
+    flow_iv = (
+        pd.to_numeric(flow_df[iv_col], errors="coerce") if iv_col is not None else pd.Series([np.nan] * len(flow_df))
+    )
+
+    normalized_flow = pd.DataFrame(
+        {"ts": flow_ts, "option_chain": flow_chain, "open_interest": flow_oi, "iv": flow_iv}
+    ).dropna(subset=["ts"])
     if normalized_flow.empty:
         return None
 
@@ -2520,7 +2526,9 @@ def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: dateti
         bars_df = pd.DataFrame()
 
     if not bars_df.empty:
-        bar_ts_col = _pick_first_existing_column(bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc", "timestamp"])
+        bar_ts_col = _pick_first_existing_column(
+            bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc", "timestamp"]
+        )
         bar_close_col = _pick_first_existing_column(bars_df, ["close", "c"])
         bar_ticker_col = _pick_first_existing_column(bars_df, ["ticker", "symbol", "underlying", "instrument_key"])
         if bar_ts_col is not None and bar_close_col is not None:
@@ -2531,7 +2539,9 @@ def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: dateti
             else:
                 bar_ticker = pd.Series([str(ticker).upper()] * len(bars_df))
 
-            bars_norm = pd.DataFrame({"ts": bar_ts, "ticker": bar_ticker, "close": bar_close}).dropna(subset=["ts", "close"])
+            bars_norm = pd.DataFrame({"ts": bar_ts, "ticker": bar_ticker, "close": bar_close}).dropna(
+                subset=["ts", "close"]
+            )
             if not bars_norm.empty:
                 bars_norm = bars_norm[
                     (bars_norm["ticker"] == str(ticker).upper())
@@ -2541,7 +2551,9 @@ def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: dateti
 
                 closes = [float(value) for value in bars_norm["close"].tolist() if value]
                 if len(closes) >= 10:
-                    returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0]
+                    returns = [
+                        (closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0
+                    ]
                     if len(returns) > 1:
                         import statistics
 
@@ -2693,7 +2705,9 @@ def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetim
         bars_df = pd.DataFrame()
 
     if not bars_df.empty:
-        ts_col = _pick_first_existing_column(bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc", "timestamp"])
+        ts_col = _pick_first_existing_column(
+            bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc", "timestamp"]
+        )
         high_col = _pick_first_existing_column(bars_df, ["high", "h"])
         close_col = _pick_first_existing_column(bars_df, ["close", "c"])
         ticker_col = _pick_first_existing_column(bars_df, ["ticker", "symbol", "underlying", "instrument_key"])
@@ -2706,10 +2720,14 @@ def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetim
             else:
                 ticker_series = pd.Series([ticker_upper] * len(bars_df))
 
-            normalized_bars = pd.DataFrame({"ts": ts_series, "ticker": ticker_series, "high": high_series, "close": close_series})
+            normalized_bars = pd.DataFrame(
+                {"ts": ts_series, "ticker": ticker_series, "high": high_series, "close": close_series}
+            )
             normalized_bars = normalized_bars.dropna(subset=["ts"])
             if not normalized_bars.empty:
-                scoped = normalized_bars[(normalized_bars["ticker"] == ticker_upper) & (normalized_bars["ts"] < entry_utc)].sort_values("ts")
+                scoped = normalized_bars[
+                    (normalized_bars["ticker"] == ticker_upper) & (normalized_bars["ts"] < entry_utc)
+                ].sort_values("ts")
                 if not scoped.empty:
                     history_52w = scoped[(scoped["ts"].dt.date >= lookback_52w) & (scoped["ts"].dt.date < entry_date)]
                     if not history_52w.empty:
@@ -2971,11 +2989,7 @@ def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime)
                 temp_df["day"] = temp_df["ts"].dt.date
                 temp_df = temp_df[(temp_df["day"] >= lookback_5d) & (temp_df["day"] < entry_date)]
                 if not temp_df.empty:
-                    daily = (
-                        temp_df.sort_values("ts")
-                        .groupby(["symbol", "day"], as_index=False)["close"]
-                        .last()
-                    )
+                    daily = temp_df.sort_values("ts").groupby(["symbol", "day"], as_index=False)["close"].last()
                     pivot = daily.pivot(index="day", columns="symbol", values="close").sort_index()
                     if ticker_upper in pivot.columns and "SPY" in pivot.columns:
                         returns = pd.DataFrame(

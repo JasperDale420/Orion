@@ -1,10 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import orion.main_price_target_labeler as labeler
 import pandas as pd
 import pytest
-
-import orion.main_price_target_labeler as labeler
 
 
 @pytest.mark.asyncio
@@ -217,9 +216,24 @@ async def test_get_sector_correlation_features_prefers_heber_when_available(
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
-                    {"ts_event": entry_ts - timedelta(minutes=20), "ticker": "AAPL", "put_call": "C", "premium_usd": 1_500_000},
-                    {"ts_event": entry_ts - timedelta(minutes=10), "ticker": "MSFT", "put_call": "P", "premium_usd": 100_000},
-                    {"ts_event": entry_ts - timedelta(hours=2), "ticker": "AAPL", "put_call": "C", "premium_usd": 999_999},
+                    {
+                        "ts_event": entry_ts - timedelta(minutes=20),
+                        "ticker": "AAPL",
+                        "put_call": "C",
+                        "premium_usd": 1_500_000,
+                    },
+                    {
+                        "ts_event": entry_ts - timedelta(minutes=10),
+                        "ticker": "MSFT",
+                        "put_call": "P",
+                        "premium_usd": 100_000,
+                    },
+                    {
+                        "ts_event": entry_ts - timedelta(hours=2),
+                        "ticker": "AAPL",
+                        "put_call": "C",
+                        "premium_usd": 999_999,
+                    },
                 ]
             )
 
@@ -391,11 +405,41 @@ async def test_get_flow_aggression_prefers_heber_when_available(monkeypatch: pyt
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
-                    {"ts_event": entry_ts - timedelta(minutes=45), "ticker": "AAPL", "aggressor": "ASK", "is_sweep": True, "premium_usd": 100_000},
-                    {"ts_event": entry_ts - timedelta(minutes=20), "ticker": "AAPL", "aggressor": "BID", "is_sweep": False, "premium_usd": 200_000},
-                    {"ts_event": entry_ts - timedelta(minutes=5), "ticker": "AAPL", "aggressor": "ASK", "is_sweep": True, "premium_usd": 50_000},
-                    {"ts_event": entry_ts - timedelta(minutes=90), "ticker": "AAPL", "aggressor": "ASK", "is_sweep": True, "premium_usd": 999_999},
-                    {"ts_event": entry_ts - timedelta(minutes=10), "ticker": "MSFT", "aggressor": "ASK", "is_sweep": True, "premium_usd": 123_456},
+                    {
+                        "ts_event": entry_ts - timedelta(minutes=45),
+                        "ticker": "AAPL",
+                        "aggressor": "ASK",
+                        "is_sweep": True,
+                        "premium_usd": 100_000,
+                    },
+                    {
+                        "ts_event": entry_ts - timedelta(minutes=20),
+                        "ticker": "AAPL",
+                        "aggressor": "BID",
+                        "is_sweep": False,
+                        "premium_usd": 200_000,
+                    },
+                    {
+                        "ts_event": entry_ts - timedelta(minutes=5),
+                        "ticker": "AAPL",
+                        "aggressor": "ASK",
+                        "is_sweep": True,
+                        "premium_usd": 50_000,
+                    },
+                    {
+                        "ts_event": entry_ts - timedelta(minutes=90),
+                        "ticker": "AAPL",
+                        "aggressor": "ASK",
+                        "is_sweep": True,
+                        "premium_usd": 999_999,
+                    },
+                    {
+                        "ts_event": entry_ts - timedelta(minutes=10),
+                        "ticker": "MSFT",
+                        "aggressor": "ASK",
+                        "is_sweep": True,
+                        "premium_usd": 123_456,
+                    },
                 ]
             )
 
@@ -493,10 +537,30 @@ async def test_get_phase1_bucket_features_prefers_heber_when_available(monkeypat
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
-                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc), "open": 90.0, "close": 90.0, "vwap": 90.0},
-                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "open": 100.0, "close": 100.0, "vwap": 100.0},
-                    {"ts_event": datetime(2026, 2, 11, 14, 30, tzinfo=timezone.utc), "open": 102.0, "close": 103.0, "vwap": 101.0},
-                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "open": 103.0, "close": 104.0, "vwap": 102.0},
+                    {
+                        "ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc),
+                        "open": 90.0,
+                        "close": 90.0,
+                        "vwap": 90.0,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc),
+                        "open": 100.0,
+                        "close": 100.0,
+                        "vwap": 100.0,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 14, 30, tzinfo=timezone.utc),
+                        "open": 102.0,
+                        "close": 103.0,
+                        "vwap": 101.0,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "open": 103.0,
+                        "close": 104.0,
+                        "vwap": 102.0,
+                    },
                 ]
             )
 
@@ -561,10 +625,30 @@ async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
-                    {"ts_event": datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc), "option_chain": option_chain, "open_interest": 110, "iv": 0.24},
-                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "option_chain": option_chain, "open_interest": 120, "iv": 0.28},
-                    {"ts_event": datetime(2026, 2, 11, 16, 0, tzinfo=timezone.utc), "option_chain": option_chain, "open_interest": 130, "iv": 0.30},
-                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "option_chain": "MSFT250221C00400000", "open_interest": 999, "iv": 0.99},
+                    {
+                        "ts_event": datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+                        "option_chain": option_chain,
+                        "open_interest": 110,
+                        "iv": 0.24,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "option_chain": option_chain,
+                        "open_interest": 120,
+                        "iv": 0.28,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 16, 0, tzinfo=timezone.utc),
+                        "option_chain": option_chain,
+                        "open_interest": 130,
+                        "iv": 0.30,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "option_chain": "MSFT250221C00400000",
+                        "open_interest": 999,
+                        "iv": 0.99,
+                    },
                 ]
             )
 
@@ -641,20 +725,56 @@ async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
-                    {"ts_event": datetime(2026, 2, 1, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "high": 150.0, "close": 140.0},
-                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "high": 160.0, "close": 155.0},
-                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "symbol": "AAPL", "high": 158.0, "close": 150.0},
-                    {"ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc), "symbol": "MSFT", "high": 500.0, "close": 500.0},
+                    {
+                        "ts_event": datetime(2026, 2, 1, 20, 0, tzinfo=timezone.utc),
+                        "symbol": "AAPL",
+                        "high": 150.0,
+                        "close": 140.0,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc),
+                        "symbol": "AAPL",
+                        "high": 160.0,
+                        "close": 155.0,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "symbol": "AAPL",
+                        "high": 158.0,
+                        "close": 150.0,
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc),
+                        "symbol": "MSFT",
+                        "high": 500.0,
+                        "close": 500.0,
+                    },
                 ]
             )
 
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
-                    {"ts_event": datetime(2026, 2, 11, 15, 5, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-21"},
-                    {"ts_event": datetime(2026, 2, 11, 15, 20, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-21"},
-                    {"ts_event": datetime(2026, 2, 11, 14, 20, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-21"},
-                    {"ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-28"},
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 5, tzinfo=timezone.utc),
+                        "ticker": "AAPL",
+                        "expiry": "2026-02-21",
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 20, tzinfo=timezone.utc),
+                        "ticker": "AAPL",
+                        "expiry": "2026-02-21",
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 14, 20, tzinfo=timezone.utc),
+                        "ticker": "AAPL",
+                        "expiry": "2026-02-21",
+                    },
+                    {
+                        "ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc),
+                        "ticker": "AAPL",
+                        "expiry": "2026-02-28",
+                    },
                 ]
             )
 

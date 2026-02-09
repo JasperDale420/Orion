@@ -6630,9 +6630,9 @@ Result:
 Residual:
 - remaining backfill parity debt is now mostly in orchestration breadth (large update surface and runtime integration behavior), rather than local helper-level source divergence.
 
-## 221) Pass 219 Continuation (2026-02-09)
+## 222) Pass 220 Continuation (2026-02-09)
 
-### 221.1 Price-Target Labeler Flow-Greeks Event Lookup Heber-First Path (TDD-Backed)
+### 222.1 Price-Target Labeler Flow-Greeks Event Lookup Heber-First Path (TDD-Backed)
 
 Finding:
 - `get_flow_greeks(event_id)` in `src/orion/main_price_target_labeler.py` was still SQL-primary against `silver_uw_flow`.
