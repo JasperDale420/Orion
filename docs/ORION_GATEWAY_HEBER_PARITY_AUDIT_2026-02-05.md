@@ -6719,3 +6719,33 @@ Result:
 
 Residual:
 - remaining backfill debt is now mostly in large orchestration/runtime behavior concerns rather than helper-level source divergence or duplicate local implementations.
+
+## 224) Pass 222 Continuation (2026-02-09)
+
+### 224.1 Backfill Sector-Correlation Wrapper Alignment (TDD-Backed)
+
+Finding:
+- `update_ml_features(...)` still imported and called `get_sector_correlation_features(...)` directly from `main_price_target_labeler` inside the method body.
+- this kept one orchestration branch outside the wrapper-delegation pattern used by other migrated backfill helpers and made test stubbing less uniform.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_sector_correlation_features_delegates_to_labeler`
+- Updated existing orchestration regression test:
+  - `test_update_ml_features_calls_sector_corr_with_two_args`
+  - now stubs `backfill.get_sector_correlation_features(...)` directly.
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared helper alias `get_labeler_sector_correlation_features`,
+  - added wrapper `get_sector_correlation_features(...)`,
+  - removed direct inline import of `get_sector_correlation_features` inside `update_ml_features(...)`,
+  - routed sector-correlation enrichment through the wrapper.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "sector_corr_with_two_args or sector_correlation_features_delegates"` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- sector-correlation enrichment now follows the same backfill wrapper-delegation contract as the other migrated helper paths.
+
+Residual:
+- remaining backfill orchestration debt is primarily the broader set of inline helper imports/calls and runtime integration behavior under full backfill load.

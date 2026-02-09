@@ -75,7 +75,7 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
         }
 
     # Regression guard: this stub accepts exactly 2 args.
-    monkeypatch.setattr(labeler, "get_sector_correlation_features", _sector_corr)
+    monkeypatch.setattr(backfill, "get_sector_correlation_features", _sector_corr)
 
     ok = await backfill.update_ml_features(record)
 
@@ -214,3 +214,27 @@ async def test_get_phase1_bucket_features_delegates_to_labeler(monkeypatch: pyte
 
     assert value == expected
     assert captured == {"ticker": "AAPL", "entry_ts": entry_ts, "dte": 15}
+
+
+@pytest.mark.asyncio
+async def test_get_sector_correlation_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+    expected = {
+        "sector_net_premium_1h": 10.0,
+        "sector_flow_direction": "BULLISH",
+        "spy_correlation_5d": 0.5,
+        "spy_return_1h": 0.2,
+    }
+
+    async def _labeler_sector_corr(ticker: str, ts: datetime) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return expected
+
+    monkeypatch.setattr(backfill, "get_labeler_sector_correlation_features", _labeler_sector_corr, raising=False)
+
+    value = await backfill.get_sector_correlation_features("AAPL", entry_ts)
+
+    assert value == expected
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}

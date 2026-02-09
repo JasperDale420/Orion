@@ -71,6 +71,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "phase1_bucket_features_delegates or update_ml_features_calls_sector_corr_with_two_args"`
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
+- **Backfill Sector-Correlation Wrapper Alignment (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_sector_correlation_features_delegates_to_labeler`
+  - Updated `test_update_ml_features_calls_sector_corr_with_two_args` to stub `backfill.get_sector_correlation_features(...)` directly.
+  - Updated `src/orion/jobs/backfill_ml_features.py` to:
+    - add `get_sector_correlation_features(...)` wrapper delegating to shared labeler helper (`get_labeler_sector_correlation_features`),
+    - route sector-correlation enrichment through the wrapper and remove inline direct import in `update_ml_features(...)`.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "sector_corr_with_two_args or sector_correlation_features_delegates"`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
     - `/health` readiness with bounded retry,
