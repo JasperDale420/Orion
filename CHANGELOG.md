@@ -26,6 +26,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Preserved existing Greeks contract order (stored greeks -> Alpaca API -> Black-Scholes fallback) while moving event lookup to Heber-first.
   - Verified with:
     - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k flow_greeks`
+- **Flow Enricher Flow-Greeks Delegation to Shared Labeler Paths (TDD)**:
+  - Added `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_flow_greeks_delegates_to_labeler_and_p2_when_option_chain_present`
+    - `test_get_flow_greeks_skips_p2_when_option_chain_missing`
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_flow_greeks(...)` now delegates base greeks to shared labeler helper (`get_labeler_flow_greeks`),
+    - enriches `iv_vs_hv_ratio` / `oi_change_*` via shared P2 helper (`get_labeler_p2_features`) when `ticker + option_chain + entry_ts` are available,
+    - removes local SQL-heavy flow-greeks derivation path from this enrichment helper.
+  - Verified with:
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
     - `test_get_underlying_price_at_entry_delegates_to_labeler`
@@ -90,6 +100,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - route IV-rank enrichment through the wrapper and remove inline direct import call in `update_ml_features(...)`.
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "iv_rank_at_entry_delegates or sector_corr_with_two_args"`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
+- **Backfill P2/P3 Wrapper Alignment (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_p2_features_delegates_to_labeler`
+    - `test_get_p3_features_delegates_to_labeler`
+  - Updated `test_update_ml_features_calls_sector_corr_with_two_args` to stub:
+    - `backfill.get_p2_features(...)`
+    - `backfill.get_p3_features(...)`
+  - Updated `src/orion/jobs/backfill_ml_features.py` to:
+    - add wrapper delegates `get_p2_features(...)` and `get_p3_features(...)`,
+    - route P2/P3 enrichment through wrappers and remove inline direct import usage in `update_ml_features(...)`.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "get_p2_features_delegates or get_p3_features_delegates or sector_corr_with_two_args"`
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:

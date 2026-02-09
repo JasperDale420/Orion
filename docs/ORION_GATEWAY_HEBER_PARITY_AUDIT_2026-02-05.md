@@ -6722,6 +6722,33 @@ Residual:
 
 ## 224) Pass 222 Continuation (2026-02-09)
 
+### 224.1 `flow_enricher` Flow-Greeks Path Delegated to Shared Labeler Helpers (TDD-Backed)
+
+Finding:
+- `src/orion/ml/flow_enricher.py::_get_flow_greeks(...)` was still a local SQL-heavy implementation over `silver_uw_flow` and `silver_alpaca_bars`.
+- this duplicated logic already centralized in labeler helpers and preserved another high-frequency local-source divergence path.
+
+Implemented:
+- Added `tests/unit/test_flow_enricher_delegation.py` with:
+  - `test_get_flow_greeks_delegates_to_labeler_and_p2_when_option_chain_present`
+  - `test_get_flow_greeks_skips_p2_when_option_chain_missing`
+- Updated `src/orion/ml/flow_enricher.py`:
+  - `_get_flow_greeks(...)` now delegates base greeks (`delta/gamma/theta/vega/iv/volume/open_interest`) to `get_labeler_flow_greeks(event_id)`,
+  - when `ticker + option_chain + entry_ts` are available, enriches `iv_vs_hv_ratio`, `oi_change_1d`, `oi_change_pct` via `get_labeler_p2_features(...)`,
+  - removed the previous local SQL-heavy flow-greeks derivation path.
+- Updated `enrich_flow_for_scoring(...)` call-site to pass `ticker`, `entry_ts`, and `option_chain` into `_get_flow_greeks(...)` for shared P2 feature enrichment.
+
+Verification:
+- `pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- flow-enricher now shares one core flow-greeks + option-feature contract with label generation paths, reducing SQL duplication and tightening parity.
+
+Residual:
+- additional `flow_enricher` helpers still read local tables directly (for example market context/window aggregation); continue staged delegation/Heber-first migration by helper family.
+
+## 224) Pass 222 Continuation (2026-02-09)
+
 ### 224.1 Backfill Sector-Correlation Wrapper Alignment (TDD-Backed)
 
 Finding:
@@ -6776,3 +6803,34 @@ Result:
 
 Residual:
 - remaining backfill technical debt is now dominated by broader orchestration complexity and additional inline helper call paths not yet wrapped.
+
+## 226) Pass 224 Continuation (2026-02-09)
+
+### 226.1 Backfill P2/P3 Wrapper Alignment (TDD-Backed)
+
+Finding:
+- `update_ml_features(...)` still imported `get_p2_features(...)` / `get_p3_features(...)` inline from `main_price_target_labeler`.
+- this left option-feature enrichment partially outside the wrapper delegation pattern used by other migrated backfill helper paths.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_p2_features_delegates_to_labeler`
+  - `test_get_p3_features_delegates_to_labeler`
+- Updated `test_update_ml_features_calls_sector_corr_with_two_args` to stub:
+  - `backfill.get_p2_features(...)`
+  - `backfill.get_p3_features(...)`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported aliases `get_labeler_p2_features` and `get_labeler_p3_features`,
+  - added wrappers `get_p2_features(...)` and `get_p3_features(...)`,
+  - removed inline `p2/p3` import path in `update_ml_features(...)`,
+  - routed P2/P3 enrichment through wrappers.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "get_p2_features_delegates or get_p3_features_delegates or sector_corr_with_two_args"` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- P2/P3 option-feature enrichment now follows the same wrapper-delegation contract as the other migrated backfill helper calls.
+
+Residual:
+- remaining backfill orchestration debt is now primarily concentrated in the remaining inline helper import block for darkpool/rvol/flow-aggression/tide/regime context and runtime behavior under full-load backfill execution.

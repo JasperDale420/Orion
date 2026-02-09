@@ -10,6 +10,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
+from orion.main_price_target_labeler import (
+    get_flow_greeks as get_labeler_flow_greeks,
+)
+from orion.main_price_target_labeler import (
+    get_p2_features as get_labeler_p2_features,
+)
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
@@ -109,7 +115,7 @@ async def enrich_flow_for_scoring(
         _get_iv_rank(ticker, entry_ts),
         _get_darkpool_volumes(ticker, entry_ts),
         _get_regime(entry_ts),
-        _get_flow_greeks(event_id) if event_id else _empty_greeks(),
+        _get_flow_greeks(event_id, ticker=ticker, entry_ts=entry_ts, option_chain=option_chain) if event_id else _empty_greeks(),
         _get_vix(entry_ts),
         _get_flow_metrics(ticker, entry_ts, dte),
         _get_market_context(ticker, entry_ts),
@@ -480,106 +486,43 @@ async def _get_regime(entry_ts: datetime) -> Dict[str, str]:
         return {}
 
 
-async def _get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
+async def _get_flow_greeks(
+    event_id: str,
+    *,
+    ticker: Optional[str] = None,
+    entry_ts: Optional[datetime] = None,
+    option_chain: Optional[str] = None,
+) -> Dict[str, Optional[float]]:
     """Get Greeks from flow event."""
-    from sqlalchemy import text
-
-    async def query(session: Any) -> Dict[str, Optional[float]]:
-        stmt = text(
-            """
-            SELECT
-                delta_alpaca, gamma_alpaca, theta_alpaca, vega_alpaca,
-                iv, volume_contract, open_interest, ticker, flow_ts_utc
-            FROM silver_uw_flow
-            WHERE event_id = :event_id
-        """
-        )
-        result = await session.execute(stmt, {"event_id": event_id})
-        row = result.fetchone()
-        if row:
-            iv = row[4]
-            ticker = row[7]
-            flow_ts = row[8]
-
-            # Calculate iv_vs_hv_ratio if we have IV
-            iv_vs_hv = None
-            if iv and ticker and flow_ts:
-                try:
-                    # Get historical volatility from bars (20-day realized)
-                    hv_stmt = text(
-                        """
-                        WITH daily_returns AS (
-                            SELECT
-                                DATE(bar_start_ts_utc) as day,
-                                LN(MAX(close) / LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) as log_return
-                            FROM silver_alpaca_bars
-                            WHERE ticker = :ticker
-                            AND bar_start_ts_utc > :start_ts AND bar_start_ts_utc <= :end_ts
-                            GROUP BY DATE(bar_start_ts_utc)
-                            ORDER BY day
-                        )
-                        SELECT STDDEV(log_return) * SQRT(252) as hv_20d
-                        FROM daily_returns
-                        WHERE log_return IS NOT NULL
-                    """
-                    )
-                    start_ts = flow_ts - timedelta(days=30)
-                    hv_result = await session.execute(
-                        hv_stmt, {"ticker": ticker, "start_ts": start_ts, "end_ts": flow_ts}
-                    )
-                    hv_row = hv_result.fetchone()
-                    if hv_row and hv_row[0] and hv_row[0] > 0:
-                        iv_vs_hv = iv / hv_row[0]
-                except Exception as e:
-                    _record_enricher_fallback("iv_vs_hv_ratio", e, ticker=ticker, event_id=event_id)
-
-            # Calculate OI change from prior day
-            oi_change_1d = None
-            oi_change_pct = None
-            current_oi = row[6]
-            if current_oi and ticker and flow_ts:
-                try:
-                    oi_stmt = text(
-                        """
-                        SELECT open_interest
-                        FROM silver_uw_flow
-                        WHERE ticker = :ticker
-                        AND option_chain = (
-                            SELECT option_chain FROM silver_uw_flow WHERE event_id = :event_id
-                        )
-                        AND DATE(flow_ts_utc) < DATE(:flow_ts)
-                        ORDER BY flow_ts_utc DESC
-                        LIMIT 1
-                    """
-                    )
-                    oi_result = await session.execute(
-                        oi_stmt, {"ticker": ticker, "flow_ts": flow_ts, "event_id": event_id}
-                    )
-                    oi_row = oi_result.fetchone()
-                    if oi_row and oi_row[0]:
-                        prior_oi = oi_row[0]
-                        oi_change_1d = current_oi - prior_oi
-                        if prior_oi > 0:
-                            oi_change_pct = (current_oi - prior_oi) / prior_oi * 100
-                except Exception as e:
-                    _record_enricher_fallback("oi_change_1d", e, ticker=ticker, event_id=event_id)
-
-            return {
-                "delta": row[0],
-                "gamma": row[1],
-                "theta": row[2],
-                "vega": row[3],
-                "iv": iv,
-                "volume": row[5],
-                "open_interest": row[6],
-                "iv_vs_hv_ratio": iv_vs_hv,
-                "oi_change_1d": oi_change_1d,
-                "oi_change_pct": oi_change_pct,
-            }
-        return {}
-
     try:
-        return await db_query(query)
+        flow_greeks = await get_labeler_flow_greeks(event_id)
+        if not isinstance(flow_greeks, dict) or not flow_greeks:
+            return {}
+
+        result: Dict[str, Optional[float]] = {
+            "delta": flow_greeks.get("delta"),
+            "gamma": flow_greeks.get("gamma"),
+            "theta": flow_greeks.get("theta"),
+            "vega": flow_greeks.get("vega"),
+            "iv": flow_greeks.get("iv"),
+            "volume": flow_greeks.get("volume"),
+            "open_interest": flow_greeks.get("open_interest"),
+            "iv_vs_hv_ratio": None,
+            "oi_change_1d": None,
+            "oi_change_pct": None,
+        }
+
+        if ticker and entry_ts and option_chain:
+            try:
+                p2 = await get_labeler_p2_features(ticker, option_chain, entry_ts)
+                if isinstance(p2, dict):
+                    result["iv_vs_hv_ratio"] = p2.get("iv_vs_hv_ratio")
+                    result["oi_change_1d"] = p2.get("oi_change_1d")
+                    result["oi_change_pct"] = p2.get("oi_change_pct")
+            except Exception as e:
+                _record_enricher_fallback("flow_enricher_p2_lookup", e, ticker=ticker, event_id=event_id)
+
+        return result
     except Exception as e:
         logger.debug(f"Greeks lookup failed: {e}")
         return {}
