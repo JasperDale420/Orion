@@ -1,7 +1,8 @@
 import asyncio
+import re
 import signal
 from datetime import datetime, timedelta, timezone
-from typing import Any, List
+from typing import Any, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -44,12 +45,51 @@ def _scope_recent_flow_for_position(position: Any, recent_flow: List[Any]) -> Li
     if not position_chain:
         return recent_flow
 
+    position_contract = _parse_option_chain_contract(position_chain)
     scoped = []
     for flow in recent_flow:
         flow_chain = (getattr(flow, "option_chain", None) or "").strip()
         if flow_chain == position_chain:
             scoped.append(flow)
+            continue
+        if not flow_chain and position_contract is not None and _flow_matches_contract_components(flow, position_contract):
+            scoped.append(flow)
     return scoped
+
+
+def _parse_option_chain_contract(option_chain: str) -> Optional[Tuple[str, str, float]]:
+    """
+    Parse OCC option chain to comparable contract components.
+
+    Returns tuple: (expiry_yyyy_mm_dd, put_call, strike_float)
+    """
+    match = re.search(r"(\d{6})([PC])(\d{8})$", option_chain.strip().upper())
+    if not match:
+        return None
+    yymmdd, put_call, strike_raw = match.groups()
+    expiry = f"20{yymmdd[0:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
+    strike = int(strike_raw) / 1000.0
+    return (expiry, put_call, strike)
+
+
+def _flow_matches_contract_components(flow: Any, contract: Tuple[str, str, float]) -> bool:
+    expiry, put_call, strike = contract
+    flow_expiry = str(getattr(flow, "expiry", "") or "").strip()
+    flow_put_call = str(getattr(flow, "put_call", "") or "").strip().upper()
+    flow_strike_raw = getattr(flow, "strike", None)
+
+    if not flow_expiry or not flow_put_call or flow_strike_raw is None:
+        return False
+    try:
+        flow_strike = float(flow_strike_raw)
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        flow_expiry == expiry
+        and flow_put_call == put_call
+        and abs(flow_strike - strike) < 1e-6
+    )
 
 
 async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[Any]:

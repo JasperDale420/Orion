@@ -6062,6 +6062,31 @@ Result:
 Residual:
 - rule internals still primarily use flow-side heuristics (aggressor/put_call/premium) and do not yet enforce explicit expiry/strike neighborhood policies when `option_chain` is missing on flow rows.
 
+## 206) Pass 200 Continuation (2026-02-09)
+
+### 206.1 Exit-Flow Contract Scoping Hardened for Missing `option_chain` Rows
+
+Finding:
+- prior pass enforced exact `flow.option_chain == position.option_chain`, but dropped rows where `option_chain` was absent even when equivalent contract metadata (`expiry`, `strike`, `put_call`) existed.
+- this could undercount relevant flow in partial-normalization windows and weaken exit signal fidelity.
+
+Implemented (TDD-backed):
+- Extended `tests/unit/test_main_execution_exit_scope.py` with:
+  - component-match include case (`expiry/strike/put_call` exact contract),
+  - mismatch rejection cases across expiry, strike, and option side,
+  - strike-string tolerance case (e.g. `"200"`).
+- Updated `src/orion/main_execution.py`:
+  - added `_parse_option_chain_contract(...)` for OCC decomposition to `(expiry, put_call, strike)`,
+  - added `_flow_matches_contract_components(...)`,
+  - enhanced `_scope_recent_flow_for_position(...)` to apply component fallback matching when flow-side `option_chain` is missing.
+
+Result:
+- contract scoping now remains effective under partial flow payloads where `option_chain` is absent but core contract fields are present,
+- reduces both false excludes (relevant contract flow dropped) and false includes (unrelated same-ticker flow retained).
+
+Residual:
+- rows missing both `option_chain` and contract components are still excluded for option positions (intentional conservative behavior); upstream normalization quality remains a dependency.
+
 ## 204) Pass 198 Continuation (2026-02-09)
 
 ### 204.1 `main_price_target_labeler` Heber-First VIX Proxy Regime Path Added (TDD-Backed)

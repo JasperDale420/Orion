@@ -30,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - filter same-ticker `recent_flow` to matching `position.option_chain` for option positions,
     - pass scoped flow into exit-rule evaluation loop.
   - This reduces cross-contract contamination where one option position could be exited based on unrelated flow for the same underlying ticker.
+- **Execution Exit Flow Component Fallback Matching (TDD)**:
+  - Extended `tests/unit/test_main_execution_exit_scope.py` with cases for flow rows that lack `option_chain` but include contract components (`expiry`, `strike`, `put_call`).
+  - Updated `src/orion/main_execution.py` to:
+    - add OCC parser `_parse_option_chain_contract(...)`,
+    - add `_flow_matches_contract_components(...)`,
+    - include component-based matching fallback in `_scope_recent_flow_for_position(...)` when flow-side `option_chain` is missing.
+  - This keeps contract scoping effective even when upstream flow normalization omits `option_chain` on some rows.
 - **Price-Target Labeler Heber VIX-Proxy Regime Path (TDD)**:
   - Added `tests/unit/test_price_target_labeler_heber_vix_proxy.py` covering:
     - Heber VIX-proxy snapshot derivation from VIXY bars (`_get_heber_vix_proxy_snapshot_at_or_before(...)`),

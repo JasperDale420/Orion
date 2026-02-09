@@ -39,3 +39,31 @@ def test_scope_recent_flow_for_position_returns_all_for_non_option_positions() -
     scoped = main_execution._scope_recent_flow_for_position(position, recent_flow)
 
     assert scoped == recent_flow
+
+
+def test_scope_recent_flow_uses_contract_components_when_flow_chain_missing() -> None:
+    position = SimpleNamespace(option_chain="AAPL260220C00200000")
+    recent_flow = [
+        SimpleNamespace(option_chain=None, expiry="2026-02-20", strike=200.0, put_call="C"),
+        SimpleNamespace(option_chain=None, expiry="2026-02-27", strike=200.0, put_call="C"),
+        SimpleNamespace(option_chain=None, expiry="2026-02-20", strike=205.0, put_call="C"),
+        SimpleNamespace(option_chain=None, expiry="2026-02-20", strike=200.0, put_call="P"),
+    ]
+
+    scoped = main_execution._scope_recent_flow_for_position(position, recent_flow)
+
+    assert len(scoped) == 1
+    assert scoped[0].expiry == "2026-02-20"
+    assert scoped[0].strike == 200.0
+    assert scoped[0].put_call == "C"
+
+
+def test_scope_recent_flow_component_match_tolerates_strike_string() -> None:
+    position = SimpleNamespace(option_chain="AAPL260220C00200000")
+    recent_flow = [
+        SimpleNamespace(option_chain=None, expiry="2026-02-20", strike="200", put_call="C"),
+    ]
+
+    scoped = main_execution._scope_recent_flow_for_position(position, recent_flow)
+
+    assert len(scoped) == 1
