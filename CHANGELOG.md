@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Query-Error Fallback + Stable Empty Output Contract (TDD)**:
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_build_bucket_training_data_returns_empty_with_feature_schema_on_query_error`
+    - `test_build_bucket_training_data_returns_stable_empty_matrix_shape_when_rows_filtered`
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - added `_empty_training_arrays(...)` for stable empty output shape/dtypes,
+    - `build_bucket_training_data(...)` now catches query failures and returns empty arrays with feature schema instead of raising,
+    - standardized non-empty output dtypes to `float` (`X`) and `int` (`y`).
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Backfill Exit Columns Resilience + Retry + Progress Telemetry (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - added bounded retry helper `_update_record_with_retry(...)` for per-record update failures,

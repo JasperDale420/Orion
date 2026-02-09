@@ -7391,3 +7391,32 @@ Result:
 
 Residual:
 - next high-value backfill pass should add a configurable dead-letter sink for repeated per-record failures and optional phase-level summary return payload for orchestration callers.
+
+## 242) Pass 240 Continuation (2026-02-09)
+
+### 242.1 Exit Classifier Query-Failure Fallback Contract (TDD-Backed)
+
+Finding:
+- `build_bucket_training_data(...)` still propagated DB/query exceptions directly.
+- during schema drift events (for example missing checkpoint columns) this caused hard failures instead of safe degradation, even though downstream training orchestration can tolerate empty datasets.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - added `_empty_training_arrays(feature_count)` helper for consistent empty output contracts,
+  - wrapped `db_query(run_query)` in guarded fallback:
+    - logs structured warning event `exit_training_query_failed`,
+    - returns empty typed arrays with preserved `feature_names` schema instead of raising.
+- Extended `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_build_bucket_training_data_returns_empty_with_feature_schema_on_query_error` (parametrized across `0DTE`, `SHORT_SWING`, `SWING`, `POSITION`),
+  - `test_build_bucket_training_data_returns_stable_empty_matrix_shape_when_rows_filtered` (explicit shape/dtype contract).
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- classifier training-data preparation now degrades safely under query/schema errors while preserving feature-schema contract.
+- this reduces operational interruption risk during migrations and partial schema rollout states.
+
+Residual:
+- next high-value pass should add explicit checkpoint-column presence preflight checks so failures can be categorized as “schema missing” before query execution, with actionable remediation metadata.

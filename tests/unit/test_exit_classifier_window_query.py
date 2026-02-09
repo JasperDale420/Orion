@@ -402,3 +402,25 @@ async def test_build_bucket_training_data_query_coalesces_entry_and_window_field
     assert "COALESCE(p.vix_at_entry, 20) as vix_at_entry" in sql
     assert "COALESCE(w.features_by_period->'1h'->>'sweep_ratio', '0') as window_sweep_ratio_1h" in sql
     assert "COALESCE(w.features_by_period->'1d'->>'dp_volume', '0') as window_dp_volume_1d" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["0DTE", "SHORT_SWING", "SWING", "POSITION"])
+async def test_build_bucket_training_data_returns_empty_with_feature_schema_on_query_error(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: str,
+) -> None:
+    async def _fail_db_query(_operation):
+        raise RuntimeError('column "return_at_missing" does not exist')
+
+    monkeypatch.setattr(exit_classifier, "db_query", _fail_db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data(bucket)
+
+    assert isinstance(X, np.ndarray)
+    assert isinstance(y, np.ndarray)
+    assert len(feature_names) > 0
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
+    assert X.dtype == float
+    assert y.dtype == int

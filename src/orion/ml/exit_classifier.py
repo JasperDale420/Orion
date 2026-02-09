@@ -67,6 +67,14 @@ def _can_train_with_labels(y: np.ndarray, min_samples: int = 100) -> tuple[bool,
     return True, ""
 
 
+def _empty_training_arrays(feature_count: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return stable empty matrix/vector outputs for training datasets."""
+    return (
+        np.empty((0, feature_count), dtype=float),
+        np.empty((0,), dtype=int),
+    )
+
+
 # Bucket-specific checkpoint configurations
 # Each checkpoint has: (column_suffix, hours_held, description)
 BUCKET_CHECKPOINTS = {
@@ -490,18 +498,6 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         AND p.max_return_pct IS NOT NULL
     """
 
-    async def run_query(session: Any) -> List[Any]:
-        from sqlalchemy import text
-
-        result = await session.execute(text(query), {"trade_type": trade_type})
-        return result.mappings().all()
-
-    rows = await db_query(run_query)
-
-    if not rows:
-        logger.warning(f"No training data for bucket {bucket}")
-        return np.array([]), np.array([]), []
-
     # Expanded feature names - includes checkpoint-specific features and window features
     feature_names = [
         # Position state at checkpoint
@@ -540,6 +536,26 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         "window_sweep_ratio_1w",
         "window_call_put_ratio_1w",
     ]
+
+    async def run_query(session: Any) -> List[Any]:
+        from sqlalchemy import text
+
+        result = await session.execute(text(query), {"trade_type": trade_type})
+        return result.mappings().all()
+
+    try:
+        rows = await db_query(run_query)
+    except Exception as e:
+        logger.warning(
+            f"Failed to build exit training query for bucket {bucket}: {e}",
+            extra={"event": "exit_training_query_failed", "bucket": bucket},
+        )
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
+
+    if not rows:
+        logger.warning(f"No training data for bucket {bucket}")
+        return np.array([]), np.array([]), []
 
     X_list = []
     y_list = []
@@ -630,11 +646,8 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
     )
 
     if not X_list:
-        return (
-            np.empty((0, len(feature_names)), dtype=float),
-            np.empty((0,), dtype=int),
-            feature_names,
-        )
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
 
     return np.array(X_list, dtype=float), np.array(y_list, dtype=int), feature_names
 
