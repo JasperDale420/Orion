@@ -51,6 +51,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `quality_guardrails._env_nonneg_int()` and `quality_guardrails._failure_backoff_elapsed()` helpers
   - Added `ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS` scheduler env support
   - Updated guardrail loop to defer reruns of failed jobs until the configured backoff window elapses
+- **Quality-Guardrails Runtime Backoff Policy Reload (TDD)**:
+  - Extended `tests/unit/test_quality_guardrails.py` with `_resolve_job_failure_backoff_policy()` coverage
+  - Added `quality_guardrails._resolve_job_failure_backoff_policy()` helper for per-iteration policy resolution
+  - Updated scheduler loop to resolve job backoff policy inside each loop iteration
+  - Runtime changes to `ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS` now apply without restarting the process
 - **Quality-Guardrails Retry Semantics Fix (TDD)**:
   - Added `_next_last_run()` helper and tests in `tests/unit/test_quality_guardrails.py`
   - Updated scheduler loop to advance `last_*` timestamps only for successful runs

@@ -5679,3 +5679,25 @@ Result:
 
 Residual:
 - resume state is timestamp-only; strict duplicate-free continuity across shared `entry_ts` cohorts still requires durable keyset state (`entry_ts` + `event_id`) per phase.
+
+## 192) Pass 185 Continuation (2026-02-09)
+
+### 192.1 Guardrail Backoff Policy Runtime Hot-Reload Added (TDD-Backed)
+
+Finding:
+- per-job backoff overrides existed, but scheduler resolved them only once at startup, so env changes required a process restart to take effect.
+
+Implemented:
+- Extended `tests/unit/test_quality_guardrails.py` with:
+  - `test_resolve_job_failure_backoff_policy_uses_global_default`
+  - `test_resolve_job_failure_backoff_policy_reloads_env_each_call`
+- Updated `src/orion/jobs/quality_guardrails.py`:
+  - added `_resolve_job_failure_backoff_policy(default_seconds)` helper,
+  - moved per-job backoff-policy resolution into the main scheduler loop per iteration,
+  - preserved existing global default + per-job override semantics.
+
+Result:
+- runtime edits to `ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS` are now observed on subsequent loop ticks without restarting `quality_guardrails`.
+
+Residual:
+- env parsing now occurs each loop iteration; if loop cadence is reduced significantly, consider caching + change-detection to avoid unnecessary parse work.

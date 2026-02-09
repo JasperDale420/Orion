@@ -5,6 +5,7 @@ from orion.jobs.quality_guardrails import (
     _failure_backoff_elapsed,
     _job_failure_backoff_seconds,
     _next_last_run,
+    _resolve_job_failure_backoff_policy,
     _should_run,
 )
 
@@ -62,3 +63,24 @@ def test_job_failure_backoff_seconds_uses_job_specific_override(monkeypatch) -> 
     )
     assert _job_failure_backoff_seconds("feature_sanity_validation", default_seconds=45) == 120
     assert _job_failure_backoff_seconds("data_quality_checker", default_seconds=45) == 45
+
+
+def test_resolve_job_failure_backoff_policy_uses_global_default(monkeypatch) -> None:
+    monkeypatch.delenv("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS", raising=False)
+    policy = _resolve_job_failure_backoff_policy(default_seconds=33)
+    assert policy == {
+        "reconciliation": 33,
+        "data_quality_checker": 33,
+        "feature_sanity_validation": 33,
+    }
+
+
+def test_resolve_job_failure_backoff_policy_reloads_env_each_call(monkeypatch) -> None:
+    monkeypatch.setenv("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS", "reconciliation=10")
+    first = _resolve_job_failure_backoff_policy(default_seconds=30)
+
+    monkeypatch.setenv("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS", "reconciliation=90")
+    second = _resolve_job_failure_backoff_policy(default_seconds=30)
+
+    assert first["reconciliation"] == 10
+    assert second["reconciliation"] == 90
