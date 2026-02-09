@@ -6550,3 +6550,28 @@ Result:
 
 Residual:
 - additional backfill/update routines still contain local-table primary reads (for example local flow-greeks derivation) and remain candidates for the next TDD migration slice.
+
+## 219) Pass 217 Continuation (2026-02-09)
+
+### 219.1 Backfill ML Features Flow-Greeks Source Alignment to Shared Labeler Path (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/backfill_ml_features.py` had a local SQL-only `get_flow_greeks(...)` implementation against `silver_uw_flow`.
+- live label generation already uses `main_price_target_labeler.get_flow_greeks(...)`, so backfill could drift in feature semantics and fallback behavior.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_flow_greeks_delegates_to_labeler`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared helper as `get_labeler_flow_greeks`,
+  - replaced local SQL implementation of `get_flow_greeks(...)` with wrapper delegation.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k flow_greeks_delegates` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- backfill now uses the same flow-greeks contract as live labeling, reducing local SQL duplication and tightening parity.
+
+Residual:
+- remaining backfill/update debt is now concentrated in other locally implemented enrichment routines (for example direct ticker metadata/earnings and any remaining local-only derivations) that should be migrated in the next slices.

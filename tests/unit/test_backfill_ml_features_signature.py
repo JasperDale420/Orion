@@ -125,3 +125,23 @@ async def test_get_underlying_price_at_offset_delegates_to_labeler(monkeypatch: 
 
     assert value == 124.0
     assert captured == {"ticker": "AAPL", "entry_ts": entry_ts, "hours": 2}
+
+
+@pytest.mark.asyncio
+async def test_get_flow_greeks_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _labeler_flow_greeks(event_id: str) -> dict[str, object]:
+        captured["event_id"] = event_id
+        return {"delta": 0.2, "gamma": 0.03, "volume": 11, "open_interest": 70, "iv": 0.5}
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("local db_query should not be used for flow-greeks lookup")
+
+    monkeypatch.setattr(backfill, "get_labeler_flow_greeks", _labeler_flow_greeks, raising=False)
+    monkeypatch.setattr(backfill, "db_query", _fail_db_query, raising=False)
+
+    value = await backfill.get_flow_greeks("evt-123")
+
+    assert value == {"delta": 0.2, "gamma": 0.03, "volume": 11, "open_interest": 70, "iv": 0.5}
+    assert captured == {"event_id": "evt-123"}

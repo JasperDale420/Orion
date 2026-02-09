@@ -29,6 +29,7 @@ from orion.main_price_target_labeler import (
     get_entry_time_features as get_labeler_entry_time_features,
 )
 from orion.main_price_target_labeler import (
+    get_flow_greeks as get_labeler_flow_greeks,
     get_gex_at_entry,
     get_max_pain_distance,
     get_underlying_price_at_entry as get_labeler_underlying_price_at_entry,
@@ -132,29 +133,12 @@ def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
 
 
 async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
-    """Get volume, OI, and IV from flow data."""
+    """Get flow Greeks/volume/OI.
 
-    async def query(session: Any) -> Dict[str, Optional[float]]:
-        stmt = text(
-            """
-            SELECT volume_contract, open_interest, iv, delta_diff
-            FROM silver_uw_flow
-            WHERE event_id = :event_id
-        """
-        )
-        result = await session.execute(stmt, {"event_id": event_id})
-        row = result.fetchone()
-        if row:
-            return {
-                "delta": row[3],
-                "gamma": None,
-                "volume": row[0],
-                "open_interest": row[1],
-                "iv": row[2],
-            }
-        return {"delta": None, "gamma": None, "volume": None, "open_interest": None, "iv": None}
-
-    return await db_query(query)
+    Delegates to the shared price-target labeler helper so backfill and
+    live labeling use one implementation contract.
+    """
+    return await get_labeler_flow_greeks(event_id)
 
 
 async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:

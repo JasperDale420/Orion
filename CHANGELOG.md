@@ -26,6 +26,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "underlying_price_at_entry_delegates or underlying_price_at_offset_delegates"`
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
+- **Backfill Flow-Greeks Source Alignment to Shared Labeler Path (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_flow_greeks_delegates_to_labeler`
+  - Updated `src/orion/jobs/backfill_ml_features.py` so `get_flow_greeks(...)` now delegates to the shared labeler helper (`get_labeler_flow_greeks`) instead of running a local SQL query.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k flow_greeks_delegates`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
     - `/health` readiness with bounded retry,
