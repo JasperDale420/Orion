@@ -299,6 +299,54 @@ async def test_get_flow_metrics_delegates_context_to_labeler_helpers(
 
 
 @pytest.mark.asyncio
+async def test_get_window_features_delegates_to_labeler_and_maps_period_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_windows(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return {
+            "1h": {"call_put_imbalance": 0.12, "sweep_ratio": 0.30, "flow_count": 5},
+            "1d": {
+                "call_put_imbalance": 0.20,
+                "sweep_ratio": 0.40,
+                "flow_count": 12,
+                "dp_volume": 200000.0,
+                "call_put_ratio": 1.3,
+                "total_premium": 750000.0,
+            },
+            "1w": {
+                "call_put_imbalance": 0.28,
+                "sweep_ratio": 0.45,
+                "flow_count": 40,
+                "dp_volume": 600000.0,
+                "call_put_ratio": 1.5,
+                "total_premium": 2300000.0,
+            },
+        }
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for window-feature lookup")
+
+    monkeypatch.setattr(enricher, "get_labeler_window_features_at_entry", _labeler_windows, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_window_features("AAPL", entry_ts)
+
+    assert value["call_put_imbalance_1h"] == pytest.approx(0.12)
+    assert value["sweep_ratio_1h"] == pytest.approx(0.30)
+    assert value["flow_count_1h"] == 5
+    assert value["call_put_imbalance_1d"] == pytest.approx(0.20)
+    assert value["dp_volume_1d"] == pytest.approx(200000.0)
+    assert value["call_put_ratio_1w"] == pytest.approx(1.5)
+    assert value["total_premium_1w"] == pytest.approx(2300000.0)
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
 async def test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -310,20 +358,12 @@ async def test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg(
         captured["entry_ts"] = ts
         return {"gex": 120.0, "vex": 75.0}
 
-    class _Result:
-        def fetchone(self) -> tuple[float, float]:
-            return (100.0, 60.0)
-
-    class _Session:
-        async def execute(self, _stmt, params: dict[str, Any]) -> _Result:
-            captured["avg_params"] = params
-            return _Result()
-
-    async def _db_query(query):
-        return await query(_Session())
+    async def _labeler_rolling(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["rolling"] = (ticker, ts)
+        return {"gex_rolling_avg": 100.0, "vex_rolling_avg": 60.0}
 
     monkeypatch.setattr(enricher, "get_labeler_gex_at_entry", _labeler_gex, raising=False)
-    monkeypatch.setattr(enricher, "db_query", _db_query, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_gex_rolling_averages", _labeler_rolling, raising=False)
 
     value = await enricher._get_gex_at_entry("AAPL", entry_ts)
 
@@ -335,8 +375,7 @@ async def test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg(
     }
     assert captured["ticker"] == "AAPL"
     assert captured["entry_ts"] == entry_ts
-    assert captured["avg_params"]["ticker"] == "AAPL"
-    assert captured["avg_params"]["entry_ts"] == entry_ts
+    assert captured["rolling"] == ("AAPL", entry_ts)
 
 
 @pytest.mark.asyncio
@@ -348,11 +387,11 @@ async def test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot(
     async def _labeler_gex(_ticker: str, _ts: datetime) -> dict[str, Any]:
         return {"gex": None, "vex": None}
 
-    async def _fail_db_query(_query):
-        raise AssertionError("rolling-average SQL should not run when base GEX snapshot is missing")
+    async def _fail_rolling(*_args, **_kwargs):
+        raise AssertionError("rolling helper should not run when base GEX snapshot is missing")
 
     monkeypatch.setattr(enricher, "get_labeler_gex_at_entry", _labeler_gex, raising=False)
-    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+    monkeypatch.setattr(enricher, "get_labeler_gex_rolling_averages", _fail_rolling, raising=False)
 
     value = await enricher._get_gex_at_entry("AAPL", entry_ts)
 

@@ -805,6 +805,90 @@ async def _get_gex_at_entry_sql(ticker: str, entry_ts: datetime) -> Dict[str, An
     return await db_query(query)
 
 
+async def get_gex_rolling_averages(ticker: str, entry_ts: datetime, days: int = 20) -> Dict[str, Optional[float]]:
+    """Get rolling average GEX/VEX values prior to entry time."""
+    heber_result = _get_gex_rolling_averages_from_heber(ticker, entry_ts, days=days)
+    if heber_result is not None:
+        return heber_result
+
+    return await _get_gex_rolling_averages_sql(ticker, entry_ts, days=days)
+
+
+def _get_gex_rolling_averages_from_heber(
+    ticker: str,
+    entry_ts: datetime,
+    days: int = 20,
+) -> Optional[Dict[str, Optional[float]]]:
+    lookback_days = max(days, 1)
+    try:
+        df = _heber_reader.read_greek_exposure(
+            symbols=[ticker],
+            asof_time=entry_ts,
+            start_time=entry_ts - timedelta(days=lookback_days),
+        )
+    except Exception as e:
+        _record_price_target_fallback("gex_rolling_avg_heber_lookup", e, ticker=ticker)
+        return None
+
+    if df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(df, ["ts_utc", "ts_event", "timestamp", "created_at"])
+    gex_col = _pick_first_existing_column(df, ["gex_oi", "gex"])
+    vex_col = _pick_first_existing_column(df, ["vex_oi", "vex"])
+    if ts_col is None or gex_col is None:
+        return None
+
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+
+    start_utc = entry_utc - timedelta(days=lookback_days)
+    ts_series = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+    window = df[(ts_series > start_utc) & (ts_series <= entry_utc)]
+    if window.empty:
+        return None
+
+    gex_avg = pd.to_numeric(window[gex_col], errors="coerce").mean()
+    vex_avg = pd.to_numeric(window[vex_col], errors="coerce").mean() if vex_col is not None else None
+
+    gex_val = float(gex_avg) if pd.notna(gex_avg) else None
+    vex_val = float(vex_avg) if vex_avg is not None and pd.notna(vex_avg) else None
+    if gex_val is None and vex_val is None:
+        return None
+
+    return {"gex_rolling_avg": gex_val, "vex_rolling_avg": vex_val}
+
+
+async def _get_gex_rolling_averages_sql(
+    ticker: str,
+    entry_ts: datetime,
+    days: int = 20,
+) -> Dict[str, Optional[float]]:
+    start_ts = entry_ts - timedelta(days=max(days, 1))
+
+    async def query(session: Any) -> Dict[str, Optional[float]]:
+        stmt = text(
+            """
+            SELECT AVG(gex_oi), AVG(vex_oi)
+            FROM silver_greek_exposure
+            WHERE ticker = :ticker
+              AND ts_utc <= :entry_ts
+              AND ts_utc > :start_ts
+        """
+        )
+        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
+        row = result.fetchone()
+        if not row:
+            return {"gex_rolling_avg": None, "vex_rolling_avg": None}
+        return {
+            "gex_rolling_avg": row[0],
+            "vex_rolling_avg": row[1],
+        }
+
+    return await db_query(query)
+
+
 async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
     """Get market tide sum for the period before entry."""
     heber_result = _get_market_tide_before_entry_from_heber(entry_ts, minutes)

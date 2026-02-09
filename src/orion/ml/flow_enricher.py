@@ -26,6 +26,9 @@ from orion.main_price_target_labeler import (
     get_gex_at_entry as get_labeler_gex_at_entry,
 )
 from orion.main_price_target_labeler import (
+    get_gex_rolling_averages as get_labeler_gex_rolling_averages,
+)
+from orion.main_price_target_labeler import (
     get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
 )
 from orion.main_price_target_labeler import (
@@ -294,7 +297,7 @@ def _get_session(ts: datetime) -> str:
 
 
 async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get GEX/VEX at entry time, plus 20-day rolling averages for confidence rules."""
+    """Get GEX/VEX at entry time, plus rolling averages from shared labeler helper."""
     try:
         gex_snapshot = await get_labeler_gex_at_entry(ticker, entry_ts)
     except Exception as e:
@@ -309,43 +312,18 @@ async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     if gex is None and vex is None:
         return {}
 
-    rolling_avg = await _get_gex_rolling_averages(ticker, entry_ts)
+    try:
+        rolling_avg = await get_labeler_gex_rolling_averages(ticker, entry_ts)
+    except Exception as e:
+        logger.debug(f"GEX rolling-average helper failed: {e}")
+        rolling_avg = {"gex_rolling_avg": None, "vex_rolling_avg": None}
+
     return {
         "gex": gex,
         "vex": vex,
         "gex_rolling_avg": rolling_avg.get("gex_rolling_avg"),
         "vex_rolling_avg": rolling_avg.get("vex_rolling_avg"),
     }
-
-
-async def _get_gex_rolling_averages(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
-    """Get rolling average GEX/VEX values for confidence rules."""
-    from sqlalchemy import text
-
-    async def query(session: Any) -> Dict[str, Optional[float]]:
-        avg_stmt = text(
-            """
-            SELECT AVG(gex_oi), AVG(vex_oi)
-            FROM silver_greek_exposure
-            WHERE ticker = :ticker
-              AND ts_utc <= :entry_ts
-              AND ts_utc > :start_ts
-        """
-        )
-        start_ts = entry_ts - timedelta(days=20)
-        avg_result = await session.execute(avg_stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
-        avg_row = avg_result.fetchone()
-
-        return {
-            "gex_rolling_avg": avg_row[0] if avg_row else None,
-            "vex_rolling_avg": avg_row[1] if avg_row else None,
-        }
-
-    try:
-        return await db_query(query)
-    except Exception as e:
-        logger.debug(f"GEX rolling-average lookup failed: {e}")
-        return {"gex_rolling_avg": None, "vex_rolling_avg": None}
 
 
 async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:

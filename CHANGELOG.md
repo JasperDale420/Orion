@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Flow Enricher GEX Rolling-Average Delegation to Shared Labeler Path (TDD)**:
+  - Updated `tests/unit/test_flow_enricher_delegation.py`:
+    - `test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg`
+    - `test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot`
+    - these now enforce delegated rolling-average lookup (no local `db_query` path).
+  - Updated `src/orion/main_price_target_labeler.py`:
+    - added shared helper `get_gex_rolling_averages(...)` with Heber-first and SQL fallback implementations.
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_gex_at_entry(...)` now uses `get_labeler_gex_rolling_averages(...)`,
+    - removed local `_get_gex_rolling_averages(...)` SQL helper and direct `silver_greek_exposure` access from flow enricher.
+  - Verified with:
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py -k gex_at_entry`
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Flow Enricher Market-Context Delegation to Shared Labeler Paths (TDD)**:
   - Extended `tests/unit/test_flow_enricher_delegation.py` with:
     - `test_get_market_context_delegates_to_labeler_helpers`

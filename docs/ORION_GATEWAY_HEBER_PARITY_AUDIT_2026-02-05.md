@@ -7033,3 +7033,30 @@ Result:
 Residual:
 - `flow_enricher` still has local SQL in broader market/window feature families (`_get_market_context(...)`, `_get_window_features(...)`, and GEX rolling averages).
 - next combined pass recommendation: delegate RVOL/overnight-gap/52w-high context to shared helpers where available, then isolate remaining window aggregation SQL as explicit backfill-only/local-derivation contracts.
+
+## 233) Pass 231 Continuation (2026-02-09)
+
+### 233.1 `flow_enricher` GEX Rolling-Average Delegation (TDD-Backed)
+
+Finding:
+- after delegating base GEX snapshot, `src/orion/ml/flow_enricher.py::_get_gex_at_entry(...)` still computed rolling averages through a local `silver_greek_exposure` query.
+- this left one direct `silver_*` dependency in flow enricher and duplicated logic outside the shared labeler contract.
+
+Implemented:
+- Updated `tests/unit/test_flow_enricher_delegation.py`:
+  - `test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg`
+  - `test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot`
+  - both now enforce delegated rolling-average lookup.
+- Added shared helper in `src/orion/main_price_target_labeler.py`:
+  - `get_gex_rolling_averages(...)` with Heber-first + SQL fallback internals.
+- Updated `src/orion/ml/flow_enricher.py`:
+  - `_get_gex_at_entry(...)` now calls `get_labeler_gex_rolling_averages(...)`,
+  - removed local `_get_gex_rolling_averages(...)` SQL helper.
+
+Verification:
+- `pytest -q tests/unit/test_flow_enricher_delegation.py -k gex_at_entry` passed.
+- `pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- `flow_enricher` no longer directly queries high-priority `silver_*` tables for core context helpers.
+- remaining local table coupling is concentrated in `gold_feature_windows` consumption (`_get_window_features(...)`), which should be handled in the next batch.
