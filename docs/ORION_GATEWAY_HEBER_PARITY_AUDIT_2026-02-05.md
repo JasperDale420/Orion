@@ -5749,6 +5749,30 @@ Result:
 Residual:
 - configuration still relies on polling env state each loop; if stronger dynamic config controls are needed, migrate policy source to a centralized runtime config table/watch channel.
 
+## 197) Pass 191 Continuation (2026-02-09)
+
+### 197.1 Guardrail Backoff Policy Moved to Centralized Runtime Config Table (TDD-Backed)
+
+Finding:
+- guardrail backoff policy remained env-driven even after hot-reload + cache controls, limiting centralized runtime control and requiring env mutation as the operator interface.
+
+Implemented:
+- Added `runtime_config` model in `src/orion/storage/models.py` for centralized key/value JSON runtime settings.
+- Extended `tests/unit/test_quality_guardrails.py` with:
+  - `test_runtime_backoff_policy_from_value_parses_and_clamps`
+  - `test_runtime_backoff_policy_from_value_returns_none_for_unusable_payload`
+  - `test_resolve_runtime_backoff_policy_cached_reuses_when_updated_ts_unchanged`
+- Updated `src/orion/jobs/quality_guardrails.py`:
+  - added DB-backed loaders/resolvers for key `quality_guardrails.backoff_seconds_jobs`,
+  - added runtime-config payload normalization for per-job backoff policy,
+  - scheduler now prefers valid DB runtime policy and falls back to env-based policy when DB config is absent/invalid.
+
+Result:
+- backoff policy can now be centrally controlled through a durable DB table entry, while preserving safe env fallback behavior.
+
+Residual:
+- runtime policy is still poll-based (loop tick + DB read); move to push/watch invalidation for lower latency and lower steady-state query overhead if needed.
+
 ## 195) Pass 189 Continuation (2026-02-09)
 
 ### 195.1 `backfill_ml_features` Durable Keyset Resume State Added (TDD-Backed)

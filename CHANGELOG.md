@@ -90,6 +90,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `quality_guardrails._resolve_job_failure_backoff_policy_cached()` helper
   - Added raw-env parsing helper to avoid redundant parse work when policy is unchanged
   - Updated scheduler loop to reuse cached policy when env input is unchanged and refresh only on change
+- **Quality-Guardrails DB Runtime Policy Source (TDD)**:
+  - Added `runtime_config` table in `src/orion/storage/models.py` for centralized runtime key/value JSON settings
+  - Extended `tests/unit/test_quality_guardrails.py` with runtime-policy normalization and DB-cache resolver coverage
+  - Added runtime-config helpers in `quality_guardrails`:
+    - `_runtime_backoff_policy_from_value()`
+    - `_load_runtime_backoff_config_row()`
+    - `_resolve_runtime_backoff_policy_cached()`
+  - Updated scheduler to prefer DB-backed `quality_guardrails.backoff_seconds_jobs` policy (when valid) with env fallback
 - **Quality-Guardrails Retry Semantics Fix (TDD)**:
   - Added `_next_last_run()` helper and tests in `tests/unit/test_quality_guardrails.py`
   - Updated scheduler loop to advance `last_*` timestamps only for successful runs

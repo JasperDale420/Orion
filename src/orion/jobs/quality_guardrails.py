@@ -16,14 +16,21 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from orion.core.logging_config import setup_logging
 from orion.jobs.data_quality_checker import run_quality_checks
 from orion.jobs.reconcile_backfill import run_reconciliation
 from orion.jobs.validate_features import run_sanity_checks
+from orion.shared.db_utils import db_query
+from orion.shared.utils import ensure_utc
 from orion.storage.db import init_db
+from orion.storage.models import RuntimeConfig
 
 logger = logging.getLogger(__name__)
 JOB_BACKOFF_ENV = "ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS"
+RUNTIME_BACKOFF_CONFIG_KEY = "quality_guardrails.backoff_seconds_jobs"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -136,6 +143,67 @@ def _resolve_job_failure_backoff_policy_cached(
     return current_raw, policy
 
 
+def _runtime_backoff_policy_from_value(raw_value: object, default_seconds: int) -> dict[str, int] | None:
+    if not isinstance(raw_value, dict):
+        return None
+
+    policy = {
+        "reconciliation": default_seconds,
+        "data_quality_checker": default_seconds,
+        "feature_sanity_validation": default_seconds,
+    }
+
+    saw_valid_override = False
+    for raw_key, raw_seconds in raw_value.items():
+        if not isinstance(raw_key, str):
+            continue
+        key = raw_key.strip().lower()
+        if key not in policy:
+            continue
+        try:
+            seconds = int(raw_seconds)
+        except (TypeError, ValueError):
+            continue
+        policy[key] = max(0, seconds)
+        saw_valid_override = True
+
+    if not saw_valid_override:
+        return None
+    return policy
+
+
+async def _load_runtime_backoff_config_row() -> tuple[datetime | None, object] | None:
+    async def query(session: AsyncSession) -> tuple[datetime | None, object] | None:
+        stmt = select(RuntimeConfig).where(RuntimeConfig.key == RUNTIME_BACKOFF_CONFIG_KEY)
+        result = await session.execute(stmt)
+        row = result.scalars().first()
+        if row is None:
+            return None
+        return ensure_utc(row.updated_ts_utc), row.value_json
+
+    try:
+        return await db_query(query)
+    except Exception:
+        logger.exception("Failed loading runtime backoff config row; falling back to env policy")
+        return None
+
+
+async def _resolve_runtime_backoff_policy_cached(
+    default_seconds: int,
+    cached_updated_ts: datetime | None,
+    cached_policy: dict[str, int] | None,
+) -> tuple[datetime | None, dict[str, int] | None]:
+    loaded = await _load_runtime_backoff_config_row()
+    if loaded is None:
+        return None, None
+
+    updated_ts, raw_value = loaded
+    if updated_ts == cached_updated_ts:
+        return cached_updated_ts, cached_policy
+
+    return updated_ts, _runtime_backoff_policy_from_value(raw_value, default_seconds)
+
+
 def _should_run(last_run: datetime | None, interval_seconds: int, now: datetime) -> bool:
     if last_run is None:
         return True
@@ -216,20 +284,28 @@ async def run_guardrail_loop() -> None:
     last_reconcile_failure: datetime | None = None
     last_quality_failure: datetime | None = None
     last_validate_failure: datetime | None = None
-    backoff_policy_raw: str | None = None
-    backoff_policy: dict[str, int] | None = None
+    env_backoff_policy_raw: str | None = None
+    env_backoff_policy: dict[str, int] | None = None
+    runtime_backoff_updated_ts: datetime | None = None
+    runtime_backoff_policy: dict[str, int] | None = None
 
     while True:
         now = datetime.now(timezone.utc)
-        backoff_policy_raw, backoff_policy = _resolve_job_failure_backoff_policy_cached(
+        env_backoff_policy_raw, env_backoff_policy = _resolve_job_failure_backoff_policy_cached(
             default_seconds=failure_backoff_seconds,
-            cached_raw=backoff_policy_raw,
-            cached_policy=backoff_policy,
+            cached_raw=env_backoff_policy_raw,
+            cached_policy=env_backoff_policy,
         )
+        runtime_backoff_updated_ts, runtime_backoff_policy = await _resolve_runtime_backoff_policy_cached(
+            default_seconds=failure_backoff_seconds,
+            cached_updated_ts=runtime_backoff_updated_ts,
+            cached_policy=runtime_backoff_policy,
+        )
+        effective_backoff_policy = runtime_backoff_policy if runtime_backoff_policy is not None else env_backoff_policy
 
         if _should_run(last_reconcile, reconcile_interval, now) and _failure_backoff_elapsed(
             last_reconcile_failure,
-            backoff_policy["reconciliation"],
+            effective_backoff_policy["reconciliation"],
             now,
         ):
             reconcile_ok = await _run_job(
@@ -244,7 +320,7 @@ async def run_guardrail_loop() -> None:
 
         if _should_run(last_quality, quality_interval, now) and _failure_backoff_elapsed(
             last_quality_failure,
-            backoff_policy["data_quality_checker"],
+            effective_backoff_policy["data_quality_checker"],
             now,
         ):
             quality_ok = await _run_job("data_quality_checker", run_quality_checks)
@@ -256,7 +332,7 @@ async def run_guardrail_loop() -> None:
 
         if _should_run(last_validate, feature_validate_interval, now) and _failure_backoff_elapsed(
             last_validate_failure,
-            backoff_policy["feature_sanity_validation"],
+            effective_backoff_policy["feature_sanity_validation"],
             now,
         ):
             validate_ok = await _run_job("feature_sanity_validation", run_sanity_checks)

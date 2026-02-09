@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from orion.jobs.quality_guardrails import (
     _env_int,
     _failure_backoff_elapsed,
@@ -7,6 +9,8 @@ from orion.jobs.quality_guardrails import (
     _next_last_run,
     _resolve_job_failure_backoff_policy,
     _resolve_job_failure_backoff_policy_cached,
+    _resolve_runtime_backoff_policy_cached,
+    _runtime_backoff_policy_from_value,
     _should_run,
 )
 
@@ -122,3 +126,57 @@ def test_resolve_job_failure_backoff_policy_cached_rebuilds_on_env_change(monkey
     assert raw1 != raw2
     assert policy2 is not policy1
     assert policy2["reconciliation"] == 90
+
+
+def test_runtime_backoff_policy_from_value_parses_and_clamps() -> None:
+    policy = _runtime_backoff_policy_from_value(
+        {
+            "reconciliation": "15",
+            "data_quality_checker": -5,
+            "feature_sanity_validation": 90,
+            "unknown_job": 999,
+        },
+        default_seconds=30,
+    )
+    assert policy == {
+        "reconciliation": 15,
+        "data_quality_checker": 0,
+        "feature_sanity_validation": 90,
+    }
+
+
+def test_runtime_backoff_policy_from_value_returns_none_for_unusable_payload() -> None:
+    assert _runtime_backoff_policy_from_value("invalid", default_seconds=30) is None
+    assert _runtime_backoff_policy_from_value({"unknown_job": 1}, default_seconds=30) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_runtime_backoff_policy_cached_reuses_when_updated_ts_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updated = datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc)
+    calls: list[int] = []
+
+    async def _fake_load_runtime_backoff_config_row() -> tuple[datetime, object] | None:
+        calls.append(1)
+        return updated, {"reconciliation": 12}
+
+    monkeypatch.setattr(
+        "orion.jobs.quality_guardrails._load_runtime_backoff_config_row",
+        _fake_load_runtime_backoff_config_row,
+    )
+
+    updated_1, policy_1 = await _resolve_runtime_backoff_policy_cached(
+        default_seconds=30,
+        cached_updated_ts=None,
+        cached_policy=None,
+    )
+    updated_2, policy_2 = await _resolve_runtime_backoff_policy_cached(
+        default_seconds=30,
+        cached_updated_ts=updated_1,
+        cached_policy=policy_1,
+    )
+
+    assert len(calls) == 2
+    assert updated_1 == updated_2 == updated
+    assert policy_2 is policy_1

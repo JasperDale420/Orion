@@ -69,3 +69,16 @@ class JobCursorState(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class RuntimeConfig(Base):
+    __tablename__ = "runtime_config"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    updated_ts_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
