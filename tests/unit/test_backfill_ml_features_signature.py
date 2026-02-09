@@ -36,8 +36,9 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
     monkeypatch.setattr(backfill, "get_max_pain_distance", _async_return(0.5))
     monkeypatch.setattr(backfill, "db_write", _async_return(None))
 
+    monkeypatch.setattr(backfill, "get_phase1_bucket_features", _async_return({"overnight_gap_pct": 0.1, "vwap_distance_pct": 0.2, "minutes_to_close": 60, "price_change_5d_prior": 1.2, "earnings_in_dte_window": False}))
+
     # Labeler helpers imported inside update_ml_features
-    monkeypatch.setattr(labeler, "get_phase1_bucket_features", _async_return({"overnight_gap_pct": 0.1, "vwap_distance_pct": 0.2, "minutes_to_close": 60, "price_change_5d_prior": 1.2, "earnings_in_dte_window": False}))
     monkeypatch.setattr(labeler, "get_darkpool_metrics", _async_return({"darkpool_1h": 1, "darkpool_15m": 1, "darkpool_30m": 1, "darkpool_4h": 1, "darkpool_1d": 1, "darkpool_3d": 1, "darkpool_1w": 1, "darkpool_2w": 1, "darkpool_4w": 1}))
     monkeypatch.setattr(
         labeler,
@@ -187,3 +188,29 @@ async def test_get_earnings_proximity_delegates_to_labeler(monkeypatch: pytest.M
 
     assert value == expected
     assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_phase1_bucket_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+    expected = {
+        "overnight_gap_pct": 0.1,
+        "vwap_distance_pct": 0.2,
+        "minutes_to_close": 60,
+        "price_change_5d_prior": 1.2,
+        "earnings_in_dte_window": False,
+    }
+
+    async def _labeler_phase1(ticker: str, ts: datetime, dte: int) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        captured["dte"] = dte
+        return expected
+
+    monkeypatch.setattr(backfill, "get_labeler_phase1_bucket_features", _labeler_phase1, raising=False)
+
+    value = await backfill.get_phase1_bucket_features("AAPL", entry_ts, 15)
+
+    assert value == expected
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts, "dte": 15}

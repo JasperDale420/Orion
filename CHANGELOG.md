@@ -60,6 +60,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k earnings_proximity_delegates`
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
+- **Backfill Phase-1 Feature Delegation + Dead Local SQL Removal (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_phase1_bucket_features_delegates_to_labeler`
+  - Updated `src/orion/jobs/backfill_ml_features.py` to:
+    - add `get_phase1_bucket_features(...)` delegation to shared labeler helper (`get_labeler_phase1_bucket_features`),
+    - remove unused local `get_phase1_features(...)` SQL implementation,
+    - route `update_ml_features(...)` through the delegated wrapper path.
+  - Updated `test_update_ml_features_calls_sector_corr_with_two_args` to stub the wrapper call path.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "phase1_bucket_features_delegates or update_ml_features_calls_sector_corr_with_two_args"`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
     - `/health` readiness with bounded retry,

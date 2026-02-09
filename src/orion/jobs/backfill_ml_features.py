@@ -15,7 +15,7 @@ Usage:
 
 import argparse
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -30,6 +30,7 @@ from orion.main_price_target_labeler import (
 from orion.main_price_target_labeler import (
     get_earnings_proximity as get_labeler_earnings_proximity,
     get_flow_greeks as get_labeler_flow_greeks,
+    get_phase1_bucket_features as get_labeler_phase1_bucket_features,
     get_gex_at_entry,
     get_max_pain_distance,
     get_ticker_info as get_labeler_ticker_info,
@@ -131,71 +132,9 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
     return await get_labeler_underlying_price_at_offset(ticker, entry_ts, hours)
 
 
-async def get_phase1_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get overnight gap and VWAP distance features from bars data."""
-    result: Dict[str, Any] = {
-        "overnight_gap_pct": None,
-        "vwap_distance_pct": None,
-        "minutes_to_close": None,
-    }
-
-    # Minutes to close (4pm ET = 20:00 UTC)
-    market_close = entry_ts.replace(hour=20, minute=0, second=0, microsecond=0)
-    if entry_ts < market_close:
-        result["minutes_to_close"] = int((market_close - entry_ts).total_seconds() / 60)
-    else:
-        result["minutes_to_close"] = 0
-
-    entry_date = entry_ts.date()
-
-    async def query(session: Any) -> Dict[str, Any]:
-        # Today's open for overnight gap
-        today_stmt = text(
-            """
-            SELECT open
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker AND DATE(bar_start_ts_utc) = :entry_date
-            ORDER BY bar_start_ts_utc ASC LIMIT 1
-        """
-        )
-        today_result = await session.execute(today_stmt, {"ticker": ticker, "entry_date": entry_date})
-        today_row = today_result.fetchone()
-        today_open = today_row[0] if today_row else None
-
-        # Prior trading day close (handles holidays/weekends)
-        prior_stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker AND DATE(bar_start_ts_utc) < :entry_date
-            ORDER BY bar_start_ts_utc DESC LIMIT 1
-        """
-        )
-        prior_result = await session.execute(prior_stmt, {"ticker": ticker, "entry_date": entry_date})
-        prior_row = prior_result.fetchone()
-        prior_close = prior_row[0] if prior_row else None
-
-        # Overnight gap
-        if today_open and prior_close and prior_close > 0:
-            result["overnight_gap_pct"] = ((today_open - prior_close) / prior_close) * 100
-
-        # VWAP distance - bar closest to entry time
-        vwap_stmt = text(
-            """
-            SELECT close, vwap
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker AND bar_start_ts_utc <= :entry_ts
-            ORDER BY bar_start_ts_utc DESC LIMIT 1
-        """
-        )
-        vwap_result = await session.execute(vwap_stmt, {"ticker": ticker, "entry_ts": entry_ts})
-        vwap_row = vwap_result.fetchone()
-        if vwap_row and vwap_row[0] and vwap_row[1] and vwap_row[1] > 0:
-            result["vwap_distance_pct"] = ((vwap_row[0] - vwap_row[1]) / vwap_row[1]) * 100
-
-        return result
-
-    return await db_query(query)
+async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) -> Dict[str, Any]:
+    """Get phase-1 bucket features via shared labeler helper."""
+    return await get_labeler_phase1_bucket_features(ticker, entry_ts, dte)
 
 
 async def get_records_to_backfill(
@@ -308,9 +247,6 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
     earnings_info = await get_earnings_proximity(ticker, entry_ts)
     updates["days_to_earnings"] = earnings_info.get("days_to_earnings")
     updates["is_post_earnings"] = earnings_info.get("is_post_earnings")
-
-    # Phase1 features: overnight gap, VWAP, minutes_to_close, price_change_5d, earnings_in_dte
-    from orion.main_price_target_labeler import get_phase1_bucket_features
 
     dte = record.get("dte", 0) or 0
     phase1_updates = await get_phase1_bucket_features(ticker, entry_ts, dte)

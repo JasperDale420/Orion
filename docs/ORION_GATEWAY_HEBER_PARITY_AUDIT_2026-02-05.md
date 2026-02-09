@@ -6656,3 +6656,66 @@ Result:
 
 Residual:
 - remaining parity debt is concentrated in non-helper orchestration/backfill paths and any still-local feature derivations not yet routed through shared Heber-first helpers.
+
+## 223) Pass 221 Continuation (2026-02-09)
+
+### 223.1 Repository-Wide SQL Coupling Inventory (Post-Helper Migration Sweep)
+
+Finding:
+- after the latest helper migrations, the largest remaining direct `silver_*` table coupling is no longer concentrated only in per-trade labeler helpers.
+- current highest-density modules by `silver_*` reference count:
+  - `src/orion/jobs/validate_features.py` (~87 references; validation/audit SQL surface),
+  - `src/orion/main_price_target_labeler.py` (~58 references; many now fallback paths, but still broad),
+  - `src/orion/ml/flow_enricher.py` (~28 references; heavy feature derivation path),
+  - `src/orion/jobs/reconcile_backfill.py` (~20 references; reconciliation path).
+
+Implemented:
+- ran a repository sweep to inventory direct `FROM/JOIN/INSERT/UPDATE silver_*` usage across `main_*`, `jobs/*`, `ml/*`, and ingestion paths.
+- produced a concrete residual target map to sequence next migration slices by operational impact.
+
+Verification:
+- command used:
+  - `rg -n "silver_[a-z0-9_]+" src/orion | cut -d: -f1 | sort | uniq -c | sort -nr`
+  - `rg -n "FROM silver_|JOIN silver_|INSERT INTO silver_|UPDATE silver_" src/orion/main_*.py src/orion/jobs/*.py src/orion/ml/*.py src/orion/ingestion/*.py`
+
+Result:
+- helper-level parity is materially improved; remaining debt is now primarily in:
+  - bulk validation/reporting jobs,
+  - flow enricher SQL feature assembly,
+  - reconciliation/batch orchestration surfaces.
+
+Residual / Next Slices:
+- prioritize next TDD migration work in this order:
+  1. `src/orion/ml/flow_enricher.py` (highest runtime feature impact).
+  2. `src/orion/jobs/reconcile_backfill.py` + `src/orion/jobs/backfill_exit_columns.py` (batch/backfill parity).
+  3. `src/orion/main_option_quote_tracker.py` and remaining quote/event local dependencies.
+- keep `validate_features.py` for late-stage parity hardening (it is primarily an audit tool and lower live-path risk).
+
+## 223) Pass 221 Continuation (2026-02-09)
+
+### 223.1 Backfill Phase-1 Feature Delegation + Dead Local SQL Removal (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/backfill_ml_features.py` still carried a local `get_phase1_features(...)` SQL implementation even though `update_ml_features(...)` was already using `main_price_target_labeler.get_phase1_bucket_features(...)`.
+- this left dead code and an unnecessary alternate path for phase-1 feature derivation inside backfill.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_phase1_bucket_features_delegates_to_labeler`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared helper as `get_labeler_phase1_bucket_features`,
+  - added wrapper `get_phase1_bucket_features(...)` delegating to shared helper,
+  - removed unused local `get_phase1_features(...)` SQL code path,
+  - updated `update_ml_features(...)` to use the wrapper directly.
+- Updated orchestration signature test to stub the wrapper path:
+  - `test_update_ml_features_calls_sector_corr_with_two_args`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "phase1_bucket_features_delegates or update_ml_features_calls_sector_corr_with_two_args"` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- backfill phase-1 feature enrichment now has one delegated source path, and dead local SQL phase-1 logic has been removed.
+
+Residual:
+- remaining backfill debt is now mostly in large orchestration/runtime behavior concerns rather than helper-level source divergence or duplicate local implementations.
