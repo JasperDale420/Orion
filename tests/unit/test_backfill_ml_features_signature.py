@@ -58,8 +58,8 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
     monkeypatch.setattr(labeler, "get_institutional_flow_1w", _async_return(100000))
     monkeypatch.setattr(labeler, "get_market_tide_before_entry", _async_return({"net_premium": 123.0, "direction": "BULLISH"}))
     monkeypatch.setattr(labeler, "get_regime_at_entry", _async_return({"trend_regime": "UP", "vol_regime": "NORMAL", "risk_regime": "ON", "session_regime": "MID", "vix_at_entry": 18.0, "vix_regime": "NORMAL"}))
-    monkeypatch.setattr(labeler, "get_p2_features", _async_return({"oi_change_1d": 1.0, "oi_change_pct": 2.0, "iv_vs_hv_ratio": 1.1}))
-    monkeypatch.setattr(labeler, "get_p3_features", _async_return({"high_52w_distance_pct": 3.0, "is_spread_leg": False, "same_expiry_trades_1h": 1}))
+    monkeypatch.setattr(backfill, "get_p2_features", _async_return({"oi_change_1d": 1.0, "oi_change_pct": 2.0, "iv_vs_hv_ratio": 1.1}))
+    monkeypatch.setattr(backfill, "get_p3_features", _async_return({"high_52w_distance_pct": 3.0, "is_spread_leg": False, "same_expiry_trades_1h": 1}))
     monkeypatch.setattr(backfill, "get_iv_rank_at_entry", _async_return(55.0))
 
     captured: dict[str, object] = {}
@@ -256,3 +256,53 @@ async def test_get_iv_rank_at_entry_delegates_to_labeler(monkeypatch: pytest.Mon
 
     assert value == 55.0
     assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_p2_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+    expected = {"oi_change_1d": 1.0, "oi_change_pct": 2.0, "iv_vs_hv_ratio": 1.1}
+
+    async def _labeler_p2(ticker: str, option_chain: str, ts: datetime) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["option_chain"] = option_chain
+        captured["entry_ts"] = ts
+        return expected
+
+    monkeypatch.setattr(backfill, "get_labeler_p2_features", _labeler_p2, raising=False)
+
+    value = await backfill.get_p2_features("AAPL", "AAPL260221C00100000", entry_ts)
+
+    assert value == expected
+    assert captured == {
+        "ticker": "AAPL",
+        "option_chain": "AAPL260221C00100000",
+        "entry_ts": entry_ts,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_p3_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+    expected = {"high_52w_distance_pct": 3.0, "is_spread_leg": False, "same_expiry_trades_1h": 2}
+
+    async def _labeler_p3(ticker: str, option_chain: str, expiry: str, ts: datetime) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["option_chain"] = option_chain
+        captured["expiry"] = expiry
+        captured["entry_ts"] = ts
+        return expected
+
+    monkeypatch.setattr(backfill, "get_labeler_p3_features", _labeler_p3, raising=False)
+
+    value = await backfill.get_p3_features("AAPL", "AAPL260221C00100000", "2026-02-21", entry_ts)
+
+    assert value == expected
+    assert captured == {
+        "ticker": "AAPL",
+        "option_chain": "AAPL260221C00100000",
+        "expiry": "2026-02-21",
+        "entry_ts": entry_ts,
+    }

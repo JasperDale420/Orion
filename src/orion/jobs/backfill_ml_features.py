@@ -31,6 +31,8 @@ from orion.main_price_target_labeler import (
     get_earnings_proximity as get_labeler_earnings_proximity,
     get_flow_greeks as get_labeler_flow_greeks,
     get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
+    get_p2_features as get_labeler_p2_features,
+    get_p3_features as get_labeler_p3_features,
     get_phase1_bucket_features as get_labeler_phase1_bucket_features,
     get_sector_correlation_features as get_labeler_sector_correlation_features,
     get_gex_at_entry,
@@ -147,6 +149,16 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
 async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
     """Get IV rank at entry via shared labeler helper."""
     return await get_labeler_iv_rank_at_entry(ticker, entry_ts)
+
+
+async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get P2 option features via shared labeler helper."""
+    return await get_labeler_p2_features(ticker, option_chain, entry_ts)
+
+
+async def get_p3_features(ticker: str, option_chain: str, expiry: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get P3 option features via shared labeler helper."""
+    return await get_labeler_p3_features(ticker, option_chain, expiry, entry_ts)
 
 
 async def get_records_to_backfill(
@@ -329,9 +341,6 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
     updates["session_regime_at_entry"] = regime_data.get("session_regime")
     updates["vix_at_entry"] = regime_data.get("vix_at_entry")
     updates["vix_regime_at_entry"] = regime_data.get("vix_regime")
-
-    # P2 features: OI change and IV vs HV
-    from orion.main_price_target_labeler import get_p2_features, get_p3_features
 
     option_chain = record.get("option_chain", "")
     expiry = record.get("expiry")
