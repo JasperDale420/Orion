@@ -23,6 +23,9 @@ from orion.main_price_target_labeler import (
     get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
 )
 from orion.main_price_target_labeler import (
+    get_max_pain_distance as get_labeler_max_pain_distance,
+)
+from orion.main_price_target_labeler import (
     get_market_tide_before_entry as get_labeler_market_tide_before_entry,
 )
 from orion.main_price_target_labeler import (
@@ -343,34 +346,15 @@ async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> Dict[str, A
 
 async def _get_max_pain_distance(ticker: str, entry_ts: datetime, dte: Optional[int] = None) -> Optional[float]:
     """Get distance to max pain."""
-    from sqlalchemy import text
-
     if dte is None:
         return None
 
-    expiry = entry_ts.date() + timedelta(days=dte)
-
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT distance_to_max_pain_pct FROM silver_max_pain
-            WHERE ticker = :ticker AND expiry = :expiry AND date <= :entry_date
-            ORDER BY date DESC LIMIT 1
-        """
-        )
-        result = await session.execute(
-            stmt,
-            {
-                "ticker": ticker,
-                "expiry": expiry,
-                "entry_date": entry_ts.date(),
-            },
-        )
-        row = result.fetchone()
-        return row[0] if row else None
+    expiry_date = datetime.combine(entry_ts.date() + timedelta(days=dte), datetime.min.time())
+    if entry_ts.tzinfo is not None:
+        expiry_date = expiry_date.replace(tzinfo=entry_ts.tzinfo)
 
     try:
-        return await db_query(query)
+        return await get_labeler_max_pain_distance(ticker, expiry_date, entry_ts)
     except Exception as e:
         logger.debug(f"Max pain lookup failed: {e}")
         return None

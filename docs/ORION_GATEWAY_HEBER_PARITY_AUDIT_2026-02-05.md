@@ -6969,3 +6969,30 @@ Result:
 
 Residual:
 - `flow_enricher` still has local SQL in other context families (for example max-pain distance and broader window aggregations); continue helper-by-helper delegation where shared canonical contracts exist.
+
+## 231) Pass 229 Continuation (2026-02-09)
+
+### 231.1 `flow_enricher` Max-Pain Distance Delegation (TDD-Backed)
+
+Finding:
+- `src/orion/ml/flow_enricher.py::_get_max_pain_distance(...)` still queried local `silver_max_pain` directly.
+- a shared labeler helper already provides Heber-first + fallback max-pain distance lookup, so the local flow-enricher query was duplicate source logic.
+
+Implemented:
+- Extended `tests/unit/test_flow_enricher_delegation.py` with:
+  - `test_get_max_pain_distance_delegates_to_labeler`
+  - `test_get_max_pain_distance_returns_none_without_dte`
+- Updated `src/orion/ml/flow_enricher.py`:
+  - imported `get_max_pain_distance` from labeler as `get_labeler_max_pain_distance`,
+  - rewired `_get_max_pain_distance(...)` to delegate to shared helper when DTE is provided,
+  - preserved existing `None` return behavior when DTE is not available.
+
+Verification:
+- `pytest -q tests/unit/test_flow_enricher_delegation.py -k max_pain_distance` passed.
+- `pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- max-pain context in flow-enricher now uses the same canonical lookup path as label generation, reducing direct SQL duplication and parity drift.
+
+Residual:
+- remaining `flow_enricher` local SQL debt is concentrated in broader market/window aggregation helpers and should be migrated in the same helper-level TDD pattern.

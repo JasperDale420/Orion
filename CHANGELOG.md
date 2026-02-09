@@ -69,6 +69,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `pytest -q tests/unit/test_flow_enricher_delegation.py -k gex_at_entry`
     - `pytest -q tests/unit/test_flow_enricher_delegation.py`
+- **Flow Enricher Max-Pain Distance Delegation to Shared Labeler Path (TDD)**:
+  - Extended `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_max_pain_distance_delegates_to_labeler`
+    - `test_get_max_pain_distance_returns_none_without_dte`
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_max_pain_distance(...)` now delegates to shared labeler helper (`get_labeler_max_pain_distance`) when DTE is present,
+    - preserves `None` behavior when DTE is missing and removes local direct SQL dependency for this helper.
+  - Verified with:
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py -k max_pain_distance`
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
     - `test_get_underlying_price_at_entry_delegates_to_labeler`

@@ -280,3 +280,45 @@ async def test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot(
     value = await enricher._get_gex_at_entry("AAPL", entry_ts)
 
     assert value == {}
+
+
+@pytest.mark.asyncio
+async def test_get_max_pain_distance_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_max_pain(ticker: str, expiry_date: datetime | None, ts: datetime) -> float:
+        captured["ticker"] = ticker
+        captured["expiry_date"] = expiry_date
+        captured["entry_ts"] = ts
+        return 12.5
+
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for max-pain lookup")
+
+    monkeypatch.setattr(enricher, "get_labeler_max_pain_distance", _labeler_max_pain, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_max_pain_distance("AAPL", entry_ts, dte=10)
+
+    assert value == pytest.approx(12.5)
+    assert captured["ticker"] == "AAPL"
+    assert captured["entry_ts"] == entry_ts
+    assert captured["expiry_date"] is not None
+    assert captured["expiry_date"].date().isoformat() == "2026-02-21"
+
+
+@pytest.mark.asyncio
+async def test_get_max_pain_distance_returns_none_without_dte(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail_labeler(*_args, **_kwargs):
+        raise AssertionError("labeler max-pain helper should not be called when dte is missing")
+
+    monkeypatch.setattr(enricher, "get_labeler_max_pain_distance", _fail_labeler, raising=False)
+
+    value = await enricher._get_max_pain_distance(
+        "AAPL",
+        datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+        dte=None,
+    )
+
+    assert value is None
