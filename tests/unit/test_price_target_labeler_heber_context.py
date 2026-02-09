@@ -207,6 +207,149 @@ async def test_get_rvol_metrics_falls_back_to_sql_when_heber_empty(monkeypatch: 
 
 
 @pytest.mark.asyncio
+async def test_get_window_features_at_entry_uses_single_query_and_maps_periods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {"execute_calls": 0}
+
+    class _Result:
+        def fetchall(self) -> list[tuple[str, dict[str, Any]]]:
+            return [
+                ("1h", {"call_put_imbalance": 0.12}),
+                ("1d", {"call_put_imbalance": 0.22, "dp_volume": 1000.0}),
+                ("1w", {"call_put_ratio": 1.4}),
+            ]
+
+    class _Session:
+        async def execute(self, _stmt, params: dict[str, Any]) -> _Result:
+            captured["execute_calls"] += 1
+            captured["params"] = params
+            return _Result()
+
+    async def _db_query(query):
+        return await query(_Session())
+
+    monkeypatch.setattr(labeler, "db_query", _db_query, raising=False)
+
+    result = await labeler.get_window_features_at_entry("AAPL", entry_ts)
+
+    assert result == {
+        "1h": {"call_put_imbalance": 0.12},
+        "1d": {"call_put_imbalance": 0.22, "dp_volume": 1000.0},
+        "1w": {"call_put_ratio": 1.4},
+    }
+    assert captured["execute_calls"] == 1
+    assert captured["params"]["ticker"] == "AAPL"
+    assert captured["params"]["entry_ts"] == entry_ts
+
+
+@pytest.mark.asyncio
+async def test_get_window_features_at_entry_returns_empty_dict_on_query_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fail_db_query(_query):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
+
+    result = await labeler.get_window_features_at_entry("AAPL", datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc))
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_get_velocity_backfill_candidates_queries_expected_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeResult:
+        def fetchall(self) -> list[Any]:
+            return []
+
+    class _FakeSession:
+        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
+            captured["sql"] = str(stmt)
+            captured["params"] = params
+            return _FakeResult()
+
+    async def _fake_db_query(fn):
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+
+    records = await labeler.get_velocity_backfill_candidates(
+        limit=12,
+        after_entry_ts=cursor_ts,
+        after_event_id="vel-120",
+    )
+
+    assert records == []
+    assert "time_to_75_pct_seconds IS NULL" in captured["sql"]
+    assert "time_to_100_pct_seconds IS NULL" in captured["sql"]
+    assert "time_to_150_pct_seconds IS NULL" in captured["sql"]
+    assert "entry_ts > :after_entry_ts" in captured["sql"]
+    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
+    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
+    assert captured["params"]["limit"] == 12
+    assert captured["params"]["after_entry_ts"] == cursor_ts
+    assert captured["params"]["after_event_id"] == "vel-120"
+
+
+@pytest.mark.asyncio
+async def test_get_checkpoint_backfill_candidates_queries_expected_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeResult:
+        def fetchall(self) -> list[Any]:
+            return []
+
+    class _FakeSession:
+        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
+            captured["sql"] = str(stmt)
+            captured["params"] = params
+            return _FakeResult()
+
+    async def _fake_db_query(fn):
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+
+    records = await labeler.get_checkpoint_backfill_candidates(
+        limit=20,
+        after_entry_ts=cursor_ts,
+        after_event_id="cp-120",
+    )
+
+    assert records == []
+    assert "price_at_15m IS NULL" in captured["sql"]
+    assert "return_at_15m IS NULL" in captured["sql"]
+    assert "price_at_30m IS NULL" in captured["sql"]
+    assert "return_at_30m IS NULL" in captured["sql"]
+    assert "price_at_8h IS NULL" in captured["sql"]
+    assert "return_at_8h IS NULL" in captured["sql"]
+    assert "price_at_1d IS NULL" in captured["sql"]
+    assert "return_at_1d IS NULL" in captured["sql"]
+    assert "price_at_2d IS NULL" in captured["sql"]
+    assert "return_at_2d IS NULL" in captured["sql"]
+    assert "price_at_3d IS NULL" in captured["sql"]
+    assert "return_at_3d IS NULL" in captured["sql"]
+    assert "price_at_1w IS NULL" in captured["sql"]
+    assert "return_at_1w IS NULL" in captured["sql"]
+    assert "entry_ts > :after_entry_ts" in captured["sql"]
+    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
+    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
+    assert captured["params"]["limit"] == 20
+    assert captured["params"]["after_entry_ts"] == cursor_ts
+    assert captured["params"]["after_event_id"] == "cp-120"
+
+
+@pytest.mark.asyncio
 async def test_get_sector_correlation_features_prefers_heber_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

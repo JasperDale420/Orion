@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Exit-Columns Candidate Selection Delegation to Shared Labeler Paths (TDD)**:
+  - Updated `tests/unit/test_backfill_exit_columns_selection.py`:
+    - `test_get_records_to_backfill_delegates_to_labeler`
+    - `test_get_all_records_for_checkpoints_delegates_to_labeler`
+    - updated cursor pass-through tests to assert delegated helper arguments.
+  - Updated `tests/unit/test_price_target_labeler_heber_context.py`:
+    - `test_get_velocity_backfill_candidates_queries_expected_shape`
+    - `test_get_checkpoint_backfill_candidates_queries_expected_shape`
+  - Updated `src/orion/main_price_target_labeler.py`:
+    - added shared helper `get_velocity_backfill_candidates(...)`,
+    - added shared helper `get_checkpoint_backfill_candidates(...)`,
+    - added `_build_backfill_cursor_clause(...)` for consistent keyset cursor logic.
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - `get_records_to_backfill(...)` now delegates to `get_labeler_velocity_backfill_candidates(...)`,
+    - `get_all_records_for_checkpoints(...)` now delegates to `get_labeler_checkpoint_backfill_candidates(...)`.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py`
+    - `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "window_features_at_entry or velocity_backfill_candidates or checkpoint_backfill_candidates"`
 - **Flow Enricher GEX Rolling-Average Delegation to Shared Labeler Path (TDD)**:
   - Updated `tests/unit/test_flow_enricher_delegation.py`:
     - `test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg`
@@ -128,6 +146,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `src/orion/ml/flow_enricher.py`:
     - `_get_window_features(...)` now delegates retrieval to `get_labeler_window_features_at_entry(...)`,
     - preserves existing downstream key mapping (`call_put_imbalance_*`, `sweep_ratio_*`, `flow_count_*`, `dp_volume_*`, `call_put_ratio_*`, `total_premium_*`).
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_window_features_delegates_to_labeler_and_maps_period_values"`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py`
+- **Flow Enricher Window Retrieval Cleanup Pass (TDD)**:
+  - Extended `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_window_features_delegates_to_labeler_and_maps_period_values`
+  - Updated shared labeler helper surface in `src/orion/main_price_target_labeler.py`:
+    - added `get_window_features_at_entry(...)` for reusable period-window retrieval.
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_window_features(...)` now delegates retrieval to `get_labeler_window_features_at_entry(...)`,
+    - removed now-unused local DB import path from flow-enricher for this feature family.
   - Verified with:
     - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_window_features_delegates_to_labeler_and_maps_period_values"`
     - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py`

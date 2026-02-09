@@ -465,6 +465,94 @@ async def _get_subsequent_prices_sql(option_chain: str, entry_ts: datetime) -> L
     return await db_query(query)
 
 
+def _build_backfill_cursor_clause(
+    after_entry_ts: datetime | None,
+    after_event_id: str | None,
+    params: Dict[str, Any],
+) -> str:
+    """Build keyset cursor predicate for backfill candidate queries."""
+    if after_entry_ts is not None and after_event_id is not None:
+        params["after_entry_ts"] = after_entry_ts
+        params["after_event_id"] = after_event_id
+        return """
+          AND (entry_ts > :after_entry_ts
+               OR (entry_ts = :after_entry_ts AND event_id > :after_event_id))
+        """
+    if after_entry_ts is not None:
+        params["after_entry_ts"] = after_entry_ts
+        return """
+          AND entry_ts >= :after_entry_ts
+        """
+    return ""
+
+
+async def get_velocity_backfill_candidates(
+    limit: int = 1000,
+    after_entry_ts: datetime | None = None,
+    after_event_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Get price-target rows that still need velocity columns backfilled."""
+
+    async def query(session: Any) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"limit": limit}
+        cursor_clause = _build_backfill_cursor_clause(after_entry_ts, after_event_id, params)
+
+        stmt = text(
+            f"""
+            SELECT event_id, ticker, option_chain, entry_ts, entry_option_price,
+                   hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts
+            FROM price_target_labels
+            WHERE (
+                (time_to_75_pct_seconds IS NULL AND hit_75_pct_ts IS NOT NULL)
+                OR (time_to_100_pct_seconds IS NULL AND hit_100_pct_ts IS NOT NULL)
+                OR (time_to_150_pct_seconds IS NULL AND hit_150_pct_ts IS NOT NULL)
+            )
+            {cursor_clause}
+            ORDER BY entry_ts ASC, event_id ASC
+            LIMIT :limit
+        """
+        )
+        result = await session.execute(stmt, params)
+        return [dict(row._mapping) for row in result.fetchall()]
+
+    return await db_query(query)
+
+
+async def get_checkpoint_backfill_candidates(
+    limit: int = 1000,
+    after_entry_ts: datetime | None = None,
+    after_event_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Get price-target rows that still need checkpoint columns backfilled."""
+
+    async def query(session: Any) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"limit": limit}
+        cursor_clause = _build_backfill_cursor_clause(after_entry_ts, after_event_id, params)
+
+        stmt = text(
+            f"""
+            SELECT event_id, option_chain, entry_ts, entry_option_price
+            FROM price_target_labels
+            WHERE (
+                price_at_15m IS NULL OR return_at_15m IS NULL
+                OR price_at_30m IS NULL OR return_at_30m IS NULL
+                OR price_at_8h IS NULL OR return_at_8h IS NULL
+                OR price_at_1d IS NULL OR return_at_1d IS NULL
+                OR price_at_2d IS NULL OR return_at_2d IS NULL
+                OR price_at_3d IS NULL OR return_at_3d IS NULL
+                OR price_at_1w IS NULL OR return_at_1w IS NULL
+            )
+            {cursor_clause}
+            ORDER BY entry_ts ASC, event_id ASC
+            LIMIT :limit
+        """
+        )
+        result = await session.execute(stmt, params)
+        return [dict(row._mapping) for row in result.fetchall()]
+
+    return await db_query(query)
+
+
 def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
     for column in columns:
         if column in df.columns:
@@ -893,28 +981,31 @@ async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[
     """Get latest gold window feature payload by period for a ticker at entry time."""
 
     async def query(session: Any) -> Dict[str, Any]:
-        features_by_period: Dict[str, Any] = {}
-
-        for period in ["1h", "1d", "1w"]:
-            stmt = text(
-                """
-                SELECT features
+        stmt = text(
+            """
+            SELECT period, features
+            FROM (
+                SELECT DISTINCT ON (period) period, features
                 FROM gold_feature_windows
                 WHERE ticker = :ticker
-                AND period = :period
-                AND window_end_ts_utc <= :entry_ts
-                ORDER BY window_end_ts_utc DESC
-                LIMIT 1
-            """
-            )
-            result = await session.execute(
-                stmt,
-                {"ticker": ticker, "period": period, "entry_ts": entry_ts},
-            )
-            row = result.fetchone()
-            if row and row[0]:
-                features_by_period[period] = row[0]
+                  AND period IN ('1h', '1d', '1w')
+                  AND window_end_ts_utc <= :entry_ts
+                ORDER BY period, window_end_ts_utc DESC
+            ) latest_by_period
+        """
+        )
+        result = await session.execute(
+            stmt,
+            {"ticker": ticker, "entry_ts": entry_ts},
+        )
+        rows = result.fetchall()
 
+        features_by_period: Dict[str, Any] = {}
+        for row in rows:
+            period = row[0]
+            features = row[1] if len(row) > 1 else None
+            if period and features:
+                features_by_period[period] = features
         return features_by_period
 
     try:
@@ -922,6 +1013,99 @@ async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[
     except Exception as e:
         logger.debug(f"Window features lookup failed for {ticker}: {e}")
         return {}
+
+
+async def get_velocity_backfill_candidates(
+    limit: int = 1000,
+    after_entry_ts: datetime | None = None,
+    after_event_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Get records missing velocity metrics for backfill."""
+
+    async def query(session: Any) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"limit": limit}
+        cursor_clause = ""
+        if after_entry_ts is not None and after_event_id is not None:
+            cursor_clause = """
+              AND (entry_ts > :after_entry_ts
+                   OR (entry_ts = :after_entry_ts AND event_id > :after_event_id))
+            """
+            params["after_entry_ts"] = after_entry_ts
+            params["after_event_id"] = after_event_id
+        elif after_entry_ts is not None:
+            cursor_clause = """
+              AND entry_ts >= :after_entry_ts
+            """
+            params["after_entry_ts"] = after_entry_ts
+
+        stmt = text(
+            f"""
+            SELECT event_id, ticker, option_chain, entry_ts, entry_option_price,
+                   hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts
+            FROM price_target_labels
+            WHERE (
+                (time_to_75_pct_seconds IS NULL AND hit_75_pct_ts IS NOT NULL)
+                OR (time_to_100_pct_seconds IS NULL AND hit_100_pct_ts IS NOT NULL)
+                OR (time_to_150_pct_seconds IS NULL AND hit_150_pct_ts IS NOT NULL)
+            )
+            {cursor_clause}
+            ORDER BY entry_ts ASC, event_id ASC
+            LIMIT :limit
+        """
+        )
+        result = await session.execute(stmt, params)
+        rows = result.fetchall()
+        return [dict(row._mapping) for row in rows]
+
+    return await db_query(query)
+
+
+async def get_checkpoint_backfill_candidates(
+    limit: int = 1000,
+    after_entry_ts: datetime | None = None,
+    after_event_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Get records missing checkpoint metrics for backfill."""
+
+    async def query(session: Any) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"limit": limit}
+        cursor_clause = ""
+        if after_entry_ts is not None and after_event_id is not None:
+            cursor_clause = """
+              AND (entry_ts > :after_entry_ts
+                   OR (entry_ts = :after_entry_ts AND event_id > :after_event_id))
+            """
+            params["after_entry_ts"] = after_entry_ts
+            params["after_event_id"] = after_event_id
+        elif after_entry_ts is not None:
+            cursor_clause = """
+              AND entry_ts >= :after_entry_ts
+            """
+            params["after_entry_ts"] = after_entry_ts
+
+        stmt = text(
+            f"""
+            SELECT event_id, option_chain, entry_ts, entry_option_price
+            FROM price_target_labels
+            WHERE (
+                price_at_15m IS NULL OR return_at_15m IS NULL
+                OR price_at_30m IS NULL OR return_at_30m IS NULL
+                OR price_at_8h IS NULL OR return_at_8h IS NULL
+                OR price_at_1d IS NULL OR return_at_1d IS NULL
+                OR price_at_2d IS NULL OR return_at_2d IS NULL
+                OR price_at_3d IS NULL OR return_at_3d IS NULL
+                OR price_at_1w IS NULL OR return_at_1w IS NULL
+            )
+            {cursor_clause}
+            ORDER BY entry_ts ASC, event_id ASC
+            LIMIT :limit
+        """
+        )
+        result = await session.execute(stmt, params)
+        rows = result.fetchall()
+        return [dict(row._mapping) for row in rows]
+
+    return await db_query(query)
 
 
 async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:

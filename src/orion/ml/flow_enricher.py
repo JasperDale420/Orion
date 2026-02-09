@@ -58,7 +58,6 @@ from orion.main_price_target_labeler import (
 from orion.main_price_target_labeler import (
     get_window_features_at_entry as get_labeler_window_features_at_entry,
 )
-from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.flow_enricher")

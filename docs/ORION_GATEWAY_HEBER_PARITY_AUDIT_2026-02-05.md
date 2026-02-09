@@ -7062,6 +7062,33 @@ Residual:
 - remaining notable local SQL in flow-enricher is now mostly intentional/derived aggregation logic rather than raw source lookup duplication.
 - next meaningful combined pass should target `backfill_exit_columns` remaining checkpoint/candidate-selection orchestration debt.
 
+## 234) Pass 232 Continuation (2026-02-09)
+
+### 234.1 `flow_enricher` + Labeler Shared Window-Feature Contract (TDD-Backed)
+
+Finding:
+- window-feature retrieval for `1h/1d/1w` context still needed explicit shared-helper coverage so `flow_enricher` could consume one canonical contract without local query ownership.
+
+Implemented:
+- Added/confirmed shared helper in `src/orion/main_price_target_labeler.py`:
+  - `get_window_features_at_entry(ticker, entry_ts)` for latest `gold_feature_windows` payloads by period.
+- Extended `tests/unit/test_flow_enricher_delegation.py` with:
+  - `test_get_window_features_delegates_to_labeler_and_maps_period_values`
+- Updated `src/orion/ml/flow_enricher.py`:
+  - `_get_window_features(...)` now relies on `get_labeler_window_features_at_entry(...)` for retrieval,
+  - retained existing period-to-feature mapping shape,
+  - removed the now-unused local DB import path for this feature family.
+
+Verification:
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "get_window_features_delegates_to_labeler_and_maps_period_values"` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- window-feature lookup now has an explicit shared contract boundary between labeler and flow-enricher, reducing direct query duplication and tightening parity behavior.
+
+Residual:
+- remaining high-value remediation area is still `backfill_exit_columns` checkpoint/candidate-selection orchestration logic.
+
 ## 233) Pass 231 Continuation (2026-02-09)
 
 ### 233.1 `flow_enricher` GEX Rolling-Average Delegation (TDD-Backed)
@@ -7088,3 +7115,42 @@ Verification:
 Result:
 - `flow_enricher` no longer directly queries high-priority `silver_*` tables for core context helpers.
 - remaining local table coupling is concentrated in `gold_feature_windows` consumption (`_get_window_features(...)`), which should be handled in the next batch.
+
+## 235) Pass 233 Continuation (2026-02-09)
+
+### 235.1 `backfill_exit_columns` Candidate-Selection Delegation (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/backfill_exit_columns.py` still owned local SQL for candidate-selection paths:
+  - `get_records_to_backfill(...)` (velocity phase),
+  - `get_all_records_for_checkpoints(...)` (checkpoint phase).
+- this left orchestration-level SQL duplicated outside shared labeler contracts and made backfill selection behavior harder to reuse or validate centrally.
+
+Implemented:
+- Added shared helpers in `src/orion/main_price_target_labeler.py`:
+  - `get_velocity_backfill_candidates(...)`,
+  - `get_checkpoint_backfill_candidates(...)`,
+  - plus `_build_backfill_cursor_clause(...)` to centralize keyset cursor predicate construction.
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - `get_records_to_backfill(...)` now delegates to `get_labeler_velocity_backfill_candidates(...)`,
+  - `get_all_records_for_checkpoints(...)` now delegates to `get_labeler_checkpoint_backfill_candidates(...)`.
+- Extended tests:
+  - `tests/unit/test_backfill_exit_columns_selection.py`
+    - `test_get_records_to_backfill_delegates_to_labeler`
+    - `test_get_all_records_for_checkpoints_delegates_to_labeler`
+    - updated cursor/timestamp-only tests to assert delegated argument pass-through.
+  - `tests/unit/test_price_target_labeler_heber_context.py`
+    - `test_get_velocity_backfill_candidates_queries_expected_shape`
+    - `test_get_checkpoint_backfill_candidates_queries_expected_shape`
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py` passed.
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "window_features_at_entry or velocity_backfill_candidates or checkpoint_backfill_candidates"` passed.
+
+Result:
+- backfill candidate-selection SQL is now centralized behind shared labeler helpers.
+- checkpoint/velocity orchestration in `backfill_exit_columns` now consumes a single canonical candidate contract, reducing drift risk and improving testability.
+
+Residual:
+- remaining debt in `backfill_exit_columns` is primarily runtime orchestration behavior (batching/retry/operational controls) rather than duplicated candidate SQL ownership.
+- next high-value remediation target remains classifier/window-query consolidation and broader end-to-end gateway contract behavior under load.

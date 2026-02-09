@@ -16,7 +16,9 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from orion.main_price_target_labeler import (
+    get_checkpoint_backfill_candidates as get_labeler_checkpoint_backfill_candidates,
     get_subsequent_prices as get_labeler_subsequent_prices,
+    get_velocity_backfill_candidates as get_labeler_velocity_backfill_candidates,
 )
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
@@ -130,44 +132,12 @@ async def get_records_to_backfill(
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Get records missing new velocity columns."""
-
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit}
-        cursor_clause = ""
-        if after_entry_ts is not None and after_event_id is not None:
-            cursor_clause = """
-              AND (entry_ts > :after_entry_ts
-                   OR (entry_ts = :after_entry_ts AND event_id > :after_event_id))
-            """
-            params["after_entry_ts"] = after_entry_ts
-            params["after_event_id"] = after_event_id
-        elif after_entry_ts is not None:
-            cursor_clause = """
-              AND entry_ts >= :after_entry_ts
-            """
-            params["after_entry_ts"] = after_entry_ts
-
-        stmt = text(
-            f"""
-            SELECT event_id, ticker, option_chain, entry_ts, entry_option_price,
-                   hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts
-            FROM price_target_labels
-            WHERE (
-                (time_to_75_pct_seconds IS NULL AND hit_75_pct_ts IS NOT NULL)
-                OR (time_to_100_pct_seconds IS NULL AND hit_100_pct_ts IS NOT NULL)
-                OR (time_to_150_pct_seconds IS NULL AND hit_150_pct_ts IS NOT NULL)
-            )
-            {cursor_clause}
-            ORDER BY entry_ts ASC, event_id ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, params)
-        rows = result.fetchall()
-        return [dict(row._mapping) for row in rows]
-
-    return await db_query(query)
+    """Get records missing new velocity columns via shared labeler helper."""
+    return await get_labeler_velocity_backfill_candidates(
+        limit=limit,
+        after_entry_ts=after_entry_ts,
+        after_event_id=after_event_id,
+    )
 
 
 async def get_all_records_for_checkpoints(
@@ -175,47 +145,12 @@ async def get_all_records_for_checkpoints(
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Get records missing checkpoint columns."""
-
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit}
-        cursor_clause = ""
-        if after_entry_ts is not None and after_event_id is not None:
-            cursor_clause = """
-              AND (entry_ts > :after_entry_ts
-                   OR (entry_ts = :after_entry_ts AND event_id > :after_event_id))
-            """
-            params["after_entry_ts"] = after_entry_ts
-            params["after_event_id"] = after_event_id
-        elif after_entry_ts is not None:
-            cursor_clause = """
-              AND entry_ts >= :after_entry_ts
-            """
-            params["after_entry_ts"] = after_entry_ts
-
-        stmt = text(
-            f"""
-            SELECT event_id, option_chain, entry_ts, entry_option_price
-            FROM price_target_labels
-            WHERE (
-                price_at_15m IS NULL OR return_at_15m IS NULL
-                OR price_at_30m IS NULL OR return_at_30m IS NULL
-                OR price_at_8h IS NULL OR return_at_8h IS NULL
-                OR price_at_1d IS NULL OR return_at_1d IS NULL
-                OR price_at_2d IS NULL OR return_at_2d IS NULL
-                OR price_at_3d IS NULL OR return_at_3d IS NULL
-                OR price_at_1w IS NULL OR return_at_1w IS NULL
-            )
-            {cursor_clause}
-            ORDER BY entry_ts ASC, event_id ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, params)
-        rows = result.fetchall()
-        return [dict(row._mapping) for row in rows]
-
-    return await db_query(query)
+    """Get records missing checkpoint columns via shared labeler helper."""
+    return await get_labeler_checkpoint_backfill_candidates(
+        limit=limit,
+        after_entry_ts=after_entry_ts,
+        after_event_id=after_event_id,
+    )
 
 
 async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:

@@ -8,76 +8,79 @@ from orion.jobs import backfill_exit_columns
 
 
 @pytest.mark.asyncio
-async def test_get_records_to_backfill_targets_all_velocity_columns_with_ordering(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_get_records_to_backfill_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
+    expected = [
+        {"event_id": "vel-1", "entry_ts": datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)},
+    ]
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
+    async def _fake_delegate(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        captured["limit"] = limit
+        captured["after_entry_ts"] = after_entry_ts
+        captured["after_event_id"] = after_event_id
+        return expected
 
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for velocity candidate selection")
 
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_exit_columns, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "get_labeler_velocity_backfill_candidates",
+        _fake_delegate,
+        raising=False,
+    )
+    monkeypatch.setattr(backfill_exit_columns, "db_query", _fail_db_query, raising=False)
 
     records = await backfill_exit_columns.get_records_to_backfill(limit=15)
 
-    assert records == []
-    assert "time_to_75_pct_seconds IS NULL" in captured["sql"]
-    assert "time_to_100_pct_seconds IS NULL" in captured["sql"]
-    assert "time_to_150_pct_seconds IS NULL" in captured["sql"]
-    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
-    assert captured["params"]["limit"] == 15
+    assert records == expected
+    assert captured == {
+        "limit": 15,
+        "after_entry_ts": None,
+        "after_event_id": None,
+    }
 
 
 @pytest.mark.asyncio
-async def test_get_all_records_for_checkpoints_targets_any_missing_checkpoint_column(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_get_all_records_for_checkpoints_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
+    expected = [
+        {"event_id": "cp-1", "entry_ts": datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)},
+    ]
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
+    async def _fake_delegate(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        captured["limit"] = limit
+        captured["after_entry_ts"] = after_entry_ts
+        captured["after_event_id"] = after_event_id
+        return expected
 
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
+    async def _fail_db_query(_query):
+        raise AssertionError("local db_query should not be used for checkpoint candidate selection")
 
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_exit_columns, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "get_labeler_checkpoint_backfill_candidates",
+        _fake_delegate,
+        raising=False,
+    )
+    monkeypatch.setattr(backfill_exit_columns, "db_query", _fail_db_query, raising=False)
 
     records = await backfill_exit_columns.get_all_records_for_checkpoints(limit=25)
 
-    assert records == []
-    assert "price_at_15m IS NULL" in captured["sql"]
-    assert "return_at_15m IS NULL" in captured["sql"]
-    assert "price_at_30m IS NULL" in captured["sql"]
-    assert "return_at_30m IS NULL" in captured["sql"]
-    assert "price_at_8h IS NULL" in captured["sql"]
-    assert "return_at_8h IS NULL" in captured["sql"]
-    assert "price_at_1d IS NULL" in captured["sql"]
-    assert "return_at_1d IS NULL" in captured["sql"]
-    assert "price_at_2d IS NULL" in captured["sql"]
-    assert "return_at_2d IS NULL" in captured["sql"]
-    assert "price_at_3d IS NULL" in captured["sql"]
-    assert "return_at_3d IS NULL" in captured["sql"]
-    assert "price_at_1w IS NULL" in captured["sql"]
-    assert "return_at_1w IS NULL" in captured["sql"]
-    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
-    assert captured["params"]["limit"] == 25
+    assert records == expected
+    assert captured == {
+        "limit": 25,
+        "after_entry_ts": None,
+        "after_event_id": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -120,20 +123,22 @@ async def test_get_records_to_backfill_supports_cursor_filter(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
+    async def _fake_delegate(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        captured["limit"] = limit
+        captured["after_entry_ts"] = after_entry_ts
+        captured["after_event_id"] = after_event_id
+        return []
 
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_exit_columns, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "get_labeler_velocity_backfill_candidates",
+        _fake_delegate,
+        raising=False,
+    )
 
     cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
     records = await backfill_exit_columns.get_records_to_backfill(
@@ -143,10 +148,9 @@ async def test_get_records_to_backfill_supports_cursor_filter(
     )
 
     assert records == []
-    assert "entry_ts > :after_entry_ts" in captured["sql"]
-    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert captured["params"]["after_event_id"] == "evt-100"
+    assert captured["limit"] == 10
+    assert captured["after_entry_ts"] == cursor_ts
+    assert captured["after_event_id"] == "evt-100"
 
 
 @pytest.mark.asyncio
@@ -155,20 +159,22 @@ async def test_get_all_records_for_checkpoints_supports_cursor_filter(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
+    async def _fake_delegate(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        captured["limit"] = limit
+        captured["after_entry_ts"] = after_entry_ts
+        captured["after_event_id"] = after_event_id
+        return []
 
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_exit_columns, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "get_labeler_checkpoint_backfill_candidates",
+        _fake_delegate,
+        raising=False,
+    )
 
     cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
     records = await backfill_exit_columns.get_all_records_for_checkpoints(
@@ -178,10 +184,9 @@ async def test_get_all_records_for_checkpoints_supports_cursor_filter(
     )
 
     assert records == []
-    assert "entry_ts > :after_entry_ts" in captured["sql"]
-    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert captured["params"]["after_event_id"] == "evt-100"
+    assert captured["limit"] == 10
+    assert captured["after_entry_ts"] == cursor_ts
+    assert captured["after_event_id"] == "evt-100"
 
 
 @pytest.mark.asyncio
@@ -190,20 +195,22 @@ async def test_get_records_to_backfill_supports_timestamp_only_cursor_filter(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
+    async def _fake_delegate(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        captured["limit"] = limit
+        captured["after_entry_ts"] = after_entry_ts
+        captured["after_event_id"] = after_event_id
+        return []
 
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_exit_columns, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "get_labeler_velocity_backfill_candidates",
+        _fake_delegate,
+        raising=False,
+    )
 
     cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
     records = await backfill_exit_columns.get_records_to_backfill(
@@ -213,9 +220,9 @@ async def test_get_records_to_backfill_supports_timestamp_only_cursor_filter(
     )
 
     assert records == []
-    assert "entry_ts >= :after_entry_ts" in captured["sql"]
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert "after_event_id" not in captured["params"]
+    assert captured["limit"] == 10
+    assert captured["after_entry_ts"] == cursor_ts
+    assert captured["after_event_id"] is None
 
 
 @pytest.mark.asyncio
@@ -224,20 +231,22 @@ async def test_get_all_records_for_checkpoints_supports_timestamp_only_cursor_fi
 ) -> None:
     captured: dict[str, Any] = {}
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
+    async def _fake_delegate(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        captured["limit"] = limit
+        captured["after_entry_ts"] = after_entry_ts
+        captured["after_event_id"] = after_event_id
+        return []
 
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_exit_columns, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "get_labeler_checkpoint_backfill_candidates",
+        _fake_delegate,
+        raising=False,
+    )
 
     cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
     records = await backfill_exit_columns.get_all_records_for_checkpoints(
@@ -247,9 +256,9 @@ async def test_get_all_records_for_checkpoints_supports_timestamp_only_cursor_fi
     )
 
     assert records == []
-    assert "entry_ts >= :after_entry_ts" in captured["sql"]
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert "after_event_id" not in captured["params"]
+    assert captured["limit"] == 10
+    assert captured["after_entry_ts"] == cursor_ts
+    assert captured["after_event_id"] is None
 
 
 @pytest.mark.asyncio
