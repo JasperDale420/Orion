@@ -2165,7 +2165,129 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
     else:
         result["minutes_to_close"] = 0
 
-    # 2-5: DB lookups
+    # 2-5: Market context lookups
+    entry_date = entry_ts.date()
+    heber_market = _get_phase1_bucket_features_from_heber(ticker, entry_ts)
+    if heber_market is not None:
+        result.update(heber_market)
+    else:
+        sql_market = await _get_phase1_bucket_features_sql(ticker, entry_ts)
+        result.update(sql_market)
+
+    # 4. earnings_in_dte_window (LEAP focus)
+    # Check if earnings date falls within DTE window
+    ticker_info = await get_ticker_info(ticker)
+    next_earnings = ticker_info.get("next_earnings_date")
+    if next_earnings:
+        expiry_date = entry_date + timedelta(days=dte)
+        result["earnings_in_dte_window"] = entry_date <= next_earnings <= expiry_date
+
+    return result
+
+
+def _get_phase1_bucket_features_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
+    result: Dict[str, Any] = {
+        "overnight_gap_pct": None,
+        "price_change_5d_prior": None,
+        "vwap_distance_pct": None,
+    }
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+
+    entry_date = entry_utc.date()
+    five_days_ago = entry_date - timedelta(days=5)
+    try:
+        bars_df = _heber_reader.read_bars(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=entry_utc - timedelta(days=14),
+        )
+    except Exception as e:
+        _record_price_target_fallback("phase1_bucket_heber_lookup", e, ticker=ticker)
+        return None
+
+    if bars_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc"])
+    open_col = _pick_first_existing_column(bars_df, ["open", "o"])
+    close_col = _pick_first_existing_column(bars_df, ["close", "c"])
+    vwap_col = _pick_first_existing_column(bars_df, ["vwap", "vw"])
+    symbol_col = _pick_first_existing_column(bars_df, ["symbol", "ticker", "underlying"])
+    if ts_col is None or close_col is None:
+        return None
+
+    ts_series = pd.to_datetime(bars_df[ts_col], utc=True, errors="coerce")
+    if open_col is not None:
+        open_series = pd.to_numeric(bars_df[open_col], errors="coerce")
+    else:
+        open_series = pd.to_numeric(bars_df[close_col], errors="coerce")
+    close_series = pd.to_numeric(bars_df[close_col], errors="coerce")
+    if vwap_col is not None:
+        vwap_series = pd.to_numeric(bars_df[vwap_col], errors="coerce")
+    else:
+        vwap_series = pd.Series([None] * len(bars_df))
+
+    temp_df = pd.DataFrame(
+        {
+            "ts": ts_series,
+            "open": open_series,
+            "close": close_series,
+            "vwap": vwap_series,
+        }
+    ).dropna(subset=["ts", "close"])
+    if temp_df.empty:
+        return None
+
+    if symbol_col is not None:
+        symbol_series = bars_df[symbol_col].astype(str).str.upper().str.split(":").str[-1]
+        temp_df["symbol"] = symbol_series.values
+        temp_df = temp_df[temp_df["symbol"] == str(ticker).upper()]
+        if temp_df.empty:
+            return None
+
+    before_entry = temp_df[temp_df["ts"] <= entry_utc].sort_values("ts")
+    if before_entry.empty:
+        return None
+    before_entry["day"] = before_entry["ts"].dt.date
+
+    today_rows = before_entry[before_entry["day"] == entry_date]
+    prior_rows = before_entry[before_entry["day"] < entry_date]
+
+    today_open: Optional[float] = None
+    prior_close: Optional[float] = None
+    if not today_rows.empty:
+        today_open = _coerce_float(today_rows.iloc[0]["open"])
+    if not prior_rows.empty:
+        prior_close = _coerce_float(prior_rows.iloc[-1]["close"])
+
+    if today_open is not None and prior_close is not None and prior_close > 0:
+        result["overnight_gap_pct"] = ((today_open - prior_close) / prior_close) * 100.0
+
+    latest_row = before_entry.iloc[-1]
+    latest_close = _coerce_float(latest_row["close"])
+    latest_vwap = _coerce_float(latest_row["vwap"])
+    if latest_close is not None and latest_vwap is not None and latest_vwap > 0:
+        result["vwap_distance_pct"] = ((latest_close - latest_vwap) / latest_vwap) * 100.0
+
+    five_day_rows = prior_rows[prior_rows["day"] <= five_days_ago]
+    if not five_day_rows.empty and prior_close is not None:
+        five_day_close = _coerce_float(five_day_rows.iloc[-1]["close"])
+        if five_day_close is not None and five_day_close > 0:
+            result["price_change_5d_prior"] = ((prior_close - five_day_close) / five_day_close) * 100.0
+
+    if any(value is not None for value in result.values()):
+        return result
+    return None
+
+
+async def _get_phase1_bucket_features_sql(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "overnight_gap_pct": None,
+        "price_change_5d_prior": None,
+        "vwap_distance_pct": None,
+    }
     entry_date = entry_ts.date()
     five_days_ago = entry_date - timedelta(days=5)
 
@@ -2244,15 +2366,6 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
 
     db_result = await db_query(query)
     result.update(db_result)
-
-    # 4. earnings_in_dte_window (LEAP focus)
-    # Check if earnings date falls within DTE window
-    ticker_info = await get_ticker_info(ticker)
-    next_earnings = ticker_info.get("next_earnings_date")
-    if next_earnings:
-        expiry_date = entry_date + timedelta(days=dte)
-        result["earnings_in_dte_window"] = entry_date <= next_earnings <= expiry_date
-
     return result
 
 

@@ -483,3 +483,70 @@ async def test_get_institutional_flow_1w_falls_back_to_sql_when_heber_empty(
     result = await labeler.get_institutional_flow_1w("AAPL", entry_ts)
 
     assert result == pytest.approx(321_000.0)
+
+
+@pytest.mark.asyncio
+async def test_get_phase1_bucket_features_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc), "open": 90.0, "close": 90.0, "vwap": 90.0},
+                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "open": 100.0, "close": 100.0, "vwap": 100.0},
+                    {"ts_event": datetime(2026, 2, 11, 14, 30, tzinfo=timezone.utc), "open": 102.0, "close": 103.0, "vwap": 101.0},
+                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "open": 103.0, "close": 104.0, "vwap": 102.0},
+                ]
+            )
+
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber bars are available")
+
+    async def _fake_ticker_info(_ticker: str):
+        return {}
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_phase1_bucket_features_sql", _fail_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "get_ticker_info", _fake_ticker_info, raising=False)
+
+    result = await labeler.get_phase1_bucket_features("AAPL", entry_ts, dte=5)
+
+    assert result["minutes_to_close"] == 270
+    assert result["overnight_gap_pct"] == pytest.approx(2.0)
+    assert result["vwap_distance_pct"] == pytest.approx(((104.0 - 102.0) / 102.0) * 100)
+    assert result["price_change_5d_prior"] == pytest.approx(((100.0 - 90.0) / 90.0) * 100)
+
+
+@pytest.mark.asyncio
+async def test_get_phase1_bucket_features_falls_back_to_sql_when_heber_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    async def _fake_sql_fallback(ticker: str, ts: datetime):
+        assert ticker == "AAPL"
+        assert ts == entry_ts
+        return {
+            "overnight_gap_pct": 1.5,
+            "price_change_5d_prior": 2.5,
+            "vwap_distance_pct": -0.5,
+        }
+
+    async def _fake_ticker_info(_ticker: str):
+        return {}
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_phase1_bucket_features_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "get_ticker_info", _fake_ticker_info, raising=False)
+
+    result = await labeler.get_phase1_bucket_features("AAPL", entry_ts, dte=5)
+
+    assert result["minutes_to_close"] == 270
+    assert result["overnight_gap_pct"] == pytest.approx(1.5)
+    assert result["price_change_5d_prior"] == pytest.approx(2.5)
+    assert result["vwap_distance_pct"] == pytest.approx(-0.5)

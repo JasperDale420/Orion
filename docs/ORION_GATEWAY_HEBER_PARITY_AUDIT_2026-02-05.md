@@ -6353,6 +6353,33 @@ Result:
 Residual:
 - Additional SQL-coupled labeler helpers still remain (notably flow-aggression and institutional-flow lookups already captured by existing failing tests in this suite) and should be migrated in the next slices.
 
+## 214) Pass 208 Continuation (2026-02-09)
+
+### 214.1 Phase-1 Bucket Market Context Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_phase1_bucket_features(...)` still sourced overnight gap / VWAP distance / 5-day momentum from SQL-only bar queries.
+
+Implemented:
+- Extended and normalized `tests/unit/test_price_target_labeler_heber_context.py` coverage for phase-1 bucket behavior:
+  - `test_get_phase1_bucket_features_prefers_heber_when_available`
+  - `test_get_phase1_bucket_features_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_phase1_bucket_features_from_heber(...)` for bar-derived market context,
+  - extracted SQL path into `_get_phase1_bucket_features_sql(...)`,
+  - updated `get_phase1_bucket_features(...)` to use Heber-first market context with SQL fallback,
+  - retained existing `minutes_to_close` and earnings-window logic unchanged.
+
+Verification:
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py -k phase1_bucket_features` passed.
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py` passed (`18 passed`).
+
+Result:
+- Phase-1 bucket market context now follows the same migration contract as other labeler context families: Heber-first with SQL fallback.
+
+Residual:
+- Remaining SQL-heavy areas are concentrated in deeper option-level feature blocks (`get_p2_features` / `get_p3_features`) and label backfill/update routines that still depend on local silver tables.
+
 ## 212) Pass 206 Continuation (2026-02-09)
 
 ### 212.1 Flow Aggression + Institutional 1W Context Heber-First Migration (TDD-Backed)
