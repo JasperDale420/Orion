@@ -17,6 +17,9 @@ from orion.main_price_target_labeler import (
     get_flow_greeks as get_labeler_flow_greeks,
 )
 from orion.main_price_target_labeler import (
+    get_gex_at_entry as get_labeler_gex_at_entry,
+)
+from orion.main_price_target_labeler import (
     get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
 )
 from orion.main_price_target_labeler import (
@@ -268,29 +271,34 @@ def _get_session(ts: datetime) -> str:
 
 async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     """Get GEX/VEX at entry time, plus 20-day rolling averages for confidence rules."""
+    try:
+        gex_snapshot = await get_labeler_gex_at_entry(ticker, entry_ts)
+    except Exception as e:
+        logger.debug(f"GEX snapshot lookup failed: {e}")
+        return {}
+
+    if not isinstance(gex_snapshot, dict):
+        return {}
+
+    gex = gex_snapshot.get("gex")
+    vex = gex_snapshot.get("vex")
+    if gex is None and vex is None:
+        return {}
+
+    rolling_avg = await _get_gex_rolling_averages(ticker, entry_ts)
+    return {
+        "gex": gex,
+        "vex": vex,
+        "gex_rolling_avg": rolling_avg.get("gex_rolling_avg"),
+        "vex_rolling_avg": rolling_avg.get("vex_rolling_avg"),
+    }
+
+
+async def _get_gex_rolling_averages(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
+    """Get rolling average GEX/VEX values for confidence rules."""
     from sqlalchemy import text
 
-    async def query(session: Any) -> Dict[str, Any]:
-        # Get current GEX/VEX
-        stmt = text(
-            """
-            SELECT gex_oi, vex_oi
-            FROM silver_greek_exposure
-            WHERE ticker = :ticker AND ts_utc <= :entry_ts
-            ORDER BY ts_utc DESC LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
-        row = result.fetchone()
-        
-        if not row:
-            return {}
-        
-        current_gex = row[0]
-        current_vex = row[1]
-        
-        # Get 20-day rolling averages for confidence rule
-        # (0DTE low GEX/VEX avoid stop rule uses these)
+    async def query(session: Any) -> Dict[str, Optional[float]]:
         avg_stmt = text(
             """
             SELECT AVG(gex_oi), AVG(vex_oi)
@@ -305,10 +313,8 @@ async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
             avg_stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts}
         )
         avg_row = avg_result.fetchone()
-        
+
         return {
-            "gex": current_gex,
-            "vex": current_vex,
             "gex_rolling_avg": avg_row[0] if avg_row else None,
             "vex_rolling_avg": avg_row[1] if avg_row else None,
         }
@@ -316,8 +322,8 @@ async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     try:
         return await db_query(query)
     except Exception as e:
-        logger.debug(f"GEX lookup failed: {e}")
-        return {}
+        logger.debug(f"GEX rolling-average lookup failed: {e}")
+        return {"gex_rolling_avg": None, "vex_rolling_avg": None}
 
 
 async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:

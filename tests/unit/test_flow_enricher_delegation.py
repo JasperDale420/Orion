@@ -219,3 +219,64 @@ async def test_get_regime_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) 
         "vix_regime": "NORMAL",
     }
     assert captured == {"entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    async def _labeler_gex(ticker: str, ts: datetime) -> dict[str, Any]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return {"gex": 120.0, "vex": 75.0}
+
+    class _Result:
+        def fetchone(self) -> tuple[float, float]:
+            return (100.0, 60.0)
+
+    class _Session:
+        async def execute(self, _stmt, params: dict[str, Any]) -> _Result:
+            captured["avg_params"] = params
+            return _Result()
+
+    async def _db_query(query):
+        return await query(_Session())
+
+    monkeypatch.setattr(enricher, "get_labeler_gex_at_entry", _labeler_gex, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _db_query, raising=False)
+
+    value = await enricher._get_gex_at_entry("AAPL", entry_ts)
+
+    assert value == {
+        "gex": 120.0,
+        "vex": 75.0,
+        "gex_rolling_avg": 100.0,
+        "vex_rolling_avg": 60.0,
+    }
+    assert captured["ticker"] == "AAPL"
+    assert captured["entry_ts"] == entry_ts
+    assert captured["avg_params"]["ticker"] == "AAPL"
+    assert captured["avg_params"]["entry_ts"] == entry_ts
+
+
+@pytest.mark.asyncio
+async def test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+
+    async def _labeler_gex(_ticker: str, _ts: datetime) -> dict[str, Any]:
+        return {"gex": None, "vex": None}
+
+    async def _fail_db_query(_query):
+        raise AssertionError("rolling-average SQL should not run when base GEX snapshot is missing")
+
+    monkeypatch.setattr(enricher, "get_labeler_gex_at_entry", _labeler_gex, raising=False)
+    monkeypatch.setattr(enricher, "db_query", _fail_db_query, raising=False)
+
+    value = await enricher._get_gex_at_entry("AAPL", entry_ts)
+
+    assert value == {}

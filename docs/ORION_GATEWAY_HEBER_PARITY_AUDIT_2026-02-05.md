@@ -6941,3 +6941,31 @@ Result:
 
 Residual:
 - `backfill_exit_columns` still has remaining local SQL in checkpoint/velocity update and candidate selection paths; continue staged delegation where a canonical shared helper exists and retain local SQL only for true backfill-only orchestration concerns.
+
+## 230) Pass 228 Continuation (2026-02-09)
+
+### 230.1 `flow_enricher` GEX Snapshot Delegation (TDD-Backed)
+
+Finding:
+- `src/orion/ml/flow_enricher.py::_get_gex_at_entry(...)` still performed both base snapshot and rolling-average calculations from local `silver_greek_exposure`.
+- this duplicated base snapshot logic already centralized in shared labeler helper `get_gex_at_entry(...)` and kept another live inference path partially divergent.
+
+Implemented:
+- Extended `tests/unit/test_flow_enricher_delegation.py` with:
+  - `test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg`
+  - `test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot`
+- Updated `src/orion/ml/flow_enricher.py`:
+  - imported shared helper alias `get_labeler_gex_at_entry`,
+  - updated `_get_gex_at_entry(...)` to source base `gex/vex` from shared helper,
+  - extracted rolling-average SQL into `_get_gex_rolling_averages(...)`,
+  - short-circuits and skips rolling-average SQL when shared base snapshot is unavailable.
+
+Verification:
+- `pytest -q tests/unit/test_flow_enricher_delegation.py -k gex_at_entry` passed.
+- `pytest -q tests/unit/test_flow_enricher_delegation.py` passed.
+
+Result:
+- flow-enricher now shares one base GEX/VEX source contract with labeler paths while preserving existing rolling-average semantics required by confidence rules.
+
+Residual:
+- `flow_enricher` still has local SQL in other context families (for example max-pain distance and broader window aggregations); continue helper-by-helper delegation where shared canonical contracts exist.

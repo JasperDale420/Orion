@@ -58,6 +58,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py -k "market_tide_delegates or iv_rank_delegates or darkpool_volumes_delegates or get_regime_delegates"`
     - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py`
+- **Flow Enricher GEX Base Snapshot Delegation to Shared Labeler Path (TDD)**:
+  - Extended `tests/unit/test_flow_enricher_delegation.py` with:
+    - `test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg`
+    - `test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot`
+  - Updated `src/orion/ml/flow_enricher.py`:
+    - `_get_gex_at_entry(...)` now delegates base snapshot (`gex`, `vex`) to `get_labeler_gex_at_entry(...)`,
+    - retains local SQL only for 20-day rolling averages via extracted `_get_gex_rolling_averages(...)`,
+    - skips rolling-average SQL lookup when shared base snapshot is unavailable.
+  - Verified with:
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py -k gex_at_entry`
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py`
 - **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
     - `test_get_underlying_price_at_entry_delegates_to_labeler`
