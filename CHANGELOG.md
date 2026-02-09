@@ -16,6 +16,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k iv_rank_at_entry`
     - `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`
+- **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_underlying_price_at_entry_delegates_to_labeler`
+    - `test_get_underlying_price_at_offset_delegates_to_labeler`
+  - Updated `src/orion/jobs/backfill_ml_features.py` to delegate:
+    - `get_underlying_price_at_entry(...)` -> shared labeler helper,
+    - `get_underlying_price_at_offset(...)` -> shared labeler helper.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "underlying_price_at_entry_delegates or underlying_price_at_offset_delegates"`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
     - `/health` readiness with bounded retry,

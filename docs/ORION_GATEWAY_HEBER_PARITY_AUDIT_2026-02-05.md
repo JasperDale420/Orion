@@ -6520,3 +6520,33 @@ Result:
 
 Residual:
 - remaining high-volume technical debt is still concentrated in downstream backfill/update/reporting routines and other local-table primary reads outside these entry-time helper migrations.
+
+## 218) Pass 216 Continuation (2026-02-09)
+
+### 218.1 Backfill ML Features Underlying-Price Source Alignment to Shared Heber-First Path (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/backfill_ml_features.py` still had local SQL-only implementations for:
+  - `get_underlying_price_at_entry(...)`
+  - `get_underlying_price_at_offset(...)`
+- live label generation already routes these lookups through shared helpers with Heber-first behavior, so backfill and live labeling could diverge in source semantics.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_underlying_price_at_entry_delegates_to_labeler`
+  - `test_get_underlying_price_at_offset_delegates_to_labeler`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared labeler helpers as:
+    - `get_labeler_underlying_price_at_entry`
+    - `get_labeler_underlying_price_at_offset`
+  - replaced local SQL implementations with wrapper delegation to those shared helpers.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "underlying_price_at_entry_delegates or underlying_price_at_offset_delegates"` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- backfill now inherits the same underlying-price source contract as live labeling, reducing local SQL divergence and tightening parity for reprocessed records.
+
+Residual:
+- additional backfill/update routines still contain local-table primary reads (for example local flow-greeks derivation) and remain candidates for the next TDD migration slice.

@@ -31,6 +31,8 @@ from orion.main_price_target_labeler import (
 from orion.main_price_target_labeler import (
     get_gex_at_entry,
     get_max_pain_distance,
+    get_underlying_price_at_entry as get_labeler_underlying_price_at_entry,
+    get_underlying_price_at_offset as get_labeler_underlying_price_at_offset,
 )
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
@@ -156,46 +158,21 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
 
 
 async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
-    """Get underlying stock price at entry time from bars."""
+    """Get underlying stock price at entry time.
 
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc <= :entry_ts
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
-        row = result.fetchone()
-        return row[0] if row else None
-
-    return await db_query(query)
+    Delegates to the shared price-target labeler helper so backfill and
+    live labeling use the same Heber-first source contract.
+    """
+    return await get_labeler_underlying_price_at_entry(ticker, entry_ts)
 
 
 async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> Optional[float]:
-    """Get underlying stock price at offset from entry."""
-    target_ts = entry_ts + timedelta(hours=hours)
+    """Get underlying stock price at offset from entry.
 
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc <= :target_ts
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "target_ts": target_ts})
-        row = result.fetchone()
-        return row[0] if row else None
-
-    return await db_query(query)
+    Delegates to the shared price-target labeler helper so backfill and
+    live labeling use the same Heber-first source contract.
+    """
+    return await get_labeler_underlying_price_at_offset(ticker, entry_ts, hours)
 
 
 async def get_phase1_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:

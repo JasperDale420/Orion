@@ -80,3 +80,48 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
     assert ok is True
     assert captured["ticker"] == "AAPL"
     assert captured["entry_ts"] == record["entry_ts"]
+
+
+@pytest.mark.asyncio
+async def test_get_underlying_price_at_entry_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+
+    async def _labeler_entry(ticker: str, ts: datetime) -> float:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return 123.45
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("local db_query should not be used for underlying entry lookup")
+
+    monkeypatch.setattr(backfill, "get_labeler_underlying_price_at_entry", _labeler_entry, raising=False)
+    monkeypatch.setattr(backfill, "db_query", _fail_db_query, raising=False)
+
+    value = await backfill.get_underlying_price_at_entry("AAPL", entry_ts)
+
+    assert value == 123.45
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_underlying_price_at_offset_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+
+    async def _labeler_offset(ticker: str, ts: datetime, hours: int) -> float:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        captured["hours"] = hours
+        return 124.0
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("local db_query should not be used for underlying offset lookup")
+
+    monkeypatch.setattr(backfill, "get_labeler_underlying_price_at_offset", _labeler_offset, raising=False)
+    monkeypatch.setattr(backfill, "db_query", _fail_db_query, raising=False)
+
+    value = await backfill.get_underlying_price_at_offset("AAPL", entry_ts, hours=2)
+
+    assert value == 124.0
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts, "hours": 2}
