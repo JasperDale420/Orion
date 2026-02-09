@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `tests/unit/test_sqlite_contention_soak.py` to verify soak summary accounting (`attempted = successful + failed`) and persisted counter correctness.
   - Extended `tests/unit/test_heber_reader.py` with catalog URL-shape contract coverage for both host-root and `/api/v1`-suffixed client base URLs.
   - Updated `src/orion/clients/heber_reader.py` to build explicit catalog-origin URLs for `/health` and `/api/v1/datasets`, removing ambiguous `httpx` path-join behavior across different base URL shapes.
+  - Audit pass 203 confirmed this closes a mixed-environment integration drift where catalog requests could misroute when callers configured different `httpx` base URL forms.
 - **Execution Exit-Policy Contract Hardening (TDD, Combined)**:
   - Added `tests/unit/test_position_manager_execution_contracts.py` covering:
     - canonical `candidate.option_symbol` propagation to tracked `option_chain`,

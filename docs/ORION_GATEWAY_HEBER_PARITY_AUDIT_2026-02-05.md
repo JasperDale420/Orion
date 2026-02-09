@@ -6173,3 +6173,30 @@ Result:
 Residual:
 - execute longer-duration soak runs in production-like conditions and record retry/failure ratios for baseline thresholds.
 - next contract-under-load slice remains Gateway end-to-end schema/error/retry validation against a live Data-Gateway instance.
+
+## 209) Pass 203 Continuation (2026-02-09)
+
+### 209.1 Heber Catalog URL-Shape Contract Hardening (TDD-Backed)
+
+Finding:
+- `HeberReader` catalog requests were sensitive to `httpx.Client(base_url=...)` path shape.
+- with `/api/v1`-suffixed client base URLs, path-join behavior could produce incorrect requests (for example, duplicate `/api/v1` segments) and failed health/dataset checks.
+
+Implemented:
+- Extended `tests/unit/test_heber_reader.py` to assert canonical endpoint behavior for both:
+  - `base_url=http://host`
+  - `base_url=http://host/api/v1`
+- Updated `src/orion/clients/heber_reader.py`:
+  - added catalog-origin URL composition helpers,
+  - switched `health_check()` to explicit origin `/health` plus API fallback,
+  - switched `list_datasets()` to explicit origin `/api/v1/datasets`.
+
+Verification:
+- `pytest -q tests/unit/test_heber_reader.py tests/unit/test_db_utils_sqlite_retry.py tests/unit/test_sqlite_contention_soak.py` passed.
+
+Result:
+- Heber catalog health and dataset discovery now behave consistently regardless of caller `httpx` base URL shape.
+- this removes another migration footgun during mixed environment rollout where some callers configure host-root URLs and others include `/api/v1`.
+
+Residual:
+- continue auditing remaining Heber adoption gaps in `main_price_target_labeler`/`flow_enricher`/backfill jobs where local SQL tables are still used as primary source of truth.

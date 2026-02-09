@@ -6,7 +6,6 @@ from pathlib import Path
 import httpx
 import pandas as pd
 import pytest
-
 from orion.clients.heber_reader import HeberReader
 
 
@@ -33,6 +32,27 @@ def test_health_check_uses_supported_endpoint() -> None:
     try:
         assert reader.health_check() is True
         assert "/health" in seen_paths
+    finally:
+        reader.close()
+
+
+@pytest.mark.parametrize("base_url", ["http://localhost:8085", "http://localhost:8085/api/v1"])
+def test_list_datasets_uses_canonical_api_v1_endpoint(base_url: str) -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/api/v1/datasets":
+            return httpx.Response(200, json={"data": [{"name": "bars"}]})
+        return httpx.Response(404, json={"detail": "not found"})
+
+    client = httpx.Client(base_url=base_url, transport=httpx.MockTransport(handler))
+    reader = HeberReader(http_client=client)
+
+    try:
+        datasets = reader.list_datasets()
+        assert datasets == [{"name": "bars"}]
+        assert seen_paths == ["/api/v1/datasets"]
     finally:
         reader.close()
 

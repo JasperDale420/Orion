@@ -71,7 +71,7 @@ class HeberReader:
     def health_check(self) -> bool:
         """Check Heber catalog API health via supported endpoint."""
         errors: list[str] = []
-        for path in ("/health", "../../health"):
+        for path in (self._catalog_health_url(), self._catalog_api_url("health")):
             try:
                 response = self.client.get(path)
                 if response.status_code == 200:
@@ -89,13 +89,31 @@ class HeberReader:
         if layer:
             params["layer"] = layer
 
-        response = self.client.get("/datasets", params=params)
+        response = self.client.get(self._catalog_api_url("datasets"), params=params)
         response.raise_for_status()
         payload = response.json()
         data = payload.get("data", [])
         if isinstance(data, list):
             return data
         return []
+
+    def _catalog_origin(self) -> str:
+        base = self.client.base_url
+        origin = f"{base.scheme}://{base.host}"
+        if base.port is not None:
+            is_default_port = (base.scheme == "http" and base.port == 80) or (
+                base.scheme == "https" and base.port == 443
+            )
+            if not is_default_port:
+                origin = f"{origin}:{base.port}"
+        return origin
+
+    def _catalog_health_url(self) -> str:
+        return f"{self._catalog_origin()}/health"
+
+    def _catalog_api_url(self, endpoint: str) -> str:
+        normalized_endpoint = endpoint.lstrip("/")
+        return f"{self._catalog_origin()}/api/v1/{normalized_endpoint}"
 
     def read_bars(
         self,
@@ -113,8 +131,7 @@ class HeberReader:
         normalized_timeframe = timeframe.strip().lower()
         if normalized_timeframe not in _SUPPORTED_BAR_TIMEFRAMES:
             raise ValueError(
-                f"Unsupported bars timeframe '{timeframe}'. "
-                f"Supported values: {sorted(_SUPPORTED_BAR_TIMEFRAMES)}"
+                f"Unsupported bars timeframe '{timeframe}'. " f"Supported values: {sorted(_SUPPORTED_BAR_TIMEFRAMES)}"
             )
 
         instrument_keys = self._to_instrument_keys(symbols)
