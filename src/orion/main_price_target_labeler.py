@@ -885,6 +885,62 @@ def _get_heber_market_tide_net_premium(entry_ts: datetime, minutes: int = 30) ->
     return _sum_market_tide_from_dataframe(flow_df, start_ts, entry_ts)
 
 
+def _map_vix_proxy_to_regime(vix_proxy: float) -> str:
+    if vix_proxy > 30:
+        return "EXTREME"
+    if vix_proxy > 20:
+        return "ELEVATED"
+    if vix_proxy > 12:
+        return "NORMAL"
+    return "LOW"
+
+
+def _get_heber_vix_proxy_snapshot_at_or_before(entry_ts: datetime) -> Optional[Dict[str, Any]]:
+    """Best-effort Heber lookup for VIX proxy (VIXY) and prior-close delta."""
+    ts_utc = entry_ts if entry_ts.tzinfo is not None else entry_ts.replace(tzinfo=timezone.utc)
+    try:
+        bars = _heber_reader.read_bars(
+            symbols=["VIXY"],
+            asof_time=datetime.now(timezone.utc),
+            start_time=ts_utc - timedelta(days=7),
+            end_time=ts_utc + timedelta(minutes=1),
+        )
+    except Exception as exc:
+        _record_price_target_fallback("heber_vix_proxy_lookup", exc)
+        return None
+
+    if bars.empty:
+        return None
+
+    ts_col = next((col for col in ("ts_event", "bar_start_ts", "timestamp") if col in bars.columns), None)
+    close_col = next((col for col in ("close", "c") if col in bars.columns), None)
+    if ts_col is None or close_col is None:
+        return None
+
+    candidates: List[tuple[datetime, float]] = []
+    for _, row in bars.iterrows():
+        row_ts = _coerce_dt_utc(row.get(ts_col))
+        row_close = _coerce_float(row.get(close_col))
+        if row_ts is None or row_close is None:
+            continue
+        if row_ts <= ts_utc:
+            candidates.append((row_ts, row_close))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    latest_close = candidates[0][1]
+    prior_close = candidates[1][1] if len(candidates) > 1 else latest_close
+    vix_1d_change = latest_close - prior_close
+
+    return {
+        "vix": latest_close,
+        "vix_1d_change": vix_1d_change,
+        "vix_regime": _map_vix_proxy_to_regime(latest_close),
+    }
+
+
 async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], entry_ts: datetime) -> Optional[float]:
     """Get distance to max pain at entry time."""
     if not expiry_date:
@@ -1086,7 +1142,9 @@ async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
         row = result.fetchone()
         return float(row[0]) if row and row[0] else None
 
-    vix_data = await db_query(query_vix)
+    vix_data = _get_heber_vix_proxy_snapshot_at_or_before(entry_ts) or {}
+    if vix_data.get("vix") is None:
+        vix_data = await db_query(query_vix)
     tide_net = _get_heber_market_tide_net_premium(entry_ts, minutes=30)
     if tide_net is None:
         tide_net = await db_query(query_tide)
