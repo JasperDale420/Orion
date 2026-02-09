@@ -902,22 +902,29 @@ async def train_bucket_exit_classifier(
     return model_data
 
 
-async def train_all_exit_classifiers(force_schema_refresh: bool = False) -> Dict[str, Any]:
+async def train_all_exit_classifiers(
+    force_schema_refresh: bool = False,
+    refresh_each_bucket: bool = False,
+) -> Dict[str, Any]:
     """Train exit classifiers for all buckets."""
-    if force_schema_refresh:
+    if force_schema_refresh and not refresh_each_bucket:
         refreshed_columns = await _load_price_target_label_columns(force_refresh=True)
         logger.info(
             "Forced schema refresh before all-bucket exit training",
             extra={
                 "event": "exit_training_schema_forced_refresh",
                 "column_count": len(refreshed_columns),
+                "refresh_strategy": "prefetch_once",
             },
         )
 
     results = {}
     for bucket in BUCKET_CHECKPOINTS.keys():
         logger.info(f"Training exit classifier for {bucket}...")
-        result = await train_bucket_exit_classifier(bucket)
+        result = await train_bucket_exit_classifier(
+            bucket,
+            force_schema_refresh=(force_schema_refresh and refresh_each_bucket),
+        )
         if result:
             results[bucket] = {
                 "auc": result.get("auc"),

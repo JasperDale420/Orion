@@ -649,3 +649,42 @@ async def test_train_all_exit_classifiers_force_refreshes_schema_once(
     assert captured_calls["refresh_flags"] == [True]
     assert len(captured_calls["buckets"]) == len(exit_classifier.BUCKET_CHECKPOINTS)
     assert all(force is False for _bucket, force in captured_calls["buckets"])
+
+
+@pytest.mark.asyncio
+async def test_train_all_exit_classifiers_refresh_each_bucket_forces_bucket_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: dict[str, object] = {"refresh_flags": [], "buckets": []}
+
+    async def _fake_load_price_target_label_columns(force_refresh: bool = False) -> set[str]:
+        captured_calls["refresh_flags"].append(force_refresh)
+        return {"ticker", "entry_ts"}
+
+    async def _fake_train_bucket_exit_classifier(bucket: str, force_schema_refresh: bool = False):
+        captured_calls["buckets"].append((bucket, force_schema_refresh))
+        return None
+
+    monkeypatch.setattr(
+        exit_classifier,
+        "_load_price_target_label_columns",
+        _fake_load_price_target_label_columns,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        exit_classifier,
+        "train_bucket_exit_classifier",
+        _fake_train_bucket_exit_classifier,
+        raising=False,
+    )
+
+    results = await exit_classifier.train_all_exit_classifiers(
+        force_schema_refresh=True,
+        refresh_each_bucket=True,
+    )
+
+    assert results == {}
+    # No one-time pre-refresh should run when each bucket refreshes independently.
+    assert captured_calls["refresh_flags"] == []
+    assert len(captured_calls["buckets"]) == len(exit_classifier.BUCKET_CHECKPOINTS)
+    assert all(force is True for _bucket, force in captured_calls["buckets"])

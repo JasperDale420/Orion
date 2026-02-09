@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier All-Bucket Refresh Strategy Control (TDD)**:
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - `train_all_exit_classifiers(...)` now accepts `refresh_each_bucket` (default `False`),
+    - when `force_schema_refresh=True` and `refresh_each_bucket=False`, orchestrator performs one schema pre-refresh and logs strategy `prefetch_once`,
+    - when both `force_schema_refresh=True` and `refresh_each_bucket=True`, each bucket training call receives `force_schema_refresh=True` and no one-time pre-refresh is executed.
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_train_all_exit_classifiers_refresh_each_bucket_forces_bucket_refresh`
+    - existing orchestrator refresh tests retained for one-time pre-refresh path.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py -k "train_all_exit_classifiers or train_bucket_exit_classifier_passes_force_schema_refresh"`
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Exit Classifier Orchestration Schema-Refresh Control (TDD)**:
   - Updated `src/orion/ml/exit_classifier.py`:
     - `build_bucket_training_data(...)` now accepts `force_schema_refresh` and can force schema metadata refresh before bucket preflight validation,

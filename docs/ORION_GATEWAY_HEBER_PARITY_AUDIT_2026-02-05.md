@@ -7567,6 +7567,35 @@ Residual:
 
 ## 247) Pass 245 Continuation (2026-02-09)
 
+### 247.1 Exit Classifier All-Bucket Schema Refresh Strategy (TDD-Backed)
+
+Finding:
+- orchestration only supported a one-time pre-refresh model, with no explicit option to force schema refresh per bucket in migration windows where checkpoint columns can change mid-run.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - `train_all_exit_classifiers(...)` now accepts `refresh_each_bucket: bool = False`,
+  - strategy behavior:
+    - `force_schema_refresh=True`, `refresh_each_bucket=False`:
+      - one-time schema pre-refresh (cache warming) before bucket loop,
+      - logs `refresh_strategy="prefetch_once"`,
+    - `force_schema_refresh=True`, `refresh_each_bucket=True`:
+      - no pre-refresh call,
+      - each bucket training invocation receives `force_schema_refresh=True`.
+- Extended `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_train_all_exit_classifiers_refresh_each_bucket_forces_bucket_refresh`,
+  - retained one-time pre-refresh coverage:
+    - `test_train_all_exit_classifiers_force_refreshes_schema_once`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py -k "train_all_exit_classifiers or train_bucket_exit_classifier_passes_force_schema_refresh"` passed.
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- orchestrator now supports both low-overhead cache-preload mode and high-safety per-bucket refresh mode, improving resilience during rolling schema migrations.
+
+## 247) Pass 245 Continuation (2026-02-09)
+
 ### 247.1 Backfill Dead-Letter Redaction + Rotation Policy (TDD-Backed, Combined Pass)
 
 Finding:
