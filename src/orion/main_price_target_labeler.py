@@ -1419,41 +1419,9 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
         "iv_alpaca": None,
     }
 
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT
-                f.volume_contract, f.open_interest, f.iv, f.underlying_price,
-                f.strike, f.put_call, f.expiry, f.flow_ts_utc, f.option_chain,
-                f.delta_alpaca, f.gamma_alpaca, f.theta_alpaca, f.vega_alpaca,
-                f.rho_alpaca, f.iv_alpaca
-            FROM silver_uw_flow f
-            WHERE f.event_id = :event_id
-        """
-        )
-        res = await session.execute(stmt, {"event_id": event_id})
-        row = res.fetchone()
-        if row:
-            return {
-                "volume": row[0],
-                "open_interest": row[1],
-                "iv": row[2],
-                "underlying_price": row[3],
-                "strike": row[4],
-                "put_call": row[5],
-                "expiry": row[6],
-                "flow_ts": row[7],
-                "option_chain": row[8],
-                "delta_stored": row[9],
-                "gamma_stored": row[10],
-                "theta_stored": row[11],
-                "vega_stored": row[12],
-                "rho_stored": row[13],
-                "iv_alpaca_stored": row[14],
-            }
-        return {}
-
-    flow_data = await db_query(query)
+    flow_data = _get_flow_greeks_from_heber(event_id)
+    if flow_data is None:
+        flow_data = await _get_flow_greeks_sql(event_id)
 
     if not flow_data:
         return result
@@ -1523,6 +1491,100 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
         result["gamma"] = calculate_black_scholes_gamma(S, K, T, RISK_FREE_RATE, sigma)
 
     return result
+
+
+def _get_flow_greeks_from_heber(event_id: str) -> Optional[Dict[str, Any]]:
+    event_id_str = str(event_id)
+    try:
+        flow_df = _heber_reader.read_flow(
+            asof_time=datetime.now(timezone.utc),
+            start_time=datetime.now(timezone.utc) - timedelta(days=365),
+        )
+    except Exception as e:
+        _record_price_target_fallback("flow_greeks_heber_lookup", e, event_id=event_id_str)
+        return None
+
+    if flow_df.empty:
+        return None
+
+    event_col = _pick_first_existing_column(flow_df, ["event_id", "source_event_id", "id"])
+    if event_col is None:
+        return None
+
+    event_series = flow_df[event_col].astype(str)
+    filtered = flow_df[event_series == event_id_str]
+    if filtered.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(filtered, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    if ts_col is not None:
+        ts_series = pd.to_datetime(filtered[ts_col], utc=True, errors="coerce")
+        filtered = filtered.assign(_ts=ts_series).sort_values("_ts")
+        row = filtered.iloc[-1]
+    else:
+        row = filtered.iloc[-1]
+
+    def _first_value(columns: List[str]) -> Any:
+        for column in columns:
+            if column in row and pd.notna(row[column]):
+                return row[column]
+        return None
+
+    return {
+        "volume": _coerce_float(_first_value(["volume_contract", "volume"])),
+        "open_interest": _coerce_float(_first_value(["open_interest", "oi"])),
+        "iv": _coerce_float(_first_value(["iv", "implied_volatility"])),
+        "underlying_price": _coerce_float(_first_value(["underlying_price", "stock_price", "underlier_price"])),
+        "strike": _coerce_float(_first_value(["strike", "strike_price"])),
+        "put_call": _first_value(["put_call", "type"]),
+        "expiry": _first_value(["expiry", "expiration", "exp_date"]),
+        "flow_ts": _coerce_dt_utc(_first_value(["flow_ts_utc", "ts_event", "timestamp", "created_at"])),
+        "option_chain": _first_value(["option_chain", "option_symbol", "contract", "contract_symbol"]),
+        "delta_stored": _coerce_float(_first_value(["delta_alpaca", "delta"])),
+        "gamma_stored": _coerce_float(_first_value(["gamma_alpaca", "gamma"])),
+        "theta_stored": _coerce_float(_first_value(["theta_alpaca", "theta"])),
+        "vega_stored": _coerce_float(_first_value(["vega_alpaca", "vega"])),
+        "rho_stored": _coerce_float(_first_value(["rho_alpaca", "rho"])),
+        "iv_alpaca_stored": _coerce_float(_first_value(["iv_alpaca"])),
+    }
+
+
+async def _get_flow_greeks_sql(event_id: str) -> Dict[str, Any]:
+    async def query(session: Any) -> Dict[str, Any]:
+        stmt = text(
+            """
+            SELECT
+                f.volume_contract, f.open_interest, f.iv, f.underlying_price,
+                f.strike, f.put_call, f.expiry, f.flow_ts_utc, f.option_chain,
+                f.delta_alpaca, f.gamma_alpaca, f.theta_alpaca, f.vega_alpaca,
+                f.rho_alpaca, f.iv_alpaca
+            FROM silver_uw_flow f
+            WHERE f.event_id = :event_id
+        """
+        )
+        res = await session.execute(stmt, {"event_id": event_id})
+        row = res.fetchone()
+        if row:
+            return {
+                "volume": row[0],
+                "open_interest": row[1],
+                "iv": row[2],
+                "underlying_price": row[3],
+                "strike": row[4],
+                "put_call": row[5],
+                "expiry": row[6],
+                "flow_ts": row[7],
+                "option_chain": row[8],
+                "delta_stored": row[9],
+                "gamma_stored": row[10],
+                "theta_stored": row[11],
+                "vega_stored": row[12],
+                "rho_stored": row[13],
+                "iv_alpaca_stored": row[14],
+            }
+        return {}
+
+    return await db_query(query)
 
 
 async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> Optional[float]:

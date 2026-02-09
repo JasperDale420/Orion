@@ -6601,3 +6601,58 @@ Result:
 
 Residual:
 - remaining backfill-local enrichment debt is now mostly concentrated in feature update orchestration and any still-local derivations not yet delegated to shared helpers.
+
+## 221) Pass 219 Continuation (2026-02-09)
+
+### 221.1 Backfill Earnings-Proximity Alignment to Shared Labeler Helper (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/backfill_ml_features.py` still computed `days_to_earnings` / `is_post_earnings` inline inside `update_ml_features(...)` using local date arithmetic over ticker metadata.
+- live labeling already centralizes this in `main_price_target_labeler.get_earnings_proximity(...)`, so backfill could diverge from live behavior on boundary/date-handling cases.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_earnings_proximity_delegates_to_labeler`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared helper as `get_labeler_earnings_proximity`,
+  - added wrapper `get_earnings_proximity(...)` delegating to shared helper,
+  - replaced inline `days_to_earnings` / `is_post_earnings` computation in `update_ml_features(...)` with delegated helper output.
+- Updated existing orchestration signature test to stub the new helper call path:
+  - `test_update_ml_features_calls_sector_corr_with_two_args`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k earnings_proximity_delegates` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- backfill and live labeling now share one earnings-proximity derivation contract, reducing duplicated date logic and closing another parity gap in feature recomputation.
+
+Residual:
+- remaining backfill parity debt is now mostly in orchestration breadth (large update surface and runtime integration behavior), rather than local helper-level source divergence.
+
+## 221) Pass 219 Continuation (2026-02-09)
+
+### 221.1 Price-Target Labeler Flow-Greeks Event Lookup Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_flow_greeks(event_id)` in `src/orion/main_price_target_labeler.py` was still SQL-primary against `silver_uw_flow`.
+- this left an event-level option-context helper outside the Heber-first migration pattern used by other labeler helpers.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_flow_greeks_prefers_heber_when_available`
+  - `test_get_flow_greeks_falls_back_to_sql_when_heber_missing`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_flow_greeks_from_heber(event_id)` to resolve event rows from Heber flow data and map required fields,
+  - extracted existing SQL behavior into `_get_flow_greeks_sql(event_id)`,
+  - updated `get_flow_greeks(...)` to run Heber-first with SQL fallback when Heber has no usable event row.
+- preserved downstream computation order for returned Greeks (`stored` -> Alpaca contract lookup -> Black-Scholes derivation), changing only the source lookup strategy.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k flow_greeks` passed.
+
+Result:
+- flow-greeks event context now follows the same Heber-first + compatibility fallback contract as other migrated labeler feature/context helpers.
+
+Residual:
+- remaining parity debt is concentrated in non-helper orchestration/backfill paths and any still-local feature derivations not yet routed through shared Heber-first helpers.

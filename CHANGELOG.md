@@ -16,6 +16,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k iv_rank_at_entry`
     - `uv run pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`
+- **Price-Target Labeler Flow-Greeks Event Lookup Heber-First Path (TDD)**:
+  - Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+    - `test_get_flow_greeks_prefers_heber_when_available`
+    - `test_get_flow_greeks_falls_back_to_sql_when_heber_missing`
+  - Updated `src/orion/main_price_target_labeler.py` so `get_flow_greeks(...)` now:
+    - checks Heber flow first via `_get_flow_greeks_from_heber(...)`,
+    - falls back to extracted SQL path `_get_flow_greeks_sql(...)` when Heber has no matching event.
+  - Preserved existing Greeks contract order (stored greeks -> Alpaca API -> Black-Scholes fallback) while moving event lookup to Heber-first.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k flow_greeks`
 - **Backfill Underlying-Price Source Alignment to Shared Labeler Path (TDD)**:
   - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
     - `test_get_underlying_price_at_entry_delegates_to_labeler`
@@ -39,6 +49,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `src/orion/jobs/backfill_ml_features.py` so `get_ticker_info(...)` now delegates to shared labeler ticker-info logic (`get_labeler_ticker_info`) and uses a local cache envelope, removing the local direct UW-client path.
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k ticker_info_delegates`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
+- **Backfill Earnings-Proximity Source Alignment to Shared Labeler Path (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_earnings_proximity_delegates_to_labeler`
+  - Updated `src/orion/jobs/backfill_ml_features.py` to:
+    - add `get_earnings_proximity(...)` delegation to shared labeler helper (`get_labeler_earnings_proximity`),
+    - replace inline earnings-date math in `update_ml_features(...)` with delegated helper output.
+  - Updated existing orchestration test `test_update_ml_features_calls_sector_corr_with_two_args` to stub the new helper call path.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k earnings_proximity_delegates`
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:

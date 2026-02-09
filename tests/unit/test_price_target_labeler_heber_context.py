@@ -704,3 +704,96 @@ async def test_get_p3_features_falls_back_to_sql_when_heber_empty(
     result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
 
     assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_get_flow_greeks_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    event_id = "evt-123"
+    flow_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "event_id": event_id,
+                        "ts_event": flow_ts,
+                        "option_chain": "AAPL250221C00190000",
+                        "volume_contract": 100,
+                        "open_interest": 200,
+                        "iv": 0.35,
+                        "underlying_price": 190.0,
+                        "strike": 190.0,
+                        "put_call": "C",
+                        "expiry": "2026-02-21",
+                        "delta_alpaca": 0.55,
+                        "gamma_alpaca": 0.02,
+                        "theta_alpaca": -0.10,
+                        "vega_alpaca": 0.11,
+                        "rho_alpaca": 0.03,
+                        "iv_alpaca": 0.36,
+                    }
+                ]
+            )
+
+    async def _fail_sql_fallback(_event_id: str):
+        raise AssertionError("SQL fallback should not run when Heber has event-level flow Greeks")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_flow_greeks_sql", _fail_sql_fallback, raising=False)
+
+    result = await labeler.get_flow_greeks(event_id)
+
+    assert result["delta"] == pytest.approx(0.55)
+    assert result["gamma"] == pytest.approx(0.02)
+    assert result["theta"] == pytest.approx(-0.10)
+    assert result["vega"] == pytest.approx(0.11)
+    assert result["rho"] == pytest.approx(0.03)
+    assert result["iv"] == pytest.approx(0.35)
+    assert result["iv_alpaca"] == pytest.approx(0.36)
+    assert result["volume"] == pytest.approx(100)
+    assert result["open_interest"] == pytest.approx(200)
+
+
+@pytest.mark.asyncio
+async def test_get_flow_greeks_falls_back_to_sql_when_heber_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_id = "evt-999"
+
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    async def _fake_sql_fallback(received_event_id: str):
+        assert received_event_id == event_id
+        return {
+            "volume": 75,
+            "open_interest": 150,
+            "iv": 0.25,
+            "underlying_price": 100.0,
+            "strike": 95.0,
+            "put_call": "C",
+            "expiry": "2026-03-20",
+            "flow_ts": datetime(2026, 2, 11, 14, 0, tzinfo=timezone.utc),
+            "option_chain": "AAPL260320C00095000",
+            "delta_stored": 0.60,
+            "gamma_stored": 0.04,
+            "theta_stored": -0.09,
+            "vega_stored": 0.12,
+            "rho_stored": 0.02,
+            "iv_alpaca_stored": 0.26,
+        }
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_flow_greeks_sql", _fake_sql_fallback, raising=False)
+
+    result = await labeler.get_flow_greeks(event_id)
+
+    assert result["delta"] == pytest.approx(0.60)
+    assert result["gamma"] == pytest.approx(0.04)
+    assert result["theta"] == pytest.approx(-0.09)
+    assert result["vega"] == pytest.approx(0.12)
+    assert result["rho"] == pytest.approx(0.02)
+    assert result["iv"] == pytest.approx(0.25)
+    assert result["iv_alpaca"] == pytest.approx(0.26)
