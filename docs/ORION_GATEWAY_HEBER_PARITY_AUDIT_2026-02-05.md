@@ -6087,6 +6087,30 @@ Result:
 Residual:
 - rows missing both `option_chain` and contract components are still excluded for option positions (intentional conservative behavior); upstream normalization quality remains a dependency.
 
+## 207) Pass 201 Continuation (2026-02-09)
+
+### 207.1 Gateway WebSocket URL Canonicalization + Failed-Handshake Cleanup Remediated
+
+Finding:
+- `GatewayStreamClient` previously built websocket URL by appending `"/ws"` to provided base URL, which broke when `DATA_GATEWAY_URL` included `/api/v1` (yielding `/api/v1/ws` instead of `/ws`).
+- failed auth path returned `False` without explicit websocket close/handle reset, leaving stale state risk in reconnect loops.
+
+Implemented (TDD-backed):
+- Added `tests/unit/test_gateway_stream_client_contract.py` validating:
+  - stable `ws_url` derivation for URL variants (`host`, `http(s)://host`, `ws(s)://host`, and `/api/v1`-suffixed forms),
+  - failed-auth cleanup semantics (`close()` called, `_websocket` cleared, `_authenticated` reset).
+- Updated `src/orion/connectors/gateway_stream_client.py`:
+  - added `_normalize_ws_url(...)` with scheme mapping and `/api/v1` suffix stripping before websocket path composition,
+  - added `_cleanup_failed_connection(...)`,
+  - invoked cleanup in both auth-failure and exception paths of `connect()`.
+
+Result:
+- websocket endpoint construction is now consistent with Gateway router contract (`/ws`) across common deployment URL shapes,
+- failed connection handshakes no longer retain stale websocket/auth state.
+
+Residual:
+- this pass hardens client-side contract handling; end-to-end reconnect soak under real Gateway load is still recommended to validate operational behavior at scale.
+
 ## 204) Pass 198 Continuation (2026-02-09)
 
 ### 204.1 `main_price_target_labeler` Heber-First VIX Proxy Regime Path Added (TDD-Backed)

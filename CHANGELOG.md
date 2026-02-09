@@ -37,6 +37,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - add `_flow_matches_contract_components(...)`,
     - include component-based matching fallback in `_scope_recent_flow_for_position(...)` when flow-side `option_chain` is missing.
   - This keeps contract scoping effective even when upstream flow normalization omits `option_chain` on some rows.
+- **Gateway Stream URL/Auth Contract Hardening (TDD)**:
+  - Added `tests/unit/test_gateway_stream_client_contract.py` covering:
+    - websocket URL normalization across `http/https/ws/wss` and `/api/v1`-suffixed gateway URLs,
+    - failed-auth cleanup behavior (socket close + connection state reset).
+  - Updated `src/orion/connectors/gateway_stream_client.py` to:
+    - centralize websocket URL normalization via `_normalize_ws_url(...)`,
+    - strip `/api/v1` suffix before websocket route composition to keep endpoint on `/ws`,
+    - add `_cleanup_failed_connection(...)` and invoke it on auth/connect failure paths.
+  - This removes a known integration footgun where API-prefixed gateway URLs produced invalid websocket paths and could leave stale handles after failed handshakes.
 - **Price-Target Labeler Heber VIX-Proxy Regime Path (TDD)**:
   - Added `tests/unit/test_price_target_labeler_heber_vix_proxy.py` covering:
     - Heber VIX-proxy snapshot derivation from VIXY bars (`_get_heber_vix_proxy_snapshot_at_or_before(...)`),

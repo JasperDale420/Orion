@@ -11,6 +11,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
+from urllib.parse import urlparse, urlunparse
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -44,15 +45,7 @@ class GatewayStreamClient:
         api_key: str,
         on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
     ):
-        # Normalize URL to WebSocket
-        if gateway_url.startswith("http://"):
-            self.ws_url = gateway_url.replace("http://", "ws://") + "/ws"
-        elif gateway_url.startswith("https://"):
-            self.ws_url = gateway_url.replace("https://", "wss://") + "/ws"
-        elif gateway_url.startswith(("ws://", "wss://")):
-            self.ws_url = gateway_url if gateway_url.endswith("/ws") else gateway_url + "/ws"
-        else:
-            self.ws_url = f"ws://{gateway_url}/ws"
+        self.ws_url = self._normalize_ws_url(gateway_url)
 
         self.api_key = api_key
         self.on_bar_callback = on_bar_callback
@@ -69,6 +62,52 @@ class GatewayStreamClient:
         # Background tasks
         self._receive_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _normalize_ws_url(gateway_url: str) -> str:
+        """
+        Normalize gateway base URL to a websocket endpoint.
+
+        Supports host-only, HTTP(S), and WS(S) inputs while ensuring `/api/v1`
+        suffixes are not propagated into websocket route construction.
+        """
+        raw = (gateway_url or "").strip()
+        if not raw:
+            raise ValueError("gateway_url is required")
+
+        if "://" not in raw:
+            raw = f"ws://{raw}"
+
+        parsed = urlparse(raw)
+
+        scheme_map = {
+            "http": "ws",
+            "https": "wss",
+            "ws": "ws",
+            "wss": "wss",
+        }
+        ws_scheme = scheme_map.get(parsed.scheme, "ws")
+
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/api/v1"):
+            path = path[: -len("/api/v1")]
+
+        if path.endswith("/ws"):
+            ws_path = path
+        else:
+            ws_path = f"{path}/ws" if path else "/ws"
+
+        return urlunparse((ws_scheme, parsed.netloc, ws_path, "", "", ""))
+
+    async def _cleanup_failed_connection(self) -> None:
+        """Best-effort websocket cleanup for failed handshake/connect paths."""
+        if self._websocket:
+            try:
+                await self._websocket.close()
+            except Exception:
+                logger.debug("Ignoring websocket close error during cleanup", exc_info=True)
+        self._websocket = None
+        self._authenticated = False
 
     def _generate_event_id(self, symbol: str, payload: Dict[str, Any]) -> str:
         """Generate deterministic event ID for deduplication."""
@@ -114,10 +153,12 @@ class GatewayStreamClient:
             else:
                 error_msg = auth_result.get("message", "Unknown error")
                 logger.error(f"Gateway authentication failed: {error_msg}")
+                await self._cleanup_failed_connection()
                 return False
 
         except Exception as e:
             logger.error(f"Gateway connection failed: {e}", exc_info=True)
+            await self._cleanup_failed_connection()
             return False
 
     async def _reconnect_with_backoff(self) -> bool:
