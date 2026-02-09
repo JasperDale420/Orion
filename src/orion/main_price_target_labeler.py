@@ -663,6 +663,92 @@ async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optio
 
 async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
     """Get opposing flow during holding period."""
+    heber_result = _get_opposing_flow_from_heber(ticker, put_call, entry_ts, end_ts)
+    if heber_result is not None:
+        return heber_result
+
+    return await _get_opposing_flow_sql(ticker, put_call, entry_ts, end_ts)
+
+
+def _get_opposing_flow_from_heber(
+    ticker: str,
+    put_call: str,
+    entry_ts: datetime,
+    end_ts: datetime,
+) -> Optional[Dict[str, Any]]:
+    opposing_type = "P" if str(put_call).upper() == "C" else "C"
+    entry_utc = _coerce_dt_utc(entry_ts)
+    end_utc = _coerce_dt_utc(end_ts)
+    if entry_utc is None or end_utc is None:
+        return None
+
+    try:
+        flow_df = _heber_reader.read_flow(
+            asof_time=end_utc,
+            start_time=entry_utc,
+        )
+    except Exception as e:
+        _record_price_target_fallback("opposing_flow_heber_lookup", e, ticker=ticker)
+        return None
+
+    if flow_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    put_call_col = _pick_first_existing_column(flow_df, ["put_call", "type"])
+    premium_col = _pick_first_existing_column(flow_df, ["premium_usd", "premium"])
+    sweep_col = _pick_first_existing_column(flow_df, ["is_sweep", "sweep"])
+    aggressor_col = _pick_first_existing_column(flow_df, ["aggressor", "side"])
+    if ts_col is None or ticker_col is None or put_call_col is None or premium_col is None:
+        return None
+
+    ts_series = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+    premium_series = pd.to_numeric(flow_df[premium_col], errors="coerce")
+    ticker_series = flow_df[ticker_col].astype(str).str.upper()
+    put_call_series = flow_df[put_call_col].astype(str).str.upper()
+    if sweep_col is not None:
+        sweep_series = flow_df[sweep_col].map(_is_truthy)
+    else:
+        sweep_series = pd.Series([False] * len(flow_df))
+    if aggressor_col is not None:
+        aggressor_series = flow_df[aggressor_col].astype(str).str.upper()
+    else:
+        aggressor_series = pd.Series([""] * len(flow_df))
+
+    temp_df = pd.DataFrame(
+        {
+            "ts": ts_series,
+            "ticker": ticker_series,
+            "put_call": put_call_series,
+            "premium": premium_series,
+            "is_sweep": sweep_series,
+            "aggressor": aggressor_series,
+        }
+    ).dropna(subset=["ts", "premium"])
+
+    if temp_df.empty:
+        return None
+
+    ticker_upper = str(ticker).upper()
+    filtered = temp_df[
+        (temp_df["ticker"] == ticker_upper)
+        & (temp_df["put_call"] == opposing_type)
+        & (temp_df["ts"] > entry_utc)
+        & (temp_df["ts"] <= end_utc)
+        & (temp_df["is_sweep"])
+        & (temp_df["aggressor"] == "ASK")
+    ]
+    if filtered.empty:
+        return {"count": 0, "premium": 0}
+
+    return {
+        "count": int(len(filtered)),
+        "premium": float(filtered["premium"].sum()),
+    }
+
+
+async def _get_opposing_flow_sql(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
     opposing_type = "P" if put_call == "C" else "C"
 
     async def query(session: Any) -> Dict[str, Any]:

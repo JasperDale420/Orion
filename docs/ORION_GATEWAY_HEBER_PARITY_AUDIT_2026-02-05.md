@@ -6321,3 +6321,34 @@ Result:
 
 Residual:
 - Full completion of `main_price_target_labeler` migration still requires auditing remaining SQL-coupled reads outside context helpers (for example entry sourcing and legacy lookup paths used in some label backfill/update flows).
+
+## 213) Pass 207 Continuation (2026-02-09)
+
+### 213.1 Price-Target Labeler Opposing-Flow Context Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_opposing_flow(...)` in `src/orion/main_price_target_labeler.py` was SQL-only against `silver_uw_flow`, leaving an active context feature outside Heber-first parity.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_opposing_flow_prefers_heber_when_available`
+  - `test_get_opposing_flow_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_opposing_flow_from_heber(...)` with robust column mapping and strict filter parity:
+    - same ticker,
+    - opposing `put_call`,
+    - `(entry_ts, end_ts]` window,
+    - sweep-only,
+    - `ASK` aggressor-only,
+  - extracted SQL path into `_get_opposing_flow_sql(...)`,
+  - updated `get_opposing_flow(...)` to use Heber-first with SQL fallback.
+
+Verification:
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py -k opposing_flow` passed.
+- `uv run pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "sector or opposing_flow"` passed.
+
+Result:
+- Opposing-flow context now aligns with the ongoing Heber-first migration contract in `main_price_target_labeler`.
+
+Residual:
+- Additional SQL-coupled labeler helpers still remain (notably flow-aggression and institutional-flow lookups already captured by existing failing tests in this suite) and should be migrated in the next slices.
