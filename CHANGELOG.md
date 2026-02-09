@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Dataset Shape Stability for Empty Training Batches (TDD)**:
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_build_bucket_training_data_returns_stable_empty_matrix_shape_when_rows_filtered`
+    - strengthened `test_build_bucket_training_data_handles_missing_max_return_pct_key` with shape assertions.
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - `build_bucket_training_data(...)` now returns a stable empty matrix shape `(0, len(feature_names))` and empty label vector shape `(0,)` when rows are filtered out,
+    - enforces numeric output dtypes (`float` for `X`, `int` for `y`) for non-empty and empty results.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py`
 - **Exit Classifier Cross-Bucket Query Contract + SQL Null-Normalization Validation (TDD)**:
   - Extended `tests/unit/test_exit_classifier_window_query.py` with:
     - `test_build_bucket_training_data_query_contract_per_bucket`

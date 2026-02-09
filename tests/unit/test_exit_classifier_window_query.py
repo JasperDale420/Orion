@@ -281,6 +281,46 @@ async def test_build_bucket_training_data_handles_missing_max_return_pct_key(
     assert X.size == 0
     assert y.size == 0
     assert len(feature_names) > 0
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_returns_stable_empty_matrix_shape_when_rows_filtered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {
+            "premium_usd": 100000.0,
+            "dte": 0,
+            "is_sweep": True,
+            "max_return_pct": -10.0,
+            "return_at_5m": 20.0,
+        }
+    ]
+
+    class _Result:
+        def mappings(self) -> "_Result":
+            return self
+
+        def all(self) -> list[dict[str, object]]:
+            return rows
+
+    class _Session:
+        async def execute(self, _stmt, _params=None) -> _Result:
+            return _Result()
+
+    async def _db_query(operation):
+        return await operation(_Session())
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
+    assert X.dtype == float
+    assert y.dtype == int
 
 
 @pytest.mark.asyncio

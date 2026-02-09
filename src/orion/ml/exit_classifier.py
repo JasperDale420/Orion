@@ -629,7 +629,14 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
         extra={"event": "exit_training_data", "bucket": bucket, "samples": len(X_list)},
     )
 
-    return np.array(X_list), np.array(y_list), feature_names
+    if not X_list:
+        return (
+            np.empty((0, len(feature_names)), dtype=float),
+            np.empty((0,), dtype=int),
+            feature_names,
+        )
+
+    return np.array(X_list, dtype=float), np.array(y_list, dtype=int), feature_names
 
 
 async def train_bucket_exit_classifier(bucket: str) -> Optional[Dict[str, Any]]:

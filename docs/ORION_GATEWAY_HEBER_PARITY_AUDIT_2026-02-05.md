@@ -7328,3 +7328,32 @@ Result:
 
 Residual:
 - next combined pass should target explicit cross-bucket schema drift checks (checkpoint column availability contracts and large-window query behavior under sparse/null-heavy datasets).
+
+## 240) Pass 238 Continuation (2026-02-09)
+
+### 240.1 Exit Classifier Empty-Batch Shape/Dtype Stability (TDD-Backed)
+
+Finding:
+- `build_bucket_training_data(...)` previously returned `np.array([])` when all candidate rows were filtered.
+- this produced shape `(0,)` instead of a stable feature-matrix contract shape, which can cause downstream ambiguity in training/pipeline consumers that expect 2D `X`.
+
+Implemented:
+- Updated `src/orion/ml/exit_classifier.py`:
+  - when no samples survive filtering, now returns:
+    - `X`: `np.empty((0, len(feature_names)), dtype=float)`
+    - `y`: `np.empty((0,), dtype=int)`
+  - non-empty outputs are now explicitly cast to `float` (`X`) and `int` (`y`) for consistent downstream behavior.
+- Extended tests in `tests/unit/test_exit_classifier_window_query.py`:
+  - `test_build_bucket_training_data_returns_stable_empty_matrix_shape_when_rows_filtered`
+  - strengthened missing-`max_return_pct` scenario with explicit shape assertions.
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- dataset output contract is now stable for empty training batches and explicitly typed for numeric model input/output handling.
+- this reduces shape surprises in classifier training orchestration and future vectorized consumers.
+
+Residual:
+- next high-value pass remains schema-drift guarding for checkpoint-column availability and larger-volume performance profiling for the classifier training query.
