@@ -630,3 +630,77 @@ async def test_get_p2_features_falls_back_to_sql_when_heber_empty(
     result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
 
     assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    expiry = datetime(2026, 2, 21, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"ts_event": datetime(2026, 2, 1, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "high": 150.0, "close": 140.0},
+                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "high": 160.0, "close": 155.0},
+                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "symbol": "AAPL", "high": 158.0, "close": 150.0},
+                    {"ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc), "symbol": "MSFT", "high": 500.0, "close": 500.0},
+                ]
+            )
+
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"ts_event": datetime(2026, 2, 11, 15, 5, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-21"},
+                    {"ts_event": datetime(2026, 2, 11, 15, 20, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-21"},
+                    {"ts_event": datetime(2026, 2, 11, 14, 20, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-21"},
+                    {"ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc), "ticker": "AAPL", "expiry": "2026-02-28"},
+                ]
+            )
+
+    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _expiry: datetime, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber has usable P3 data")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_p3_features_sql", _fail_sql_fallback, raising=False)
+
+    result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
+
+    assert result["high_52w_distance_pct"] == pytest.approx(((160.0 - 150.0) / 160.0) * 100.0)
+    assert result["same_expiry_trades_1h"] == 2
+    assert result["is_spread_leg"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_p3_features_falls_back_to_sql_when_heber_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    expiry = datetime(2026, 2, 21, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    expected = {
+        "high_52w_distance_pct": 5.0,
+        "is_spread_leg": False,
+        "same_expiry_trades_1h": 1,
+    }
+
+    async def _fake_sql_fallback(ticker: str, option_chain: str, expiry_value: datetime, ts: datetime):
+        assert ticker == "AAPL"
+        assert option_chain == "AAPL250221C00190000"
+        assert expiry_value == expiry
+        assert ts == entry_ts
+        return expected
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_p3_features_sql", _fake_sql_fallback, raising=False)
+
+    result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
+
+    assert result == expected

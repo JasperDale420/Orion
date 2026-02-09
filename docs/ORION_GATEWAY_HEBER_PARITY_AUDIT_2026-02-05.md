@@ -6433,3 +6433,34 @@ Result:
 
 Residual:
 - next high-value migration target in this area is `get_p3_features(...)`, which still reads 52w/high + same-expiry activity from local SQL tables as its primary source.
+
+## 216) Pass 214 Continuation (2026-02-09)
+
+### 216.1 Price-Target Labeler P3 Option Features Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_p3_features(...)` in `src/orion/main_price_target_labeler.py` remained SQL-primary for:
+  - 52-week high distance (`silver_alpaca_bars`),
+  - same-expiry activity and spread-leg detection (`silver_uw_flow`).
+- This left the remaining deep option-feature family outside the Heber-first migration contract.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_p3_features_prefers_heber_when_available`
+  - `test_get_p3_features_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_p3_features_from_heber(...)` for:
+    - 52w-high distance from Heber bars,
+    - same-expiry 1h trade count and spread-leg heuristic from Heber flow,
+  - extracted SQL path into `_get_p3_features_sql(...)`,
+  - updated `get_p3_features(...)` to run Heber-first and fallback to SQL when Heber yields no usable data.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k get_p3_features` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- both deep option-level feature builders (`get_p2_features` and `get_p3_features`) now follow the same Heber-first + compatibility fallback contract as the migrated context helpers.
+
+Residual:
+- primary remaining parity debt in `main_price_target_labeler` is now concentrated in broader label backfill/update routines and remaining local-table primary reads outside feature helpers.

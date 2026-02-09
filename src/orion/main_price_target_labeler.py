@@ -2592,6 +2592,113 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
     - is_spread_leg: Whether this trade is likely part of a spread
     - same_expiry_trades_1h: Count of trades on same expiry in last hour (spread indicator)
     """
+    heber_result = _get_p3_features_from_heber(ticker, expiry, entry_ts)
+    if heber_result is not None:
+        return heber_result
+
+    return await _get_p3_features_sql(ticker, option_chain, expiry, entry_ts)
+
+
+def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetime) -> Optional[Dict[str, Any]]:
+    result: Dict[str, Any] = {
+        "high_52w_distance_pct": None,
+        "is_spread_leg": None,
+        "same_expiry_trades_1h": None,
+    }
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+
+    entry_date = entry_utc.date()
+    lookback_52w = entry_date - timedelta(days=365)
+    lookback_1h = entry_utc - timedelta(hours=1)
+    ticker_upper = str(ticker).upper()
+
+    expiry_date = _coerce_date(expiry)
+    expiry_str = expiry_date.isoformat() if expiry_date is not None else (str(expiry) if expiry else None)
+
+    try:
+        bars_df = _heber_reader.read_bars(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=entry_utc - timedelta(days=370),
+        )
+    except Exception as e:
+        _record_price_target_fallback("p3_bars_heber_lookup", e, ticker=ticker)
+        bars_df = pd.DataFrame()
+
+    if not bars_df.empty:
+        ts_col = _pick_first_existing_column(bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc", "timestamp"])
+        high_col = _pick_first_existing_column(bars_df, ["high", "h"])
+        close_col = _pick_first_existing_column(bars_df, ["close", "c"])
+        ticker_col = _pick_first_existing_column(bars_df, ["ticker", "symbol", "underlying", "instrument_key"])
+        if ts_col is not None and high_col is not None and close_col is not None:
+            ts_series = pd.to_datetime(bars_df[ts_col], utc=True, errors="coerce")
+            high_series = pd.to_numeric(bars_df[high_col], errors="coerce")
+            close_series = pd.to_numeric(bars_df[close_col], errors="coerce")
+            if ticker_col is not None:
+                ticker_series = bars_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+            else:
+                ticker_series = pd.Series([ticker_upper] * len(bars_df))
+
+            normalized_bars = pd.DataFrame({"ts": ts_series, "ticker": ticker_series, "high": high_series, "close": close_series})
+            normalized_bars = normalized_bars.dropna(subset=["ts"])
+            if not normalized_bars.empty:
+                scoped = normalized_bars[(normalized_bars["ticker"] == ticker_upper) & (normalized_bars["ts"] < entry_utc)].sort_values("ts")
+                if not scoped.empty:
+                    history_52w = scoped[(scoped["ts"].dt.date >= lookback_52w) & (scoped["ts"].dt.date < entry_date)]
+                    if not history_52w.empty:
+                        high_52w = pd.to_numeric(history_52w["high"], errors="coerce").max()
+                    else:
+                        high_52w = None
+
+                    current_price = _coerce_float(scoped.iloc[-1].get("close"))
+                    if high_52w is not None and current_price is not None and high_52w > 0:
+                        result["high_52w_distance_pct"] = ((float(high_52w) - current_price) / float(high_52w)) * 100.0
+
+    if expiry_str:
+        try:
+            flow_df = _heber_reader.read_flow(
+                symbols=[ticker],
+                asof_time=entry_utc,
+                start_time=lookback_1h - timedelta(minutes=5),
+            )
+        except Exception as e:
+            _record_price_target_fallback("p3_flow_heber_lookup", e, ticker=ticker)
+            flow_df = pd.DataFrame()
+
+        if not flow_df.empty:
+            flow_ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+            flow_ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+            flow_expiry_col = _pick_first_existing_column(flow_df, ["expiry", "expiration", "exp_date"])
+            if flow_ts_col is not None and flow_expiry_col is not None:
+                flow_ts = pd.to_datetime(flow_df[flow_ts_col], utc=True, errors="coerce")
+                flow_expiry = pd.to_datetime(flow_df[flow_expiry_col], errors="coerce").dt.date.astype(str)
+                if flow_ticker_col is not None:
+                    flow_ticker = flow_df[flow_ticker_col].astype(str).str.upper().str.split(":").str[-1]
+                else:
+                    flow_ticker = pd.Series([ticker_upper] * len(flow_df))
+
+                normalized_flow = pd.DataFrame({"ts": flow_ts, "ticker": flow_ticker, "expiry": flow_expiry}).dropna(
+                    subset=["ts", "expiry"]
+                )
+                if not normalized_flow.empty:
+                    flow_window = normalized_flow[
+                        (normalized_flow["ticker"] == ticker_upper)
+                        & (normalized_flow["expiry"] == expiry_str)
+                        & (normalized_flow["ts"] >= lookback_1h)
+                        & (normalized_flow["ts"] < entry_utc)
+                    ]
+                    same_expiry_count = int(len(flow_window))
+                    result["same_expiry_trades_1h"] = same_expiry_count
+                    result["is_spread_leg"] = same_expiry_count >= 2
+
+    if any(value is not None for value in result.values()):
+        return result
+    return None
+
+
+async def _get_p3_features_sql(ticker: str, option_chain: str, expiry: datetime, entry_ts: datetime) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "high_52w_distance_pct": None,
         "is_spread_leg": None,
@@ -2603,7 +2710,6 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
     lookback_1h = entry_ts - timedelta(hours=1)
 
     async def query(session: Any) -> Dict[str, Any]:
-        # Get 52-week high
         high_52w_stmt = text(
             """
             SELECT MAX(high) as high_52w
@@ -2619,7 +2725,6 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
         high_row = high_result.fetchone()
         high_52w = high_row[0] if high_row else None
 
-        # Get current price for distance calculation
         current_price_stmt = text(
             """
             SELECT close
@@ -2637,8 +2742,6 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
         if high_52w and current_price and high_52w > 0:
             result["high_52w_distance_pct"] = ((high_52w - current_price) / high_52w) * 100
 
-        # Count same-expiry trades in last hour (spread indicator)
-        # Convert expiry to string format for query
         expiry_str = expiry.strftime("%Y-%m-%d") if hasattr(expiry, "strftime") else str(expiry) if expiry else None
         if expiry_str:
             same_expiry_stmt = text(
@@ -2658,15 +2761,12 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
             expiry_row = expiry_result.fetchone()
             same_expiry_count = expiry_row[0] if expiry_row else 0
             result["same_expiry_trades_1h"] = same_expiry_count
-
-            # Spread detection heuristic: if 2+ trades on same expiry in 1h, likely spread
             result["is_spread_leg"] = same_expiry_count >= 2
 
         return result
 
     db_result = await db_query(query)
     result.update(db_result)
-
     return result
 
 
