@@ -30,6 +30,7 @@ from orion.main_price_target_labeler import (
 from orion.main_price_target_labeler import (
     get_earnings_proximity as get_labeler_earnings_proximity,
     get_flow_greeks as get_labeler_flow_greeks,
+    get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
     get_phase1_bucket_features as get_labeler_phase1_bucket_features,
     get_sector_correlation_features as get_labeler_sector_correlation_features,
     get_gex_at_entry,
@@ -141,6 +142,11 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
 async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     """Get sector-correlation context via shared labeler helper."""
     return await get_labeler_sector_correlation_features(ticker, entry_ts)
+
+
+async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
+    """Get IV rank at entry via shared labeler helper."""
+    return await get_labeler_iv_rank_at_entry(ticker, entry_ts)
 
 
 async def get_records_to_backfill(
@@ -350,9 +356,6 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
         updates["sector_flow_direction"] = sector_corr.get("sector_flow_direction")
         updates["spy_correlation_5d"] = sector_corr.get("spy_correlation_5d")
         updates["spy_return_1h"] = sector_corr.get("spy_return_1h")
-
-    # IV rank (from UW)
-    from orion.main_price_target_labeler import get_iv_rank_at_entry
 
     updates["iv_rank_at_entry"] = await get_iv_rank_at_entry(ticker, entry_ts)
 

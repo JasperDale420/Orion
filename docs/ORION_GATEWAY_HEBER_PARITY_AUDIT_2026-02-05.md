@@ -6749,3 +6749,30 @@ Result:
 
 Residual:
 - remaining backfill orchestration debt is primarily the broader set of inline helper imports/calls and runtime integration behavior under full backfill load.
+
+## 225) Pass 223 Continuation (2026-02-09)
+
+### 225.1 Backfill IV-Rank Wrapper Alignment (TDD-Backed)
+
+Finding:
+- `update_ml_features(...)` still imported `get_iv_rank_at_entry(...)` directly inside the method body from `main_price_target_labeler`.
+- this left IV-rank enrichment outside the wrapper delegation pattern now used by the rest of migrated backfill helpers.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_iv_rank_at_entry_delegates_to_labeler`
+- Updated `test_update_ml_features_calls_sector_corr_with_two_args` to stub `backfill.get_iv_rank_at_entry(...)`.
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared helper alias `get_labeler_iv_rank_at_entry`,
+  - added wrapper `get_iv_rank_at_entry(...)`,
+  - removed inline import call and routed IV-rank enrichment through the wrapper.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "iv_rank_at_entry_delegates or sector_corr_with_two_args"` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- IV-rank enrichment now follows the same wrapper-delegation contract as other migrated backfill helper calls.
+
+Residual:
+- remaining backfill technical debt is now dominated by broader orchestration complexity and additional inline helper call paths not yet wrapped.

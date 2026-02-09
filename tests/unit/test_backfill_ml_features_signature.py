@@ -60,7 +60,7 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
     monkeypatch.setattr(labeler, "get_regime_at_entry", _async_return({"trend_regime": "UP", "vol_regime": "NORMAL", "risk_regime": "ON", "session_regime": "MID", "vix_at_entry": 18.0, "vix_regime": "NORMAL"}))
     monkeypatch.setattr(labeler, "get_p2_features", _async_return({"oi_change_1d": 1.0, "oi_change_pct": 2.0, "iv_vs_hv_ratio": 1.1}))
     monkeypatch.setattr(labeler, "get_p3_features", _async_return({"high_52w_distance_pct": 3.0, "is_spread_leg": False, "same_expiry_trades_1h": 1}))
-    monkeypatch.setattr(labeler, "get_iv_rank_at_entry", _async_return(55.0))
+    monkeypatch.setattr(backfill, "get_iv_rank_at_entry", _async_return(55.0))
 
     captured: dict[str, object] = {}
 
@@ -237,4 +237,22 @@ async def test_get_sector_correlation_features_delegates_to_labeler(monkeypatch:
     value = await backfill.get_sector_correlation_features("AAPL", entry_ts)
 
     assert value == expected
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
+
+
+@pytest.mark.asyncio
+async def test_get_iv_rank_at_entry_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+
+    async def _labeler_iv_rank(ticker: str, ts: datetime) -> float:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return 55.0
+
+    monkeypatch.setattr(backfill, "get_labeler_iv_rank_at_entry", _labeler_iv_rank, raising=False)
+
+    value = await backfill.get_iv_rank_at_entry("AAPL", entry_ts)
+
+    assert value == 55.0
     assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
