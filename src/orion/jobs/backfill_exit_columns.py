@@ -20,7 +20,11 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from orion.main_price_target_labeler import (
     get_checkpoint_backfill_candidates as get_labeler_checkpoint_backfill_candidates,
+)
+from orion.main_price_target_labeler import (
     get_subsequent_prices as get_labeler_subsequent_prices,
+)
+from orion.main_price_target_labeler import (
     get_velocity_backfill_candidates as get_labeler_velocity_backfill_candidates,
 )
 from orion.shared.db_utils import db_query, db_write
@@ -35,6 +39,12 @@ BATCH_SIZE = 50
 MAX_RECORD_RETRIES = 2
 RETRY_SLEEP_SECONDS = 0.25
 DEFAULT_DEAD_LETTER_PATH = os.getenv("ORION_BACKFILL_EXIT_DEAD_LETTER_PATH")
+DEFAULT_DEAD_LETTER_MAX_BYTES = int(os.getenv("ORION_BACKFILL_EXIT_DEAD_LETTER_MAX_BYTES", "10485760"))
+DEFAULT_DEAD_LETTER_REDACT_FIELDS = {
+    field.strip()
+    for field in os.getenv("ORION_BACKFILL_EXIT_DEAD_LETTER_REDACT_FIELDS", "").split(",")
+    if field.strip()
+}
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
@@ -301,12 +311,43 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _write_dead_letter_record(dead_letter_path: str, payload: Dict[str, Any]) -> None:
+def _apply_dead_letter_redaction(payload: Dict[str, Any], redact_fields: set[str]) -> Dict[str, Any]:
+    """Redact configured payload fields in dead-letter records."""
+    if not redact_fields:
+        return payload
+    return {key: ("[REDACTED]" if key in redact_fields else value) for key, value in payload.items()}
+
+
+def _rotate_dead_letter_file_if_needed(dead_letter_file: Path, max_bytes: int) -> bool:
+    """Rotate dead-letter file when size exceeds threshold."""
+    if max_bytes <= 0 or not dead_letter_file.exists():
+        return False
+    if dead_letter_file.stat().st_size < max_bytes:
+        return False
+
+    suffix = 1
+    while True:
+        candidate = dead_letter_file.with_name(f"{dead_letter_file.name}.{suffix}")
+        if not candidate.exists():
+            dead_letter_file.rename(candidate)
+            return True
+        suffix += 1
+
+
+def _write_dead_letter_record(
+    dead_letter_path: str,
+    payload: Dict[str, Any],
+    max_bytes: int = DEFAULT_DEAD_LETTER_MAX_BYTES,
+    redact_fields: set[str] | None = None,
+) -> bool:
     """Append a dead-letter payload as JSONL."""
     path = Path(dead_letter_path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
+    redacted_payload = _apply_dead_letter_redaction(payload, redact_fields or set())
+    rotated = _rotate_dead_letter_file_if_needed(path, max_bytes)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, default=_json_safe) + "\n")
+        handle.write(json.dumps(redacted_payload, default=_json_safe) + "\n")
+    return rotated
 
 
 async def run_backfill(
@@ -315,17 +356,22 @@ async def run_backfill(
     max_retries: int = MAX_RECORD_RETRIES,
     retry_sleep_seconds: float = RETRY_SLEEP_SECONDS,
     dead_letter_path: str | None = DEFAULT_DEAD_LETTER_PATH,
+    dead_letter_max_bytes: int = DEFAULT_DEAD_LETTER_MAX_BYTES,
+    dead_letter_redact_fields: set[str] | None = None,
 ) -> Dict[str, Any]:
     """Run the backfill job."""
     await init_db()
+    dead_letter_redact_fields = dead_letter_redact_fields or DEFAULT_DEAD_LETTER_REDACT_FIELDS
 
     logger.info(
-        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s",
+        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s",
         batch_size,
         limit,
         max_retries,
         retry_sleep_seconds,
         dead_letter_path,
+        dead_letter_max_bytes,
+        sorted(dead_letter_redact_fields),
     )
 
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
@@ -335,6 +381,7 @@ async def run_backfill(
     velocity_retried = 0
     velocity_processed = 0
     velocity_dead_lettered = 0
+    velocity_dead_letter_rotated = 0
     log_velocity_every = max(batch_size, 1)
     velocity_after_entry_ts, velocity_after_event_id = await _load_velocity_backfill_cursor()
 
@@ -371,7 +418,7 @@ async def run_backfill(
             if failed:
                 velocity_failed += 1
                 if dead_letter_path:
-                    _write_dead_letter_record(
+                    rotated = _write_dead_letter_record(
                         dead_letter_path,
                         {
                             "phase": "velocity",
@@ -380,8 +427,11 @@ async def run_backfill(
                             "error": error_message or "unknown error",
                             "retries_used": retries,
                         },
+                        max_bytes=dead_letter_max_bytes,
+                        redact_fields=dead_letter_redact_fields,
                     )
                     velocity_dead_lettered += 1
+                    velocity_dead_letter_rotated += int(rotated)
             velocity_retried += retries
 
             velocity_processed += 1
@@ -418,6 +468,7 @@ async def run_backfill(
     checkpoint_retried = 0
     checkpoint_processed = 0
     checkpoint_dead_lettered = 0
+    checkpoint_dead_letter_rotated = 0
     checkpoint_after_entry_ts, checkpoint_after_event_id = await _load_checkpoint_backfill_cursor()
     log_checkpoint_every = max(batch_size, 1)
 
@@ -454,7 +505,7 @@ async def run_backfill(
             if failed:
                 checkpoint_failed += 1
                 if dead_letter_path:
-                    _write_dead_letter_record(
+                    rotated = _write_dead_letter_record(
                         dead_letter_path,
                         {
                             "phase": "checkpoint",
@@ -463,8 +514,11 @@ async def run_backfill(
                             "error": error_message or "unknown error",
                             "retries_used": retries,
                         },
+                        max_bytes=dead_letter_max_bytes,
+                        redact_fields=dead_letter_redact_fields,
                     )
                     checkpoint_dead_lettered += 1
+                    checkpoint_dead_letter_rotated += int(rotated)
             checkpoint_retried += retries
 
             checkpoint_processed += 1
@@ -501,6 +555,7 @@ async def run_backfill(
             "failed": velocity_failed,
             "retried": velocity_retried,
             "dead_lettered": velocity_dead_lettered,
+            "dead_letter_rotated": velocity_dead_letter_rotated,
         },
         "checkpoint": {
             "processed": checkpoint_processed,
@@ -508,13 +563,17 @@ async def run_backfill(
             "failed": checkpoint_failed,
             "retried": checkpoint_retried,
             "dead_lettered": checkpoint_dead_lettered,
+            "dead_letter_rotated": checkpoint_dead_letter_rotated,
         },
         "total_processed": velocity_processed + checkpoint_processed,
         "total_updated": velocity_updated + checkpoint_updated,
         "total_failed": velocity_failed + checkpoint_failed,
         "total_retried": velocity_retried + checkpoint_retried,
         "total_dead_lettered": velocity_dead_lettered + checkpoint_dead_lettered,
+        "total_dead_letter_rotated": velocity_dead_letter_rotated + checkpoint_dead_letter_rotated,
         "dead_letter_path": dead_letter_path,
+        "dead_letter_max_bytes": dead_letter_max_bytes,
+        "dead_letter_redact_fields": sorted(dead_letter_redact_fields),
     }
     logger.info("Backfill complete! summary=%s", summary)
     return summary
@@ -543,7 +602,20 @@ async def main() -> None:
         default=DEFAULT_DEAD_LETTER_PATH,
         help="Optional JSONL file path for exhausted-retry records",
     )
+    parser.add_argument(
+        "--dead-letter-max-bytes",
+        type=int,
+        default=DEFAULT_DEAD_LETTER_MAX_BYTES,
+        help="Rotate dead-letter file after this size threshold",
+    )
+    parser.add_argument(
+        "--dead-letter-redact-fields",
+        type=str,
+        default=",".join(sorted(DEFAULT_DEAD_LETTER_REDACT_FIELDS)),
+        help="Comma-separated dead-letter payload fields to redact",
+    )
     args = parser.parse_args()
+    redact_fields = {field.strip() for field in args.dead_letter_redact_fields.split(",") if field.strip()}
 
     await run_backfill(
         batch_size=args.batch_size,
@@ -551,6 +623,8 @@ async def main() -> None:
         max_retries=args.max_retries,
         retry_sleep_seconds=args.retry_sleep_seconds,
         dead_letter_path=args.dead_letter_path,
+        dead_letter_max_bytes=args.dead_letter_max_bytes,
+        dead_letter_redact_fields=redact_fields,
     )
 
 

@@ -7564,3 +7564,48 @@ Result:
 
 Residual:
 - wire `force_refresh=True` into selected orchestration paths where schema rollout windows are expected.
+
+## 247) Pass 245 Continuation (2026-02-09)
+
+### 247.1 Backfill Dead-Letter Redaction + Rotation Policy (TDD-Backed, Combined Pass)
+
+Finding:
+- pass 244 left one explicit residual open:
+  - dead-letter records had no payload redaction controls,
+  - dead-letter sink had no size-based rotation policy for sustained error periods.
+- this created avoidable PII/log-risk exposure and operational storage risk during prolonged retry exhaustion events.
+
+Implemented:
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - added dead-letter redaction helper `_apply_dead_letter_redaction(...)`,
+  - added dead-letter rotation helper `_rotate_dead_letter_file_if_needed(...)`,
+  - expanded `_write_dead_letter_record(...)` to:
+    - accept `max_bytes` and `redact_fields`,
+    - apply field redaction before write,
+    - rotate file when threshold reached,
+    - return `bool` flag indicating rotation occurred,
+  - introduced new defaults:
+    - `ORION_BACKFILL_EXIT_DEAD_LETTER_MAX_BYTES`
+    - `ORION_BACKFILL_EXIT_DEAD_LETTER_REDACT_FIELDS`,
+  - expanded `run_backfill(...)` contract with:
+    - `dead_letter_max_bytes`
+    - `dead_letter_redact_fields`,
+    - phase and total `dead_letter_rotated` counters in summary payload,
+  - expanded CLI with:
+    - `--dead-letter-max-bytes`
+    - `--dead-letter-redact-fields`.
+- Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+  - `test_write_dead_letter_record_applies_redaction_and_rotation`
+  - `test_run_backfill_dead_letter_redaction_and_rotation`
+  - updated retry helper assertions for terminal `error_message` metadata.
+
+Verification:
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py` passed.
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py` passed.
+
+Result:
+- exhausted-retry backfill failures now flow through a safer and operationally bounded dead-letter channel.
+- this closes the pass-244 residual and improves parity with production-grade ingestion/backfill handling requirements.
+
+Residual:
+- add optional gzip compression for rotated dead-letter files if sustained error rates make long-lived archives large.

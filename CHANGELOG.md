@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Exit-Columns Dead-Letter Redaction + Rotation Controls (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - added dead-letter payload redaction controls:
+      - env default `ORION_BACKFILL_EXIT_DEAD_LETTER_REDACT_FIELDS`
+      - runtime/CLI `dead_letter_redact_fields` / `--dead-letter-redact-fields`,
+    - added dead-letter file rotation by max size:
+      - env/arg default `ORION_BACKFILL_EXIT_DEAD_LETTER_MAX_BYTES`
+      - runtime/CLI `dead_letter_max_bytes` / `--dead-letter-max-bytes`,
+    - added per-phase and total `dead_letter_rotated` counters to backfill summary payload,
+    - `_write_dead_letter_record(...)` now supports redaction + rotation and returns a rotation flag.
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+    - `test_write_dead_letter_record_applies_redaction_and_rotation`
+    - `test_run_backfill_dead_letter_redaction_and_rotation`
+    - updated retry test assertions for terminal `error_message` contract.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py`
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py`
 - **Exit Classifier Force-Refresh Schema Probe + Missing-Family Metrics (TDD)**:
   - Updated `src/orion/ml/exit_classifier.py`:
     - `_load_price_target_label_columns(...)` now supports `force_refresh=True` to bypass schema cache in long-lived workers during active migrations,
