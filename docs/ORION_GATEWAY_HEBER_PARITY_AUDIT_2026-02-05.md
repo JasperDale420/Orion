@@ -7777,3 +7777,37 @@ Verification:
 Result:
 - dead-letter rotation is now bounded by both file size and retained-file count.
 - rollout operators now have an explicit runbook for schema-refresh strategy selection during migration windows.
+
+## 252) Pass 250 Continuation (2026-02-09)
+
+### 252.1 Pattern Miner Refresh-Config Resolution Telemetry (TDD-Backed)
+
+Finding:
+- after strategy env consolidation, runtime logs still did not explicitly expose the resolved refresh mode/source in a structured event for operational tracing.
+
+Implemented:
+- Updated `src/orion/ml/pattern_miner.py`:
+  - added `_exit_classifier_schema_refresh_config_details_from_env()` to return:
+    - `force_schema_refresh`
+    - `refresh_each_bucket`
+    - `source` (`strategy_env`, `legacy_flags`, or `strategy_env_invalid_fallback`),
+  - added `_exit_classifier_schema_refresh_mode(...)` with canonical labels:
+    - `off`
+    - `prefetch_once`
+    - `per_bucket`,
+  - `run_all_pattern_mining()` now emits structured telemetry event:
+    - `event=exit_training_schema_refresh_config_resolved`
+    - `refresh_mode`
+    - `refresh_source`
+    - resolved booleans.
+- Extended tests in `tests/unit/test_pattern_miner_exit_refresh_config.py`:
+  - `test_exit_classifier_schema_refresh_config_details_tracks_source`
+  - `test_exit_classifier_schema_refresh_mode_labels`
+  - strengthened pass-through test with telemetry assertions.
+
+Verification:
+- `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py` passed.
+- `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py` passed.
+
+Result:
+- refresh-strategy resolution is now observable and machine-parsable in logs, improving rollout debugging and auditability.

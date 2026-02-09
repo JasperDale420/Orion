@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Pattern Miner Exit-Refresh Resolution Telemetry (TDD)**:
+  - Updated `src/orion/ml/pattern_miner.py`:
+    - added `_exit_classifier_schema_refresh_config_details_from_env()` to return resolved flags with source metadata,
+    - added `_exit_classifier_schema_refresh_mode(...)` mode labels (`off`, `prefetch_once`, `per_bucket`),
+    - `run_all_pattern_mining()` now emits structured resolution telemetry:
+      - `event=exit_training_schema_refresh_config_resolved`
+      - `refresh_mode`
+      - `refresh_source`
+      - resolved booleans.
+  - Updated `tests/unit/test_pattern_miner_exit_refresh_config.py`:
+    - `test_exit_classifier_schema_refresh_config_details_tracks_source`
+    - `test_exit_classifier_schema_refresh_mode_labels`
+    - strengthened `test_run_all_pattern_mining_passes_exit_refresh_flags` with telemetry assertions.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `uv run pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py`
 - **Combined Pass: Dead-Letter Rotation Retention Cap + Schema-Refresh Runbook Note (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - added rotation-retention cap for dead-letter archives:

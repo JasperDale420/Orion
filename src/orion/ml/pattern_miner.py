@@ -140,17 +140,23 @@ def get_quick_winner_target(seconds_threshold: int) -> str:
 
 def _exit_classifier_schema_refresh_config_from_env() -> tuple[bool, bool]:
     """Read schema-refresh strategy flags for exit-classifier training orchestration."""
+    force_schema_refresh, refresh_each_bucket, _source = _exit_classifier_schema_refresh_config_details_from_env()
+    return force_schema_refresh, refresh_each_bucket
+
+
+def _exit_classifier_schema_refresh_config_details_from_env() -> tuple[bool, bool, str]:
+    """Read schema-refresh config with source metadata for observability."""
     strategy = os.getenv(
         "ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY",
         "",
     ).strip().lower()
     if strategy:
         if strategy in {"off", "disabled", "none", "false"}:
-            return False, False
+            return False, False, "strategy_env"
         if strategy in {"prefetch_once", "once"}:
-            return True, False
+            return True, False, "strategy_env"
         if strategy in {"per_bucket", "each_bucket", "each"}:
-            return True, True
+            return True, True, "strategy_env"
         logger.warning(
             "Invalid ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY; falling back to legacy flags",
             extra={
@@ -179,7 +185,17 @@ def _exit_classifier_schema_refresh_config_from_env() -> tuple[bool, bool]:
         )
         refresh_each_bucket = False
 
-    return force_schema_refresh, refresh_each_bucket
+    source = "strategy_env_invalid_fallback" if strategy else "legacy_flags"
+    return force_schema_refresh, refresh_each_bucket, source
+
+
+def _exit_classifier_schema_refresh_mode(force_schema_refresh: bool, refresh_each_bucket: bool) -> str:
+    """Return a human-readable refresh strategy mode label."""
+    if not force_schema_refresh:
+        return "off"
+    if refresh_each_bucket:
+        return "per_bucket"
+    return "prefetch_once"
 
 
 # Trade bucket configurations with bucket-specific lookback windows
@@ -805,11 +821,21 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
         from orion.ml.exit_classifier import train_all_exit_classifiers
 
         logger.info("Training exit classifiers for all buckets")
-        force_schema_refresh, refresh_each_bucket = _exit_classifier_schema_refresh_config_from_env()
+        force_schema_refresh, refresh_each_bucket, refresh_source = (
+            _exit_classifier_schema_refresh_config_details_from_env()
+        )
+        refresh_mode = _exit_classifier_schema_refresh_mode(force_schema_refresh, refresh_each_bucket)
         logger.info(
             "Exit classifier schema refresh config: force=%s refresh_each_bucket=%s",
             force_schema_refresh,
             refresh_each_bucket,
+            extra={
+                "event": "exit_training_schema_refresh_config_resolved",
+                "refresh_mode": refresh_mode,
+                "refresh_source": refresh_source,
+                "force_schema_refresh": force_schema_refresh,
+                "refresh_each_bucket": refresh_each_bucket,
+            },
         )
         exit_results = await train_all_exit_classifiers(
             force_schema_refresh=force_schema_refresh,
