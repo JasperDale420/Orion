@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+
 from orion.jobs import backfill_exit_columns
 
 
@@ -520,3 +521,73 @@ async def test_run_backfill_resumes_with_keyset_cursor_when_available(
     assert checkpoint_calls[0]["after_event_id"] == "cp-150"
     assert saved_velocity_cursors == [(vel_ts, "vel-200")]
     assert saved_checkpoint_cursors == [(cp_ts, "cp-200")]
+
+
+@pytest.mark.asyncio
+async def test_load_phase_cursors_do_not_fallback_to_legacy_watermarks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_get_cursor_state(_session: Any, _key: str) -> None:
+        return None
+
+    async def _fake_get_watermark(_session: Any, _key: str) -> None:
+        raise AssertionError("legacy watermark fallback should not be read")
+
+    class _FakeSession:
+        pass
+
+    async def _fake_db_query(fn):
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(backfill_exit_columns, "get_cursor_state", _fake_get_cursor_state)
+    monkeypatch.setattr(backfill_exit_columns, "get_watermark", _fake_get_watermark, raising=False)
+    monkeypatch.setattr(backfill_exit_columns, "db_query", _fake_db_query)
+
+    velocity_loaded = await backfill_exit_columns._load_velocity_backfill_cursor()
+    checkpoint_loaded = await backfill_exit_columns._load_checkpoint_backfill_cursor()
+
+    assert velocity_loaded == (None, None)
+    assert checkpoint_loaded == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_save_phase_cursors_do_not_write_legacy_watermarks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    velocity_writes: list[tuple[datetime, str | None]] = []
+    checkpoint_writes: list[tuple[datetime, str | None]] = []
+
+    async def _fake_upsert_cursor_state(
+        _session: Any,
+        key: str,
+        last_seen_ts_utc: datetime,
+        last_seen_id: str | None,
+    ) -> None:
+        if key == backfill_exit_columns.VELOCITY_BACKFILL_CURSOR_KEY:
+            velocity_writes.append((last_seen_ts_utc, last_seen_id))
+            return
+        if key == backfill_exit_columns.CHECKPOINT_BACKFILL_CURSOR_KEY:
+            checkpoint_writes.append((last_seen_ts_utc, last_seen_id))
+            return
+        raise AssertionError(f"Unexpected cursor key: {key}")
+
+    async def _fake_upsert_watermark(_session: Any, _key: str, _last_seen_ts_utc: datetime) -> None:
+        raise AssertionError("legacy watermark fallback should not be written")
+
+    class _FakeSession:
+        pass
+
+    async def _fake_db_write(fn):
+        return await fn(_FakeSession())
+
+    ts1 = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    ts2 = datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(backfill_exit_columns, "upsert_cursor_state", _fake_upsert_cursor_state)
+    monkeypatch.setattr(backfill_exit_columns, "upsert_watermark", _fake_upsert_watermark, raising=False)
+    monkeypatch.setattr(backfill_exit_columns, "db_write", _fake_db_write)
+
+    await backfill_exit_columns._save_velocity_backfill_cursor(ts1, "vel-500")
+    await backfill_exit_columns._save_checkpoint_backfill_cursor(ts2, "cp-500")
+
+    assert velocity_writes == [(ts1, "vel-500")]
+    assert checkpoint_writes == [(ts2, "cp-500")]

@@ -27,13 +27,15 @@ from sqlalchemy import text
 
 from orion.main_price_target_labeler import (
     get_entry_time_features as get_labeler_entry_time_features,
+)
+from orion.main_price_target_labeler import (
     get_gex_at_entry,
     get_max_pain_distance,
 )
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
-from orion.storage.watermarks import get_cursor_state, get_watermark, upsert_cursor_state, upsert_watermark
+from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
 from orion.unusualwhales.api.stock import get_info
 from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
@@ -41,7 +43,6 @@ from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 logger = setup_struct_logger("orion.backfill.ml_features")
 
 BATCH_SIZE = 50
-BACKFILL_WATERMARK_KEY = "backfill_ml_features.price_target_labels"
 BACKFILL_CURSOR_KEY = "backfill_ml_features.price_target_labels.cursor"
 
 
@@ -85,7 +86,7 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
     if ticker in _ticker_info_cache:
         return _ticker_info_cache[ticker]
 
-    cache_entry = {
+    cache_entry: Dict[str, Any] = {
         "sector": None,
         "next_earnings_date": None,
         "announce_time": None,
@@ -308,24 +309,6 @@ async def get_records_to_backfill(
     return await db_query(query)
 
 
-async def _load_backfill_watermark() -> datetime | None:
-    """Load persisted resume timestamp for backfill progress."""
-
-    async def query(session: Any) -> datetime | None:
-        return await get_watermark(session, BACKFILL_WATERMARK_KEY)
-
-    return await db_query(query)
-
-
-async def _save_backfill_watermark(entry_ts: datetime) -> None:
-    """Persist latest processed entry timestamp for crash-safe resume."""
-
-    async def write(session: Any) -> None:
-        await upsert_watermark(session, key=BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
-
-    await db_write(write)
-
-
 async def _load_backfill_cursor() -> tuple[datetime | None, str | None]:
     """Load persisted resume cursor (timestamp + event_id)."""
 
@@ -333,14 +316,13 @@ async def _load_backfill_cursor() -> tuple[datetime | None, str | None]:
         cursor = await get_cursor_state(session, BACKFILL_CURSOR_KEY)
         if cursor is not None:
             return cursor.last_seen_ts_utc, cursor.last_seen_id
-        ts = await get_watermark(session, BACKFILL_WATERMARK_KEY)
-        return ts, None
+        return None, None
 
     return await db_query(query)
 
 
 async def _save_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
-    """Persist resume cursor and legacy timestamp watermark."""
+    """Persist resume cursor."""
 
     async def write(session: Any) -> None:
         await upsert_cursor_state(
@@ -349,7 +331,6 @@ async def _save_backfill_cursor(entry_ts: datetime, event_id: str | None) -> Non
             last_seen_ts_utc=entry_ts,
             last_seen_id=event_id,
         )
-        await upsert_watermark(session, key=BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
 
     await db_write(write)
 

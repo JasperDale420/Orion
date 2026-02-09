@@ -15,64 +15,18 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import text
+
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
-from orion.storage.watermarks import get_cursor_state, get_watermark, upsert_cursor_state, upsert_watermark
-from sqlalchemy import text
+from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
 
 logger = setup_struct_logger("orion.backfill.exit_columns")
 
 BATCH_SIZE = 50
-VELOCITY_BACKFILL_WATERMARK_KEY = "backfill_exit_columns.velocity"
-CHECKPOINT_BACKFILL_WATERMARK_KEY = "backfill_exit_columns.checkpoint"
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
-
-
-async def _load_velocity_backfill_watermark() -> datetime | None:
-    """Load persisted velocity-phase resume timestamp."""
-
-    async def query(session: Any) -> datetime | None:
-        return await get_watermark(session, VELOCITY_BACKFILL_WATERMARK_KEY)
-
-    return await db_query(query)
-
-
-async def _save_velocity_backfill_watermark(entry_ts: datetime) -> None:
-    """Persist latest processed velocity-phase timestamp."""
-
-    async def write(session: Any) -> None:
-        await upsert_watermark(
-            session,
-            key=VELOCITY_BACKFILL_WATERMARK_KEY,
-            last_seen_ts_utc=entry_ts,
-        )
-
-    await db_write(write)
-
-
-async def _load_checkpoint_backfill_watermark() -> datetime | None:
-    """Load persisted checkpoint-phase resume timestamp."""
-
-    async def query(session: Any) -> datetime | None:
-        return await get_watermark(session, CHECKPOINT_BACKFILL_WATERMARK_KEY)
-
-    return await db_query(query)
-
-
-async def _save_checkpoint_backfill_watermark(entry_ts: datetime) -> None:
-    """Persist latest processed checkpoint-phase timestamp."""
-
-    async def write(session: Any) -> None:
-        await upsert_watermark(
-            session,
-            key=CHECKPOINT_BACKFILL_WATERMARK_KEY,
-            last_seen_ts_utc=entry_ts,
-        )
-
-    await db_write(write)
-
 
 async def _load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
     """Load persisted velocity-phase resume cursor (timestamp + event_id)."""
@@ -81,14 +35,13 @@ async def _load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]
         cursor = await get_cursor_state(session, VELOCITY_BACKFILL_CURSOR_KEY)
         if cursor is not None:
             return cursor.last_seen_ts_utc, cursor.last_seen_id
-        ts = await get_watermark(session, VELOCITY_BACKFILL_WATERMARK_KEY)
-        return ts, None
+        return None, None
 
     return await db_query(query)
 
 
 async def _save_velocity_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
-    """Persist velocity-phase cursor and legacy timestamp watermark."""
+    """Persist velocity-phase cursor."""
 
     async def write(session: Any) -> None:
         await upsert_cursor_state(
@@ -97,7 +50,6 @@ async def _save_velocity_backfill_cursor(entry_ts: datetime, event_id: str | Non
             last_seen_ts_utc=entry_ts,
             last_seen_id=event_id,
         )
-        await upsert_watermark(session, key=VELOCITY_BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
 
     await db_write(write)
 
@@ -109,14 +61,13 @@ async def _load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | Non
         cursor = await get_cursor_state(session, CHECKPOINT_BACKFILL_CURSOR_KEY)
         if cursor is not None:
             return cursor.last_seen_ts_utc, cursor.last_seen_id
-        ts = await get_watermark(session, CHECKPOINT_BACKFILL_WATERMARK_KEY)
-        return ts, None
+        return None, None
 
     return await db_query(query)
 
 
 async def _save_checkpoint_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
-    """Persist checkpoint-phase cursor and legacy timestamp watermark."""
+    """Persist checkpoint-phase cursor."""
 
     async def write(session: Any) -> None:
         await upsert_cursor_state(
@@ -125,7 +76,6 @@ async def _save_checkpoint_backfill_cursor(entry_ts: datetime, event_id: str | N
             last_seen_ts_utc=entry_ts,
             last_seen_id=event_id,
         )
-        await upsert_watermark(session, key=CHECKPOINT_BACKFILL_WATERMARK_KEY, last_seen_ts_utc=entry_ts)
 
     await db_write(write)
 

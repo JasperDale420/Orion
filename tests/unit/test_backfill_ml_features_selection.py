@@ -321,3 +321,60 @@ async def test_run_backfill_resumes_with_keyset_cursor_when_available(
     assert calls[0]["after_entry_ts"] == resumed_ts
     assert calls[0]["after_event_id"] == "evt-150"
     assert saved_cursors == [(first_ts, "evt-200")]
+
+
+@pytest.mark.asyncio
+async def test_load_backfill_cursor_does_not_fallback_to_legacy_watermark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_get_cursor_state(_session: Any, _key: str) -> None:
+        return None
+
+    async def _fake_get_watermark(_session: Any, _key: str) -> None:
+        raise AssertionError("legacy watermark fallback should not be read")
+
+    class _FakeSession:
+        pass
+
+    async def _fake_db_query(fn):
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(backfill_ml_features, "get_cursor_state", _fake_get_cursor_state)
+    monkeypatch.setattr(backfill_ml_features, "get_watermark", _fake_get_watermark, raising=False)
+    monkeypatch.setattr(backfill_ml_features, "db_query", _fake_db_query)
+
+    loaded = await backfill_ml_features._load_backfill_cursor()
+    assert loaded == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_save_backfill_cursor_does_not_write_legacy_watermark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[tuple[datetime, str | None]] = []
+
+    async def _fake_upsert_cursor_state(
+        _session: Any,
+        key: str,
+        last_seen_ts_utc: datetime,
+        last_seen_id: str | None,
+    ) -> None:
+        assert key == backfill_ml_features.BACKFILL_CURSOR_KEY
+        writes.append((last_seen_ts_utc, last_seen_id))
+
+    async def _fake_upsert_watermark(_session: Any, _key: str, _last_seen_ts_utc: datetime) -> None:
+        raise AssertionError("legacy watermark fallback should not be written")
+
+    class _FakeSession:
+        pass
+
+    async def _fake_db_write(fn):
+        return await fn(_FakeSession())
+
+    ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(backfill_ml_features, "upsert_cursor_state", _fake_upsert_cursor_state)
+    monkeypatch.setattr(backfill_ml_features, "upsert_watermark", _fake_upsert_watermark, raising=False)
+    monkeypatch.setattr(backfill_ml_features, "db_write", _fake_db_write)
+
+    await backfill_ml_features._save_backfill_cursor(ts, "evt-500")
+    assert writes == [(ts, "evt-500")]
