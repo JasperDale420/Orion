@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Training Query Parameter Binding Hardening (TDD)**:
+  - Updated `tests/unit/test_exit_classifier_window_query.py`:
+    - `test_build_bucket_training_data_binds_trade_type_parameter`
+    - existing lateral-window test now captures execute params.
+  - Updated `src/orion/ml/exit_classifier.py`:
+    - `build_bucket_training_data(...)` now binds `trade_type` via SQL parameters (`:trade_type`) instead of string interpolation.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_exit_classifier_window_query.py`
 - **Shared Window-Feature Query Consolidation for Labeler + Exit Classifier (TDD)**:
   - Updated `src/orion/main_price_target_labeler.py`:
     - `get_window_features_at_entry(...)` now uses a single `DISTINCT ON (period)` query for `1h/1d/1w` instead of per-period calls.

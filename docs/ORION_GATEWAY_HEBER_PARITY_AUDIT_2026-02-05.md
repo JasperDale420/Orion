@@ -7189,3 +7189,29 @@ Result:
 
 Residual:
 - further parity work should focus on remaining high-cardinality training joins and on extracting additional local SQL paths in model prep into shared helper contracts where stable.
+
+## 237) Pass 235 Continuation (2026-02-09)
+
+### 237.1 Exit Classifier Trade-Type Binding Hardening (TDD-Backed)
+
+Finding:
+- `src/orion/ml/exit_classifier.py::build_bucket_training_data(...)` still interpolated `trade_type` directly into SQL text.
+- while current source values are controlled, this kept query safety/consistency below project standard and made parameterized contract behavior untested.
+
+Implemented:
+- Extended `tests/unit/test_exit_classifier_window_query.py` with:
+  - `test_build_bucket_training_data_binds_trade_type_parameter`.
+- Updated `src/orion/ml/exit_classifier.py`:
+  - changed `WHERE p.trade_type = '{trade_type}'` to `WHERE p.trade_type = :trade_type`,
+  - now executes with bound params: `{"trade_type": trade_type}`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `uv run pytest -q tests/unit/test_flow_enricher_delegation.py tests/unit/test_backfill_exit_columns_selection.py` passed.
+
+Result:
+- exit-classifier training query now uses explicit bind parameters for bucket trade type.
+- this reduces SQL interpolation risk and aligns training query behavior with hardened DB access patterns used elsewhere in remediation.
+
+Residual:
+- next combined pass should target broader classifier training contract validation (feature null-handling, large-sample query performance, and cross-bucket schema drift checks).

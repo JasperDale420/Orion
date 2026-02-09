@@ -451,14 +451,14 @@ async def build_bucket_training_data(bucket: str) -> Tuple[np.ndarray, np.ndarra
                 ORDER BY period, window_end_ts_utc DESC
             ) latest_by_period
         ) w ON true
-        WHERE p.trade_type = '{trade_type}'
+        WHERE p.trade_type = :trade_type
         AND p.max_return_pct IS NOT NULL
     """
 
     async def run_query(session: Any) -> List[Any]:
         from sqlalchemy import text
 
-        result = await session.execute(text(query))
+        result = await session.execute(text(query), {"trade_type": trade_type})
         return result.mappings().all()
 
     rows = await db_query(run_query)

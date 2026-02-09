@@ -10,7 +10,7 @@ import orion.ml.exit_classifier as exit_classifier
 async def test_build_bucket_training_data_uses_single_lateral_window_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     class _Result:
         def mappings(self) -> "_Result":
@@ -20,8 +20,9 @@ async def test_build_bucket_training_data_uses_single_lateral_window_lookup(
             return []
 
     class _Session:
-        async def execute(self, stmt) -> _Result:
+        async def execute(self, stmt, params=None) -> _Result:
             captured["sql"] = str(stmt)
+            captured["params"] = params
             return _Result()
 
     async def _db_query(operation):
@@ -45,3 +46,36 @@ async def test_build_bucket_training_data_uses_single_lateral_window_lookup(
     assert "w1h" not in sql
     assert "w1d" not in sql
     assert "w1w" not in sql
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_binds_trade_type_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Result:
+        def mappings(self) -> "_Result":
+            return self
+
+        def all(self) -> list[dict[str, object]]:
+            return []
+
+    class _Session:
+        async def execute(self, stmt, params=None) -> _Result:
+            captured["sql"] = str(stmt)
+            captured["params"] = params
+            return _Result()
+
+    async def _db_query(operation):
+        return await operation(_Session())
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert isinstance(X, np.ndarray)
+    assert isinstance(y, np.ndarray)
+    assert feature_names == []
+    assert "p.trade_type = :trade_type" in str(captured["sql"])
+    assert captured["params"] == {"trade_type": "0DTE"}
