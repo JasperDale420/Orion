@@ -15,7 +15,6 @@ Usage:
 
 import argparse
 import asyncio
-import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +31,7 @@ from orion.main_price_target_labeler import (
     get_flow_greeks as get_labeler_flow_greeks,
     get_gex_at_entry,
     get_max_pain_distance,
+    get_ticker_info as get_labeler_ticker_info,
     get_underlying_price_at_entry as get_labeler_underlying_price_at_entry,
     get_underlying_price_at_offset as get_labeler_underlying_price_at_offset,
 )
@@ -39,9 +39,6 @@ from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
-from orion.unusualwhales.api.stock import get_info
-from orion.unusualwhales.client import UnusualWhalesClient
-from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 
 logger = setup_struct_logger("orion.backfill.ml_features")
 
@@ -68,24 +65,10 @@ def extract_underlying_ticker(option_symbol: str) -> str:
 
 # Ticker info cache
 _ticker_info_cache: Dict[str, Dict[str, Any]] = {}
-_uw_client: Optional[UnusualWhalesClient] = None
-
-
-def _get_uw_client() -> Optional[UnusualWhalesClient]:
-    """Get or create UW client."""
-    global _uw_client
-    if _uw_client is None:
-        api_key = os.getenv("UW_API_KEY")
-        base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com")
-        if not api_key:
-            logger.warning("UW_API_KEY not set, ticker info lookups will fail")
-            return None
-        _uw_client = UnusualWhalesClient(base_url=base_url, token=api_key)
-    return _uw_client
 
 
 async def get_ticker_info(ticker: str) -> Dict[str, Any]:
-    """Fetch ticker info from UW API with caching."""
+    """Fetch ticker info via shared labeler helper with local cache."""
     if ticker in _ticker_info_cache:
         return _ticker_info_cache[ticker]
 
@@ -93,35 +76,18 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
         "sector": None,
         "next_earnings_date": None,
         "announce_time": None,
+        "last_earnings_date": None,
     }
 
-    client = _get_uw_client()
-    if client is None:
-        _ticker_info_cache[ticker] = cache_entry
-        return cache_entry
-
     try:
-        response = await asyncio.to_thread(
-            get_info.sync,
-            ticker=ticker,
-            client=client,
-        )
-
-        if isinstance(response, TickerInfoResults) and response.data:
-            info = response.data
-            from orion.unusualwhales.types import UNSET
-
-            cache_entry["sector"] = (
-                info.sector.value if info.sector and not isinstance(info.sector, type(UNSET)) else None
-            )
-            cache_entry["next_earnings_date"] = (
-                info.next_earnings_date
-                if info.next_earnings_date and not isinstance(info.next_earnings_date, type(UNSET))
-                else None
-            )
-
+        labeler_info = await get_labeler_ticker_info(ticker)
+        if isinstance(labeler_info, dict):
+            cache_entry["sector"] = labeler_info.get("sector")
+            cache_entry["next_earnings_date"] = labeler_info.get("next_earnings_date")
+            cache_entry["announce_time"] = labeler_info.get("announce_time")
+            cache_entry["last_earnings_date"] = labeler_info.get("last_earnings_date")
     except Exception as e:
-        logger.debug(f"Failed to fetch ticker info for {ticker}: {e}")
+        logger.debug(f"Failed to fetch ticker info for {ticker} via shared helper: {e}")
 
     _ticker_info_cache[ticker] = cache_entry
     return cache_entry

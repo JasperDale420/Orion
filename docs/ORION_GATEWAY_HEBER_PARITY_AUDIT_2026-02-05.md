@@ -6575,3 +6575,29 @@ Result:
 
 Residual:
 - remaining backfill/update debt is now concentrated in other locally implemented enrichment routines (for example direct ticker metadata/earnings and any remaining local-only derivations) that should be migrated in the next slices.
+
+## 220) Pass 218 Continuation (2026-02-09)
+
+### 220.1 Backfill Ticker-Metadata Source Alignment to Shared Labeler Helper (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/backfill_ml_features.py` maintained its own UW-client implementation of `get_ticker_info(...)`, including separate cache and endpoint handling.
+- this duplicated logic already present in `main_price_target_labeler.get_ticker_info(...)` and could drift from live labeling semantics.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_ticker_info_delegates_to_labeler`
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared helper as `get_labeler_ticker_info`,
+  - removed local direct UW client path for ticker metadata lookup,
+  - changed `get_ticker_info(...)` to delegate to shared helper and keep a lightweight local cache envelope.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k ticker_info_delegates` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- backfill now shares ticker metadata/earnings-date source behavior with live label generation, reducing divergence and removing one direct local UW implementation path.
+
+Residual:
+- remaining backfill-local enrichment debt is now mostly concentrated in feature update orchestration and any still-local derivations not yet delegated to shared helpers.

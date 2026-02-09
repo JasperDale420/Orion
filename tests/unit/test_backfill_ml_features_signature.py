@@ -145,3 +145,25 @@ async def test_get_flow_greeks_delegates_to_labeler(monkeypatch: pytest.MonkeyPa
 
     assert value == {"delta": 0.2, "gamma": 0.03, "volume": 11, "open_interest": 70, "iv": 0.5}
     assert captured == {"event_id": "evt-123"}
+
+
+@pytest.mark.asyncio
+async def test_get_ticker_info_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    expected = {
+        "sector": "Technology",
+        "next_earnings_date": None,
+        "announce_time": None,
+        "last_earnings_date": None,
+    }
+
+    async def _labeler_ticker_info(ticker: str) -> dict[str, object]:
+        captured["ticker"] = ticker
+        return expected
+
+    monkeypatch.setattr(backfill, "get_labeler_ticker_info", _labeler_ticker_info, raising=False)
+
+    value = await backfill.get_ticker_info("AAPL")
+
+    assert value == expected
+    assert captured == {"ticker": "AAPL"}

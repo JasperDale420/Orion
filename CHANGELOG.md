@@ -33,6 +33,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k flow_greeks_delegates`
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
+- **Backfill Ticker-Info Source Alignment to Shared Labeler Path (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_ticker_info_delegates_to_labeler`
+  - Updated `src/orion/jobs/backfill_ml_features.py` so `get_ticker_info(...)` now delegates to shared labeler ticker-info logic (`get_labeler_ticker_info`) and uses a local cache envelope, removing the local direct UW-client path.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k ticker_info_delegates`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
     - `/health` readiness with bounded retry,
