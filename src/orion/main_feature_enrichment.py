@@ -40,6 +40,8 @@ IV_RANK_INTERVAL = 900  # Every 15 minutes
 REGIME_SNAPSHOT_INTERVAL = 300  # Every 5 minutes
 VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
 DEFAULT_ZERO_WRITE_WARN_STREAK = 3
+DEFAULT_LOOP_SLEEP_SECONDS = 30.0
+DEFAULT_LOOP_ERROR_WARN_STREAK = 3
 STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
 
 _heber_reader = HeberReader()
@@ -109,6 +111,69 @@ def _zero_write_warn_streak_threshold() -> int:
             },
         )
         return DEFAULT_ZERO_WRITE_WARN_STREAK
+
+
+def _loop_sleep_seconds() -> float:
+    raw = os.getenv(
+        "ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS",
+        str(DEFAULT_LOOP_SLEEP_SECONDS),
+    ).strip()
+    try:
+        value = float(raw)
+        if value <= 0:
+            raise ValueError("must be > 0")
+        return value
+    except Exception:
+        logger.warning(
+            "Invalid ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS; using default",
+            extra={
+                "event": "feature_enrichment_loop_sleep_seconds_invalid",
+                "value": raw,
+                "default": DEFAULT_LOOP_SLEEP_SECONDS,
+            },
+        )
+        return DEFAULT_LOOP_SLEEP_SECONDS
+
+
+def _loop_error_warn_streak_threshold() -> int:
+    raw = os.getenv(
+        "ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK",
+        str(DEFAULT_LOOP_ERROR_WARN_STREAK),
+    ).strip()
+    try:
+        value = int(raw)
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
+    except Exception:
+        logger.warning(
+            "Invalid ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK; using default",
+            extra={
+                "event": "feature_enrichment_loop_error_warn_streak_invalid",
+                "value": raw,
+                "default": DEFAULT_LOOP_ERROR_WARN_STREAK,
+            },
+        )
+        return DEFAULT_LOOP_ERROR_WARN_STREAK
+
+
+def _note_loop_error(
+    consecutive_error_streak: int,
+    warn_streak: int,
+    error: Exception,
+) -> int:
+    streak = consecutive_error_streak + 1
+    if streak >= warn_streak:
+        logger.warning(
+            "Feature enrichment loop has consecutive cycle errors",
+            extra={
+                "event": "feature_enrichment_loop_error_streak",
+                "streak": streak,
+                "warn_streak": warn_streak,
+                "error": str(error),
+            },
+        )
+    return streak
 
 
 def _note_fetch_count(
@@ -321,6 +386,8 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
     gateway_url, gateway_api_key = _gateway_runtime_contract()
     zero_write_warn_streak = _zero_write_warn_streak_threshold()
+    loop_sleep_seconds = _loop_sleep_seconds()
+    loop_error_warn_streak = _loop_error_warn_streak_threshold()
     await init_db()
 
     # Initialize connectors (now using Data Gateway)
@@ -339,6 +406,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     last_vix = datetime.min.replace(tzinfo=timezone.utc)
     last_ticker_source: str | None = None
     zero_write_streaks: dict[str, int] = {}
+    loop_error_streak = 0
 
     logger.info("Feature Enrichment Service started")
 
@@ -433,13 +501,19 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     last_regime = now
                 except Exception as e:
                     logger.error(f"Regime snapshot error: {e}", exc_info=True)
+            loop_error_streak = 0
 
         except Exception as e:
             logger.error(f"Feature enrichment error: {e}", exc_info=True)
+            loop_error_streak = _note_loop_error(
+                consecutive_error_streak=loop_error_streak,
+                warn_streak=loop_error_warn_streak,
+                error=e,
+            )
 
         # Wait before next iteration
         try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=30)
+            await asyncio.wait_for(shutdown_event.wait(), timeout=loop_sleep_seconds)
             break
         except asyncio.TimeoutError:
             pass

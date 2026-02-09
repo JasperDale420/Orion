@@ -7848,6 +7848,44 @@ Result:
   - ticker-source drift away from Heber is observable,
   - sustained zero-write cycles per feed trigger operational warnings instead of remaining silent.
 
+## 255) Pass 253 Continuation (2026-02-09)
+
+### 255.1 Combined Runtime-Guardrail Pass: Backfill Max-Duration Cutoff + Feature Loop Error-Streak Controls (TDD-Backed)
+
+Finding:
+- backfill runtime controls already covered retry/dead-letter/failure-count bounds, but did not include a wall-clock cutoff for long-running sessions.
+- feature enrichment loop had zero-write and source-shift observability, but lacked explicit loop-sleep configurability and consecutive loop-error streak warning semantics.
+
+Implemented:
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - added `max_duration_seconds` runtime bound with:
+    - env `ORION_BACKFILL_EXIT_MAX_DURATION_SECONDS`,
+    - CLI `--max-duration-seconds`,
+  - abort behavior now sets:
+    - `aborted=True`
+    - `abort_reason="max_duration_seconds_reached"`
+    - `max_duration_seconds` summary field.
+- Updated `src/orion/main_feature_enrichment.py`:
+  - added `_loop_sleep_seconds()`:
+    - env `ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS`,
+    - invalid config warning event: `feature_enrichment_loop_sleep_seconds_invalid`,
+  - added `_note_loop_error(...)` + warn threshold parser:
+    - env `ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK`,
+    - warning event: `feature_enrichment_loop_error_streak`,
+  - loop wait timeout is now env-configurable and loop error streak is tracked/reset per successful cycle.
+- Added tests:
+  - `tests/unit/test_backfill_exit_columns_selection.py`
+    - `test_run_backfill_aborts_when_max_duration_seconds_reached`
+  - `tests/unit/test_feature_enrichment_runtime_signals.py`
+    - `test_loop_sleep_seconds_invalid_env_uses_default`
+    - `test_note_loop_error_warns_at_threshold`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_feature_enrichment_runtime_signals.py` passed.
+
+Result:
+- backfill and enrichment loops now have stronger runtime-bounds and consecutive-error signaling controls, reducing silent long-run degradation risk during migration operations.
+
 ## 254) Pass 252 Continuation (2026-02-09)
 
 ### 254.1 Remaining Orion-Local Silver Dependency Inventory (Audit-Only, Combined Pass)

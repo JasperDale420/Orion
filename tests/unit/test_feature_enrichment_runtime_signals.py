@@ -154,3 +154,50 @@ def test_log_ticker_source_transition_logs_on_change(monkeypatch: pytest.MonkeyP
         "source": "local_db",
         "tickers_count": 3,
     }
+
+
+def test_loop_sleep_seconds_invalid_env_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[dict[str, object]] = []
+    monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS", "abc")
+
+    def _fake_warning(_message: str, *args: object, extra: dict[str, object] | None = None, **_kwargs: object) -> None:
+        if extra:
+            warnings.append(extra)
+
+    monkeypatch.setattr(feature_enrichment.logger, "warning", _fake_warning, raising=False)
+
+    value = feature_enrichment._loop_sleep_seconds()
+
+    assert value == feature_enrichment.DEFAULT_LOOP_SLEEP_SECONDS
+    assert warnings[-1]["event"] == "feature_enrichment_loop_sleep_seconds_invalid"
+
+
+def test_note_loop_error_warns_at_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[dict[str, object]] = []
+
+    def _fake_warning(_message: str, *args: object, extra: dict[str, object] | None = None, **_kwargs: object) -> None:
+        if extra:
+            warnings.append(extra)
+
+    monkeypatch.setattr(feature_enrichment.logger, "warning", _fake_warning, raising=False)
+
+    streak = feature_enrichment._note_loop_error(
+        consecutive_error_streak=0,
+        warn_streak=2,
+        error=RuntimeError("boom"),
+    )
+    assert streak == 1
+    assert warnings == []
+
+    streak = feature_enrichment._note_loop_error(
+        consecutive_error_streak=streak,
+        warn_streak=2,
+        error=RuntimeError("boom"),
+    )
+    assert streak == 2
+    assert warnings[-1] == {
+        "event": "feature_enrichment_loop_error_streak",
+        "streak": 2,
+        "warn_streak": 2,
+        "error": "boom",
+    }

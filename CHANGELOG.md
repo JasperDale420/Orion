@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Runtime Guardrails for Backfill + Feature-Enrichment Loop (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - added elapsed-runtime circuit breaker:
+      - env default `ORION_BACKFILL_EXIT_MAX_DURATION_SECONDS`,
+      - runtime arg `max_duration_seconds`,
+      - CLI flag `--max-duration-seconds`,
+    - backfill now aborts safely when elapsed runtime exceeds threshold with:
+      - `aborted=true`
+      - `abort_reason=max_duration_seconds_reached`
+      - `max_duration_seconds` in summary payload.
+  - Updated `src/orion/main_feature_enrichment.py`:
+    - added loop wait configuration:
+      - env `ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS`,
+      - invalid values emit `feature_enrichment_loop_sleep_seconds_invalid` and fall back to default,
+    - added loop consecutive-error warning threshold:
+      - env `ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK`,
+      - warning event `feature_enrichment_loop_error_streak`.
+  - Extended tests:
+    - `tests/unit/test_backfill_exit_columns_selection.py`
+      - `test_run_backfill_aborts_when_max_duration_seconds_reached`
+    - `tests/unit/test_feature_enrichment_runtime_signals.py`
+      - `test_loop_sleep_seconds_invalid_env_uses_default`
+      - `test_note_loop_error_warns_at_threshold`.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_feature_enrichment_runtime_signals.py`
 - **Feature Enrichment Runtime Signal Hardening (TDD)**:
   - Updated `src/orion/main_feature_enrichment.py`:
     - added source-aware ticker discovery via `get_active_tickers_with_source(...)` (`heber`, `local_db`, `static_fallback`),

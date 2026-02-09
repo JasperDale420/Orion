@@ -54,6 +54,7 @@ DEFAULT_DEAD_LETTER_COMPRESS_ROTATED = os.getenv(
     "false",
 ).strip().lower() in {"1", "true", "yes", "y", "on"}
 DEFAULT_MAX_FAILED_RECORDS = int(os.getenv("ORION_BACKFILL_EXIT_MAX_FAILED_RECORDS", "0"))
+DEFAULT_MAX_DURATION_SECONDS = float(os.getenv("ORION_BACKFILL_EXIT_MAX_DURATION_SECONDS", "0"))
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
@@ -434,18 +435,34 @@ async def run_backfill(
     dead_letter_max_rotated_files: int = DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES,
     dead_letter_compress_rotated: bool = DEFAULT_DEAD_LETTER_COMPRESS_ROTATED,
     max_failed_records: int = DEFAULT_MAX_FAILED_RECORDS,
+    max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS,
 ) -> Dict[str, Any]:
     """Run the backfill job."""
     run_started_at = time.perf_counter()
     await init_db()
     dead_letter_redact_fields = dead_letter_redact_fields or DEFAULT_DEAD_LETTER_REDACT_FIELDS
     failure_threshold = max(0, max_failed_records)
+    duration_threshold = max(0.0, max_duration_seconds)
     aborted = False
     abort_reason: str | None = None
     total_failed_count = 0
 
+    def _abort_if_duration_exceeded() -> bool:
+        nonlocal aborted, abort_reason
+        if duration_threshold <= 0:
+            return False
+        if (time.perf_counter() - run_started_at) < duration_threshold:
+            return False
+        aborted = True
+        abort_reason = "max_duration_seconds_reached"
+        logger.error(
+            "Aborting backfill: reached max_duration_seconds=%s",
+            duration_threshold,
+        )
+        return True
+
     logger.info(
-        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_max_rotated_files=%s, dead_letter_compress_rotated=%s, max_failed_records=%s",
+        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_max_rotated_files=%s, dead_letter_compress_rotated=%s, max_failed_records=%s, max_duration_seconds=%s",
         batch_size,
         limit,
         max_retries,
@@ -456,6 +473,7 @@ async def run_backfill(
         dead_letter_max_rotated_files,
         dead_letter_compress_rotated,
         failure_threshold,
+        duration_threshold,
     )
 
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
@@ -479,6 +497,8 @@ async def run_backfill(
         )
 
     while True:
+        if _abort_if_duration_exceeded():
+            break
         remaining = limit - velocity_processed
         if remaining <= 0:
             break
@@ -492,6 +512,8 @@ async def run_backfill(
             break
 
         for record in velocity_records:
+            if _abort_if_duration_exceeded():
+                break
             updated, failed, retries, error_message = await _update_record_with_retry(
                 record,
                 update_velocity_columns,
@@ -584,6 +606,8 @@ async def run_backfill(
         )
 
     while not aborted:
+        if _abort_if_duration_exceeded():
+            break
         remaining = limit - checkpoint_processed
         if remaining <= 0:
             break
@@ -597,6 +621,8 @@ async def run_backfill(
             break
 
         for record in checkpoint_records:
+            if _abort_if_duration_exceeded():
+                break
             updated, failed, retries, error_message = await _update_record_with_retry(
                 record,
                 update_checkpoint_columns,
@@ -702,6 +728,7 @@ async def run_backfill(
         "dead_letter_max_rotated_files": dead_letter_max_rotated_files,
         "dead_letter_compress_rotated": dead_letter_compress_rotated,
         "max_failed_records": failure_threshold,
+        "max_duration_seconds": duration_threshold,
         "aborted": aborted,
         "abort_reason": abort_reason,
         "total_elapsed_seconds": total_elapsed_seconds,
@@ -769,6 +796,12 @@ async def main() -> None:
         default=DEFAULT_MAX_FAILED_RECORDS,
         help="Abort run after this many failed records across phases (0 = disabled)",
     )
+    parser.add_argument(
+        "--max-duration-seconds",
+        type=float,
+        default=DEFAULT_MAX_DURATION_SECONDS,
+        help="Abort run after this many elapsed seconds across phases (0 = disabled)",
+    )
     parser.set_defaults(dead_letter_compress_rotated=DEFAULT_DEAD_LETTER_COMPRESS_ROTATED)
     args = parser.parse_args()
     redact_fields = {field.strip() for field in args.dead_letter_redact_fields.split(",") if field.strip()}
@@ -784,6 +817,7 @@ async def main() -> None:
         dead_letter_max_rotated_files=args.dead_letter_max_rotated_files,
         dead_letter_compress_rotated=args.dead_letter_compress_rotated,
         max_failed_records=args.max_failed_records,
+        max_duration_seconds=args.max_duration_seconds,
     )
 
 
