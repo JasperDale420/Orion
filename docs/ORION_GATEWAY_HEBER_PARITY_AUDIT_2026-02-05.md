@@ -7811,3 +7811,39 @@ Verification:
 
 Result:
 - refresh-strategy resolution is now observable and machine-parsable in logs, improving rollout debugging and auditability.
+
+## 253) Pass 251 Continuation (2026-02-09)
+
+### 253.1 Feature Enrichment Runtime Signals for Heber-Fallback Drift + Zero-Write Streaks (TDD-Backed)
+
+Finding:
+- feature enrichment previously selected active tickers through a layered fallback path (Heber -> local DB -> static list), but runtime did not surface source transitions in structured telemetry.
+- enrichment fetch loops also lacked explicit consecutive zero-write streak alerts per feed, making silent partial outages harder to detect during migration to externalized data ownership.
+
+Implemented:
+- Updated `src/orion/main_feature_enrichment.py`:
+  - added `get_active_tickers_with_source(...)` returning `(tickers, source)` where source is:
+    - `heber`
+    - `local_db`
+    - `static_fallback`,
+  - kept `get_active_tickers(...)` as compatibility wrapper,
+  - added `_log_ticker_source_transition(...)` to emit structured source-shift telemetry:
+    - `event=feature_enrichment_ticker_source_changed`
+    - includes previous source, new source, and ticker count,
+  - added `_note_fetch_count(...)` to track per-feed zero-write streaks and emit warnings on threshold breach:
+    - `event=feature_enrichment_zero_write_streak`,
+  - added `_zero_write_warn_streak_threshold()` with env configuration:
+    - `ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK`
+    - invalid values log `feature_enrichment_zero_write_warn_streak_invalid` and fall back to default.
+- Added tests in `tests/unit/test_feature_enrichment_runtime_signals.py`:
+  - source resolution/fallback behavior,
+  - streak warning and reset behavior,
+  - source transition logging behavior.
+
+Verification:
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_gateway_contract.py tests/unit/test_feature_enrichment_heber_source.py` passed.
+
+Result:
+- feature enrichment now exposes runtime degradations that directly matter for Gateway/Heber migration readiness:
+  - ticker-source drift away from Heber is observable,
+  - sustained zero-write cycles per feed trigger operational warnings instead of remaining silent.

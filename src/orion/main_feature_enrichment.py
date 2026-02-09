@@ -6,6 +6,7 @@ Runs as a background service to populate feature tables for ML.
 """
 
 import asyncio
+import os
 import signal
 from datetime import datetime, timezone
 from typing import Any, List
@@ -38,6 +39,8 @@ MAX_PAIN_INTERVAL = 3600  # Every hour
 IV_RANK_INTERVAL = 900  # Every 15 minutes
 REGIME_SNAPSHOT_INTERVAL = 300  # Every 5 minutes
 VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
+DEFAULT_ZERO_WRITE_WARN_STREAK = 3
+STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
 
 _heber_reader = HeberReader()
 
@@ -86,8 +89,74 @@ def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> List
     return counts.head(limit).index.tolist()
 
 
-async def get_active_tickers(limit: int = 20) -> List[str]:
-    """Get tickers with recent flow activity (Heber first, DB fallback)."""
+def _zero_write_warn_streak_threshold() -> int:
+    raw = os.getenv(
+        "ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK",
+        str(DEFAULT_ZERO_WRITE_WARN_STREAK),
+    ).strip()
+    try:
+        value = int(raw)
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
+    except Exception:
+        logger.warning(
+            "Invalid ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK; using default",
+            extra={
+                "event": "feature_enrichment_zero_write_warn_streak_invalid",
+                "value": raw,
+                "default": DEFAULT_ZERO_WRITE_WARN_STREAK,
+            },
+        )
+        return DEFAULT_ZERO_WRITE_WARN_STREAK
+
+
+def _note_fetch_count(
+    feed_name: str,
+    count: int,
+    zero_write_streaks: dict[str, int],
+    warn_streak: int,
+    tickers_count: int | None = None,
+) -> None:
+    if count > 0:
+        zero_write_streaks[feed_name] = 0
+        return
+
+    streak = zero_write_streaks.get(feed_name, 0) + 1
+    zero_write_streaks[feed_name] = streak
+    if streak >= warn_streak:
+        logger.warning(
+            "Feature enrichment feed has consecutive zero-write cycles",
+            extra={
+                "event": "feature_enrichment_zero_write_streak",
+                "feed": feed_name,
+                "count": count,
+                "streak": streak,
+                "warn_streak": warn_streak,
+                "tickers_count": tickers_count,
+            },
+        )
+
+
+def _log_ticker_source_transition(source: str, previous_source: str | None, tickers_count: int) -> str:
+    if source == previous_source:
+        return source
+
+    extra = {
+        "event": "feature_enrichment_ticker_source_changed",
+        "previous_source": previous_source,
+        "source": source,
+        "tickers_count": tickers_count,
+    }
+    if source == "heber":
+        logger.info("Ticker discovery source switched", extra=extra)
+    else:
+        logger.warning("Ticker discovery source switched away from Heber", extra=extra)
+    return source
+
+
+async def get_active_tickers_with_source(limit: int = 20) -> tuple[List[str], str]:
+    """Get tickers with recent flow activity and the source used."""
     try:
         now_utc = datetime.now(timezone.utc)
         flow_df = _heber_reader.read_flow(
@@ -96,7 +165,7 @@ async def get_active_tickers(limit: int = 20) -> List[str]:
         )
         tickers = _extract_top_tickers_from_flow_df(flow_df, limit=limit)
         if tickers:
-            return tickers
+            return tickers, "heber"
     except Exception:
         logger.debug("Heber flow ticker discovery failed, falling back to local DB", exc_info=True)
 
@@ -116,10 +185,16 @@ async def get_active_tickers(limit: int = 20) -> List[str]:
         return [row[0] for row in result.fetchall()]
 
     try:
-        return await db_query(query)
+        return await db_query(query), "local_db"
     except Exception:
         # Fallback to common tickers
-        return ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
+        return STATIC_TICKER_FALLBACK, "static_fallback"
+
+
+async def get_active_tickers(limit: int = 20) -> List[str]:
+    """Get tickers with recent flow activity (Heber first, DB fallback)."""
+    tickers, _source = await get_active_tickers_with_source(limit=limit)
+    return tickers
 
 
 async def get_latest_vix_data() -> dict:
@@ -245,6 +320,7 @@ async def persist_regime_snapshot(
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
     gateway_url, gateway_api_key = _gateway_runtime_contract()
+    zero_write_warn_streak = _zero_write_warn_streak_threshold()
     await init_db()
 
     # Initialize connectors (now using Data Gateway)
@@ -261,36 +337,65 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     last_iv = datetime.min.replace(tzinfo=timezone.utc)
     last_regime = datetime.min.replace(tzinfo=timezone.utc)
     last_vix = datetime.min.replace(tzinfo=timezone.utc)
+    last_ticker_source: str | None = None
+    zero_write_streaks: dict[str, int] = {}
 
     logger.info("Feature Enrichment Service started")
 
     while not shutdown_event.is_set():
         try:
             now = datetime.now(timezone.utc)
-            tickers = await get_active_tickers()
+            tickers, ticker_source = await get_active_tickers_with_source()
+            last_ticker_source = _log_ticker_source_transition(
+                source=ticker_source,
+                previous_source=last_ticker_source,
+                tickers_count=len(tickers),
+            )
 
             # Market Tide - every minute
             if (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL:
                 count = await tide_connector.fetch_and_store()
                 logger.info(f"Market Tide: stored {count} ticks")
+                _note_fetch_count("market_tide", count, zero_write_streaks, zero_write_warn_streak)
                 last_tide = now
 
             # Greek Exposure - every 5 minutes
             if (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL:
                 count = await greek_connector.fetch_and_store(tickers)
                 logger.info(f"Greek Exposure: stored {count} records for {len(tickers)} tickers")
+                _note_fetch_count(
+                    "greek_exposure",
+                    count,
+                    zero_write_streaks,
+                    zero_write_warn_streak,
+                    tickers_count=len(tickers),
+                )
                 last_greek = now
 
             # Max Pain - every hour
             if (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL:
                 count = await max_pain_connector.fetch_and_store(tickers)
                 logger.info(f"Max Pain: stored {count} records")
+                _note_fetch_count(
+                    "max_pain",
+                    count,
+                    zero_write_streaks,
+                    zero_write_warn_streak,
+                    tickers_count=len(tickers),
+                )
                 last_max_pain = now
 
             # IV Rank - every 15 minutes
             if (now - last_iv).total_seconds() >= IV_RANK_INTERVAL:
                 count = await iv_connector.fetch_and_store(tickers)
                 logger.info(f"IV Rank: stored {count} records")
+                _note_fetch_count(
+                    "iv_rank",
+                    count,
+                    zero_write_streaks,
+                    zero_write_warn_streak,
+                    tickers_count=len(tickers),
+                )
                 last_iv = now
 
             # VIX Data - every hour
@@ -298,6 +403,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 try:
                     count = await vix_connector.fetch_and_store()
                     logger.info(f"VIX Proxy: stored {count} records")
+                    _note_fetch_count("vix_proxy", count, zero_write_streaks, zero_write_warn_streak)
                     last_vix = now
                 except Exception as e:
                     logger.error(f"VIX proxy fetch error: {e}", exc_info=True)
