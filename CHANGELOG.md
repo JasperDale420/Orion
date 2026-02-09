@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Exit Classifier Cross-Bucket Query Contract + SQL Null-Normalization Validation (TDD)**:
+  - Extended `tests/unit/test_exit_classifier_window_query.py` with:
+    - `test_build_bucket_training_data_query_contract_per_bucket`
+    - `test_build_bucket_training_data_query_coalesces_entry_and_window_fields`
+  - Validated `src/orion/ml/exit_classifier.py` training query contract:
+    - bucket-specific checkpoint columns are present for `0DTE`, `SHORT_SWING`, `SWING`, and `POSITION`,
+    - SQL-side `COALESCE(...)` defaults are enforced for entry + window fields (`1h/1d/1w`) to reduce null-driven training drift.
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_price_target_labeler_heber_context.py -k "window_features_at_entry or velocity_backfill_candidates or checkpoint_backfill_candidates or query_contract_per_bucket or query_coalesces_entry_and_window_fields"`
 - **Exit Classifier Label-Distribution Guard Before Model Fit (TDD)**:
   - Updated `tests/unit/test_exit_classifier_window_query.py`:
     - `test_can_train_with_labels_rejects_single_class_and_sparse_classes`

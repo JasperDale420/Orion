@@ -7275,6 +7275,33 @@ Result:
 Residual:
 - next high-value classifier pass should add explicit schema-drift tests around checkpoint column availability and null-heavy row distributions under larger sample sets.
 
+## 240) Pass 238 Continuation (2026-02-09)
+
+### 240.1 Exit-Classifier Cross-Bucket Query Contracts + SQL Null Normalization (TDD-Backed)
+
+Finding:
+- residual classifier debt called out in pass 239 was still open in audit narrative: explicit cross-bucket checkpoint column contract checks and query-time null normalization validation.
+- these checks are important because bucket schema drift or nullable window payloads can silently degrade training quality while still returning rows.
+
+Implemented:
+- Extended `tests/unit/test_exit_classifier_window_query.py` with:
+  - `test_build_bucket_training_data_query_contract_per_bucket`
+  - `test_build_bucket_training_data_query_coalesces_entry_and_window_fields`
+- Validated query behavior in `src/orion/ml/exit_classifier.py::build_bucket_training_data(...)`:
+  - bucket-specific checkpoint columns are asserted for `0DTE`, `SHORT_SWING`, `SWING`, `POSITION`,
+  - SQL-side defaults are asserted via `COALESCE(...)` for entry fields and `gold_feature_windows` JSON window fields (`1h/1d/1w`).
+
+Verification:
+- `pytest -q tests/unit/test_exit_classifier_window_query.py` passed.
+- `pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_price_target_labeler_heber_context.py -k "window_features_at_entry or velocity_backfill_candidates or checkpoint_backfill_candidates or query_contract_per_bucket or query_coalesces_entry_and_window_fields"` passed.
+
+Result:
+- classifier training query contract is now explicitly guarded across all trade buckets.
+- null-heavy entry/window rows are normalized at SQL projection time, reducing downstream training-data instability and drift risk.
+
+Residual:
+- next high-value classifier pass should cover large-sample performance checks and optional query plan/index verification for `price_target_labels` + `gold_feature_windows` joins.
+
 ## 239) Pass 237 Continuation (2026-02-09)
 
 ### 239.1 Exit Classifier Label-Distribution Guarding (TDD-Backed)
