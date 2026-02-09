@@ -633,3 +633,165 @@ async def test_save_phase_cursors_do_not_write_legacy_watermarks(
 
     assert velocity_writes == [(ts1, "vel-500")]
     assert checkpoint_writes == [(ts2, "cp-500")]
+
+
+@pytest.mark.asyncio
+async def test_update_record_with_retry_retries_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def _flaky_update(_record: dict[str, Any]) -> bool:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("transient failure")
+        return True
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
+
+    updated, failed, retries = await backfill_exit_columns._update_record_with_retry(
+        {"event_id": "evt-1"},
+        _flaky_update,
+        phase_name="velocity",
+    )
+
+    assert updated is True
+    assert failed is False
+    assert retries == 1
+    assert attempts["count"] == 2
+    assert sleeps == [backfill_exit_columns.RETRY_SLEEP_SECONDS]
+
+
+@pytest.mark.asyncio
+async def test_update_record_with_retry_marks_failure_after_max_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def _always_fail(_record: dict[str, Any]) -> bool:
+        attempts["count"] += 1
+        raise RuntimeError("permanent failure")
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
+
+    updated, failed, retries = await backfill_exit_columns._update_record_with_retry(
+        {"event_id": "evt-2"},
+        _always_fail,
+        phase_name="checkpoint",
+    )
+
+    assert updated is False
+    assert failed is True
+    assert retries == backfill_exit_columns.MAX_RECORD_RETRIES
+    assert attempts["count"] == backfill_exit_columns.MAX_RECORD_RETRIES + 1
+    assert len(sleeps) == backfill_exit_columns.MAX_RECORD_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_continues_when_velocity_update_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    velocity_calls: list[dict[str, Any]] = []
+    saved_velocity_cursors: list[tuple[datetime, str | None]] = []
+    attempted_event_ids: list[str] = []
+
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    ts2 = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        velocity_calls.append(
+            {
+                "limit": limit,
+                "after_entry_ts": after_entry_ts,
+                "after_event_id": after_event_id,
+            }
+        )
+        if len(velocity_calls) == 1:
+            return [
+                {"event_id": "vel-err", "entry_ts": ts1},
+                {"event_id": "vel-ok", "entry_ts": ts2},
+            ]
+        return []
+
+    async def _fake_get_all_records_for_checkpoints(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return []
+
+    async def _fake_update_velocity_columns(record: dict[str, Any]) -> bool:
+        attempted_event_ids.append(record["event_id"])
+        if record["event_id"] == "vel-err":
+            raise RuntimeError("boom")
+        return True
+
+    async def _fake_update_checkpoint_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_save_velocity_backfill_cursor(entry_ts: datetime, event_id: str | None) -> None:
+        saved_velocity_cursors.append((entry_ts, event_id))
+
+    async def _fake_save_checkpoint_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        raise AssertionError("checkpoint cursor should not be written")
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(backfill_exit_columns, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_exit_columns, "get_all_records_for_checkpoints", _fake_get_all_records_for_checkpoints)
+    monkeypatch.setattr(backfill_exit_columns, "update_velocity_columns", _fake_update_velocity_columns)
+    monkeypatch.setattr(backfill_exit_columns, "update_checkpoint_columns", _fake_update_checkpoint_columns)
+    monkeypatch.setattr(backfill_exit_columns, "init_db", _fake_init_db)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_velocity_backfill_cursor",
+        _fake_load_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_checkpoint_backfill_cursor",
+        _fake_load_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_velocity_backfill_cursor",
+        _fake_save_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_checkpoint_backfill_cursor",
+        _fake_save_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
+
+    await backfill_exit_columns.run_backfill(batch_size=2, limit=2)
+
+    assert attempted_event_ids.count("vel-err") == backfill_exit_columns.MAX_RECORD_RETRIES + 1
+    assert "vel-ok" in attempted_event_ids
+    assert saved_velocity_cursors == [(ts1, "vel-err"), (ts2, "vel-ok")]

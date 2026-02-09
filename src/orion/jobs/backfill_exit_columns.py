@@ -13,7 +13,7 @@ Usage:
 import argparse
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from orion.main_price_target_labeler import (
     get_checkpoint_backfill_candidates as get_labeler_checkpoint_backfill_candidates,
@@ -29,6 +29,8 @@ from sqlalchemy import text
 logger = setup_struct_logger("orion.backfill.exit_columns")
 
 BATCH_SIZE = 50
+MAX_RECORD_RETRIES = 2
+RETRY_SLEEP_SECONDS = 0.25
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
@@ -243,6 +245,48 @@ async def update_checkpoint_columns(record: Dict[str, Any]) -> bool:
     return True
 
 
+async def _update_record_with_retry(
+    record: Dict[str, Any],
+    update_fn: Callable[[Dict[str, Any]], Awaitable[bool]],
+    phase_name: str,
+) -> tuple[bool, bool, int]:
+    """Run a record updater with bounded retries.
+
+    Returns:
+        (updated, failed, retries_used)
+    """
+    retries_used = 0
+    event_id = record.get("event_id")
+
+    for attempt in range(MAX_RECORD_RETRIES + 1):
+        try:
+            updated = await update_fn(record)
+            return updated, False, retries_used
+        except Exception as exc:
+            if attempt >= MAX_RECORD_RETRIES:
+                logger.error(
+                    "Failed %s update for event_id=%s after %s attempt(s): %s",
+                    phase_name,
+                    event_id,
+                    attempt + 1,
+                    exc,
+                )
+                return False, True, retries_used
+
+            retries_used += 1
+            logger.warning(
+                "Retrying %s update for event_id=%s after attempt %s/%s: %s",
+                phase_name,
+                event_id,
+                attempt + 1,
+                MAX_RECORD_RETRIES + 1,
+                exc,
+            )
+            await asyncio.sleep(RETRY_SLEEP_SECONDS)
+
+    return False, True, retries_used
+
+
 async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
     """Run the backfill job."""
     await init_db()
@@ -252,7 +296,10 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
     logger.info("Phase 1: Backfilling velocity columns (time_to_75/100/150_pct_seconds)...")
     velocity_updated = 0
+    velocity_failed = 0
+    velocity_retried = 0
     velocity_processed = 0
+    log_velocity_every = max(batch_size, 1)
     velocity_after_entry_ts, velocity_after_event_id = await _load_velocity_backfill_cursor()
 
     if velocity_after_entry_ts is not None:
@@ -276,22 +323,48 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             break
 
         for record in velocity_records:
-            if await update_velocity_columns(record):
+            updated, failed, retries = await _update_record_with_retry(
+                record,
+                update_velocity_columns,
+                phase_name="velocity",
+            )
+            if updated:
                 velocity_updated += 1
+            if failed:
+                velocity_failed += 1
+            velocity_retried += retries
+
             velocity_processed += 1
             velocity_after_entry_ts = record.get("entry_ts")
             velocity_after_event_id = record.get("event_id")
             if velocity_after_entry_ts is not None:
                 await _save_velocity_backfill_cursor(velocity_after_entry_ts, velocity_after_event_id)
 
+            if velocity_processed % log_velocity_every == 0:
+                logger.info(
+                    "Processed %s velocity records | Updated: %s | Failed: %s | Retries: %s",
+                    velocity_processed,
+                    velocity_updated,
+                    velocity_failed,
+                    velocity_retried,
+                )
+
             if velocity_processed >= limit:
                 break
 
-    logger.info(f"Velocity columns updated: {velocity_updated}/{velocity_processed}")
+    logger.info(
+        "Velocity columns updated: %s/%s | failed=%s | retries=%s",
+        velocity_updated,
+        velocity_processed,
+        velocity_failed,
+        velocity_retried,
+    )
 
     # Phase 2: Checkpoint columns (slower, needs to fetch price history)
     logger.info("Phase 2: Backfilling checkpoint columns (15m/30m/8h/1d/2d/3d/1w)...")
     checkpoint_updated = 0
+    checkpoint_failed = 0
+    checkpoint_retried = 0
     checkpoint_processed = 0
     checkpoint_after_entry_ts, checkpoint_after_event_id = await _load_checkpoint_backfill_cursor()
     log_checkpoint_every = max(batch_size, 1)
@@ -317,8 +390,17 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
             break
 
         for record in checkpoint_records:
-            if await update_checkpoint_columns(record):
+            updated, failed, retries = await _update_record_with_retry(
+                record,
+                update_checkpoint_columns,
+                phase_name="checkpoint",
+            )
+            if updated:
                 checkpoint_updated += 1
+            if failed:
+                checkpoint_failed += 1
+            checkpoint_retried += retries
+
             checkpoint_processed += 1
             checkpoint_after_entry_ts = record.get("entry_ts")
             checkpoint_after_event_id = record.get("event_id")
@@ -326,12 +408,24 @@ async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:
                 await _save_checkpoint_backfill_cursor(checkpoint_after_entry_ts, checkpoint_after_event_id)
 
             if checkpoint_processed % log_checkpoint_every == 0:
-                logger.info(f"Processed {checkpoint_processed} checkpoint records...")
+                logger.info(
+                    "Processed %s checkpoint records | Updated: %s | Failed: %s | Retries: %s",
+                    checkpoint_processed,
+                    checkpoint_updated,
+                    checkpoint_failed,
+                    checkpoint_retried,
+                )
 
             if checkpoint_processed >= limit:
                 break
 
-    logger.info(f"Checkpoint columns updated: {checkpoint_updated}/{checkpoint_processed}")
+    logger.info(
+        "Checkpoint columns updated: %s/%s | failed=%s | retries=%s",
+        checkpoint_updated,
+        checkpoint_processed,
+        checkpoint_failed,
+        checkpoint_retried,
+    )
 
     logger.info("Backfill complete!")
 

@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Backfill Exit Columns Resilience + Retry + Progress Telemetry (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - added bounded retry helper `_update_record_with_retry(...)` for per-record update failures,
+    - introduced retry controls (`MAX_RECORD_RETRIES`, `RETRY_SLEEP_SECONDS`),
+    - `run_backfill(...)` now continues processing after per-record failures in both velocity and checkpoint phases,
+    - added structured per-phase progress summaries with processed/updated/failed/retried counts.
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+    - `test_update_record_with_retry_retries_then_succeeds`
+    - `test_update_record_with_retry_marks_failure_after_max_retries`
+    - `test_run_backfill_continues_when_velocity_update_raises`
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py`
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py`
 - **Exit Classifier Dataset Shape Stability for Empty Training Batches (TDD)**:
   - Updated `tests/unit/test_exit_classifier_window_query.py`:
     - `test_build_bucket_training_data_returns_stable_empty_matrix_shape_when_rows_filtered`

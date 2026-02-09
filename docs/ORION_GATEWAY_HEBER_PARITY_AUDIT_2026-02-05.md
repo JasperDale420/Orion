@@ -7357,3 +7357,37 @@ Result:
 
 Residual:
 - next high-value pass remains schema-drift guarding for checkpoint-column availability and larger-volume performance profiling for the classifier training query.
+
+## 241) Pass 239 Continuation (2026-02-09)
+
+### 241.1 `backfill_exit_columns` Runtime Hardening (TDD-Backed, Combined Pass)
+
+Finding:
+- `src/orion/jobs/backfill_exit_columns.py::run_backfill(...)` previously called record updaters directly inside phase loops.
+- any per-record exception could abort the full job, preventing later records from being processed and creating brittle recovery behavior during long backfill runs.
+- phase progress logs also lacked explicit failure/retry counters, making operational visibility weaker than neighboring backfill jobs.
+
+Implemented:
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - added `_update_record_with_retry(...)` with bounded retry behavior for per-record update failures,
+  - introduced retry controls:
+    - `MAX_RECORD_RETRIES = 2`
+    - `RETRY_SLEEP_SECONDS = 0.25`
+  - routed both velocity/checkpoint phase updates through retry helper,
+  - preserved cursor advancement semantics while adding per-phase `failed` and `retried` counters,
+  - added richer progress/final logs for both phases including processed/updated/failed/retried totals.
+- Extended `tests/unit/test_backfill_exit_columns_selection.py`:
+  - `test_update_record_with_retry_retries_then_succeeds`
+  - `test_update_record_with_retry_marks_failure_after_max_retries`
+  - `test_run_backfill_continues_when_velocity_update_raises`
+
+Verification:
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py` passed.
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py` passed.
+
+Result:
+- backfill now degrades gracefully under transient/per-record failures instead of stopping the entire run.
+- retry/failure telemetry is explicit, which improves operations visibility and post-run triage quality.
+
+Residual:
+- next high-value backfill pass should add a configurable dead-letter sink for repeated per-record failures and optional phase-level summary return payload for orchestration callers.
