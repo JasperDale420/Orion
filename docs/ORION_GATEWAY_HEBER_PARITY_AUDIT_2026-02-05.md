@@ -6834,3 +6834,49 @@ Result:
 
 Residual:
 - remaining backfill orchestration debt is now primarily concentrated in the remaining inline helper import block for darkpool/rvol/flow-aggression/tide/regime context and runtime behavior under full-load backfill execution.
+
+## 227) Pass 225 Continuation (2026-02-09)
+
+### 227.1 Backfill Context Helper Wrapper Alignment (TDD-Backed)
+
+Finding:
+- `update_ml_features(...)` still had a remaining inline helper import block for:
+  - darkpool metrics,
+  - RVOL metrics,
+  - flow aggression,
+  - institutional flow (1w),
+  - market tide context,
+  - regime context.
+- this left a final set of backfill orchestration paths outside the wrapper-delegation pattern and kept stubbing behavior inconsistent across helper families.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+  - `test_get_darkpool_metrics_delegates_to_labeler`
+  - `test_get_rvol_metrics_delegates_to_labeler`
+  - `test_get_flow_aggression_delegates_to_labeler`
+  - `test_get_institutional_flow_1w_delegates_to_labeler`
+  - `test_get_market_tide_before_entry_delegates_to_labeler`
+  - `test_get_regime_at_entry_delegates_to_labeler`
+- Updated orchestration regression test `test_update_ml_features_calls_sector_corr_with_two_args` to stub:
+  - `backfill.get_darkpool_metrics(...)`,
+  - `backfill.get_rvol_metrics(...)`,
+  - `backfill.get_flow_aggression(...)`,
+  - `backfill.get_institutional_flow_1w(...)`,
+  - `backfill.get_market_tide_before_entry(...)`,
+  - `backfill.get_regime_at_entry(...)`.
+- Updated `src/orion/jobs/backfill_ml_features.py`:
+  - imported shared helper aliases for the six context helpers above,
+  - added wrapper delegates for each helper,
+  - removed the remaining inline direct-import block in `update_ml_features(...)`,
+  - routed context enrichment through wrappers.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "get_darkpool_metrics_delegates or get_rvol_metrics_delegates or get_flow_aggression_delegates or get_institutional_flow_1w_delegates or get_market_tide_before_entry_delegates or get_regime_at_entry_delegates or sector_corr_with_two_args"` passed.
+- `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- backfill context enrichment is now consistently wrapper-delegated across darkpool/RVOL/flow/tide/regime helper families, aligning orchestration with the shared labeler contract.
+
+Residual:
+- major helper-level wrapper alignment in `backfill_ml_features.py` is now largely complete.
+- remaining debt in this file is primarily runtime behavior and operational concerns (full-load backfill execution characteristics, integration/soak behavior, and broader orchestration complexity rather than helper-source divergence).

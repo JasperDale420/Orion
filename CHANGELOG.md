@@ -114,6 +114,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "get_p2_features_delegates or get_p3_features_delegates or sector_corr_with_two_args"`
     - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
+- **Backfill Context Helper Wrapper Alignment (TDD)**:
+  - Extended `tests/unit/test_backfill_ml_features_signature.py` with:
+    - `test_get_darkpool_metrics_delegates_to_labeler`
+    - `test_get_rvol_metrics_delegates_to_labeler`
+    - `test_get_flow_aggression_delegates_to_labeler`
+    - `test_get_institutional_flow_1w_delegates_to_labeler`
+    - `test_get_market_tide_before_entry_delegates_to_labeler`
+    - `test_get_regime_at_entry_delegates_to_labeler`
+  - Updated `test_update_ml_features_calls_sector_corr_with_two_args` to stub:
+    - `backfill.get_darkpool_metrics(...)`
+    - `backfill.get_rvol_metrics(...)`
+    - `backfill.get_flow_aggression(...)`
+    - `backfill.get_institutional_flow_1w(...)`
+    - `backfill.get_market_tide_before_entry(...)`
+    - `backfill.get_regime_at_entry(...)`
+  - Updated `src/orion/jobs/backfill_ml_features.py` to:
+    - add wrapper delegates for darkpool, RVOL, flow aggression, institutional flow, market tide, and regime helpers,
+    - route `update_ml_features(...)` through wrappers instead of inline direct helper imports.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py -k "get_darkpool_metrics_delegates or get_rvol_metrics_delegates or get_flow_aggression_delegates or get_institutional_flow_1w_delegates or get_market_tide_before_entry_delegates or get_regime_at_entry_delegates or sector_corr_with_two_args"`
+    - `uv run pytest -q tests/unit/test_backfill_ml_features_signature.py`
 - **Gateway Live Contract Probe (TDD)**:
   - Added `src/orion/jobs/gateway_contract_probe.py` with `run_gateway_contract_probe(...)` and CLI entrypoint (`python -m orion.jobs.gateway_contract_probe`) to validate:
     - `/health` readiness with bounded retry,

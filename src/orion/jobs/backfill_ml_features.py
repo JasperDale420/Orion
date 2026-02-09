@@ -22,29 +22,66 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import text
-
+from orion.main_price_target_labeler import (
+    get_darkpool_metrics as get_labeler_darkpool_metrics,
+)
+from orion.main_price_target_labeler import (
+    get_earnings_proximity as get_labeler_earnings_proximity,
+)
 from orion.main_price_target_labeler import (
     get_entry_time_features as get_labeler_entry_time_features,
 )
 from orion.main_price_target_labeler import (
-    get_earnings_proximity as get_labeler_earnings_proximity,
+    get_flow_aggression as get_labeler_flow_aggression,
+)
+from orion.main_price_target_labeler import (
     get_flow_greeks as get_labeler_flow_greeks,
-    get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
-    get_p2_features as get_labeler_p2_features,
-    get_p3_features as get_labeler_p3_features,
-    get_phase1_bucket_features as get_labeler_phase1_bucket_features,
-    get_sector_correlation_features as get_labeler_sector_correlation_features,
+)
+from orion.main_price_target_labeler import (
     get_gex_at_entry,
     get_max_pain_distance,
+)
+from orion.main_price_target_labeler import (
+    get_institutional_flow_1w as get_labeler_institutional_flow_1w,
+)
+from orion.main_price_target_labeler import (
+    get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
+)
+from orion.main_price_target_labeler import (
+    get_market_tide_before_entry as get_labeler_market_tide_before_entry,
+)
+from orion.main_price_target_labeler import (
+    get_p2_features as get_labeler_p2_features,
+)
+from orion.main_price_target_labeler import (
+    get_p3_features as get_labeler_p3_features,
+)
+from orion.main_price_target_labeler import (
+    get_phase1_bucket_features as get_labeler_phase1_bucket_features,
+)
+from orion.main_price_target_labeler import (
+    get_regime_at_entry as get_labeler_regime_at_entry,
+)
+from orion.main_price_target_labeler import (
+    get_rvol_metrics as get_labeler_rvol_metrics,
+)
+from orion.main_price_target_labeler import (
+    get_sector_correlation_features as get_labeler_sector_correlation_features,
+)
+from orion.main_price_target_labeler import (
     get_ticker_info as get_labeler_ticker_info,
+)
+from orion.main_price_target_labeler import (
     get_underlying_price_at_entry as get_labeler_underlying_price_at_entry,
+)
+from orion.main_price_target_labeler import (
     get_underlying_price_at_offset as get_labeler_underlying_price_at_offset,
 )
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
+from sqlalchemy import text
 
 logger = setup_struct_logger("orion.backfill.ml_features")
 
@@ -159,6 +196,36 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
 async def get_p3_features(ticker: str, option_chain: str, expiry: str, entry_ts: datetime) -> Dict[str, Any]:
     """Get P3 option features via shared labeler helper."""
     return await get_labeler_p3_features(ticker, option_chain, expiry, entry_ts)
+
+
+async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get darkpool metrics via shared labeler helper."""
+    return await get_labeler_darkpool_metrics(ticker, entry_ts)
+
+
+async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get RVOL metrics via shared labeler helper."""
+    return await get_labeler_rvol_metrics(ticker, entry_ts)
+
+
+async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get flow aggression metrics via shared labeler helper."""
+    return await get_labeler_flow_aggression(ticker, entry_ts)
+
+
+async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> Optional[float]:
+    """Get institutional flow aggregate via shared labeler helper."""
+    return await get_labeler_institutional_flow_1w(ticker, entry_ts)
+
+
+async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
+    """Get market tide context via shared labeler helper."""
+    return await get_labeler_market_tide_before_entry(entry_ts, minutes=minutes)
+
+
+async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
+    """Get regime context via shared labeler helper."""
+    return await get_labeler_regime_at_entry(entry_ts)
 
 
 async def get_records_to_backfill(
@@ -288,16 +355,6 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
 
     max_pain = await get_max_pain_distance(ticker, record.get("expiry"), entry_ts)
     updates["max_pain_distance_pct"] = max_pain
-
-    # Darkpool metrics for all windows
-    from orion.main_price_target_labeler import (
-        get_darkpool_metrics,
-        get_flow_aggression,
-        get_institutional_flow_1w,
-        get_market_tide_before_entry,
-        get_regime_at_entry,
-        get_rvol_metrics,
-    )
 
     dp_metrics = await get_darkpool_metrics(ticker, entry_ts)
     updates["darkpool_volume_1h"] = dp_metrics.get("darkpool_1h")
