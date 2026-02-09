@@ -32,6 +32,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first darkpool aggregation (`_get_darkpool_volume_from_heber`) with SQL fallback (`_get_darkpool_volume_sql`) in `get_darkpool_volume(...)`.
   - Extended `tests/unit/test_price_target_labeler_heber_context.py` with Heber-first RVOL coverage and SQL fallback expectations.
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first RVOL aggregation (`_get_rvol_metrics_from_heber`) with extracted SQL fallback (`_get_rvol_metrics_sql`) in `get_rvol_metrics(...)`.
+  - Fixed failing Heber-context tests for flow aggression and institutional flow by migrating:
+    - `get_flow_aggression(...)` to Heber-first (`_get_flow_aggression_from_heber`) with extracted SQL fallback (`_get_flow_aggression_sql`),
+    - `get_institutional_flow_1w(...)` to Heber-first (`_get_institutional_flow_1w_from_heber`) with extracted SQL fallback (`_get_institutional_flow_1w_sql`).
   - Extended `tests/unit/test_price_target_labeler_heber_context.py` with Heber-first sector/correlation coverage and SQL fallback expectations.
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first sector/correlation aggregation (`_get_sector_correlation_features_from_heber`) with extracted SQL fallback (`_get_sector_correlation_features_sql`) in `get_sector_correlation_features(...)`.
   - Extended `tests/unit/test_price_target_labeler_heber_context.py` with Heber-first opposing-flow coverage and SQL fallback expectations.

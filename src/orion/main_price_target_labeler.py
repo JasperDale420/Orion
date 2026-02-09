@@ -1935,6 +1935,95 @@ async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Opti
     - sweep_ratio_1h: Sweeps / total trades (urgency indicator)
     - same_ticker_premium_1h: Total premium traded for this ticker in last hour
     """
+    heber_result = _get_flow_aggression_from_heber(ticker, entry_ts)
+    if heber_result is not None:
+        return heber_result
+
+    return await _get_flow_aggression_sql(ticker, entry_ts)
+
+
+def _get_flow_aggression_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+    start_utc = entry_utc - timedelta(hours=1)
+
+    try:
+        flow_df = _heber_reader.read_flow(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=start_utc,
+        )
+    except Exception as e:
+        _record_price_target_fallback("flow_aggression_heber", e, ticker=ticker)
+        return None
+
+    if flow_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    premium_col = _pick_first_existing_column(flow_df, ["premium_usd", "premium"])
+    if ts_col is None or premium_col is None:
+        return None
+
+    ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    sweep_col = _pick_first_existing_column(flow_df, ["is_sweep", "sweep"])
+    aggressor_col = _pick_first_existing_column(flow_df, ["aggressor", "side"])
+
+    ts_series = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+    premium_series = pd.to_numeric(flow_df[premium_col], errors="coerce")
+
+    if ticker_col is not None:
+        ticker_series = flow_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+    else:
+        ticker_series = pd.Series([str(ticker).upper()] * len(flow_df))
+
+    if sweep_col is not None:
+        sweep_series = flow_df[sweep_col].map(_is_truthy)
+    else:
+        sweep_series = pd.Series([False] * len(flow_df))
+
+    if aggressor_col is not None:
+        aggressor_series = flow_df[aggressor_col].astype(str).str.upper()
+    else:
+        aggressor_series = pd.Series([""] * len(flow_df))
+
+    temp_df = pd.DataFrame(
+        {
+            "ts": ts_series,
+            "ticker": ticker_series,
+            "premium": premium_series,
+            "is_sweep": sweep_series,
+            "aggressor": aggressor_series,
+        }
+    ).dropna(subset=["ts", "premium"])
+
+    if temp_df.empty:
+        return None
+
+    ticker_upper = str(ticker).upper()
+    filtered = temp_df[
+        (temp_df["ticker"] == ticker_upper)
+        & (temp_df["ts"] >= start_utc)
+        & (temp_df["ts"] < entry_utc)
+    ]
+
+    if filtered.empty:
+        return {"ask_side_ratio": None, "sweep_ratio_1h": None, "same_ticker_premium_1h": None}
+
+    total = len(filtered)
+    ask_count = int((filtered["aggressor"] == "ASK").sum())
+    sweep_count = int(filtered["is_sweep"].sum())
+    total_premium = float(filtered["premium"].sum())
+
+    return {
+        "ask_side_ratio": ask_count / total if total > 0 else None,
+        "sweep_ratio_1h": sweep_count / total if total > 0 else None,
+        "same_ticker_premium_1h": total_premium,
+    }
+
+
+async def _get_flow_aggression_sql(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
     start_ts = entry_ts - timedelta(hours=1)
 
     async def query(session: Any) -> Dict[str, Optional[float]]:
@@ -1972,6 +2061,66 @@ async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> Optional
     Returns sum of premium from trades > $50,000 in the past week.
     Large trades often indicate institutional positioning for longer-term moves.
     """
+    heber_result = _get_institutional_flow_1w_from_heber(ticker, entry_ts)
+    if heber_result is not None:
+        return heber_result
+
+    return await _get_institutional_flow_1w_sql(ticker, entry_ts)
+
+
+def _get_institutional_flow_1w_from_heber(ticker: str, entry_ts: datetime) -> Optional[float]:
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+    start_utc = entry_utc - timedelta(days=7)
+
+    try:
+        flow_df = _heber_reader.read_flow(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=start_utc,
+        )
+    except Exception as e:
+        _record_price_target_fallback("institutional_flow_1w_heber", e, ticker=ticker)
+        return None
+
+    if flow_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    premium_col = _pick_first_existing_column(flow_df, ["premium_usd", "premium"])
+    if ts_col is None or premium_col is None:
+        return None
+
+    ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    if ticker_col is not None:
+        ticker_series = flow_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+    else:
+        ticker_series = pd.Series([str(ticker).upper()] * len(flow_df))
+
+    ts_series = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+    premium_series = pd.to_numeric(flow_df[premium_col], errors="coerce")
+
+    temp_df = pd.DataFrame({"ts": ts_series, "ticker": ticker_series, "premium": premium_series}).dropna(
+        subset=["ts", "premium"]
+    )
+    if temp_df.empty:
+        return None
+
+    ticker_upper = str(ticker).upper()
+    filtered = temp_df[
+        (temp_df["ticker"] == ticker_upper)
+        & (temp_df["ts"] >= start_utc)
+        & (temp_df["ts"] < entry_utc)
+        & (temp_df["premium"] >= 50000)
+    ]
+
+    if filtered.empty:
+        return None
+    return float(filtered["premium"].sum())
+
+
+async def _get_institutional_flow_1w_sql(ticker: str, entry_ts: datetime) -> Optional[float]:
     start_ts = entry_ts - timedelta(days=7)
 
     async def query(session: Any) -> Optional[float]:

@@ -6352,3 +6352,27 @@ Result:
 
 Residual:
 - Additional SQL-coupled labeler helpers still remain (notably flow-aggression and institutional-flow lookups already captured by existing failing tests in this suite) and should be migrated in the next slices.
+
+## 212) Pass 206 Continuation (2026-02-09)
+
+### 212.1 Flow Aggression + Institutional 1W Context Heber-First Migration (TDD-Backed)
+
+Finding:
+- `get_flow_aggression(...)` and `get_institutional_flow_1w(...)` in `src/orion/main_price_target_labeler.py` were still SQL-only against `silver_uw_flow`.
+- existing Heber-context tests for these paths were red, confirming migration drift.
+
+Implemented:
+- Updated `src/orion/main_price_target_labeler.py`:
+  - `get_flow_aggression(...)` now routes Heber-first via `_get_flow_aggression_from_heber(...)` and falls back via `_get_flow_aggression_sql(...)`.
+  - `get_institutional_flow_1w(...)` now routes Heber-first via `_get_institutional_flow_1w_from_heber(...)` and falls back via `_get_institutional_flow_1w_sql(...)`.
+- Heber implementations normalize ticker forms (`ticker`/`symbol`/`underlying`/`instrument_key`), apply UTC window filters, and preserve previous output contracts.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "flow_aggression or institutional_flow_1w"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py` passed.
+
+Result:
+- two additional context feature families now follow the same migration pattern (Heber-first with SQL fallback), reducing direct dependence on Orion-local UW SQL tables.
+
+Residual:
+- additional SQL-coupled context remains in `main_price_target_labeler` and adjacent enrichment jobs; continue staged Heber-first migration by feature family.
