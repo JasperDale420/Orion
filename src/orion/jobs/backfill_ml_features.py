@@ -28,6 +28,7 @@ from orion.main_price_target_labeler import (
     get_entry_time_features as get_labeler_entry_time_features,
 )
 from orion.main_price_target_labeler import (
+    get_earnings_proximity as get_labeler_earnings_proximity,
     get_flow_greeks as get_labeler_flow_greeks,
     get_gex_at_entry,
     get_max_pain_distance,
@@ -91,6 +92,11 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
 
     _ticker_info_cache[ticker] = cache_entry
     return cache_entry
+
+
+async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+    """Get earnings proximity via shared labeler helper."""
+    return await get_labeler_earnings_proximity(ticker, entry_ts)
 
 
 def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
@@ -299,19 +305,9 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
     updates["sector"] = ticker_info.get("sector")
     updates["industry"] = None
 
-    next_earnings = ticker_info.get("next_earnings_date")
-    if next_earnings:
-        entry_date = entry_ts.date()
-        days_diff = (next_earnings - entry_date).days
-        if days_diff < 0:
-            updates["days_to_earnings"] = None
-            updates["is_post_earnings"] = True
-        else:
-            updates["days_to_earnings"] = days_diff
-            updates["is_post_earnings"] = False
-    else:
-        updates["days_to_earnings"] = None
-        updates["is_post_earnings"] = None
+    earnings_info = await get_earnings_proximity(ticker, entry_ts)
+    updates["days_to_earnings"] = earnings_info.get("days_to_earnings")
+    updates["is_post_earnings"] = earnings_info.get("is_post_earnings")
 
     # Phase1 features: overnight gap, VWAP, minutes_to_close, price_change_5d, earnings_in_dte
     from orion.main_price_target_labeler import get_phase1_bucket_features

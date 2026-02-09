@@ -31,6 +31,7 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
     monkeypatch.setattr(backfill, "get_underlying_price_at_entry", _async_return(100.0))
     monkeypatch.setattr(backfill, "get_underlying_price_at_offset", _async_return(101.0))
     monkeypatch.setattr(backfill, "get_ticker_info", _async_return({"sector": "Technology", "next_earnings_date": None}))
+    monkeypatch.setattr(backfill, "get_earnings_proximity", _async_return({"days_to_earnings": None, "is_post_earnings": None}))
     monkeypatch.setattr(backfill, "get_gex_at_entry", _async_return({"gex": 1.0, "vex": 2.0}))
     monkeypatch.setattr(backfill, "get_max_pain_distance", _async_return(0.5))
     monkeypatch.setattr(backfill, "db_write", _async_return(None))
@@ -167,3 +168,22 @@ async def test_get_ticker_info_delegates_to_labeler(monkeypatch: pytest.MonkeyPa
 
     assert value == expected
     assert captured == {"ticker": "AAPL"}
+
+
+@pytest.mark.asyncio
+async def test_get_earnings_proximity_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, object] = {}
+    expected = {"days_to_earnings": 4, "is_post_earnings": False}
+
+    async def _labeler_earnings(ticker: str, ts: datetime) -> dict[str, object]:
+        captured["ticker"] = ticker
+        captured["entry_ts"] = ts
+        return expected
+
+    monkeypatch.setattr(backfill, "get_labeler_earnings_proximity", _labeler_earnings, raising=False)
+
+    value = await backfill.get_earnings_proximity("AAPL", entry_ts)
+
+    assert value == expected
+    assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
