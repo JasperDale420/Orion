@@ -550,3 +550,83 @@ async def test_get_phase1_bucket_features_falls_back_to_sql_when_heber_empty(
     assert result["overnight_gap_pct"] == pytest.approx(1.5)
     assert result["price_change_5d_prior"] == pytest.approx(2.5)
     assert result["vwap_distance_pct"] == pytest.approx(-0.5)
+
+
+@pytest.mark.asyncio
+async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    option_chain = "AAPL250221C00190000"
+
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"ts_event": datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc), "option_chain": option_chain, "open_interest": 110, "iv": 0.24},
+                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "option_chain": option_chain, "open_interest": 120, "iv": 0.28},
+                    {"ts_event": datetime(2026, 2, 11, 16, 0, tzinfo=timezone.utc), "option_chain": option_chain, "open_interest": 130, "iv": 0.30},
+                    {"ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc), "option_chain": "MSFT250221C00400000", "open_interest": 999, "iv": 0.99},
+                ]
+            )
+
+        def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
+            close_values = [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 107.0, 106.0, 108.0, 111.0, 109.0, 112.0]
+            start_day = datetime(2026, 1, 30, 20, 0, tzinfo=timezone.utc)
+            rows = []
+            for idx, close in enumerate(close_values):
+                rows.append({"ts_event": start_day + timedelta(days=idx), "symbol": "AAPL", "close": close})
+            return pd.DataFrame(rows)
+
+    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber has usable P2 data")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_p2_features_sql", _fail_sql_fallback, raising=False)
+
+    result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
+
+    import statistics
+
+    closes = [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 107.0, 106.0, 108.0, 111.0, 109.0, 112.0]
+    returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes))]
+    expected_hv = statistics.stdev(returns) * (252**0.5) * 100
+    expected_ratio = 30.0 / expected_hv
+
+    assert result["oi_change_1d"] == pytest.approx(10.0)
+    assert result["oi_change_pct"] == pytest.approx((10.0 / 120.0) * 100.0)
+    assert result["hv_30d"] == pytest.approx(expected_hv)
+    assert result["iv_vs_hv_ratio"] == pytest.approx(expected_ratio)
+
+
+@pytest.mark.asyncio
+async def test_get_p2_features_falls_back_to_sql_when_heber_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    option_chain = "AAPL250221C00190000"
+
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+        def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    expected = {
+        "oi_change_1d": 4.0,
+        "oi_change_pct": 2.5,
+        "iv_vs_hv_ratio": 1.2,
+        "hv_30d": 20.0,
+    }
+
+    async def _fake_sql_fallback(ticker: str, option_chain_value: str, ts: datetime):
+        assert ticker == "AAPL"
+        assert option_chain_value == option_chain
+        assert ts == entry_ts
+        return expected
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_p2_features_sql", _fake_sql_fallback, raising=False)
+
+    result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
+
+    assert result == expected

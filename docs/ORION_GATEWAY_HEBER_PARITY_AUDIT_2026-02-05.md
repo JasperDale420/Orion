@@ -6403,3 +6403,33 @@ Result:
 
 Residual:
 - additional SQL-coupled context remains in `main_price_target_labeler` and adjacent enrichment jobs; continue staged Heber-first migration by feature family.
+
+## 215) Pass 213 Continuation (2026-02-09)
+
+### 215.1 Price-Target Labeler P2 Option Features Heber-First Path (TDD-Backed)
+
+Finding:
+- `get_p2_features(...)` in `src/orion/main_price_target_labeler.py` remained SQL-primary (`silver_uw_flow` + `silver_alpaca_bars`), leaving core option-level feature construction outside the Heber-first migration contract used by context helpers.
+
+Implemented:
+- Extended `tests/unit/test_price_target_labeler_heber_context.py` with:
+  - `test_get_p2_features_prefers_heber_when_available`
+  - `test_get_p2_features_falls_back_to_sql_when_heber_empty`
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_p2_features_from_heber(...)` to compute:
+    - OI change (`oi_change_1d`, `oi_change_pct`) from Heber flow scoped to `option_chain`,
+    - 30-day HV (`hv_30d`) from Heber bars,
+    - IV/HV ratio (`iv_vs_hv_ratio`) from Heber IV + derived HV,
+  - extracted existing SQL logic into `_get_p2_features_sql(...)`,
+  - updated `get_p2_features(...)` to run Heber-first and fallback to SQL when Heber yields no usable data.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k get_p2_features` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py` passed.
+- `pytest -q tests/unit/test_backfill_ml_features_signature.py` passed.
+
+Result:
+- P2 option-level feature construction now follows the same Heber-first with compatibility fallback pattern as the migrated context feature families, reducing direct dependence on Orion-local silver tables.
+
+Residual:
+- next high-value migration target in this area is `get_p3_features(...)`, which still reads 52w/high + same-expiry activity from local SQL tables as its primary source.

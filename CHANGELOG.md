@@ -41,6 +41,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first opposing-flow aggregation (`_get_opposing_flow_from_heber`) with extracted SQL fallback (`_get_opposing_flow_sql`) in `get_opposing_flow(...)`.
   - Extended `tests/unit/test_price_target_labeler_heber_context.py` with phase-1 bucket market context Heber-first/fallback coverage.
   - Updated `src/orion/main_price_target_labeler.py` to add Heber-first phase-1 market context aggregation (`_get_phase1_bucket_features_from_heber`) with extracted SQL fallback (`_get_phase1_bucket_features_sql`) in `get_phase1_bucket_features(...)`.
+  - Extended `tests/unit/test_price_target_labeler_heber_context.py` with P2 option-feature Heber-first/fallback coverage.
+  - Updated `src/orion/main_price_target_labeler.py` to add Heber-first P2 option-feature aggregation (`_get_p2_features_from_heber`) with extracted SQL fallback (`_get_p2_features_sql`) in `get_p2_features(...)`.
 - **Execution Exit-Policy Contract Hardening (TDD, Combined)**:
   - Added `tests/unit/test_position_manager_execution_contracts.py` covering:
     - canonical `candidate.option_symbol` propagation to tracked `option_chain`,

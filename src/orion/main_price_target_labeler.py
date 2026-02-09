@@ -2370,12 +2370,128 @@ async def _get_phase1_bucket_features_sql(ticker: str, entry_ts: datetime) -> Di
 
 
 async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
-    """Get P2 ML features: OI change momentum and IV vs HV ratio.
+    """Get P2 ML features: OI change momentum and IV vs HV ratio."""
+    heber_result = _get_p2_features_from_heber(ticker, option_chain, entry_ts)
+    if heber_result is not None:
+        return heber_result
 
-    - oi_change_1d: Absolute OI change from prior day
-    - oi_change_pct: Percentage OI change from prior day
-    - iv_vs_hv_ratio: Current IV / 30-day historical volatility
-    """
+    return await _get_p2_features_sql(ticker, option_chain, entry_ts)
+
+
+def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
+    result: Dict[str, Optional[float]] = {
+        "oi_change_1d": None,
+        "oi_change_pct": None,
+        "iv_vs_hv_ratio": None,
+        "hv_30d": None,
+    }
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
+        return None
+
+    entry_date = entry_utc.date()
+    option_chain_upper = str(option_chain).upper()
+
+    try:
+        flow_df = _heber_reader.read_flow(
+            asof_time=entry_utc,
+            start_time=entry_utc - timedelta(days=35),
+        )
+    except Exception as e:
+        _record_price_target_fallback("p2_flow_heber_lookup", e, ticker=ticker, option_chain=option_chain)
+        return None
+
+    if flow_df.empty:
+        return None
+
+    flow_ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    flow_chain_col = _pick_first_existing_column(flow_df, ["option_chain", "option_symbol", "contract_symbol", "instrument_key"])
+    oi_col = _pick_first_existing_column(flow_df, ["open_interest", "oi"])
+    iv_col = _pick_first_existing_column(flow_df, ["iv", "implied_volatility"])
+    if flow_ts_col is None or flow_chain_col is None:
+        return None
+
+    flow_ts = pd.to_datetime(flow_df[flow_ts_col], utc=True, errors="coerce")
+    flow_chain = flow_df[flow_chain_col].astype(str).str.upper().str.split(":").str[-1]
+    flow_oi = pd.to_numeric(flow_df[oi_col], errors="coerce") if oi_col is not None else pd.Series([np.nan] * len(flow_df))
+    flow_iv = pd.to_numeric(flow_df[iv_col], errors="coerce") if iv_col is not None else pd.Series([np.nan] * len(flow_df))
+
+    normalized_flow = pd.DataFrame({"ts": flow_ts, "option_chain": flow_chain, "open_interest": flow_oi, "iv": flow_iv}).dropna(
+        subset=["ts"]
+    )
+    if normalized_flow.empty:
+        return None
+
+    scoped_flow = normalized_flow[normalized_flow["option_chain"] == option_chain_upper].sort_values("ts")
+    if scoped_flow.empty:
+        return None
+
+    current_day_rows = scoped_flow[scoped_flow["ts"].dt.date == entry_date]
+    prior_rows = scoped_flow[scoped_flow["ts"] < entry_utc]
+
+    current_oi: Optional[float] = None
+    prior_oi: Optional[float] = None
+    iv_value: Optional[float] = None
+    if not current_day_rows.empty:
+        latest_current = current_day_rows.iloc[-1]
+        current_oi = _coerce_float(latest_current.get("open_interest"))
+        iv_value = _coerce_float(latest_current.get("iv"))
+    if not prior_rows.empty:
+        prior_oi = _coerce_float(prior_rows.iloc[-1].get("open_interest"))
+
+    if current_oi is not None and prior_oi is not None:
+        result["oi_change_1d"] = float(current_oi - prior_oi)
+        if prior_oi > 0:
+            result["oi_change_pct"] = ((current_oi - prior_oi) / prior_oi) * 100.0
+
+    try:
+        bars_df = _heber_reader.read_bars(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=entry_utc - timedelta(days=35),
+        )
+    except Exception as e:
+        _record_price_target_fallback("p2_hv_heber_lookup", e, ticker=ticker)
+        bars_df = pd.DataFrame()
+
+    if not bars_df.empty:
+        bar_ts_col = _pick_first_existing_column(bars_df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc", "timestamp"])
+        bar_close_col = _pick_first_existing_column(bars_df, ["close", "c"])
+        bar_ticker_col = _pick_first_existing_column(bars_df, ["ticker", "symbol", "underlying", "instrument_key"])
+        if bar_ts_col is not None and bar_close_col is not None:
+            bar_ts = pd.to_datetime(bars_df[bar_ts_col], utc=True, errors="coerce")
+            bar_close = pd.to_numeric(bars_df[bar_close_col], errors="coerce")
+            if bar_ticker_col is not None:
+                bar_ticker = bars_df[bar_ticker_col].astype(str).str.upper().str.split(":").str[-1]
+            else:
+                bar_ticker = pd.Series([str(ticker).upper()] * len(bars_df))
+
+            bars_norm = pd.DataFrame({"ts": bar_ts, "ticker": bar_ticker, "close": bar_close}).dropna(subset=["ts", "close"])
+            if not bars_norm.empty:
+                bars_norm = bars_norm[
+                    (bars_norm["ticker"] == str(ticker).upper())
+                    & (bars_norm["ts"].dt.date >= (entry_date - timedelta(days=30)))
+                    & (bars_norm["ts"].dt.date < entry_date)
+                ].sort_values("ts")
+
+                closes = [float(value) for value in bars_norm["close"].tolist() if value]
+                if len(closes) >= 10:
+                    returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0]
+                    if len(returns) > 1:
+                        import statistics
+
+                        result["hv_30d"] = statistics.stdev(returns) * (252**0.5) * 100
+
+    if iv_value is not None and result["hv_30d"] is not None and result["hv_30d"] > 0:
+        iv_pct = iv_value * 100 if iv_value < 2 else iv_value
+        result["iv_vs_hv_ratio"] = iv_pct / result["hv_30d"]
+
+    if any(value is not None for value in result.values()):
+        return result
+    return None
+
+
+async def _get_p2_features_sql(ticker: str, option_chain: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
     result: Dict[str, Optional[float]] = {
         "oi_change_1d": None,
         "oi_change_pct": None,
@@ -2386,7 +2502,6 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
     lookback_30d = entry_date - timedelta(days=30)
 
     async def query(session: Any) -> Dict[str, Optional[float]]:
-        # Get current OI for this option_chain
         current_oi_stmt = text(
             """
             SELECT open_interest
@@ -2403,7 +2518,6 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         current_row = current_result.fetchone()
         current_oi = current_row[0] if current_row else None
 
-        # Get prior OI (nearest flow before entry_ts for same option_chain)
         prior_oi_stmt = text(
             """
             SELECT open_interest
@@ -2418,14 +2532,11 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         prior_row = prior_result.fetchone()
         prior_oi = prior_row[0] if prior_row else None
 
-        # Calculate OI change
         if current_oi is not None and prior_oi is not None:
             result["oi_change_1d"] = float(current_oi - prior_oi)
             if prior_oi > 0:
                 result["oi_change_pct"] = ((current_oi - prior_oi) / prior_oi) * 100
 
-        # Calculate Historical Volatility (30-day)
-        # Using daily close-to-close returns
         hv_stmt = text(
             """
             SELECT close
@@ -2442,16 +2553,13 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         closes = [row[0] for row in hv_result.fetchall() if row[0]]
 
         if len(closes) >= 10:
-            # Calculate daily returns
             returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0]
             if returns:
                 import statistics
 
-                # Annualized HV = daily std * sqrt(252)
                 hv = statistics.stdev(returns) * (252**0.5) * 100 if len(returns) > 1 else None
-                result["hv_30d"] = hv  # Store for reference
+                result["hv_30d"] = hv
 
-        # Fetch IV from the flow data for this option_chain
         iv_stmt = text(
             """
             SELECT iv
@@ -2466,10 +2574,7 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
         iv_row = iv_result.fetchone()
         iv_value = iv_row[0] if iv_row and iv_row[0] else None
 
-        # Calculate IV vs HV ratio
         if iv_value and result.get("hv_30d") and result["hv_30d"] > 0:
-            # IV is typically in decimal (0.25 = 25%) or percentage form
-            # Normalize IV to percentage if it's in decimal form
             iv_pct = iv_value * 100 if iv_value < 2 else iv_value
             result["iv_vs_hv_ratio"] = iv_pct / result["hv_30d"]
 
@@ -2477,7 +2582,6 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
 
     db_result = await db_query(query)
     result.update(db_result)
-
     return result
 
 
