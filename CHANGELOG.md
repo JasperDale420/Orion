@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price-Target Labeler Heber Flow Read Path (TDD)**:
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py` covering:
+    - Heber-first entry candidate sourcing in `get_entry_signals(...)`
+    - SQL fallback when Heber flow is unavailable/insufficient
+    - Heber-first subsequent option-price sourcing in `get_subsequent_prices(...)`
+    - SQL fallback when Heber flow shape is incompatible
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` to:
+    - add Heber-normalization helpers for flow candidates,
+    - use Heber-first reads for entry-candidate selection and subsequent option-price lookup,
+    - retain SQL fallback paths for compatibility and phased migration safety.
+  - This reduces direct dependency on Orion-local `silver_uw_flow` for two core price-target labeling read paths.
 - **Price-Target Labeler Heber Bar Lookup Fallback (TDD)**:
   - Added `tests/unit/test_price_target_labeler_heber_bars.py` covering:
     - Heber-first underlying-price lookup at entry time
@@ -25,6 +36,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - load keyset cursor state on startup with timestamp-watermark fallback,
     - persist both keyset cursor and legacy watermark during progress updates.
   - `backfill_ml_features` now resumes with strict keyset continuity when available while preserving backward compatibility with existing timestamp-only state.
+- **Backfill Cursor-Only Resume Cleanup (TDD, Combined)**:
+  - Extended `tests/unit/test_backfill_ml_features_selection.py` with:
+    - `test_load_backfill_cursor_does_not_fallback_to_legacy_watermark`
+    - `test_save_backfill_cursor_does_not_write_legacy_watermark`
+  - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+    - `test_load_phase_cursors_do_not_fallback_to_legacy_watermarks`
+    - `test_save_phase_cursors_do_not_write_legacy_watermarks`
+  - Updated `src/orion/jobs/backfill_ml_features.py` and `src/orion/jobs/backfill_exit_columns.py` to:
+    - remove timestamp-watermark fallback reads on cursor load,
+    - remove timestamp-watermark writes on cursor save,
+    - rely exclusively on durable keyset cursor state (`entry_ts` + `event_id`) for backfill resume.
 - **Backfill Exit-Columns Keyset Resume State (TDD)**:
   - Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
     - `test_run_backfill_resumes_with_keyset_cursor_when_available`

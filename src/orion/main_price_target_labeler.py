@@ -10,6 +10,7 @@ import os
 import signal
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
@@ -380,6 +381,19 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
       - 15+ DTE (POSITION): 2 hours
     """
 
+    try:
+        heber_entries = await _get_entry_signals_from_heber(limit)
+    except Exception as e:
+        _record_price_target_fallback("entry_signals_heber", e)
+        heber_entries = []
+
+    if heber_entries:
+        return heber_entries
+
+    return await _get_entry_signals_sql(limit)
+
+
+async def _get_entry_signals_sql(limit: int) -> List[Any]:
     async def query(session: Any) -> List[Any]:
         stmt = text(
             """
@@ -426,7 +440,14 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
 
 async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
     """Get all subsequent prices for an option chain after entry."""
+    heber_prices = _get_subsequent_prices_from_heber(option_chain, entry_ts)
+    if heber_prices is not None:
+        return heber_prices
 
+    return await _get_subsequent_prices_sql(option_chain, entry_ts)
+
+
+async def _get_subsequent_prices_sql(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
     async def query(session: Any) -> List[Dict[str, Any]]:
         stmt = text(
             """
@@ -442,6 +463,162 @@ async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[D
         return [{"price": row[0], "ts": row[1]} for row in result.fetchall()]
 
     return await db_query(query)
+
+
+def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
+    for column in columns:
+        if column in df.columns:
+            return column
+    return None
+
+
+def _extract_entry_signal_row(row: pd.Series) -> Optional[SimpleNamespace]:
+    def _first(keys: List[str]) -> Any:
+        for key in keys:
+            if key in row and pd.notna(row[key]):
+                return row[key]
+        return None
+
+    event_id = _first(["event_id", "source_event_id", "id"])
+    flow_ts = _coerce_dt_utc(_first(["flow_ts_utc", "ts_event", "timestamp", "created_at"]))
+    option_chain = _first(["option_chain", "option_symbol", "contract"])
+    option_price = _coerce_float(_first(["option_price", "price"]))
+    premium = _coerce_float(_first(["premium_usd", "premium"]))
+    aggressor = _first(["aggressor", "side"])
+    expiry = _first(["expiry"])
+    put_call = _first(["put_call", "type"])
+    is_sweep = _first(["is_sweep", "sweep"])
+
+    ticker = _first(["ticker", "symbol", "underlying"])
+    if ticker is None and "instrument_key" in row and pd.notna(row["instrument_key"]):
+        ticker = str(row["instrument_key"]).split(":")[-1]
+
+    if event_id is None or flow_ts is None or option_chain is None or ticker is None:
+        return None
+    if option_price is None or option_price <= 0:
+        return None
+    if premium is None:
+        return None
+    if str(aggressor).upper() not in {"ASK", "BID"}:
+        return None
+
+    sweep = _is_truthy(is_sweep)
+    if sweep and premium < 50000:
+        return None
+    if not sweep and premium < 100000:
+        return None
+
+    expiry_dt = parse_expiry(str(expiry)) if expiry is not None else None
+    dte = calculate_dte(flow_ts, expiry_dt)
+    age = datetime.now(timezone.utc) - flow_ts
+    min_age = _min_entry_age_for_dte(dte)
+    if age < min_age:
+        return None
+
+    return SimpleNamespace(
+        event_id=str(event_id),
+        ticker=str(ticker),
+        flow_ts_utc=flow_ts,
+        expiry=str(expiry) if expiry is not None else None,
+        option_chain=str(option_chain),
+        option_price=option_price,
+        premium_usd=premium,
+        aggressor=str(aggressor).upper(),
+        put_call=str(put_call) if put_call is not None else None,
+        is_sweep=is_sweep,
+    )
+
+
+def _min_entry_age_for_dte(dte: Optional[int]) -> timedelta:
+    if dte == 0:
+        return timedelta(minutes=15)
+    if dte is not None and 1 <= dte <= 3:
+        return timedelta(minutes=30)
+    if dte is not None and 4 <= dte <= 14:
+        return timedelta(hours=1)
+    if dte is not None and dte >= 15:
+        return timedelta(hours=2)
+    return timedelta(minutes=30)
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "t"}
+    return False
+
+
+async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
+    if not event_ids:
+        return set()
+
+    async def query(session: Any) -> Set[str]:
+        stmt = text("SELECT event_id FROM price_target_labels WHERE event_id = ANY(:event_ids)")
+        result = await session.execute(stmt, {"event_ids": event_ids})
+        return {str(row[0]) for row in result.fetchall()}
+
+    return await db_query(query)
+
+
+async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
+    now_utc = datetime.now(timezone.utc)
+    flow_df = _heber_reader.read_flow(
+        asof_time=now_utc,
+        start_time=now_utc - timedelta(days=365),
+    )
+    if flow_df.empty:
+        return []
+
+    candidates: List[SimpleNamespace] = []
+    for _, row in flow_df.iterrows():
+        normalized = _extract_entry_signal_row(row)
+        if normalized is not None:
+            candidates.append(normalized)
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda item: item.flow_ts_utc)
+    labeled_ids = await _get_labeled_price_target_event_ids([item.event_id for item in candidates])
+    return [item for item in candidates if item.event_id not in labeled_ids][:limit]
+
+
+def _get_subsequent_prices_from_heber(option_chain: str, entry_ts: datetime) -> Optional[List[Dict[str, Any]]]:
+    try:
+        flow_df = _heber_reader.read_flow(
+            asof_time=datetime.now(timezone.utc),
+            start_time=entry_ts,
+        )
+    except Exception as e:
+        _record_price_target_fallback("subsequent_prices_heber", e, option_chain=option_chain)
+        return None
+
+    if flow_df.empty:
+        return []
+
+    chain_col = _pick_first_existing_column(flow_df, ["option_chain", "option_symbol", "contract"])
+    ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    price_col = _pick_first_existing_column(flow_df, ["option_price", "price"])
+    if chain_col is None or ts_col is None or price_col is None:
+        return None
+
+    prices: List[Dict[str, Any]] = []
+    for _, row in flow_df.iterrows():
+        if str(row.get(chain_col)) != option_chain:
+            continue
+        ts = _coerce_dt_utc(row.get(ts_col))
+        price = _coerce_float(row.get(price_col))
+        if ts is None or ts <= entry_ts:
+            continue
+        if price is None or price <= 0:
+            continue
+        prices.append({"price": price, "ts": ts})
+
+    prices.sort(key=lambda item: item["ts"])
+    return prices
 
 
 async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:

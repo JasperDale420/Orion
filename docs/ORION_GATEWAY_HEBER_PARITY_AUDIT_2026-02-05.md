@@ -5816,3 +5816,55 @@ Result:
 
 Residual:
 - broader `main_price_target_labeler` feature and label calculations still query multiple Orion-local silver tables; remaining functions require phased migration to Heber datasets/access facades.
+
+## 197) Pass 191 Continuation (2026-02-09)
+
+### 197.1 `main_price_target_labeler` Heber-First Flow Candidate + Price Reads Added (TDD-Backed)
+
+Finding:
+- `main_price_target_labeler` still depended directly on `silver_uw_flow` for both:
+  - unlabeled entry candidate discovery (`get_entry_signals`), and
+  - subsequent option price series lookup (`get_subsequent_prices`).
+
+Implemented:
+- Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py` with coverage for:
+  - Heber-first candidate sourcing in `get_entry_signals(...)`,
+  - SQL fallback when Heber flow is empty,
+  - Heber-first subsequent price sourcing in `get_subsequent_prices(...)`,
+  - SQL fallback when Heber flow schema is incompatible.
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - introduced Heber flow normalization helpers for candidate extraction and eligibility gating,
+  - split SQL logic into explicit fallback helpers (`_get_entry_signals_sql`, `_get_subsequent_prices_sql`),
+  - routed both read paths through Heber-first logic with fallback retention.
+
+Result:
+- two high-frequency read paths in price-target labeling now consume Heber flow data first, reducing direct coupling to Orion-local `silver_uw_flow` while preserving operational safety through SQL fallbacks.
+
+Residual:
+- large portions of feature enrichment in `main_price_target_labeler` still query local silver context tables (`silver_market_tide`, `silver_greek_exposure`, `silver_max_pain`, `silver_iv_rank`) and require further staged migration.
+
+## 198) Pass 192 Continuation (2026-02-09)
+
+### 198.1 Combined Backfill Legacy Watermark Fallback Retirement (TDD-Backed)
+
+Finding:
+- both `backfill_ml_features` and `backfill_exit_columns` had already adopted durable keyset cursor state, but still retained legacy timestamp-watermark fallback reads/writes, creating dual-state complexity and unnecessary writes.
+
+Implemented:
+- Extended `tests/unit/test_backfill_ml_features_selection.py` with:
+  - `test_load_backfill_cursor_does_not_fallback_to_legacy_watermark`
+  - `test_save_backfill_cursor_does_not_write_legacy_watermark`
+- Extended `tests/unit/test_backfill_exit_columns_selection.py` with:
+  - `test_load_phase_cursors_do_not_fallback_to_legacy_watermarks`
+  - `test_save_phase_cursors_do_not_write_legacy_watermarks`
+- Updated both jobs:
+  - `src/orion/jobs/backfill_ml_features.py`
+  - `src/orion/jobs/backfill_exit_columns.py`
+  - removed watermark fallback on cursor load and watermark writes on cursor save,
+  - now rely exclusively on `job_cursor_state` keyset cursor (`entry_ts` + `event_id`) for resume continuity.
+
+Result:
+- resume-state ownership is simplified to a single durable cursor mechanism across both jobs, reducing state divergence risk and maintenance complexity.
+
+Residual:
+- run a one-time cleanup migration to remove obsolete legacy watermark keys from `ingest_watermarks` for retired backfill paths.
