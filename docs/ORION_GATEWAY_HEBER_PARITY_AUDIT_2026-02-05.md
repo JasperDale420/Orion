@@ -5973,3 +5973,33 @@ Result:
 
 Residual:
 - remaining SQL-coupled labeler context still includes `silver_max_pain` and `silver_iv_rank`; these remain the next combined migration target.
+
+## 203) Pass 197 Continuation (2026-02-09)
+
+### 203.1 `main_price_target_labeler` Heber-First Max-Pain + IV-Rank Paths Added (TDD-Backed)
+
+Finding:
+- `main_price_target_labeler` still queried local SQL tables for:
+  - max-pain distance (`silver_max_pain`) via `get_max_pain_distance(...)`,
+  - IV-rank offset lookups (`silver_iv_rank`) via `get_iv_at_offset(...)`.
+
+Implemented:
+- Added `tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py` to validate:
+  - Heber-first max-pain lookup with SQL fallback behavior,
+  - Heber-first IV-rank offset lookup with SQL fallback behavior.
+- Extended `tests/unit/test_heber_reader.py` with Heber dataset read coverage for:
+  - `read_max_pain(...)`,
+  - `read_iv_rank(...)`.
+- Updated `src/orion/clients/heber_reader.py`:
+  - added silver dataset readers for `max_pain` and `iv_rank`,
+  - tightened `_read_parquet(...)` return typing via DataFrame casts for mypy compliance.
+- Updated `src/orion/main_price_target_labeler.py`:
+  - added `_get_max_pain_distance_from_heber(...)` and SQL fallback split helper,
+  - added `_get_iv_rank_from_heber(...)` and SQL fallback split helper,
+  - routed `get_max_pain_distance(...)` and `get_iv_at_offset(...)` through Heber-first access.
+
+Result:
+- previously residual SQL-coupled max-pain and IV-rank context reads now execute Heber-first with explicit compatibility fallback, reducing local table coupling in feature construction paths.
+
+Residual:
+- broader labeler SQL dependencies still remain (for example `silver_vix_data`, portions of ticker/market context joins), and should continue to be migrated in incremental, test-backed slices.

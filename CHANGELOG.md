@@ -29,6 +29,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - centralize Heber tide math in `_sum_market_tide_from_dataframe(...)`,
     - add `_get_heber_market_tide_net_premium(...)` with aggregate-read then flow-derived fallback strategy,
     - reuse that helper in both market-tide feature extraction and regime detection path before SQL fallback.
+- **Price-Target Labeler Heber Max-Pain + IV-Rank Context Paths (TDD)**:
+  - Added `tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py` covering:
+    - Heber-first max-pain distance lookup with SQL fallback,
+    - Heber-first IV-rank offset lookup with SQL fallback.
+  - Extended `tests/unit/test_heber_reader.py` with:
+    - `read_max_pain(...)` dataset filtering coverage,
+    - `read_iv_rank(...)` dataset filtering coverage.
+  - Updated `src/orion/main_price_target_labeler.py` to:
+    - add `_get_max_pain_distance_from_heber(...)` + SQL fallback split helper,
+    - add `_get_iv_rank_from_heber(...)` + SQL fallback split helper for `get_iv_at_offset(...)`.
+  - Updated `src/orion/clients/heber_reader.py` with:
+    - `read_max_pain(...)`,
+    - `read_iv_rank(...)`,
+    - strict mypy-safe DataFrame casting in parquet reader return path.
 - **Legacy Backfill Watermark Cleanup Job + Storage Helper (TDD)**:
   - Added `tests/unit/test_storage_watermarks_cleanup.py` covering:
     - no-op behavior for empty key input,

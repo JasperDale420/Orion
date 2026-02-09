@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pandas as pd
@@ -359,7 +359,7 @@ class HeberReader:
     ) -> pd.DataFrame:
         try:
             table = pq.read_table(path, columns=columns, filters=filters if filters else None)
-            return table.to_pandas()
+            return cast(pd.DataFrame, table.to_pandas())
         except Exception as exc:
             if filters:
                 logger.warning(
@@ -368,7 +368,7 @@ class HeberReader:
                     error=str(exc),
                 )
                 table = pq.read_table(path, columns=columns)
-                return table.to_pandas()
+                return cast(pd.DataFrame, table.to_pandas())
 
             logger.error(
                 "heber_read_failed",
