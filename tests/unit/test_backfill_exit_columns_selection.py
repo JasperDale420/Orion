@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -931,6 +932,37 @@ def test_write_dead_letter_record_applies_redaction_and_rotation(tmp_path) -> No
     assert payload_2["error"] == "[REDACTED]"
 
 
+def test_write_dead_letter_record_rotates_and_gzips_when_enabled(tmp_path) -> None:
+    dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
+
+    first_rotated = backfill_exit_columns._write_dead_letter_record(
+        str(dead_letter_path),
+        {"phase": "velocity", "event_id": "evt-1", "error": "boom-1", "retries_used": 0},
+        max_bytes=1024,
+        redact_fields={"event_id"},
+        compress_rotated=True,
+    )
+    assert first_rotated is False
+
+    second_rotated = backfill_exit_columns._write_dead_letter_record(
+        str(dead_letter_path),
+        {"phase": "velocity", "event_id": "evt-2", "error": "boom-2", "retries_used": 1},
+        max_bytes=1,
+        redact_fields={"event_id"},
+        compress_rotated=True,
+    )
+    assert second_rotated is True
+
+    gz_path = tmp_path / "exit_backfill_dead_letter.jsonl.1.gz"
+    assert gz_path.exists()
+    assert not (tmp_path / "exit_backfill_dead_letter.jsonl.1").exists()
+
+    with gzip.open(gz_path, "rt", encoding="utf-8") as handle:
+        rotated_payload = json.loads(handle.read().splitlines()[0])
+    assert rotated_payload["event_id"] == "[REDACTED]"
+    assert rotated_payload["error"] == "boom-1"
+
+
 @pytest.mark.asyncio
 async def test_run_backfill_dead_letter_redaction_and_rotation(
     monkeypatch: pytest.MonkeyPatch,
@@ -1035,3 +1067,104 @@ async def test_run_backfill_dead_letter_redaction_and_rotation(
     assert len(payloads) == 2
     assert all(payload["event_id"] == "[REDACTED]" for payload in payloads)
     assert all(payload["error"] == "[REDACTED]" for payload in payloads)
+
+
+@pytest.mark.asyncio
+async def test_run_backfill_dead_letter_rotation_tracks_compressed_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=timezone.utc)
+
+    async def _fake_get_records_to_backfill(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if after_entry_ts is None:
+            return [
+                {"event_id": "vel-fail-1", "entry_ts": ts1},
+                {"event_id": "vel-fail-2", "entry_ts": ts2},
+            ]
+        return []
+
+    async def _fake_get_all_records_for_checkpoints(
+        limit: int,
+        after_entry_ts: datetime | None = None,
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return []
+
+    async def _always_fail_velocity(_record: dict[str, Any]) -> bool:
+        raise RuntimeError("secret-error")
+
+    async def _fake_update_checkpoint_columns(_record: dict[str, Any]) -> bool:
+        return True
+
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_load_velocity_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_load_checkpoint_backfill_cursor() -> tuple[datetime | None, str | None]:
+        return None, None
+
+    async def _fake_save_velocity_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    async def _fake_save_checkpoint_backfill_cursor(_entry_ts: datetime, _event_id: str | None) -> None:
+        return None
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(backfill_exit_columns, "get_records_to_backfill", _fake_get_records_to_backfill)
+    monkeypatch.setattr(backfill_exit_columns, "get_all_records_for_checkpoints", _fake_get_all_records_for_checkpoints)
+    monkeypatch.setattr(backfill_exit_columns, "update_velocity_columns", _always_fail_velocity)
+    monkeypatch.setattr(backfill_exit_columns, "update_checkpoint_columns", _fake_update_checkpoint_columns)
+    monkeypatch.setattr(backfill_exit_columns, "init_db", _fake_init_db)
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_velocity_backfill_cursor",
+        _fake_load_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_load_checkpoint_backfill_cursor",
+        _fake_load_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_velocity_backfill_cursor",
+        _fake_save_velocity_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        backfill_exit_columns,
+        "_save_checkpoint_backfill_cursor",
+        _fake_save_checkpoint_backfill_cursor,
+        raising=False,
+    )
+    monkeypatch.setattr(backfill_exit_columns.asyncio, "sleep", _fake_sleep)
+
+    summary = await backfill_exit_columns.run_backfill(
+        batch_size=2,
+        limit=2,
+        max_retries=0,
+        dead_letter_path=str(dead_letter_path),
+        dead_letter_max_bytes=1,
+        dead_letter_redact_fields={"event_id", "error"},
+        dead_letter_compress_rotated=True,
+    )
+
+    assert summary["velocity"]["failed"] == 2
+    assert summary["total_dead_lettered"] == 2
+    assert summary["total_dead_letter_rotated"] >= 1
+    assert summary["total_dead_letter_compressed"] >= 1
+    assert summary["dead_letter_compress_rotated"] is True
+    assert (tmp_path / "exit_backfill_dead_letter.jsonl.1.gz").exists()

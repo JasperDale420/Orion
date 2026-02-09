@@ -8,6 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Dead-Letter Gzip Rotation + Exit-Training Refresh Env Wiring (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - added optional gzip compression for rotated dead-letter files:
+      - env default `ORION_BACKFILL_EXIT_DEAD_LETTER_COMPRESS_ROTATED`
+      - runtime/CLI `dead_letter_compress_rotated` with flags:
+        - `--dead-letter-compress-rotated`
+        - `--no-dead-letter-compress-rotated`,
+    - rotated dead-letter files now support `.jsonl.N.gz` output when enabled,
+    - added `dead_letter_compressed` counters in phase + total summary payload.
+  - Updated `src/orion/ml/pattern_miner.py`:
+    - added `_exit_classifier_schema_refresh_config_from_env()` config helper,
+    - `run_all_pattern_mining()` now reads and forwards:
+      - `ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH`
+      - `ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET`
+    - includes safety guard: per-bucket refresh is disabled if force refresh is false.
+  - Added tests:
+    - `tests/unit/test_backfill_exit_columns_selection.py`
+      - `test_write_dead_letter_record_rotates_and_gzips_when_enabled`
+      - `test_run_backfill_dead_letter_rotation_tracks_compressed_files`
+    - `tests/unit/test_pattern_miner_exit_refresh_config.py`
+      - env config defaults
+      - invalid config guard behavior
+      - pass-through wiring from `run_all_pattern_mining()` to exit-classifier trainer.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py -k "dead_letter and (rotation or gzip or compressed)" tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_pattern_miner_exit_refresh_config.py`
 - **Exit Classifier All-Bucket Refresh Strategy Control (TDD)**:
   - Updated `src/orion/ml/exit_classifier.py`:
     - `train_all_exit_classifiers(...)` now accepts `refresh_each_bucket` (default `False`),

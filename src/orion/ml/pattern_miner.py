@@ -138,6 +138,31 @@ def get_quick_winner_target(seconds_threshold: int) -> str:
     """
 
 
+def _exit_classifier_schema_refresh_config_from_env() -> tuple[bool, bool]:
+    """Read schema-refresh strategy flags for exit-classifier training orchestration."""
+    force_schema_refresh = os.getenv(
+        "ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "y", "on"}
+    refresh_each_bucket = os.getenv(
+        "ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    if refresh_each_bucket and not force_schema_refresh:
+        logger.warning(
+            "Ignoring ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET because force refresh is disabled",
+            extra={
+                "event": "exit_training_schema_refresh_config_invalid",
+                "force_schema_refresh": force_schema_refresh,
+                "refresh_each_bucket": refresh_each_bucket,
+            },
+        )
+        refresh_each_bucket = False
+
+    return force_schema_refresh, refresh_each_bucket
+
+
 # Trade bucket configurations with bucket-specific lookback windows
 TRADE_BUCKET_CONFIGS = {
     "0DTE": {
@@ -761,7 +786,16 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
         from orion.ml.exit_classifier import train_all_exit_classifiers
 
         logger.info("Training exit classifiers for all buckets")
-        exit_results = await train_all_exit_classifiers()
+        force_schema_refresh, refresh_each_bucket = _exit_classifier_schema_refresh_config_from_env()
+        logger.info(
+            "Exit classifier schema refresh config: force=%s refresh_each_bucket=%s",
+            force_schema_refresh,
+            refresh_each_bucket,
+        )
+        exit_results = await train_all_exit_classifiers(
+            force_schema_refresh=force_schema_refresh,
+            refresh_each_bucket=refresh_each_bucket,
+        )
 
         for bucket, data in exit_results.items():
             if data.get("auc", 0) < 0.55:

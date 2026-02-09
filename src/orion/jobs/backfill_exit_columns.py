@@ -12,8 +12,10 @@ Usage:
 
 import argparse
 import asyncio
+import gzip
 import json
 import os
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -45,6 +47,10 @@ DEFAULT_DEAD_LETTER_REDACT_FIELDS = {
     for field in os.getenv("ORION_BACKFILL_EXIT_DEAD_LETTER_REDACT_FIELDS", "").split(",")
     if field.strip()
 }
+DEFAULT_DEAD_LETTER_COMPRESS_ROTATED = os.getenv(
+    "ORION_BACKFILL_EXIT_DEAD_LETTER_COMPRESS_ROTATED",
+    "false",
+).strip().lower() in {"1", "true", "yes", "y", "on"}
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
@@ -318,7 +324,19 @@ def _apply_dead_letter_redaction(payload: Dict[str, Any], redact_fields: set[str
     return {key: ("[REDACTED]" if key in redact_fields else value) for key, value in payload.items()}
 
 
-def _rotate_dead_letter_file_if_needed(dead_letter_file: Path, max_bytes: int) -> bool:
+def _gzip_dead_letter_rotation_file(source_path: Path) -> None:
+    """Compress a rotated dead-letter file and remove the uncompressed source."""
+    target_path = source_path.with_name(f"{source_path.name}.gz")
+    with source_path.open("rb") as source_handle, gzip.open(target_path, "wb") as target_handle:
+        shutil.copyfileobj(source_handle, target_handle)
+    source_path.unlink(missing_ok=True)
+
+
+def _rotate_dead_letter_file_if_needed(
+    dead_letter_file: Path,
+    max_bytes: int,
+    compress_rotated: bool = False,
+) -> bool:
     """Rotate dead-letter file when size exceeds threshold."""
     if max_bytes <= 0 or not dead_letter_file.exists():
         return False
@@ -328,8 +346,18 @@ def _rotate_dead_letter_file_if_needed(dead_letter_file: Path, max_bytes: int) -
     suffix = 1
     while True:
         candidate = dead_letter_file.with_name(f"{dead_letter_file.name}.{suffix}")
-        if not candidate.exists():
+        candidate_gz = dead_letter_file.with_name(f"{dead_letter_file.name}.{suffix}.gz")
+        if not candidate.exists() and (not compress_rotated or not candidate_gz.exists()):
             dead_letter_file.rename(candidate)
+            if compress_rotated:
+                try:
+                    _gzip_dead_letter_rotation_file(candidate)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to gzip rotated dead-letter file %s: %s",
+                        candidate,
+                        exc,
+                    )
             return True
         suffix += 1
 
@@ -339,12 +367,13 @@ def _write_dead_letter_record(
     payload: Dict[str, Any],
     max_bytes: int = DEFAULT_DEAD_LETTER_MAX_BYTES,
     redact_fields: set[str] | None = None,
+    compress_rotated: bool = DEFAULT_DEAD_LETTER_COMPRESS_ROTATED,
 ) -> bool:
     """Append a dead-letter payload as JSONL."""
     path = Path(dead_letter_path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     redacted_payload = _apply_dead_letter_redaction(payload, redact_fields or set())
-    rotated = _rotate_dead_letter_file_if_needed(path, max_bytes)
+    rotated = _rotate_dead_letter_file_if_needed(path, max_bytes, compress_rotated=compress_rotated)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(redacted_payload, default=_json_safe) + "\n")
     return rotated
@@ -358,13 +387,14 @@ async def run_backfill(
     dead_letter_path: str | None = DEFAULT_DEAD_LETTER_PATH,
     dead_letter_max_bytes: int = DEFAULT_DEAD_LETTER_MAX_BYTES,
     dead_letter_redact_fields: set[str] | None = None,
+    dead_letter_compress_rotated: bool = DEFAULT_DEAD_LETTER_COMPRESS_ROTATED,
 ) -> Dict[str, Any]:
     """Run the backfill job."""
     await init_db()
     dead_letter_redact_fields = dead_letter_redact_fields or DEFAULT_DEAD_LETTER_REDACT_FIELDS
 
     logger.info(
-        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s",
+        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_compress_rotated=%s",
         batch_size,
         limit,
         max_retries,
@@ -372,6 +402,7 @@ async def run_backfill(
         dead_letter_path,
         dead_letter_max_bytes,
         sorted(dead_letter_redact_fields),
+        dead_letter_compress_rotated,
     )
 
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
@@ -382,6 +413,7 @@ async def run_backfill(
     velocity_processed = 0
     velocity_dead_lettered = 0
     velocity_dead_letter_rotated = 0
+    velocity_dead_letter_compressed = 0
     log_velocity_every = max(batch_size, 1)
     velocity_after_entry_ts, velocity_after_event_id = await _load_velocity_backfill_cursor()
 
@@ -429,9 +461,11 @@ async def run_backfill(
                         },
                         max_bytes=dead_letter_max_bytes,
                         redact_fields=dead_letter_redact_fields,
+                        compress_rotated=dead_letter_compress_rotated,
                     )
                     velocity_dead_lettered += 1
                     velocity_dead_letter_rotated += int(rotated)
+                    velocity_dead_letter_compressed += int(rotated and dead_letter_compress_rotated)
             velocity_retried += retries
 
             velocity_processed += 1
@@ -469,6 +503,7 @@ async def run_backfill(
     checkpoint_processed = 0
     checkpoint_dead_lettered = 0
     checkpoint_dead_letter_rotated = 0
+    checkpoint_dead_letter_compressed = 0
     checkpoint_after_entry_ts, checkpoint_after_event_id = await _load_checkpoint_backfill_cursor()
     log_checkpoint_every = max(batch_size, 1)
 
@@ -516,9 +551,11 @@ async def run_backfill(
                         },
                         max_bytes=dead_letter_max_bytes,
                         redact_fields=dead_letter_redact_fields,
+                        compress_rotated=dead_letter_compress_rotated,
                     )
                     checkpoint_dead_lettered += 1
                     checkpoint_dead_letter_rotated += int(rotated)
+                    checkpoint_dead_letter_compressed += int(rotated and dead_letter_compress_rotated)
             checkpoint_retried += retries
 
             checkpoint_processed += 1
@@ -556,6 +593,7 @@ async def run_backfill(
             "retried": velocity_retried,
             "dead_lettered": velocity_dead_lettered,
             "dead_letter_rotated": velocity_dead_letter_rotated,
+            "dead_letter_compressed": velocity_dead_letter_compressed,
         },
         "checkpoint": {
             "processed": checkpoint_processed,
@@ -564,6 +602,7 @@ async def run_backfill(
             "retried": checkpoint_retried,
             "dead_lettered": checkpoint_dead_lettered,
             "dead_letter_rotated": checkpoint_dead_letter_rotated,
+            "dead_letter_compressed": checkpoint_dead_letter_compressed,
         },
         "total_processed": velocity_processed + checkpoint_processed,
         "total_updated": velocity_updated + checkpoint_updated,
@@ -571,9 +610,11 @@ async def run_backfill(
         "total_retried": velocity_retried + checkpoint_retried,
         "total_dead_lettered": velocity_dead_lettered + checkpoint_dead_lettered,
         "total_dead_letter_rotated": velocity_dead_letter_rotated + checkpoint_dead_letter_rotated,
+        "total_dead_letter_compressed": velocity_dead_letter_compressed + checkpoint_dead_letter_compressed,
         "dead_letter_path": dead_letter_path,
         "dead_letter_max_bytes": dead_letter_max_bytes,
         "dead_letter_redact_fields": sorted(dead_letter_redact_fields),
+        "dead_letter_compress_rotated": dead_letter_compress_rotated,
     }
     logger.info("Backfill complete! summary=%s", summary)
     return summary
@@ -614,6 +655,19 @@ async def main() -> None:
         default=",".join(sorted(DEFAULT_DEAD_LETTER_REDACT_FIELDS)),
         help="Comma-separated dead-letter payload fields to redact",
     )
+    parser.add_argument(
+        "--dead-letter-compress-rotated",
+        dest="dead_letter_compress_rotated",
+        action="store_true",
+        help="Gzip dead-letter rotated files (e.g. .jsonl.1.gz)",
+    )
+    parser.add_argument(
+        "--no-dead-letter-compress-rotated",
+        dest="dead_letter_compress_rotated",
+        action="store_false",
+        help="Keep rotated dead-letter files uncompressed",
+    )
+    parser.set_defaults(dead_letter_compress_rotated=DEFAULT_DEAD_LETTER_COMPRESS_ROTATED)
     args = parser.parse_args()
     redact_fields = {field.strip() for field in args.dead_letter_redact_fields.split(",") if field.strip()}
 
@@ -625,6 +679,7 @@ async def main() -> None:
         dead_letter_path=args.dead_letter_path,
         dead_letter_max_bytes=args.dead_letter_max_bytes,
         dead_letter_redact_fields=redact_fields,
+        dead_letter_compress_rotated=args.dead_letter_compress_rotated,
     )
 
 

@@ -7670,3 +7670,51 @@ Result:
 
 Residual:
 - evaluate whether nightly automation should set `force_schema_refresh=True` only inside schema rollout windows (feature flag or schedule guard).
+
+## 249) Pass 247 Continuation (2026-02-09)
+
+### 249.1 Combined Pass: Dead-Letter Gzip Compression + Exit-Training Env Refresh Wiring (TDD-Backed)
+
+Finding:
+- pass 247 residual remained open on dead-letter archive bloat for sustained error windows.
+- pass 248 residual required rollout-window control for exit-classifier schema refresh behavior in scheduled orchestration paths.
+
+Implemented:
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - added optional gzip compression for rotated dead-letter files:
+    - env default: `ORION_BACKFILL_EXIT_DEAD_LETTER_COMPRESS_ROTATED`,
+    - function arg: `dead_letter_compress_rotated`,
+    - CLI flags:
+      - `--dead-letter-compress-rotated`
+      - `--no-dead-letter-compress-rotated`,
+  - rotation helper now optionally compresses `.jsonl.N` to `.jsonl.N.gz`,
+  - summary now includes:
+    - per-phase `dead_letter_compressed`
+    - `total_dead_letter_compressed`
+    - `dead_letter_compress_rotated`.
+- Updated `src/orion/ml/pattern_miner.py`:
+  - added `_exit_classifier_schema_refresh_config_from_env()` to read rollout controls:
+    - `ORION_EXIT_CLASSIFIER_FORCE_SCHEMA_REFRESH`
+    - `ORION_EXIT_CLASSIFIER_REFRESH_EACH_BUCKET`,
+  - wired `run_all_pattern_mining()` to forward those settings into `train_all_exit_classifiers(...)`,
+  - added guardrail:
+    - if per-bucket refresh is enabled without force refresh, it is disabled and logged as config-invalid.
+- Added test coverage:
+  - `tests/unit/test_backfill_exit_columns_selection.py`
+    - `test_write_dead_letter_record_rotates_and_gzips_when_enabled`
+    - `test_run_backfill_dead_letter_rotation_tracks_compressed_files`
+  - `tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - env defaults
+    - invalid config guard behavior
+    - orchestration pass-through to exit-classifier trainer.
+
+Verification:
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py -k "dead_letter and (rotation or gzip or compressed)" tests/unit/test_pattern_miner_exit_refresh_config.py` passed.
+- `pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_pattern_miner_exit_refresh_config.py` passed.
+
+Result:
+- dead-letter archives are now operationally bounded with optional compressed rotation.
+- exit-classifier schema-refresh behavior is now configurable at orchestration time, closing rollout-window control gaps.
+
+Residual:
+- add a runbook note defining when to use `refresh_each_bucket=true` versus one-time prefetch in schema rollout playbooks.
