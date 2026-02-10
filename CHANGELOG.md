@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Warning cleanup pass (TDD)**:
+  - fixed async-mock compatibility in HTTP clients by supporting both sync and awaitable `raise_for_status()`:
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/mcp_server.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/trading_rag.py`
+  - removed invalid `@pytest.mark.asyncio` decorators from sync tests in:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_universe_persistence.py`
+  - eliminated previously observed runtime/pytest warnings from these paths in suite output.
+
 - **TDD stabilization pass: cross-test DB/session integrity + meta-search compatibility**:
   - hardened global DB session plumbing to prevent leaked `async_session_factory` overrides between tests,
   - updated shared DB transaction helper to prefer dynamic storage session factory while preserving legacy patch target behavior,

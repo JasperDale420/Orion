@@ -55,7 +55,6 @@ async def test_hydrate_from_db():
         assert "MSFT" not in uni.expiry_tickers  # Invalid date
 
 
-@pytest.mark.asyncio
 def test_update_from_event_expiry():
     """
     Verifies that incoming events update the expiry tracking.
@@ -94,7 +93,6 @@ def test_update_from_event_expiry():
     assert uni.expiry_tickers["NVDA"] == exp2  # Still exp2
 
 
-@pytest.mark.asyncio
 def test_cleanup_respects_expiry():
     """
     Verifies that cleanup does NOT remove tickers with future expiry.

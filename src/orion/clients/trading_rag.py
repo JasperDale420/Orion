@@ -6,6 +6,7 @@ Provides access to indexed trading books for context-aware Q&A.
 """
 
 import os
+from inspect import isawaitable
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -72,7 +73,9 @@ class TradingRAGClient:
                 "/retrieve",
                 json={"query": query, "top_k": top_k},
             )
-            response.raise_for_status()
+            maybe_result = response.raise_for_status()
+            if isawaitable(maybe_result):
+                await maybe_result
             data = response.json()
 
             logger.info(
@@ -106,7 +109,9 @@ class TradingRAGClient:
                 "/answer",
                 json={"query": query, "top_k": top_k},
             )
-            response.raise_for_status()
+            maybe_result = response.raise_for_status()
+            if isawaitable(maybe_result):
+                await maybe_result
             data = response.json()
 
             logger.info(

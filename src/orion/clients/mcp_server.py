@@ -6,6 +6,7 @@ Uses HTTP to call MCP tools for trading, market data, and flow analysis.
 """
 
 import os
+from inspect import isawaitable
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -59,7 +60,9 @@ class MCPServerClient:
                 "/call",
                 json={"tool": tool_name, "arguments": args},
             )
-            response.raise_for_status()
+            maybe_result = response.raise_for_status()
+            if isawaitable(maybe_result):
+                await maybe_result
             return response.json()
         except httpx.HTTPStatusError as e:
             logger.error(f"MCP tool call failed: {e}")
