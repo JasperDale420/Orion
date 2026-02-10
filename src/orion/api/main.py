@@ -47,6 +47,27 @@ async def custom_404_handler(request: Request, exc: HTTPException) -> JSONRespon
     )
 
 
+from orion.core.errors import OrionError
+
+
+@app.exception_handler(OrionError)
+async def orion_exception_handler(request: Request, exc: OrionError) -> JSONResponse:
+    """
+    Handle OrionError with standard Empire error envelope.
+    """
+    return JSONResponse(
+        status_code=400,
+        content={
+            "success": False,
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+            },
+        },
+    )
+
+
 @app.middleware("http")
 async def audit_middleware(request: Request, call_next: Any) -> Response:
     trace_id = request.headers.get("x-trace-id") or str(uuid.uuid4())

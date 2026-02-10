@@ -8603,3 +8603,40 @@ Result:
 - targeted coupling reduced again:
   - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `41 -> 37`,
   - same targeted refs in `main_price_target_labeler.py`: `11 -> 7`.
+
+## 274) Pass 273 Continuation (2026-02-10)
+
+### 274.1 Event-Flow SQL Fallback Cluster Removed in `main_price_target_labeler` (TDD-Backed, Combined)
+
+Finding:
+- remaining event-flow fallback paths still used local `silver_uw_flow` SQL when Heber event data was missing:
+  - `get_entry_signals(...)`,
+  - `get_subsequent_prices(...)`,
+  - `get_flow_greeks(...)`.
+- this kept entry selection, post-entry price tracking, and stored-Greeks enrichment partially coupled to Orion-local SQL.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - `get_entry_signals(...)` now returns Heber-derived entries only (or empty list),
+  - `get_subsequent_prices(...)` now returns Heber-derived prices only (or empty list),
+  - `get_flow_greeks(...)` now uses Heber event flow only (or null-shaped payload),
+  - removed:
+    - `_get_entry_signals_sql(...)`
+    - `_get_subsequent_prices_sql(...)`
+    - `_get_flow_greeks_sql(...)`.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py`
+    - `test_get_entry_signals_returns_empty_when_heber_empty`
+    - `test_get_subsequent_prices_returns_empty_when_heber_missing_columns`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+    - `test_get_flow_greeks_returns_null_payload_when_heber_missing`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_context.py -k "entry_signals or subsequent_prices or flow_greeks"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+
+Result:
+- entry signal ingestion/label follow-up paths in `main_price_target_labeler` are now Heber-only with explicit empty/null outputs.
+- targeted coupling reduced again:
+  - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `37 -> 34`,
+  - same targeted refs in `main_price_target_labeler.py`: `7 -> 4`.
