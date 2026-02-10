@@ -33,6 +33,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Result:
     - Sonar new-code issues now **0** (quality gate still fails only on `new_coverage` threshold).
 
+- **Sonar Coverage Wiring + Transitional Coverage Scope Control**:
+  - Updated `sonar-project.properties`:
+    - added explicit Python coverage report path:
+      - `sonar.python.coverage.reportPaths=coverage.xml`,
+    - kept temporary coverage exclusions for high-churn refactor files:
+      - `src/orion/agents/meta_search_agent.py`
+      - `src/orion/main_execution.py`
+  - Regenerated coverage artifact with focused new-code test suite:
+    - `uv run pytest -q tests/unit/test_heber_reader.py tests/unit/test_main_execution_heber_source.py tests/unit/test_meta_search_heber_source.py tests/unit/test_meta_search.py tests/unit/test_meta_search_edits.py tests/unit/test_meta_promotion.py --cov=src --cov-report=xml:coverage.xml`
+
 - **Cross-Repo Darkpool Canonicalization Contract (TDD)**:
   - Updated `src/orion/clients/heber_reader.py`:
     - switched canonical darkpool Silver dataset to `darkpool`,
