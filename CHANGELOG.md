@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Validate Features Heber-First Source Audit Adapter (TDD)**:
+  - Updated `src/orion/jobs/validate_features.py`:
+    - added Heber-first source-audit adapter for dataset coverage checks with local SQL fallback,
+    - added env toggle:
+      - `ORION_VALIDATE_FEATURES_PREFER_HEBER` (`1` default, falsey values disable Heber reads),
+    - added source coverage helpers for:
+      - label-period bounds,
+      - Heber dataframe coverage summarization,
+      - per-source backend provenance (`heber` vs `local_db`),
+    - refactored `audit_data_sources()` to use shared source specs and emit backend + preference details.
+  - Added tests:
+    - `tests/unit/test_validate_features_source_adapter.py`
+      - env parsing behavior
+      - Heber-preferred selection
+      - local fallback behavior
+      - dataframe summarization behavior.
+  - Verified with:
+    - `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_heber_reader.py`
 - **Combined Pass: Runtime Guardrails for Backfill + Feature-Enrichment Loop (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - added elapsed-runtime circuit breaker:

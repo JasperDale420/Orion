@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pandas as pd
+import pytest
+
+from orion.jobs import validate_features
+
+
+def test_prefer_heber_source_from_env_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORION_VALIDATE_FEATURES_PREFER_HEBER", raising=False)
+    assert validate_features._prefer_heber_source_from_env() is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "False", "no", "off", "n"])
+def test_prefer_heber_source_from_env_false_values(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("ORION_VALIDATE_FEATURES_PREFER_HEBER", value)
+    assert validate_features._prefer_heber_source_from_env() is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):
+        assert source == "silver_uw_flow"
+        assert label_start_ts is None
+        assert label_end_ts is None
+        return {
+            "min_date": "2026-02-01",
+            "max_date": "2026-02-05",
+            "tickers": 3,
+            "backend": "heber",
+        }
+
+    async def _fail_local(*, source: str):
+        raise AssertionError("local DB fallback should not be called when Heber succeeds")
+
+    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_heber", _fake_heber)
+    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", _fail_local)
+
+    summary = await validate_features._fetch_source_summary(
+        source="silver_uw_flow",
+        label_start_ts=None,
+        label_end_ts=None,
+        prefer_heber=True,
+    )
+
+    assert summary["backend"] == "heber"
+    assert summary["tickers"] == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_summary_falls_back_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _empty_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):
+        assert source == "silver_uw_flow"
+        return None
+
+    async def _local(*, source: str):
+        assert source == "silver_uw_flow"
+        return {
+            "min_date": "2026-01-01",
+            "max_date": "2026-02-05",
+            "tickers": 7,
+            "backend": "local_db",
+        }
+
+    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_heber", _empty_heber)
+    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", _local)
+
+    summary = await validate_features._fetch_source_summary(
+        source="silver_uw_flow",
+        label_start_ts=None,
+        label_end_ts=None,
+        prefer_heber=True,
+    )
+
+    assert summary["backend"] == "local_db"
+    assert summary["tickers"] == 7
+
+
+def test_summarize_heber_frame_uses_instrument_key_and_ts_event() -> None:
+    df = pd.DataFrame(
+        {
+            "instrument_key": ["equity:SPY", "equity:SPY", "equity:QQQ"],
+            "ts_event": [
+                datetime(2026, 2, 3, 14, tzinfo=timezone.utc),
+                datetime(2026, 2, 4, 14, tzinfo=timezone.utc),
+                datetime(2026, 2, 5, 14, tzinfo=timezone.utc),
+            ],
+        }
+    )
+
+    summary = validate_features._summarize_heber_source_frame(df)
+
+    assert summary["min_date"] == "2026-02-03"
+    assert summary["max_date"] == "2026-02-05"
+    assert summary["tickers"] == 2

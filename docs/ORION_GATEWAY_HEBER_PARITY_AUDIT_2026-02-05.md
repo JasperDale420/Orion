@@ -7936,3 +7936,54 @@ Proposed sequencing for step 1 (implementation phase):
 
 Result:
 - we now have a quantified, file-level dependency map that defines exactly where remaining migration work is concentrated and what should be prioritized before broad archival.
+
+## 256) Pass 254 Continuation (2026-02-10)
+
+### 256.1 Validate-Features Source Audit Adapter (Heber-First with SQL Fallback, TDD-Backed)
+
+Finding:
+- `jobs/validate_features.py` remained one of the top migration hotspots and still hardcoded per-table SQL audit queries for source coverage.
+- this created a parity gap: audit execution could not prefer Heber-backed datasets and had no explicit backend provenance for each source check.
+
+Implemented:
+- Updated `src/orion/jobs/validate_features.py`:
+  - introduced shared source audit specs (`_AUDIT_SOURCE_SPECS`) for the primary migration-critical sources:
+    - `silver_alpaca_bars`
+    - `silver_uw_flow`
+    - `silver_uw_darkpool`
+    - `silver_greek_exposure`
+    - `silver_max_pain`
+    - `silver_market_tide`
+    - `silver_vix_data`
+    - `silver_regime_history`,
+  - added Heber-first source selection with local SQL fallback:
+    - `_fetch_source_summary_from_heber(...)`
+    - `_fetch_source_summary_from_local_db(...)`
+    - `_fetch_source_summary(...)`,
+  - added bounded label-period helpers:
+    - `_load_label_period()`
+    - `_label_date_bounds(...)`,
+  - added Heber dataframe coverage summarization:
+    - `_summarize_heber_source_frame(...)`
+    - ticker extraction support for `instrument_key` sources,
+  - added source preference env:
+    - `ORION_VALIDATE_FEATURES_PREFER_HEBER`
+      - default: Heber-first
+      - falsey values (`0|false|no|off|n`): local-db-only,
+  - refactored `audit_data_sources()` to:
+    - use shared source specs,
+    - report backend provenance (`heber` / `local_db`) per source,
+    - log active source preference mode.
+- Added tests in `tests/unit/test_validate_features_source_adapter.py`:
+  - env preference parsing,
+  - Heber-preferred path,
+  - local fallback path,
+  - dataframe summary correctness.
+
+Verification:
+- `pytest -q tests/unit/test_validate_features_source_adapter.py` passed.
+- `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_heber_reader.py` passed.
+
+Result:
+- `validate_features` source coverage audit now participates in Gateway/Heber migration semantics rather than being local-SQL-only.
+- this closes one of the highest audit-surface gaps while preserving operational continuity through fallback behavior.

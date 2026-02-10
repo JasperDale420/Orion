@@ -13,11 +13,14 @@ Usage:
 
 import argparse
 import asyncio
-from datetime import datetime, timedelta
+import os
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import pandas as pd
 from sqlalchemy import text
 
+from orion.clients.heber_reader import get_heber_reader
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -30,6 +33,7 @@ MINUTES_TO_CLOSE_MAX = 390
 # ============================================================================
 # SPOT-CHECK VALIDATION
 # ============================================================================
+
 
 async def spot_check_record(event_id: str) -> Dict[str, Any]:
     """
@@ -101,16 +105,16 @@ def validate_time_features(label: Dict, entry_ts: datetime) -> Dict[str, List[st
         if label["entry_day_of_week"] == entry_ts.weekday():
             passed.append(f"entry_day_of_week={label['entry_day_of_week']} ✓")
         else:
-            failed.append(f"entry_day_of_week mismatch: got {label['entry_day_of_week']}, expected {entry_ts.weekday()}")
+            failed.append(
+                f"entry_day_of_week mismatch: got {label['entry_day_of_week']}, expected {entry_ts.weekday()}"
+            )
 
     # minutes_to_close should be within regular US session minutes.
     if label.get("minutes_to_close") is not None:
         if 0 <= label["minutes_to_close"] <= MINUTES_TO_CLOSE_MAX:
             passed.append(f"minutes_to_close={label['minutes_to_close']} in range ✓")
         else:
-            failed.append(
-                f"minutes_to_close={label['minutes_to_close']} out of range [0, {MINUTES_TO_CLOSE_MAX}]"
-            )
+            failed.append(f"minutes_to_close={label['minutes_to_close']} out of range [0, {MINUTES_TO_CLOSE_MAX}]")
 
     return {"passed": passed, "failed": failed}
 
@@ -234,12 +238,14 @@ def validate_greeks(label: Dict) -> Dict[str, List[str]]:
 # SANITY CHECKS (BATCH)
 # ============================================================================
 
+
 async def run_sanity_checks() -> Dict[str, Any]:
     """Run batch sanity checks on all records."""
     results: Dict[str, Any] = {"passed": 0, "failed": 0, "issues": []}
 
     async def check(session: Any) -> List[Dict]:
-        stmt = text("""
+        stmt = text(
+            """
             SELECT
                 COUNT(*) as total,
                 COUNT(*) FILTER (WHERE NOT ml_ready) as not_ready,
@@ -247,13 +253,16 @@ async def run_sanity_checks() -> Dict[str, Any]:
                 COUNT(*) FILTER (WHERE ml_ready AND gamma_at_entry < 0) as bad_gamma,
                 COUNT(*) FILTER (WHERE ml_ready AND (iv_rank_at_entry < 0 OR iv_rank_at_entry > 100)) as bad_iv_rank,
                 COUNT(*) FILTER (
-                    WHERE ml_ready AND (minutes_to_close < 0 OR minutes_to_close > """ + str(MINUTES_TO_CLOSE_MAX) + """)
+                    WHERE ml_ready AND (minutes_to_close < 0 OR minutes_to_close > """
+            + str(MINUTES_TO_CLOSE_MAX)
+            + """)
                 ) as bad_mtc,
                 COUNT(*) FILTER (WHERE ml_ready AND (entry_hour < 0 OR entry_hour > 23)) as bad_hour,
                 COUNT(*) FILTER (WHERE ml_ready AND darkpool_volume_1h < 0) as bad_dp,
                 COUNT(*) FILTER (WHERE ml_ready AND rvol_1h < 0) as bad_rvol
             FROM price_target_labels
-        """)
+        """
+        )
         result = await session.execute(stmt)
         row = result.fetchone()
         return dict(row._mapping)
@@ -296,6 +305,253 @@ async def run_sanity_checks() -> Dict[str, Any]:
 # DATA SOURCE AUDIT
 # ============================================================================
 
+_AUDIT_SOURCE_SPECS: dict[str, dict[str, Any]] = {
+    "silver_alpaca_bars": {
+        "sql": "SELECT MIN(DATE(bar_start_ts_utc)), MAX(DATE(bar_start_ts_utc)), COUNT(DISTINCT ticker) FROM silver_alpaca_bars",
+        "features": ["overnight_gap", "vwap", "underlying"],
+        "heber_method": "read_bars",
+        "row_count_as_tickers": False,
+    },
+    "silver_uw_flow": {
+        "sql": "SELECT MIN(DATE(flow_ts_utc)), MAX(DATE(flow_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_flow",
+        "features": ["greeks", "iv", "rvol", "flow_aggression", "checkpoints"],
+        "heber_method": "read_flow",
+        "row_count_as_tickers": False,
+    },
+    "silver_uw_darkpool": {
+        "sql": "SELECT MIN(DATE(dark_ts_utc)), MAX(DATE(dark_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_darkpool",
+        "features": ["darkpool_*"],
+        "heber_method": "read_darkpool",
+        "row_count_as_tickers": False,
+    },
+    "silver_greek_exposure": {
+        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(DISTINCT ticker) FROM silver_greek_exposure",
+        "features": ["gex", "vex"],
+        "heber_method": "read_greek_exposure",
+        "row_count_as_tickers": False,
+    },
+    "silver_max_pain": {
+        "sql": "SELECT MIN(date), MAX(date), COUNT(DISTINCT ticker) FROM silver_max_pain",
+        "features": ["max_pain_distance"],
+        "heber_method": "read_max_pain",
+        "row_count_as_tickers": False,
+    },
+    "silver_market_tide": {
+        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_market_tide",
+        "features": ["market_tide_30m", "market_tide_direction"],
+        "heber_method": "read_market_tide",
+        "row_count_as_tickers": True,
+    },
+    "silver_vix_data": {
+        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_vix_data",
+        "features": ["vix_at_entry", "vix_regime"],
+        "heber_method": None,
+        "tickers_constant": 1,
+    },
+    "silver_regime_history": {
+        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_regime_history",
+        "features": ["trend_regime", "vol_regime", "risk_regime", "session_regime"],
+        "heber_method": None,
+        "tickers_constant": 1,
+    },
+}
+
+_AUDIT_SOURCE_ORDER = [
+    "silver_alpaca_bars",
+    "silver_uw_flow",
+    "silver_uw_darkpool",
+    "silver_greek_exposure",
+    "silver_max_pain",
+    "silver_market_tide",
+    "silver_vix_data",
+    "silver_regime_history",
+]
+
+_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
+_SOURCE_TIME_COLUMNS = ["ts_event", "ts_utc", "bar_start_ts", "flow_ts_utc", "dark_ts_utc", "date"]
+_SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "instrument_key"]
+
+
+def _prefer_heber_source_from_env() -> bool:
+    raw = os.getenv("ORION_VALIDATE_FEATURES_PREFER_HEBER", "1").strip().lower()
+    return raw not in _PREFER_HEBER_FALSE_VALUES
+
+
+def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
+    for column in columns:
+        if column in df.columns:
+            return column
+    return None
+
+
+def _label_date_bounds(
+    min_date: Optional[date],
+    max_date: Optional[date],
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    if min_date is None or max_date is None:
+        return None, None
+    return (
+        datetime.combine(min_date, time.min, tzinfo=timezone.utc),
+        datetime.combine(max_date, time.max, tzinfo=timezone.utc),
+    )
+
+
+def _summarize_heber_source_frame(
+    df: pd.DataFrame,
+    row_count_as_tickers: bool = False,
+) -> Dict[str, Any]:
+    if df.empty:
+        return {"min_date": None, "max_date": None, "tickers": 0}
+
+    time_column = _pick_first_existing_column(df, _SOURCE_TIME_COLUMNS)
+    min_date = None
+    max_date = None
+    if time_column is not None:
+        time_series = pd.to_datetime(df[time_column], utc=True, errors="coerce").dropna()
+        if not time_series.empty:
+            min_date = str(time_series.min().date())
+            max_date = str(time_series.max().date())
+
+    ticker_column = _pick_first_existing_column(df, _SOURCE_TICKER_COLUMNS)
+    if ticker_column is None:
+        tickers = int(len(df)) if row_count_as_tickers else 0
+    else:
+        ticker_series = df[ticker_column].dropna().astype(str)
+        if ticker_column == "instrument_key":
+            ticker_series = ticker_series.str.split(":").str[-1]
+        tickers = int(ticker_series.nunique())
+
+    return {"min_date": min_date, "max_date": max_date, "tickers": tickers}
+
+
+def _heber_read_kwargs(
+    source: str,
+    label_start_ts: Optional[datetime],
+    label_end_ts: Optional[datetime],
+) -> Dict[str, Any]:
+    asof_time = datetime.now(timezone.utc)
+    if source == "silver_alpaca_bars":
+        return {
+            "symbols": [],
+            "asof_time": asof_time,
+            "start_time": label_start_ts,
+            "end_time": label_end_ts,
+            "timeframe": "1m",
+        }
+    if source == "silver_market_tide":
+        return {
+            "asof_time": asof_time,
+            "start_time": label_start_ts,
+        }
+    return {
+        "asof_time": asof_time,
+        "start_time": label_start_ts,
+    }
+
+
+async def _fetch_source_summary_from_heber(
+    *,
+    source: str,
+    label_start_ts: Optional[datetime],
+    label_end_ts: Optional[datetime],
+) -> Optional[Dict[str, Any]]:
+    spec = _AUDIT_SOURCE_SPECS[source]
+    method_name = spec.get("heber_method")
+    if not method_name:
+        return None
+
+    reader = get_heber_reader()
+    method = getattr(reader, method_name, None)
+    if method is None:
+        return None
+
+    kwargs = _heber_read_kwargs(source, label_start_ts, label_end_ts)
+    try:
+        df = await asyncio.to_thread(method, **kwargs)
+    except Exception as exc:
+        logger.warning(
+            "audit_source_heber_read_failed",
+            source=source,
+            method=method_name,
+            error=str(exc),
+        )
+        return None
+
+    summary = _summarize_heber_source_frame(df, row_count_as_tickers=bool(spec.get("row_count_as_tickers", False)))
+    if summary["min_date"] is None or summary["max_date"] is None:
+        return None
+
+    summary["backend"] = "heber"
+    return summary
+
+
+async def _fetch_source_summary_from_local_db(*, source: str) -> Dict[str, Any]:
+    spec = _AUDIT_SOURCE_SPECS[source]
+
+    async def audit(session: Any) -> Any:
+        result = await session.execute(text(spec["sql"]))
+        return result.fetchone()
+
+    row = await db_query(audit)
+    min_date = str(row[0]) if row and row[0] else None
+    max_date = str(row[1]) if row and row[1] else None
+    tickers_constant = spec.get("tickers_constant")
+    if tickers_constant is not None:
+        tickers = int(tickers_constant)
+    else:
+        tickers = int(row[2]) if row and row[2] else 0
+
+    return {
+        "min_date": min_date,
+        "max_date": max_date,
+        "tickers": tickers,
+        "backend": "local_db",
+    }
+
+
+async def _fetch_source_summary(
+    *,
+    source: str,
+    label_start_ts: Optional[datetime],
+    label_end_ts: Optional[datetime],
+    prefer_heber: bool,
+) -> Dict[str, Any]:
+    if prefer_heber:
+        heber_summary = await _fetch_source_summary_from_heber(
+            source=source,
+            label_start_ts=label_start_ts,
+            label_end_ts=label_end_ts,
+        )
+        if heber_summary is not None:
+            return heber_summary
+    return await _fetch_source_summary_from_local_db(source=source)
+
+
+async def _load_label_period() -> Dict[str, Any]:
+    async def query(session: Any) -> Dict[str, Any]:
+        stmt = text(
+            """
+            SELECT MIN(DATE(entry_ts)) as min_date, MAX(DATE(entry_ts)) as max_date,
+                   COUNT(DISTINCT ticker) as ticker_count
+            FROM price_target_labels WHERE ml_ready
+            """
+        )
+        result = await session.execute(stmt)
+        row = result.fetchone()
+        min_date = row[0] if row else None
+        max_date = row[1] if row else None
+        ticker_count = int(row[2]) if row and row[2] else 0
+        return {
+            "min_date_raw": min_date,
+            "max_date_raw": max_date,
+            "min_date": str(min_date) if min_date else None,
+            "max_date": str(max_date) if max_date else None,
+            "tickers": ticker_count,
+        }
+
+    return await db_query(query)
+
+
 # Feature-to-source mapping for all 130+ features
 FEATURE_SOURCE_MAPPING = {
     # Greeks - from silver_uw_flow
@@ -304,10 +560,8 @@ FEATURE_SOURCE_MAPPING = {
     "iv_at_entry": "silver_uw_flow",
     "volume_at_entry": "silver_uw_flow",
     "open_interest_at_entry": "silver_uw_flow",
-
     # IV Rank - from silver_uw_flow history
     "iv_rank_at_entry": "silver_uw_flow",
-
     # Darkpool - from silver_uw_darkpool
     "darkpool_volume_1h": "silver_uw_darkpool",
     "darkpool_15m": "silver_uw_darkpool",
@@ -318,25 +572,20 @@ FEATURE_SOURCE_MAPPING = {
     "darkpool_1w": "silver_uw_darkpool",
     "darkpool_2w": "silver_uw_darkpool",
     "darkpool_4w": "silver_uw_darkpool",
-
     # Bars - from silver_alpaca_bars
     "overnight_gap_pct": "silver_alpaca_bars",
     "vwap_distance_pct": "silver_alpaca_bars",
     "underlying_at_entry": "silver_alpaca_bars",
     "underlying_at_1h": "silver_alpaca_bars",
     "price_change_5d_prior": "silver_alpaca_bars",
-
     # GEX/VEX - from silver_greek_exposure
     "gex_at_entry": "silver_greek_exposure",
     "vex_at_entry": "silver_greek_exposure",
-
     # Max Pain - from silver_max_pain
     "max_pain_distance_pct": "silver_max_pain",
-
     # Market Tide - from silver_market_tide
     "market_tide_30m": "silver_market_tide",
     "market_tide_direction": "silver_market_tide",
-
     # Regimes - from silver_vix_data / silver_regime_history
     "vix_at_entry": "silver_vix_data",
     "vix_regime_at_entry": "silver_vix_data",
@@ -344,26 +593,22 @@ FEATURE_SOURCE_MAPPING = {
     "vol_regime_at_entry": "silver_regime_history",
     "risk_regime_at_entry": "silver_regime_history",
     "session_regime_at_entry": "silver_regime_history",
-
     # Time features - derived from entry_ts (no source table)
     "entry_hour": "derived",
     "entry_day_of_week": "derived",
     "entry_session": "derived",
     "minutes_to_close": "derived",
-
     # Flow aggression - from silver_uw_flow
     "ask_side_ratio": "silver_uw_flow",
     "sweep_ratio_1h": "silver_uw_flow",
     "same_ticker_premium_1h": "silver_uw_flow",
     "institutional_flow_1w": "silver_uw_flow",
-
     # RVOL - from silver_uw_flow
     "rvol_1h": "silver_uw_flow",
     "rvol_daily": "silver_uw_flow",
     "rvol_weekly": "silver_uw_flow",
     "rvol_30m": "silver_uw_flow",
     "rvol_3d": "silver_uw_flow",
-
     # Return checkpoints - from silver_uw_flow (option prices)
     "return_at_15m": "silver_uw_flow",
     "return_at_30m": "silver_uw_flow",
@@ -379,83 +624,41 @@ FEATURE_SOURCE_MAPPING = {
 
 async def audit_data_sources() -> Dict[str, Any]:
     """Audit ALL source tables for the label period."""
+    label_period = await _load_label_period()
+    label_start_ts, label_end_ts = _label_date_bounds(
+        label_period.get("min_date_raw"),
+        label_period.get("max_date_raw"),
+    )
+    prefer_heber = _prefer_heber_source_from_env()
 
-    async def audit(session: Any) -> Dict:
-        # Get label date range
-        label_stmt = text("""
-            SELECT MIN(DATE(entry_ts)) as min_date, MAX(DATE(entry_ts)) as max_date,
-                   COUNT(DISTINCT ticker) as ticker_count
-            FROM price_target_labels WHERE ml_ready
-        """)
-        label_result = await session.execute(label_stmt)
-        label_row = label_result.fetchone()
+    sources: Dict[str, Dict[str, Any]] = {}
+    for source in _AUDIT_SOURCE_ORDER:
+        summary = await _fetch_source_summary(
+            source=source,
+            label_start_ts=label_start_ts,
+            label_end_ts=label_end_ts,
+            prefer_heber=prefer_heber,
+        )
+        summary["features"] = list(_AUDIT_SOURCE_SPECS[source]["features"])
+        sources[source] = summary
 
-        sources = {}
-
-        # 1. silver_alpaca_bars
-        stmt = text("SELECT MIN(DATE(bar_start_ts_utc)), MAX(DATE(bar_start_ts_utc)), COUNT(DISTINCT ticker) FROM silver_alpaca_bars")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_alpaca_bars"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": row[2] or 0, "features": ["overnight_gap", "vwap", "underlying"]}
-
-        # 2. silver_uw_flow
-        stmt = text("SELECT MIN(DATE(flow_ts_utc)), MAX(DATE(flow_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_flow")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_uw_flow"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": row[2] or 0, "features": ["greeks", "iv", "rvol", "flow_aggression", "checkpoints"]}
-
-        # 3. silver_uw_darkpool
-        stmt = text("SELECT MIN(DATE(dark_ts_utc)), MAX(DATE(dark_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_darkpool")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_uw_darkpool"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": row[2] or 0, "features": ["darkpool_*"]}
-
-        # 4. silver_greek_exposure
-        stmt = text("SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(DISTINCT ticker) FROM silver_greek_exposure")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_greek_exposure"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": row[2] or 0, "features": ["gex", "vex"]}
-
-        # 5. silver_max_pain
-        stmt = text("SELECT MIN(date), MAX(date), COUNT(DISTINCT ticker) FROM silver_max_pain")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_max_pain"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": row[2] or 0, "features": ["max_pain_distance"]}
-
-        # 6. silver_market_tide
-        stmt = text("SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_market_tide")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_market_tide"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": row[2] or 0, "features": ["market_tide_30m", "market_tide_direction"]}
-
-        # 7. silver_vix_data
-        stmt = text("SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_vix_data")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_vix_data"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": 1, "features": ["vix_at_entry", "vix_regime"]}
-
-        # 8. silver_regime_history
-        stmt = text("SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_regime_history")
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        sources["silver_regime_history"] = {"min_date": str(row[0]) if row[0] else None, "max_date": str(row[1]) if row[1] else None, "tickers": 1, "features": ["trend_regime", "vol_regime", "risk_regime", "session_regime"]}
-
-        return {
-            "label_period": {
-                "min_date": str(label_row[0]) if label_row[0] else None,
-                "max_date": str(label_row[1]) if label_row[1] else None,
-                "tickers": label_row[2] if label_row[2] else 0,
-            },
-            "sources": sources,
-        }
-
-    audit_results = await db_query(audit)
+    audit_results = {
+        "label_period": {
+            "min_date": label_period["min_date"],
+            "max_date": label_period["max_date"],
+            "tickers": label_period["tickers"],
+        },
+        "sources": sources,
+    }
 
     logger.info("=" * 60)
-    logger.info("DATA SOURCE AUDIT - All 11 Silver Tables")
+    logger.info("DATA SOURCE AUDIT - Silver Coverage")
     logger.info("=" * 60)
-    logger.info(f"Label period: {audit_results['label_period']['min_date']} to {audit_results['label_period']['max_date']}")
+    logger.info(
+        f"Label period: {audit_results['label_period']['min_date']} to {audit_results['label_period']['max_date']}"
+    )
     logger.info(f"Label tickers: {audit_results['label_period']['tickers']}")
+    logger.info(f"Source preference: {'heber-first' if prefer_heber else 'local-db-only'}")
     logger.info("-" * 60)
 
     label_min = audit_results["label_period"]["min_date"]
@@ -464,8 +667,11 @@ async def audit_data_sources() -> Dict[str, Any]:
     for source, info in audit_results["sources"].items():
         status = "✓" if info["min_date"] and info["max_date"] else "✗"
         features = ", ".join(info.get("features", []))
+        backend = info.get("backend", "local_db")
         logger.info(f"{status} {source}")
-        logger.info(f"    Period: {info['min_date']} to {info['max_date']} | Tickers: {info['tickers']}")
+        logger.info(
+            f"    Period: {info['min_date']} to {info['max_date']} | Tickers: {info['tickers']} | Backend: {backend}"
+        )
         logger.info(f"    Features: {features}")
 
         # Check coverage gaps
@@ -483,6 +689,7 @@ async def audit_data_sources() -> Dict[str, Any]:
 # ============================================================================
 # MAIN
 # ============================================================================
+
 
 async def main():
     """Main entry point."""
