@@ -23,9 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
       - `bars`, `flow_alerts`, `darkpool`, `greek_exposure`, `max_pain`, `market_tide`, `vix_data`, `regime_history`,
     - added backward-compatible normalization for legacy IDs (for example `silver_uw_flow` -> `flow_alerts`),
     - migrated audit source specs/order and feature-source mapping to canonical IDs while preserving local SQL fallback behavior.
+    - `validate_darkpool(...)` now uses Heber-first darkpool volume lookup with local SQL fallback for spot-check validation.
   - Updated tests in `tests/unit/test_validate_features_source_adapter.py`:
     - added canonicalization and legacy-alias acceptance coverage,
     - added guardrail asserting feature source mappings no longer use `silver_*` source IDs.
+    - added darkpool validation-source coverage:
+      - `test_validate_darkpool_prefers_heber_when_available`
+      - `test_validate_darkpool_falls_back_to_local_when_heber_empty`.
   - Verified with:
     - `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py`
     - `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_heber_reader.py -k "validate_features or darkpool"`

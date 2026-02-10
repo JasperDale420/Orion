@@ -120,6 +120,50 @@ def test_feature_source_mapping_uses_canonical_source_ids() -> None:
         assert not source.startswith("silver_"), f"{feature} still points to legacy source id: {source}"
 
 
+@pytest.mark.asyncio
+async def test_validate_darkpool_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail_db_query(_fn):
+        raise AssertionError("local DB fallback should not be used when Heber volume is available")
+
+    monkeypatch.setattr(validate_features, "_get_darkpool_volume_from_heber_for_validation", lambda *_: 150)
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+
+    results = await validate_features.validate_darkpool(
+        {"darkpool_volume_1h": 150},
+        "AAPL",
+        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+    )
+
+    assert results["failed"] == []
+    assert any("matches" in msg for msg in results["passed"])
+
+
+@pytest.mark.asyncio
+async def test_validate_darkpool_falls_back_to_local_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_db_query(fn):
+        class _FakeResult:
+            def fetchone(self):
+                return (200,)
+
+        class _FakeSession:
+            async def execute(self, *_args, **_kwargs):
+                return _FakeResult()
+
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(validate_features, "_get_darkpool_volume_from_heber_for_validation", lambda *_: None)
+    monkeypatch.setattr(validate_features, "db_query", _fake_db_query)
+
+    results = await validate_features.validate_darkpool(
+        {"darkpool_volume_1h": 200},
+        "AAPL",
+        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+    )
+
+    assert results["failed"] == []
+    assert any("matches" in msg for msg in results["passed"])
+
+
 def test_summarize_heber_frame_uses_instrument_key_and_ts_event() -> None:
     df = pd.DataFrame(
         {

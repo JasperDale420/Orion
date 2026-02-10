@@ -8341,3 +8341,24 @@ Verification:
 Result:
 - validate-features auditing now reports/operates on canonical source contracts rather than legacy local-table labels.
 - legacy callers remain compatible via alias normalization, reducing migration break risk while lowering naming-coupling debt.
+
+### 265.2 Spot-Check Path Hardening: Darkpool Validation Heber-First (TDD-Backed)
+
+Finding:
+- `validate_darkpool(...)` still validated `darkpool_volume_1h` using only local SQL (`silver_uw_darkpool`) even when Heber-backed darkpool data was available.
+- This left part of spot-check validation behavior behind the migration contract.
+
+Implemented:
+- Updated `src/orion/jobs/validate_features.py`:
+  - added `_get_darkpool_volume_from_heber_for_validation(...)` to compute validation-window darkpool volume from Heber reads,
+  - updated `validate_darkpool(...)` to prefer Heber-derived expected volume and fallback to SQL only when Heber data is unavailable.
+- Added tests:
+  - `tests/unit/test_validate_features_source_adapter.py`
+    - `test_validate_darkpool_prefers_heber_when_available`
+    - `test_validate_darkpool_falls_back_to_local_when_heber_empty`.
+
+Verification:
+- `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py` passed.
+
+Result:
+- validate-features spot checks now align better with Heber-first migration semantics while preserving local fallback behavior.

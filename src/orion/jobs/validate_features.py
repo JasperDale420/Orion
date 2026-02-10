@@ -188,6 +188,9 @@ async def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dic
     """Validate darkpool volume against raw darkpool table."""
     passed, failed, warnings = [], [], []
 
+    def _count_darkpool_from_heber(minutes: int) -> Optional[int]:
+        return _get_darkpool_volume_from_heber_for_validation(ticker, entry_ts, minutes)
+
     async def count_dp(session: Any, minutes: int) -> int:
         start_ts = entry_ts - timedelta(minutes=minutes)
         stmt = text("""
@@ -202,7 +205,10 @@ async def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dic
 
     # Check darkpool_1h
     if label.get("darkpool_volume_1h") is not None:
-        expected = await db_query(lambda s: count_dp(s, 60))
+        expected = _count_darkpool_from_heber(60)
+        if expected is None:
+            expected = await db_query(lambda s: count_dp(s, 60))
+
         actual = label["darkpool_volume_1h"]
         if expected == actual:
             passed.append(f"darkpool_1h={actual} matches ✓")
@@ -212,6 +218,53 @@ async def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dic
             failed.append(f"darkpool_1h mismatch: got {actual}, expected {expected}")
 
     return {"passed": passed, "failed": failed, "warnings": warnings}
+
+
+def _get_darkpool_volume_from_heber_for_validation(
+    ticker: str,
+    entry_ts: datetime,
+    window_minutes: int,
+) -> Optional[int]:
+    """Return summed darkpool volume from Heber for validation window."""
+    start_ts = entry_ts - timedelta(minutes=window_minutes)
+    try:
+        darkpool_df = get_heber_reader().read_darkpool(
+            symbols=[ticker],
+            start_time=start_ts,
+            asof_time=entry_ts,
+        )
+    except Exception as exc:
+        logger.warning("validate_darkpool_heber_lookup_failed", ticker=ticker, error=str(exc))
+        return None
+
+    if darkpool_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(darkpool_df, ["dark_ts_utc", "ts_utc", "ts_event", "timestamp", "created_at"])
+    size_col = _pick_first_existing_column(darkpool_df, ["size_shares", "size", "shares", "volume"])
+    if ts_col is None or size_col is None:
+        return None
+
+    start_utc = pd.Timestamp(start_ts)
+    if start_utc.tzinfo is None:
+        start_utc = start_utc.tz_localize("UTC")
+    else:
+        start_utc = start_utc.tz_convert("UTC")
+
+    entry_utc = pd.Timestamp(entry_ts)
+    if entry_utc.tzinfo is None:
+        entry_utc = entry_utc.tz_localize("UTC")
+    else:
+        entry_utc = entry_utc.tz_convert("UTC")
+    ts_series = pd.to_datetime(darkpool_df[ts_col], utc=True, errors="coerce")
+    in_window = darkpool_df[(ts_series >= start_utc) & (ts_series <= entry_utc)]
+    if in_window.empty:
+        return 0
+
+    total = pd.to_numeric(in_window[size_col], errors="coerce").sum()
+    if pd.isna(total):
+        return None
+    return int(total)
 
 
 def validate_greeks(label: Dict) -> Dict[str, List[str]]:
