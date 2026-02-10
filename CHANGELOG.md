@@ -17,6 +17,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Validate Features Source-ID Canonicalization + Legacy Alias Adapter (TDD)**:
+  - Updated `src/orion/jobs/validate_features.py`:
+    - introduced canonical source IDs for feature/source contracts:
+      - `bars`, `flow_alerts`, `darkpool`, `greek_exposure`, `max_pain`, `market_tide`, `vix_data`, `regime_history`,
+    - added backward-compatible normalization for legacy IDs (for example `silver_uw_flow` -> `flow_alerts`),
+    - migrated audit source specs/order and feature-source mapping to canonical IDs while preserving local SQL fallback behavior.
+  - Updated tests in `tests/unit/test_validate_features_source_adapter.py`:
+    - added canonicalization and legacy-alias acceptance coverage,
+    - added guardrail asserting feature source mappings no longer use `silver_*` source IDs.
+  - Verified with:
+    - `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py`
+    - `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_heber_reader.py -k "validate_features or darkpool"`
+
 - **Combined Pass: Meta-Search Sonar Closure + Async Session Add Hardening (TDD)**:
   - Updated `src/orion/agents/meta_search_agent.py`:
     - resolved remaining Sonar new-code issues in promotion/ingestion helpers,

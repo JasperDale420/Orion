@@ -22,10 +22,17 @@ def test_prefer_heber_source_from_env_false_values(
     assert validate_features._prefer_heber_source_from_env() is False
 
 
+def test_normalize_source_id_legacy_alias_maps_to_canonical() -> None:
+    assert validate_features._normalize_source_id("silver_uw_flow") == "flow_alerts"
+    assert validate_features._normalize_source_id("silver_uw_darkpool") == "darkpool"
+    assert validate_features._normalize_source_id("silver_alpaca_bars") == "bars"
+    assert validate_features._normalize_source_id("flow_alerts") == "flow_alerts"
+
+
 @pytest.mark.asyncio
 async def test_fetch_source_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):
-        assert source == "silver_uw_flow"
+        assert source == "flow_alerts"
         assert label_start_ts is None
         assert label_end_ts is None
         return {
@@ -42,7 +49,7 @@ async def test_fetch_source_summary_prefers_heber(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", _fail_local)
 
     summary = await validate_features._fetch_source_summary(
-        source="silver_uw_flow",
+        source="flow_alerts",
         label_start_ts=None,
         label_end_ts=None,
         prefer_heber=True,
@@ -55,11 +62,11 @@ async def test_fetch_source_summary_prefers_heber(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.asyncio
 async def test_fetch_source_summary_falls_back_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _empty_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):
-        assert source == "silver_uw_flow"
+        assert source == "flow_alerts"
         return None
 
     async def _local(*, source: str):
-        assert source == "silver_uw_flow"
+        assert source == "flow_alerts"
         return {
             "min_date": "2026-01-01",
             "max_date": "2026-02-05",
@@ -71,7 +78,7 @@ async def test_fetch_source_summary_falls_back_to_local(monkeypatch: pytest.Monk
     monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", _local)
 
     summary = await validate_features._fetch_source_summary(
-        source="silver_uw_flow",
+        source="flow_alerts",
         label_start_ts=None,
         label_end_ts=None,
         prefer_heber=True,
@@ -79,6 +86,38 @@ async def test_fetch_source_summary_falls_back_to_local(monkeypatch: pytest.Monk
 
     assert summary["backend"] == "local_db"
     assert summary["tickers"] == 7
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_summary_accepts_legacy_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):
+        assert source == "flow_alerts"
+        return {
+            "min_date": "2026-02-01",
+            "max_date": "2026-02-05",
+            "tickers": 3,
+            "backend": "heber",
+        }
+
+    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_heber", _fake_heber)
+    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", lambda **_: None)
+
+    summary = await validate_features._fetch_source_summary(
+        source="silver_uw_flow",
+        label_start_ts=None,
+        label_end_ts=None,
+        prefer_heber=True,
+    )
+
+    assert summary["backend"] == "heber"
+    assert summary["tickers"] == 3
+
+
+def test_feature_source_mapping_uses_canonical_source_ids() -> None:
+    for feature, source in validate_features.FEATURE_SOURCE_MAPPING.items():
+        if source == "derived":
+            continue
+        assert not source.startswith("silver_"), f"{feature} still points to legacy source id: {source}"
 
 
 def test_summarize_heber_frame_uses_instrument_key_and_ts_event() -> None:

@@ -8308,3 +8308,36 @@ Verification:
 Result:
 - canonical darkpool contract is now locked to `darkpool` across Data-Gateway event emission, Heber catalog/stream metadata, and Orion read defaults.
 - backward compatibility remains in Orion reader (`darkpool_trades` fallback) to avoid migration breakage on historical partitions.
+
+## 265) Pass 264 Continuation (2026-02-10)
+
+### 265.1 `validate_features` Contract Cleanup: Canonical Source IDs + Legacy Alias Support (TDD-Backed)
+
+Finding:
+- `src/orion/jobs/validate_features.py` still encoded source ownership with legacy Orion table IDs (`silver_uw_flow`, `silver_uw_darkpool`, etc.) across:
+  - audit source specs,
+  - source ordering,
+  - feature-source mapping.
+- This kept migration/audit contracts tightly coupled to local table naming instead of canonical dataset/feed ownership.
+
+Implemented:
+- Updated `src/orion/jobs/validate_features.py`:
+  - introduced canonical source IDs:
+    - `bars`, `flow_alerts`, `darkpool`, `greek_exposure`, `max_pain`, `market_tide`, `vix_data`, `regime_history`,
+  - added `LEGACY_SOURCE_ALIASES` + `_normalize_source_id(...)` for backward compatibility with prior `silver_*` identifiers,
+  - migrated `_AUDIT_SOURCE_SPECS`, `_AUDIT_SOURCE_ORDER`, and `FEATURE_SOURCE_MAPPING` to canonical IDs,
+  - preserved local SQL fallback behavior by keeping existing SQL statements in source specs while decoupling exposed source contract IDs.
+- Updated tests:
+  - `tests/unit/test_validate_features_source_adapter.py`:
+    - `test_normalize_source_id_legacy_alias_maps_to_canonical`
+    - `test_fetch_source_summary_accepts_legacy_alias`
+    - `test_feature_source_mapping_uses_canonical_source_ids`
+    - adjusted existing source-adapter tests to assert canonical IDs.
+
+Verification:
+- `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py` passed.
+- `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_heber_reader.py -k "validate_features or darkpool"` passed.
+
+Result:
+- validate-features auditing now reports/operates on canonical source contracts rather than legacy local-table labels.
+- legacy callers remain compatible via alias normalization, reducing migration break risk while lowering naming-coupling debt.

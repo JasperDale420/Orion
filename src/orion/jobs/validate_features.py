@@ -28,6 +28,25 @@ from orion.storage.db import init_db
 logger = setup_struct_logger("orion.validate_features")
 
 MINUTES_TO_CLOSE_MAX = 390
+SOURCE_BARS = "bars"
+SOURCE_FLOW = "flow_alerts"
+SOURCE_DARKPOOL = "darkpool"
+SOURCE_GREEK_EXPOSURE = "greek_exposure"
+SOURCE_MAX_PAIN = "max_pain"
+SOURCE_MARKET_TIDE = "market_tide"
+SOURCE_VIX = "vix_data"
+SOURCE_REGIME = "regime_history"
+
+LEGACY_SOURCE_ALIASES = {
+    "silver_alpaca_bars": SOURCE_BARS,
+    "silver_uw_flow": SOURCE_FLOW,
+    "silver_uw_darkpool": SOURCE_DARKPOOL,
+    "silver_greek_exposure": SOURCE_GREEK_EXPOSURE,
+    "silver_max_pain": SOURCE_MAX_PAIN,
+    "silver_market_tide": SOURCE_MARKET_TIDE,
+    "silver_vix_data": SOURCE_VIX,
+    "silver_regime_history": SOURCE_REGIME,
+}
 
 
 # ============================================================================
@@ -306,49 +325,49 @@ async def run_sanity_checks() -> Dict[str, Any]:
 # ============================================================================
 
 _AUDIT_SOURCE_SPECS: dict[str, dict[str, Any]] = {
-    "silver_alpaca_bars": {
+    SOURCE_BARS: {
         "sql": "SELECT MIN(DATE(bar_start_ts_utc)), MAX(DATE(bar_start_ts_utc)), COUNT(DISTINCT ticker) FROM silver_alpaca_bars",
         "features": ["overnight_gap", "vwap", "underlying"],
         "heber_method": "read_bars",
         "row_count_as_tickers": False,
     },
-    "silver_uw_flow": {
+    SOURCE_FLOW: {
         "sql": "SELECT MIN(DATE(flow_ts_utc)), MAX(DATE(flow_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_flow",
         "features": ["greeks", "iv", "rvol", "flow_aggression", "checkpoints"],
         "heber_method": "read_flow",
         "row_count_as_tickers": False,
     },
-    "silver_uw_darkpool": {
+    SOURCE_DARKPOOL: {
         "sql": "SELECT MIN(DATE(dark_ts_utc)), MAX(DATE(dark_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_darkpool",
         "features": ["darkpool_*"],
         "heber_method": "read_darkpool",
         "row_count_as_tickers": False,
     },
-    "silver_greek_exposure": {
+    SOURCE_GREEK_EXPOSURE: {
         "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(DISTINCT ticker) FROM silver_greek_exposure",
         "features": ["gex", "vex"],
         "heber_method": "read_greek_exposure",
         "row_count_as_tickers": False,
     },
-    "silver_max_pain": {
+    SOURCE_MAX_PAIN: {
         "sql": "SELECT MIN(date), MAX(date), COUNT(DISTINCT ticker) FROM silver_max_pain",
         "features": ["max_pain_distance"],
         "heber_method": "read_max_pain",
         "row_count_as_tickers": False,
     },
-    "silver_market_tide": {
+    SOURCE_MARKET_TIDE: {
         "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_market_tide",
         "features": ["market_tide_30m", "market_tide_direction"],
         "heber_method": "read_market_tide",
         "row_count_as_tickers": True,
     },
-    "silver_vix_data": {
+    SOURCE_VIX: {
         "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_vix_data",
         "features": ["vix_at_entry", "vix_regime"],
         "heber_method": None,
         "tickers_constant": 1,
     },
-    "silver_regime_history": {
+    SOURCE_REGIME: {
         "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_regime_history",
         "features": ["trend_regime", "vol_regime", "risk_regime", "session_regime"],
         "heber_method": None,
@@ -357,14 +376,14 @@ _AUDIT_SOURCE_SPECS: dict[str, dict[str, Any]] = {
 }
 
 _AUDIT_SOURCE_ORDER = [
-    "silver_alpaca_bars",
-    "silver_uw_flow",
-    "silver_uw_darkpool",
-    "silver_greek_exposure",
-    "silver_max_pain",
-    "silver_market_tide",
-    "silver_vix_data",
-    "silver_regime_history",
+    SOURCE_BARS,
+    SOURCE_FLOW,
+    SOURCE_DARKPOOL,
+    SOURCE_GREEK_EXPOSURE,
+    SOURCE_MAX_PAIN,
+    SOURCE_MARKET_TIDE,
+    SOURCE_VIX,
+    SOURCE_REGIME,
 ]
 
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
@@ -382,6 +401,10 @@ def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optiona
         if column in df.columns:
             return column
     return None
+
+
+def _normalize_source_id(source: str) -> str:
+    return LEGACY_SOURCE_ALIASES.get(source, source)
 
 
 def _label_date_bounds(
@@ -429,8 +452,9 @@ def _heber_read_kwargs(
     label_start_ts: Optional[datetime],
     label_end_ts: Optional[datetime],
 ) -> Dict[str, Any]:
+    source_id = _normalize_source_id(source)
     asof_time = datetime.now(timezone.utc)
-    if source == "silver_alpaca_bars":
+    if source_id == SOURCE_BARS:
         return {
             "symbols": [],
             "asof_time": asof_time,
@@ -438,7 +462,7 @@ def _heber_read_kwargs(
             "end_time": label_end_ts,
             "timeframe": "1m",
         }
-    if source == "silver_market_tide":
+    if source_id == SOURCE_MARKET_TIDE:
         return {
             "asof_time": asof_time,
             "start_time": label_start_ts,
@@ -455,7 +479,8 @@ async def _fetch_source_summary_from_heber(
     label_start_ts: Optional[datetime],
     label_end_ts: Optional[datetime],
 ) -> Optional[Dict[str, Any]]:
-    spec = _AUDIT_SOURCE_SPECS[source]
+    source_id = _normalize_source_id(source)
+    spec = _AUDIT_SOURCE_SPECS[source_id]
     method_name = spec.get("heber_method")
     if not method_name:
         return None
@@ -465,13 +490,13 @@ async def _fetch_source_summary_from_heber(
     if method is None:
         return None
 
-    kwargs = _heber_read_kwargs(source, label_start_ts, label_end_ts)
+    kwargs = _heber_read_kwargs(source_id, label_start_ts, label_end_ts)
     try:
         df = await asyncio.to_thread(method, **kwargs)
     except Exception as exc:
         logger.warning(
             "audit_source_heber_read_failed",
-            source=source,
+            source=source_id,
             method=method_name,
             error=str(exc),
         )
@@ -486,7 +511,8 @@ async def _fetch_source_summary_from_heber(
 
 
 async def _fetch_source_summary_from_local_db(*, source: str) -> Dict[str, Any]:
-    spec = _AUDIT_SOURCE_SPECS[source]
+    source_id = _normalize_source_id(source)
+    spec = _AUDIT_SOURCE_SPECS[source_id]
 
     async def audit(session: Any) -> Any:
         result = await session.execute(text(spec["sql"]))
@@ -516,15 +542,16 @@ async def _fetch_source_summary(
     label_end_ts: Optional[datetime],
     prefer_heber: bool,
 ) -> Dict[str, Any]:
+    source_id = _normalize_source_id(source)
     if prefer_heber:
         heber_summary = await _fetch_source_summary_from_heber(
-            source=source,
+            source=source_id,
             label_start_ts=label_start_ts,
             label_end_ts=label_end_ts,
         )
         if heber_summary is not None:
             return heber_summary
-    return await _fetch_source_summary_from_local_db(source=source)
+    return await _fetch_source_summary_from_local_db(source=source_id)
 
 
 async def _load_label_period() -> Dict[str, Any]:
@@ -554,71 +581,71 @@ async def _load_label_period() -> Dict[str, Any]:
 
 # Feature-to-source mapping for all 130+ features
 FEATURE_SOURCE_MAPPING = {
-    # Greeks - from silver_uw_flow
-    "delta_at_entry": "silver_uw_flow",
-    "gamma_at_entry": "silver_uw_flow",
-    "iv_at_entry": "silver_uw_flow",
-    "volume_at_entry": "silver_uw_flow",
-    "open_interest_at_entry": "silver_uw_flow",
-    # IV Rank - from silver_uw_flow history
-    "iv_rank_at_entry": "silver_uw_flow",
-    # Darkpool - from silver_uw_darkpool
-    "darkpool_volume_1h": "silver_uw_darkpool",
-    "darkpool_15m": "silver_uw_darkpool",
-    "darkpool_30m": "silver_uw_darkpool",
-    "darkpool_4h": "silver_uw_darkpool",
-    "darkpool_1d": "silver_uw_darkpool",
-    "darkpool_3d": "silver_uw_darkpool",
-    "darkpool_1w": "silver_uw_darkpool",
-    "darkpool_2w": "silver_uw_darkpool",
-    "darkpool_4w": "silver_uw_darkpool",
-    # Bars - from silver_alpaca_bars
-    "overnight_gap_pct": "silver_alpaca_bars",
-    "vwap_distance_pct": "silver_alpaca_bars",
-    "underlying_at_entry": "silver_alpaca_bars",
-    "underlying_at_1h": "silver_alpaca_bars",
-    "price_change_5d_prior": "silver_alpaca_bars",
-    # GEX/VEX - from silver_greek_exposure
-    "gex_at_entry": "silver_greek_exposure",
-    "vex_at_entry": "silver_greek_exposure",
-    # Max Pain - from silver_max_pain
-    "max_pain_distance_pct": "silver_max_pain",
-    # Market Tide - from silver_market_tide
-    "market_tide_30m": "silver_market_tide",
-    "market_tide_direction": "silver_market_tide",
-    # Regimes - from silver_vix_data / silver_regime_history
-    "vix_at_entry": "silver_vix_data",
-    "vix_regime_at_entry": "silver_vix_data",
-    "trend_regime_at_entry": "silver_regime_history",
-    "vol_regime_at_entry": "silver_regime_history",
-    "risk_regime_at_entry": "silver_regime_history",
-    "session_regime_at_entry": "silver_regime_history",
+    # Greeks - from flow alert feed
+    "delta_at_entry": SOURCE_FLOW,
+    "gamma_at_entry": SOURCE_FLOW,
+    "iv_at_entry": SOURCE_FLOW,
+    "volume_at_entry": SOURCE_FLOW,
+    "open_interest_at_entry": SOURCE_FLOW,
+    # IV Rank - from flow history
+    "iv_rank_at_entry": SOURCE_FLOW,
+    # Darkpool windows
+    "darkpool_volume_1h": SOURCE_DARKPOOL,
+    "darkpool_15m": SOURCE_DARKPOOL,
+    "darkpool_30m": SOURCE_DARKPOOL,
+    "darkpool_4h": SOURCE_DARKPOOL,
+    "darkpool_1d": SOURCE_DARKPOOL,
+    "darkpool_3d": SOURCE_DARKPOOL,
+    "darkpool_1w": SOURCE_DARKPOOL,
+    "darkpool_2w": SOURCE_DARKPOOL,
+    "darkpool_4w": SOURCE_DARKPOOL,
+    # Bars
+    "overnight_gap_pct": SOURCE_BARS,
+    "vwap_distance_pct": SOURCE_BARS,
+    "underlying_at_entry": SOURCE_BARS,
+    "underlying_at_1h": SOURCE_BARS,
+    "price_change_5d_prior": SOURCE_BARS,
+    # GEX/VEX
+    "gex_at_entry": SOURCE_GREEK_EXPOSURE,
+    "vex_at_entry": SOURCE_GREEK_EXPOSURE,
+    # Max pain
+    "max_pain_distance_pct": SOURCE_MAX_PAIN,
+    # Market tide
+    "market_tide_30m": SOURCE_MARKET_TIDE,
+    "market_tide_direction": SOURCE_MARKET_TIDE,
+    # Regimes - from VIX / regime history
+    "vix_at_entry": SOURCE_VIX,
+    "vix_regime_at_entry": SOURCE_VIX,
+    "trend_regime_at_entry": SOURCE_REGIME,
+    "vol_regime_at_entry": SOURCE_REGIME,
+    "risk_regime_at_entry": SOURCE_REGIME,
+    "session_regime_at_entry": SOURCE_REGIME,
     # Time features - derived from entry_ts (no source table)
     "entry_hour": "derived",
     "entry_day_of_week": "derived",
     "entry_session": "derived",
     "minutes_to_close": "derived",
-    # Flow aggression - from silver_uw_flow
-    "ask_side_ratio": "silver_uw_flow",
-    "sweep_ratio_1h": "silver_uw_flow",
-    "same_ticker_premium_1h": "silver_uw_flow",
-    "institutional_flow_1w": "silver_uw_flow",
-    # RVOL - from silver_uw_flow
-    "rvol_1h": "silver_uw_flow",
-    "rvol_daily": "silver_uw_flow",
-    "rvol_weekly": "silver_uw_flow",
-    "rvol_30m": "silver_uw_flow",
-    "rvol_3d": "silver_uw_flow",
-    # Return checkpoints - from silver_uw_flow (option prices)
-    "return_at_15m": "silver_uw_flow",
-    "return_at_30m": "silver_uw_flow",
-    "return_at_1h": "silver_uw_flow",
-    "return_at_2h": "silver_uw_flow",
-    "return_at_4h": "silver_uw_flow",
-    "return_at_8h": "silver_uw_flow",
-    "return_at_1d": "silver_uw_flow",
-    "return_at_2d": "silver_uw_flow",
-    "return_at_1w": "silver_uw_flow",
+    # Flow aggression
+    "ask_side_ratio": SOURCE_FLOW,
+    "sweep_ratio_1h": SOURCE_FLOW,
+    "same_ticker_premium_1h": SOURCE_FLOW,
+    "institutional_flow_1w": SOURCE_FLOW,
+    # RVOL
+    "rvol_1h": SOURCE_FLOW,
+    "rvol_daily": SOURCE_FLOW,
+    "rvol_weekly": SOURCE_FLOW,
+    "rvol_30m": SOURCE_FLOW,
+    "rvol_3d": SOURCE_FLOW,
+    # Return checkpoints (option prices)
+    "return_at_15m": SOURCE_FLOW,
+    "return_at_30m": SOURCE_FLOW,
+    "return_at_1h": SOURCE_FLOW,
+    "return_at_2h": SOURCE_FLOW,
+    "return_at_4h": SOURCE_FLOW,
+    "return_at_8h": SOURCE_FLOW,
+    "return_at_1d": SOURCE_FLOW,
+    "return_at_2d": SOURCE_FLOW,
+    "return_at_1w": SOURCE_FLOW,
 }
 
 
