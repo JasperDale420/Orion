@@ -523,9 +523,10 @@ async def main() -> None:
                                 ticker=position.ticker,
                                 qty=position.qty,
                                 exit_signal=exit_sig,
+                                direction=position.direction,
                             )
                             if closed:
-                                position_manager.remove_position(position.ticker)
+                                position_manager.remove_position(position.candidate_id)
                             break  # Exit on first immediate signal
         except Exception as exit_err:
             logger.error(f"Exit rule evaluation error: {exit_err}")

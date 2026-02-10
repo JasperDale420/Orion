@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-
 from orion.execution.position_manager import PositionManager
 from orion.storage.db import async_session_factory
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
@@ -79,6 +78,32 @@ def test_create_position_prefers_candidate_option_symbol_over_evidence() -> None
     assert pos is not None
     assert pos.option_chain == "MSFT260220P00350000"
     assert pos.entry_option_price == 4.1
+
+
+def test_add_position_keeps_multiple_contracts_for_same_ticker() -> None:
+    pm = PositionManager()
+    now = datetime.now(timezone.utc)
+    candidate_one = _candidate(
+        candidate_id="c-1",
+        ticker="AAPL",
+        ts=now,
+        option_symbol="AAPL260220C00200000",
+    )
+    candidate_two = _candidate(
+        candidate_id="c-2",
+        ticker="AAPL",
+        ts=now,
+        option_symbol="AAPL260220P00190000",
+    )
+    decision_one = _decision(candidate_id="c-1", ticker="AAPL", ts=now, limit_price=2.1)
+    decision_two = _decision(candidate_id="c-2", ticker="AAPL", ts=now, limit_price=3.2)
+
+    pm.add_position(candidate_one, decision_one, entry_context={})
+    pm.add_position(candidate_two, decision_two, entry_context={})
+
+    positions = pm.get_open_positions()
+    assert len(positions) == 2
+    assert {p.candidate_id for p in positions} == {"c-1", "c-2"}
 
 
 @pytest.mark.asyncio

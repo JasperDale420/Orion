@@ -437,6 +437,7 @@ class ExecutionEngine:
         ticker: str,
         qty: float,
         exit_signal: Any,
+        direction: str = "LONG",
         use_market_order: bool = False,
     ) -> bool:
         """
@@ -464,7 +465,7 @@ class ExecutionEngine:
                 return False
 
             # Determine order params
-            side = OrderSide.SELL  # Closing a long position
+            side = OrderSide.BUY if str(direction).upper() == "SHORT" else OrderSide.SELL
             client_order_id = str(uuid.uuid4())
 
             if use_market_order or exit_signal.urgency == "IMMEDIATE":

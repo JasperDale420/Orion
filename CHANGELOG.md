@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Execution/position tracking hardening (TDD)**:
+  - fixed `PositionManager` identity handling to track positions by `candidate_id` (instead of ticker), preventing same-ticker contract overwrite in multi-position books,
+  - preserved backward compatibility for ticker-based lookups/removals while making close-path removal candidate-specific in execution loop,
+  - made `ExecutionEngine.close_position(...)` direction-aware so short positions close with `BUY` and long positions close with `SELL`,
+  - added regression coverage:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_position_manager_execution_contracts.py::test_add_position_keeps_multiple_contracts_for_same_ticker`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_execution_engine_close_direction.py::test_close_position_uses_buy_side_for_short_direction`
+  - validation:
+    - `uv run pytest -q tests/unit/test_position_manager_execution_contracts.py::test_add_position_keeps_multiple_contracts_for_same_ticker tests/unit/test_execution_engine_close_direction.py`
+    - `uv run pytest -q` (`742 passed, 6 skipped`).
+
 - **Warning cleanup pass (TDD)**:
   - fixed async-mock compatibility in HTTP clients by supporting both sync and awaitable `raise_for_status()`:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/mcp_server.py`

@@ -12,10 +12,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
-
 from orion.shared.db_utils import db_query
 from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +60,8 @@ class PositionManager:
     """
 
     def __init__(self) -> None:
-        self._positions: Dict[str, OpenPosition] = {}  # ticker -> position
+        # Key positions by candidate_id to avoid collapsing same-underlying contracts.
+        self._positions: Dict[str, OpenPosition] = {}
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -87,7 +87,7 @@ class PositionManager:
             for decision, candidate in rows:
                 pos = self._create_position_from_decision(decision, candidate)
                 if pos:
-                    self._positions[pos.ticker] = pos
+                    self._positions[pos.candidate_id] = pos
 
             self._initialized = True
             logger.info(
@@ -165,7 +165,7 @@ class PositionManager:
             rule_id=candidate.rule_id,
         )
 
-        self._positions[candidate.ticker] = pos
+        self._positions[candidate.candidate_id] = pos
         logger.info(
             f"Position added: {candidate.ticker} {candidate.direction}",
             extra={
@@ -178,26 +178,38 @@ class PositionManager:
         return pos
 
     def get_position(self, ticker: str) -> Optional[OpenPosition]:
-        """Get position for a ticker if exists."""
-        return self._positions.get(ticker)
+        """Get the most recent tracked position for a ticker if exists."""
+        matches = [p for p in self._positions.values() if p.ticker == ticker]
+        if not matches:
+            return None
+        return max(matches, key=lambda p: p.entry_ts)
 
     def get_open_positions(self) -> List[OpenPosition]:
         """Return all open positions."""
         return list(self._positions.values())
 
-    def remove_position(self, ticker: str) -> Optional[OpenPosition]:
-        """Remove position after exit."""
-        pos = self._positions.pop(ticker, None)
+    def remove_position(self, identifier: str) -> Optional[OpenPosition]:
+        """
+        Remove position after exit.
+
+        Accepts either candidate_id (preferred) or ticker for backward compatibility.
+        """
+        pos = self._positions.pop(identifier, None)
+        if pos is None:
+            for candidate_id, existing in list(self._positions.items()):
+                if existing.ticker == identifier:
+                    pos = self._positions.pop(candidate_id)
+                    break
         if pos:
             logger.info(
-                f"Position removed: {ticker}",
-                extra={"event_type": "POSITION_REMOVED", "ticker": ticker},
+                f"Position removed: {pos.ticker}",
+                extra={"event_type": "POSITION_REMOVED", "ticker": pos.ticker},
             )
         return pos
 
     def has_position(self, ticker: str) -> bool:
         """Check if we have an open position for ticker."""
-        return ticker in self._positions
+        return any(position.ticker == ticker for position in self._positions.values())
 
     async def sync_with_broker(self, connector: Any) -> None:
         """
@@ -214,10 +226,15 @@ class PositionManager:
             broker_tickers = {str(p.symbol) for p in broker_positions}
 
             # Remove positions not at broker
-            to_remove = [t for t in self._positions if t not in broker_tickers]
-            for ticker in to_remove:
-                self.remove_position(ticker)
-                logger.info(f"Position {ticker} removed - not found at broker")
+            to_remove = [
+                candidate_id
+                for candidate_id, position in self._positions.items()
+                if position.ticker not in broker_tickers
+            ]
+            for candidate_id in to_remove:
+                removed = self.remove_position(candidate_id)
+                if removed:
+                    logger.info(f"Position {removed.ticker} removed - not found at broker")
 
             logger.info(
                 "PositionManager synced with broker",
