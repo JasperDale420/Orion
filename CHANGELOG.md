@@ -17,6 +17,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Feature Enrichment Heber-First VIX Context Reads (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+    - `get_latest_vix_data()` now prefers Heber `VIXY` bars for VIX proxy context and falls back to local SQL when unavailable,
+    - added helper paths for VIX proxy regime mapping and 1-day change derivation from Heber bars.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_context_heber_source.py`:
+    - added Heber-preferred and fallback coverage for `get_latest_vix_data()`.
+  - Verified with:
+    - `pytest -q tests/unit/test_feature_enrichment_context_heber_source.py -k "latest_vix_data or latest_market_tide or spy_cumulative_return"`
+    - `pytest -q tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_runtime_signals.py`
+    - `ruff check src/orion/main_feature_enrichment.py tests/unit/test_feature_enrichment_context_heber_source.py`
+
 - **Validate Features Source-ID Canonicalization + Legacy Alias Adapter (TDD)**:
   - Updated `src/orion/jobs/validate_features.py`:
     - introduced canonical source IDs for feature/source contracts:
