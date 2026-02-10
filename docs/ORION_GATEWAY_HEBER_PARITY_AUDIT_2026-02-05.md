@@ -8927,3 +8927,29 @@ Result:
 - active local-Silver read dependency was removed from `vix_proxy_connector`.
 - remaining `silver_*` references in this module are intentional `silver_vix_data` persistence/read paths.
 - current top executable `silver_*` hotspots are now primarily intentional persistence surfaces and a small set of remaining migration candidates (`sync_earnings`, connector write paths, and targeted backfill logic).
+
+## 283) Pass 282 Continuation (2026-02-10)
+
+### 283.1 `UWMaxPainConnector` Current-Price Read Migrated to Heber (TDD-Backed)
+
+Finding:
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_max_pain_connector.py` still fetched underlying prices using local `silver_alpaca_bars`, keeping a direct local-Silver read dependency in the connector path.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_max_pain_connector.py`:
+  - migrated `_get_current_price(...)` to Heber `read_bars(...)`,
+  - added schema-tolerant ticker/time/close normalization for Heber bars,
+  - removed local SQL fallback behavior for current-price lookup.
+- Added tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_uw_max_pain_heber_source.py`:
+    - `test_get_current_price_prefers_heber_without_local_db_fallback`
+    - `test_get_current_price_returns_none_when_heber_unavailable`.
+
+Verification:
+- `pytest -q tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py -k "max_pain"` passed.
+- `pytest -q tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_remediation_rules.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py -k "max_pain or validate_features or reconcile_backfill or data_quality_checker or window_feature_job or option_quote_tracker or vix_proxy or sync_earnings or remediation_rules"` passed.
+- `ruff check src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_max_pain_heber_source.py` passed.
+
+Result:
+- `uw_max_pain_connector` no longer reads local `silver_alpaca_bars`.
+- remaining `silver_*` references in this connector are limited to intentional `silver_max_pain` persistence writes.
