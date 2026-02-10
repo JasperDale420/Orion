@@ -147,3 +147,33 @@ async def test_get_iv_rank_at_entry_falls_back_to_sql_when_heber_empty(
 
     iv_rank = await labeler.get_iv_rank_at_entry("AAPL", entry_ts)
     assert iv_rank == 67.5
+
+
+@pytest.mark.asyncio
+async def test_get_iv_rank_at_entry_estimates_from_heber_flow_when_iv_rank_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_iv_rank(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"flow_ts_utc": entry_ts - timedelta(days=3), "iv": 0.20},
+                    {"flow_ts_utc": entry_ts - timedelta(days=2), "iv": 0.30},
+                    {"flow_ts_utc": entry_ts - timedelta(days=1), "iv": 0.40},
+                    {"flow_ts_utc": entry_ts - timedelta(hours=1), "iv": 0.45},
+                ]
+            )
+
+    async def _fake_db_query(_callback):
+        return None
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+
+    iv_rank = await labeler.get_iv_rank_at_entry("AAPL", entry_ts)
+    assert iv_rank == 100.0

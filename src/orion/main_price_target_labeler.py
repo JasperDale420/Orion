@@ -1330,47 +1330,69 @@ def _get_max_pain_distance_from_heber(
 
 
 async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
-    """Get IV rank at entry time by calculating from flow IV history.
-
-    Calculates IV rank as percentile: (current - min) / (max - min) * 100
-    using historical IV data from silver_uw_flow for the same ticker.
-    """
+    """Get IV rank at entry time with Heber-first sourcing."""
     heber_iv_rank = _get_iv_rank_from_heber(ticker, entry_ts)
     if heber_iv_rank is not None:
         return heber_iv_rank
 
-    async def query(session: Any) -> Optional[float]:
-        # Get current IV and historical IVs for this ticker (last 30 days)
-        stmt = text(
-            """
-            WITH iv_history AS (
-                SELECT iv
-                FROM silver_uw_flow
-                WHERE ticker = :ticker
-                AND flow_ts_utc BETWEEN :start_ts AND :entry_ts
-                AND iv IS NOT NULL AND iv > 0
-            )
-            SELECT
-                (SELECT iv FROM silver_uw_flow
-                 WHERE ticker = :ticker AND flow_ts_utc <= :entry_ts
-                 AND iv IS NOT NULL AND iv > 0
-                 ORDER BY flow_ts_utc DESC LIMIT 1) as current_iv,
-                MIN(iv) as min_iv,
-                MAX(iv) as max_iv
-            FROM iv_history
-        """
-        )
-        start_ts = entry_ts - timedelta(days=30)
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
-        row = result.fetchone()
-        if row and row[0] and row[1] is not None and row[2] is not None:
-            current_iv, min_iv, max_iv = row[0], row[1], row[2]
-            if max_iv > min_iv:
-                return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100))
-            return 50.0  # No range, return middle
+    sql_iv_rank = await _get_iv_at_offset_sql(ticker, entry_ts)
+    if sql_iv_rank is not None:
+        return float(sql_iv_rank)
+
+    return _estimate_iv_rank_from_heber_flow(ticker, entry_ts)
+
+
+def _estimate_iv_rank_from_heber_flow(ticker: str, target_ts: datetime) -> Optional[float]:
+    """Estimate IV rank from Heber flow IV history when IV-rank snapshots are unavailable."""
+    target_utc = _coerce_dt_utc(target_ts)
+    if target_utc is None:
         return None
 
-    return await db_query(query)
+    start_utc = target_utc - timedelta(days=30)
+
+    try:
+        flow_df = _heber_reader.read_flow(
+            symbols=[ticker],
+            asof_time=target_utc,
+            start_time=start_utc,
+        )
+    except Exception as e:
+        _record_price_target_fallback("iv_rank_heber_flow_estimate", e, ticker=ticker)
+        return None
+
+    if flow_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    iv_col = _pick_first_existing_column(flow_df, ["iv", "implied_volatility", "iv_alpaca"])
+    if ts_col is None or iv_col is None:
+        return None
+
+    ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    if ticker_col is not None:
+        ticker_series = flow_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+    else:
+        ticker_series = pd.Series([str(ticker).upper()] * len(flow_df))
+
+    ts_series = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+    iv_series = pd.to_numeric(flow_df[iv_col], errors="coerce")
+
+    temp_df = pd.DataFrame({"ts": ts_series, "ticker": ticker_series, "iv": iv_series}).dropna(subset=["ts", "iv"])
+    if temp_df.empty:
+        return None
+
+    ticker_upper = str(ticker).upper()
+    window = temp_df[(temp_df["ticker"] == ticker_upper) & (temp_df["ts"] > start_utc) & (temp_df["ts"] <= target_utc)]
+    if window.empty:
+        return None
+
+    window = window.sort_values("ts")
+    current_iv = float(window.iloc[-1]["iv"])
+    min_iv = float(window["iv"].min())
+    max_iv = float(window["iv"].max())
+    if max_iv > min_iv:
+        return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100.0))
+    return 50.0
 
 
 async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:

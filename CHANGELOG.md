@@ -49,6 +49,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler IV-Rank Heber-First Fallback Hardening (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - `get_iv_rank_at_entry(...)` now falls back to local `silver_iv_rank` lookup before any estimation path,
+    - removed local `silver_uw_flow` SQL IV-history fallback for IV-rank entry calculation,
+    - added Heber flow-based IV-rank estimator `_estimate_iv_rank_from_heber_flow(...)` for cases where IV-rank snapshots are unavailable.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`:
+    - `test_get_iv_rank_at_entry_estimates_from_heber_flow_when_iv_rank_missing`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k "iv_rank"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`
+
 - **Validate Features Overnight-Gap Heber-First Spot Check (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
     - `validate_overnight_gap(...)` now prefers Heber bars-derived `(today_open, prior_close)` inputs and falls back to local SQL only when Heber data is unavailable,

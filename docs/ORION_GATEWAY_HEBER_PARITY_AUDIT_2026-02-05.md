@@ -8385,3 +8385,31 @@ Verification:
 
 Result:
 - overnight-gap spot-check validation now follows the same Heber-first contract as other migrated validation sources, reducing local-SQL coupling in `validate_features` while preserving fallback behavior.
+
+## 267) Pass 266 Continuation (2026-02-10)
+
+### 267.1 `main_price_target_labeler` IV-Rank Fallback De-Coupling from Local Flow SQL (TDD-Backed)
+
+Finding:
+- `get_iv_rank_at_entry(...)` still used a local `silver_uw_flow` SQL fallback path (30-day IV history CTE) when Heber `iv_rank` snapshots were unavailable.
+- This left a high-frequency labeler path dependent on Orion-local flow storage instead of Heber-first fallback semantics.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - changed `get_iv_rank_at_entry(...)` fallback order:
+    1. Heber `read_iv_rank(...)`
+    2. local `silver_iv_rank` SQL fallback (`_get_iv_at_offset_sql(...)`)
+    3. Heber flow-based IV-rank estimate (`_estimate_iv_rank_from_heber_flow(...)`)
+  - removed the local `silver_uw_flow` SQL IV-history query block from `get_iv_rank_at_entry(...)`,
+  - added `_estimate_iv_rank_from_heber_flow(...)` to compute IV rank from Heber flow history when IV-rank snapshots are missing.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`
+    - `test_get_iv_rank_at_entry_estimates_from_heber_flow_when_iv_rank_missing`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k "iv_rank"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py` passed.
+
+Result:
+- IV-rank entry lookup now stays Heber-first even in fallback scenarios and no longer depends on local `silver_uw_flow` SQL for IV-rank computation.
+- targeted local coupling count reduced further (`silver_*` references in `src/orion`: 54 -> 51).
