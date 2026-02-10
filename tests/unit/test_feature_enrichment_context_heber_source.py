@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
-
 from orion import main_feature_enrichment as feature_enrichment
 
 
@@ -33,6 +32,36 @@ async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
+async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+    bars_df = pd.DataFrame(
+        {
+            "bar_start_ts": [
+                now - timedelta(days=1, minutes=1),
+                now - timedelta(days=1),
+                now - timedelta(minutes=1),
+            ],
+            "close": [20.0, 20.0, 24.0],
+            "symbol": ["VIXY", "VIXY", "VIXY"],
+        }
+    )
+
+    monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
+    monkeypatch.setattr(feature_enrichment._heber_reader, "read_bars", lambda **_kwargs: bars_df)
+
+    async def _fail_db_query(_query_fn):
+        raise AssertionError("db_query fallback should not be called")
+
+    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query)
+
+    vix_data = await feature_enrichment.get_latest_vix_data()
+
+    assert vix_data["vix"] == pytest.approx(24.0)
+    assert vix_data["vix_1d_change"] == pytest.approx(20.0)
+    assert vix_data["vix_regime"] == "ELEVATED"
+
+
+@pytest.mark.asyncio
 async def test_get_latest_market_tide_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         feature_enrichment._heber_reader,
@@ -48,6 +77,30 @@ async def test_get_latest_market_tide_falls_back_to_local_db(monkeypatch: pytest
     value = await feature_enrichment.get_latest_market_tide()
 
     assert value == pytest.approx(12.5)
+
+
+@pytest.mark.asyncio
+async def test_get_latest_vix_data_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        feature_enrichment._heber_reader,
+        "read_bars",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
+    )
+
+    async def _fake_db_query(_query_fn):
+        return {
+            "vix": 18.0,
+            "vvix": None,
+            "vix_1d_change": -1.0,
+            "vix_regime": "NORMAL",
+        }
+
+    monkeypatch.setattr(feature_enrichment, "db_query", _fake_db_query)
+
+    vix_data = await feature_enrichment.get_latest_vix_data()
+
+    assert vix_data["vix"] == pytest.approx(18.0)
+    assert vix_data["vix_regime"] == "NORMAL"
 
 
 @pytest.mark.asyncio

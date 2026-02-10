@@ -152,6 +152,67 @@ def _get_latest_market_tide_from_heber() -> float | None:
     return float(call_value - put_value)
 
 
+def _map_vix_proxy_to_regime(vix_proxy: float) -> str:
+    if vix_proxy > 30:
+        return "EXTREME"
+    if vix_proxy > 20:
+        return "ELEVATED"
+    if vix_proxy > 12:
+        return "NORMAL"
+    return "LOW"
+
+
+def _get_latest_vix_data_from_heber() -> dict[str, float | str | None] | None:
+    try:
+        now = datetime.now(timezone.utc)
+        bars_df = _heber_reader.read_bars(
+            symbols=["VIXY"],
+            asof_time=now,
+            start_time=now - pd.Timedelta(days=3),
+        )
+    except Exception:
+        logger.debug("Heber VIXY bars read failed, falling back to local DB", exc_info=True)
+        return None
+
+    if bars_df.empty:
+        return None
+
+    bars_df = bars_df.copy()
+    symbol_col = _first_existing_column(bars_df, ["symbol", "ticker", "underlying", "instrument_key"])
+    if symbol_col is not None:
+        symbols = bars_df[symbol_col].astype(str).str.upper().str.split(":").str[-1]
+        bars_df = bars_df.loc[symbols == "VIXY"]
+    if bars_df.empty:
+        return None
+
+    close_col = _first_existing_column(bars_df, ["close", "c"])
+    if close_col is None:
+        return None
+
+    bars_df["_ts"] = _coerce_time_series(bars_df)
+    bars_df["_close"] = pd.to_numeric(bars_df[close_col], errors="coerce")
+    bars_df = bars_df.dropna(subset=["_ts", "_close"]).sort_values("_ts")
+    if bars_df.empty:
+        return None
+
+    latest = bars_df.iloc[-1]
+    latest_close = float(latest["_close"])
+    target_prior_ts = latest["_ts"] - pd.Timedelta(days=1)
+    prior_rows = bars_df.loc[bars_df["_ts"] <= target_prior_ts]
+    if prior_rows.empty:
+        vix_1d_change = 0.0
+    else:
+        prior_close = float(prior_rows.iloc[-1]["_close"])
+        vix_1d_change = ((latest_close - prior_close) / prior_close) * 100 if prior_close > 0 else 0.0
+
+    return {
+        "vix": latest_close,
+        "vvix": None,
+        "vix_1d_change": vix_1d_change,
+        "vix_regime": _map_vix_proxy_to_regime(latest_close),
+    }
+
+
 def _get_spy_cumulative_return_from_heber() -> float | None:
     try:
         now = datetime.now(timezone.utc)
@@ -415,7 +476,11 @@ async def get_active_tickers(limit: int = 20) -> List[str]:
 
 
 async def get_latest_vix_data() -> dict:
-    """Get latest VIX data from silver_vix_data."""
+    """Get latest VIX context, preferring Heber VIXY proxy bars."""
+    if _prefer_heber_context_reads():
+        heber_vix = _get_latest_vix_data_from_heber()
+        if heber_vix is not None:
+            return heber_vix
 
     async def query(session: Any) -> dict:
         stmt = text(
