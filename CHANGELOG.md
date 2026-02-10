@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **TDD compatibility + risk/execution remediation batch**:
+  - restored ML scorer backward compatibility (`use_heuristic`, `model`, optional `extract_features(..., bucket=None)`),
+  - made heuristic score capping live-only (paper/backtest remain uncapped),
+  - restored normalizer legacy aliases (`call_put`, `flags`) for UW flow payloads,
+  - added `SignalEngine.process_signals(...)` compatibility path for legacy FEATURE_EVENT candidates,
+  - fixed `SolverRouter` baseline fallback behavior:
+    - synthesize minimal config for legacy/incomplete solver blobs,
+    - restrict fallback to non-live stages,
+  - restored `RiskManager.check_order(...)` support for `max_order_size_usd` override,
+  - hardened fill polling compatibility in `ExecutionEngine`:
+    - deterministic fill-id handling for first vs incremental fills,
+    - dedup guard via persisted processed-fill check,
+    - async/sync-safe pending-order removal,
+  - aligned default exit-rules factory to legacy six-rule default (price-target rule opt-in).
+
 - **Post-merge compatibility remediation pass (TDD batch)**:
   - stabilized API test compatibility for newer `httpx` transport usage (`ASGITransport`) and boolean flow fixtures,
   - restored legacy compatibility paths in core runtime:

@@ -539,14 +539,16 @@ class PriceTargetExitRule(ExitRule):
 
 
 # Factory function to get all exit rules with default config
-def get_default_exit_rules() -> List[ExitRule]:
-    """Return all exit rules with default configuration."""
-    return [
+def get_default_exit_rules(include_price_target: bool = False) -> List[ExitRule]:
+    """Return default exit rules (legacy default excludes price-target rule)."""
+    rules: List[ExitRule] = [
         SentimentReversalExitRule(min_opposing_premium=100000.0),
         NetPremiumDeclineExitRule(decline_threshold_pct=50.0),
         VolumeOIDivergenceExitRule(oi_increase_threshold_pct=20.0),
         WaningMomentumExitRule(momentum_drop_threshold_pct=70.0),
         IVContractionExitRule(iv_drop_threshold=10.0),
         OpposingClusterExitRule(min_cluster_count=5),
-        PriceTargetExitRule(profit_target_pct=50.0, stop_loss_pct=20.0),
     ]
+    if include_price_target:
+        rules.append(PriceTargetExitRule(profit_target_pct=50.0, stop_loss_pct=20.0))
+    return rules

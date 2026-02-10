@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -36,6 +37,43 @@ class SignalEngine:
         self._previous_regime: dict[str, str] = {}
         # Market connector for price discovery
         self._market_connector = None
+
+    def process_signals(self, signals: list[Any]) -> list[Any]:
+        """
+        Backward-compatible adapter for legacy callers/tests.
+        Uses legacy FEATURE_EVENT heuristics and falls back to RuleEngine.
+        """
+        legacy_candidates: list[CandidateTrade] = []
+        for signal in signals:
+            if getattr(signal, "signal_type", None) != "FEATURE_EVENT":
+                continue
+
+            feat = getattr(signal, "features", {}) or {}
+            put_call = str(feat.get("call_put") or feat.get("put_call") or "").upper()
+            premium = float(feat.get("premium_usd") or 0)
+            is_sweep = bool(feat.get("is_sweep"))
+            if put_call in {"C", "CALL"} and is_sweep and premium >= 50000:
+                ts = signal.signal_ts_utc
+                legacy_candidates.append(
+                    CandidateTrade(
+                        candidate_id=hashlib.sha256(
+                            f"{signal.ticker}_{ts.isoformat()}_bullish_sweep_v1".encode("utf-8")
+                        ).hexdigest(),
+                        ticker=signal.ticker,
+                        timestamp_utc=ts,
+                        rule_id="bullish_sweep_v1",
+                        direction="LONG",
+                        confidence=0.7,
+                        evidence={"premium": premium},
+                    )
+                )
+
+        if legacy_candidates:
+            return legacy_candidates
+
+        from orion.processing.rule_engine import RuleEngine
+
+        return RuleEngine().process_signals(signals)
 
     async def initialize(self) -> None:
         """

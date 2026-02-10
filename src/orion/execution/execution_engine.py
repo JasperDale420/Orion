@@ -138,6 +138,14 @@ class ExecutionEngine:
         else:
             await self._execute_equity_order(decision, candidate)
 
+    async def _remove_pending_order_compat(self, order_id: str) -> None:
+        """Support both sync and async remove_pending_order implementations."""
+        if not order_id or not hasattr(self.risk_manager, "remove_pending_order"):
+            return
+        maybe_result = self.risk_manager.remove_pending_order(order_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
+
     async def _execute_equity_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
         """Execute a standard equity order."""
         # 1. Pre-Flight Checks (Health, Lag, Shorting)
@@ -350,8 +358,7 @@ class ExecutionEngine:
             decision.executed_successfully = "TRUE"
             self._record_result(True)
         except Exception as e:
-            if hasattr(self.risk_manager, "remove_pending_order"):
-                self.risk_manager.remove_pending_order(client_order_id)
+            await self._remove_pending_order_compat(client_order_id)
 
             await self._persist_order_record(
                 decision=decision,
@@ -644,6 +651,8 @@ class ExecutionEngine:
         try:
             order_id = str(fill.id)
             client_oid = getattr(fill, "client_order_id", None) or order_id
+            if await self._is_fill_processed(order_id):
+                return
 
             # Get current filled qty and total order qty
             filled_qty = float(fill.filled_qty) if fill.filled_qty else 0.0
@@ -685,19 +694,19 @@ class ExecutionEngine:
             )
 
             # Process the incremental fill amount through risk manager
-            await self.risk_manager.process_fill(
-                ticker, incremental_qty, filled_avg_price, side, fill_id=f"{order_id}_{filled_qty}"
-            )
+            fill_id = order_id if last_filled == 0 else f"{order_id}_{filled_qty}"
+            await self.risk_manager.process_fill(ticker, incremental_qty, filled_avg_price, side, fill_id=fill_id)
 
             # Only remove from pending orders when fully filled
             if not is_partial:
-                if client_oid and hasattr(self.risk_manager, "remove_pending_order"):
-                    self.risk_manager.remove_pending_order(client_oid)
+                if client_oid:
+                    await self._remove_pending_order_compat(client_oid)
                 # Clean up tracker
                 if order_id in self._partial_fill_tracker:
                     del self._partial_fill_tracker[order_id]
 
             await self._persist_fill_record(fill)
+            await self._mark_fill_processed(order_id, client_oid=client_oid, ticker=ticker, qty=incremental_qty)
 
         except Exception as e:
             logger.error(f"Failed to process fill {getattr(fill, 'id', 'unknown')}: {e}")

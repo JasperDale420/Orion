@@ -92,12 +92,14 @@ class RiskManager:
         if not self._check_loss_limits(cfg):
             return False
 
-        # 2. Max Order Size (percentage of equity)
-        max_order_size = self.current_equity * cfg.max_order_size_pct
+        # 2. Max Order Size (legacy USD override takes precedence when set)
+        max_order_size = (
+            float(cfg.max_order_size_usd)
+            if cfg.max_order_size_usd is not None
+            else self.current_equity * cfg.max_order_size_pct
+        )
         if estimated_cost > max_order_size:
-            logger.warning(
-                f"RISK REJECT: Order Size ${estimated_cost:.2f} > Limit ${max_order_size:.2f} ({cfg.max_order_size_pct:.0%} of equity)"
-            )
+            logger.warning(f"RISK REJECT: Order Size ${estimated_cost:.2f} > Limit ${max_order_size:.2f}")
             return False
 
         # Calculate projected signed exposure

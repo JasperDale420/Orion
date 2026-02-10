@@ -62,8 +62,13 @@ class MLScorer:
         self.target = target
         self.models: Dict[str, Any] = {}  # bucket -> model_data
         self.feature_names: Dict[str, List[str]] = {}  # bucket -> feature names
+        # Backward compatibility fields expected by older tests/callers.
+        self.model: Any | None = None
+        self.use_heuristic: bool = True
 
         self._load_models()
+        self.use_heuristic = len(self.models) == 0
+        self.model = self.models.get("SWING", {}).get("model")
 
     def _load_models(self) -> None:
         """Load all available bucket-specific models with freshness validation."""
@@ -134,11 +139,20 @@ class MLScorer:
                 extra={"event": "models_loaded", "count": loaded_count, "stale_skipped": skipped_stale},
             )
 
-    def extract_features(self, flow: Dict[str, Any], bucket: str) -> Dict[str, float]:
+    def extract_features(self, flow: Dict[str, Any], bucket: Optional[str] = None) -> Dict[str, float]:
         """
         Extract features from a flow event for scoring.
         Uses feature names from the model if available.
         """
+        if bucket is None:
+            dte = flow.get("dte")
+            if isinstance(dte, str):
+                try:
+                    dte = int(dte)
+                except ValueError:
+                    dte = None
+            bucket = get_trade_bucket(dte)
+
         feature_names = self.feature_names.get(bucket, [])
 
         # Build feature dict based on model's expected features
@@ -279,11 +293,13 @@ class MLScorer:
         if premium < 10000:
             score -= 0.20
 
-        # Cap heuristic at 0.50 to prevent untrained buckets from generating live signals
+        # In live mode we cap heuristic output to avoid taking untrained-model signals.
+        # In paper/backtest, keep uncapped behavior for compatibility/analysis.
         raw_score = min(max(score, 0.0), 1.0)
-        capped_score = min(raw_score, 0.50)
+        cap_enabled = system_settings.orion_stage == "live"
+        capped_score = min(raw_score, 0.50) if cap_enabled else raw_score
 
-        if raw_score > 0.50:
+        if cap_enabled and raw_score > 0.50:
             logger.warning(
                 f"Heuristic scorer used (no model) - score capped from {raw_score:.2f} to {capped_score:.2f}",
                 extra={"event": "heuristic_scorer_capped", "raw_score": raw_score, "capped_score": capped_score},

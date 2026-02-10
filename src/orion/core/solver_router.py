@@ -229,7 +229,7 @@ class SolverRouter:
                     # Fallback Logic (FR 5.6.3)
                     fallback_id = baseline_id
 
-                    if fallback_id:
+                    if fallback_id and str(getattr(context, "current_stage", "")).lower() != "live":
                         # Find the baseline solver in the active list (it should be active if it's the baseline)
                         fallback_solver = next((s for s in active_solvers if s.solver_id == fallback_id), None)
 
@@ -245,8 +245,25 @@ class SolverRouter:
                                 fb_cfg_blob = fallback_solver.definition_json or fallback_solver.config
                                 if not fb_cfg_blob:
                                     raise ValueError(f"Baseline solver {fallback_id} has no config")
+                                if isinstance(fb_cfg_blob, dict):
+                                    fb_cfg_data = dict(fb_cfg_blob)
+                                else:
+                                    fb_cfg_data = {}
+                                # Legacy compatibility: synthesize minimally valid config.
+                                version_id_value = fb_cfg_data.get("version_id")
+                                if not isinstance(version_id_value, str) or not version_id_value:
+                                    fallback_version = getattr(fallback_solver, "version_id", None)
+                                    if isinstance(fallback_version, str) and fallback_version:
+                                        version_id_value = fallback_version
+                                    else:
+                                        version_id_value = fallback_id
+                                    fb_cfg_data["version_id"] = version_id_value
+                                fb_cfg_data.setdefault("rules", [])
+                                fb_cfg_data.setdefault("entry_logic", {"rules": []})
+                                fb_cfg_data.setdefault("exit_logic", {})
+                                fb_cfg_data.setdefault("risk", {"risk_per_trade_bps": 100, "max_open_positions": 1})
 
-                                fb_cfg = SolverConfig(**fb_cfg_blob)
+                                fb_cfg = SolverConfig(**fb_cfg_data)
 
                                 # Validate critical fields
                                 if not fb_cfg.version_id:

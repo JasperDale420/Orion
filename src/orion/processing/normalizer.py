@@ -75,6 +75,8 @@ class NormalizationEngine:
             # Keep payload JSON-serializable (Bronze payload stored as JSON).
             "flow_ts_utc": flow_ts.isoformat(),
             "put_call": put_call,
+            # Legacy compatibility alias used by older tests/callers.
+            "call_put": put_call,
             "expiry": payload.get("expiry"),
             "strike": float(payload.get("strike_price") or payload.get("strike") or 0),
             "option_price": float(payload.get("price", 0) or 0),
@@ -85,6 +87,8 @@ class NormalizationEngine:
             "aggressor": aggressor,
             "is_sweep": str(is_sweep).lower(),  # Stored as string 'true'/'false' to match model
             "flags_json": {"is_sweep": is_sweep, "is_block": is_block, "is_multi_leg": is_multi_leg},
+            # Legacy compatibility alias.
+            "flags": {"is_sweep": is_sweep, "is_block": is_block, "is_multi_leg": is_multi_leg},
             "open_interest": float(payload.get("open_interest", 0) or 0),
             "volume_contract": float(payload.get("volume", 0) or 0),
             # New UW fields
