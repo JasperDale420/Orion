@@ -1335,10 +1335,6 @@ async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[floa
     if heber_iv_rank is not None:
         return heber_iv_rank
 
-    sql_iv_rank = await _get_iv_at_offset_sql(ticker, entry_ts)
-    if sql_iv_rank is not None:
-        return float(sql_iv_rank)
-
     return _estimate_iv_rank_from_heber_flow(ticker, entry_ts)
 
 
@@ -1814,7 +1810,7 @@ async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> O
     if heber_iv_rank is not None:
         return heber_iv_rank
 
-    return await _get_iv_at_offset_sql(ticker, target_ts)
+    return _estimate_iv_rank_from_heber_flow(ticker, target_ts)
 
 
 def _get_iv_rank_from_heber(ticker: str, target_ts: datetime) -> Optional[float]:
@@ -1858,25 +1854,6 @@ def _get_iv_rank_from_heber(ticker: str, target_ts: datetime) -> Optional[float]
             best_iv_rank = iv_rank
 
     return best_iv_rank
-
-
-async def _get_iv_at_offset_sql(ticker: str, target_ts: datetime) -> Optional[float]:
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT iv_rank
-            FROM silver_iv_rank
-            WHERE ticker = :ticker
-            AND ts_utc <= :target_ts
-            ORDER BY ts_utc DESC
-            LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "target_ts": target_ts})
-        row = result.fetchone()
-        return row[0] if row else None
-
-    return await db_query(query)
 
 
 async def get_darkpool_volume(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> Optional[float]:

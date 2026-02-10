@@ -8437,3 +8437,30 @@ Verification:
 Result:
 - one duplicate local SQL path removed from the regime enrichment flow,
 - targeted coupling improved again (`silver_*` references in `src/orion`: 51 -> 50; `main_price_target_labeler`: 21 -> 20).
+
+## 269) Pass 268 Continuation (2026-02-10)
+
+### 269.1 `main_price_target_labeler` IV-Rank Local SQL Fallback Removed (TDD-Backed)
+
+Finding:
+- After prior IV-rank hardening, `get_iv_rank_at_entry(...)` and `get_iv_at_offset(...)` still depended on `_get_iv_at_offset_sql(...)` (`silver_iv_rank`) before using Heber flow estimation.
+- This kept a local SQL dependency in a high-traffic labeler path.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - removed `_get_iv_at_offset_sql(...)` and its `silver_iv_rank` query path,
+  - `get_iv_at_offset(...)` now falls back from Heber `iv_rank` snapshots directly to Heber flow estimation (`_estimate_iv_rank_from_heber_flow(...)`),
+  - `get_iv_rank_at_entry(...)` now follows the same Heber-only fallback chain.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`:
+    - replaced SQL-fallback assertions with Heber-flow-estimate and no-data behavior checks:
+      - `test_get_iv_at_offset_falls_back_to_heber_flow_estimate_when_iv_rank_unusable`
+      - `test_get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_unavailable`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k "iv_at_offset_falls_back_to_heber_flow_estimate or get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_unavailable or iv_rank"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py` passed.
+
+Result:
+- IV-rank enrichment now remains Heber-backed end-to-end for both entry and offset lookups.
+- targeted coupling improved again (`silver_*` references in `src/orion`: 50 -> 49; `main_price_target_labeler`: 20 -> 19).

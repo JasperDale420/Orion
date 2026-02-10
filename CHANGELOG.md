@@ -72,6 +72,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler IV-Rank SQL Fallback Removal (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed `_get_iv_at_offset_sql(...)` (`silver_iv_rank` SQL fallback),
+    - `get_iv_at_offset(...)` now falls back from Heber `iv_rank` snapshots directly to Heber flow estimation,
+    - `get_iv_rank_at_entry(...)` now uses the same Heber-only fallback chain.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`:
+    - `test_get_iv_at_offset_falls_back_to_heber_flow_estimate_when_iv_rank_unusable`
+    - `test_get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_unavailable`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k "iv_at_offset_falls_back_to_heber_flow_estimate or get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_unavailable or iv_rank"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+
 - **Price Target Labeler Regime Fallback De-Duping (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - removed the inline `silver_market_tide` fallback query in `get_regime_at_entry(...)`,

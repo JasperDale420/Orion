@@ -87,7 +87,7 @@ async def test_get_iv_at_offset_prefers_heber_when_available(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_get_iv_at_offset_falls_back_to_sql_when_heber_unusable(
+async def test_get_iv_at_offset_falls_back_to_heber_flow_estimate_when_iv_rank_unusable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
@@ -96,14 +96,24 @@ async def test_get_iv_at_offset_falls_back_to_sql_when_heber_unusable(
         def read_iv_rank(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame([{"unexpected": "shape"}])
 
-    async def _fake_db_query(_callback):
-        return 55.0
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"flow_ts_utc": entry_ts - timedelta(days=3), "iv": 0.20},
+                    {"flow_ts_utc": entry_ts - timedelta(days=2), "iv": 0.30},
+                    {"flow_ts_utc": entry_ts - timedelta(days=1), "iv": 0.40},
+                    {"flow_ts_utc": entry_ts - timedelta(minutes=30), "iv": 0.45},
+                ]
+            )
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not be used for IV rank fallback")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     iv_rank = await labeler.get_iv_at_offset("AAPL", entry_ts, hours=0)
-    assert iv_rank == 55.0
+    assert iv_rank == 100.0
 
 
 @pytest.mark.asyncio
@@ -130,7 +140,7 @@ async def test_get_iv_rank_at_entry_prefers_heber_when_available(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_get_iv_rank_at_entry_falls_back_to_sql_when_heber_empty(
+async def test_get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
@@ -139,14 +149,17 @@ async def test_get_iv_rank_at_entry_falls_back_to_sql_when_heber_empty(
         def read_iv_rank(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_db_query(_callback):
-        return 67.5
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not be used when Heber data is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     iv_rank = await labeler.get_iv_rank_at_entry("AAPL", entry_ts)
-    assert iv_rank == 67.5
+    assert iv_rank is None
 
 
 @pytest.mark.asyncio
