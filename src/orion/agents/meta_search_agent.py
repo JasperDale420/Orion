@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import os
 import uuid
@@ -16,6 +17,7 @@ from orion.core.solver_validation import ensure_solver_definition_json, solver_d
 from orion.shared.db_utils import db_query, db_write
 from orion.storage.db import async_session_factory
 from orion.storage.models_solvers import (
+    MetaExperiment,
     PromotionRecommendation,
     Solver,
     SolverEdits,
@@ -50,6 +52,11 @@ class MetaSearchAgent:
             self.vector_store = VectorStore()
         except Exception as e:
             logger.warning(f"Failed to initialize VectorStore: {e}. RAG features disabled.")
+
+    async def _session_add(self, session: Any, obj: Any) -> None:
+        maybe_awaitable = session.add(obj)
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
 
     def _calculate_composite_score(self, metrics: SolverMetrics, weights: Optional[dict[str, float]] = None) -> float:
         """
@@ -93,177 +100,204 @@ class MetaSearchAgent:
         )
 
         async with async_session_factory() as session:
-            # 1. Load Base
-            stmt = select(Solver).where(Solver.solver_id == base_solver_id)
-            result = await session.execute(stmt)
-            base_solver = result.scalars().first()
-
+            base_solver = await self._fetch_solver(session, base_solver_id)
             if not base_solver:
-                log_meta_event(
-                    logger,
-                    component="MetaSearch",
-                    severity="ERROR",
-                    entity_type="solver",
-                    entity_id=str(base_solver_id),
-                    message="Base solver not found",
-                    metadata={},
-                )
+                self._log_base_solver_not_found(base_solver_id)
                 return
 
-            # Fetch Base Metrics for Composite Score comparison
-            # We need the LATEST metrics for this solver
-            stmt_m = (
-                select(SolverMetrics)
-                .where(SolverMetrics.solver_id == base_solver_id)
-                .order_by(SolverMetrics.evaluated_at_utc.desc())
-                .limit(1)
-            )
-            res_m = await session.execute(stmt_m)
-            base_metrics = res_m.scalars().first()
-
-            base_score = 0.0
-            if base_metrics:
-                base_score = self._calculate_composite_score(base_metrics)
-            else:
-                # Fallback to loose approximation from Solver table
-                base_score = base_solver.sharpe_ratio or 0.0
-
-            # Create Experiment Record
-            objective = "maximize composite_score(sharpe,profit_factor,info_ratio,stability) with drawdown penalty"
-            experiment = await self._log_experiment(
-                description=experiment_name,
-                status="running",
-                name=experiment_name,
-                objective=objective,
-                base_solver_ids=[str(base_solver_id)],
-                config_json={"objective": objective, "weights": meta_settings.scoring_weights},
-            )
-            # Re-fetch experiment from session to ensure it's tracked if needed later in the same session
-            # Or, if _log_experiment returns the managed object, this step is not needed.
-            # Assuming _log_experiment returns the managed object.
-            # If not, we'd need: experiment = await session.get(MetaExperiment, experiment.experiment_id)
-
+            base_score = await self._fetch_base_score(session, base_solver_id, base_solver)
+            experiment = await self._create_evolution_experiment(base_solver_id, experiment_name)
             try:
-                # 2. Generate Variants (SolverEdits)
-                base_config = SolverConfig(**base_solver.config)
-
-                # Build Performance Context with RAG
-                perf_ctx = f"Current Score: {base_score:.2f}. Sharpe: {base_solver.sharpe_ratio or 0.0}."
-
-                if self.vector_store:
-                    try:
-                        # Query for insights relevant to this strategy/family
-                        query = f"performance notes for strategy {base_solver.family_name} low sharpe optimization"
-                        docs = await self.vector_store.search(query, k=3)
-                        if docs:
-                            rag_text = "\\n".join([f"- {d.content[:300]}..." for d in docs])
-                            perf_ctx += f"\\nRelevant Insights:\\n{rag_text}"
-                    except Exception as e:
-                        logger.warning(f"RAG Search failed: {e}")
-
-                # Use MetaAgent (LLM)
-                edits_list = await self.meta_agent.propose_edits(base_config, perf_ctx)
-
-                # Fallback if LLM fails
-                if not edits_list:
-                    logger.warning("LLM failed to propose edits. Using random fallback.")
-                    edits_list = self._generate_heuristic_variants(
-                        base_config, base_solver, count=3, generated_by="random_fallback"
-                    )
-
-                best_variant = None
-                best_score = -999.0
-
-                # 3. Apply Edits & Evaluate
-                # DSR Correction: We need to know the Total Trials run in this experiment so far.
-                # PRD 10.3: "account for total number of trials"
-
-                # We can't easily get the *future* count, but DSR technically requires N to be the size of the set being compared.
-                # If we are doing sequential optimization, N grows.
-                # Let's accumulate trial_count on the experiment record.
-
-                current_trial_count = experiment.trial_count or 0
-
-                for i, edit_record in enumerate(edits_list):
-                    current_trial_count += 1
-                    experiment.trial_count = current_trial_count
-                    # Commit early or batch? Batch is fine for the loop, but we need the count for the eval.
-
-                    # Apply edit to get config first, to validate it
-                    try:
-                        new_config = self.apply_edit(base_config, edit_record)
-                    except ValueError as ve:
-                        logger.warning(f"Skipping invalid edit: {ve}")
-                        continue
-                    try:
-                        ensure_solver_definition_json(new_config.model_dump(mode="json"), None)
-                    except Exception as dsl_err:
-                        logger.warning(
-                            "Skipping solver variant due to DSL validation failure",
-                            extra=solver_dsl_error_extra(dsl_err),
-                        )
-                        continue
-
-                    # Persist Edit (FR 4.5)
-                    sql_edit = SolverEdits(
-                        id=str(uuid.uuid4()),
-                        experiment_id=experiment.experiment_id,
-                        base_solver_id=edit_record.base_solver_id,
-                        new_solver_id=edit_record.new_solver_id,
-                        edit_json=edit_record.model_dump(mode="json"),
-                        generated_by=edit_record.generated_by,
-                    )
-                    session.add(sql_edit)
-
-                    # Create Solver Record (Inactive Candidate)
-                    new_solver = Solver(
-                        solver_id=new_config.version_id,
-                        family_name=f"{base_solver.family_name}_gen_{experiment.experiment_id[:4]}",
-                        config=new_config.model_dump(mode="json"),
-                        is_active=False,
-                        status="candidate",
-                        stage="research",
-                        created_by=edit_record.generated_by,
-                        definition_json=ensure_solver_definition_json(new_config.model_dump(mode="json"), None),
-                    )
-                    session.add(new_solver)
-
-                    # Evaluate (FR 5.2.1/5.3.2: store solver_runs + solver_metrics)
-                    # DSR: Correct for multiple testing (n_trials = cumulative trials in this experiment)
-                    # This ensures that as we try more variants, the hurdle for Significance increases.
-                    solver_run, metrics = await self.evaluate_variant(
-                        new_solver.solver_id, new_config, n_trials=current_trial_count
-                    )
-                    new_score = self._calculate_composite_score(metrics)
-
-                    logger.info(f"Variant {i} Score: {new_score:.4f} (Sharpe: {metrics.sharpe_ratio})")
-
-                    # Save Run + Metrics
-                    session.add(solver_run)
-                    session.add(metrics)
-
-                    # Update Edit Reward (Composite Delta)
-                    sql_edit.reward = new_score - base_score
-
-                    if new_score > best_score:
-                        best_score = new_score
-                        best_variant = new_solver
-
-                # 4. Finalize
-                experiment.status = "completed"
-                experiment.end_time_utc = datetime.now(timezone.utc)
-                experiment.completed_at = datetime.now(timezone.utc)
-                if best_variant:
-                    experiment.best_solver_id = best_variant.solver_id
-                    logger.info(f"Best Variant Found: {best_variant.solver_id} (Score: {best_score:.4f})")
-                experiment.summary = f"best_score={best_score:.4f}"
-
+                await self._run_evolution_generation(session, base_solver, base_score, experiment)
                 await session.commit()
-
             except Exception as e:
                 logger.error(f"Evolution Failed: {e}")
                 experiment.status = "failed"
                 await session.rollback()
+
+    async def _fetch_solver(self, session: Any, solver_id: str) -> Any:
+        stmt = select(Solver).where(Solver.solver_id == solver_id)
+        result = await session.execute(stmt)
+        return result.scalars().first()
+
+    def _log_base_solver_not_found(self, base_solver_id: str) -> None:
+        log_meta_event(
+            logger,
+            component="MetaSearch",
+            severity="ERROR",
+            entity_type="solver",
+            entity_id=str(base_solver_id),
+            message="Base solver not found",
+            metadata={},
+        )
+
+    async def _fetch_base_score(self, session: Any, base_solver_id: str, base_solver: Any) -> float:
+        stmt = (
+            select(SolverMetrics)
+            .where(SolverMetrics.solver_id == base_solver_id)
+            .order_by(SolverMetrics.evaluated_at_utc.desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        metrics = result.scalars().first()
+        if metrics:
+            return self._calculate_composite_score(metrics)
+        return base_solver.sharpe_ratio or 0.0
+
+    async def _create_evolution_experiment(self, base_solver_id: str, experiment_name: str) -> Any:
+        objective = "maximize composite_score(sharpe,profit_factor,info_ratio,stability) with drawdown penalty"
+        return await self._log_experiment(
+            description=experiment_name,
+            status="running",
+            name=experiment_name,
+            objective=objective,
+            base_solver_ids=[str(base_solver_id)],
+            config_json={"objective": objective, "weights": meta_settings.scoring_weights},
+        )
+
+    async def _log_experiment(
+        self,
+        description: str,
+        status: str,
+        name: str,
+        objective: str,
+        base_solver_ids: List[str],
+        config_json: Dict[str, Any],
+    ) -> MetaExperiment:
+        async def create_experiment(session: Any) -> MetaExperiment:
+            now = datetime.now(timezone.utc)
+            experiment = MetaExperiment(
+                experiment_id=str(uuid.uuid4()),
+                description=description,
+                status=status,
+                id=str(uuid.uuid4()),
+                name=name,
+                objective=objective,
+                base_solver_ids=base_solver_ids,
+                config_json=config_json,
+                trial_count=0,
+                started_at=now,
+                start_time_utc=now,
+            )
+            await self._session_add(session, experiment)
+            await session.flush()
+            return experiment
+
+        return await db_write(create_experiment)
+
+    async def _build_performance_context(self, base_solver: Any, base_score: float) -> str:
+        perf_ctx = f"Current Score: {base_score:.2f}. Sharpe: {base_solver.sharpe_ratio or 0.0}."
+        if not self.vector_store:
+            return perf_ctx
+        try:
+            query = f"performance notes for strategy {base_solver.family_name} low sharpe optimization"
+            docs = await self.vector_store.search(query, k=3)
+        except Exception as e:
+            logger.warning(f"RAG Search failed: {e}")
+            return perf_ctx
+        if docs:
+            rag_text = "\\n".join([f"- {d.content[:300]}..." for d in docs])
+            return f"{perf_ctx}\\nRelevant Insights:\\n{rag_text}"
+        return perf_ctx
+
+    async def _generate_edit_candidates(
+        self, base_config: SolverConfig, base_solver: Any, perf_ctx: str
+    ) -> List[SolverEdit]:
+        edits_list = await self.meta_agent.propose_edits(base_config, perf_ctx)
+        if edits_list:
+            return edits_list
+        logger.warning("LLM failed to propose edits. Using random fallback.")
+        return self._generate_heuristic_variants(base_config, base_solver, count=3, generated_by="random_fallback")
+
+    async def _run_evolution_generation(
+        self, session: Any, base_solver: Any, base_score: float, experiment: Any
+    ) -> None:
+        base_config = SolverConfig(**base_solver.config)
+        perf_ctx = await self._build_performance_context(base_solver, base_score)
+        edits_list = await self._generate_edit_candidates(base_config, base_solver, perf_ctx)
+
+        best_variant = None
+        best_score = -999.0
+        current_trial_count = experiment.trial_count or 0
+
+        for i, edit_record in enumerate(edits_list):
+            current_trial_count += 1
+            experiment.trial_count = current_trial_count
+            variant = await self._evaluate_evolution_variant(
+                session=session,
+                base_solver=base_solver,
+                base_config=base_config,
+                base_score=base_score,
+                experiment=experiment,
+                edit_record=edit_record,
+                trial_count=current_trial_count,
+                variant_index=i,
+            )
+            if variant and variant[1] > best_score:
+                best_variant, best_score = variant
+
+        experiment.status = "completed"
+        experiment.end_time_utc = datetime.now(timezone.utc)
+        experiment.completed_at = datetime.now(timezone.utc)
+        if best_variant:
+            experiment.best_solver_id = best_variant.solver_id
+            logger.info(f"Best Variant Found: {best_variant.solver_id} (Score: {best_score:.4f})")
+        experiment.summary = f"best_score={best_score:.4f}"
+
+    async def _evaluate_evolution_variant(
+        self,
+        session: Any,
+        base_solver: Any,
+        base_config: SolverConfig,
+        base_score: float,
+        experiment: Any,
+        edit_record: SolverEdit,
+        trial_count: int,
+        variant_index: int,
+    ) -> tuple[Any, float] | None:
+        try:
+            new_config = self.apply_edit(base_config, edit_record)
+            ensure_solver_definition_json(new_config.model_dump(mode="json"), None)
+        except ValueError as ve:
+            logger.warning(f"Skipping invalid edit: {ve}")
+            return None
+        except Exception as dsl_err:
+            logger.warning(
+                "Skipping solver variant due to DSL validation failure",
+                extra=solver_dsl_error_extra(dsl_err),
+            )
+            return None
+
+        sql_edit = SolverEdits(
+            id=str(uuid.uuid4()),
+            experiment_id=experiment.experiment_id,
+            base_solver_id=edit_record.base_solver_id,
+            new_solver_id=edit_record.new_solver_id,
+            edit_json=edit_record.model_dump(mode="json"),
+            generated_by=edit_record.generated_by,
+        )
+        await self._session_add(session, sql_edit)
+
+        new_solver = Solver(
+            solver_id=new_config.version_id,
+            family_name=f"{base_solver.family_name}_gen_{experiment.experiment_id[:4]}",
+            config=new_config.model_dump(mode="json"),
+            is_active=False,
+            status="candidate",
+            stage="research",
+            created_by=edit_record.generated_by,
+            definition_json=ensure_solver_definition_json(new_config.model_dump(mode="json"), None),
+        )
+        await self._session_add(session, new_solver)
+
+        solver_run, metrics = await self.evaluate_variant(new_solver.solver_id, new_config, n_trials=trial_count)
+        new_score = self._calculate_composite_score(metrics)
+        logger.info(f"Variant {variant_index} Score: {new_score:.4f} (Sharpe: {metrics.sharpe_ratio})")
+
+        await self._session_add(session, solver_run)
+        await self._session_add(session, metrics)
+        sql_edit.reward = new_score - base_score
+        return new_solver, new_score
 
     async def ingest_proposals(self, proposals_dir: str = "proposals") -> None:
         """
@@ -272,49 +306,7 @@ class MetaSearchAgent:
         if not os.path.exists(proposals_dir):
             return
 
-        # Collect all valid proposals first (file I/O outside transaction)
-        proposals_to_ingest = []
-
-        for filename in os.listdir(proposals_dir):
-            if not filename.endswith(".yaml"):
-                continue
-
-            path = os.path.join(proposals_dir, filename)
-            try:
-                artifact = await asyncio.to_thread(self._load_yaml_artifact, path)
-
-                meta = artifact.get("meta", {})
-                proposal = artifact.get("proposal", {})
-
-                if meta.get("status") != "PROPOSED":
-                    continue
-
-                if proposal.get("type") != "solver_edit":
-                    continue
-
-                base_id = proposal.get("target_solver_id")
-                ops_data = proposal.get("ops", [])
-                edit_id = str(uuid.uuid4())
-
-                new_solver_id = deterministic_solver_id(
-                    base_solver_id=str(base_id),
-                    edit_ops={"ops": ops_data},
-                    prefix="eod",
-                )
-
-                proposals_to_ingest.append(
-                    {
-                        "edit_id": edit_id,
-                        "base_id": base_id,
-                        "new_solver_id": new_solver_id,
-                        "ops_data": ops_data,
-                        "filename": filename,
-                        "path": path,
-                    }
-                )
-
-            except Exception as e:
-                logger.error(f"Failed to parse {filename}: {e}")
+        proposals_to_ingest = await self._collect_yaml_proposals(proposals_dir)
 
         if not proposals_to_ingest:
             return
@@ -331,13 +323,54 @@ class MetaSearchAgent:
                     generated_by="llm_eod_agent",
                     reward=None,
                 )
-                session.add(sql_edit)
+                await self._session_add(session, sql_edit)
                 logger.info(f"Ingested proposal {prop['filename']} as Edit {prop['edit_id']}")
             await session.flush()
 
         await db_write(save_proposals)
 
-        # Move processed files (file I/O outside transaction)
+        self._move_processed_proposals(proposals_dir, proposals_to_ingest)
+
+    async def _collect_yaml_proposals(self, proposals_dir: str) -> List[Dict[str, Any]]:
+        proposals_to_ingest: List[Dict[str, Any]] = []
+        for filename in os.listdir(proposals_dir):
+            proposal = await self._parse_yaml_proposal(proposals_dir, filename)
+            if proposal:
+                proposals_to_ingest.append(proposal)
+        return proposals_to_ingest
+
+    async def _parse_yaml_proposal(self, proposals_dir: str, filename: str) -> Dict[str, Any] | None:
+        if not filename.endswith(".yaml"):
+            return None
+
+        path = os.path.join(proposals_dir, filename)
+        try:
+            artifact = await asyncio.to_thread(self._load_yaml_artifact, path)
+            meta = artifact.get("meta", {})
+            proposal = artifact.get("proposal", {})
+            if meta.get("status") != "PROPOSED":
+                return None
+            if proposal.get("type") != "solver_edit":
+                return None
+            base_id = proposal.get("target_solver_id")
+            ops_data = proposal.get("ops", [])
+            return {
+                "edit_id": str(uuid.uuid4()),
+                "base_id": base_id,
+                "new_solver_id": deterministic_solver_id(
+                    base_solver_id=str(base_id),
+                    edit_ops={"ops": ops_data},
+                    prefix="eod",
+                ),
+                "ops_data": ops_data,
+                "filename": filename,
+                "path": path,
+            }
+        except Exception as e:
+            logger.error(f"Failed to parse {filename}: {e}")
+            return None
+
+    def _move_processed_proposals(self, proposals_dir: str, proposals_to_ingest: List[Dict[str, Any]]) -> None:
         processed_dir = os.path.join(proposals_dir, "processed")
         os.makedirs(processed_dir, exist_ok=True)
         for prop in proposals_to_ingest:
@@ -371,156 +404,140 @@ class MetaSearchAgent:
         FR 5.7.2: Picks up pending EOD/Human edits and evaluates them.
         """
 
-        # First, fetch all pending edits (read-only query)
+        pending_edits = await self._fetch_pending_edits()
+        if not pending_edits:
+            return
+
+        logger.info(f"Processing {len(pending_edits)} pending edits...")
+        for edit in pending_edits:
+            await self._process_pending_edit(edit)
+
+    async def _fetch_pending_edits(self) -> List[Any]:
         async def fetch_pending(session: Any) -> List[Any]:
             stmt = select(SolverEdits).where(SolverEdits.reward is None)
             result = await session.execute(stmt)
             return result.scalars().all()
 
-        pending_edits = await db_query(fetch_pending)
+        return await db_query(fetch_pending)
 
-        if not pending_edits:
-            return
+    async def _process_pending_edit(self, edit: Any) -> None:
+        try:
+            base_solver = await self._fetch_base_solver_for_edit(edit)
+            if not base_solver:
+                logger.error(f"Base solver {edit.base_solver_id} not found for edit {edit.id}")
+                await self._mark_edit_reward(edit.id, -999.0)
+                return
 
-        logger.info(f"Processing {len(pending_edits)} pending edits...")
+            base_config = SolverConfig(**base_solver.config)
+            solver_edit_obj = self._build_solver_edit(edit)
+            new_config = await self._validated_edit_config(edit, base_config, solver_edit_obj)
+            if new_config is None:
+                return
 
-        # Process each edit and collect results
-        for edit in pending_edits:
-            try:
-                # Load base solver (read-only)
-                async def fetch_base_solver(session: Any, edit: Any = edit) -> Any:
-                    stmt_b = select(Solver).where(Solver.solver_id == edit.base_solver_id)
-                    res_b = await session.execute(stmt_b)
-                    return res_b.scalars().first()
+            solver_run, metrics = await self.evaluate_variant(new_config.version_id, new_config)
+            new_score = self._calculate_composite_score(metrics)
+            base_metrics = await self._fetch_latest_solver_metrics(base_solver.solver_id)
+            base_score = (
+                self._calculate_composite_score(base_metrics) if base_metrics else (base_solver.sharpe_ratio or 0.0)
+            )
 
-                base_solver = await db_query(fetch_base_solver)
+            await self._save_edit_evaluation_results(
+                edit, base_solver, new_config, solver_run, metrics, new_score, base_score
+            )
+            logger.info(f"Processed Edit {edit.id}: Reward={new_score - base_score:.4f}")
+        except Exception as e:
+            logger.error(f"Failed to process edit {edit.id}: {e}")
 
-                if not base_solver:
-                    logger.error(f"Base solver {edit.base_solver_id} not found for edit {edit.id}")
+    async def _fetch_base_solver_for_edit(self, edit: Any) -> Any:
+        async def fetch_base_solver(session: Any) -> Any:
+            stmt = select(Solver).where(Solver.solver_id == edit.base_solver_id)
+            result = await session.execute(stmt)
+            return result.scalars().first()
 
-                    # Mark as invalid
-                    async def mark_invalid(session: Any, edit: Any = edit) -> None:
-                        stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
-                        result = await session.execute(stmt)
-                        edit_obj = result.scalars().first()
-                        if edit_obj:
-                            edit_obj.reward = -999.0
+        return await db_query(fetch_base_solver)
 
-                    await db_write(mark_invalid)
-                    continue
+    def _build_solver_edit(self, edit: Any) -> SolverEdit:
+        ops_objs = [EditOp(**op_dict) for op_dict in edit.edit_json.get("ops", [])]
+        return SolverEdit(
+            base_solver_id=edit.base_solver_id,
+            new_solver_id=edit.new_solver_id,
+            generated_by=edit.generated_by,
+            ops=ops_objs,
+        )
 
-                base_config = SolverConfig(**base_solver.config)
+    async def _validated_edit_config(
+        self, edit: Any, base_config: SolverConfig, solver_edit_obj: SolverEdit
+    ) -> Optional[SolverConfig]:
+        try:
+            new_config = self.apply_edit(base_config, solver_edit_obj)
+            ensure_solver_definition_json(new_config.model_dump(mode="json"), None)
+            return new_config
+        except ValueError as ve:
+            logger.error(f"Edit {edit.id} Invalid: {ve}")
+        except Exception as dsl_err:
+            logger.error(
+                f"Edit {edit.id} DSL validation failed: {dsl_err}",
+                extra=solver_dsl_error_extra(dsl_err),
+            )
+        await self._mark_edit_reward(edit.id, -999.0)
+        return None
 
-                # Reconstruct SolverEdit object
-                raw_ops = edit.edit_json.get("ops", [])
-                ops_objs = []
-                for op_dict in raw_ops:
-                    ops_objs.append(EditOp(**op_dict))
+    async def _mark_edit_reward(self, edit_id: str, reward: float) -> None:
+        async def mark_invalid(session: Any) -> None:
+            stmt = select(SolverEdits).where(SolverEdits.id == edit_id)
+            result = await session.execute(stmt)
+            edit_obj = result.scalars().first()
+            if edit_obj:
+                edit_obj.reward = reward
 
-                solver_edit_obj = SolverEdit(
-                    base_solver_id=edit.base_solver_id,
-                    new_solver_id=edit.new_solver_id,
-                    generated_by=edit.generated_by,
-                    ops=ops_objs,
-                )
+        await db_write(mark_invalid)
 
-                # Apply Edit & VALIDATE
-                try:
-                    new_config = self.apply_edit(base_config, solver_edit_obj)
-                except ValueError as ve:
-                    logger.error(f"Edit {edit.id} Invalid: {ve}")
+    async def _fetch_latest_solver_metrics(self, solver_id: str) -> Any:
+        async def fetch_base_metrics(session: Any) -> Any:
+            stmt = (
+                select(SolverMetrics)
+                .where(SolverMetrics.solver_id == solver_id)
+                .order_by(SolverMetrics.evaluated_at_utc.desc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            return result.scalars().first()
 
-                    async def mark_invalid_edit(session: Any, edit: Any = edit) -> None:
-                        stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
-                        result = await session.execute(stmt)
-                        edit_obj = result.scalars().first()
-                        if edit_obj:
-                            edit_obj.reward = -999.0
+        return await db_query(fetch_base_metrics)
 
-                    await db_write(mark_invalid_edit)
-                    continue
+    async def _save_edit_evaluation_results(
+        self,
+        edit: Any,
+        base_solver: Any,
+        new_config: SolverConfig,
+        solver_run: Any,
+        metrics: Any,
+        new_score: float,
+        base_score: float,
+    ) -> None:
+        async def save_results(session: Any) -> None:
+            new_solver = Solver(
+                solver_id=new_config.version_id,
+                family_name=f"{base_solver.family_name}_eod_{edit.id[:4]}",
+                config=new_config.model_dump(mode="json"),
+                is_active=False,
+                status="candidate",
+                stage="research",
+                created_by=edit.generated_by,
+                definition_json=ensure_solver_definition_json(new_config.model_dump(mode="json"), None),
+            )
+            await self._session_add(session, new_solver)
+            await self._session_add(session, solver_run)
+            await self._session_add(session, metrics)
 
-                try:
-                    ensure_solver_definition_json(new_config.model_dump(mode="json"), None)
-                except Exception as dsl_err:
-                    logger.error(
-                        f"Edit {edit.id} DSL validation failed: {dsl_err}",
-                        extra=solver_dsl_error_extra(dsl_err),
-                    )
+            stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
+            result = await session.execute(stmt)
+            edit_obj = result.scalars().first()
+            if edit_obj:
+                edit_obj.reward = new_score - base_score
+                edit_obj.evaluated_at_utc = datetime.now(timezone.utc)
 
-                    async def mark_dsl_failed(session: Any, edit: Any = edit) -> None:
-                        stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
-                        result = await session.execute(stmt)
-                        edit_obj = result.scalars().first()
-                        if edit_obj:
-                            edit_obj.reward = -999.0
-
-                    await db_write(mark_dsl_failed)
-                    continue
-
-                # Evaluate (this creates solver_run and metrics)
-                solver_run, metrics = await self.evaluate_variant(new_config.version_id, new_config)
-
-                # Calculate scores
-                new_score = self._calculate_composite_score(metrics)
-
-                # Fetch base metrics for comparison
-                async def fetch_base_metrics(session: Any, base_solver: Any = base_solver) -> Any:
-                    stmt_m = (
-                        select(SolverMetrics)
-                        .where(SolverMetrics.solver_id == base_solver.solver_id)
-                        .order_by(SolverMetrics.evaluated_at_utc.desc())
-                        .limit(1)
-                    )
-                    res_m = await session.execute(stmt_m)
-                    return res_m.scalars().first()
-
-                base_metrics = await db_query(fetch_base_metrics)
-
-                base_score = (
-                    self._calculate_composite_score(base_metrics) if base_metrics else (base_solver.sharpe_ratio or 0.0)
-                )
-
-                # Save everything in one transaction
-                async def save_evaluation_results(
-                    session,
-                    new_config=new_config,
-                    base_solver=base_solver,
-                    edit=edit,
-                    solver_run=solver_run,
-                    metrics=metrics,
-                    new_score=new_score,
-                    base_score=base_score,
-                ) -> None:
-                    # Create new solver
-                    new_solver = Solver(
-                        solver_id=new_config.version_id,
-                        family_name=f"{base_solver.family_name}_eod_{edit.id[:4]}",
-                        config=new_config.model_dump(mode="json"),
-                        is_active=False,
-                        status="candidate",
-                        stage="research",
-                        created_by=edit.generated_by,
-                        definition_json=ensure_solver_definition_json(new_config.model_dump(mode="json"), None),
-                    )
-                    session.add(new_solver)
-                    session.add(solver_run)
-                    session.add(metrics)
-
-                    # Update edit reward
-                    stmt = select(SolverEdits).where(SolverEdits.id == edit.id)
-                    result = await session.execute(stmt)
-                    edit_obj = result.scalars().first()
-                    if edit_obj:
-                        edit_obj.reward = new_score - base_score
-                        edit_obj.evaluated_at_utc = datetime.now(timezone.utc)
-
-                await db_write(save_evaluation_results)
-
-                logger.info(f"Processed Edit {edit.id}: Reward={new_score - base_score:.4f}")
-
-            except Exception as e:
-                logger.error(f"Failed to process edit {edit.id}: {e}")
+        await db_write(save_results)
 
     async def refine_and_promote(
         self,
@@ -622,7 +639,7 @@ class MetaSearchAgent:
                 solver.stage = "paper"
                 solver.status = "active"
                 solver.is_active = True
-                session.add(metrics)
+                await self._session_add(session, metrics)
                 logger.info(
                     f"Promoted solver {solver_id} to paper stage",
                     extra={
@@ -644,8 +661,8 @@ class MetaSearchAgent:
                     created_by="refinement_loop",
                     definition_json=ensure_solver_definition_json(config.model_dump(mode="json"), None),
                 )
-                session.add(new_solver)
-                session.add(metrics)
+                await self._session_add(session, new_solver)
+                await self._session_add(session, metrics)
                 logger.info(f"Created and promoted solver {solver_id} to paper stage")
 
         await db_write(update_stage)
@@ -742,56 +759,7 @@ class MetaSearchAgent:
         new_config.version_id = edit.new_solver_id
 
         for op in edit.ops:
-            if op.op == EditOpType.MODIFY_PARAM:
-                if op.param_name == "exit_logic.take_profit_atr_multiple":
-                    new_config.exit_logic.take_profit_atr_multiple = float(op.new_value)
-                elif op.param_name == "risk_per_trade_bps":
-                    new_config.risk_per_trade_bps = int(op.new_value)
-
-            elif op.op == EditOpType.MODIFY_RISK:
-                if op.param_name == "risk_per_trade_bps" and new_config.risk:
-                    new_config.risk.risk_per_trade_bps = int(op.new_value)
-
-            elif op.op == EditOpType.TOGGLE_FEATURE:
-                feat = op.feature_name
-                if not feat:
-                    continue
-                enable = bool(op.new_value)
-
-                # We assume event_features by default if not specified, but verify lists
-                # If enabling:
-                if enable:
-                    if (
-                        feat not in new_config.features.event_features
-                        and feat not in new_config.features.window_features
-                    ):
-                        new_config.features.event_features.append(feat)
-                # If disabling:
-                else:
-                    if feat in new_config.features.event_features:
-                        new_config.features.event_features.remove(feat)
-                    if feat in new_config.features.window_features:
-                        new_config.features.window_features.remove(feat)
-
-            elif op.op == EditOpType.ADD_RULE:
-                rule_val = op.new_value
-                if rule_val:
-                    # Avoid duplicates
-                    exists = any(
-                        (isinstance(r, str) and r == rule_val) or (hasattr(r, "id") and r.id == rule_val)
-                        for r in new_config.rules
-                    )
-                    if not exists:
-                        new_config.rules.append(rule_val)
-
-            elif op.op == EditOpType.REMOVE_RULE:
-                rule_id = op.rule_id or str(op.new_value)
-                if rule_id:
-                    new_config.rules = [
-                        r
-                        for r in new_config.rules
-                        if not ((isinstance(r, str) and r == rule_id) or (hasattr(r, "id") and r.id == rule_id))
-                    ]
+            self._apply_edit_op(new_config, op)
 
         # VALIDATION
         # Pydantic will auto-validate assignments if Config.validate_assignment is True.
@@ -805,6 +773,63 @@ class MetaSearchAgent:
         # Here we just return. Implicitly validity is checked on assignment.
 
         return new_config
+
+    def _apply_edit_op(self, new_config: SolverConfig, op: EditOp) -> None:
+        if op.op == EditOpType.MODIFY_PARAM:
+            self._apply_modify_param(new_config, op)
+            return
+        if op.op == EditOpType.MODIFY_RISK:
+            self._apply_modify_risk_op(new_config, op)
+            return
+        if op.op == EditOpType.TOGGLE_FEATURE:
+            self._apply_toggle_feature(new_config, op)
+            return
+        if op.op == EditOpType.ADD_RULE:
+            self._apply_add_rule(new_config, op)
+            return
+        if op.op == EditOpType.REMOVE_RULE:
+            self._apply_remove_rule(new_config, op)
+
+    def _apply_modify_param(self, new_config: SolverConfig, op: EditOp) -> None:
+        if op.param_name == "exit_logic.take_profit_atr_multiple":
+            new_config.exit_logic.take_profit_atr_multiple = float(op.new_value)
+        elif op.param_name == "risk_per_trade_bps":
+            new_config.risk_per_trade_bps = int(op.new_value)
+
+    def _apply_modify_risk_op(self, new_config: SolverConfig, op: EditOp) -> None:
+        if op.param_name == "risk_per_trade_bps" and new_config.risk:
+            new_config.risk.risk_per_trade_bps = int(op.new_value)
+
+    def _apply_toggle_feature(self, new_config: SolverConfig, op: EditOp) -> None:
+        feat = op.feature_name
+        if not feat:
+            return
+        enable = bool(op.new_value)
+        if enable:
+            if feat not in new_config.features.event_features and feat not in new_config.features.window_features:
+                new_config.features.event_features.append(feat)
+            return
+        if feat in new_config.features.event_features:
+            new_config.features.event_features.remove(feat)
+        if feat in new_config.features.window_features:
+            new_config.features.window_features.remove(feat)
+
+    def _rule_matches(self, rule: Any, rule_id: str) -> bool:
+        return (isinstance(rule, str) and rule == rule_id) or (hasattr(rule, "id") and rule.id == rule_id)
+
+    def _apply_add_rule(self, new_config: SolverConfig, op: EditOp) -> None:
+        rule_val = op.new_value
+        if not rule_val:
+            return
+        exists = any(self._rule_matches(rule, rule_val) for rule in new_config.rules)
+        if not exists:
+            new_config.rules.append(rule_val)
+
+    def _apply_remove_rule(self, new_config: SolverConfig, op: EditOp) -> None:
+        rule_id = op.rule_id or str(op.new_value)
+        if not rule_id:
+            return
+        new_config.rules = [rule for rule in new_config.rules if not self._rule_matches(rule, rule_id)]
 
     def _create_default_task(self) -> EvaluationTask:
         from datetime import datetime, timedelta, timezone
@@ -1014,12 +1039,18 @@ class MetaSearchAgent:
     async def _fetch_events_from_heber(
         self, task: EvaluationTask
     ) -> Tuple[List[Any], List[Any], Dict[str, Any]] | None:
-        from orion.storage.models import BronzeEvent
+        frames = await self._read_heber_frames(task)
+        if frames is None:
+            return None
+        bars_frame, flow_frame = frames
+        alpaca_events, price_data = self._map_heber_bar_events(task, bars_frame)
+        flow_events = self._map_heber_flow_events(task, flow_frame)
+        return alpaca_events, flow_events, price_data
 
+    async def _read_heber_frames(self, task: EvaluationTask) -> Optional[tuple[pd.DataFrame, pd.DataFrame]]:
         reader = get_heber_reader()
-        asof_time = task.end_time_utc
         symbols = task.ticker_filter or []
-
+        asof_time = task.end_time_utc
         try:
             bars_frame = await asyncio.to_thread(
                 reader.read_bars,
@@ -1035,144 +1066,219 @@ class MetaSearchAgent:
                 start_time=task.start_time_utc,
                 min_premium=1000,
             )
+            return bars_frame, flow_frame
         except Exception as exc:
             logger.warning(f"Heber read failed for meta-search events: {exc}")
             return None
 
+    def _map_heber_bar_events(self, task: EvaluationTask, bars_frame: pd.DataFrame) -> tuple[List[Any], Dict[str, Any]]:
+        if bars_frame.empty:
+            return [], {}
+
         alpaca_events: List[Any] = []
-        flow_events: List[Any] = []
-        price_data: Dict[str, Any] = {}
         data_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+        ticker_col = self._first_existing_column(bars_frame, ("ticker", "symbol", "instrument_key"))
+        ts_col = self._first_existing_column(bars_frame, ("bar_start_ts", "bar_start_ts_utc", "ts_event"))
+        open_col = self._first_existing_column(bars_frame, ("open", "o"))
+        high_col = self._first_existing_column(bars_frame, ("high", "h"))
+        low_col = self._first_existing_column(bars_frame, ("low", "l"))
+        close_col = self._first_existing_column(bars_frame, ("close", "c"))
+        volume_col = self._first_existing_column(bars_frame, ("volume", "v"))
+        vwap_col = self._first_existing_column(bars_frame, ("vwap", "vw"))
+        trades_col = self._first_existing_column(bars_frame, ("trade_count", "n"))
+        required_cols = (ticker_col, ts_col, open_col, high_col, low_col, close_col, volume_col)
+        if any(col is None for col in required_cols):
+            return [], {}
 
-        if not bars_frame.empty:
-            ticker_col = self._first_existing_column(bars_frame, ("ticker", "symbol", "instrument_key"))
-            ts_col = self._first_existing_column(bars_frame, ("bar_start_ts", "bar_start_ts_utc", "ts_event"))
-            open_col = self._first_existing_column(bars_frame, ("open", "o"))
-            high_col = self._first_existing_column(bars_frame, ("high", "h"))
-            low_col = self._first_existing_column(bars_frame, ("low", "l"))
-            close_col = self._first_existing_column(bars_frame, ("close", "c"))
-            volume_col = self._first_existing_column(bars_frame, ("volume", "v"))
-            vwap_col = self._first_existing_column(bars_frame, ("vwap", "vw"))
-            trades_col = self._first_existing_column(bars_frame, ("trade_count", "n"))
+        tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
+        for _, row in bars_frame.iterrows():
+            mapped = self._map_single_heber_bar_row(
+                row=row,
+                tickers_filter=tickers_filter,
+                ticker_col=ticker_col,
+                ts_col=ts_col,
+                open_col=open_col,
+                high_col=high_col,
+                low_col=low_col,
+                close_col=close_col,
+                volume_col=volume_col,
+                vwap_col=vwap_col,
+                trades_col=trades_col,
+            )
+            if mapped is None:
+                continue
+            payload, series_row = mapped
+            ticker = payload["ticker"]
+            alpaca_events.append(payload)
+            data_by_ticker.setdefault(ticker, []).append(series_row)
+        return alpaca_events, self._price_data_from_rows(data_by_ticker)
 
-            if ticker_col and ts_col and open_col and high_col and low_col and close_col and volume_col:
-                tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
-                for _, row in bars_frame.iterrows():
-                    ticker = self._normalize_ticker(row.get(ticker_col))
-                    if ticker is None:
-                        continue
-                    if tickers_filter and ticker not in tickers_filter:
-                        continue
-                    bar_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
-                    if pd.isna(bar_ts):
-                        continue
-                    payload = {
-                        "ticker": ticker,
-                        "o": row.get(open_col),
-                        "h": row.get(high_col),
-                        "l": row.get(low_col),
-                        "c": row.get(close_col),
-                        "v": row.get(volume_col),
-                        "vw": row.get(vwap_col) if vwap_col else None,
-                        "t": bar_ts.to_pydatetime(),
-                        "n": row.get(trades_col) if trades_col else None,
-                    }
-                    alpaca_events.append(payload)
-                    data_by_ticker.setdefault(ticker, []).append(
-                        {
-                            "timestamp": bar_ts.to_pydatetime(),
-                            "open": row.get(open_col),
-                            "high": row.get(high_col),
-                            "low": row.get(low_col),
-                            "close": row.get(close_col),
-                            "volume": row.get(volume_col),
-                        }
-                    )
+    def _map_single_heber_bar_row(
+        self,
+        row: Any,
+        tickers_filter: set[str],
+        ticker_col: str,
+        ts_col: str,
+        open_col: str,
+        high_col: str,
+        low_col: str,
+        close_col: str,
+        volume_col: str,
+        vwap_col: str | None,
+        trades_col: str | None,
+    ) -> Optional[tuple[Dict[str, Any], Dict[str, Any]]]:
+        ticker = self._normalize_ticker(row.get(ticker_col))
+        if ticker is None:
+            return None
+        if tickers_filter and ticker not in tickers_filter:
+            return None
+        bar_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
+        if pd.isna(bar_ts):
+            return None
+        ts_value = bar_ts.to_pydatetime()
+        payload = {
+            "ticker": ticker,
+            "o": row.get(open_col),
+            "h": row.get(high_col),
+            "l": row.get(low_col),
+            "c": row.get(close_col),
+            "v": row.get(volume_col),
+            "vw": row.get(vwap_col) if vwap_col else None,
+            "t": ts_value,
+            "n": row.get(trades_col) if trades_col else None,
+        }
+        series_row = {
+            "timestamp": ts_value,
+            "open": row.get(open_col),
+            "high": row.get(high_col),
+            "low": row.get(low_col),
+            "close": row.get(close_col),
+            "volume": row.get(volume_col),
+        }
+        return payload, series_row
 
+    def _price_data_from_rows(self, data_by_ticker: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        price_data: Dict[str, Any] = {}
         for ticker, bar_list in data_by_ticker.items():
             if not bar_list:
                 continue
             df = pd.DataFrame(bar_list)
-            df = df.set_index("timestamp")
-            price_data[ticker] = df.sort_index()
+            price_data[ticker] = df.set_index("timestamp").sort_index()
+        return price_data
 
-        if not flow_frame.empty:
-            ticker_col = self._first_existing_column(flow_frame, ("ticker", "symbol", "instrument_key"))
-            ts_col = self._first_existing_column(flow_frame, ("flow_ts_utc", "ts_event", "timestamp"))
-            premium_col = self._first_existing_column(flow_frame, ("premium_usd", "premium"))
-            put_call_col = self._first_existing_column(flow_frame, ("put_call", "call_put"))
-            sweep_col = self._first_existing_column(flow_frame, ("is_sweep", "sweep"))
-            aggressor_col = self._first_existing_column(flow_frame, ("aggressor", "aggressor_ind", "side"))
-            underlying_col = self._first_existing_column(flow_frame, ("underlying_price", "underlying"))
-            expiry_col = self._first_existing_column(flow_frame, ("expiry",))
-            event_id_col = self._first_existing_column(flow_frame, ("event_id", "id"))
+    def _map_heber_flow_events(self, task: EvaluationTask, flow_frame: pd.DataFrame) -> List[Any]:
+        from orion.storage.models import BronzeEvent
 
-            if ticker_col and ts_col and premium_col:
-                tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
-                for idx, row in flow_frame.iterrows():
-                    ticker = self._normalize_ticker(row.get(ticker_col))
-                    if ticker is None:
-                        continue
-                    if tickers_filter and ticker not in tickers_filter:
-                        continue
-                    flow_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
-                    if pd.isna(flow_ts):
-                        continue
-                    premium = pd.to_numeric(row.get(premium_col), errors="coerce")
-                    if pd.isna(premium):
-                        continue
+        if flow_frame.empty:
+            return []
 
-                    payload: Dict[str, Any] = {
-                        "ticker": ticker,
-                        "premium": float(premium),
-                        "put_call": str(row.get(put_call_col)).strip().upper()
-                        if put_call_col and row.get(put_call_col)
-                        else "",
-                        "is_sweep": bool(row.get(sweep_col)) if sweep_col else False,
-                        "aggressor_ind": (
-                            str(row.get(aggressor_col)).strip().upper()
-                            if aggressor_col and row.get(aggressor_col)
-                            else ""
-                        ),
-                        "underlying_price": row.get(underlying_col) if underlying_col else None,
-                    }
-                    if expiry_col and row.get(expiry_col):
-                        payload["expiry"] = row.get(expiry_col)
-                        try:
-                            exp_date = pd.to_datetime(row.get(expiry_col), errors="coerce")
-                            if not pd.isna(exp_date):
-                                payload["dte"] = (exp_date.date() - flow_ts.date()).days
-                        except Exception:
-                            pass
+        ticker_col = self._first_existing_column(flow_frame, ("ticker", "symbol", "instrument_key"))
+        ts_col = self._first_existing_column(flow_frame, ("flow_ts_utc", "ts_event", "timestamp"))
+        premium_col = self._first_existing_column(flow_frame, ("premium_usd", "premium"))
+        put_call_col = self._first_existing_column(flow_frame, ("put_call", "call_put"))
+        sweep_col = self._first_existing_column(flow_frame, ("is_sweep", "sweep"))
+        aggressor_col = self._first_existing_column(flow_frame, ("aggressor", "aggressor_ind", "side"))
+        underlying_col = self._first_existing_column(flow_frame, ("underlying_price", "underlying"))
+        expiry_col = self._first_existing_column(flow_frame, ("expiry",))
+        event_id_col = self._first_existing_column(flow_frame, ("event_id", "id"))
+        if not (ticker_col and ts_col and premium_col):
+            return []
 
-                    flow_events.append(
-                        BronzeEvent(
-                            event_id=(
-                                str(row.get(event_id_col)).strip()
-                                if event_id_col and row.get(event_id_col)
-                                else f"heber_flow_{idx}"
-                            ),
-                            event_type="UW_FLOW",
-                            source="BACKTEST",
-                            event_ts_utc=flow_ts.to_pydatetime(),
-                            payload=payload,
-                            ticker=ticker,
-                        )
-                    )
+        flow_events: List[Any] = []
+        tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
+        for idx, row in flow_frame.iterrows():
+            event = self._map_single_heber_flow_row(
+                row=row,
+                idx=idx,
+                tickers_filter=tickers_filter,
+                ticker_col=ticker_col,
+                ts_col=ts_col,
+                premium_col=premium_col,
+                put_call_col=put_call_col,
+                sweep_col=sweep_col,
+                aggressor_col=aggressor_col,
+                underlying_col=underlying_col,
+                expiry_col=expiry_col,
+                event_id_col=event_id_col,
+                event_factory=BronzeEvent,
+            )
+            if event is not None:
+                flow_events.append(event)
+        return flow_events
 
-        return alpaca_events, flow_events, price_data
+    def _map_single_heber_flow_row(
+        self,
+        row: Any,
+        idx: Any,
+        tickers_filter: set[str],
+        ticker_col: str,
+        ts_col: str,
+        premium_col: str,
+        put_call_col: str | None,
+        sweep_col: str | None,
+        aggressor_col: str | None,
+        underlying_col: str | None,
+        expiry_col: str | None,
+        event_id_col: str | None,
+        event_factory: Any,
+    ) -> Optional[Any]:
+        ticker = self._normalize_ticker(row.get(ticker_col))
+        if ticker is None:
+            return None
+        if tickers_filter and ticker not in tickers_filter:
+            return None
+        flow_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
+        if pd.isna(flow_ts):
+            return None
+        premium = pd.to_numeric(row.get(premium_col), errors="coerce")
+        if pd.isna(premium):
+            return None
+
+        payload: Dict[str, Any] = {
+            "ticker": ticker,
+            "premium": float(premium),
+            "put_call": str(row.get(put_call_col)).strip().upper() if put_call_col and row.get(put_call_col) else "",
+            "is_sweep": bool(row.get(sweep_col)) if sweep_col else False,
+            "aggressor_ind": str(row.get(aggressor_col)).strip().upper()
+            if aggressor_col and row.get(aggressor_col)
+            else "",
+            "underlying_price": row.get(underlying_col) if underlying_col else None,
+        }
+        self._maybe_add_expiry_dte(payload, row.get(expiry_col) if expiry_col else None, flow_ts)
+        event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
+        return event_factory(
+            event_id=event_id,
+            event_type="UW_FLOW",
+            source="BACKTEST",
+            event_ts_utc=flow_ts.to_pydatetime(),
+            payload=payload,
+            ticker=ticker,
+        )
+
+    def _maybe_add_expiry_dte(self, payload: Dict[str, Any], expiry_value: Any, flow_ts: Any) -> None:
+        if not expiry_value:
+            return
+        payload["expiry"] = expiry_value
+        try:
+            exp_date = pd.to_datetime(expiry_value, errors="coerce")
+            if not pd.isna(exp_date):
+                payload["dte"] = (exp_date.date() - flow_ts.date()).days
+        except Exception:
+            return
 
     async def _fetch_events_from_local_sql(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
-        from orion.storage.models import BronzeEvent
-        from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
+        bars = await self._fetch_local_bars(task)
+        flows = await self._fetch_local_flows(task)
+        alpaca_events, price_data = self._map_local_bar_events(bars)
+        flow_events = self._map_local_flow_events(flows)
+        return alpaca_events, flow_events, price_data
+
+    async def _fetch_local_bars(self, task: EvaluationTask) -> List[Any]:
+        from orion.storage.models_silver import SilverAlpacaBar
         from sqlalchemy import and_, select
 
-        alpaca_events: List[Any] = []
-        flow_events: List[Any] = []
-        price_data: Dict[str, Any] = {}
-
-        async def fetch_bars_and_flow(session: Any) -> None:
-            stmt_bars = (
+        async def fetch(session: Any) -> List[Any]:
+            stmt = (
                 select(SilverAlpacaBar)
                 .where(
                     and_(
@@ -1182,46 +1288,19 @@ class MetaSearchAgent:
                 )
                 .order_by(SilverAlpacaBar.bar_start_ts_utc.asc())
             )
-
             if task.ticker_filter:
-                stmt_bars = stmt_bars.where(SilverAlpacaBar.ticker.in_(task.ticker_filter))
+                stmt = stmt.where(SilverAlpacaBar.ticker.in_(task.ticker_filter))
+            result = await session.execute(stmt)
+            return result.scalars().all()
 
-            res_bars = await session.execute(stmt_bars)
-            bars = res_bars.scalars().all()
+        return await db_query(fetch)
 
-            data_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
-            for b in bars:
-                payload = {
-                    "ticker": b.ticker,
-                    "o": b.open,
-                    "h": b.high,
-                    "l": b.low,
-                    "c": b.close,
-                    "v": b.volume,
-                    "vw": b.vwap,
-                    "t": b.bar_start_ts_utc,
-                    "n": b.trade_count,
-                }
-                alpaca_events.append(payload)
+    async def _fetch_local_flows(self, task: EvaluationTask) -> List[Any]:
+        from orion.storage.models_silver import SilverOptionFlow
+        from sqlalchemy import and_, select
 
-                data_by_ticker.setdefault(b.ticker, []).append(
-                    {
-                        "timestamp": b.bar_start_ts_utc,
-                        "open": b.open,
-                        "high": b.high,
-                        "low": b.low,
-                        "close": b.close,
-                        "volume": b.volume,
-                    }
-                )
-
-            for ticker, bar_list in data_by_ticker.items():
-                if bar_list:
-                    df = pd.DataFrame(bar_list)
-                    df = df.set_index("timestamp")
-                    price_data[ticker] = df.sort_index()
-
-            stmt_flow = select(SilverOptionFlow).where(
+        async def fetch(session: Any) -> List[Any]:
+            stmt = select(SilverOptionFlow).where(
                 and_(
                     SilverOptionFlow.flow_ts_utc >= task.start_time_utc,
                     SilverOptionFlow.flow_ts_utc <= task.end_time_utc,
@@ -1229,45 +1308,77 @@ class MetaSearchAgent:
                 )
             )
             if task.ticker_filter:
-                stmt_flow = stmt_flow.where(SilverOptionFlow.ticker.in_(task.ticker_filter))
+                stmt = stmt.where(SilverOptionFlow.ticker.in_(task.ticker_filter))
+            result = await session.execute(stmt)
+            return result.scalars().all()
 
-            res_flow = await session.execute(stmt_flow)
-            flows = res_flow.scalars().all()
+        return await db_query(fetch)
 
-            for f in flows:
-                payload = {
-                    "ticker": f.ticker,
-                    "premium": f.premium_usd,
-                    "put_call": f.put_call,
-                    "is_sweep": f.is_sweep,
-                    "aggressor_ind": f.aggressor,
-                    "underlying_price": f.underlying_price,
+    def _map_local_bar_events(self, bars: List[Any]) -> tuple[List[Any], Dict[str, Any]]:
+        alpaca_events: List[Any] = []
+        data_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+        for bar in bars:
+            alpaca_events.append(
+                {
+                    "ticker": bar.ticker,
+                    "o": bar.open,
+                    "h": bar.high,
+                    "l": bar.low,
+                    "c": bar.close,
+                    "v": bar.volume,
+                    "vw": bar.vwap,
+                    "t": bar.bar_start_ts_utc,
+                    "n": bar.trade_count,
                 }
-                if f.expiry:
-                    try:
-                        exp_date = f.expiry
-                        if isinstance(exp_date, str):
-                            exp_date = datetime.strptime(exp_date, "%Y-%m-%d").date()
-                        days = (exp_date - f.flow_ts_utc.date()).days
-                        payload["dte"] = days
-                    except Exception:
-                        pass
+            )
+            data_by_ticker.setdefault(bar.ticker, []).append(
+                {
+                    "timestamp": bar.bar_start_ts_utc,
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "volume": bar.volume,
+                }
+            )
+        return alpaca_events, self._price_data_from_rows(data_by_ticker)
 
-                flow_events.append(
-                    BronzeEvent(
-                        event_id=f.event_id,
-                        event_type="UW_FLOW",
-                        source="BACKTEST",
-                        event_ts_utc=f.flow_ts_utc,
-                        payload=payload,
-                        ticker=f.ticker,
-                    )
+    def _map_local_flow_events(self, flows: List[Any]) -> List[Any]:
+        from orion.storage.models import BronzeEvent
+
+        events: List[Any] = []
+        for flow in flows:
+            payload = {
+                "ticker": flow.ticker,
+                "premium": flow.premium_usd,
+                "put_call": flow.put_call,
+                "is_sweep": flow.is_sweep,
+                "aggressor_ind": flow.aggressor,
+                "underlying_price": flow.underlying_price,
+            }
+            self._maybe_add_local_flow_dte(payload, flow.expiry, flow.flow_ts_utc)
+            events.append(
+                BronzeEvent(
+                    event_id=flow.event_id,
+                    event_type="UW_FLOW",
+                    source="BACKTEST",
+                    event_ts_utc=flow.flow_ts_utc,
+                    payload=payload,
+                    ticker=flow.ticker,
                 )
+            )
+        return events
 
-        async with async_session_factory() as session:
-            await fetch_bars_and_flow(session)
-
-        return alpaca_events, flow_events, price_data
+    def _maybe_add_local_flow_dte(self, payload: Dict[str, Any], expiry: Any, flow_ts_utc: Any) -> None:
+        if not expiry:
+            return
+        try:
+            exp_date = expiry
+            if isinstance(exp_date, str):
+                exp_date = datetime.strptime(exp_date, "%Y-%m-%d").date()
+            payload["dte"] = (exp_date - flow_ts_utc.date()).days
+        except Exception:
+            return
 
     async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
         if self._prefer_heber_event_source():
@@ -1283,93 +1394,124 @@ class MetaSearchAgent:
         from orion.core.promotion_rules import STAGE_ORDER, evaluate_stage_transition
 
         async with async_session_factory() as session:
-            stmt = select(Solver)
-            result = await session.execute(stmt)
-            solvers = result.scalars().all()
-
+            solvers = await self._fetch_all_solvers(session)
             count_recommendations = 0
             count_demoted = 0
 
-            for s in solvers:
-                stmt_m = (
-                    select(SolverMetrics)
-                    .where(SolverMetrics.solver_id == s.solver_id)
-                    .order_by(SolverMetrics.evaluated_at_utc.desc())
-                    .limit(1)
+            for solver in solvers:
+                recs, demos = await self._scan_single_solver_promotion(
+                    session=session,
+                    solver=solver,
+                    stage_order=STAGE_ORDER,
+                    evaluate_stage_transition=evaluate_stage_transition,
                 )
-                m_res = await session.execute(stmt_m)
-                latest_metrics = m_res.scalars().first()
-
-                if not latest_metrics:
-                    continue
-
-                action = evaluate_stage_transition(latest_metrics, s.stage)
-
-                if action == "promote":
-                    try:
-                        idx = STAGE_ORDER.index(s.stage)
-                        if idx < len(STAGE_ORDER) - 1:
-                            new_stage = STAGE_ORDER[idx + 1]
-
-                            stmt_rec = select(PromotionRecommendation).where(
-                                PromotionRecommendation.solver_id == s.solver_id,
-                                PromotionRecommendation.status == "PENDING",
-                                PromotionRecommendation.recommended_stage == new_stage,
-                            )
-                            existing = (await session.execute(stmt_rec)).scalars().first()
-                            if not existing:
-                                logger.info(
-                                    f"Recommending PROMOTION for Solver {s.solver_id}: {s.stage} -> {new_stage}"
-                                )
-                                session.add(
-                                    PromotionRecommendation(
-                                        id=str(uuid.uuid4()),
-                                        solver_id=s.solver_id,
-                                        current_stage=s.stage,
-                                        recommended_stage=new_stage,
-                                        reason=f"Metrics met promotion criteria (Sharpe: {latest_metrics.sharpe_ratio:.2f})",
-                                        metrics_snapshot=latest_metrics.metrics_json or {},
-                                    )
-                                )
-                                count_recommendations += 1
-                    except ValueError:
-                        pass
-
-                elif action == "demote":
-                    # PRDv2 FR 5.5.2: recommendation vs decision.
-                    # Safety: stop trading immediately, but do not mutate stage here.
-                    logger.info(f"DEMOTION RECOMMENDED for Solver {s.solver_id} from {s.stage}")
-                    s.is_active = False
-
-                    try:
-                        idx = STAGE_ORDER.index(s.stage)
-                        recommended_stage = STAGE_ORDER[idx - 1] if idx > 0 else s.stage
-                    except ValueError:
-                        recommended_stage = s.stage
-
-                    stmt_rec = select(PromotionRecommendation).where(
-                        PromotionRecommendation.solver_id == s.solver_id,
-                        PromotionRecommendation.status == "PENDING",
-                        PromotionRecommendation.recommended_stage == recommended_stage,
-                    )
-                    existing = (await session.execute(stmt_rec)).scalars().first()
-                    if not existing:
-                        session.add(
-                            PromotionRecommendation(
-                                id=str(uuid.uuid4()),
-                                solver_id=s.solver_id,
-                                current_stage=s.stage,
-                                recommended_stage=recommended_stage,
-                                reason="Demotion criteria breached (meta-agent scan).",
-                                metrics_snapshot=latest_metrics.metrics_json or {},
-                            )
-                        )
-                    count_demoted += 1
+                count_recommendations += recs
+                count_demoted += demos
             await session.commit()
             if count_recommendations > 0 or count_demoted > 0:
                 logger.info(
                     f"Promotion Cycle Complete: +{count_recommendations} Recommendations, +{count_demoted} Demotion Recommendations."
                 )
+
+    async def _fetch_all_solvers(self, session: Any) -> List[Any]:
+        result = await session.execute(select(Solver))
+        return result.scalars().all()
+
+    async def _fetch_latest_solver_metrics_for_session(self, session: Any, solver_id: str) -> Any:
+        stmt = (
+            select(SolverMetrics)
+            .where(SolverMetrics.solver_id == solver_id)
+            .order_by(SolverMetrics.evaluated_at_utc.desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalars().first()
+
+    async def _pending_recommendation_exists(self, session: Any, solver_id: str, stage: str) -> bool:
+        stmt = select(PromotionRecommendation).where(
+            PromotionRecommendation.solver_id == solver_id,
+            PromotionRecommendation.status == "PENDING",
+            PromotionRecommendation.recommended_stage == stage,
+        )
+        existing = (await session.execute(stmt)).scalars().first()
+        return bool(existing)
+
+    def _next_stage(self, stage_order: List[str], stage: str) -> Optional[str]:
+        try:
+            idx = stage_order.index(stage)
+        except ValueError:
+            return None
+        if idx >= len(stage_order) - 1:
+            return None
+        return stage_order[idx + 1]
+
+    def _previous_stage(self, stage_order: List[str], stage: str) -> str:
+        try:
+            idx = stage_order.index(stage)
+        except ValueError:
+            return stage
+        return stage_order[idx - 1] if idx > 0 else stage
+
+    async def _scan_single_solver_promotion(
+        self,
+        session: Any,
+        solver: Any,
+        stage_order: List[str],
+        evaluate_stage_transition: Any,
+    ) -> tuple[int, int]:
+        latest_metrics = await self._fetch_latest_solver_metrics_for_session(session, solver.solver_id)
+        if not latest_metrics:
+            return 0, 0
+
+        action = evaluate_stage_transition(latest_metrics, solver.stage)
+        if action == "promote":
+            return await self._handle_solver_promotion(session, solver, latest_metrics, stage_order), 0
+        if action == "demote":
+            return 0, await self._handle_solver_demotion(session, solver, latest_metrics, stage_order)
+        return 0, 0
+
+    async def _handle_solver_promotion(
+        self, session: Any, solver: Any, latest_metrics: Any, stage_order: List[str]
+    ) -> int:
+        new_stage = self._next_stage(stage_order, solver.stage)
+        if not new_stage:
+            return 0
+        if await self._pending_recommendation_exists(session, solver.solver_id, new_stage):
+            return 0
+        logger.info(f"Recommending PROMOTION for Solver {solver.solver_id}: {solver.stage} -> {new_stage}")
+        await self._session_add(
+            session,
+            PromotionRecommendation(
+                id=str(uuid.uuid4()),
+                solver_id=solver.solver_id,
+                current_stage=solver.stage,
+                recommended_stage=new_stage,
+                reason=f"Metrics met promotion criteria (Sharpe: {latest_metrics.sharpe_ratio:.2f})",
+                metrics_snapshot=latest_metrics.metrics_json or {},
+            ),
+        )
+        return 1
+
+    async def _handle_solver_demotion(
+        self, session: Any, solver: Any, latest_metrics: Any, stage_order: List[str]
+    ) -> int:
+        logger.info(f"DEMOTION RECOMMENDED for Solver {solver.solver_id} from {solver.stage}")
+        solver.is_active = False
+        recommended_stage = self._previous_stage(stage_order, solver.stage)
+        if await self._pending_recommendation_exists(session, solver.solver_id, recommended_stage):
+            return 0
+        await self._session_add(
+            session,
+            PromotionRecommendation(
+                id=str(uuid.uuid4()),
+                solver_id=solver.solver_id,
+                current_stage=solver.stage,
+                recommended_stage=recommended_stage,
+                reason="Demotion criteria breached (meta-agent scan).",
+                metrics_snapshot=latest_metrics.metrics_json or {},
+            ),
+        )
+        return 1
 
     # --------------------------------------------------------
     # Weekly Evolution Cycle (Friday EOD)
@@ -1421,59 +1563,7 @@ class MetaSearchAgent:
         # 4. Generate recommendations
         recommendations = await self._generate_weekly_recommendations(week_data, execution_analysis, drift_analysis)
 
-        # 5. Execute mutations if not dry run
-        mutations_applied = []
-        if not dry_run and recommendations.get("proposed_edits"):
-            for edit_proposal in recommendations["proposed_edits"][:3]:  # Max 3 per week
-                try:
-                    # Load base solver
-                    base_id = edit_proposal.get("base_solver_id")
-                    if not base_id:
-                        continue
-
-                    async with async_session_factory() as session:
-                        stmt = select(Solver).where(Solver.solver_id == base_id)
-                        result = await session.execute(stmt)
-                        base_solver = result.scalars().first()
-
-                        if base_solver:
-                            base_config = SolverConfig(**base_solver.config)
-
-                            # Use meta agent to propose edits
-                            context = edit_proposal.get("context", "Weekly evolution cycle")
-                            edits = await self.meta_agent.propose_edits(base_config, context)
-
-                            if edits:
-                                # Apply first edit
-                                new_config = self.apply_edit(base_config, edits[0])
-
-                                # Persist new solver as candidate
-                                new_solver = Solver(
-                                    solver_id=new_config.version_id,
-                                    family_name=f"{base_solver.family_name}_weekly",
-                                    config=new_config.model_dump(mode="json"),
-                                    is_active=False,
-                                    status="candidate",
-                                    stage="research",
-                                    created_by="weekly_evolution",
-                                    definition_json=ensure_solver_definition_json(
-                                        new_config.model_dump(mode="json"), None
-                                    ),
-                                )
-                                session.add(new_solver)
-                                await session.commit()
-
-                                mutations_applied.append(
-                                    {
-                                        "base_id": base_id,
-                                        "new_id": new_config.version_id,
-                                        "reason": edit_proposal.get("reason"),
-                                    }
-                                )
-                                logger.info(f"Created weekly mutation: {new_config.version_id}")
-
-                except Exception as e:
-                    logger.error(f"Failed to apply weekly mutation: {e}")
+        mutations_applied = await self._apply_weekly_mutations(recommendations, dry_run=dry_run)
 
         summary = {
             "period": week_data["period"],
@@ -1501,6 +1591,55 @@ class MetaSearchAgent:
         )
 
         return summary
+
+    async def _apply_weekly_mutations(self, recommendations: Dict[str, Any], dry_run: bool) -> List[Dict[str, Any]]:
+        if dry_run:
+            return []
+        proposed_edits = recommendations.get("proposed_edits") or []
+        if not proposed_edits:
+            return []
+
+        mutations_applied: List[Dict[str, Any]] = []
+        for edit_proposal in proposed_edits[:3]:
+            mutation = await self._apply_single_weekly_mutation(edit_proposal)
+            if mutation:
+                mutations_applied.append(mutation)
+        return mutations_applied
+
+    async def _apply_single_weekly_mutation(self, edit_proposal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        base_id = edit_proposal.get("base_solver_id")
+        if not base_id:
+            return None
+        try:
+            async with async_session_factory() as session:
+                base_solver = await self._fetch_solver(session, base_id)
+                if not base_solver:
+                    return None
+                base_config = SolverConfig(**base_solver.config)
+                context = edit_proposal.get("context", "Weekly evolution cycle")
+                edits = await self.meta_agent.propose_edits(base_config, context)
+                if not edits:
+                    return None
+                new_config = self.apply_edit(base_config, edits[0])
+                await self._session_add(
+                    session,
+                    Solver(
+                        solver_id=new_config.version_id,
+                        family_name=f"{base_solver.family_name}_weekly",
+                        config=new_config.model_dump(mode="json"),
+                        is_active=False,
+                        status="candidate",
+                        stage="research",
+                        created_by="weekly_evolution",
+                        definition_json=ensure_solver_definition_json(new_config.model_dump(mode="json"), None),
+                    ),
+                )
+                await session.commit()
+            logger.info(f"Created weekly mutation: {new_config.version_id}")
+            return {"base_id": base_id, "new_id": new_config.version_id, "reason": edit_proposal.get("reason")}
+        except Exception as e:
+            logger.error(f"Failed to apply weekly mutation: {e}")
+            return None
 
     def _analyze_execution_quality(self, week_data: Dict[str, Any]) -> Dict[str, Any]:
         """

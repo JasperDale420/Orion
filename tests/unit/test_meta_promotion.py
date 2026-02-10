@@ -33,13 +33,13 @@ async def test_ingest_proposals_creates_db_records(tmp_path):
     with open(file_path, "w") as f:
         yaml.dump(yaml_content, f)
 
-    # Mock Session
+    # Mock DB write transaction used by ingest_proposals
     mock_session = AsyncMock()
-    mock_factory = MagicMock()
-    mock_factory.return_value.__aenter__.return_value = mock_session
-    mock_factory.return_value.__aexit__.return_value = None
 
-    with patch("orion.agents.meta_search_agent.async_session_factory", side_effect=mock_factory):
+    async def fake_db_write(callback):
+        await callback(mock_session)
+
+    with patch("orion.agents.meta_search_agent.db_write", side_effect=fake_db_write):
         agent = MetaSearchAgent()
 
         # Override dir path in logic? OR pass it if arg exists.
@@ -47,7 +47,6 @@ async def test_ingest_proposals_creates_db_records(tmp_path):
         await agent.ingest_proposals(str(proposals_dir))
 
         # Verify Session Add (SolverEdits)
-        assert mock_session.add.called
         args, _ = mock_session.add.call_args
         obj = args[0]
         assert isinstance(obj, SolverEdits)
@@ -174,3 +173,26 @@ async def test_scan_for_promotions_demotes_solver():
         assert any(isinstance(x, PromotionRecommendation) for x in added)
 
         assert mock_session.commit.called
+
+
+@pytest.mark.asyncio
+async def test_handle_solver_demotion_skips_duplicate_pending_recommendation():
+    solver = MagicMock(spec=Solver)
+    solver.solver_id = "solver_paper_pending"
+    solver.stage = "paper"
+    solver.is_active = True
+
+    metrics = MagicMock(spec=SolverMetrics)
+    metrics.metrics_json = {}
+
+    session = AsyncMock()
+    agent = MetaSearchAgent()
+    agent._pending_recommendation_exists = AsyncMock(return_value=True)
+
+    demotion_count = await agent._handle_solver_demotion(
+        session, solver, metrics, ["research", "shadow", "paper", "live"]
+    )
+
+    assert demotion_count == 0
+    assert solver.is_active is False
+    session.add.assert_not_called()

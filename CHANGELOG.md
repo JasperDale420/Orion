@@ -17,6 +17,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Meta-Search Sonar Closure + Async Session Add Hardening (TDD)**:
+  - Updated `src/orion/agents/meta_search_agent.py`:
+    - resolved remaining Sonar new-code issues in promotion/ingestion helpers,
+    - converted `_move_processed_proposals(...)` from async to sync helper (no awaited operations),
+    - adjusted demotion flow to return `0` when a pending identical recommendation already exists,
+    - added `_session_add(...)` helper to safely support both normal SQLAlchemy `session.add(...)` and async-mocked session adds in tests.
+  - Updated `tests/unit/test_meta_promotion.py`:
+    - added `test_handle_solver_demotion_skips_duplicate_pending_recommendation`,
+    - switched ingestion persistence assertion to patch `db_write(...)` directly for deterministic transaction validation.
+  - Validation:
+    - `uv run pytest -q tests/unit/test_meta_promotion.py tests/unit/test_meta_search.py tests/unit/test_meta_search_edits.py tests/unit/test_meta_search_heber_source.py tests/unit/test_main_execution_heber_source.py`
+    - `uv run ruff check src/orion/agents/meta_search_agent.py tests/unit/test_meta_promotion.py`
+    - `sonar-scanner -Dproject.settings=sonar-project.properties`
+  - Result:
+    - Sonar new-code issues now **0** (quality gate still fails only on `new_coverage` threshold).
+
 - **Cross-Repo Darkpool Canonicalization Contract (TDD)**:
   - Updated `src/orion/clients/heber_reader.py`:
     - switched canonical darkpool Silver dataset to `darkpool`,
