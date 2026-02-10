@@ -8026,3 +8026,45 @@ Verification:
 Result:
 - batch-oriented runaway behavior in backfill now has a dedicated stop condition.
 - prolonged fallback away from Heber in feature enrichment now emits a direct, thresholded operational warning signal.
+
+## 258) Pass 257 Continuation (2026-02-10)
+
+### 258.1 Combined Migration Pass: Heber-First Wiring for Window Aggregation + Data Quality Flow/Darkpool Checks (TDD-Backed)
+
+Finding:
+- two remaining operational jobs still queried Orion-local silver tables directly for flow/darkpool paths:
+  - `jobs/window_feature_job.py`
+  - `jobs/data_quality_checker.py`
+- this left an integration gap where runtime parity checks and windowed aggregation would not exercise Heber datasets unless SQL-local tables were populated.
+
+Implemented:
+- Updated `src/orion/jobs/window_feature_job.py`:
+  - introduced Heber-first source mode with SQL fallback:
+    - env: `ORION_WINDOW_FEATURE_JOB_PREFER_HEBER` (default enabled),
+  - added Heber aggregation path:
+    - reads flow + darkpool from Heber reader,
+    - computes equivalent window features (counts, premiums, sweep ratio, ask ratio, darkpool notional),
+    - falls back to existing SQL query path when Heber is unavailable/empty.
+- Updated `src/orion/jobs/data_quality_checker.py`:
+  - introduced Heber-first mode for flow/darkpool summaries and staleness checks:
+    - env: `ORION_DATA_QUALITY_CHECKER_PREFER_HEBER` (default enabled),
+  - added Heber summary builders and staleness evaluators with SQL fallback:
+    - flow summary
+    - darkpool summary
+    - flow staleness
+    - darkpool staleness,
+  - summary payloads now include backend provenance (`heber` or `local_db`).
+- Added tests:
+  - `tests/unit/test_window_feature_job_heber_source.py`
+  - `tests/unit/test_data_quality_checker_heber_source.py`
+  - validates:
+    - Heber-preferred path behavior,
+    - fallback behavior when Heber read path is empty/unavailable,
+    - staleness logic against Heber-backed timestamps.
+
+Verification:
+- `pytest -q tests/unit/test_window_feature_job_heber_source.py tests/unit/test_data_quality_checker_heber_source.py` passed.
+
+Result:
+- two additional migration hotspots now operate on Heber-first data contracts while preserving fallback safety.
+- this reduces remaining local-silver coupling in operational checks and windowed feature generation ahead of the larger `main_price_target_labeler.py` migration step.

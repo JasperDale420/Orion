@@ -15,9 +15,12 @@ Usage:
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+import pandas as pd
+from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_query
 from orion.storage.db import init_db
@@ -31,6 +34,7 @@ CRITICAL_TICKERS = ["SPY", "QQQ", "IWM", "NVDA", "AAPL", "TSLA"]
 # Market hours (Eastern Time, simplified as UTC-5)
 MARKET_OPEN_HOUR = 14  # 9:30 ET = 14:30 UTC
 MARKET_CLOSE_HOUR = 21  # 4:00 PM ET = 21:00 UTC
+_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 
 # =============================================================================
@@ -52,9 +56,7 @@ async def check_zero_valued_bars(lookback_hours: int = 24) -> List[Dict]:
               AND bar_start_ts_utc > NOW() - INTERVAL ':hours hours'
             GROUP BY ticker
             ORDER BY zero_count DESC
-        """.replace(
-                ":hours", str(lookback_hours)
-            )
+        """.replace(":hours", str(lookback_hours))
         )
         result = await session.execute(stmt)
         return [{"ticker": r[0], "zero_count": r[1], "earliest": r[2], "latest": r[3]} for r in result.fetchall()]
@@ -163,6 +165,10 @@ async def get_bars_summary() -> Dict:
 
 async def get_flow_summary() -> Dict:
     """Get UW Flow data quality summary."""
+    if _prefer_heber_source():
+        heber_summary = await _get_flow_summary_from_heber()
+        if heber_summary is not None:
+            return heber_summary
 
     async def query(session: Any) -> Dict:
         stmt = text(
@@ -188,6 +194,7 @@ async def get_flow_summary() -> Dict:
             "unique_tickers": row[3] or 0,
             "latest_flow": row[4],
             "validity_pct": round(100 * valid / total, 2) if total > 0 else 0,
+            "backend": "local_db",
         }
 
     return await db_query(query)
@@ -200,6 +207,11 @@ async def check_flow_staleness(stale_minutes: int = 30) -> bool:
 
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
         return False  # Outside market hours, no alert
+
+    if _prefer_heber_source():
+        heber_stale = await _check_flow_staleness_from_heber(stale_minutes=stale_minutes)
+        if heber_stale is not None:
+            return heber_stale
 
     async def query(session: Any) -> bool:
         stmt = text(
@@ -222,6 +234,10 @@ async def check_flow_staleness(stale_minutes: int = 30) -> bool:
 
 async def get_darkpool_summary() -> Dict:
     """Get Darkpool data quality summary."""
+    if _prefer_heber_source():
+        heber_summary = await _get_darkpool_summary_from_heber()
+        if heber_summary is not None:
+            return heber_summary
 
     async def query(session: Any) -> Dict:
         stmt = text(
@@ -247,6 +263,7 @@ async def get_darkpool_summary() -> Dict:
             "unique_tickers": row[3] or 0,
             "latest_trade": row[4],
             "validity_pct": round(100 * valid / total, 2) if total > 0 else 0,
+            "backend": "local_db",
         }
 
     return await db_query(query)
@@ -259,6 +276,11 @@ async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
 
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
         return False
+
+    if _prefer_heber_source():
+        heber_stale = await _check_darkpool_staleness_from_heber(stale_minutes=stale_minutes)
+        if heber_stale is not None:
+            return heber_stale
 
     async def query(session: Any) -> bool:
         stmt = text(
@@ -557,6 +579,156 @@ async def run_quality_checks():
     logger.info("=" * 60)
 
     return results
+
+
+def _prefer_heber_source() -> bool:
+    raw = os.getenv("ORION_DATA_QUALITY_CHECKER_PREFER_HEBER", "1").strip().lower()
+    return raw not in _PREFER_HEBER_FALSE_VALUES
+
+
+def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "ticker" in df.columns:
+        return df
+    if "symbol" in df.columns:
+        return df.assign(ticker=df["symbol"].astype(str).str.upper())
+    if "instrument_key" in df.columns:
+        return df.assign(ticker=df["instrument_key"].astype(str).str.split(":").str[-1].str.upper())
+    return df
+
+
+def _latest_event_time(df: pd.DataFrame) -> datetime | None:
+    time_col = _first_existing_column(df, ["ts_event", "flow_ts_utc", "dark_ts_utc", "ts_utc"])
+    if time_col is None:
+        return None
+    series = pd.to_datetime(df[time_col], utc=True, errors="coerce").dropna()
+    if series.empty:
+        return None
+    return series.max().to_pydatetime()
+
+
+async def _read_heber_flow_24h() -> pd.DataFrame | None:
+    now = datetime.now(timezone.utc)
+    start = now - pd.Timedelta(hours=24)
+    reader = get_heber_reader()
+    try:
+        return await asyncio.to_thread(reader.read_flow, start_time=start, asof_time=now)
+    except Exception as exc:
+        logger.warning("flow_heber_read_failed", extra={"event_type": "FLOW_HEBER_READ_FAILED", "error": str(exc)})
+        return None
+
+
+async def _read_heber_darkpool_24h() -> pd.DataFrame | None:
+    now = datetime.now(timezone.utc)
+    start = now - pd.Timedelta(hours=24)
+    reader = get_heber_reader()
+    try:
+        return await asyncio.to_thread(reader.read_darkpool, start_time=start, asof_time=now)
+    except Exception as exc:
+        logger.warning(
+            "darkpool_heber_read_failed",
+            extra={"event_type": "DARKPOOL_HEBER_READ_FAILED", "error": str(exc)},
+        )
+        return None
+
+
+async def _get_flow_summary_from_heber() -> Dict | None:
+    df = await _read_heber_flow_24h()
+    if df is None:
+        return None
+    if df.empty:
+        return {
+            "total_flows_24h": 0,
+            "valid_premium": 0,
+            "missing_premium": 0,
+            "unique_tickers": 0,
+            "latest_flow": None,
+            "validity_pct": 0,
+            "backend": "heber",
+        }
+
+    df = _coerce_ticker_column(df)
+    premium_col = _first_existing_column(df, ["premium_usd", "premium"])
+    premiums = (
+        pd.to_numeric(df[premium_col], errors="coerce") if premium_col else pd.Series(index=df.index, dtype=float)
+    )
+    valid_premium = int((premiums > 0).sum()) if premium_col else 0
+    total = int(len(df))
+    latest = _latest_event_time(df)
+    unique_tickers = int(df["ticker"].dropna().astype(str).nunique()) if "ticker" in df.columns else 0
+    return {
+        "total_flows_24h": total,
+        "valid_premium": valid_premium,
+        "missing_premium": int(total - valid_premium),
+        "unique_tickers": unique_tickers,
+        "latest_flow": latest,
+        "validity_pct": round(100 * valid_premium / total, 2) if total > 0 else 0,
+        "backend": "heber",
+    }
+
+
+async def _check_flow_staleness_from_heber(stale_minutes: int) -> bool | None:
+    df = await _read_heber_flow_24h()
+    if df is None:
+        return None
+    latest = _latest_event_time(df)
+    if latest is None:
+        return False
+    minutes_ago = (datetime.now(timezone.utc) - latest).total_seconds() / 60.0
+    return minutes_ago > stale_minutes
+
+
+async def _get_darkpool_summary_from_heber() -> Dict | None:
+    df = await _read_heber_darkpool_24h()
+    if df is None:
+        return None
+    if df.empty:
+        return {
+            "total_trades_24h": 0,
+            "valid_trades": 0,
+            "invalid_price": 0,
+            "unique_tickers": 0,
+            "latest_trade": None,
+            "validity_pct": 0,
+            "backend": "heber",
+        }
+
+    df = _coerce_ticker_column(df)
+    size_col = _first_existing_column(df, ["size_shares", "size"])
+    price_col = _first_existing_column(df, ["trade_price", "price"])
+    sizes = pd.to_numeric(df[size_col], errors="coerce") if size_col else pd.Series(index=df.index, dtype=float)
+    prices = pd.to_numeric(df[price_col], errors="coerce") if price_col else pd.Series(index=df.index, dtype=float)
+    valid_trades = int((sizes > 0).sum()) if size_col else 0
+    invalid_price = int(((prices.isna()) | (prices == 0)).sum()) if price_col else int(len(df))
+    total = int(len(df))
+    latest = _latest_event_time(df)
+    unique_tickers = int(df["ticker"].dropna().astype(str).nunique()) if "ticker" in df.columns else 0
+    return {
+        "total_trades_24h": total,
+        "valid_trades": valid_trades,
+        "invalid_price": invalid_price,
+        "unique_tickers": unique_tickers,
+        "latest_trade": latest,
+        "validity_pct": round(100 * valid_trades / total, 2) if total > 0 else 0,
+        "backend": "heber",
+    }
+
+
+async def _check_darkpool_staleness_from_heber(stale_minutes: int) -> bool | None:
+    df = await _read_heber_darkpool_24h()
+    if df is None:
+        return None
+    latest = _latest_event_time(df)
+    if latest is None:
+        return False
+    minutes_ago = (datetime.now(timezone.utc) - latest).total_seconds() / 60.0
+    return minutes_ago > stale_minutes
 
 
 if __name__ == "__main__":

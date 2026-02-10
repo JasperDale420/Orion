@@ -32,6 +32,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
       - `test_note_ticker_source_streak_warns_on_non_heber_threshold`.
   - Verified with:
     - `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_gateway_contract.py`
+- **Window + Data Quality Heber-First Source Integration (TDD)**:
+  - Updated `src/orion/jobs/window_feature_job.py`:
+    - added Heber-first feature aggregation path with local SQL fallback:
+      - env `ORION_WINDOW_FEATURE_JOB_PREFER_HEBER` (default enabled),
+    - computes flow/darkpool window aggregates directly from Heber datasets when available,
+    - preserves the existing SQL aggregation path as fallback.
+  - Updated `src/orion/jobs/data_quality_checker.py`:
+    - added Heber-first flow/darkpool summary + staleness checks with local SQL fallback:
+      - env `ORION_DATA_QUALITY_CHECKER_PREFER_HEBER` (default enabled),
+    - flow/darkpool summaries now include backend provenance (`heber` or `local_db`).
+  - Added tests:
+    - `tests/unit/test_window_feature_job_heber_source.py`
+    - `tests/unit/test_data_quality_checker_heber_source.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_window_feature_job_heber_source.py tests/unit/test_data_quality_checker_heber_source.py`
 - **Validate Features Heber-First Source Audit Adapter (TDD)**:
   - Updated `src/orion/jobs/validate_features.py`:
     - added Heber-first source-audit adapter for dataset coverage checks with local SQL fallback,
