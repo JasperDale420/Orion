@@ -17,6 +17,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Meta-Search Sonar Remediation Pass (TDD validation)**:
+  - Updated `src/orion/agents/meta_search_agent.py` to resolve Sonar reliability/code-smell findings:
+    - replaced sync YAML file reads in async ingestion path with `asyncio.to_thread(...)`,
+    - removed redundant multi-exception catches where `ValidationError` duplicated `ValueError`,
+    - removed unused parameter/local bindings (`_base_solver_id`, `_solver_run`, `_price_data`),
+    - removed DataFrame `inplace=True` mutations in favor of assignment-style transforms,
+    - ensured async DB write callback performs async work (`await session.flush()`).
+  - Validation:
+    - `ruff check src/orion/agents/meta_search_agent.py src/orion/main_execution.py tests/unit/test_meta_search_heber_source.py tests/unit/test_main_execution_heber_source.py`
+    - `uv run pytest -q tests/unit/test_meta_search_heber_source.py tests/unit/test_main_execution_heber_source.py`
+    - `sonar-scanner -Dproject.settings=sonar-project.properties`
+  - Sonar new-code issues reduced from **17 → 8** (remaining are cognitive-complexity refactors in `meta_search_agent.py`).
+
 - **Combined Pass: Execution Recent-Flow + Meta-Search Event Fetching Heber-First (TDD)**:
   - Updated `src/orion/main_execution.py`:
     - added Heber-first recent-flow sourcing for exit-rule context with SQL fallback:

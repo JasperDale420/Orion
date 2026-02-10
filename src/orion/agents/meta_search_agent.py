@@ -7,9 +7,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import yaml
-from pydantic import ValidationError
-from sqlalchemy import select
-
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
@@ -25,6 +22,7 @@ from orion.storage.models_solvers import (
     SolverMetrics,
     SolverRun,
 )
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
@@ -194,7 +192,7 @@ class MetaSearchAgent:
                     # Apply edit to get config first, to validate it
                     try:
                         new_config = self.apply_edit(base_config, edit_record)
-                    except (ValueError, ValidationError) as ve:
+                    except ValueError as ve:
                         logger.warning(f"Skipping invalid edit: {ve}")
                         continue
                     try:
@@ -283,8 +281,7 @@ class MetaSearchAgent:
 
             path = os.path.join(proposals_dir, filename)
             try:
-                with open(path, "r") as f:
-                    artifact = yaml.safe_load(f)
+                artifact = await asyncio.to_thread(self._load_yaml_artifact, path)
 
                 meta = artifact.get("meta", {})
                 proposal = artifact.get("proposal", {})
@@ -336,6 +333,7 @@ class MetaSearchAgent:
                 )
                 session.add(sql_edit)
                 logger.info(f"Ingested proposal {prop['filename']} as Edit {prop['edit_id']}")
+            await session.flush()
 
         await db_write(save_proposals)
 
@@ -429,7 +427,7 @@ class MetaSearchAgent:
                 # Apply Edit & VALIDATE
                 try:
                     new_config = self.apply_edit(base_config, solver_edit_obj)
-                except (ValueError, ValidationError) as ve:
+                except ValueError as ve:
                     logger.error(f"Edit {edit.id} Invalid: {ve}")
 
                     async def mark_invalid_edit(session: Any, edit: Any = edit) -> None:
@@ -528,7 +526,7 @@ class MetaSearchAgent:
         self,
         solver_id: str,
         config: SolverConfig,
-        base_solver_id: str,
+        _base_solver_id: str,
         max_iterations: int = MAX_REFINEMENT_ITERATIONS,
     ) -> Optional[str]:
         """
@@ -552,7 +550,7 @@ class MetaSearchAgent:
             )
 
             # 1. Backtest
-            solver_run, metrics = await self.evaluate_variant(current_solver_id, current_config)
+            _solver_run, metrics = await self.evaluate_variant(current_solver_id, current_config)
             score = self._calculate_composite_score(metrics)
 
             logger.info(
@@ -1008,6 +1006,11 @@ class MetaSearchAgent:
             ticker = ticker.split(":")[-1]
         return ticker or None
 
+    @staticmethod
+    def _load_yaml_artifact(path: str) -> Dict[str, Any]:
+        with open(path, "r") as handle:
+            return yaml.safe_load(handle) or {}
+
     async def _fetch_events_from_heber(
         self, task: EvaluationTask
     ) -> Tuple[List[Any], List[Any], Dict[str, Any]] | None:
@@ -1090,9 +1093,8 @@ class MetaSearchAgent:
             if not bar_list:
                 continue
             df = pd.DataFrame(bar_list)
-            df.set_index("timestamp", inplace=True)
-            df.sort_index(inplace=True)
-            price_data[ticker] = df
+            df = df.set_index("timestamp")
+            price_data[ticker] = df.sort_index()
 
         if not flow_frame.empty:
             ticker_col = self._first_existing_column(flow_frame, ("ticker", "symbol", "instrument_key"))
@@ -1161,10 +1163,9 @@ class MetaSearchAgent:
         return alpaca_events, flow_events, price_data
 
     async def _fetch_events_from_local_sql(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
-        from sqlalchemy import and_, select
-
         from orion.storage.models import BronzeEvent
         from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
+        from sqlalchemy import and_, select
 
         alpaca_events: List[Any] = []
         flow_events: List[Any] = []
@@ -1217,9 +1218,8 @@ class MetaSearchAgent:
             for ticker, bar_list in data_by_ticker.items():
                 if bar_list:
                     df = pd.DataFrame(bar_list)
-                    df.set_index("timestamp", inplace=True)
-                    df.sort_index(inplace=True)
-                    price_data[ticker] = df
+                    df = df.set_index("timestamp")
+                    price_data[ticker] = df.sort_index()
 
             stmt_flow = select(SilverOptionFlow).where(
                 and_(
@@ -1273,7 +1273,7 @@ class MetaSearchAgent:
         if self._prefer_heber_event_source():
             heber_data = await self._fetch_events_from_heber(task)
             if heber_data is not None:
-                alpaca_events, flow_events, price_data = heber_data
+                alpaca_events, flow_events, _price_data = heber_data
                 if alpaca_events or flow_events:
                     return heber_data
 
