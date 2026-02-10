@@ -8747,3 +8747,37 @@ Verification:
 Result:
 - `main_price_target_labeler` now has **zero active local `silver_*` SQL statements**.
 - remaining `silver_*` strings in this module are documentation/comments only, not executable DB paths.
+
+## 278) Pass 277 Continuation (2026-02-10)
+
+### 278.1 `main_feature_enrichment` Context Reads De-Coupled from Local SQL (TDD-Backed)
+
+Finding:
+- `main_feature_enrichment` still used local SQL fallbacks for context reads when Heber was unavailable:
+  - VIX context (`silver_vix_data`),
+  - market tide (`silver_market_tide`),
+  - SPY cumulative return (`silver_alpaca_bars`).
+- this preserved local-table coupling in a runtime enrichment path even with Heber context adapters already present.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+  - `get_latest_vix_data()` now returns Heber-derived payload or `{}` (removed local SQL fallback),
+  - `get_latest_market_tide()` now returns Heber-derived value or `None` (removed local SQL fallback),
+  - `get_spy_cumulative_return()` now returns Heber-derived value or `0.0` (removed local SQL fallback).
+- Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_context_heber_source.py`:
+  - converted local-DB fallback tests to no-DB fallback contracts:
+    - `test_get_latest_market_tide_returns_none_when_heber_unavailable`
+    - `test_get_latest_vix_data_returns_empty_when_heber_unavailable`
+    - `test_get_spy_cumulative_return_returns_zero_when_heber_unavailable`
+    - `test_context_reads_can_disable_heber` (asserts no local DB fallback when Heber context reads disabled).
+
+Verification:
+- `pytest -q tests/unit/test_feature_enrichment_context_heber_source.py` passed.
+- `pytest -q tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_runtime_signals.py` passed.
+
+Result:
+- local SQL coupling in `main_feature_enrichment` is now narrowed to:
+  - ticker discovery fallback (`silver_uw_flow`),
+  - regime snapshot persistence (`silver_regime_history`).
+- `main_feature_enrichment` active SQL-coupled statement count:
+  - `FROM/JOIN/INSERT/UPDATE silver_*`: `5 -> 2`.

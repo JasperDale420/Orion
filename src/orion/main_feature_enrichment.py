@@ -482,30 +482,7 @@ async def get_latest_vix_data() -> dict:
         if heber_vix is not None:
             return heber_vix
 
-    async def query(session: Any) -> dict:
-        stmt = text(
-            """
-            SELECT vix, vvix, vix_1d_change, vix_regime
-            FROM silver_vix_data
-            ORDER BY ts_utc DESC
-            LIMIT 1
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        if row:
-            return {
-                "vix": row[0],
-                "vvix": row[1],
-                "vix_1d_change": row[2],
-                "vix_regime": row[3],
-            }
-        return {}
-
-    try:
-        return await db_query(query)
-    except Exception:
-        return {}
+    return {}
 
 
 async def get_latest_market_tide() -> float | None:
@@ -515,23 +492,7 @@ async def get_latest_market_tide() -> float | None:
         if heber_net is not None:
             return heber_net
 
-    async def query(session: Any) -> float | None:
-        stmt = text(
-            """
-            SELECT net_call_premium - net_put_premium as net_premium
-            FROM silver_market_tide
-            ORDER BY ts_utc DESC
-            LIMIT 1
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        return row[0] if row else None
-
-    try:
-        return await db_query(query)
-    except Exception:
-        return None
+    return None
 
 
 async def get_spy_cumulative_return() -> float:
@@ -541,27 +502,7 @@ async def get_spy_cumulative_return() -> float:
         if heber_return is not None:
             return heber_return
 
-    async def query(session: Any) -> float:
-        stmt = text(
-            """
-            SELECT
-                (LAST_VALUE(close) OVER (ORDER BY bar_start_ts_utc) -
-                 FIRST_VALUE(close) OVER (ORDER BY bar_start_ts_utc)) /
-                NULLIF(FIRST_VALUE(close) OVER (ORDER BY bar_start_ts_utc), 0) as cum_return
-            FROM silver_alpaca_bars
-            WHERE ticker = 'SPY'
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 20
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        return float(row[0]) if row and row[0] else 0.0
-
-    try:
-        return await db_query(query)
-    except Exception:
-        return 0.0
+    return 0.0
 
 
 async def persist_regime_snapshot(

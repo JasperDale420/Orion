@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
+
 from orion import main_feature_enrichment as feature_enrichment
 
 
@@ -62,45 +63,39 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_get_latest_market_tide_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_latest_market_tide_returns_none_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         feature_enrichment._heber_reader,
         "read_market_tide",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
 
-    async def _fake_db_query(_query_fn):
-        return 12.5
+    async def _fail_db_query(_query_fn):
+        raise AssertionError("db_query fallback should not be called")
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fake_db_query)
+    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query)
 
     value = await feature_enrichment.get_latest_market_tide()
 
-    assert value == pytest.approx(12.5)
+    assert value is None
 
 
 @pytest.mark.asyncio
-async def test_get_latest_vix_data_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_latest_vix_data_returns_empty_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         feature_enrichment._heber_reader,
         "read_bars",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
 
-    async def _fake_db_query(_query_fn):
-        return {
-            "vix": 18.0,
-            "vvix": None,
-            "vix_1d_change": -1.0,
-            "vix_regime": "NORMAL",
-        }
+    async def _fail_db_query(_query_fn):
+        raise AssertionError("db_query fallback should not be called")
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fake_db_query)
+    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query)
 
     vix_data = await feature_enrichment.get_latest_vix_data()
 
-    assert vix_data["vix"] == pytest.approx(18.0)
-    assert vix_data["vix_regime"] == "NORMAL"
+    assert vix_data == {}
 
 
 @pytest.mark.asyncio
@@ -128,37 +123,42 @@ async def test_get_spy_cumulative_return_prefers_heber(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_get_spy_cumulative_return_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_spy_cumulative_return_returns_zero_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         feature_enrichment._heber_reader,
         "read_bars",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
 
-    async def _fake_db_query(_query_fn):
-        return 0.15
+    async def _fail_db_query(_query_fn):
+        raise AssertionError("db_query fallback should not be called")
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fake_db_query)
+    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query)
 
     value = await feature_enrichment.get_spy_cumulative_return()
 
-    assert value == pytest.approx(0.15)
+    assert value == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
 async def test_context_reads_can_disable_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", "false")
     db_called = {"value": False}
+    heber_called = {"value": False}
 
-    monkeypatch.setattr(feature_enrichment._heber_reader, "read_market_tide", lambda **_kwargs: pd.DataFrame())
+    def _heber_market_tide(**_kwargs):
+        heber_called["value"] = True
+        return pd.DataFrame()
 
-    async def _fake_db_query(_query_fn):
+    async def _fail_db_query(_query_fn):
         db_called["value"] = True
-        return 0.0
+        raise AssertionError("db_query fallback should not be called")
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fake_db_query)
+    monkeypatch.setattr(feature_enrichment._heber_reader, "read_market_tide", _heber_market_tide)
+    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query)
 
     value = await feature_enrichment.get_latest_market_tide()
 
-    assert value == 0.0
-    assert db_called["value"] is True
+    assert value is None
+    assert db_called["value"] is False
+    assert heber_called["value"] is False

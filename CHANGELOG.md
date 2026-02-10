@@ -102,6 +102,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Feature Enrichment Context SQL Fallback Removal (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+    - removed local SQL fallback paths for:
+      - `get_latest_vix_data()`
+      - `get_latest_market_tide()`
+      - `get_spy_cumulative_return()`,
+    - these helpers now use Heber context reads or explicit defaults (`{}`, `None`, `0.0`).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_context_heber_source.py`:
+    - `test_get_latest_market_tide_returns_none_when_heber_unavailable`
+    - `test_get_latest_vix_data_returns_empty_when_heber_unavailable`
+    - `test_get_spy_cumulative_return_returns_zero_when_heber_unavailable`
+    - updated `test_context_reads_can_disable_heber` to assert no local DB fallback.
+  - Verified with:
+    - `pytest -q tests/unit/test_feature_enrichment_context_heber_source.py`
+    - `pytest -q tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_runtime_signals.py`
+
 - **Price Target Labeler Checkpoint Quote SQL Removal (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - replaced `get_real_checkpoint_prices(...)` local SQL query (`silver_option_quotes`) with Heber-only flow-backed extraction via `_get_real_checkpoint_prices_from_heber(...)`,
