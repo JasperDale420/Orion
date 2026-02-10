@@ -12,7 +12,8 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orion.config import system_settings
-from orion.storage.db import async_session_factory
+from orion.storage import db
+from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,9 @@ T = TypeVar("T")
 SQLITE_LOCK_RETRY_ATTEMPTS = system_settings.sqlite_lock_retry_attempts
 SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS = system_settings.sqlite_lock_retry_base_delay_seconds
 SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS = system_settings.sqlite_lock_retry_max_delay_seconds
+
+# Legacy patch target for tests.
+async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY
 
 
 def _is_sqlite_session(session: AsyncSession) -> bool:
@@ -77,7 +81,10 @@ async def db_transaction(operation: Callable[[AsyncSession], Awaitable[T]], *, c
     """
     max_attempts = SQLITE_LOCK_RETRY_ATTEMPTS + 1
     for attempt in range(max_attempts):
-        async with async_session_factory() as session:
+        session_factory = async_session_factory
+        if session_factory is _ORIGINAL_ASYNC_SESSION_FACTORY:
+            session_factory = db.async_session_factory
+        async with session_factory() as session:
             try:
                 result = await operation(session)
                 if commit:

@@ -30,24 +30,28 @@ class Base(DeclarativeBase):
     pass
 
 
+def _default_async_session_factory() -> AsyncSession:
+    return _sessionmaker()
+
+
+async_session_factory = _default_async_session_factory
+
+
 def configure_db(db_url: str, *, echo: bool | None = None) -> None:
     """
     Reconfigure the global engine/session factory.
     Primarily intended for tests to ensure deterministic DB_URL usage.
     """
-    global engine, _sessionmaker
+    global engine, _sessionmaker, async_session_factory
     engine = _make_engine(db_url, echo=bool(echo) if echo is not None else system_settings.db_echo)
     _sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    # Reset any external symbol reassignment performed by tests.
+    async_session_factory = _default_async_session_factory
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
-
-
-def async_session_factory() -> AsyncSession:
-    return _sessionmaker()
-
 
 async def init_db() -> None:
     # Ensure all models are imported so Base.metadata is complete for create_all().

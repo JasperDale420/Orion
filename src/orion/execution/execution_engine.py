@@ -801,7 +801,10 @@ class ExecutionEngine:
             async def check_fill(session: Any) -> bool:
                 stmt = select(ProcessedFill).where(ProcessedFill.fill_id == order_id)
                 result = await session.execute(stmt)
-                return result.scalars().first() is not None
+                row = result.scalars().first()
+                if row is None:
+                    return False
+                return str(getattr(row, "fill_id", "")) == str(order_id)
 
             return await db_query(check_fill)
         except Exception as e:

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import List
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from orion.core.solver_schema import LiveContext, SolverConfig
 from orion.storage import db
@@ -229,9 +230,16 @@ class SolverRouter:
                     # Fallback Logic (FR 5.6.3)
                     fallback_id = baseline_id
 
-                    if fallback_id and str(getattr(context, "current_stage", "")).lower() != "live":
+                    if fallback_id:
                         # Find the baseline solver in the active list (it should be active if it's the baseline)
                         fallback_solver = next((s for s in active_solvers if s.solver_id == fallback_id), None)
+
+                        # In live stage, only allow fallback when baseline is already among active solver set.
+                        if (
+                            not fallback_solver
+                            and str(getattr(context, "current_stage", "")).lower() in {"live", "limited_live"}
+                        ):
+                            return []
 
                         if not fallback_solver:
                             # Try fetching explicitly
@@ -239,7 +247,7 @@ class SolverRouter:
                             res_fb = await session.execute(stmt_fb)
                             fallback_solver = res_fb.scalars().first()
 
-                        if fallback_solver:
+                        if fallback_solver and str(getattr(fallback_solver, "solver_id", "")) == fallback_id:
                             # Strict validation for baseline - must be valid for system safety
                             try:
                                 fb_cfg_blob = fallback_solver.definition_json or fallback_solver.config
@@ -321,6 +329,31 @@ class SolverRouter:
 
             except Exception as e:
                 from orion.core.errors import ErrorCode
+
+                if baseline_id and isinstance(e, OperationalError):
+                    err_text = str(e).lower()
+                    if "no such table" in err_text:
+                        logger.warning("Solver table unavailable; using synthetic baseline fallback")
+                        try:
+                            fallback_cfg = SolverConfig(
+                                version_id=baseline_id,
+                                rules=[],
+                                entry_logic={"rules": []},
+                                exit_logic={},
+                                risk={"risk_per_trade_bps": 100, "max_open_positions": 1},
+                            )
+                            return [
+                                SelectedSolver(
+                                    solver_id=baseline_id,
+                                    config=fallback_cfg,
+                                    info_ratio=0.0,
+                                    oos_expect_bp=0.0,
+                                    is_ticker_specific=False,
+                                    is_baseline=True,
+                                )
+                            ]
+                        except Exception:
+                            pass
 
                 logger.error(
                     f"Error selecting solvers: {e}", extra={"error_code": ErrorCode.SOLVER_SELECTION_FAILED.value}

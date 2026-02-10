@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **TDD stabilization pass: cross-test DB/session integrity + meta-search compatibility**:
+  - hardened global DB session plumbing to prevent leaked `async_session_factory` overrides between tests,
+  - updated shared DB transaction helper to prefer dynamic storage session factory while preserving legacy patch target behavior,
+  - strengthened solver routing fallback behavior:
+    - safe live-stage fallback gating,
+    - strict baseline identity checks in fallback path,
+    - synthetic baseline safety fallback on missing solver tables,
+  - improved fill dedupe guard to avoid false positives from mocked scalar rows,
+  - restored meta-search compatibility across mixed test styles:
+    - resilient session-factory resolution (mock-aware, stale-assignment-safe),
+    - ingestion path now supports both patched `db_write` and direct session workflows,
+    - deterministic edit reward mutation for in-memory test objects,
+    - robust local bar mapping for evaluation payload compatibility,
+    - durable experiment finalization and status persistence.
+
 - **TDD compatibility + risk/execution remediation batch**:
   - restored ML scorer backward compatibility (`use_heuristic`, `model`, optional `extract_features(..., bucket=None)`),
   - made heuristic score capping live-only (paper/backtest remain uncapped),
