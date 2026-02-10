@@ -647,43 +647,68 @@ def _get_subsequent_prices_from_heber(option_chain: str, entry_ts: datetime) -> 
 
 
 async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
-    """Get real option prices and Greeks from silver_option_quotes (Alpaca API data).
+    """Get real option prices and Greeks from Heber event-level checkpoint data."""
+    return _get_real_checkpoint_prices_from_heber(event_id)
 
-    Returns dict mapping checkpoint names to dicts containing:
-    - price: mid price (or last_trade as fallback)
-    - delta, gamma, theta, vega, iv: Greeks at checkpoint
-    """
 
-    async def query(session: Any) -> Dict[str, Dict[str, Optional[float]]]:
-        stmt = text(
-            """
-            SELECT checkpoint, mid_price, last_trade_price,
-                   delta, gamma, theta, vega, iv
-            FROM silver_option_quotes
-            WHERE flow_event_id = :event_id
-        """
-        )
-        result = await session.execute(stmt, {"event_id": event_id})
-        data: Dict[str, Dict[str, Optional[float]]] = {}
-        for row in result.fetchall():
-            checkpoint = row[0]
-            # Prefer mid_price, fallback to last_trade
-            price = row[1] if row[1] is not None else row[2]
-            data[checkpoint] = {
-                "price": float(price) if price else None,
-                "delta": float(row[3]) if row[3] is not None else None,
-                "gamma": float(row[4]) if row[4] is not None else None,
-                "theta": float(row[5]) if row[5] is not None else None,
-                "vega": float(row[6]) if row[6] is not None else None,
-                "iv": float(row[7]) if row[7] is not None else None,
-            }
-        return data
-
+def _get_real_checkpoint_prices_from_heber(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
+    event_id_str = str(event_id)
     try:
-        return await db_query(query)
+        flow_df = _heber_reader.read_flow(
+            asof_time=datetime.now(timezone.utc),
+            start_time=datetime.now(timezone.utc) - timedelta(days=365),
+        )
     except Exception as e:
-        _record_price_target_fallback("checkpoint_quote_lookup", e, option_chain=option_chain)
+        _record_price_target_fallback("checkpoint_quote_heber_lookup", e, event_id=event_id_str)
         return {}
+
+    if flow_df.empty:
+        return {}
+
+    event_col = _pick_first_existing_column(flow_df, ["event_id", "source_event_id", "id"])
+    checkpoint_col = _pick_first_existing_column(flow_df, ["checkpoint", "price_checkpoint", "checkpoint_name"])
+    mid_col = _pick_first_existing_column(flow_df, ["mid_price", "option_mid_price", "quote_mid"])
+    last_col = _pick_first_existing_column(flow_df, ["last_trade_price", "option_price", "price"])
+    if event_col is None or checkpoint_col is None or (mid_col is None and last_col is None):
+        return {}
+
+    filtered = flow_df[flow_df[event_col].astype(str) == event_id_str]
+    if filtered.empty:
+        return {}
+
+    delta_col = _pick_first_existing_column(filtered, ["delta", "delta_alpaca"])
+    gamma_col = _pick_first_existing_column(filtered, ["gamma", "gamma_alpaca"])
+    theta_col = _pick_first_existing_column(filtered, ["theta", "theta_alpaca"])
+    vega_col = _pick_first_existing_column(filtered, ["vega", "vega_alpaca"])
+    iv_col = _pick_first_existing_column(filtered, ["iv", "iv_alpaca", "implied_volatility"])
+
+    data: Dict[str, Dict[str, Optional[float]]] = {}
+
+    def _clean_float(value: Any) -> Optional[float]:
+        parsed = _coerce_float(value)
+        if parsed is None or pd.isna(parsed):
+            return None
+        return parsed
+
+    for _, row in filtered.iterrows():
+        checkpoint = str(row.get(checkpoint_col) or "").strip()
+        if not checkpoint:
+            continue
+
+        mid_price = _clean_float(row.get(mid_col)) if mid_col is not None else None
+        last_price = _clean_float(row.get(last_col)) if last_col is not None else None
+        price = mid_price if mid_price is not None else last_price
+
+        data[checkpoint] = {
+            "price": price,
+            "delta": _clean_float(row.get(delta_col)) if delta_col is not None else None,
+            "gamma": _clean_float(row.get(gamma_col)) if gamma_col is not None else None,
+            "theta": _clean_float(row.get(theta_col)) if theta_col is not None else None,
+            "vega": _clean_float(row.get(vega_col)) if vega_col is not None else None,
+            "iv": _clean_float(row.get(iv_col)) if iv_col is not None else None,
+        }
+
+    return data
 
 
 async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:

@@ -102,6 +102,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler Checkpoint Quote SQL Removal (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - replaced `get_real_checkpoint_prices(...)` local SQL query (`silver_option_quotes`) with Heber-only flow-backed extraction via `_get_real_checkpoint_prices_from_heber(...)`,
+    - removed final active local `silver_*` query path in this module,
+    - fixed prior exception-path bug in checkpoint quote fallback logging and normalized NaN numeric values.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`:
+    - `test_get_real_checkpoint_prices_prefers_heber_when_available`
+    - `test_get_real_checkpoint_prices_returns_empty_when_heber_unavailable`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "real_checkpoint_prices"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py`
+
 - **Price Target Labeler `silver_ticker_info` + Regime/Underlying SQL Fallback Cleanup (TDD, combined pass)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - removed local SQL fallback usage in:

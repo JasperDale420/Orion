@@ -948,3 +948,85 @@ async def test_get_flow_greeks_returns_null_payload_when_heber_missing(
         "iv": None,
         "iv_alpaca": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_get_real_checkpoint_prices_prefers_heber_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_id = "evt-abc"
+
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "event_id": event_id,
+                        "checkpoint": "15m",
+                        "mid_price": 1.25,
+                        "last_trade_price": 1.20,
+                        "delta": 0.55,
+                        "gamma": 0.02,
+                        "theta": -0.10,
+                        "vega": 0.11,
+                        "iv": 0.31,
+                    },
+                    {
+                        "event_id": event_id,
+                        "checkpoint": "1h",
+                        "mid_price": None,
+                        "last_trade_price": 1.50,
+                        "delta": 0.60,
+                        "gamma": 0.03,
+                        "theta": -0.08,
+                        "vega": 0.13,
+                        "iv": 0.33,
+                    },
+                ]
+            )
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not run when Heber checkpoint data is available")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
+
+    result = await labeler.get_real_checkpoint_prices(event_id)
+
+    assert result == {
+        "15m": {
+            "price": 1.25,
+            "delta": 0.55,
+            "gamma": 0.02,
+            "theta": -0.10,
+            "vega": 0.11,
+            "iv": 0.31,
+        },
+        "1h": {
+            "price": 1.50,
+            "delta": 0.60,
+            "gamma": 0.03,
+            "theta": -0.08,
+            "vega": 0.13,
+            "iv": 0.33,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_real_checkpoint_prices_returns_empty_when_heber_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not run when Heber checkpoint data is unavailable")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
+
+    result = await labeler.get_real_checkpoint_prices("evt-none")
+
+    assert result == {}

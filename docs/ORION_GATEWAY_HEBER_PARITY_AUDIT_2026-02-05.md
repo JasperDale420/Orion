@@ -8719,3 +8719,31 @@ Result:
   - `silver_option_quotes` (quote lookup).
 - current `main_price_target_labeler` SQL-coupled statement count:
   - `FROM/JOIN/INSERT/UPDATE silver_*`: `1`.
+
+## 277) Pass 276 Continuation (2026-02-10)
+
+### 277.1 `silver_option_quotes` Fallback Removal: Checkpoint Quote Path Heber-Only (TDD-Backed)
+
+Finding:
+- the final active local SQL query in `main_price_target_labeler` was `get_real_checkpoint_prices(...)`, which read checkpoint quote/Greeks from `silver_option_quotes`.
+- this prevented full Heber-only migration for label assembly in this module.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - rewired `get_real_checkpoint_prices(...)` to Heber-only flow reads via new helper:
+    - `_get_real_checkpoint_prices_from_heber(...)`,
+  - removed local SQL query path against `silver_option_quotes`,
+  - fixed latent exception-path bug in previous implementation (`option_chain` NameError in fallback logging),
+  - added robust NaN normalization for checkpoint price/Greeks fields.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`:
+    - `test_get_real_checkpoint_prices_prefers_heber_when_available`
+    - `test_get_real_checkpoint_prices_returns_empty_when_heber_unavailable`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "real_checkpoint_prices"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+
+Result:
+- `main_price_target_labeler` now has **zero active local `silver_*` SQL statements**.
+- remaining `silver_*` strings in this module are documentation/comments only, not executable DB paths.
