@@ -26,7 +26,7 @@ from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
 from orion.connectors.uw_max_pain_connector import UWMaxPainConnector
 from orion.connectors.vix_proxy_connector import VIXProxyConnector
-from orion.shared.db_utils import db_query, db_write
+from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -445,28 +445,9 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[List[str], st
         if tickers:
             return tickers, "heber"
     except Exception:
-        logger.debug("Heber flow ticker discovery failed, falling back to local DB", exc_info=True)
+        logger.debug("Heber flow ticker discovery failed; using static fallback", exc_info=True)
 
-    async def query(session: Any) -> List[str]:
-        stmt = text(
-            """
-            SELECT ticker
-            FROM silver_uw_flow
-            WHERE flow_ts_utc > NOW() - INTERVAL '1 day'
-            AND ticker IS NOT NULL
-            GROUP BY ticker
-            ORDER BY COUNT(*) DESC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, {"limit": limit})
-        return [row[0] for row in result.fetchall()]
-
-    try:
-        return await db_query(query), "local_db"
-    except Exception:
-        # Fallback to common tickers
-        return STATIC_TICKER_FALLBACK, "static_fallback"
+    return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
 
 
 async def get_active_tickers(limit: int = 20) -> List[str]:

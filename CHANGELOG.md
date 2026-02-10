@@ -102,6 +102,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Feature Enrichment Ticker Discovery Local-DB Fallback Removal (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+    - removed local SQL ticker discovery fallback (`silver_uw_flow`) from `get_active_tickers_with_source(...)`,
+    - ticker discovery now uses Heber first, then static fallback only.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_runtime_signals.py`:
+    - `test_get_active_tickers_with_source_falls_back_to_static_without_db`
+    - `test_get_active_tickers_with_source_falls_back_to_static`
+    - both assert no `db_query` fallback path.
+  - Verified with:
+    - `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py -k "active_tickers_with_source"`
+    - `pytest -q tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_runtime_signals.py`
+
 - **Feature Enrichment Context SQL Fallback Removal (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
     - removed local SQL fallback paths for:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+
 from orion import main_feature_enrichment as feature_enrichment
 
 
@@ -33,41 +34,47 @@ async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_get_active_tickers_with_source_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_active_tickers_with_source_falls_back_to_static_without_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    db_calls = {"count": 0}
     monkeypatch.setattr(
         feature_enrichment._heber_reader,
         "read_flow",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
 
-    async def _fake_db_query(_query_fn):
-        return ["SPY", "QQQ"]
+    async def _record_db_query(_query_fn):
+        db_calls["count"] += 1
+        return ["SHOULD_NOT_BE_USED"]
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fake_db_query)
-
-    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
-
-    assert tickers == ["SPY", "QQQ"]
-    assert source == "local_db"
-
-
-@pytest.mark.asyncio
-async def test_get_active_tickers_with_source_falls_back_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        feature_enrichment._heber_reader,
-        "read_flow",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
-    )
-
-    async def _fail_db_query(_query_fn):
-        raise RuntimeError("db unavailable")
-
-    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query)
+    monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query)
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
     assert source == "static_fallback"
     assert tickers[:2] == ["SPY", "QQQ"]
+    assert db_calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_active_tickers_with_source_falls_back_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
+    db_calls = {"count": 0}
+    monkeypatch.setattr(
+        feature_enrichment._heber_reader,
+        "read_flow",
+        lambda **_kwargs: pd.DataFrame(),
+    )
+
+    async def _record_db_query(_query_fn):
+        db_calls["count"] += 1
+        return ["SHOULD_NOT_BE_USED"]
+
+    monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query)
+
+    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+
+    assert source == "static_fallback"
+    assert tickers[:2] == ["SPY", "QQQ"]
+    assert db_calls["count"] == 0
 
 
 def test_note_fetch_count_warns_on_zero_write_streak(monkeypatch: pytest.MonkeyPatch) -> None:

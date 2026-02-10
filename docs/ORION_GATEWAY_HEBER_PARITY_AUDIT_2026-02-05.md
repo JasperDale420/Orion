@@ -8781,3 +8781,31 @@ Result:
   - regime snapshot persistence (`silver_regime_history`).
 - `main_feature_enrichment` active SQL-coupled statement count:
   - `FROM/JOIN/INSERT/UPDATE silver_*`: `5 -> 2`.
+
+## 279) Pass 278 Continuation (2026-02-10)
+
+### 279.1 `main_feature_enrichment` Ticker Discovery Local-DB Fallback Removed (TDD-Backed)
+
+Finding:
+- `get_active_tickers_with_source(...)` still queried local `silver_uw_flow` when Heber ticker discovery failed or returned empty data.
+- this kept a read-path dependency on Orion-local silver storage in the enrichment loop.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+  - removed local-DB ticker discovery fallback query (`silver_uw_flow`),
+  - `get_active_tickers_with_source(...)` now follows:
+    1. Heber flow ticker discovery,
+    2. static ticker fallback (`STATIC_TICKER_FALLBACK`) when Heber is unavailable/empty.
+- Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_runtime_signals.py`:
+  - `test_get_active_tickers_with_source_falls_back_to_static_without_db`
+  - `test_get_active_tickers_with_source_falls_back_to_static`
+  - both now assert `source == "static_fallback"` and no `db_query` usage.
+
+Verification:
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py -k "active_tickers_with_source"` passed.
+- `pytest -q tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_runtime_signals.py` passed.
+
+Result:
+- `main_feature_enrichment` active `silver_*` SQL coupling is now reduced to one intentional write surface:
+  - `INSERT INTO silver_regime_history` (regime snapshot persistence).
+- active `FROM/JOIN/INSERT/UPDATE silver_*` count in `main_feature_enrichment`: `2 -> 1`.
