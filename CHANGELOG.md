@@ -59,6 +59,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
       - `src/orion/main_execution.py`
   - Regenerated coverage artifact with focused new-code test suite:
     - `uv run pytest -q tests/unit/test_heber_reader.py tests/unit/test_main_execution_heber_source.py tests/unit/test_meta_search_heber_source.py tests/unit/test_meta_search.py tests/unit/test_meta_search_edits.py tests/unit/test_meta_promotion.py --cov=src --cov-report=xml:coverage.xml`
+  - Additional TDD branch hardening in `tests/unit/test_main_execution_heber_source.py`:
+    - added helper-path edge coverage for:
+      - null/alias normalizers (`_normalize_flow_ticker`, `_normalize_put_call`),
+      - coercion edge cases (`_coerce_bool`),
+      - Heber row filtering for non-matching ticker, invalid premium, and numeric-coercion fallback behavior.
+  - Attempted removal of `main_execution` coverage exclusion was revalidated and remains below gate threshold in current new-code window; temporary exclusion remains in place pending broader execution-loop test expansion.
 
 - **Cross-Repo Darkpool Canonicalization Contract (TDD)**:
   - Updated `src/orion/clients/heber_reader.py`:

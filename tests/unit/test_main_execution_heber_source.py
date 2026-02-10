@@ -63,8 +63,10 @@ def test_prefer_heber_recent_flow_source_env_false(monkeypatch: pytest.MonkeyPat
 
 
 def test_flow_normalizers_handle_alias_values() -> None:
+    assert main_execution._normalize_flow_ticker(None) is None
     assert main_execution._normalize_flow_ticker("opra:aapl") == "AAPL"
     assert main_execution._normalize_flow_ticker("   ") is None
+    assert main_execution._normalize_put_call(None) == ""
     assert main_execution._normalize_put_call("call") == "C"
     assert main_execution._normalize_put_call("put") == "P"
     assert main_execution._normalize_put_call("x") == "X"
@@ -101,3 +103,32 @@ async def test_fetch_recent_flow_for_ticker_skips_heber_when_disabled(monkeypatc
 
     assert rows == db_rows
     assert fake_reader.read_flow.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_recent_flow_from_heber_skips_invalid_and_non_matching_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    fake_reader = MagicMock()
+    fake_reader.read_flow.return_value = pd.DataFrame(
+        {
+            "ticker": ["MSFT", "AAPL", "AAPL", "AAPL"],
+            "flow_ts_utc": [now, now, now, now],
+            "premium_usd": [1000.0, "bad", 1200.0, 1400.0],
+            "put_call": ["call", "put", "call", "put"],
+            "underlying_price": ["bad", 210.0, "bad", 220.0],
+            "strike": ["bad", 190.0, "bad", 195.0],
+        }
+    )
+    monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
+
+    rows = await main_execution._fetch_recent_flow_from_heber("AAPL", minutes=30)
+
+    # MSFT row is skipped, invalid premium row is skipped, and two valid AAPL rows survive.
+    assert len(rows) == 2
+    assert all(r.ticker == "AAPL" for r in rows)
+    assert {r.premium_usd for r in rows} == {1200.0, 1400.0}
+    # Non-numeric coercions should safely map to None.
+    assert any(r.underlying_price is None for r in rows)
+    assert any(r.strike is None for r in rows)
