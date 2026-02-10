@@ -8640,3 +8640,42 @@ Result:
 - targeted coupling reduced again:
   - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `37 -> 34`,
   - same targeted refs in `main_price_target_labeler.py`: `7 -> 4`.
+
+## 275) Pass 274 Continuation (2026-02-10)
+
+### 275.1 Regime + Underlying-Price SQL Fallback Removal in `main_price_target_labeler` (TDD-Backed, Combined)
+
+Finding:
+- `main_price_target_labeler` still used Orion-local SQL fallback paths for:
+  - regime VIX context (`silver_vix_data` + `silver_alpaca_bars` fallback),
+  - underlying price lookup at entry/offset (`silver_alpaca_bars`).
+- these paths preserved direct local-table coupling in core label context assembly even after Heber-first migration.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - `get_regime_at_entry(...)` now uses only Heber VIX proxy snapshot (`_get_heber_vix_proxy_snapshot_at_or_before`) and no longer executes local SQL VIX fallback query,
+  - `get_underlying_price_at_entry(...)` now returns Heber bar value or `None` (removed local SQL fallback),
+  - `get_underlying_price_at_offset(...)` now returns Heber bar value or `None` (removed local SQL fallback).
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+    - `test_get_regime_at_entry_leaves_vix_none_when_heber_vix_unavailable`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_bars.py`
+    - `test_get_underlying_price_at_entry_returns_none_when_heber_has_no_bar`
+    - `test_get_underlying_price_at_offset_returns_none_when_heber_has_no_bar`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_market_tide.py`
+    - `test_get_regime_at_entry_uses_heber_tide_without_sql_fallback`
+  - plus prior Heber-only contract updates in the same remediation batch:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+    - asserting no SQL fallback for entry-signals/subsequent-prices/flow-greeks when Heber is unavailable.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+
+Result:
+- active local SQL coupling in `main_price_target_labeler` is reduced to three explicit query surfaces:
+  - `silver_option_quotes` (quote lookup),
+  - `silver_ticker_info` (sector cache read/write).
+- current `main_price_target_labeler` SQL-coupled statement count:
+  - `FROM/JOIN/INSERT/UPDATE silver_*`: `3`.

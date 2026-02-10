@@ -33,13 +33,8 @@ async def test_get_entry_signals_prefers_heber_flow_when_available(monkeypatch: 
 
     async def _fake_get_labeled_event_ids(_event_ids: list[str]) -> set[str]:
         return set()
-
-    async def _fail_sql_fallback(_limit: int):
-        raise AssertionError("SQL fallback should not be used when Heber returns valid entries")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "_get_labeled_price_target_event_ids", _fake_get_labeled_event_ids, raising=False)
-    monkeypatch.setattr(labeler, "_get_entry_signals_sql", _fail_sql_fallback, raising=False)
 
     entries = await labeler.get_entry_signals(limit=5)
 
@@ -53,12 +48,7 @@ async def test_get_entry_signals_returns_empty_when_heber_empty(monkeypatch: pyt
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_limit: int):
-        raise AssertionError("SQL fallback should not run when Heber flow is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_entry_signals_sql", _fail_sql_fallback, raising=False)
 
     entries = await labeler.get_entry_signals(limit=3)
 
@@ -85,12 +75,7 @@ async def test_get_subsequent_prices_prefers_heber_flow_when_available(monkeypat
                     },
                 ]
             )
-
-    async def _fail_sql_fallback(_option_chain: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not be used when Heber flow provides prices")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_subsequent_prices_sql", _fail_sql_fallback, raising=False)
 
     prices = await labeler.get_subsequent_prices("AAPL250117C00200000", entry_ts)
 
@@ -109,12 +94,7 @@ async def test_get_subsequent_prices_returns_empty_when_heber_missing_columns(
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame([{"unexpected": "shape"}])
-
-    async def _fail_sql_fallback(_option_chain: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber flow has unusable shape")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_subsequent_prices_sql", _fail_sql_fallback, raising=False)
 
     prices = await labeler.get_subsequent_prices("AAPL250117C00200000", entry_ts)
 

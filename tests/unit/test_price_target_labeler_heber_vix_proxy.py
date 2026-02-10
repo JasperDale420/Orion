@@ -73,13 +73,13 @@ async def test_get_regime_at_entry_prefers_heber_vix_proxy(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_get_regime_at_entry_falls_back_to_sql_when_heber_vix_unavailable(
+async def test_get_regime_at_entry_leaves_vix_none_when_heber_vix_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import orion.analysis.regime as regime_module
 
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
-    captured: dict[str, Any] = {"calls": []}
+    captured: dict[str, Any] = {}
 
     class _FakeDetector:
         def detect(self, **kwargs: Any):
@@ -93,25 +93,21 @@ async def test_get_regime_at_entry_falls_back_to_sql_when_heber_vix_unavailable(
                 vix_regime=SimpleNamespace(value="ELEVATED"),
             )
 
-    async def _fake_db_query(callback):
-        captured["calls"].append(callback.__name__)
-        if callback.__name__ == "query_vix":
-            return {"vix": 22.0, "vix_1d_change": 1.0, "vix_regime": "ELEVATED"}
-        raise AssertionError(f"Unexpected callback: {callback.__name__}")
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not be used when Heber vix proxy is unavailable")
 
     monkeypatch.setattr(regime_module, "MultiAxisRegimeDetector", _FakeDetector)
     monkeypatch.setattr(
         labeler, "_get_heber_vix_proxy_snapshot_at_or_before", lambda *_args, **_kwargs: None, raising=False
     )
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: 12.0, raising=False)
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     result = await labeler.get_regime_at_entry(entry_ts)
 
-    assert captured["calls"] == ["query_vix"]
-    assert captured["vix"] == 22.0
-    assert captured["vix_1d_change"] == 1.0
-    assert result["vix_at_entry"] == 22.0
+    assert captured["vix"] is None
+    assert captured["vix_1d_change"] is None
+    assert result["vix_at_entry"] is None
 
 
 @pytest.mark.asyncio

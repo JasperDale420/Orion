@@ -19,12 +19,7 @@ async def test_get_gex_at_entry_prefers_heber_when_available(monkeypatch: pytest
                     {"ts_utc": entry_ts - timedelta(minutes=1), "gex_oi": 125.0, "vex_oi": 12.5},
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber has usable GEX data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_gex_at_entry_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_gex_at_entry("AAPL", entry_ts)
 
@@ -38,12 +33,7 @@ async def test_get_gex_at_entry_returns_none_when_heber_empty(monkeypatch: pytes
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber GEX is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_gex_at_entry_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_gex_at_entry("AAPL", entry_ts)
 
@@ -62,12 +52,7 @@ async def test_get_gex_rolling_averages_prefers_heber_when_available(monkeypatch
                     {"ts_utc": entry_ts - timedelta(days=1), "gex_oi": 120.0, "vex_oi": 70.0},
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _days: int = 20):
-        raise AssertionError("SQL fallback should not run when Heber rolling GEX is available")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_gex_rolling_averages_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=3)
 
@@ -81,12 +66,7 @@ async def test_get_gex_rolling_averages_returns_none_when_heber_empty(monkeypatc
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _days: int = 20):
-        raise AssertionError("SQL fallback should not run when Heber rolling GEX is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_gex_rolling_averages_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=20)
 
@@ -107,12 +87,7 @@ async def test_get_market_tide_before_entry_prefers_heber_when_available(
                     {"ts_utc": entry_ts - timedelta(minutes=5), "net_call_premium": 50.0, "net_put_premium": -10.0},
                 ]
             )
-
-    async def _fail_sql_fallback(_entry_ts: datetime, _minutes: int = 30):
-        raise AssertionError("SQL fallback should not run when Heber has usable market tide data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_market_tide_before_entry_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
 
@@ -129,12 +104,7 @@ async def test_get_market_tide_before_entry_returns_none_when_heber_shape_missin
     class _FakeHeberReader:
         def read_market_tide(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame([{"ts_utc": entry_ts - timedelta(minutes=10), "unexpected": 1}])
-
-    async def _fail_sql_fallback(_entry_ts: datetime, _minutes: int = 30):
-        raise AssertionError("SQL fallback should not run for market tide")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_market_tide_before_entry_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
 
@@ -154,12 +124,7 @@ async def test_get_darkpool_volume_prefers_heber_when_available(monkeypatch: pyt
                     {"dark_ts_utc": entry_ts - timedelta(minutes=70), "size_shares": 999},
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _window_minutes: int = 60):
-        raise AssertionError("SQL fallback should not run when Heber has usable darkpool data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_darkpool_volume_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_darkpool_volume("AAPL", entry_ts, window_minutes=60)
     assert result == 350.0
@@ -174,12 +139,7 @@ async def test_get_darkpool_volume_returns_none_when_heber_empty(
     class _FakeHeberReader:
         def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _window_minutes: int = 60):
-        raise AssertionError("SQL fallback should not run when Heber darkpool is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_darkpool_volume_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_darkpool_volume("AAPL", entry_ts, window_minutes=60)
     assert result is None
@@ -199,12 +159,7 @@ async def test_get_rvol_metrics_prefers_heber_when_available(monkeypatch: pytest
                     {"ts_event": entry_ts - timedelta(days=8, hours=2), "volume": 500},
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber bars are available")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_rvol_metrics_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_rvol_metrics("AAPL", entry_ts)
 
@@ -220,12 +175,7 @@ async def test_get_rvol_metrics_returns_none_when_heber_empty(monkeypatch: pytes
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber bars are unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_rvol_metrics_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_rvol_metrics("AAPL", entry_ts)
 
@@ -436,12 +386,7 @@ async def test_get_sector_correlation_features_prefers_heber_when_available(
                     {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 208.0},
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber has usable sector/correlation data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_sector_correlation_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_sector_correlation_features("AAPL", entry_ts)
 
@@ -463,12 +408,7 @@ async def test_get_sector_correlation_features_returns_none_when_heber_empty(
 
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber sector/correlation data is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_sector_correlation_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_sector_correlation_features("AAPL", entry_ts)
 
@@ -531,12 +471,7 @@ async def test_get_opposing_flow_prefers_heber_when_available(monkeypatch: pytes
                     },
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _put_call: str, _entry_ts: datetime, _end_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber has usable opposing-flow data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_opposing_flow_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
 
@@ -551,12 +486,7 @@ async def test_get_opposing_flow_returns_zeroes_when_heber_empty(monkeypatch: py
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _put_call: str, _entry_ts: datetime, _end_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber opposing-flow data is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_opposing_flow_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
 
@@ -608,12 +538,7 @@ async def test_get_flow_aggression_prefers_heber_when_available(monkeypatch: pyt
                     },
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber has usable flow data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_flow_aggression_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_flow_aggression("AAPL", entry_ts)
 
@@ -629,12 +554,7 @@ async def test_get_flow_aggression_returns_none_when_heber_empty(monkeypatch: py
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber flow-aggression data is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_flow_aggression_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_flow_aggression("AAPL", entry_ts)
 
@@ -660,12 +580,7 @@ async def test_get_institutional_flow_1w_prefers_heber_when_available(monkeypatc
                     {"ts_event": entry_ts - timedelta(days=1), "ticker": "MSFT", "premium_usd": 999_999},
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber has usable institutional-flow data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_institutional_flow_1w_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_institutional_flow_1w("AAPL", entry_ts)
 
@@ -681,12 +596,7 @@ async def test_get_institutional_flow_1w_returns_none_when_heber_empty(
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber institutional-flow data is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_institutional_flow_1w_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_institutional_flow_1w("AAPL", entry_ts)
 
@@ -727,15 +637,10 @@ async def test_get_phase1_bucket_features_prefers_heber_when_available(monkeypat
                     },
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber bars are available")
-
     async def _fake_ticker_info(_ticker: str):
         return {}
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_phase1_bucket_features_sql", _fail_sql_fallback, raising=False)
     monkeypatch.setattr(labeler, "get_ticker_info", _fake_ticker_info, raising=False)
 
     result = await labeler.get_phase1_bucket_features("AAPL", entry_ts, dte=5)
@@ -755,15 +660,10 @@ async def test_get_phase1_bucket_features_returns_none_when_heber_empty(
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber phase1 market data is unavailable")
-
     async def _fake_ticker_info(_ticker: str):
         return {}
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_phase1_bucket_features_sql", _fail_sql_fallback, raising=False)
     monkeypatch.setattr(labeler, "get_ticker_info", _fake_ticker_info, raising=False)
 
     result = await labeler.get_phase1_bucket_features("AAPL", entry_ts, dte=5)
@@ -818,12 +718,7 @@ async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.
             for idx, close in enumerate(close_values):
                 rows.append({"ts_event": start_day + timedelta(days=idx), "symbol": "AAPL", "close": close})
             return pd.DataFrame(rows)
-
-    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber has usable P2 data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_p2_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
 
@@ -853,12 +748,7 @@ async def test_get_p2_features_returns_none_when_heber_empty(
 
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber P2 data is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_p2_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
 
@@ -931,12 +821,7 @@ async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.
                     },
                 ]
             )
-
-    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _expiry: datetime, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber has usable P3 data")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_p3_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
 
@@ -958,12 +843,7 @@ async def test_get_p3_features_returns_none_when_heber_empty(
 
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _expiry: datetime, _entry_ts: datetime):
-        raise AssertionError("SQL fallback should not run when Heber P3 data is unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_p3_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
 
@@ -1003,12 +883,7 @@ async def test_get_flow_greeks_prefers_heber_when_available(monkeypatch: pytest.
                     }
                 ]
             )
-
-    async def _fail_sql_fallback(_event_id: str):
-        raise AssertionError("SQL fallback should not run when Heber has event-level flow Greeks")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_flow_greeks_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_flow_greeks(event_id)
 
@@ -1032,12 +907,7 @@ async def test_get_flow_greeks_returns_null_payload_when_heber_missing(
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
-
-    async def _fail_sql_fallback(_event_id: str):
-        raise AssertionError("SQL fallback should not run when Heber flow Greeks are unavailable")
-
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_flow_greeks_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_flow_greeks(event_id)
 

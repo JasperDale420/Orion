@@ -1203,62 +1203,12 @@ def _estimate_iv_rank_from_heber_flow(ticker: str, target_ts: datetime) -> Optio
 
 
 async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
-    """Get regime snapshot at entry time from VIX/VIXY data + market tide.
-
-    Uses VIXY bar data from silver_alpaca_bars as VIX proxy when
-    silver_vix_data table is empty.
-    """
+    """Get regime snapshot at entry time from Heber VIX proxy + market tide."""
     from orion.analysis.regime import MultiAxisRegimeDetector
 
     detector = MultiAxisRegimeDetector()
 
-    # Try silver_vix_data first, then fallback to VIXY bars
-    async def query_vix(session: Any) -> Dict[str, Any]:
-        # First try the VIX table
-        stmt = text(
-            """
-            SELECT vix, vix_1d_change, vix_regime
-            FROM silver_vix_data
-            WHERE ts_utc <= :entry_ts
-            ORDER BY ts_utc DESC LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"entry_ts": entry_ts})
-        row = result.fetchone()
-        if row and row[0]:
-            return {"vix": row[0], "vix_1d_change": row[1], "vix_regime": row[2]}
-
-        # Fallback: Use VIXY from silver_alpaca_bars as proxy
-        stmt = text(
-            """
-            SELECT close,
-                   close - LAG(close) OVER (ORDER BY bar_start_ts_utc) as change_1d
-            FROM silver_alpaca_bars
-            WHERE ticker = 'VIXY' AND bar_start_ts_utc <= :entry_ts
-            ORDER BY bar_start_ts_utc DESC LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"entry_ts": entry_ts})
-        row = result.fetchone()
-        if row and row[0]:
-            vix_proxy = float(row[0])
-            vix_change = float(row[1]) if row[1] else 0.0
-            # Map VIXY price to VIX regime
-            if vix_proxy > 30:
-                regime = "EXTREME"
-            elif vix_proxy > 20:
-                regime = "ELEVATED"
-            elif vix_proxy > 12:
-                regime = "NORMAL"
-            else:
-                regime = "LOW"
-            return {"vix": vix_proxy, "vix_1d_change": vix_change, "vix_regime": regime}
-
-        return {}
-
     vix_data = _get_heber_vix_proxy_snapshot_at_or_before(entry_ts) or {}
-    if vix_data.get("vix") is None:
-        vix_data = await db_query(query_vix)
     tide_net = _get_heber_market_tide_net_premium(entry_ts, minutes=30)
 
     # Detect regime snapshot
@@ -1304,22 +1254,7 @@ async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Opti
     if heber_price is not None:
         return heber_price
 
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc <= :entry_ts
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
-        row = result.fetchone()
-        return row[0] if row else None
-
-    return await db_query(query)
+    return None
 
 
 async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> Optional[float]:
@@ -1329,22 +1264,7 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
     if heber_price is not None:
         return heber_price
 
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc <= :target_ts
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "target_ts": target_ts})
-        row = result.fetchone()
-        return row[0] if row else None
-
-    return await db_query(query)
+    return None
 
 
 def _coerce_dt_utc(value: Any) -> Optional[datetime]:

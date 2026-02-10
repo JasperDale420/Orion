@@ -73,11 +73,11 @@ async def test_get_market_tide_before_entry_prefers_heber_net(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_get_regime_at_entry_uses_heber_tide_before_sql_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_regime_at_entry_uses_heber_tide_without_sql_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     import orion.analysis.regime as regime_module
 
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
-    captured: dict[str, Any] = {"calls": []}
+    captured: dict[str, Any] = {}
 
     class _FakeDetector:
         def detect(self, **kwargs: Any):
@@ -91,17 +91,20 @@ async def test_get_regime_at_entry_uses_heber_tide_before_sql_fallback(monkeypat
                 vix_regime=SimpleNamespace(value="ELEVATED"),
             )
 
-    async def _fake_db_query(callback):
-        captured["calls"].append(callback.__name__)
-        assert callback.__name__ == "query_vix"
-        return {"vix": 19.5, "vix_1d_change": 0.8, "vix_regime": "ELEVATED"}
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not be called when Heber vix proxy/tide are available")
 
     monkeypatch.setattr(regime_module, "MultiAxisRegimeDetector", _FakeDetector)
+    monkeypatch.setattr(
+        labeler,
+        "_get_heber_vix_proxy_snapshot_at_or_before",
+        lambda _entry_ts: {"vix": 19.5, "vix_1d_change": 0.8, "vix_regime": "ELEVATED"},
+        raising=False,
+    )
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: 77.0, raising=False)
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     result = await labeler.get_regime_at_entry(entry_ts)
 
-    assert captured["calls"] == ["query_vix"]
     assert captured["market_tide_net"] == 77.0
     assert result["vix_at_entry"] == 19.5
