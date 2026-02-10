@@ -62,17 +62,37 @@ detect-secrets = "^1.4.0"
 pre-commit = "^3.5.0"
 
 [tool.pytest.ini_options]
-minversion = "6.0"
-addopts = "-ra -q --cov=src"
-testpaths = [
-    "tests",
-]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --tb=short --strict-markers"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
+    "ignore::DeprecationWarning",
     "ignore::DeprecationWarning:pydantic.*:",
     "ignore::DeprecationWarning:sqlalchemy.*:",
-    "ignore::DeprecationWarning:pytest_asyncio.*:"
+    "ignore::DeprecationWarning:pytest_asyncio.*:",
+]
+markers = [
+    "unit: Fast, isolated unit tests (no I/O, no network)",
+    "integration: Tests with real DB, file I/O, or component interactions",
+    "e2e: End-to-end full system flow tests",
+    "slow: Tests that take >1s (opt-in, excluded by default)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = ["tests/*", "scripts/*", "*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
 ]
 
 [tool.ruff]
