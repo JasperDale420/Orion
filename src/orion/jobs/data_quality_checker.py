@@ -45,28 +45,10 @@ _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 async def check_zero_valued_bars(lookback_hours: int = 24) -> List[Dict]:
     """Check for bars with invalid close values in recent data."""
-    if _prefer_heber_source():
-        heber_rows = await _check_zero_valued_bars_from_heber(lookback_hours=lookback_hours)
-        if heber_rows is not None:
-            return heber_rows
-
-    async def query(session: Any) -> List[Dict]:
-        stmt = text(
-            """
-            SELECT ticker, COUNT(*) as zero_count,
-                   MIN(bar_start_ts_utc) as earliest,
-                   MAX(bar_start_ts_utc) as latest
-            FROM silver_alpaca_bars
-            WHERE (close = 0 OR close IS NULL)
-              AND bar_start_ts_utc > NOW() - INTERVAL ':hours hours'
-            GROUP BY ticker
-            ORDER BY zero_count DESC
-        """.replace(":hours", str(lookback_hours))
-        )
-        result = await session.execute(stmt)
-        return [{"ticker": r[0], "zero_count": r[1], "earliest": r[2], "latest": r[3]} for r in result.fetchall()]
-
-    return await db_query(query)
+    if not _prefer_heber_source():
+        return []
+    heber_rows = await _check_zero_valued_bars_from_heber(lookback_hours=lookback_hours)
+    return heber_rows or []
 
 
 async def check_data_staleness(stale_minutes: int = 15) -> List[Dict]:
@@ -78,102 +60,46 @@ async def check_data_staleness(stale_minutes: int = 15) -> List[Dict]:
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
         return []
 
-    if _prefer_heber_source():
-        heber_rows = await _check_data_staleness_from_heber(stale_minutes=stale_minutes)
-        if heber_rows is not None:
-            return heber_rows
-
-    async def query(session: Any) -> List[Dict]:
-        stmt = text(
-            """
-            SELECT ticker, MAX(bar_start_ts_utc) as last_bar,
-                   EXTRACT(EPOCH FROM (NOW() - MAX(bar_start_ts_utc))) / 60 as minutes_ago
-            FROM silver_alpaca_bars
-            WHERE ticker = ANY(:tickers)
-            GROUP BY ticker
-            HAVING EXTRACT(EPOCH FROM (NOW() - MAX(bar_start_ts_utc))) / 60 > :stale_minutes
-        """
-        )
-        result = await session.execute(stmt, {"tickers": CRITICAL_TICKERS, "stale_minutes": stale_minutes})
-        return [{"ticker": r[0], "last_bar": r[1], "minutes_ago": r[2]} for r in result.fetchall()]
-
-    return await db_query(query)
+    if not _prefer_heber_source():
+        return []
+    heber_rows = await _check_data_staleness_from_heber(stale_minutes=stale_minutes)
+    return heber_rows or []
 
 
 async def check_bar_gaps(ticker: str = "SPY", gap_minutes: int = 5) -> List[Dict]:
     """Check for gaps in bar data for a ticker."""
-    if _prefer_heber_source():
-        heber_rows = await _check_bar_gaps_from_heber(ticker=ticker, gap_minutes=gap_minutes)
-        if heber_rows is not None:
-            return heber_rows
-
-    async def query(session: Any) -> List[Dict]:
-        stmt = text(
-            """
-            WITH bar_gaps AS (
-                SELECT
-                    bar_start_ts_utc,
-                    LAG(bar_start_ts_utc) OVER (ORDER BY bar_start_ts_utc) as prev_bar,
-                    EXTRACT(EPOCH FROM (bar_start_ts_utc - LAG(bar_start_ts_utc) OVER (ORDER BY bar_start_ts_utc))) / 60 as gap_minutes
-                FROM silver_alpaca_bars
-                WHERE ticker = :ticker
-                  AND bar_start_ts_utc > NOW() - INTERVAL '24 hours'
-                  AND EXTRACT(HOUR FROM bar_start_ts_utc) >= :market_open
-                  AND EXTRACT(HOUR FROM bar_start_ts_utc) < :market_close
-            )
-            SELECT bar_start_ts_utc, prev_bar, gap_minutes
-            FROM bar_gaps
-            WHERE gap_minutes > :gap_minutes
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 10
-        """
-        )
-        result = await session.execute(
-            stmt,
-            {
-                "ticker": ticker,
-                "gap_minutes": gap_minutes,
-                "market_open": MARKET_OPEN_HOUR,
-                "market_close": MARKET_CLOSE_HOUR,
-            },
-        )
-        return [{"bar_ts": r[0], "prev_bar": r[1], "gap_minutes": r[2]} for r in result.fetchall()]
-
-    return await db_query(query)
+    if not _prefer_heber_source():
+        return []
+    heber_rows = await _check_bar_gaps_from_heber(ticker=ticker, gap_minutes=gap_minutes)
+    return heber_rows or []
 
 
 async def get_bars_summary() -> Dict:
     """Get Alpaca bars data quality summary."""
-    if _prefer_heber_source():
-        heber_summary = await _get_bars_summary_from_heber()
-        if heber_summary is not None:
-            return heber_summary
-
-    async def query(session: Any) -> Dict:
-        stmt = text(
-            """
-            SELECT
-                COUNT(*) as total_bars,
-                SUM(CASE WHEN close > 0 THEN 1 ELSE 0 END) as valid_bars,
-                SUM(CASE WHEN close = 0 OR close IS NULL THEN 1 ELSE 0 END) as invalid_bars,
-                COUNT(DISTINCT ticker) as unique_tickers,
-                MAX(bar_start_ts_utc) as latest_bar
-            FROM silver_alpaca_bars
-            WHERE bar_start_ts_utc > NOW() - INTERVAL '24 hours'
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
+    if not _prefer_heber_source():
         return {
-            "total_bars_24h": row[0] or 0,
-            "valid_bars": row[1] or 0,
-            "invalid_bars": row[2] or 0,
-            "unique_tickers": row[3] or 0,
-            "latest_bar": row[4],
-            "validity_pct": round(100 * (row[1] or 0) / row[0], 2) if row[0] and row[0] > 0 else 0,
+            "total_bars_24h": 0,
+            "valid_bars": 0,
+            "invalid_bars": 0,
+            "unique_tickers": 0,
+            "latest_bar": None,
+            "validity_pct": 0,
+            "backend": "source_unavailable",
         }
 
-    return await db_query(query)
+    heber_summary = await _get_bars_summary_from_heber()
+    if heber_summary is not None:
+        return heber_summary
+
+    return {
+        "total_bars_24h": 0,
+        "valid_bars": 0,
+        "invalid_bars": 0,
+        "unique_tickers": 0,
+        "latest_bar": None,
+        "validity_pct": 0,
+        "backend": "heber_unavailable",
+    }
 
 
 # =============================================================================
@@ -183,39 +109,30 @@ async def get_bars_summary() -> Dict:
 
 async def get_flow_summary() -> Dict:
     """Get UW Flow data quality summary."""
-    if _prefer_heber_source():
-        heber_summary = await _get_flow_summary_from_heber()
-        if heber_summary is not None:
-            return heber_summary
-
-    async def query(session: Any) -> Dict:
-        stmt = text(
-            """
-            SELECT
-                COUNT(*) as total_flows,
-                COUNT(CASE WHEN premium_usd IS NOT NULL AND premium_usd > 0 THEN 1 END) as valid_premium,
-                COUNT(CASE WHEN premium_usd IS NULL OR premium_usd = 0 THEN 1 END) as missing_premium,
-                COUNT(DISTINCT ticker) as unique_tickers,
-                MAX(flow_ts_utc) as latest_flow
-            FROM silver_uw_flow
-            WHERE flow_ts_utc > NOW() - INTERVAL '24 hours'
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        total = row[0] or 0
-        valid = row[1] or 0
+    if not _prefer_heber_source():
         return {
-            "total_flows_24h": total,
-            "valid_premium": valid,
-            "missing_premium": row[2] or 0,
-            "unique_tickers": row[3] or 0,
-            "latest_flow": row[4],
-            "validity_pct": round(100 * valid / total, 2) if total > 0 else 0,
-            "backend": "local_db",
+            "total_flows_24h": 0,
+            "valid_premium": 0,
+            "missing_premium": 0,
+            "unique_tickers": 0,
+            "latest_flow": None,
+            "validity_pct": 0,
+            "backend": "source_unavailable",
         }
 
-    return await db_query(query)
+    heber_summary = await _get_flow_summary_from_heber()
+    if heber_summary is not None:
+        return heber_summary
+
+    return {
+        "total_flows_24h": 0,
+        "valid_premium": 0,
+        "missing_premium": 0,
+        "unique_tickers": 0,
+        "latest_flow": None,
+        "validity_pct": 0,
+        "backend": "heber_unavailable",
+    }
 
 
 async def check_flow_staleness(stale_minutes: int = 30) -> bool:
@@ -226,23 +143,10 @@ async def check_flow_staleness(stale_minutes: int = 30) -> bool:
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
         return False  # Outside market hours, no alert
 
-    if _prefer_heber_source():
-        heber_stale = await _check_flow_staleness_from_heber(stale_minutes=stale_minutes)
-        if heber_stale is not None:
-            return heber_stale
-
-    async def query(session: Any) -> bool:
-        stmt = text(
-            """
-            SELECT EXTRACT(EPOCH FROM (NOW() - MAX(flow_ts_utc))) / 60 as minutes_ago
-            FROM silver_uw_flow
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        return row[0] is not None and row[0] > stale_minutes
-
-    return await db_query(query)
+    if not _prefer_heber_source():
+        return False
+    heber_stale = await _check_flow_staleness_from_heber(stale_minutes=stale_minutes)
+    return bool(heber_stale) if heber_stale is not None else False
 
 
 # =============================================================================
@@ -252,39 +156,30 @@ async def check_flow_staleness(stale_minutes: int = 30) -> bool:
 
 async def get_darkpool_summary() -> Dict:
     """Get Darkpool data quality summary."""
-    if _prefer_heber_source():
-        heber_summary = await _get_darkpool_summary_from_heber()
-        if heber_summary is not None:
-            return heber_summary
-
-    async def query(session: Any) -> Dict:
-        stmt = text(
-            """
-            SELECT
-                COUNT(*) as total_trades,
-                COUNT(CASE WHEN size_shares IS NOT NULL AND size_shares > 0 THEN 1 END) as valid_trades,
-                COUNT(CASE WHEN trade_price IS NULL OR trade_price = 0 THEN 1 END) as invalid_price,
-                COUNT(DISTINCT ticker) as unique_tickers,
-                MAX(dark_ts_utc) as latest_trade
-            FROM silver_uw_darkpool
-            WHERE dark_ts_utc > NOW() - INTERVAL '24 hours'
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        total = row[0] or 0
-        valid = row[1] or 0
+    if not _prefer_heber_source():
         return {
-            "total_trades_24h": total,
-            "valid_trades": valid,
-            "invalid_price": row[2] or 0,
-            "unique_tickers": row[3] or 0,
-            "latest_trade": row[4],
-            "validity_pct": round(100 * valid / total, 2) if total > 0 else 0,
-            "backend": "local_db",
+            "total_trades_24h": 0,
+            "valid_trades": 0,
+            "invalid_price": 0,
+            "unique_tickers": 0,
+            "latest_trade": None,
+            "validity_pct": 0,
+            "backend": "source_unavailable",
         }
 
-    return await db_query(query)
+    heber_summary = await _get_darkpool_summary_from_heber()
+    if heber_summary is not None:
+        return heber_summary
+
+    return {
+        "total_trades_24h": 0,
+        "valid_trades": 0,
+        "invalid_price": 0,
+        "unique_tickers": 0,
+        "latest_trade": None,
+        "validity_pct": 0,
+        "backend": "heber_unavailable",
+    }
 
 
 async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
@@ -295,23 +190,10 @@ async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
         return False
 
-    if _prefer_heber_source():
-        heber_stale = await _check_darkpool_staleness_from_heber(stale_minutes=stale_minutes)
-        if heber_stale is not None:
-            return heber_stale
-
-    async def query(session: Any) -> bool:
-        stmt = text(
-            """
-            SELECT EXTRACT(EPOCH FROM (NOW() - MAX(dark_ts_utc))) / 60 as minutes_ago
-            FROM silver_uw_darkpool
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        return row[0] is not None and row[0] > stale_minutes
-
-    return await db_query(query)
+    if not _prefer_heber_source():
+        return False
+    heber_stale = await _check_darkpool_staleness_from_heber(stale_minutes=stale_minutes)
+    return bool(heber_stale) if heber_stale is not None else False
 
 
 # =============================================================================

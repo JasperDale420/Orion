@@ -13,11 +13,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import pandas as pd
+from sqlalchemy import text
+
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
 from orion.core.logging_config import setup_logging
-from orion.shared.db_utils import db_query, db_write
-from sqlalchemy import text
+from orion.shared.db_utils import db_write
 
 logger = logging.getLogger("orion.jobs.window_feature_job")
 
@@ -94,16 +95,9 @@ class WindowFeatureJob:
         self, ticker: str, window_start: datetime, window_end: datetime, period: str
     ) -> Dict[str, Any] | None:
         """Query data sources and aggregate features for the window."""
-        if self.prefer_heber:
-            heber_features = await self._build_features_from_heber(
-                ticker=ticker,
-                window_start=window_start,
-                window_end=window_end,
-                period=period,
-            )
-            if heber_features is not None:
-                return heber_features
-        return await self._build_features_from_local_db(
+        if not self.prefer_heber:
+            return None
+        return await self._build_features_from_heber(
             ticker=ticker,
             window_start=window_start,
             window_end=window_end,
@@ -113,105 +107,9 @@ class WindowFeatureJob:
     async def _build_features_from_local_db(
         self, ticker: str, window_start: datetime, window_end: datetime, period: str
     ) -> Dict[str, Any] | None:
-        """Query local silver tables and aggregate features for the window."""
-
-        async def query(session: Any) -> Dict[str, Any] | None:
-            # Aggregate flow metrics from silver_uw_flow
-            flow_stmt = text(
-                """
-                SELECT
-                    COUNT(*) as flow_count,
-                    SUM(CASE WHEN put_call = 'C' THEN premium_usd ELSE 0 END) as call_premium,
-                    SUM(CASE WHEN put_call = 'P' THEN premium_usd ELSE 0 END) as put_premium,
-                    SUM(premium_usd) as total_premium,
-                    COUNT(CASE WHEN is_sweep::text = 'true' OR is_sweep::text = 'True' THEN 1 END) as sweep_count,
-                    COUNT(CASE WHEN aggressor = 'ASK' THEN 1 END) as ask_side_count,
-                    COUNT(CASE WHEN aggressor = 'BID' THEN 1 END) as bid_side_count,
-                    AVG(iv) as avg_iv,
-                    MAX(premium_usd) as max_premium
-                FROM silver_uw_flow
-                WHERE ticker = :ticker
-                AND flow_ts_utc >= :start_ts
-                AND flow_ts_utc < :end_ts
-            """
-            )
-            flow_result = await session.execute(
-                flow_stmt,
-                {"ticker": ticker, "start_ts": window_start, "end_ts": window_end},
-            )
-            flow_row = flow_result.fetchone()
-
-            # Aggregate dark pool from silver_uw_darkpool
-            dp_stmt = text(
-                """
-                SELECT
-                    COUNT(*) as dp_count,
-                    SUM(size_shares) as dp_volume,
-                    SUM(size_shares * trade_price) as dp_notional
-                FROM silver_uw_darkpool
-                WHERE ticker = :ticker
-                AND dark_ts_utc >= :start_ts
-                AND dark_ts_utc < :end_ts
-            """
-            )
-            dp_result = await session.execute(
-                dp_stmt,
-                {"ticker": ticker, "start_ts": window_start, "end_ts": window_end},
-            )
-            dp_row = dp_result.fetchone()
-
-            if not flow_row or flow_row[0] == 0:
-                # No flow data in window
-                return None
-
-            # Calculate derived features
-            flow_count = flow_row[0] or 0
-            call_premium = float(flow_row[1] or 0)
-            put_premium = float(flow_row[2] or 0)
-            total_premium = float(flow_row[3] or 0)
-            sweep_count = int(flow_row[4] or 0)
-            ask_side = int(flow_row[5] or 0)
-            _ = flow_row[6]  # bid_side - available but not currently used
-            avg_iv = float(flow_row[7]) if flow_row[7] else None
-            max_premium = float(flow_row[8] or 0)
-
-            dp_count = int(dp_row[0] or 0) if dp_row else 0
-            dp_volume = float(dp_row[1] or 0) if dp_row else 0
-            dp_notional = float(dp_row[2] or 0) if dp_row else 0
-
-            # Derived ratios
-            call_put_ratio = call_premium / put_premium if put_premium > 0 else None
-            call_put_imbalance = (call_premium - put_premium) / total_premium if total_premium > 0 else 0
-            sweep_ratio = sweep_count / flow_count if flow_count > 0 else 0
-            ask_ratio = ask_side / flow_count if flow_count > 0 else 0.5
-
-            return {
-                # Raw counts
-                "flow_count": flow_count,
-                "sweep_count": sweep_count,
-                "dp_count": dp_count,
-                # Premiums
-                "call_premium": call_premium,
-                "put_premium": put_premium,
-                "total_premium": total_premium,
-                "max_premium": max_premium,
-                # Dark pool
-                "dp_volume": dp_volume,
-                "dp_notional": dp_notional,
-                # Ratios
-                "call_put_ratio": call_put_ratio,
-                "call_put_imbalance": call_put_imbalance,
-                "sweep_ratio": sweep_ratio,
-                "ask_ratio": ask_ratio,
-                # IV
-                "avg_iv": avg_iv,
-                # Window metadata
-                "period": period,
-                "window_start": window_start.isoformat(),
-                "window_end": window_end.isoformat(),
-            }
-
-        return await db_query(query)
+        """Legacy local-DB path is disabled in Heber-only mode."""
+        _ = (ticker, window_start, window_end, period)
+        return None
 
     async def _build_features_from_heber(
         self, ticker: str, window_start: datetime, window_end: datetime, period: str

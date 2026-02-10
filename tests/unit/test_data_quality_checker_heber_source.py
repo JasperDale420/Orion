@@ -41,33 +41,22 @@ async def test_get_flow_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_get_flow_summary_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_flow_summary_returns_empty_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeReader:
         def read_flow(self, **_kwargs):
             raise RuntimeError("heber unavailable")
 
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    local_called = {"value": False}
 
-    async def _fake_db_query(_fn):
-        local_called["value"] = True
-        return {
-            "total_flows_24h": 10,
-            "valid_premium": 8,
-            "missing_premium": 2,
-            "unique_tickers": 4,
-            "latest_flow": None,
-            "validity_pct": 80.0,
-            "backend": "local_db",
-        }
+    async def _fail_db_query(_fn):
+        raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(dqc, "db_query", _fake_db_query)
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query)
 
     summary = await dqc.get_flow_summary()
 
-    assert local_called["value"] is True
-    assert summary["backend"] == "local_db"
-    assert summary["total_flows_24h"] == 10
+    assert summary["backend"] in {"heber_unavailable", "source_unavailable"}
+    assert summary["total_flows_24h"] == 0
 
 
 @pytest.mark.asyncio
@@ -209,28 +198,19 @@ async def test_check_bar_gaps_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_get_bars_summary_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_bars_summary_returns_empty_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeReader:
         def read_bars(self, **_kwargs):
             raise RuntimeError("heber unavailable")
 
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    local_called = {"value": False}
 
-    async def _fake_db_query(_fn):
-        local_called["value"] = True
-        return {
-            "total_bars_24h": 10,
-            "valid_bars": 9,
-            "invalid_bars": 1,
-            "unique_tickers": 3,
-            "latest_bar": None,
-            "validity_pct": 90.0,
-        }
+    async def _fail_db_query(_fn):
+        raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(dqc, "db_query", _fake_db_query)
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query)
 
     summary = await dqc.get_bars_summary()
 
-    assert local_called["value"] is True
-    assert summary["total_bars_24h"] == 10
+    assert summary["backend"] in {"heber_unavailable", "source_unavailable"}
+    assert summary["total_bars_24h"] == 0

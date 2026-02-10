@@ -44,47 +44,34 @@ async def test_get_pending_checkpoints_prefers_heber(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_get_pending_checkpoints_falls_back_to_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_pending_checkpoints_returns_empty_when_heber_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _FakeReader:
         def read_flow(self, **_kwargs):
             raise RuntimeError("heber unavailable")
 
     monkeypatch.setattr(oqt, "get_heber_reader", lambda: _FakeReader())
-    local_called = {"value": False}
 
-    async def _fake_db_query(_fn):
-        local_called["value"] = True
-        return [
-            {
-                "event_id": "local-1",
-                "ticker": "SPY",
-                "option_symbol": "SPY260220C00500000",
-                "flow_ts_utc": datetime.now(timezone.utc),
-                "minutes_since_entry": 5.0,
-            }
-        ]
+    async def _fail_db_query(_fn):
+        raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(oqt, "db_query", _fake_db_query)
+    monkeypatch.setattr(oqt, "db_query", _fail_db_query)
 
     pending = await oqt.get_pending_checkpoints()
 
-    assert local_called["value"] is True
-    assert len(pending) == 1
-    assert pending[0]["event_id"] == "local-1"
+    assert pending == []
 
 
 @pytest.mark.asyncio
 async def test_get_pending_checkpoints_can_disable_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_OPTION_QUOTE_TRACKER_PREFER_HEBER", "false")
-    local_called = {"value": False}
 
-    async def _fake_db_query(_fn):
-        local_called["value"] = True
-        return []
+    async def _fail_db_query(_fn):
+        raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(oqt, "db_query", _fake_db_query)
+    monkeypatch.setattr(oqt, "db_query", _fail_db_query)
 
     pending = await oqt.get_pending_checkpoints()
 
     assert pending == []
-    assert local_called["value"] is True

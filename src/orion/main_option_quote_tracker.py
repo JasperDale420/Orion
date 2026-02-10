@@ -85,35 +85,11 @@ def extract_underlying_ticker(option_symbol: str) -> str:
 
 async def get_pending_checkpoints() -> List[Dict[str, Any]]:
     """Get flow events that need checkpoint quotes fetched."""
-    if _prefer_heber_flow_source():
-        heber_pending = await _get_pending_checkpoints_from_heber()
-        if heber_pending is not None:
-            return heber_pending
+    if not _prefer_heber_flow_source():
+        return []
 
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        # Find flow events from last 24 hours
-        # Construct option symbol from components: TICKER + YYMMDD + C/P + strike*1000 padded
-        stmt = text(
-            """
-            SELECT
-                f.event_id,
-                f.ticker,
-                f.ticker || TO_CHAR(TO_DATE(f.expiry, 'YYYY-MM-DD'), 'YYMMDD') ||
-                    f.put_call || LPAD(CAST((f.strike * 1000)::bigint AS text), 8, '0') as option_symbol,
-                f.flow_ts_utc,
-                EXTRACT(EPOCH FROM (NOW() - f.flow_ts_utc)) / 60 as minutes_since_entry
-            FROM silver_uw_flow f
-            WHERE f.flow_ts_utc > NOW() - INTERVAL '24 hours'
-            AND f.expiry IS NOT NULL
-            AND f.strike IS NOT NULL
-            ORDER BY f.flow_ts_utc DESC
-            LIMIT 1000
-        """
-        )
-        result = await session.execute(stmt)
-        return [dict(row._mapping) for row in result.fetchall()]
-
-    return await db_query(query)
+    heber_pending = await _get_pending_checkpoints_from_heber()
+    return heber_pending or []
 
 
 def _prefer_heber_flow_source() -> bool:

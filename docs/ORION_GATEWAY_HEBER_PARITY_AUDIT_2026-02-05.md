@@ -8850,3 +8850,53 @@ Result:
   - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
     - `FROM/JOIN/INSERT/UPDATE silver_*`: `0`.
 - remaining `silver_*` tokens in `validate_features.py` are now legacy source-id aliases only (compatibility mapping), not executable SQL paths.
+
+## 281) Pass 280 Continuation (2026-02-10)
+
+### 281.1 `data_quality_checker` + `window_feature_job` + `option_quote_tracker` Heber-Only Hardening (TDD-Backed, Combined)
+
+Finding:
+- three runtime/support modules still had active local fallback paths to Orion-local Silver tables:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py` (bars/flow/darkpool quality checks),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/window_feature_job.py` (window feature aggregation fallback),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py` (`silver_uw_flow` pending-checkpoint fallback).
+- this kept migration-critical monitoring/backfill tooling coupled to local SQL sources during Gateway/Heber centralization.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py`:
+  - removed local SQL fallback reads for:
+    - `check_zero_valued_bars(...)`,
+    - `check_data_staleness(...)`,
+    - `check_bar_gaps(...)`,
+    - `get_bars_summary(...)`,
+    - `get_flow_summary(...)`,
+    - `check_flow_staleness(...)`,
+    - `get_darkpool_summary(...)`,
+    - `check_darkpool_staleness(...)`,
+  - added explicit Heber-unavailable/default result behavior (`backend: heber_unavailable` or `source_unavailable`).
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/window_feature_job.py`:
+  - removed operational local SQL fallback path from `_build_features(...)`,
+  - local helper now acts as disabled legacy shim (no SQL access).
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`:
+  - removed local SQL fallback query against `silver_uw_flow` in `get_pending_checkpoints(...)`,
+  - pending checkpoint discovery now uses Heber flow only (or empty when unavailable/disabled).
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_data_quality_checker_heber_source.py`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_window_feature_job_heber_source.py`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_option_quote_tracker_heber_source.py`
+  - fallback assertions converted to no-local-DB contract assertions.
+
+Verification:
+- `pytest -q tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py` passed.
+- `pytest -q tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_remediation_rules.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py` passed.
+- `ruff check src/orion/jobs/data_quality_checker.py src/orion/jobs/window_feature_job.py src/orion/main_option_quote_tracker.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py` passed.
+
+Result:
+- active executable local-SQL coupling removed from:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py`,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/window_feature_job.py`.
+- remaining `main_option_quote_tracker.py` `silver_*` SQL references are now intentional `silver_option_quotes` persistence/read paths (checkpoint storage), not feed fallback reads.
+- updated hotspot ranking after this pass shows remaining highest-risk executable `silver_*` paths concentrated in:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`,
+  - selected connector persistence paths (intentional table writes).

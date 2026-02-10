@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
+
 from orion.jobs.window_feature_job import WindowFeatureJob
 
 
@@ -62,7 +63,9 @@ async def test_build_features_prefers_heber_without_local_fallback(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_build_features_falls_back_to_local_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_build_features_returns_none_when_heber_empty_without_local_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc)
     window_start = now - timedelta(minutes=5)
 
@@ -75,13 +78,11 @@ async def test_build_features_falls_back_to_local_when_heber_empty(monkeypatch: 
 
     monkeypatch.setattr("orion.jobs.window_feature_job.get_heber_reader", lambda: _FakeReader())
 
-    expected = {"flow_count": 1, "period": "5m"}
-
-    async def _local(*_args, **_kwargs):
-        return expected
+    async def _fail_local(*_args, **_kwargs):
+        raise AssertionError("local fallback should not be called")
 
     job = WindowFeatureJob(tickers=["SPY"], periods=["5m"], prefer_heber=True)
-    monkeypatch.setattr(job, "_build_features_from_local_db", _local)
+    monkeypatch.setattr(job, "_build_features_from_local_db", _fail_local)
 
     features = await job._build_features(
         ticker="SPY",
@@ -90,4 +91,4 @@ async def test_build_features_falls_back_to_local_when_heber_empty(monkeypatch: 
         period="5m",
     )
 
-    assert features == expected
+    assert features is None

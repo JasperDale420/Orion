@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Data-quality + window features + quote tracker Heber-only fallback removal (TDD, combined pass)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py`:
+    - removed local Silver SQL fallback reads for bars/flow/darkpool quality checks,
+    - quality summaries now return explicit unavailable payloads when Heber is disabled/unavailable.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/window_feature_job.py`:
+    - disabled local Silver SQL feature-build fallback path,
+    - `_build_features(...)` now runs Heber-only aggregation when enabled and returns `None` when Heber data is unavailable.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`:
+    - removed local `silver_uw_flow` fallback read in `get_pending_checkpoints(...)`,
+    - pending checkpoint discovery is now Heber-only (or empty when unavailable/disabled).
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_data_quality_checker_heber_source.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_window_feature_job_heber_source.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_option_quote_tracker_heber_source.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py`
+    - `pytest -q tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_remediation_rules.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py`
+    - `ruff check src/orion/jobs/data_quality_checker.py src/orion/jobs/window_feature_job.py src/orion/main_option_quote_tracker.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py`
+
 - **Reconciliation + Validation Heber-only hardening (TDD, combined pass)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/reconcile_backfill.py`:
     - removed Bronze-vs-local-Silver SQL fallback comparison path,
