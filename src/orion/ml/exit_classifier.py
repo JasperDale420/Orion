@@ -11,24 +11,23 @@ Buckets and their time horizons:
 - POSITION: Days to weeks (1d, 2d, 3d, 1w)
 """
 
-import os
 import pickle
 import time
 from dataclasses import dataclass
 from math import isnan
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.exit_classifier")
 
-MODEL_DIR = Path(os.getenv("ORION_MODEL_DIR", "/app/models"))
+MODEL_DIR = system_settings.model_dir
 SCHEMA_CACHE_TTL_SECONDS = 60.0
 
 _schema_cache_columns: Optional[set[str]] = None

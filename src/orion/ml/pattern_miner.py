@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from sqlalchemy import text
 
+from orion.config import system_settings
 from orion.ml.schemas import (
     FeatureImportance,
     MLInsightsSummary,
@@ -28,7 +29,7 @@ from orion.shared.logger import setup_struct_logger
 logger = setup_struct_logger("orion.ml.pattern_miner")
 
 # Model output directory - models are saved here for MLScorer to load
-MODEL_DIR = Path(os.getenv("ORION_MODEL_DIR", "/app/models"))
+MODEL_DIR = system_settings.model_dir
 
 
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)

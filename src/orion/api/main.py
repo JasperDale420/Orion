@@ -1,4 +1,3 @@
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -13,6 +12,7 @@ from starlette.responses import JSONResponse, Response
 from orion.api.auth import require_api_key
 from orion.api.deps import get_db
 from orion.api.schemas import ExperimentResponse, PromotionRecommendationResponse, SolverMetricsResponse, SolverResponse
+from orion.config import system_settings
 from orion.rag.vector_store import VectorStore
 from orion.shared.db_utils import db_write
 
@@ -57,7 +57,7 @@ async def audit_middleware(request: Request, call_next: Any) -> Response:
         session.add(
             AuditLog(
                 id=str(uuid.uuid4()),
-                run_id=os.getenv("ORION_RUN_ID"),
+                run_id=system_settings.run_id,
                 trace_id=trace_id,
                 method=request.method,
                 path=request.url.path,

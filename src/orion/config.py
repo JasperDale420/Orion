@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env file if present
 
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -121,8 +122,39 @@ class SystemSettings(BaseSettings):
     max_data_lag_seconds: int = 90  # Alpaca 1m bars are naturally 60-80s behind
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
+    uw_base_url: str = Field(default="https://api.unusualwhales.com", validation_alias="UW_BASE_URL")
     static_watchlist: List[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL", "VIXY"]
     require_rollups_for_signals_live: bool = True
+
+    # Runtime / Observability
+    run_id: str = Field(default_factory=lambda: str(uuid.uuid4()), validation_alias="ORION_RUN_ID")
+    log_format: str = Field(default="json", validation_alias="ORION_LOG_FORMAT")
+    api_key: Optional[str] = Field(default=None, validation_alias="ORION_API_KEY")
+    metrics_enabled: bool = Field(default=False, validation_alias="ORION_METRICS_ENABLED")
+    metrics_port: int = Field(default=8000, validation_alias="ORION_METRICS_PORT")
+
+    # ML / Models
+    model_dir: Path = Field(default=Path("/app/models"), validation_alias="ORION_MODEL_DIR")
+    max_model_age_days: int = Field(default=14, validation_alias="ORION_MAX_MODEL_AGE_DAYS")
+    proposals_dir: str = Field(default="proposals", validation_alias="ORION_PROPOSALS_DIR")
+
+    # SQLite tuning
+    sqlite_lock_retry_attempts: int = Field(default=2, ge=0, validation_alias="ORION_SQLITE_LOCK_RETRY_ATTEMPTS")
+    sqlite_lock_retry_base_delay_seconds: float = Field(default=0.05, ge=0.0, validation_alias="ORION_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS")
+    sqlite_lock_retry_max_delay_seconds: float = Field(default=0.5, ge=0.0, validation_alias="ORION_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS")
+
+    # Heber preference flags
+    validate_features_prefer_heber: bool = Field(default=True, validation_alias="ORION_VALIDATE_FEATURES_PREFER_HEBER")
+    window_feature_job_prefer_heber: bool = Field(default=True, validation_alias="ORION_WINDOW_FEATURE_JOB_PREFER_HEBER")
+    data_quality_checker_prefer_heber: bool = Field(default=True, validation_alias="ORION_DATA_QUALITY_CHECKER_PREFER_HEBER")
+
+    # System Monitor
+    monitor_lag_threshold: int = Field(default=300, validation_alias="MONITOR_LAG_THRESHOLD")
+    monitor_dlq_lookback: int = Field(default=5, validation_alias="MONITOR_DLQ_LOOKBACK")
+
+    # RAG / Embeddings
+    ollama_embedding_model: str = Field(default="nomic-embed-text", validation_alias="OLLAMA_EMBEDDING_MODEL")
+    ollama_base_url: str = Field(default="http://host.docker.internal:11434", validation_alias="OLLAMA_BASE_URL")
 
     model_config = SettingsConfigDict(env_prefix="ORION_")
 
@@ -136,6 +168,8 @@ class AgentSettings(BaseSettings):
     model_name: str = "gpt-5.2"
     reasoning_level: str = Field(default="extra_high", validation_alias="ORION_REASONING_LEVEL")
     openai_api_key: Optional[str] = Field(default=None, validation_alias="OPENAI_API_KEY")
+    deepseek_api_key: Optional[str] = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
+    deepseek_model: str = Field(default="deepseek-reasoner", validation_alias="DEEPSEEK_MODEL")
     model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")
 
 

@@ -1,10 +1,10 @@
 import logging
-import os
 import traceback
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 
+from orion.config import system_settings
 from orion.storage import db  # Import module for dynamic access
 from orion.storage.models_dlq import DeadLetterQueue
 
@@ -56,7 +56,7 @@ class DLQWriter:
                 ticker = ticker or payload.get("ticker")
 
             # Correlation defaults
-            run_id = run_id or os.getenv("ORION_RUN_ID")
+            run_id = run_id or system_settings.run_id
             trace_id = trace_id or safe_payload.get("trace_id")
 
             async with db.async_session_factory() as session:

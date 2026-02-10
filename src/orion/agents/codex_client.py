@@ -11,6 +11,8 @@ import logging
 import shutil
 from typing import Optional
 
+from orion.config import agent_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,11 +44,9 @@ async def run_codex_completion(
     Raises:
         CodexClientError: If both DeepSeek and codex fail.
     """
-    import os
-
     # Try DeepSeek API first if configured
-    deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
-    deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-reasoner")
+    deepseek_api_key = agent_settings.deepseek_api_key
+    deepseek_model = agent_settings.deepseek_model
 
     if deepseek_api_key and deepseek_api_key != "your-deepseek-api-key-here":  # pragma: allowlist secret
         try:

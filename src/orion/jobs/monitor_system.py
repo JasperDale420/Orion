@@ -1,10 +1,10 @@
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
 
+from orion.config import system_settings
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import SystemStatus
@@ -13,8 +13,8 @@ from orion.storage.models_dlq import DeadLetterQueue
 logger = setup_struct_logger("orion.monitor")
 
 # Configurable Thresholds
-HEARTBEAT_LAG_THRESHOLD_SECONDS = int(os.getenv("MONITOR_LAG_THRESHOLD", 300))  # 5 mins
-DLQ_LOOKBACK_MINUTES = int(os.getenv("MONITOR_DLQ_LOOKBACK", 5))  # Check last 5 mins
+HEARTBEAT_LAG_THRESHOLD_SECONDS = system_settings.monitor_lag_threshold
+DLQ_LOOKBACK_MINUTES = system_settings.monitor_dlq_lookback
 
 
 async def check_heartbeats(session: Any) -> None:

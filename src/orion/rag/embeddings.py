@@ -5,17 +5,18 @@ Uses Ollama by default for local inference, falls back to OpenAI if configured.
 """
 
 import logging
-import os
 from typing import List, Optional
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.config import agent_settings, system_settings
+
 logger = logging.getLogger(__name__)
 
 # Ollama embedding model - nomic-embed-text is purpose-built for RAG
-OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+OLLAMA_EMBEDDING_MODEL = system_settings.ollama_embedding_model
+OLLAMA_BASE_URL = system_settings.ollama_base_url
 
 
 class EmbeddingClient:
@@ -34,7 +35,7 @@ class EmbeddingClient:
 
         # Fallback to OpenAI if configured
         self.openai_client: Optional["AsyncOpenAI"] = None
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = agent_settings.openai_api_key
         if api_key and not api_key.startswith("sk-your"):
             try:
                 from openai import AsyncOpenAI

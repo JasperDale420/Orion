@@ -1,8 +1,8 @@
 import asyncio
 import logging
-import os
 
 from orion.agents.meta_search_agent import MetaSearchAgent
+from orion.config import system_settings
 from orion.core.logging_config import setup_logging
 from orion.storage.db import init_db
 
@@ -25,7 +25,7 @@ async def main() -> None:
     # Path to proposals
     # Assuming running from repo root or src
     # EOD agent writes to 'proposals' in CWD usually, need to coordinate path
-    proposals_dir = os.getenv("ORION_PROPOSALS_DIR", "proposals")
+    proposals_dir = system_settings.proposals_dir
 
     logger.info("Step 1: Ingesting Proposals...")
     await agent.ingest_proposals(proposals_dir)

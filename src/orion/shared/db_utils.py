@@ -6,20 +6,21 @@ Provides helpers to reduce boilerplate for database operations.
 
 import asyncio
 import logging
-import os
 from typing import Awaitable, Callable, TypeVar
 
-from orion.storage.db import async_session_factory
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from orion.config import system_settings
+from orion.storage.db import async_session_factory
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-SQLITE_LOCK_RETRY_ATTEMPTS = max(0, int(os.getenv("ORION_SQLITE_LOCK_RETRY_ATTEMPTS", "2")))
-SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS = max(0.0, float(os.getenv("ORION_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS", "0.05")))
-SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS = max(0.0, float(os.getenv("ORION_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS", "0.5")))
+SQLITE_LOCK_RETRY_ATTEMPTS = system_settings.sqlite_lock_retry_attempts
+SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS = system_settings.sqlite_lock_retry_base_delay_seconds
+SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS = system_settings.sqlite_lock_retry_max_delay_seconds
 
 
 def _is_sqlite_session(session: AsyncSession) -> bool:

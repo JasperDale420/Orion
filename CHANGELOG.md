@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Pydantic Settings Migration (os.getenv → SystemSettings/AgentSettings)**:
+  - Added 20+ fields to `SystemSettings` and `AgentSettings` in `src/orion/config.py`:
+    - `run_id`, `log_format`, `api_key`, `metrics_enabled`, `metrics_port`, `model_dir`,
+      `max_model_age_days`, `proposals_dir`, `monitor_lag_threshold`, `monitor_dlq_lookback`,
+      `ollama_embedding_model`, `ollama_base_url`, `deepseek_api_key`, `deepseek_model`, `uw_base_url`
+  - Migrated 12 files from `os.getenv`/`os.environ.get` to centralized settings singletons:
+    - `api/auth.py`, `api/main.py`, `shared/db_utils.py`, `shared/dlq_utils.py`, `shared/metrics.py`,
+      `jobs/monitor_system.py`, `ml/scorer.py`, `ml/exit_classifier.py`, `ml/pattern_miner.py`,
+      `rag/embeddings.py`, `jobs/run_meta_loop.py`, `agents/codex_client.py`
+  - Removed unused `os` imports from migrated files
+
 - **Combined Pass: Batch-Bound Backfill + Non-Heber Source Streak Alerts (TDD)**:
   - Updated `src/orion/jobs/backfill_exit_columns.py`:
     - added non-empty-batch circuit breaker:

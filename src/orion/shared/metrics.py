@@ -1,8 +1,8 @@
 import logging
-import os
 
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
+from orion.config import system_settings
 from orion.shared.patterns import AsyncSingleton
 
 logger = logging.getLogger(__name__)
@@ -63,8 +63,7 @@ async def init_metrics() -> Metrics:
     metrics = await Metrics.get_instance()
 
     # Start server if enabled
-    if os.getenv("ORION_METRICS_ENABLED", "false").lower() == "true":
-        port = int(os.getenv("ORION_METRICS_PORT", "8000"))
-        Metrics.start_server(port)
+    if system_settings.metrics_enabled:
+        Metrics.start_server(system_settings.metrics_port)
 
     return metrics

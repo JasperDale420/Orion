@@ -5,19 +5,18 @@ Scores every flow event with a trained LightGBM model.
 Supports bucket-specific models (0DTE, SHORT_SWING, SWING, POSITION).
 """
 
-import os
 import pickle
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.scorer")
 
 # Default model path
-MODEL_DIR = Path(os.getenv("ORION_MODEL_DIR", "/app/models"))
+MODEL_DIR = system_settings.model_dir
 
 # Score threshold for generating candidates (adjustable via solver config)
 DEFAULT_SCORE_THRESHOLD = 0.5
@@ -76,7 +75,7 @@ class MLScorer:
             return
 
         # Model freshness config (envvar override)
-        max_age_days = int(os.getenv("ORION_MAX_MODEL_AGE_DAYS", "14"))
+        max_age_days = system_settings.max_model_age_days
 
         loaded_count = 0
         skipped_stale = 0
@@ -227,7 +226,7 @@ class MLScorer:
 
             # Predict probability
             prob = model.predict_proba(feature_vector)[0][1]
-            
+
             # Apply confidence rules (post-model adjustments)
             adjusted_prob = self._apply_confidence_rules(float(prob), flow, bucket)
             return adjusted_prob
@@ -295,29 +294,29 @@ class MLScorer:
     def _apply_confidence_rules(self, base_score: float, flow: Dict[str, Any], bucket: str) -> float:
         """
         Apply post-model confidence rules.
-        
+
         These rules adjust the model's probability score based on patterns
         discovered by the EOD agent and pattern miner.
-        
+
         Current rules:
         - 0dte_low_gex_vex_avoid_stop: For 0DTE trades, when GEX and VEX are
           both below their historical averages, increase confidence by 1.3x.
           This rule predicts stop avoidance with 100% accuracy (n=149).
         """
         adjusted_score = base_score
-        
+
         # Rule: 0DTE low GEX/VEX avoid stop (EOD agent proposal 2026-01-09)
         # When GEX and VEX are both below average, the trade is more likely
         # to avoid hitting stop loss (AUC=0.75, hit_rate=100%)
         if bucket == "0DTE":
             gex = flow.get("gex_at_entry") or flow.get("gex")
             vex = flow.get("vex_at_entry") or flow.get("vex")
-            
+
             # Use rolling averages from flow or fall back to hardcoded baseline
             # These averages should be updated periodically from silver_greek_exposure
             gex_avg = flow.get("gex_rolling_avg", 0)  # If not present, rule won't apply
             vex_avg = flow.get("vex_rolling_avg", 0)
-            
+
             # Only apply if we have valid GEX/VEX data
             if gex is not None and vex is not None and gex_avg != 0 and vex_avg != 0:
                 if gex < gex_avg and vex < vex_avg:
@@ -335,7 +334,7 @@ class MLScorer:
                             "multiplier": multiplier,
                         },
                     )
-        
+
         return adjusted_score
 
     def should_trade(self, flow: Dict[str, Any], threshold: float = DEFAULT_SCORE_THRESHOLD) -> bool:
