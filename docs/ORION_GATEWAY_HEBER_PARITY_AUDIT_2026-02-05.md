@@ -8068,3 +8068,42 @@ Verification:
 Result:
 - two additional migration hotspots now operate on Heber-first data contracts while preserving fallback safety.
 - this reduces remaining local-silver coupling in operational checks and windowed feature generation ahead of the larger `main_price_target_labeler.py` migration step.
+
+## 259) Pass 258 Continuation (2026-02-10)
+
+### 259.1 Combined Migration Pass: Option Quote Tracker Pending-Flow Source + Data-Quality Bars Checks (TDD-Backed)
+
+Finding:
+- despite prior flow/darkpool migration in `jobs/data_quality_checker.py`, core bars checks still ran SQL-only against `silver_alpaca_bars`:
+  - `get_bars_summary(...)`
+  - `check_zero_valued_bars(...)`
+  - `check_data_staleness(...)`
+  - `check_bar_gaps(...)`.
+- `main_option_quote_tracker.py` pending-checkpoint discovery remained SQL-only against `silver_uw_flow`, keeping a critical runtime loop coupled to local tables.
+
+Implemented:
+- Updated `src/orion/jobs/data_quality_checker.py`:
+  - extended existing Heber-first mode (`ORION_DATA_QUALITY_CHECKER_PREFER_HEBER`) to bars checks:
+    - added Heber bars readers/helpers for 24h windows,
+    - added Heber-backed implementations for bars summary, zero-value detection, staleness, and gap checks,
+    - retained local SQL fallback when Heber read path is unavailable.
+- Updated `src/orion/main_option_quote_tracker.py`:
+  - added Heber-first pending-flow source for `get_pending_checkpoints(...)` with SQL fallback,
+  - added env toggle:
+    - `ORION_OPTION_QUOTE_TRACKER_PREFER_HEBER` (default enabled),
+  - normalized Heber flow records into legacy tracker payload shape:
+    - `event_id`
+    - `ticker`
+    - `option_symbol`
+    - `flow_ts_utc`
+    - `minutes_since_entry`.
+- Added tests:
+  - `tests/unit/test_option_quote_tracker_heber_source.py`
+  - extended `tests/unit/test_data_quality_checker_heber_source.py` with bars-path Heber-first + fallback coverage.
+
+Verification:
+- `pytest -q tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_legacy_label_pipeline_gates.py` passed.
+
+Result:
+- option-quote checkpoint scheduling and bars-quality monitoring now participate in Heber-first contract semantics.
+- local `silver_uw_flow` / `silver_alpaca_bars` coupling is reduced further in operational paths while preserving fallback safety during rollout.

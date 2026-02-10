@@ -6,13 +6,16 @@ for accurate ML training labels.
 """
 
 import asyncio
+import os
 import re
 import signal
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
+import pandas as pd
 from sqlalchemy import text
 
+from orion.clients.heber_reader import get_heber_reader
 from orion.config import SystemSettings
 from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
 from orion.shared.db_utils import db_query, db_write
@@ -40,6 +43,7 @@ BATCH_SIZE = 100
 
 # Polling interval
 POLL_INTERVAL_SECONDS = 60
+_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 shutdown_event = asyncio.Event()
 
@@ -81,6 +85,10 @@ def extract_underlying_ticker(option_symbol: str) -> str:
 
 async def get_pending_checkpoints() -> List[Dict[str, Any]]:
     """Get flow events that need checkpoint quotes fetched."""
+    if _prefer_heber_flow_source():
+        heber_pending = await _get_pending_checkpoints_from_heber()
+        if heber_pending is not None:
+            return heber_pending
 
     async def query(session: Any) -> List[Dict[str, Any]]:
         # Find flow events from last 24 hours
@@ -106,6 +114,125 @@ async def get_pending_checkpoints() -> List[Dict[str, Any]]:
         return [dict(row._mapping) for row in result.fetchall()]
 
     return await db_query(query)
+
+
+def _prefer_heber_flow_source() -> bool:
+    raw = os.getenv("ORION_OPTION_QUOTE_TRACKER_PREFER_HEBER", "1").strip().lower()
+    return raw not in _PREFER_HEBER_FALSE_VALUES
+
+
+def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "ticker" in df.columns:
+        return df
+    if "symbol" in df.columns:
+        return df.assign(ticker=df["symbol"].astype(str).str.upper())
+    if "underlying" in df.columns:
+        return df.assign(ticker=df["underlying"].astype(str).str.upper())
+    if "instrument_key" in df.columns:
+        return df.assign(ticker=df["instrument_key"].astype(str).str.split(":").str[-1].str.upper())
+    return df
+
+
+def _normalize_put_call(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().upper()
+    if normalized in {"C", "CALL", "CALLS"}:
+        return "C"
+    if normalized in {"P", "PUT", "PUTS"}:
+        return "P"
+    return None
+
+
+def _coerce_expiry(expiry: Any) -> datetime | None:
+    if expiry is None:
+        return None
+    parsed = pd.to_datetime(expiry, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    if isinstance(parsed, pd.Timestamp):
+        return parsed.to_pydatetime()
+    return None
+
+
+def _coerce_flow_ts(value: Any) -> datetime | None:
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    if isinstance(parsed, pd.Timestamp):
+        return parsed.to_pydatetime()
+    return None
+
+
+def _build_option_symbol(ticker: str, expiry: datetime, put_call: str, strike: float) -> str:
+    strike_thousandths = int(float(strike) * 1000)
+    return f"{ticker}{expiry.strftime('%y%m%d')}{put_call}{strike_thousandths:08d}"
+
+
+async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> List[Dict[str, Any]] | None:
+    now_utc = datetime.now(timezone.utc)
+    start = now_utc - timedelta(hours=24)
+    reader = get_heber_reader()
+    try:
+        flow_df = await asyncio.to_thread(reader.read_flow, asof_time=now_utc, start_time=start)
+    except Exception as exc:
+        logger.warning(
+            "option_quote_tracker_heber_read_failed",
+            extra={"event_type": "OPTION_QUOTE_TRACKER_HEBER_READ_FAILED", "error": str(exc)},
+        )
+        return None
+
+    if flow_df.empty:
+        return []
+
+    flow_df = _coerce_ticker_column(flow_df)
+    ts_col = _first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    event_col = _first_existing_column(flow_df, ["event_id", "source_event_id", "id"])
+    expiry_col = _first_existing_column(flow_df, ["expiry", "expiration", "exp_date"])
+    put_call_col = _first_existing_column(flow_df, ["put_call", "type", "option_type", "right"])
+    strike_col = _first_existing_column(flow_df, ["strike", "strike_price"])
+
+    if ts_col is None or event_col is None or expiry_col is None or put_call_col is None or strike_col is None:
+        return []
+
+    pending: List[Dict[str, Any]] = []
+    for _, row in flow_df.iterrows():
+        event_id = row.get(event_col)
+        ticker = row.get("ticker")
+        flow_ts = _coerce_flow_ts(row.get(ts_col))
+        expiry = _coerce_expiry(row.get(expiry_col))
+        put_call = _normalize_put_call(row.get(put_call_col))
+        strike = pd.to_numeric(row.get(strike_col), errors="coerce")
+
+        if event_id is None or ticker is None or flow_ts is None:
+            continue
+        if flow_ts < start:
+            continue
+        if expiry is None or put_call is None or pd.isna(strike):
+            continue
+
+        option_symbol = _build_option_symbol(str(ticker).upper(), expiry, put_call, float(strike))
+        minutes_since = (now_utc - flow_ts).total_seconds() / 60.0
+
+        pending.append(
+            {
+                "event_id": str(event_id),
+                "ticker": str(ticker).upper(),
+                "option_symbol": option_symbol,
+                "flow_ts_utc": flow_ts,
+                "minutes_since_entry": minutes_since,
+            }
+        )
+
+    pending.sort(key=lambda item: item["flow_ts_utc"], reverse=True)
+    return pending[:limit]
 
 
 async def get_existing_quotes(event_ids: List[str]) -> Dict[str, set]:

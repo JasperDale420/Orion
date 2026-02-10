@@ -20,11 +20,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import pandas as pd
+from sqlalchemy import text
+
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_query
 from orion.storage.db import init_db
-from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,10 @@ _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 async def check_zero_valued_bars(lookback_hours: int = 24) -> List[Dict]:
     """Check for bars with invalid close values in recent data."""
+    if _prefer_heber_source():
+        heber_rows = await _check_zero_valued_bars_from_heber(lookback_hours=lookback_hours)
+        if heber_rows is not None:
+            return heber_rows
 
     async def query(session: Any) -> List[Dict]:
         stmt = text(
@@ -73,6 +78,11 @@ async def check_data_staleness(stale_minutes: int = 15) -> List[Dict]:
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
         return []
 
+    if _prefer_heber_source():
+        heber_rows = await _check_data_staleness_from_heber(stale_minutes=stale_minutes)
+        if heber_rows is not None:
+            return heber_rows
+
     async def query(session: Any) -> List[Dict]:
         stmt = text(
             """
@@ -92,6 +102,10 @@ async def check_data_staleness(stale_minutes: int = 15) -> List[Dict]:
 
 async def check_bar_gaps(ticker: str = "SPY", gap_minutes: int = 5) -> List[Dict]:
     """Check for gaps in bar data for a ticker."""
+    if _prefer_heber_source():
+        heber_rows = await _check_bar_gaps_from_heber(ticker=ticker, gap_minutes=gap_minutes)
+        if heber_rows is not None:
+            return heber_rows
 
     async def query(session: Any) -> List[Dict]:
         stmt = text(
@@ -130,6 +144,10 @@ async def check_bar_gaps(ticker: str = "SPY", gap_minutes: int = 5) -> List[Dict
 
 async def get_bars_summary() -> Dict:
     """Get Alpaca bars data quality summary."""
+    if _prefer_heber_source():
+        heber_summary = await _get_bars_summary_from_heber()
+        if heber_summary is not None:
+            return heber_summary
 
     async def query(session: Any) -> Dict:
         stmt = text(
@@ -604,7 +622,10 @@ def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _latest_event_time(df: pd.DataFrame) -> datetime | None:
-    time_col = _first_existing_column(df, ["ts_event", "flow_ts_utc", "dark_ts_utc", "ts_utc"])
+    time_col = _first_existing_column(
+        df,
+        ["ts_event", "flow_ts_utc", "dark_ts_utc", "bar_start_ts", "bar_start_ts_utc", "ts_utc"],
+    )
     if time_col is None:
         return None
     series = pd.to_datetime(df[time_col], utc=True, errors="coerce").dropna()
@@ -729,6 +750,179 @@ async def _check_darkpool_staleness_from_heber(stale_minutes: int) -> bool | Non
         return False
     minutes_ago = (datetime.now(timezone.utc) - latest).total_seconds() / 60.0
     return minutes_ago > stale_minutes
+
+
+async def _read_heber_bars_24h(symbols: List[str] | None = None, lookback_hours: int = 24) -> pd.DataFrame | None:
+    now = datetime.now(timezone.utc)
+    start = now - pd.Timedelta(hours=lookback_hours)
+    reader = get_heber_reader()
+    try:
+        return await asyncio.to_thread(
+            reader.read_bars,
+            symbols=symbols or [],
+            asof_time=now,
+            start_time=start,
+        )
+    except Exception as exc:
+        logger.warning("bars_heber_read_failed", extra={"event_type": "BARS_HEBER_READ_FAILED", "error": str(exc)})
+        return None
+
+
+def _coerce_bar_time_series(df: pd.DataFrame) -> pd.Series:
+    time_col = _first_existing_column(df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc"])
+    if time_col is None:
+        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+    return pd.to_datetime(df[time_col], utc=True, errors="coerce")
+
+
+async def _get_bars_summary_from_heber() -> Dict | None:
+    df = await _read_heber_bars_24h()
+    if df is None:
+        return None
+    if df.empty:
+        return {
+            "total_bars_24h": 0,
+            "valid_bars": 0,
+            "invalid_bars": 0,
+            "unique_tickers": 0,
+            "latest_bar": None,
+            "validity_pct": 0,
+            "backend": "heber",
+        }
+
+    df = _coerce_ticker_column(df)
+    close_col = _first_existing_column(df, ["close", "c"])
+    close_values = (
+        pd.to_numeric(df[close_col], errors="coerce") if close_col else pd.Series(index=df.index, dtype=float)
+    )
+    total = int(len(df))
+    valid = int((close_values > 0).sum()) if close_col else 0
+    invalid = int(((close_values.isna()) | (close_values == 0)).sum()) if close_col else total
+    unique_tickers = int(df["ticker"].dropna().astype(str).nunique()) if "ticker" in df.columns else 0
+    latest = _latest_event_time(df)
+    return {
+        "total_bars_24h": total,
+        "valid_bars": valid,
+        "invalid_bars": invalid,
+        "unique_tickers": unique_tickers,
+        "latest_bar": latest,
+        "validity_pct": round(100 * valid / total, 2) if total > 0 else 0,
+        "backend": "heber",
+    }
+
+
+async def _check_zero_valued_bars_from_heber(lookback_hours: int) -> List[Dict] | None:
+    df = await _read_heber_bars_24h(lookback_hours=lookback_hours)
+    if df is None:
+        return None
+    if df.empty:
+        return []
+
+    df = _coerce_ticker_column(df)
+    close_col = _first_existing_column(df, ["close", "c"])
+    if close_col is None or "ticker" not in df.columns:
+        return []
+
+    ts_series = _coerce_bar_time_series(df)
+    close_values = pd.to_numeric(df[close_col], errors="coerce")
+    invalid_mask = close_values.isna() | (close_values == 0)
+    invalid_df = pd.DataFrame({"ticker": df["ticker"], "bar_ts": ts_series, "close": close_values})[invalid_mask]
+    if invalid_df.empty:
+        return []
+
+    grouped = (
+        invalid_df.dropna(subset=["bar_ts"])
+        .groupby("ticker", as_index=False)
+        .agg(zero_count=("close", "size"), earliest=("bar_ts", "min"), latest=("bar_ts", "max"))
+        .sort_values("zero_count", ascending=False)
+    )
+
+    return [
+        {
+            "ticker": str(row["ticker"]),
+            "zero_count": int(row["zero_count"]),
+            "earliest": row["earliest"].to_pydatetime()
+            if isinstance(row["earliest"], pd.Timestamp)
+            else row["earliest"],
+            "latest": row["latest"].to_pydatetime() if isinstance(row["latest"], pd.Timestamp) else row["latest"],
+        }
+        for _, row in grouped.iterrows()
+    ]
+
+
+async def _check_data_staleness_from_heber(stale_minutes: int) -> List[Dict] | None:
+    df = await _read_heber_bars_24h(symbols=CRITICAL_TICKERS)
+    if df is None:
+        return None
+    if df.empty:
+        return []
+
+    df = _coerce_ticker_column(df)
+    if "ticker" not in df.columns:
+        return []
+    ts_series = _coerce_bar_time_series(df)
+    temp_df = pd.DataFrame({"ticker": df["ticker"].astype(str).str.upper(), "bar_ts": ts_series}).dropna(
+        subset=["bar_ts"]
+    )
+    if temp_df.empty:
+        return []
+
+    latest_by_ticker = temp_df.groupby("ticker", as_index=False)["bar_ts"].max()
+    now = datetime.now(timezone.utc)
+    stale_rows: List[Dict] = []
+    for _, row in latest_by_ticker.iterrows():
+        ticker = str(row["ticker"])
+        if ticker not in {t.upper() for t in CRITICAL_TICKERS}:
+            continue
+        last_bar = row["bar_ts"]
+        minutes_ago = (now - last_bar.to_pydatetime()).total_seconds() / 60.0
+        if minutes_ago > stale_minutes:
+            stale_rows.append(
+                {
+                    "ticker": ticker,
+                    "last_bar": last_bar.to_pydatetime(),
+                    "minutes_ago": minutes_ago,
+                }
+            )
+
+    stale_rows.sort(key=lambda item: item["minutes_ago"], reverse=True)
+    return stale_rows
+
+
+async def _check_bar_gaps_from_heber(ticker: str, gap_minutes: int) -> List[Dict] | None:
+    df = await _read_heber_bars_24h(symbols=[ticker], lookback_hours=24)
+    if df is None:
+        return None
+    if df.empty:
+        return []
+
+    df = _coerce_ticker_column(df)
+    ts_series = _coerce_bar_time_series(df)
+    ticker_upper = ticker.upper()
+    bars = pd.DataFrame({"ticker": df.get("ticker"), "bar_ts": ts_series}).dropna(subset=["bar_ts"])
+    bars = bars[bars["ticker"].astype(str).str.upper() == ticker_upper]
+    if bars.empty:
+        return []
+
+    bars = bars.sort_values("bar_ts")
+    bars["hour_utc"] = bars["bar_ts"].dt.hour
+    bars = bars[(bars["hour_utc"] >= MARKET_OPEN_HOUR) & (bars["hour_utc"] < MARKET_CLOSE_HOUR)]
+    if bars.empty:
+        return []
+
+    bars["prev_bar"] = bars["bar_ts"].shift(1)
+    bars["gap_minutes"] = (bars["bar_ts"] - bars["prev_bar"]).dt.total_seconds() / 60.0
+    gaps = bars[bars["gap_minutes"] > gap_minutes].sort_values("bar_ts", ascending=False).head(10)
+    return [
+        {
+            "bar_ts": row["bar_ts"].to_pydatetime() if isinstance(row["bar_ts"], pd.Timestamp) else row["bar_ts"],
+            "prev_bar": row["prev_bar"].to_pydatetime()
+            if isinstance(row["prev_bar"], pd.Timestamp)
+            else row["prev_bar"],
+            "gap_minutes": float(row["gap_minutes"]),
+        }
+        for _, row in gaps.iterrows()
+    ]
 
 
 if __name__ == "__main__":

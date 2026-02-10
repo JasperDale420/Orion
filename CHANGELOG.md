@@ -47,6 +47,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - `tests/unit/test_data_quality_checker_heber_source.py`
   - Verified with:
     - `pytest -q tests/unit/test_window_feature_job_heber_source.py tests/unit/test_data_quality_checker_heber_source.py`
+- **Combined Pass: Option Quote Tracker + Bar Quality Heber-First Reads (TDD)**:
+  - Updated `src/orion/main_option_quote_tracker.py`:
+    - added Heber-first pending-flow sourcing for checkpoint tracking with SQL fallback,
+    - added env toggle:
+      - `ORION_OPTION_QUOTE_TRACKER_PREFER_HEBER` (default enabled),
+    - normalizes Heber flow rows into legacy checkpoint payload shape (`event_id`, `option_symbol`, `flow_ts_utc`, `minutes_since_entry`).
+  - Updated `src/orion/jobs/data_quality_checker.py`:
+    - extended existing Heber-first mode (`ORION_DATA_QUALITY_CHECKER_PREFER_HEBER`) to bars checks:
+      - bars summary,
+      - zero-valued bars,
+      - critical-ticker staleness,
+      - bar gap detection,
+    - preserves SQL fallback behavior when Heber read paths are unavailable.
+  - Added/extended tests:
+    - `tests/unit/test_option_quote_tracker_heber_source.py`
+    - `tests/unit/test_data_quality_checker_heber_source.py`
+      - bars Heber-first and fallback coverage.
+  - Verified with:
+    - `pytest -q tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_legacy_label_pipeline_gates.py`
 - **Validate Features Heber-First Source Audit Adapter (TDD)**:
   - Updated `src/orion/jobs/validate_features.py`:
     - added Heber-first source-audit adapter for dataset coverage checks with local SQL fallback,
