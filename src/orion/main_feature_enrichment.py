@@ -42,6 +42,7 @@ VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
 DEFAULT_ZERO_WRITE_WARN_STREAK = 3
 DEFAULT_LOOP_SLEEP_SECONDS = 30.0
 DEFAULT_LOOP_ERROR_WARN_STREAK = 3
+DEFAULT_NON_HEBER_WARN_STREAK = 3
 STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
 
 _heber_reader = HeberReader()
@@ -171,6 +172,52 @@ def _note_loop_error(
                 "streak": streak,
                 "warn_streak": warn_streak,
                 "error": str(error),
+            },
+        )
+    return streak
+
+
+def _non_heber_warn_streak_threshold() -> int:
+    raw = os.getenv(
+        "ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK",
+        str(DEFAULT_NON_HEBER_WARN_STREAK),
+    ).strip()
+    try:
+        value = int(raw)
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
+    except Exception:
+        logger.warning(
+            "Invalid ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK; using default",
+            extra={
+                "event": "feature_enrichment_non_heber_warn_streak_invalid",
+                "value": raw,
+                "default": DEFAULT_NON_HEBER_WARN_STREAK,
+            },
+        )
+        return DEFAULT_NON_HEBER_WARN_STREAK
+
+
+def _note_ticker_source_streak(
+    source: str,
+    non_heber_streak: int,
+    warn_streak: int,
+    tickers_count: int,
+) -> int:
+    if source == "heber":
+        return 0
+
+    streak = non_heber_streak + 1
+    if streak >= warn_streak:
+        logger.warning(
+            "Ticker discovery has consecutive non-Heber source cycles",
+            extra={
+                "event": "feature_enrichment_non_heber_streak",
+                "source": source,
+                "streak": streak,
+                "warn_streak": warn_streak,
+                "tickers_count": tickers_count,
             },
         )
     return streak
@@ -388,6 +435,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     zero_write_warn_streak = _zero_write_warn_streak_threshold()
     loop_sleep_seconds = _loop_sleep_seconds()
     loop_error_warn_streak = _loop_error_warn_streak_threshold()
+    non_heber_warn_streak = _non_heber_warn_streak_threshold()
     await init_db()
 
     # Initialize connectors (now using Data Gateway)
@@ -407,6 +455,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     last_ticker_source: str | None = None
     zero_write_streaks: dict[str, int] = {}
     loop_error_streak = 0
+    non_heber_streak = 0
 
     logger.info("Feature Enrichment Service started")
 
@@ -417,6 +466,12 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
             last_ticker_source = _log_ticker_source_transition(
                 source=ticker_source,
                 previous_source=last_ticker_source,
+                tickers_count=len(tickers),
+            )
+            non_heber_streak = _note_ticker_source_streak(
+                source=ticker_source,
+                non_heber_streak=non_heber_streak,
+                warn_streak=non_heber_warn_streak,
                 tickers_count=len(tickers),
             )
 

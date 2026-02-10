@@ -7987,3 +7987,42 @@ Verification:
 Result:
 - `validate_features` source coverage audit now participates in Gateway/Heber migration semantics rather than being local-SQL-only.
 - this closes one of the highest audit-surface gaps while preserving operational continuity through fallback behavior.
+
+## 257) Pass 256 Continuation (2026-02-10)
+
+### 257.1 Combined Runtime-Orchestration Guardrails: Backfill Max-Batches + Feature Non-Heber Streak Alerts (TDD-Backed)
+
+Finding:
+- backfill runtime protections now covered retries, dead-letter controls, failure count, and duration cutoff, but still lacked a bounded batch-count stop for runaway pagination loops.
+- feature enrichment already emitted source-transition telemetry, but had no explicit consecutive non-Heber warning signal when runtime remained degraded for multiple cycles.
+
+Implemented:
+- Updated `src/orion/jobs/backfill_exit_columns.py`:
+  - added max-batch circuit breaker:
+    - env `ORION_BACKFILL_EXIT_MAX_BATCHES`
+    - runtime arg `max_batches`
+    - CLI flag `--max-batches`,
+  - counts non-empty fetch batches across both velocity and checkpoint phases,
+  - abort behavior now supports:
+    - `abort_reason="max_batches_reached"`
+    - summary fields `max_batches` and `total_batches`.
+- Updated `src/orion/main_feature_enrichment.py`:
+  - added non-Heber streak threshold parsing:
+    - env `ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK`
+    - invalid config warning event: `feature_enrichment_non_heber_warn_streak_invalid`,
+  - added consecutive non-Heber warning event:
+    - `feature_enrichment_non_heber_streak`,
+  - non-Heber streak now resets when ticker discovery source returns to `heber`.
+- Added tests:
+  - `tests/unit/test_backfill_exit_columns_selection.py`
+    - `test_run_backfill_aborts_when_max_batches_reached`
+  - `tests/unit/test_feature_enrichment_runtime_signals.py`
+    - `test_non_heber_warn_streak_threshold_invalid_env_uses_default`
+    - `test_note_ticker_source_streak_warns_on_non_heber_threshold`.
+
+Verification:
+- `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_gateway_contract.py` passed.
+
+Result:
+- batch-oriented runaway behavior in backfill now has a dedicated stop condition.
+- prolonged fallback away from Heber in feature enrichment now emits a direct, thresholded operational warning signal.

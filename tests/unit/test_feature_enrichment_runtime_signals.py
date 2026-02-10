@@ -201,3 +201,61 @@ def test_note_loop_error_warns_at_threshold(monkeypatch: pytest.MonkeyPatch) -> 
         "warn_streak": 2,
         "error": "boom",
     }
+
+
+def test_non_heber_warn_streak_threshold_invalid_env_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[dict[str, object]] = []
+    monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK", "nope")
+
+    def _fake_warning(_message: str, *args: object, extra: dict[str, object] | None = None, **_kwargs: object) -> None:
+        if extra:
+            warnings.append(extra)
+
+    monkeypatch.setattr(feature_enrichment.logger, "warning", _fake_warning, raising=False)
+
+    value = feature_enrichment._non_heber_warn_streak_threshold()
+
+    assert value == feature_enrichment.DEFAULT_NON_HEBER_WARN_STREAK
+    assert warnings[-1]["event"] == "feature_enrichment_non_heber_warn_streak_invalid"
+
+
+def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[dict[str, object]] = []
+
+    def _fake_warning(_message: str, *args: object, extra: dict[str, object] | None = None, **_kwargs: object) -> None:
+        if extra:
+            warnings.append(extra)
+
+    monkeypatch.setattr(feature_enrichment.logger, "warning", _fake_warning, raising=False)
+
+    streak = feature_enrichment._note_ticker_source_streak(
+        source="local_db",
+        non_heber_streak=0,
+        warn_streak=2,
+        tickers_count=5,
+    )
+    assert streak == 1
+    assert warnings == []
+
+    streak = feature_enrichment._note_ticker_source_streak(
+        source="local_db",
+        non_heber_streak=streak,
+        warn_streak=2,
+        tickers_count=5,
+    )
+    assert streak == 2
+    assert warnings[-1] == {
+        "event": "feature_enrichment_non_heber_streak",
+        "source": "local_db",
+        "streak": 2,
+        "warn_streak": 2,
+        "tickers_count": 5,
+    }
+
+    streak = feature_enrichment._note_ticker_source_streak(
+        source="heber",
+        non_heber_streak=streak,
+        warn_streak=2,
+        tickers_count=5,
+    )
+    assert streak == 0

@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Batch-Bound Backfill + Non-Heber Source Streak Alerts (TDD)**:
+  - Updated `src/orion/jobs/backfill_exit_columns.py`:
+    - added non-empty-batch circuit breaker:
+      - env `ORION_BACKFILL_EXIT_MAX_BATCHES`
+      - runtime arg `max_batches`
+      - CLI flag `--max-batches`,
+    - run summary now includes:
+      - `max_batches`
+      - `total_batches`
+      - abort reason `max_batches_reached` when triggered.
+  - Updated `src/orion/main_feature_enrichment.py`:
+    - added non-Heber source streak warning controls:
+      - env `ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK`
+      - invalid values log `feature_enrichment_non_heber_warn_streak_invalid`,
+    - added consecutive non-Heber warning event:
+      - `feature_enrichment_non_heber_streak`.
+  - Extended tests:
+    - `tests/unit/test_backfill_exit_columns_selection.py`
+      - `test_run_backfill_aborts_when_max_batches_reached`
+    - `tests/unit/test_feature_enrichment_runtime_signals.py`
+      - `test_non_heber_warn_streak_threshold_invalid_env_uses_default`
+      - `test_note_ticker_source_streak_warns_on_non_heber_threshold`.
+  - Verified with:
+    - `uv run pytest -q tests/unit/test_backfill_exit_columns_selection.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_gateway_contract.py`
 - **Validate Features Heber-First Source Audit Adapter (TDD)**:
   - Updated `src/orion/jobs/validate_features.py`:
     - added Heber-first source-audit adapter for dataset coverage checks with local SQL fallback,

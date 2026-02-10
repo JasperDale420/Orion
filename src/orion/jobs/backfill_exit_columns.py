@@ -55,6 +55,7 @@ DEFAULT_DEAD_LETTER_COMPRESS_ROTATED = os.getenv(
 ).strip().lower() in {"1", "true", "yes", "y", "on"}
 DEFAULT_MAX_FAILED_RECORDS = int(os.getenv("ORION_BACKFILL_EXIT_MAX_FAILED_RECORDS", "0"))
 DEFAULT_MAX_DURATION_SECONDS = float(os.getenv("ORION_BACKFILL_EXIT_MAX_DURATION_SECONDS", "0"))
+DEFAULT_MAX_BATCHES = int(os.getenv("ORION_BACKFILL_EXIT_MAX_BATCHES", "0"))
 VELOCITY_BACKFILL_CURSOR_KEY = "backfill_exit_columns.velocity.cursor"
 CHECKPOINT_BACKFILL_CURSOR_KEY = "backfill_exit_columns.checkpoint.cursor"
 
@@ -436,6 +437,7 @@ async def run_backfill(
     dead_letter_compress_rotated: bool = DEFAULT_DEAD_LETTER_COMPRESS_ROTATED,
     max_failed_records: int = DEFAULT_MAX_FAILED_RECORDS,
     max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS,
+    max_batches: int = DEFAULT_MAX_BATCHES,
 ) -> Dict[str, Any]:
     """Run the backfill job."""
     run_started_at = time.perf_counter()
@@ -443,9 +445,11 @@ async def run_backfill(
     dead_letter_redact_fields = dead_letter_redact_fields or DEFAULT_DEAD_LETTER_REDACT_FIELDS
     failure_threshold = max(0, max_failed_records)
     duration_threshold = max(0.0, max_duration_seconds)
+    batch_threshold = max(0, max_batches)
     aborted = False
     abort_reason: str | None = None
     total_failed_count = 0
+    total_batches = 0
 
     def _abort_if_duration_exceeded() -> bool:
         nonlocal aborted, abort_reason
@@ -461,8 +465,22 @@ async def run_backfill(
         )
         return True
 
+    def _abort_if_batch_limit_reached() -> bool:
+        nonlocal aborted, abort_reason
+        if batch_threshold <= 0:
+            return False
+        if total_batches < batch_threshold:
+            return False
+        aborted = True
+        abort_reason = "max_batches_reached"
+        logger.error(
+            "Aborting backfill: reached max_batches=%s",
+            batch_threshold,
+        )
+        return True
+
     logger.info(
-        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_max_rotated_files=%s, dead_letter_compress_rotated=%s, max_failed_records=%s, max_duration_seconds=%s",
+        "Starting backfill with batch_size=%s, limit=%s, max_retries=%s, retry_sleep_seconds=%s, dead_letter_path=%s, dead_letter_max_bytes=%s, dead_letter_redact_fields=%s, dead_letter_max_rotated_files=%s, dead_letter_compress_rotated=%s, max_failed_records=%s, max_duration_seconds=%s, max_batches=%s",
         batch_size,
         limit,
         max_retries,
@@ -474,6 +492,7 @@ async def run_backfill(
         dead_letter_compress_rotated,
         failure_threshold,
         duration_threshold,
+        batch_threshold,
     )
 
     # Phase 1: Velocity columns (fast, just uses existing timestamps)
@@ -499,6 +518,8 @@ async def run_backfill(
     while True:
         if _abort_if_duration_exceeded():
             break
+        if _abort_if_batch_limit_reached():
+            break
         remaining = limit - velocity_processed
         if remaining <= 0:
             break
@@ -510,6 +531,7 @@ async def run_backfill(
         )
         if not velocity_records:
             break
+        total_batches += 1
 
         for record in velocity_records:
             if _abort_if_duration_exceeded():
@@ -608,6 +630,8 @@ async def run_backfill(
     while not aborted:
         if _abort_if_duration_exceeded():
             break
+        if _abort_if_batch_limit_reached():
+            break
         remaining = limit - checkpoint_processed
         if remaining <= 0:
             break
@@ -619,6 +643,7 @@ async def run_backfill(
         )
         if not checkpoint_records:
             break
+        total_batches += 1
 
         for record in checkpoint_records:
             if _abort_if_duration_exceeded():
@@ -729,6 +754,8 @@ async def run_backfill(
         "dead_letter_compress_rotated": dead_letter_compress_rotated,
         "max_failed_records": failure_threshold,
         "max_duration_seconds": duration_threshold,
+        "max_batches": batch_threshold,
+        "total_batches": total_batches,
         "aborted": aborted,
         "abort_reason": abort_reason,
         "total_elapsed_seconds": total_elapsed_seconds,
@@ -802,6 +829,12 @@ async def main() -> None:
         default=DEFAULT_MAX_DURATION_SECONDS,
         help="Abort run after this many elapsed seconds across phases (0 = disabled)",
     )
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=DEFAULT_MAX_BATCHES,
+        help="Abort run after this many non-empty record batches across phases (0 = disabled)",
+    )
     parser.set_defaults(dead_letter_compress_rotated=DEFAULT_DEAD_LETTER_COMPRESS_ROTATED)
     args = parser.parse_args()
     redact_fields = {field.strip() for field in args.dead_letter_redact_fields.split(",") if field.strip()}
@@ -818,6 +851,7 @@ async def main() -> None:
         dead_letter_compress_rotated=args.dead_letter_compress_rotated,
         max_failed_records=args.max_failed_records,
         max_duration_seconds=args.max_duration_seconds,
+        max_batches=args.max_batches,
     )
 
 
