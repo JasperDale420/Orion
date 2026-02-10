@@ -751,7 +751,7 @@ async def test_get_phase1_bucket_features_prefers_heber_when_available(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_get_phase1_bucket_features_falls_back_to_sql_when_heber_empty(
+async def test_get_phase1_bucket_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
@@ -760,28 +760,23 @@ async def test_get_phase1_bucket_features_falls_back_to_sql_when_heber_empty(
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_sql_fallback(ticker: str, ts: datetime):
-        assert ticker == "AAPL"
-        assert ts == entry_ts
-        return {
-            "overnight_gap_pct": 1.5,
-            "price_change_5d_prior": 2.5,
-            "vwap_distance_pct": -0.5,
-        }
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber phase1 market data is unavailable")
 
     async def _fake_ticker_info(_ticker: str):
         return {}
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_phase1_bucket_features_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_phase1_bucket_features_sql", _fail_sql_fallback, raising=False)
     monkeypatch.setattr(labeler, "get_ticker_info", _fake_ticker_info, raising=False)
 
     result = await labeler.get_phase1_bucket_features("AAPL", entry_ts, dte=5)
 
     assert result["minutes_to_close"] == 270
-    assert result["overnight_gap_pct"] == pytest.approx(1.5)
-    assert result["price_change_5d_prior"] == pytest.approx(2.5)
-    assert result["vwap_distance_pct"] == pytest.approx(-0.5)
+    assert result["overnight_gap_pct"] is None
+    assert result["price_change_5d_prior"] is None
+    assert result["vwap_distance_pct"] is None
+    assert result["earnings_in_dte_window"] is None
 
 
 @pytest.mark.asyncio
@@ -850,7 +845,7 @@ async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_get_p2_features_falls_back_to_sql_when_heber_empty(
+async def test_get_p2_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
@@ -863,25 +858,20 @@ async def test_get_p2_features_falls_back_to_sql_when_heber_empty(
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    expected = {
-        "oi_change_1d": 4.0,
-        "oi_change_pct": 2.5,
-        "iv_vs_hv_ratio": 1.2,
-        "hv_30d": 20.0,
-    }
-
-    async def _fake_sql_fallback(ticker: str, option_chain_value: str, ts: datetime):
-        assert ticker == "AAPL"
-        assert option_chain_value == option_chain
-        assert ts == entry_ts
-        return expected
+    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber P2 data is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_p2_features_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_p2_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
 
-    assert result == expected
+    assert result == {
+        "oi_change_1d": None,
+        "oi_change_pct": None,
+        "iv_vs_hv_ratio": None,
+        "hv_30d": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -960,7 +950,7 @@ async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_get_p3_features_falls_back_to_sql_when_heber_empty(
+async def test_get_p3_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
@@ -973,25 +963,19 @@ async def test_get_p3_features_falls_back_to_sql_when_heber_empty(
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    expected = {
-        "high_52w_distance_pct": 5.0,
-        "is_spread_leg": False,
-        "same_expiry_trades_1h": 1,
-    }
-
-    async def _fake_sql_fallback(ticker: str, option_chain: str, expiry_value: datetime, ts: datetime):
-        assert ticker == "AAPL"
-        assert option_chain == "AAPL250221C00190000"
-        assert expiry_value == expiry
-        assert ts == entry_ts
-        return expected
+    async def _fail_sql_fallback(_ticker: str, _option_chain: str, _expiry: datetime, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber P3 data is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_p3_features_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_p3_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
 
-    assert result == expected
+    assert result == {
+        "high_52w_distance_pct": None,
+        "is_spread_leg": None,
+        "same_expiry_trades_1h": None,
+    }
 
 
 @pytest.mark.asyncio

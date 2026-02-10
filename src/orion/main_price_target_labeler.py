@@ -2113,9 +2113,6 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
     heber_market = _get_phase1_bucket_features_from_heber(ticker, entry_ts)
     if heber_market is not None:
         result.update(heber_market)
-    else:
-        sql_market = await _get_phase1_bucket_features_sql(ticker, entry_ts)
-        result.update(sql_market)
 
     # 4. earnings_in_dte_window (LEAP focus)
     # Check if earnings date falls within DTE window
@@ -2225,100 +2222,18 @@ def _get_phase1_bucket_features_from_heber(ticker: str, entry_ts: datetime) -> O
     return None
 
 
-async def _get_phase1_bucket_features_sql(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
-        "overnight_gap_pct": None,
-        "price_change_5d_prior": None,
-        "vwap_distance_pct": None,
-    }
-    entry_date = entry_ts.date()
-    five_days_ago = entry_date - timedelta(days=5)
-
-    async def query(session: Any) -> Dict[str, Any]:
-        # Get current day's open and VWAP
-        today_stmt = text(
-            """
-            SELECT open, vwap, close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) = :entry_date
-            ORDER BY bar_start_ts_utc ASC
-            LIMIT 1
-        """
-        )
-        today_result = await session.execute(today_stmt, {"ticker": ticker, "entry_date": entry_date})
-        today_row = today_result.fetchone()
-
-        today_open = today_row[0] if today_row else None
-
-        # Get prior trading day close (handles holidays/weekends)
-        prior_stmt = text(
-            """
-            SELECT close, bar_start_ts_utc
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) < :entry_date
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        prior_result = await session.execute(prior_stmt, {"ticker": ticker, "entry_date": entry_date})
-        prior_row = prior_result.fetchone()
-        prior_close = prior_row[0] if prior_row else None
-
-        # Overnight gap
-        if today_open and prior_close and prior_close > 0:
-            result["overnight_gap_pct"] = ((today_open - prior_close) / prior_close) * 100
-
-        # VWAP distance - use bar closest to entry time
-        vwap_stmt = text(
-            """
-            SELECT close, vwap
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc <= :entry_ts
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        vwap_result = await session.execute(vwap_stmt, {"ticker": ticker, "entry_ts": entry_ts})
-        vwap_row = vwap_result.fetchone()
-        if vwap_row and vwap_row[0] and vwap_row[1] and vwap_row[1] > 0:
-            current_price = vwap_row[0]
-            current_vwap = vwap_row[1]
-            result["vwap_distance_pct"] = ((current_price - current_vwap) / current_vwap) * 100
-
-        # 5-day price change (POSITION)
-        five_day_stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) <= :five_days_ago
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        five_day_result = await session.execute(five_day_stmt, {"ticker": ticker, "five_days_ago": five_days_ago})
-        five_day_row = five_day_result.fetchone()
-
-        if five_day_row and prior_close and five_day_row[0] > 0:
-            result["price_change_5d_prior"] = ((prior_close - five_day_row[0]) / five_day_row[0]) * 100
-
-        return result
-
-    db_result = await db_query(query)
-    result.update(db_result)
-    return result
-
-
 async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
     """Get P2 ML features: OI change momentum and IV vs HV ratio."""
     heber_result = _get_p2_features_from_heber(ticker, option_chain, entry_ts)
     if heber_result is not None:
         return heber_result
 
-    return await _get_p2_features_sql(ticker, option_chain, entry_ts)
+    return {
+        "oi_change_1d": None,
+        "oi_change_pct": None,
+        "iv_vs_hv_ratio": None,
+        "hv_30d": None,
+    }
 
 
 def _get_p2_features_from_heber(
@@ -2448,100 +2363,6 @@ def _get_p2_features_from_heber(
     return None
 
 
-async def _get_p2_features_sql(ticker: str, option_chain: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
-    result: Dict[str, Optional[float]] = {
-        "oi_change_1d": None,
-        "oi_change_pct": None,
-        "iv_vs_hv_ratio": None,
-    }
-
-    entry_date = entry_ts.date()
-    lookback_30d = entry_date - timedelta(days=30)
-
-    async def query(session: Any) -> Dict[str, Optional[float]]:
-        current_oi_stmt = text(
-            """
-            SELECT open_interest
-            FROM silver_uw_flow
-            WHERE option_chain = :option_chain
-            AND DATE(flow_ts_utc) = :entry_date
-            ORDER BY flow_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        current_result = await session.execute(
-            current_oi_stmt, {"option_chain": option_chain, "entry_date": entry_date}
-        )
-        current_row = current_result.fetchone()
-        current_oi = current_row[0] if current_row else None
-
-        prior_oi_stmt = text(
-            """
-            SELECT open_interest
-            FROM silver_uw_flow
-            WHERE option_chain = :option_chain
-            AND flow_ts_utc < :entry_ts
-            ORDER BY flow_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        prior_result = await session.execute(prior_oi_stmt, {"option_chain": option_chain, "entry_ts": entry_ts})
-        prior_row = prior_result.fetchone()
-        prior_oi = prior_row[0] if prior_row else None
-
-        if current_oi is not None and prior_oi is not None:
-            result["oi_change_1d"] = float(current_oi - prior_oi)
-            if prior_oi > 0:
-                result["oi_change_pct"] = ((current_oi - prior_oi) / prior_oi) * 100
-
-        hv_stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) >= :lookback_30d
-            AND DATE(bar_start_ts_utc) < :entry_date
-            ORDER BY bar_start_ts_utc
-        """
-        )
-        hv_result = await session.execute(
-            hv_stmt, {"ticker": ticker, "lookback_30d": lookback_30d, "entry_date": entry_date}
-        )
-        closes = [row[0] for row in hv_result.fetchall() if row[0]]
-
-        if len(closes) >= 10:
-            returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0]
-            if returns:
-                import statistics
-
-                hv = statistics.stdev(returns) * (252**0.5) * 100 if len(returns) > 1 else None
-                result["hv_30d"] = hv
-
-        iv_stmt = text(
-            """
-            SELECT iv
-            FROM silver_uw_flow
-            WHERE option_chain = :option_chain
-            AND DATE(flow_ts_utc) = :entry_date
-            ORDER BY flow_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        iv_result = await session.execute(iv_stmt, {"option_chain": option_chain, "entry_date": entry_date})
-        iv_row = iv_result.fetchone()
-        iv_value = iv_row[0] if iv_row and iv_row[0] else None
-
-        if iv_value and result.get("hv_30d") and result["hv_30d"] > 0:
-            iv_pct = iv_value * 100 if iv_value < 2 else iv_value
-            result["iv_vs_hv_ratio"] = iv_pct / result["hv_30d"]
-
-        return result
-
-    db_result = await db_query(query)
-    result.update(db_result)
-    return result
-
-
 async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entry_ts: datetime) -> Dict[str, Any]:
     """Get P3 ML features: 52w high distance, spread detection, same-expiry trades.
 
@@ -2553,7 +2374,11 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
     if heber_result is not None:
         return heber_result
 
-    return await _get_p3_features_sql(ticker, option_chain, expiry, entry_ts)
+    return {
+        "high_52w_distance_pct": None,
+        "is_spread_leg": None,
+        "same_expiry_trades_1h": None,
+    }
 
 
 def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetime) -> Optional[Dict[str, Any]]:
@@ -2659,78 +2484,6 @@ def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetim
     if any(value is not None for value in result.values()):
         return result
     return None
-
-
-async def _get_p3_features_sql(ticker: str, option_chain: str, expiry: datetime, entry_ts: datetime) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
-        "high_52w_distance_pct": None,
-        "is_spread_leg": None,
-        "same_expiry_trades_1h": None,
-    }
-
-    entry_date = entry_ts.date()
-    lookback_52w = entry_date - timedelta(days=365)
-    lookback_1h = entry_ts - timedelta(hours=1)
-
-    async def query(session: Any) -> Dict[str, Any]:
-        high_52w_stmt = text(
-            """
-            SELECT MAX(high) as high_52w
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND DATE(bar_start_ts_utc) >= :lookback_52w
-            AND DATE(bar_start_ts_utc) < :entry_date
-        """
-        )
-        high_result = await session.execute(
-            high_52w_stmt, {"ticker": ticker, "lookback_52w": lookback_52w, "entry_date": entry_date}
-        )
-        high_row = high_result.fetchone()
-        high_52w = high_row[0] if high_row else None
-
-        current_price_stmt = text(
-            """
-            SELECT close
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc < :entry_ts
-            ORDER BY bar_start_ts_utc DESC
-            LIMIT 1
-        """
-        )
-        price_result = await session.execute(current_price_stmt, {"ticker": ticker, "entry_ts": entry_ts})
-        price_row = price_result.fetchone()
-        current_price = price_row[0] if price_row else None
-
-        if high_52w and current_price and high_52w > 0:
-            result["high_52w_distance_pct"] = ((high_52w - current_price) / high_52w) * 100
-
-        expiry_str = expiry.strftime("%Y-%m-%d") if hasattr(expiry, "strftime") else str(expiry) if expiry else None
-        if expiry_str:
-            same_expiry_stmt = text(
-                """
-                SELECT COUNT(*) as trade_count
-                FROM silver_uw_flow
-                WHERE ticker = :ticker
-                AND expiry = :expiry
-                AND flow_ts_utc >= :lookback_1h
-                AND flow_ts_utc < :entry_ts
-            """
-            )
-            expiry_result = await session.execute(
-                same_expiry_stmt,
-                {"ticker": ticker, "expiry": expiry_str, "lookback_1h": lookback_1h, "entry_ts": entry_ts},
-            )
-            expiry_row = expiry_result.fetchone()
-            same_expiry_count = expiry_row[0] if expiry_row else 0
-            result["same_expiry_trades_1h"] = same_expiry_count
-            result["is_spread_leg"] = same_expiry_count >= 2
-
-        return result
-
-    db_result = await db_query(query)
-    result.update(db_result)
-    return result
 
 
 async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:

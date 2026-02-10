@@ -8566,3 +8566,40 @@ Result:
 - targeted coupling reduced again:
   - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `44 -> 41`,
   - same targeted refs in `main_price_target_labeler.py`: `14 -> 11`.
+
+## 273) Pass 272 Continuation (2026-02-10)
+
+### 273.1 Phase Feature SQL Fallback Cluster Removed in `main_price_target_labeler` (TDD-Backed, Combined)
+
+Finding:
+- phase feature helpers still depended on local SQL fallbacks when Heber data was missing:
+  - phase-1 market context (`_get_phase1_bucket_features_sql`),
+  - P2 option-context features (`_get_p2_features_sql`),
+  - P3 expiry-context features (`_get_p3_features_sql`).
+- this kept a large `silver_alpaca_bars`/`silver_uw_flow` dependency surface in core label assembly.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - `get_phase1_bucket_features(...)` now keeps Heber-derived values and default nulls when Heber is unavailable (no local SQL fallback),
+  - `get_p2_features(...)` now returns a null-shaped payload when Heber is unavailable (no local SQL fallback),
+  - `get_p3_features(...)` now returns a null-shaped payload when Heber is unavailable (no local SQL fallback),
+  - removed:
+    - `_get_phase1_bucket_features_sql(...)`
+    - `_get_p2_features_sql(...)`
+    - `_get_p3_features_sql(...)`.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+    - `test_get_phase1_bucket_features_returns_none_when_heber_empty`
+    - `test_get_p2_features_returns_none_when_heber_empty`
+    - `test_get_p3_features_returns_none_when_heber_empty`
+    - each asserts no SQL fallback invocation and null-shaped output contract.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "phase1_bucket_features or p2_features or p3_features"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+
+Result:
+- phase-1 / P2 / P3 feature sourcing in `main_price_target_labeler` is now Heber-only with explicit null defaults.
+- targeted coupling reduced again:
+  - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `41 -> 37`,
+  - same targeted refs in `main_price_target_labeler.py`: `11 -> 7`.

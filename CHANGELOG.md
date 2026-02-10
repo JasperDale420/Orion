@@ -83,6 +83,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler Phase Feature SQL Fallback Removal (TDD, combined pass)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed phase-feature local SQL fallback helpers:
+      - `_get_phase1_bucket_features_sql(...)`
+      - `_get_p2_features_sql(...)`
+      - `_get_p3_features_sql(...)`,
+    - Heber-unavailable behavior now keeps explicit default null payloads for:
+      - phase1 market-context fields,
+      - P2 (`oi_change_1d`, `oi_change_pct`, `iv_vs_hv_ratio`, `hv_30d`),
+      - P3 (`high_52w_distance_pct`, `is_spread_leg`, `same_expiry_trades_1h`).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`:
+    - `test_get_phase1_bucket_features_returns_none_when_heber_empty`
+    - `test_get_p2_features_returns_none_when_heber_empty`
+    - `test_get_p3_features_returns_none_when_heber_empty`
+    - each now asserts no SQL fallback usage.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "phase1_bucket_features or p2_features or p3_features"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py`
+
 - **Price Target Labeler Flow-Context SQL Fallback Cluster Removal (TDD, combined pass)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - removed local SQL fallback helpers for flow-context features:
