@@ -1,15 +1,19 @@
 """
 VIX Proxy Connector.
 
-Uses VIXY price data from silver_alpaca_bars to compute VIX-like metrics.
+Uses Heber VIXY bar data to compute VIX-like metrics.
 VIXY closely tracks short-term VIX futures, allowing us to derive a VIX proxy.
 """
 
+import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+import pandas as pd
 from sqlalchemy import text
 
+from orion.clients.heber_reader import get_heber_reader
 from orion.shared.db_utils import db_query, db_write
 
 logger = logging.getLogger(__name__)
@@ -33,7 +37,7 @@ def classify_vix_regime(vix: float) -> str:
 
 
 class VIXProxyConnector:
-    """Computes VIX proxy from VIXY bars stored in silver_alpaca_bars."""
+    """Computes VIX proxy from VIXY bars sourced from Heber."""
 
     async def fetch_and_store(self) -> int:
         """Fetch recent VIXY bars and compute VIX proxy metrics."""
@@ -82,28 +86,49 @@ class VIXProxyConnector:
         return stored
 
     async def _get_vixy_bars(self) -> list[Dict[str, Any]]:
-        """Get recent VIXY daily bars from silver_alpaca_bars."""
-
-        async def query(session: Any) -> list[Dict[str, Any]]:
-            stmt = text(
-                """
-                SELECT bar_start_ts_utc as ts, close
-                FROM silver_alpaca_bars
-                WHERE ticker = 'VIXY'
-                ORDER BY bar_start_ts_utc DESC
-                LIMIT 30
-            """
-            )
-            result = await session.execute(stmt)
-            rows = result.fetchall()
-            # Return in chronological order
-            return [{"ts": r[0], "close": float(r[1])} for r in reversed(rows)]
-
+        """Get recent VIXY daily bars from Heber."""
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=60)
         try:
-            return await db_query(query)
+            bars_df = await asyncio.to_thread(
+                get_heber_reader().read_bars,
+                symbols=["VIXY"],
+                start_time=start,
+                asof_time=now,
+                timeframe="1d",
+            )
         except Exception as e:
             logger.error(f"Failed to fetch VIXY bars: {e}")
             return []
+
+        if bars_df is None or bars_df.empty:
+            return []
+
+        ts_col = _first_existing_column(bars_df, ["bar_start_ts_utc", "bar_start_ts", "ts_event", "ts_utc"])
+        close_col = _first_existing_column(bars_df, ["close", "c"])
+        if ts_col is None or close_col is None:
+            return []
+
+        normalized = _coerce_ticker_column(bars_df.copy())
+        if "ticker" in normalized.columns:
+            normalized = normalized[normalized["ticker"].astype(str).str.upper() == "VIXY"]
+        if normalized.empty:
+            return []
+
+        ts_series = pd.to_datetime(normalized[ts_col], utc=True, errors="coerce")
+        close_series = pd.to_numeric(normalized[close_col], errors="coerce")
+        temp = pd.DataFrame({"ts": ts_series, "close": close_series}).dropna(subset=["ts", "close"])
+        if temp.empty:
+            return []
+
+        temp = temp.sort_values("ts").tail(30)
+        return [
+            {
+                "ts": row["ts"].to_pydatetime() if isinstance(row["ts"], pd.Timestamp) else row["ts"],
+                "close": float(row["close"]),
+            }
+            for _, row in temp.iterrows()
+        ]
 
     async def _persist(self, record: Dict[str, Any]) -> None:
         """Persist VIX proxy record to database."""
@@ -146,3 +171,20 @@ class VIXProxyConnector:
             return await db_query(query)
         except Exception:
             return None
+
+
+def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "ticker" in df.columns:
+        return df
+    if "symbol" in df.columns:
+        return df.assign(ticker=df["symbol"].astype(str).str.upper())
+    if "instrument_key" in df.columns:
+        return df.assign(ticker=df["instrument_key"].astype(str).str.split(":").str[-1].str.upper())
+    return df

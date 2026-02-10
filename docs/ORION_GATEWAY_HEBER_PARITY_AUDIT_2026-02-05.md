@@ -8900,3 +8900,30 @@ Result:
   - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`,
   - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`,
   - selected connector persistence paths (intentional table writes).
+
+## 282) Pass 281 Continuation (2026-02-10)
+
+### 282.1 `vix_proxy_connector` Local Bars Read Removed (TDD-Backed)
+
+Finding:
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py` still sourced VIXY bars from local `silver_alpaca_bars`, which kept the connector coupled to Orion-local Silver reads despite Heber bar availability.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`:
+  - `_get_vixy_bars()` now reads VIXY bars via Heber `read_bars(...)`,
+  - added schema-tolerant normalization helpers for ticker/time/close columns,
+  - removed local bars SQL fallback path (Heber unavailable now returns an empty list).
+- Added tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_vix_proxy_connector_heber_source.py`:
+    - `test_get_vixy_bars_prefers_heber_without_local_db_fallback`
+    - `test_get_vixy_bars_returns_empty_when_heber_unavailable`.
+
+Verification:
+- `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py` passed.
+- `pytest -q tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py` passed.
+- `ruff check src/orion/connectors/vix_proxy_connector.py tests/unit/test_vix_proxy_connector_heber_source.py` passed.
+
+Result:
+- active local-Silver read dependency was removed from `vix_proxy_connector`.
+- remaining `silver_*` references in this module are intentional `silver_vix_data` persistence/read paths.
+- current top executable `silver_*` hotspots are now primarily intentional persistence surfaces and a small set of remaining migration candidates (`sync_earnings`, connector write paths, and targeted backfill logic).

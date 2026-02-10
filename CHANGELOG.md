@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **VIX proxy connector Heber-source migration (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`:
+    - replaced local `silver_alpaca_bars` read in `_get_vixy_bars()` with Heber `read_bars(...)` sourcing,
+    - normalized ticker/time/close extraction for mixed Heber schemas (`instrument_key`, `symbol`, `bar_start_ts_*`, `ts_event`, `close/c`),
+    - removed local bars SQL fallback behavior (returns empty list when Heber is unavailable).
+  - Added tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_vix_proxy_connector_heber_source.py`
+      - `test_get_vixy_bars_prefers_heber_without_local_db_fallback`
+      - `test_get_vixy_bars_returns_empty_when_heber_unavailable`.
+  - Verified with:
+    - `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py`
+    - `pytest -q tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py`
+    - `ruff check src/orion/connectors/vix_proxy_connector.py tests/unit/test_vix_proxy_connector_heber_source.py`
+
 - **Data-quality + window features + quote tracker Heber-only fallback removal (TDD, combined pass)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py`:
     - removed local Silver SQL fallback reads for bars/flow/darkpool quality checks,
