@@ -124,7 +124,7 @@ def test_read_flow_applies_min_premium(tmp_path: Path) -> None:
     assert float(result.iloc[0]["premium"]) == 120_000.0
 
 
-def test_read_darkpool_falls_back_to_alias_dataset(tmp_path: Path) -> None:
+def test_read_darkpool_falls_back_to_legacy_alias_dataset(tmp_path: Path) -> None:
     base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
     darkpool = pd.DataFrame(
         {
@@ -134,13 +134,41 @@ def test_read_darkpool_falls_back_to_alias_dataset(tmp_path: Path) -> None:
             "premium": [250_000.0],
         }
     )
-    _write_parquet(tmp_path / "silver" / "feed=darkpool" / "dt=2026-02-05" / "part-0.parquet", darkpool)
+    _write_parquet(tmp_path / "silver" / "feed=darkpool_trades" / "dt=2026-02-05" / "part-0.parquet", darkpool)
 
     reader = HeberReader(data_root=tmp_path)
     result = reader.read_darkpool(symbols=["SPY"], asof_time=base + timedelta(minutes=1))
 
     assert len(result) == 1
     assert set(result["instrument_key"]) == {"equity:SPY"}
+
+
+def test_read_darkpool_prefers_canonical_dataset_when_both_exist(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    canonical = pd.DataFrame(
+        {
+            "instrument_key": ["equity:SPY"],
+            "ts_event": [base],
+            "ts_available": [base],
+            "premium": [111_000.0],
+        }
+    )
+    legacy = pd.DataFrame(
+        {
+            "instrument_key": ["equity:SPY"],
+            "ts_event": [base],
+            "ts_available": [base],
+            "premium": [222_000.0],
+        }
+    )
+    _write_parquet(tmp_path / "silver" / "feed=darkpool" / "dt=2026-02-05" / "part-0.parquet", canonical)
+    _write_parquet(tmp_path / "silver" / "feed=darkpool_trades" / "dt=2026-02-05" / "part-0.parquet", legacy)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_darkpool(symbols=["SPY"], asof_time=base + timedelta(minutes=1))
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["premium"]) == 111_000.0
 
 
 def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:

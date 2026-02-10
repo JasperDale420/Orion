@@ -25,8 +25,8 @@ logger = structlog.get_logger(__name__)
 
 _SILVER_BARS_DATASET = "bars"
 _SILVER_FLOW_DATASET = "flow_alerts"
-_SILVER_DARKPOOL_DATASET = "darkpool_trades"
-_SILVER_DARKPOOL_DATASET_ALIASES = ("darkpool_trades", "darkpool")
+_SILVER_DARKPOOL_DATASET = "darkpool"
+_SILVER_DARKPOOL_DATASET_ALIASES = ("darkpool", "darkpool_trades")
 _SILVER_MARKET_TIDE_DATASET = "market_tide"
 _SILVER_GREEK_EXPOSURE_DATASET = "greek_exposure"
 _SILVER_MAX_PAIN_DATASET = "max_pain"
@@ -196,7 +196,7 @@ class HeberReader:
         asof_time: datetime | None = None,
         start_time: datetime | None = None,
     ) -> pd.DataFrame:
-        """Read darkpool prints from Heber Silver (`feed=darkpool_trades`)."""
+        """Read darkpool prints from Heber Silver (`feed=darkpool`)."""
         instrument_keys = self._to_instrument_keys(symbols) if symbols else None
         for dataset in self._silver_darkpool_datasets:
             df = self._read_silver_dataset(

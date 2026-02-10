@@ -8260,3 +8260,51 @@ Verification:
 Result:
 - Orion darkpool reads are now resilient to the current Gateway/Heber naming drift during migration.
 - execution code surface is cleaner and less ambiguous, with legacy helper debt explicitly removed.
+
+## 264) Pass 263 Continuation (2026-02-10)
+
+### 264.1 Cross-Repo Canonicalization: `darkpool` Feed Name Locked End-to-End (TDD-Backed)
+
+Finding:
+- `darkpool` naming was still split across projects:
+  - Orion previously preferred `darkpool_trades`,
+  - Heber provider capability/stream/slice metadata still used `darkpool_trades`,
+  - Data-Gateway already emitted canonical `feed="darkpool"`.
+- This mismatch risked ongoing drift in contracts and operational metadata.
+
+Implemented:
+- Orion:
+  - updated `src/orion/clients/heber_reader.py`:
+    - canonical Silver dataset default is now `darkpool`,
+    - legacy `darkpool_trades` retained as fallback alias.
+  - updated tests:
+    - `tests/unit/test_heber_reader.py`
+      - `test_read_darkpool_prefers_canonical_dataset_when_both_exist`
+      - `test_read_darkpool_falls_back_to_legacy_alias_dataset`.
+- Heber:
+  - updated canonical naming from `darkpool_trades` to `darkpool` in:
+    - `heber/catalog/datasources.py` (provider capabilities),
+    - `heber/bus/streams.py` (stream + consumer-group mapping),
+    - `heber/bus/__init__.py` (canonical stream enum),
+    - `heber/ops/slices.py` (implementation slices),
+    - `heber/features/templates/flow.py` (template dependency docs),
+    - `heber/models/silver.py` (schema docstring canonicalization; compatibility alias helper retained).
+  - added contract assertions:
+    - `heber/catalog/tests_datasources.py`
+    - `heber/ops/tests_remaining.py`.
+- Data-Gateway:
+  - added explicit contract test:
+    - `tests/test_uw_poller.py::test_poll_darkpool_emits_canonical_darkpool_feed`
+  - confirms poller emits `feed="darkpool"` in wrapped envelopes.
+
+Verification:
+- Orion:
+  - `pytest -q tests/unit/test_heber_reader.py -k "darkpool"` passed.
+- Heber:
+  - `pytest -q heber/catalog/tests_datasources.py heber/ops/tests_remaining.py -k "darkpool"` passed.
+- Data-Gateway:
+  - `pytest -q tests/test_uw_poller.py -k "darkpool_emits_canonical"` passed.
+
+Result:
+- canonical darkpool contract is now locked to `darkpool` across Data-Gateway event emission, Heber catalog/stream metadata, and Orion read defaults.
+- backward compatibility remains in Orion reader (`darkpool_trades` fallback) to avoid migration breakage on historical partitions.

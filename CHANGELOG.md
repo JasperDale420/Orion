@@ -17,6 +17,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Cross-Repo Darkpool Canonicalization Contract (TDD)**:
+  - Updated `src/orion/clients/heber_reader.py`:
+    - switched canonical darkpool Silver dataset to `darkpool`,
+    - retained backward-compatible read fallback to legacy `darkpool_trades`,
+    - preserved optional `darkpool_dataset` override for explicit local control.
+  - Updated tests in `tests/unit/test_heber_reader.py`:
+    - `test_read_darkpool_prefers_canonical_dataset_when_both_exist`
+    - `test_read_darkpool_falls_back_to_legacy_alias_dataset`.
+  - Verified with:
+    - `pytest -q tests/unit/test_heber_reader.py -k "darkpool"`
+
 - **Combined Pass: Heber Darkpool Alias Compatibility + Legacy Execution Helper Decommission (TDD)**:
   - Updated `src/orion/clients/heber_reader.py`:
     - added darkpool dataset alias fallback support for Silver reads:
