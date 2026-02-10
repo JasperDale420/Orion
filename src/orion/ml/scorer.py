@@ -139,9 +139,60 @@ class MLScorer:
                 extra={"event": "models_loaded", "count": loaded_count, "stale_skipped": skipped_stale},
             )
 
+    @staticmethod
+    def _safe_div(numerator: float, denominator: float, default: float = 0) -> float:
+        """Safe division that returns default when denominator is zero."""
+        return numerator / denominator if denominator > 0 else default
+
+    @staticmethod
+    def _flow_float(flow: Dict[str, Any], key: str) -> float:
+        """Extract a float value from flow data, defaulting to 0."""
+        return float(flow.get(key) or 0)
+
+    @staticmethod
+    def _build_feature_map(flow: Dict[str, Any]) -> Dict[str, float]:
+        """Build the full mapping from flow fields to ML feature names."""
+        get = lambda k: float(flow.get(k) or 0)  # noqa: E731
+        premium = get("premium_usd")
+        underlying = get("underlying_price")
+        strike = get("strike")
+        size = int(flow.get("size_contracts") or 0)
+        volume = get("volume_contract")
+        oi = get("open_interest")
+
+        safe = lambda n, d, fallback=0: n / d if d > 0 else fallback  # noqa: E731
+
+        return {
+            "premium_usd": premium,
+            "dte": int(flow.get("dte") or 0),
+            "iv": get("iv"),
+            "iv_rank_at_entry": get("iv"),
+            "volume_contract": volume,
+            "open_interest": oi,
+            "underlying_price": underlying,
+            "strike": strike,
+            "size_contracts": size,
+            "moneyness": safe(strike, underlying, 1.0),
+            "volume_oi_ratio": safe(volume, oi),
+            "premium_per_contract": safe(premium, size),
+            "gex_at_entry": get("gex"),
+            "vex_at_entry": get("vex"),
+            "market_tide_30m": get("market_tide"),
+            "max_pain_distance_pct": get("max_pain_distance"),
+            "vix_at_entry": get("vix"),
+            "darkpool_volume_1h": get("darkpool_volume"),
+            "put_call": 1 if flow.get("put_call") == "C" else 0,
+            "vol_regime_at_entry": 0,
+            "risk_regime_at_entry": 0,
+            "session_regime_at_entry": 0,
+            "trend_regime_at_entry": 0,
+            "vix_regime_at_entry": 0,
+            "market_tide_direction": 0,
+        }
+
     def extract_features(self, flow: Dict[str, Any], bucket: Optional[str] = None) -> Dict[str, float]:
-        """
-        Extract features from a flow event for scoring.
+        """Extract features from a flow event for scoring.
+
         Uses feature names from the model if available.
         """
         if bucket is None:
@@ -154,57 +205,12 @@ class MLScorer:
             bucket = get_trade_bucket(dte)
 
         feature_names = self.feature_names.get(bucket, [])
+        feature_map = self._build_feature_map(flow)
 
-        # Build feature dict based on model's expected features
-        features = {}
-
-        # Common feature extraction
-        premium = float(flow.get("premium_usd") or 0)
-        underlying = float(flow.get("underlying_price") or 0)
-        strike = float(flow.get("strike") or 0)
-        size = int(flow.get("size_contracts") or 0)
-        volume = float(flow.get("volume_contract") or 0)
-        oi = float(flow.get("open_interest") or 0)
-
-        # Map flow fields to feature names used by pattern_miner
-        feature_map = {
-            "premium_usd": premium,
-            "dte": int(flow.get("dte") or 0),
-            "iv": float(flow.get("iv") or 0),
-            "iv_rank_at_entry": float(flow.get("iv") or 0),  # Use IV as proxy
-            "volume_contract": volume,
-            "open_interest": oi,
-            "underlying_price": underlying,
-            "strike": strike,
-            "size_contracts": size,
-            "moneyness": strike / underlying if underlying > 0 else 1.0,
-            "volume_oi_ratio": volume / oi if oi > 0 else 0,
-            "premium_per_contract": premium / size if size > 0 else 0,
-            # GEX/VEX features (may not be in flow, default to 0)
-            "gex_at_entry": float(flow.get("gex") or 0),
-            "vex_at_entry": float(flow.get("vex") or 0),
-            "market_tide_30m": float(flow.get("market_tide") or 0),
-            "max_pain_distance_pct": float(flow.get("max_pain_distance") or 0),
-            "vix_at_entry": float(flow.get("vix") or 0),
-            "darkpool_volume_1h": float(flow.get("darkpool_volume") or 0),
-            # Categorical (encode as numbers)
-            "put_call": 1 if flow.get("put_call") == "C" else 0,
-            "vol_regime_at_entry": 0,
-            "risk_regime_at_entry": 0,
-            "session_regime_at_entry": 0,
-            "trend_regime_at_entry": 0,
-            "vix_regime_at_entry": 0,
-            "market_tide_direction": 0,
-        }
-
-        # Return only the features the model expects
-        if feature_names:
-            for feat in feature_names:
-                features[feat] = feature_map.get(feat, 0)
-        else:
+        if not feature_names:
             return feature_map
 
-        return features
+        return {feat: feature_map.get(feat, 0) for feat in feature_names}
 
     def score(self, flow: Dict[str, Any]) -> float:
         """
