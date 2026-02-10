@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pandas as pd
-import requests
 from dotenv import load_dotenv
 
 
@@ -61,7 +61,7 @@ def fetch_darkpool_for_ticker_day(ticker: str, day: str) -> list[DarkpoolPrint]:
     Falls back to [] on 404/422 which can indicate no data for that ticker/day.
     """
     # NOTE: UW_BASE_URL in this repo includes the `/api` prefix, so the correct per-ticker path is `/darkpool/{ticker}`.
-    r = requests.get(f"{_base()}/darkpool/{ticker}", params={"date": day}, headers=_headers(), timeout=30)
+    r = httpx.get(f"{_base()}/darkpool/{ticker}", params={"date": day}, headers=_headers(), timeout=30)
     if r.status_code in (404, 422):
         return []
     r.raise_for_status()

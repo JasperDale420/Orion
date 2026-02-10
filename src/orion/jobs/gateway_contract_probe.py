@@ -19,7 +19,7 @@ from contextlib import suppress
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-import requests
+import httpx
 import websockets
 
 from orion.config import system_settings
@@ -116,7 +116,7 @@ async def _run_health_probe(
     for attempt in range(1, max(1, retries) + 1):
         attempts = attempt
         try:
-            response = await asyncio.to_thread(requests.get, health_url, timeout=timeout_seconds)
+            response = await asyncio.to_thread(httpx.get, health_url, timeout=timeout_seconds)
             payload: dict[str, Any] = {}
             with suppress(Exception):
                 parsed = response.json()

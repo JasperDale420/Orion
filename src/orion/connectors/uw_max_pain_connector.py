@@ -9,7 +9,7 @@ import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-import requests
+import httpx
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -37,24 +37,24 @@ class UWMaxPainConnector:
         """Fetch max pain for a ticker via Data Gateway."""
         url = f"{self.gateway_url}/api/v1/uw/{ticker}/max-pain"
         try:
-            resp = requests.get(url, headers=self.headers, timeout=30)
+            resp = httpx.get(url, headers=self.headers, timeout=30)
             if resp.status_code >= 400:
                 if _is_retryable_gateway_status(resp.status_code):
                     resp.raise_for_status()
                 logger.warning("Non-retryable max pain status=%s ticker=%s", resp.status_code, ticker)
                 return None
             return resp.json()
-        except requests.HTTPError as e:
-            status = getattr(e.response, "status_code", None)
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
             if _is_retryable_gateway_status(status):
                 logger.warning("Retryable max pain HTTP error status=%s ticker=%s", status, ticker)
                 raise
             logger.warning("Non-retryable max pain HTTP error status=%s ticker=%s", status, ticker)
             return None
-        except (requests.Timeout, requests.ConnectionError) as e:
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
             logger.warning(f"Transient network error fetching max pain for {ticker}: {e}")
             raise
-        except requests.RequestException as e:
+        except httpx.HTTPError as e:
             logger.warning(f"Failed to fetch max pain for {ticker}: {e}")
             return None
         except Exception as e:

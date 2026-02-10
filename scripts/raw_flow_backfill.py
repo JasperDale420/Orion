@@ -13,13 +13,14 @@ from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import List
 
-import requests
+import httpx
 from dotenv import load_dotenv
-from orion.core.logging_config import setup_logging
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from orion.core.logging_config import setup_logging
 
 load_dotenv()
 
@@ -37,7 +38,7 @@ UW_BASE_URL = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
 
 
 @retry(
-    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    retry=retry_if_exception_type(httpx.HTTPError),
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=2, max=30),
 )
@@ -48,7 +49,7 @@ def fetch_flow_page(older_than: str, limit: int = 500) -> List[dict]:
 
     time.sleep(0.6)  # Rate limit: 120 req/min
 
-    resp = requests.get(url, params=params, headers={"Authorization": f"Bearer {UW_API_KEY}"}, timeout=30)
+    resp = httpx.get(url, params=params, headers={"Authorization": f"Bearer {UW_API_KEY}"}, timeout=30)
 
     daily_count = resp.headers.get("x-uw-daily-req-count", "N/A")
     logger.info(f"UW API: {daily_count} / 15000 daily requests")
@@ -197,10 +198,11 @@ async def backfill_days(days: int = 14):
 
         # Now persist to silver using the fixed normalizer
         async with AsyncSessionLocal() as session:
+            from sqlalchemy import select
+
             from orion.processing.normalizer import NormalizationEngine
             from orion.processing.persistence import persist_silver_from_bronze
             from orion.storage.models import BronzeEvent
-            from sqlalchemy import select
 
             # Fetch the bronze events we just inserted
             result = await session.execute(

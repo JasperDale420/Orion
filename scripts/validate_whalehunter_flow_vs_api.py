@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pandas as pd
-import requests
 from dotenv import load_dotenv
 
 
@@ -82,7 +82,7 @@ def fetch_flow_alerts_for_day(day: str) -> list[FlowAlert]:
     seen_ids: set[str] = set()
 
     while True:
-        r = requests.get(
+        r = httpx.get(
             f"{_base()}/option-trades/flow-alerts",
             params={"limit": limit, "older_than": cursor},
             headers=_headers(),

@@ -9,7 +9,7 @@ import logging
 from datetime import date, datetime
 from typing import Any, Dict, Optional
 
-import requests
+import httpx
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -41,24 +41,24 @@ class UWMarketTideConnector:
             params["date"] = market_date.isoformat()
 
         try:
-            resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+            resp = httpx.get(url, headers=self.headers, params=params, timeout=30)
             if resp.status_code >= 400:
                 if _is_retryable_gateway_status(resp.status_code):
                     resp.raise_for_status()
                 logger.warning("Non-retryable market tide status=%s", resp.status_code)
                 return None
             return resp.json()
-        except requests.HTTPError as e:
-            status = getattr(e.response, "status_code", None)
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
             if _is_retryable_gateway_status(status):
                 logger.warning("Retryable market tide HTTP error status=%s", status)
                 raise
             logger.warning("Non-retryable market tide HTTP error status=%s", status)
             return None
-        except (requests.Timeout, requests.ConnectionError) as e:
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
             logger.warning(f"Transient network error fetching market tide: {e}")
             raise
-        except requests.RequestException as e:
+        except httpx.HTTPError as e:
             logger.warning(f"Failed to fetch market tide: {e}")
             return None
         except Exception as e:

@@ -22,9 +22,13 @@ class _FakeResponse:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            import requests
+            import httpx
 
-            raise requests.HTTPError(f"status={self.status_code}", response=self)
+            raise httpx.HTTPStatusError(
+                f"status={self.status_code}",
+                request=httpx.Request("GET", "http://test"),
+                response=self,
+            )
 
     def json(self) -> dict[str, Any]:
         return self._payload
@@ -60,7 +64,7 @@ def test_fetch_retries_transient_503_then_succeeds(
         calls.append((args, kwargs))
         return responses.pop(0)
 
-    monkeypatch.setattr(module.requests, "get", _fake_get)
+    monkeypatch.setattr(module.httpx, "get", _fake_get)
 
     result = fetch(*call_args)
 
@@ -86,7 +90,7 @@ def test_fetch_does_not_retry_non_retryable_404(
         calls.append((args, kwargs))
         return _FakeResponse(404)
 
-    monkeypatch.setattr(module.requests, "get", _fake_get)
+    monkeypatch.setattr(module.httpx, "get", _fake_get)
 
     result = fetch(*call_args)
 
