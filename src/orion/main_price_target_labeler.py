@@ -390,52 +390,7 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
     if heber_entries:
         return heber_entries
 
-    return await _get_entry_signals_sql(limit)
-
-
-async def _get_entry_signals_sql(limit: int) -> List[Any]:
-    async def query(session: Any) -> List[Any]:
-        stmt = text(
-            """
-            WITH flow_with_dte AS (
-                SELECT f.*,
-                    CASE
-                        WHEN f.expiry IS NOT NULL THEN
-                            (f.expiry::date - DATE(f.flow_ts_utc))
-                        ELSE NULL
-                    END as dte
-                FROM silver_uw_flow f
-                LEFT JOIN price_target_labels p ON f.event_id = p.event_id
-                WHERE p.event_id IS NULL
-                AND f.option_chain IS NOT NULL
-                AND f.option_price > 0
-                AND f.aggressor IN ('ASK', 'BID')
-                AND (
-                    (f.is_sweep = 'true' AND f.premium_usd >= 50000)
-                    OR (f.is_sweep != 'true' AND f.premium_usd >= 100000)
-                )
-            )
-            SELECT * FROM flow_with_dte
-            WHERE (
-                -- 0DTE: 15 minute minimum age
-                (dte = 0 AND flow_ts_utc < NOW() - INTERVAL '15 minutes')
-                -- 1-3 DTE (SHORT_SWING): 30 minute minimum age
-                OR (dte BETWEEN 1 AND 3 AND flow_ts_utc < NOW() - INTERVAL '30 minutes')
-                -- 4-14 DTE (SWING): 1 hour minimum age
-                OR (dte BETWEEN 4 AND 14 AND flow_ts_utc < NOW() - INTERVAL '1 hour')
-                -- 15+ DTE (POSITION): 2 hour minimum age
-                OR (dte >= 15 AND flow_ts_utc < NOW() - INTERVAL '2 hours')
-                -- Unknown DTE: use 30 minute default
-                OR (dte IS NULL AND flow_ts_utc < NOW() - INTERVAL '30 minutes')
-            )
-            ORDER BY flow_ts_utc ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, {"limit": limit})
-        return result.fetchall()
-
-    return await db_query(query)
+    return []
 
 
 async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
@@ -444,25 +399,7 @@ async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[D
     if heber_prices is not None:
         return heber_prices
 
-    return await _get_subsequent_prices_sql(option_chain, entry_ts)
-
-
-async def _get_subsequent_prices_sql(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        stmt = text(
-            """
-            SELECT option_price, flow_ts_utc
-            FROM silver_uw_flow
-            WHERE option_chain = :option_chain
-            AND flow_ts_utc > :entry_ts
-            AND option_price > 0
-            ORDER BY flow_ts_utc ASC
-        """
-        )
-        result = await session.execute(stmt, {"option_chain": option_chain, "entry_ts": entry_ts})
-        return [{"price": row[0], "ts": row[1]} for row in result.fetchall()]
-
-    return await db_query(query)
+    return []
 
 
 def _build_backfill_cursor_clause(
@@ -1506,8 +1443,6 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     }
 
     flow_data = _get_flow_greeks_from_heber(event_id)
-    if flow_data is None:
-        flow_data = await _get_flow_greeks_sql(event_id)
 
     if not flow_data:
         return result
@@ -1633,44 +1568,6 @@ def _get_flow_greeks_from_heber(event_id: str) -> Optional[Dict[str, Any]]:
         "rho_stored": _coerce_float(_first_value(["rho_alpaca", "rho"])),
         "iv_alpaca_stored": _coerce_float(_first_value(["iv_alpaca"])),
     }
-
-
-async def _get_flow_greeks_sql(event_id: str) -> Dict[str, Any]:
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT
-                f.volume_contract, f.open_interest, f.iv, f.underlying_price,
-                f.strike, f.put_call, f.expiry, f.flow_ts_utc, f.option_chain,
-                f.delta_alpaca, f.gamma_alpaca, f.theta_alpaca, f.vega_alpaca,
-                f.rho_alpaca, f.iv_alpaca
-            FROM silver_uw_flow f
-            WHERE f.event_id = :event_id
-        """
-        )
-        res = await session.execute(stmt, {"event_id": event_id})
-        row = res.fetchone()
-        if row:
-            return {
-                "volume": row[0],
-                "open_interest": row[1],
-                "iv": row[2],
-                "underlying_price": row[3],
-                "strike": row[4],
-                "put_call": row[5],
-                "expiry": row[6],
-                "flow_ts": row[7],
-                "option_chain": row[8],
-                "delta_stored": row[9],
-                "gamma_stored": row[10],
-                "theta_stored": row[11],
-                "vega_stored": row[12],
-                "rho_stored": row[13],
-                "iv_alpaca_stored": row[14],
-            }
-        return {}
-
-    return await db_query(query)
 
 
 async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> Optional[float]:

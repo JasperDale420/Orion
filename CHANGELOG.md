@@ -9,11 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - **Price target labeler Heber-only fallback guardrails (TDD)**:
-  - tightened Heber-source contract tests to enforce no SQL fallback when Heber data is missing/unusable for:
+  - removed remaining SQL fallback paths in `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` for:
     - entry signal reads,
     - subsequent price reads,
     - flow Greeks context reads.
-  - updated:
+  - tightened Heber-source contract tests to enforce no SQL fallback when Heber data is missing/unusable:
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py`
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
   - validation: `uv run pytest -q` (`744 passed, 6 skipped`).
