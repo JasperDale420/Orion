@@ -548,7 +548,7 @@ async def test_get_opposing_flow_prefers_heber_when_available(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_get_opposing_flow_falls_back_to_sql_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_opposing_flow_returns_zeroes_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
     end_ts = entry_ts + timedelta(hours=2)
 
@@ -556,21 +556,15 @@ async def test_get_opposing_flow_falls_back_to_sql_when_heber_empty(monkeypatch:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    expected = {"count": 7, "premium": 777_000.0}
-
-    async def _fake_sql_fallback(ticker: str, put_call: str, ts_start: datetime, ts_end: datetime):
-        assert ticker == "AAPL"
-        assert put_call == "C"
-        assert ts_start == entry_ts
-        assert ts_end == end_ts
-        return expected
+    async def _fail_sql_fallback(_ticker: str, _put_call: str, _entry_ts: datetime, _end_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber opposing-flow data is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_opposing_flow_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_opposing_flow_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
 
-    assert result == expected
+    assert result == {"count": 0, "premium": 0.0}
 
 
 @pytest.mark.asyncio
@@ -633,26 +627,26 @@ async def test_get_flow_aggression_prefers_heber_when_available(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_get_flow_aggression_falls_back_to_sql_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_flow_aggression_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    expected = {"ask_side_ratio": 0.7, "sweep_ratio_1h": 0.5, "same_ticker_premium_1h": 500_000.0}
-
-    async def _fake_sql_fallback(ticker: str, ts: datetime):
-        assert ticker == "AAPL"
-        assert ts == entry_ts
-        return expected
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber flow-aggression data is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_flow_aggression_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_flow_aggression_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_flow_aggression("AAPL", entry_ts)
 
-    assert result == expected
+    assert result == {
+        "ask_side_ratio": None,
+        "sweep_ratio_1h": None,
+        "same_ticker_premium_1h": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -683,7 +677,7 @@ async def test_get_institutional_flow_1w_prefers_heber_when_available(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_get_institutional_flow_1w_falls_back_to_sql_when_heber_empty(
+async def test_get_institutional_flow_1w_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
@@ -692,17 +686,15 @@ async def test_get_institutional_flow_1w_falls_back_to_sql_when_heber_empty(
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_sql_fallback(ticker: str, ts: datetime):
-        assert ticker == "AAPL"
-        assert ts == entry_ts
-        return 321_000.0
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber institutional-flow data is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_institutional_flow_1w_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_institutional_flow_1w_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_institutional_flow_1w("AAPL", entry_ts)
 
-    assert result == pytest.approx(321_000.0)
+    assert result is None
 
 
 @pytest.mark.asyncio

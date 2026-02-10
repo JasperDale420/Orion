@@ -755,7 +755,7 @@ async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_
     if heber_result is not None:
         return heber_result
 
-    return await _get_opposing_flow_sql(ticker, put_call, entry_ts, end_ts)
+    return {"count": 0, "premium": 0.0}
 
 
 def _get_opposing_flow_from_heber(
@@ -834,37 +834,6 @@ def _get_opposing_flow_from_heber(
         "count": int(len(filtered)),
         "premium": float(filtered["premium"].sum()),
     }
-
-
-async def _get_opposing_flow_sql(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
-    opposing_type = "P" if put_call == "C" else "C"
-
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT COUNT(*) as count, COALESCE(SUM(premium_usd), 0) as total_premium
-            FROM silver_uw_flow
-            WHERE ticker = :ticker
-            AND put_call = :opposing_type
-            AND flow_ts_utc > :entry_ts
-            AND flow_ts_utc <= :end_ts
-            AND is_sweep = 'true'
-            AND aggressor = 'ASK'
-        """
-        )
-        result = await session.execute(
-            stmt,
-            {
-                "ticker": ticker,
-                "opposing_type": opposing_type,
-                "entry_ts": entry_ts,
-                "end_ts": end_ts,
-            },
-        )
-        row = result.fetchone()
-        return {"count": row[0] or 0, "premium": row[1] or 0}
-
-    return await db_query(query)
 
 
 async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
@@ -1970,7 +1939,7 @@ async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Opti
     if heber_result is not None:
         return heber_result
 
-    return await _get_flow_aggression_sql(ticker, entry_ts)
+    return {"ask_side_ratio": None, "sweep_ratio_1h": None, "same_ticker_premium_1h": None}
 
 
 def _get_flow_aggression_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
@@ -2050,38 +2019,6 @@ def _get_flow_aggression_from_heber(ticker: str, entry_ts: datetime) -> Optional
     }
 
 
-async def _get_flow_aggression_sql(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
-    start_ts = entry_ts - timedelta(hours=1)
-
-    async def query(session: Any) -> Dict[str, Optional[float]]:
-        stmt = text(
-            """
-            SELECT
-                COUNT(*) as total_trades,
-                SUM(CASE WHEN UPPER(aggressor) = 'ASK' THEN 1 ELSE 0 END) as ask_trades,
-                SUM(CASE WHEN LOWER(is_sweep) IN ('true', '1', 'yes') THEN 1 ELSE 0 END) as sweep_trades,
-                SUM(premium_usd) as total_premium
-            FROM silver_uw_flow
-            WHERE ticker = :ticker
-            AND flow_ts_utc >= :start_ts
-            AND flow_ts_utc < :entry_ts
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "start_ts": start_ts, "entry_ts": entry_ts})
-        row = result.fetchone()
-
-        if not row or not row[0] or row[0] == 0:
-            return {"ask_side_ratio": None, "sweep_ratio_1h": None, "same_ticker_premium_1h": None}
-
-        total = row[0]
-        ask_ratio = row[1] / total if row[1] else 0
-        sweep_ratio = row[2] / total if row[2] else 0
-
-        return {"ask_side_ratio": ask_ratio, "sweep_ratio_1h": sweep_ratio, "same_ticker_premium_1h": row[3]}
-
-    return await db_query(query)
-
-
 async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> Optional[float]:
     """Get institutional-grade flow for LEAP trades (past week).
 
@@ -2092,7 +2029,7 @@ async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> Optional
     if heber_result is not None:
         return heber_result
 
-    return await _get_institutional_flow_1w_sql(ticker, entry_ts)
+    return None
 
 
 def _get_institutional_flow_1w_from_heber(ticker: str, entry_ts: datetime) -> Optional[float]:
@@ -2145,27 +2082,6 @@ def _get_institutional_flow_1w_from_heber(ticker: str, entry_ts: datetime) -> Op
     if filtered.empty:
         return None
     return float(filtered["premium"].sum())
-
-
-async def _get_institutional_flow_1w_sql(ticker: str, entry_ts: datetime) -> Optional[float]:
-    start_ts = entry_ts - timedelta(days=7)
-
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT SUM(premium_usd) as institutional_premium
-            FROM silver_uw_flow
-            WHERE ticker = :ticker
-            AND flow_ts_utc >= :start_ts
-            AND flow_ts_utc < :entry_ts
-            AND premium_usd >= 50000
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "start_ts": start_ts, "entry_ts": entry_ts})
-        row = result.fetchone()
-        return row[0] if row and row[0] else None
-
-    return await db_query(query)
 
 
 async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) -> Dict[str, Any]:

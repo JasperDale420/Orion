@@ -83,6 +83,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler Flow-Context SQL Fallback Cluster Removal (TDD, combined pass)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed local SQL fallback helpers for flow-context features:
+      - `_get_opposing_flow_sql(...)`
+      - `_get_flow_aggression_sql(...)`
+      - `_get_institutional_flow_1w_sql(...)`,
+    - Heber-unavailable behavior now returns safe default outputs:
+      - opposing flow: `{"count": 0, "premium": 0.0}`,
+      - flow aggression: null-shaped metrics,
+      - institutional 1w flow: `None`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`:
+    - `test_get_opposing_flow_returns_zeroes_when_heber_empty`
+    - `test_get_flow_aggression_returns_none_when_heber_empty`
+    - `test_get_institutional_flow_1w_returns_none_when_heber_empty`
+    - each asserts no SQL fallback path is called.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "opposing_flow or flow_aggression or institutional_flow_1w"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py`
+
 - **Price Target Labeler Context Fallback De-Coupling (TDD, combined pass)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - removed local SQL fallbacks for:

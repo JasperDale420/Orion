@@ -8529,3 +8529,40 @@ Result:
 - targeted coupling reduced further:
   - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `48 -> 44`,
   - same targeted refs in `main_price_target_labeler.py`: `18 -> 14`.
+
+## 272) Pass 271 Continuation (2026-02-10)
+
+### 272.1 `main_price_target_labeler` Flow-Context SQL Fallback Cluster Removed (TDD-Backed, Combined)
+
+Finding:
+- a remaining local `silver_uw_flow` fallback cluster still existed in:
+  - `get_opposing_flow(...)`,
+  - `get_flow_aggression(...)`,
+  - `get_institutional_flow_1w(...)`.
+- these paths kept core label context partially coupled to Orion-local SQL when Heber flow data was unavailable.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - `get_opposing_flow(...)` now returns zero-shaped defaults (`{"count": 0, "premium": 0.0}`) when Heber is unavailable and no longer calls local SQL fallback,
+  - `get_flow_aggression(...)` now returns null-shaped defaults when Heber is unavailable and no longer calls local SQL fallback,
+  - `get_institutional_flow_1w(...)` now returns `None` when Heber is unavailable and no longer calls local SQL fallback,
+  - removed:
+    - `_get_opposing_flow_sql(...)`
+    - `_get_flow_aggression_sql(...)`
+    - `_get_institutional_flow_1w_sql(...)`.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+    - `test_get_opposing_flow_returns_zeroes_when_heber_empty`
+    - `test_get_flow_aggression_returns_none_when_heber_empty`
+    - `test_get_institutional_flow_1w_returns_none_when_heber_empty`
+    - each asserts no SQL fallback invocation.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "opposing_flow or flow_aggression or institutional_flow_1w"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+
+Result:
+- another high-traffic flow-context fallback cluster is now Heber-only in `main_price_target_labeler`.
+- targeted coupling reduced again:
+  - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `44 -> 41`,
+  - same targeted refs in `main_price_target_labeler.py`: `14 -> 11`.
