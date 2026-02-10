@@ -32,10 +32,12 @@ async def test_rule_overrides():
 
 @pytest.mark.asyncio
 @patch("orion.jobs.reconcile_backfill.async_session_factory")
-async def test_reconcile_backfill_logic(mock_session_factory):
+async def test_reconcile_backfill_logic(mock_session_factory, monkeypatch: pytest.MonkeyPatch):
     """
     Verify run_reconciliation logic with mocked DB results.
     """
+    monkeypatch.setenv("ORION_RECONCILE_BACKFILL_PREFER_HEBER", "false")
+
     # Setup Mock Session
     mock_session = AsyncMock()
     mock_session_factory.return_value.__aenter__.return_value = mock_session

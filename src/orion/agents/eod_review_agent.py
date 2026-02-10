@@ -4,12 +4,15 @@ import math
 import os
 import uuid
 from datetime import datetime, time, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 from dotenv import load_dotenv
+from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
 from sqlalchemy import select
-from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -30,6 +33,7 @@ from orion.storage.models_silver import SilverSignal
 from orion.storage.models_solvers import SolverEdits
 
 logger = setup_struct_logger("orion.agents.eod_review_agent")
+_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 
 class EODReviewAgent(BaseAgent):
@@ -269,6 +273,56 @@ class EODReviewAgent(BaseAgent):
             return (limit_price - fill_price) / limit_price * 10000.0
         return None
 
+    def _prefer_heber_regime_bars(self) -> bool:
+        raw = os.getenv("ORION_EOD_REVIEW_PREFER_HEBER_BARS", "1").strip().lower()
+        return raw not in _PREFER_HEBER_FALSE_VALUES
+
+    async def _load_regime_bars_from_heber(
+        self, tickers: List[str], start_ts: datetime, end_ts: datetime
+    ) -> List[Any] | None:
+        if not tickers:
+            return []
+
+        reader = get_heber_reader()
+        try:
+            frame = await asyncio.to_thread(
+                reader.read_bars,
+                symbols=tickers,
+                asof_time=end_ts,
+                start_time=start_ts,
+                end_time=end_ts,
+            )
+        except Exception:
+            logger.debug("Heber bars read failed for EOD regime context", exc_info=True)
+            return None
+
+        if frame.empty:
+            return []
+
+        ticker_col = None
+        for candidate in ("ticker", "symbol", "underlying", "instrument_key"):
+            if candidate in frame.columns:
+                ticker_col = candidate
+                break
+        close_col = "close" if "close" in frame.columns else ("c" if "c" in frame.columns else None)
+        if ticker_col is None or close_col is None:
+            return []
+
+        tickers_upper = {str(t).upper() for t in tickers}
+        rows: List[Any] = []
+        for _, row in frame.iterrows():
+            ticker_raw = row.get(ticker_col)
+            if ticker_raw is None:
+                continue
+            ticker = str(ticker_raw).upper().split(":")[-1]
+            if ticker not in tickers_upper:
+                continue
+            close = pd.to_numeric(row.get(close_col), errors="coerce")
+            if pd.isna(close):
+                continue
+            rows.append(SimpleNamespace(ticker=ticker, close=float(close)))
+        return rows
+
     async def _gather_data(self, date: datetime.date, *, run_id: str, reports_dir: str) -> Tuple[Dict[str, Any], str]:
         """
         Gather metrics, decisions, and outcomes for the day.
@@ -390,12 +444,23 @@ class EODReviewAgent(BaseAgent):
             tickers_for_regime = {s.ticker for s in sigs if s.ticker} | {t.ticker for t in trade_journal if t.ticker}
 
             if tickers_for_regime:
-                bars_stmt = select(SilverAlpacaBar).where(
-                    SilverAlpacaBar.ticker.in_(sorted(tickers_for_regime)),
-                    SilverAlpacaBar.bar_start_ts_utc >= start_ts,
-                    SilverAlpacaBar.bar_start_ts_utc < end_ts,
-                )
-                bars = (await session.execute(bars_stmt)).scalars().all()
+                heber_bars: List[Any] | None = None
+                if self._prefer_heber_regime_bars():
+                    heber_bars = await self._load_regime_bars_from_heber(
+                        tickers=sorted(tickers_for_regime),
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                    )
+
+                if heber_bars:
+                    bars = heber_bars
+                else:
+                    bars_stmt = select(SilverAlpacaBar).where(
+                        SilverAlpacaBar.ticker.in_(sorted(tickers_for_regime)),
+                        SilverAlpacaBar.bar_start_ts_utc >= start_ts,
+                        SilverAlpacaBar.bar_start_ts_utc < end_ts,
+                    )
+                    bars = (await session.execute(bars_stmt)).scalars().all()
             else:
                 bars = []
 

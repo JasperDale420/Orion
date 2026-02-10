@@ -8140,3 +8140,42 @@ Verification:
 Result:
 - regime-context reads in feature enrichment now align with Heber-first migration semantics.
 - this further reduces runtime dependency on Orion-local `silver_market_tide`/`silver_alpaca_bars` while preserving operational fallback safety.
+
+## 261) Pass 260 Continuation (2026-02-10)
+
+### 261.1 Combined Migration Pass: Reconciliation Counts + EOD Regime Bars Heber-First (TDD-Backed)
+
+Finding:
+- two more runtime paths remained SQL-local only:
+  - `jobs/reconcile_backfill.py` reconciliation silver counts,
+  - `agents/eod_review_agent.py` regime-bar context query.
+- this left parity checks and EOD regime derivation partially dependent on Orion-local silver tables.
+
+Implemented:
+- Updated `src/orion/jobs/reconcile_backfill.py`:
+  - added Heber-first source toggle:
+    - `ORION_RECONCILE_BACKFILL_PREFER_HEBER` (default enabled),
+  - added Heber count adapters for:
+    - bars (`read_bars`)
+    - flow (`read_flow`)
+    - darkpool (`read_darkpool`),
+  - normalized ticker/time columns across Heber schema variants and aggregated daily counts,
+  - retained existing SQL fallback when Heber reads are unavailable/empty.
+- Updated `src/orion/agents/eod_review_agent.py`:
+  - added Heber-first regime-bars toggle:
+    - `ORION_EOD_REVIEW_PREFER_HEBER_BARS` (default enabled),
+  - added Heber bars loader for regime context with row normalization to existing volatility-regime inputs (`ticker`, `close`),
+  - retained existing SQL fallback to `SilverAlpacaBar` when Heber path is unavailable/empty.
+- Added tests:
+  - `tests/unit/test_reconcile_backfill_heber_source.py`
+  - `tests/unit/test_eod_review_agent_heber_bars.py`
+- Adjusted compatibility test:
+  - `tests/unit/test_remediation_rules.py::test_reconcile_backfill_logic`
+  - forces SQL mode (`ORION_RECONCILE_BACKFILL_PREFER_HEBER=false`) so legacy SQL call-count assertions remain deterministic.
+
+Verification:
+- `pytest -q tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_eod_review_agent_heber_bars.py tests/unit/test_eod_agent.py tests/unit/test_remediation_rules.py::test_reconcile_backfill_logic` passed.
+
+Result:
+- reconciliation and EOD regime context now align with Heber-first source semantics while preserving fallback safety.
+- remaining migration scope is now increasingly concentrated in large legacy orchestration surfaces (notably `main_price_target_labeler.py`) and cleanup of older baseline test debt unrelated to this pass.

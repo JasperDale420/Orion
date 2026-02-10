@@ -17,6 +17,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Reconciliation + EOD Regime Bars Heber-First (TDD)**:
+  - Updated `src/orion/jobs/reconcile_backfill.py`:
+    - added Heber-first reconciliation read mode with SQL fallback:
+      - env `ORION_RECONCILE_BACKFILL_PREFER_HEBER` (default enabled),
+    - added Heber adapters for bars/flow/darkpool count aggregation and schema-normalization helpers.
+  - Updated `src/orion/agents/eod_review_agent.py`:
+    - added Heber-first regime-bars read mode with SQL fallback:
+      - env `ORION_EOD_REVIEW_PREFER_HEBER_BARS` (default enabled),
+    - added Heber bars loader that normalizes to existing regime inputs (`ticker`, `close`).
+  - Added tests:
+    - `tests/unit/test_reconcile_backfill_heber_source.py`
+    - `tests/unit/test_eod_review_agent_heber_bars.py`
+  - Updated compatibility test:
+    - `tests/unit/test_remediation_rules.py::test_reconcile_backfill_logic`
+    - forces SQL mode for deterministic legacy call-count assertions.
+  - Verified with:
+    - `pytest -q tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_eod_review_agent_heber_bars.py tests/unit/test_eod_agent.py tests/unit/test_remediation_rules.py::test_reconcile_backfill_logic`
+
 - **Pydantic Settings Migration (os.getenv → SystemSettings/AgentSettings)**:
   - Added 20+ fields to `SystemSettings` and `AgentSettings` in `src/orion/config.py`:
     - `run_id`, `log_format`, `api_key`, `metrics_enabled`, `metrics_port`, `model_dir`,
