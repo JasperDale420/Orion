@@ -129,23 +129,7 @@ async def list_solvers(
     """
     List registered solvers with pagination.
     """
-    # Optimization: Select specific columns to avoid loading large definition_json
-    stmt = (
-        select(
-            Solver.solver_id,
-            Solver.family_name,
-            Solver.stage,
-            Solver.is_active,
-            Solver.config,
-            Solver.created_at_utc,
-            Solver.total_pnl,
-            Solver.sharpe_ratio,
-            Solver.win_rate,
-            Solver.trades_count,
-        )
-        .offset(skip)
-        .limit(limit)
-    )
+    stmt = select(Solver).offset(skip).limit(limit)
     if active_only:
         stmt = stmt.where((Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active)))
 
@@ -153,7 +137,7 @@ async def list_solvers(
     stmt = stmt.order_by(desc(Solver.created_at_utc))
 
     result = await db.execute(stmt)
-    return result.all()
+    return result.scalars().all()
 
 
 @app.get("/solvers/{solver_id}", response_model=SolverResponse)
@@ -206,21 +190,9 @@ async def list_experiments(
     """
     List meta-search experiments.
     """
-    # Optimization: Select specific columns to avoid loading large config_json
-    stmt = (
-        select(
-            MetaExperiment.experiment_id,
-            MetaExperiment.description,
-            MetaExperiment.status,
-            MetaExperiment.best_solver_id,
-            MetaExperiment.start_time_utc,
-            MetaExperiment.end_time_utc,
-        )
-        .order_by(desc(MetaExperiment.start_time_utc))
-        .limit(limit)
-    )
+    stmt = select(MetaExperiment).order_by(desc(MetaExperiment.start_time_utc)).limit(limit)
     result = await db.execute(stmt)
-    return result.all()
+    return result.scalars().all()
 
 
 @app.get("/promotions", response_model=List[PromotionRecommendationResponse])
@@ -324,39 +296,52 @@ async def search(
     trace_id = str(uuid.uuid4())
     logger.info("RAG search request", extra={"event_type": "RAG_SEARCH", "trace_id": trace_id, "ticker": ticker})
 
-    store = VectorStore()
-    ticker_list = None
-    if tickers:
-        ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
-    docs = await store.search(
-        q,
-        k=k,
-        ticker=ticker,
-        tickers=ticker_list,
-        doc_type=doc_type,
-        rule_id=rule_id,
-        model_version=model_version,
-        market_session=session,
-        start=start,
-        end=end,
-        min_premium_usd=min_premium_usd,
-        max_premium_usd=max_premium_usd,
-    )
-    return [
-        {
-            "doc_id": d.doc_id,
-            "source_type": d.source_type,
-            "source_id": d.source_id,
-            "content": d.content,
-            "metadata": d.metadata_json,
-            "pointers": {
-                "source_type": d.source_type,
-                "source_id": d.source_id,
-                **((d.metadata_json or {}).get("pointers") or {}),
-            },
-        }
-        for d in docs
-    ]
+    try:
+        store = VectorStore()
+        ticker_list = None
+        if tickers:
+            ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
+        docs = await store.search(
+            q,
+            k=k,
+            ticker=ticker,
+            tickers=ticker_list,
+            doc_type=doc_type,
+            rule_id=rule_id,
+            model_version=model_version,
+            market_session=session,
+            start=start,
+            end=end,
+            min_premium_usd=min_premium_usd,
+            max_premium_usd=max_premium_usd,
+        )
+        rows: List[Dict[str, Any]] = []
+        for d in docs:
+            meta = getattr(d, "metadata_json", None) or {}
+            source_type = getattr(d, "source_type", None)
+            source_id = getattr(d, "source_id", None)
+            rows.append(
+                {
+                    "doc_id": getattr(d, "doc_id", None),
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "content": getattr(d, "content", None),
+                    "metadata": meta,
+                    "pointers": {
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        **(meta.get("pointers") or {}),
+                    },
+                }
+            )
+        return rows
+    except Exception as e:
+        logger.error(
+            "RAG search failed",
+            extra={"event_type": "RAG_SEARCH_ERROR", "trace_id": trace_id, "error": str(e)},
+            exc_info=True,
+        )
+        return []
 
 
 def _dt_iso(dt: datetime | None) -> str | None:

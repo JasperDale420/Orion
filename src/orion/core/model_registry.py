@@ -15,11 +15,13 @@ class ModelRegistry(AsyncSingleton):
     Supports local file paths (joblib/pickle).
     """
 
+    _cache: Dict[str, Any] = {}
+
     def __init__(self) -> None:
         super().__init__()
-        self._cache: Dict[str, Any] = {}
 
-    def get(self, model_uri: str) -> Optional[Any]:
+    @classmethod
+    def get(cls, model_uri: str) -> Optional[Any]:
         """
         Retrieves a model from the registry. Uses LRU-like caching.
 
@@ -37,8 +39,8 @@ class ModelRegistry(AsyncSingleton):
             path = model_uri
 
         # Check Cache
-        if path in self._cache:
-            return self._cache[path]
+        if path in cls._cache:
+            return cls._cache[path]
 
         # Load
         try:
@@ -53,11 +55,11 @@ class ModelRegistry(AsyncSingleton):
             model = joblib.load(path)
 
             # Update Cache (Simple unbounded for now, or naive check)
-            if len(self._cache) > 20:
+            if len(cls._cache) > 20:
                 # Evict one
-                self._cache.pop(next(iter(self._cache)))
+                cls._cache.pop(next(iter(cls._cache)))
 
-            self._cache[path] = model
+            cls._cache[path] = model
             logger.info(f"Loaded model from {path}")
             return model
 
@@ -65,5 +67,6 @@ class ModelRegistry(AsyncSingleton):
             logger.error(f"Failed to load model from {path}: {e}")
             return None
 
-    def clear_cache(self) -> None:
-        self._cache.clear()
+    @classmethod
+    def clear_cache(cls) -> None:
+        cls._cache.clear()

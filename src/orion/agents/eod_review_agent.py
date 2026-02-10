@@ -47,12 +47,14 @@ class EODReviewAgent(BaseAgent):
     def __init__(
         self,
         *,
+        llm_client: Optional[Any] = None,
         vector_store: Optional[Any] = None,
         proposal_builder: Optional[ProposalBuilder] = None,
     ):
         from orion.config import agent_settings
 
         super().__init__(name="EODReview", model=agent_settings.model_name)
+        self.llm_client = llm_client
         self.vector_store = vector_store or VectorStore()
         self.proposal_builder = proposal_builder or ProposalBuilder()
 
@@ -1076,6 +1078,17 @@ Analyze today's performance and identify:
 
         try:
             from orion.config import agent_settings
+
+            if self.llm_client is not None:
+                completion = await self.llm_client.chat.completions.create(
+                    model=agent_settings.model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+                content = completion.choices[0].message.content
+                return extract_json_from_response(content)
 
             # Build combined prompt for codex CLI
             full_prompt = build_chat_prompt(system_prompt, user_prompt)

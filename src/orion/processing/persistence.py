@@ -265,7 +265,7 @@ async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeE
         for i in range(0, len(flow_rows), BATCH_SIZE):
             batch = flow_rows[i : i + BATCH_SIZE]
             stmt = insert(SilverOptionFlow).values(batch)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["event_id", "flow_ts_utc"])
+            stmt = stmt.on_conflict_do_nothing(index_elements=["event_id"])
             await session.execute(stmt)
     if bar_rows:
         for i in range(0, len(bar_rows), BATCH_SIZE):

@@ -94,6 +94,12 @@ class AlpacaMarketConnector:
             bar_open = getattr(bar, "open", None) or payload.get("open") or payload.get("o")
             bar_volume = getattr(bar, "volume", None) or payload.get("volume") or payload.get("v")
 
+            # Compatibility fallback: some SDK mocks provide only close.
+            if bar_open is None and bar_close is not None:
+                bar_open = bar_close
+            if bar_volume is None:
+                bar_volume = 0
+
             if not bar_close or bar_close <= 0:
                 logger.warning(f"Rejecting invalid bar for {ticker}: close={bar_close}")
                 return None

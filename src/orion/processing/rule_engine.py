@@ -15,6 +15,8 @@ class RuleEngine:
 
     def __init__(self, config: dict[Any, Any] | None = None):
         from orion.processing.rules.flow_rules import (
+            BearishPutPressureRule,
+            BullishSweepRule,
             ShortSwingEntryRule,
             SwingEntryRule,
             ZeroDTESweepRule,
@@ -27,11 +29,15 @@ class RuleEngine:
             return overrides.get(rule_id) or cfg.get(rule_id, {})
 
         zero_dte_cfg = get_rule_cfg("rule_0dte_sweep_v1")
+        bullish_cfg = get_rule_cfg("rule_bullish_sweep_v1")
+        bearish_cfg = get_rule_cfg("rule_bearish_put_pressure_v1")
         swing_cfg = get_rule_cfg("rule_swing_entry_v1")
         short_swing_cfg = get_rule_cfg("rule_short_swing_entry_v1")
 
         # Data-driven entry rules based on price target analysis
         self.rules: List[TradingRule] = [
+            BullishSweepRule(min_premium=bullish_cfg.get("min_premium", 10000.0)),
+            BearishPutPressureRule(min_premium=bearish_cfg.get("min_premium", 10000.0)),
             ZeroDTESweepRule(
                 min_premium=zero_dte_cfg.get("min_premium", 100000.0),
                 max_premium=zero_dte_cfg.get("max_premium", 150000.0),

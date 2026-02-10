@@ -1,14 +1,14 @@
+import inspect
 import logging
 import math
 from datetime import datetime
 from typing import Any, Iterable, List
 
-from sqlalchemy import Float, cast, select
-
 from orion.rag.embeddings import EmbeddingClient
 from orion.shared.utils import parse_timestamptz
 from orion.storage.db import async_session_factory
 from orion.storage.models_rag import RagDocument
+from sqlalchemy import Float, cast, select
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 class VectorStore:
     def __init__(self) -> None:
         self.embedder = EmbeddingClient()
+
+    async def _resolve_embedding(self, text: str) -> list[float]:
+        maybe = self.embedder.get_embedding(text)
+        if inspect.isawaitable(maybe):
+            return await maybe
+        return maybe
 
     async def add_document(
         self, doc_id: str, content: str, source_type: str, source_id: str, metadata: dict[str, Any]
@@ -26,7 +32,7 @@ class VectorStore:
         embedding: list[float] = []
         embedding_vec = None
         try:
-            embedding = await self.embedder.get_embedding(content)
+            embedding = await self._resolve_embedding(content)
             embedding_vec = embedding if len(embedding) == 1536 else None
         except Exception as e:
             logger.warning(f"Embedding unavailable; storing document without vector. doc_id={doc_id} err={e}")
@@ -49,6 +55,8 @@ class VectorStore:
             logger.info(f"Indexed doc: {doc_id}")
 
     def _cosine_sim(self, a: Iterable[float], b: Iterable[float]) -> float:
+        if a is None or b is None:
+            return float("-inf")
         aa = list(a)
         bb = list(b)
         if len(aa) != len(bb) or not aa:
@@ -78,7 +86,7 @@ class VectorStore:
         """Semantic search with optional metadata filters."""
         query_embedding: list[float] | None = None
         try:
-            query_embedding = await self.embedder.get_embedding(query)
+            query_embedding = await self._resolve_embedding(query)
         except Exception as e:
             logger.warning(f"Embedding unavailable for query; falling back to keyword-only search: {e}")
 
@@ -114,11 +122,11 @@ class VectorStore:
                 stmt_base = stmt_base.where(RagDocument.metadata_json["timestamp"].as_string() < end_dt.isoformat())
             if min_premium_usd is not None:
                 stmt_base = stmt_base.where(
-                    cast(RagDocument.metadata_json["premium_usd"].as_float(), Float) >= float(min_premium_usd)
+                    cast(RagDocument.metadata_json["premium_usd"].as_string(), Float) >= float(min_premium_usd)
                 )
             if max_premium_usd is not None:
                 stmt_base = stmt_base.where(
-                    cast(RagDocument.metadata_json["premium_usd"].as_float(), Float) <= float(max_premium_usd)
+                    cast(RagDocument.metadata_json["premium_usd"].as_string(), Float) <= float(max_premium_usd)
                 )
 
             # Prefer server-side vector search if available; otherwise fallback to in-python ranking.
@@ -134,7 +142,7 @@ class VectorStore:
                     .limit(max(200, k))
                 )
                 result = await db.execute(stmt_vec)
-                vec_docs = list(result.scalars().all())
+                vec_docs = list(result.scalars().all() or [])
             except Exception as e:
                 logger.warning(f"Server-side vector search unavailable, falling back to python rank: {e}")
 
@@ -145,7 +153,7 @@ class VectorStore:
                 .limit(200)
             )
             result_kw = await db.execute(stmt_kw)
-            kw_docs = list(result_kw.scalars().all())
+            kw_docs = list(result_kw.scalars().all() or [])
 
             merged: dict[str, RagDocument] = {d.doc_id: d for d in vec_docs}
             for d in kw_docs:
@@ -155,3 +163,6 @@ class VectorStore:
             if vec_docs and query_embedding:
                 docs = sorted(docs, key=lambda d: self._cosine_sim(d.embedding, query_embedding), reverse=True)
             return docs[:k]
+
+        async with async_session_factory() as session:
+            return await execute_search(session)

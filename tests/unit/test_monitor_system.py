@@ -13,7 +13,7 @@ from orion.storage.models_dlq import DeadLetterQueue
 
 
 @pytest.mark.asyncio
-async def test_monitor_logic(caplog):
+async def test_monitor_logic(caplog, capsys):
     """
     Verify monitor detects:
     1. Stale Heartbeats
@@ -46,10 +46,8 @@ async def test_monitor_logic(caplog):
             await check_heartbeats(session)
             await check_dlq(session)
 
-    # Verify Logs
-    # Stale service -> ERROR
-    assert "ALERT: Stale Heartbeat for stale_service" in caplog.text
-    # Healthy service -> INFO
-    assert "Heartbeat OK: healthy_service" in caplog.text
-    # DLQ -> ERROR
-    assert "ALERT: 1 new Failures in DLQ" in caplog.text
+    # Verify emitted structured logs (stdout JSON in this project).
+    out = capsys.readouterr().out
+    assert "ALERT: Stale Heartbeat for stale_service" in out
+    assert "Heartbeat OK: healthy_service" in out
+    assert "ALERT: 1 new Failures in DLQ" in out

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from orion.api.main import app
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
@@ -60,7 +60,7 @@ async def test_pointer_endpoints_return_raw_entities(monkeypatch):
         await session.commit()
 
     headers = {"x-api-key": "testkey"}
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         ev = (await client.get("/events/evt_1", headers=headers)).json()
         assert ev["event_id"] == "evt_1"
         assert ev["payload"]["ticker"] == "SPY"

@@ -197,8 +197,14 @@ class MultiAxisRegimeDetector:
         self.trend_threshold = trend_threshold
         self.vol_window = vol_window
 
-    def detect_session(self, ts: datetime) -> SessionRegime:
+    def detect_session(self, ts: datetime | str) -> SessionRegime:
         """Classify session based on ET market hours."""
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                ts = datetime.utcnow()
+
         # Convert to ET (UTC-5 during EST, UTC-4 during EDT)
         # Approximate: use UTC and offset by 5 hours
         et_hour = (ts.hour - 5) % 24

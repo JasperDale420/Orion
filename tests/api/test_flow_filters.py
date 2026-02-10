@@ -29,7 +29,7 @@ async def test_flows_endpoint_supports_min_premium_filter(monkeypatch):
                 ask=1.1,
                 underlying_price=500.0,
                 aggressor="ASK",
-                is_sweep="true",
+                is_sweep=True,
                 flags_json={"is_sweep": True},
                 volume_contract=1,
                 open_interest=10,
@@ -52,7 +52,7 @@ async def test_flows_endpoint_supports_min_premium_filter(monkeypatch):
                 ask=1.1,
                 underlying_price=500.0,
                 aggressor="ASK",
-                is_sweep="true",
+                is_sweep=True,
                 flags_json={"is_sweep": True},
                 volume_contract=1,
                 open_interest=10,
@@ -64,6 +64,7 @@ async def test_flows_endpoint_supports_min_premium_filter(monkeypatch):
     headers = {"x-api-key": "testkey"}
     # Use ASGITransport to avoid DeprecationWarning/TypeError with newer httpx
     from httpx import ASGITransport
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         rows = (await client.get("/flows", headers=headers, params={"ticker": "SPY", "min_premium_usd": 1000})).json()
         assert isinstance(rows, list)

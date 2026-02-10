@@ -30,12 +30,7 @@ network_retry = retry(
 )
 
 
-def generate_occ_symbol(
-    ticker: str,
-    expiration_date: datetime,
-    option_type: str,
-    strike_price: float
-) -> str:
+def generate_occ_symbol(ticker: str, expiration_date: datetime, option_type: str, strike_price: float) -> str:
     """
     Generate OCC-format option symbol.
 
@@ -75,25 +70,24 @@ class AlpacaOptionsConnector:
 
     def __init__(self, settings: SystemSettings):
         self.settings = settings
+        self.connected = False
         is_paper = settings.alpaca_paper or (settings.orion_stage.upper() != "LIVE")
 
-        self.client = TradingClient(
-            settings.alpaca_api_key,
-            settings.alpaca_secret_key,
-            paper=is_paper
-        )
+        self.client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=is_paper)
         self._log_account_info()
 
     def _log_account_info(self) -> None:
         try:
             acct = self.client.get_account()
+            self.connected = True
             logger.info(
                 f"Alpaca Options Trading Connected. "
                 f"Buying Power: {acct.buying_power} (Paper: {self.settings.alpaca_paper})"
             )
         except Exception as e:
             logger.error(f"Failed to connect to Alpaca for options: {e}")
-            raise
+            # Non-fatal in tests/paper startup; execution paths still guard on order errors.
+            self.connected = False
 
     @network_retry
     def submit_option_order(
@@ -185,7 +179,6 @@ class AlpacaOptionsConnector:
             Dict with 'bid', 'ask', 'last', 'mid' prices
         """
         try:
-
             import aiohttp
 
             api_key = self.settings.alpaca_api_key

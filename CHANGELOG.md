@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Post-merge compatibility remediation pass (TDD batch)**:
+  - stabilized API test compatibility for newer `httpx` transport usage (`ASGITransport`) and boolean flow fixtures,
+  - restored legacy compatibility paths in core runtime:
+    - `EODReviewAgent` constructor/LLM compatibility,
+    - `RiskSettings` legacy fields (`max_order_size_usd`, `max_ticker_exposure_usd`),
+    - `RiskManager` metric guards and legacy exposure handling,
+    - `ModelRegistry` class-level API compatibility for `get()` / `clear_cache()`,
+  - made options connector account probe non-fatal at startup to avoid hard init failures in non-auth test runs,
+  - fixed silver flow upsert conflict target (`event_id`) to match schema constraints,
+  - restored rule coverage by re-enabling bullish/bearish flow rules in `RuleEngine`,
+  - improved search + RAG resilience:
+    - robust embedding resolution (sync/async),
+    - safer JSON premium filtering + fallback behavior,
+    - defensive `/search` result mapping and error handling,
+  - made `SolverRouter` session factory resolution patch-friendly and test-stable,
+  - updated monitor test assertions to structured-log output capture.
+
 - **HTTP Client: requests → httpx** — Migrated all HTTP clients from `requests` to `httpx`:
   - 4 UW connectors: `uw_greek_exposure_connector.py`, `uw_iv_rank_connector.py`, `uw_market_tide_connector.py`, `uw_max_pain_connector.py`
   - `gateway_contract_probe.py`
@@ -16,6 +33,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Exception mappings: `HTTPError→HTTPStatusError`, `Timeout→TimeoutException`, `ConnectionError→ConnectError`, `RequestException→HTTPError`
 
 ### Added
+
+- **Validate Features Overnight-Gap Heber-First Spot Check (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+    - `validate_overnight_gap(...)` now prefers Heber bars-derived `(today_open, prior_close)` inputs and falls back to local SQL only when Heber data is unavailable,
+    - added `_get_overnight_gap_inputs_from_heber_for_validation(...)` with schema/time normalization for Heber bar frames.
+  - Updated tests in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_source_adapter.py`:
+    - `test_validate_overnight_gap_prefers_heber_when_available`
+    - `test_validate_overnight_gap_falls_back_to_local_when_heber_empty`.
+  - Verified with:
+    - `pytest -q tests/unit/test_validate_features_source_adapter.py -k "overnight_gap"`
+    - `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py`
+    - `ruff check src/orion/jobs/validate_features.py tests/unit/test_validate_features_source_adapter.py`
 
 - **Feature Enrichment Heber-First VIX Context Reads (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:

@@ -11,8 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import dateutil.parser
-
-from orion.shared.db_utils import db_query, db_write
+from orion.shared.db_utils import db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SignalType, SilverSignal
@@ -67,14 +66,13 @@ class FeatureEngine:
             logger.error(f"Failed to hydrate FeatureEngine: {e}")
 
     async def _hydrate_single_ticker(self, ticker: str) -> None:
+        from orion.storage.models_silver import SilverAlpacaBar
         from sqlalchemy import select
 
-        from orion.storage.models_silver import SilverAlpacaBar
-
         try:
+            from orion.storage.db import async_session_factory
 
-            async def fetch_bars(session: Any) -> List[Any]:
-                # Fetch last N bars
+            async with async_session_factory() as session:
                 stmt = (
                     select(SilverAlpacaBar)
                     .where(SilverAlpacaBar.ticker == ticker)
@@ -82,9 +80,7 @@ class FeatureEngine:
                     .limit(self.max_history_len)
                 )
                 result = await session.execute(stmt)
-                return result.scalars().all()
-
-            bars = await db_query(fetch_bars)
+                bars = result.scalars().all()
 
             if not bars:
                 return
@@ -127,9 +123,8 @@ class FeatureEngine:
         Writes computed features to the GoldFeatureEvent table.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from sqlalchemy.dialects.postgresql import insert
-
         from orion.storage.models_gold import GoldFeatureEvent
+        from sqlalchemy.dialects.postgresql import insert
 
         # Ensure ID/PK uniqueness
         if not ticker or not ts:
@@ -157,9 +152,8 @@ class FeatureEngine:
         Batch write features to Gold store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from sqlalchemy.dialects.postgresql import insert
-
         from orion.storage.models_gold import GoldFeatureEvent
+        from sqlalchemy.dialects.postgresql import insert
 
         if not signals:
             return
@@ -184,8 +178,9 @@ class FeatureEngine:
         total = len(rows)
 
         try:
+            from orion.storage.db import async_session_factory
 
-            async def insert_chunks(session: Any) -> None:
+            async with async_session_factory() as session:
                 for i in range(0, total, chunk_size):
                     chunk = rows[i : i + chunk_size]
                     stmt = insert(GoldFeatureEvent).values(chunk)
@@ -194,8 +189,7 @@ class FeatureEngine:
                         set_={"features": stmt.excluded.features},
                     )
                     await session.execute(stmt)
-
-            await db_write(insert_chunks)
+                await session.commit()
             logger.info(f"Persisted {total} feature events to Gold Store.")
         except Exception as e:
             logger.error(f"Failed to batch persist features: {e}")
@@ -207,14 +201,14 @@ class FeatureEngine:
         Hydrates SilverSignals from Gold Feature store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from sqlalchemy import and_, select
-
         from orion.storage.models_gold import GoldFeatureEvent
+        from sqlalchemy import and_, select
 
         signals = []
         try:
+            from orion.storage.db import async_session_factory
 
-            async def fetch_gold_features(session: Any) -> List[Any]:
+            async with async_session_factory() as session:
                 stmt = (
                     select(GoldFeatureEvent)
                     .where(
@@ -227,11 +221,8 @@ class FeatureEngine:
                     )
                     .order_by(GoldFeatureEvent.event_ts_utc.asc())
                 )
-
                 result = await session.execute(stmt)
-                return result.scalars().all()
-
-            rows = await db_query(fetch_gold_features)
+                rows = result.scalars().all()
 
             for r in rows:
                 # Reconstruct SilverSignal
@@ -322,6 +313,8 @@ class FeatureEngine:
 
         # Normalize is_sweep
         is_sweep = features.get("is_sweep")
+        if is_sweep is None:
+            is_sweep = features.get("sweep")
         if isinstance(is_sweep, str):
             features["is_sweep"] = is_sweep.strip().lower() in {"true", "1", "yes", "y"}
         elif is_sweep is None:

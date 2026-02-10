@@ -17,7 +17,8 @@ _metrics: "Metrics | None" = None
 try:
     from orion.shared.metrics import Metrics
 
-    _metrics = Metrics.get_instance()
+    _maybe_metrics = Metrics.get_instance()
+    _metrics = _maybe_metrics if hasattr(_maybe_metrics, "risk_equity") else None
 except ImportError:
     pass
 
@@ -266,7 +267,11 @@ class RiskManager:
     ) -> bool:
         abs_proj = abs(projected_signed)
         abs_curr = abs(effective_signed)
-        limit = self.current_equity * cfg.max_ticker_exposure_pct
+        limit = (
+            float(cfg.max_ticker_exposure_usd)
+            if getattr(cfg, "max_ticker_exposure_usd", None) is not None
+            else self.current_equity * cfg.max_ticker_exposure_pct
+        )
 
         if abs_proj > limit:
             if abs_proj < abs_curr:
@@ -287,7 +292,7 @@ class RiskManager:
         position_vega: float = 0.0,
     ) -> bool:
         """Check portfolio-level Greeks limits for options trades.
-        
+
         All checks use PROJECTED values (current + new position) to prevent
         trades that would breach limits upon execution.
         """
@@ -455,9 +460,11 @@ class RiskManager:
         # Get current time in ET
         if timestamp is None:
             from zoneinfo import ZoneInfo
+
             timestamp = datetime.now(ZoneInfo("America/New_York"))
         elif timestamp.tzinfo is None:
             from zoneinfo import ZoneInfo
+
             timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
 
         # Market close is 4:00 PM ET
@@ -504,9 +511,11 @@ class RiskManager:
         # Get current time in ET
         if timestamp is None:
             from zoneinfo import ZoneInfo
+
             timestamp = datetime.now(ZoneInfo("America/New_York"))
         elif timestamp.tzinfo is None:
             from zoneinfo import ZoneInfo
+
             timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
 
         market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
@@ -526,7 +535,7 @@ class RiskManager:
         """
         Calculates position size based on risk per trade.
         Caps at max_order_size_pct of account equity.
-        
+
         Note: For correlation-aware sizing, use calculate_size_with_correlation().
         """
         if entry_price <= 0:
@@ -564,58 +573,61 @@ class RiskManager:
     ) -> float:
         """
         Calculates position size with correlation adjustment.
-        
+
         First calculates base size using standard risk-per-trade,
         then applies correlation penalty if new ticker is highly
         correlated with existing holdings.
-        
+
         Args:
             ticker: Symbol to size
             entry_price: Entry price per share
             stop_loss_pct: Optional stop loss percentage
             account_equity: Optional account equity override
-            
+
         Returns:
             Position size in shares (may be reduced from base size)
         """
         # Get base size
         base_qty = self.calculate_size(entry_price, stop_loss_pct, account_equity)
-        
+
         if base_qty <= 0:
             return 0.0
-            
+
         # Apply correlation adjustment if enabled and adjuster available
         if not self.config.correlation_size_scaling:
             return base_qty
-            
+
         if not hasattr(self, "_correlation_adjuster") or self._correlation_adjuster is None:
             return base_qty
-            
+
         # Get existing position tickers
         existing_tickers = [t for t, p in self.positions.items() if p.get("qty", 0) != 0]
-        
+
         if not existing_tickers:
             return base_qty
-            
+
         # Get correlation-adjusted multiplier
-        multiplier = await self._correlation_adjuster.get_size_multiplier(
-            ticker, existing_tickers, self.config
-        )
-        
+        multiplier = await self._correlation_adjuster.get_size_multiplier(ticker, existing_tickers, self.config)
+
         adjusted_qty = max(1.0, math.floor(base_qty * multiplier))
-        
+
         if adjusted_qty < base_qty:
             logger.info(
                 f"Correlation sizing for {ticker}: {base_qty:.0f} -> {adjusted_qty:.0f} shares (x{multiplier:.2f})",
-                extra={"event": "correlation_size_applied", "ticker": ticker, "base": base_qty, "adjusted": adjusted_qty}
+                extra={
+                    "event": "correlation_size_applied",
+                    "ticker": ticker,
+                    "base": base_qty,
+                    "adjusted": adjusted_qty,
+                },
             )
-            
+
         return float(adjusted_qty)
 
     def set_correlation_adjuster(self, adjuster: "CorrelationAdjuster") -> None:
         """
         Inject correlation adjuster for size scaling.
-        
+
         Args:
             adjuster: CorrelationAdjuster instance with market connector
         """
@@ -720,7 +732,7 @@ class RiskManager:
         await db_write(save_risk_state)
         logger.info("Risk state persisted to DB")
         # Metrics: track risk state
-        if _metrics:
+        if _metrics and hasattr(_metrics, "risk_equity"):
             _metrics.risk_equity.set(self.current_equity)
             _metrics.risk_daily_loss.set(self.current_daily_loss)
             _metrics.risk_open_positions.set(self.open_positions)
@@ -755,7 +767,7 @@ class RiskManager:
         Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
         Idempotent: Checks fill_id against in-memory history.
-        
+
         Args:
             ticker: Symbol filled
             qty: Quantity filled
@@ -769,7 +781,7 @@ class RiskManager:
             return
 
         self.processed_fill_ids.add(fill_id)
-        
+
         # Calculate slippage if expected price provided
         if expected_price is not None and expected_price > 0:
             slippage_bps = (price - expected_price) / expected_price * 10000
@@ -785,7 +797,7 @@ class RiskManager:
                     "side": side,
                 },
             )
-            if _metrics:
+            if _metrics and hasattr(_metrics, "slippage_bps"):
                 _metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
 
         # Standardize: side='buy' -> positive qty effect, side='sell'/'short' -> negative qty effect
@@ -882,7 +894,7 @@ class RiskManager:
         await self._save_state()
 
         # Metrics: track ticker exposure
-        if _metrics:
+        if _metrics and hasattr(_metrics, "risk_exposure"):
             _metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
 
     async def update_post_trade(

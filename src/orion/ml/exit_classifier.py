@@ -316,7 +316,7 @@ class ExitFeatures:
     premium_usd: float
     dte_at_entry: int
     is_sweep: bool
-    bucket: str
+    bucket: str = ""
 
     # Market context at entry
     iv_rank_at_entry: Optional[float] = None
@@ -365,6 +365,21 @@ class BucketExitClassifier:
         self.feature_names: Dict[str, List[str]] = {}
         self._load_models()
 
+    def _infer_bucket(self, features: ExitFeatures) -> str:
+        """Infer bucket from entry DTE for backward-compatible callers."""
+        bucket = (features.bucket or "").strip().upper()
+        if bucket in BUCKET_CHECKPOINTS:
+            return bucket
+
+        dte = int(features.dte_at_entry)
+        if dte <= 0:
+            return "0DTE"
+        if dte <= 2:
+            return "SHORT_SWING"
+        if dte <= 7:
+            return "SWING"
+        return "POSITION"
+
     def _load_models(self) -> None:
         """Load all bucket-specific exit models."""
         if not MODEL_DIR.exists():
@@ -405,7 +420,8 @@ class BucketExitClassifier:
 
         Uses bucket-specific model if available, else heuristic.
         """
-        bucket = features.bucket
+        bucket = self._infer_bucket(features)
+        features.bucket = bucket
 
         if bucket in self.models:
             return self._ml_predict(features, bucket)
@@ -483,7 +499,7 @@ class BucketExitClassifier:
         # Profit target hit
         if features.current_return_pct >= thresholds["take_profit"]:
             exit_score += 0.5
-            reasons.append(f"Hit {features.current_return_pct:.0f}% (TP={thresholds['take_profit']}%)")
+            reasons.append(f"Return hit {features.current_return_pct:.0f}% (TP={thresholds['take_profit']}%)")
         elif features.current_return_pct >= thresholds["partial_profit"]:
             exit_score += 0.2
             reasons.append(f"Solid {features.current_return_pct:.0f}% gain")
@@ -564,7 +580,7 @@ class BucketExitClassifier:
             if time_pct >= 0.8:  # Last 20% of allowed hold time
                 return 0.5
             elif time_pct >= 0.6:
-                return 0.2
+                return 0.3
         else:
             # Other buckets: gentle time pressure
             if time_pct >= 0.9:
@@ -954,3 +970,17 @@ def reload_exit_classifier() -> BucketExitClassifier:
     global _exit_classifier
     _exit_classifier = BucketExitClassifier()
     return _exit_classifier
+
+
+class ExitClassifier(BucketExitClassifier):
+    """
+    Backward-compatible alias for legacy tests/callers.
+
+    Historical API expected `use_heuristic` and `model` attributes from a single-model
+    classifier; bucketed classifier keeps those semantics via compatibility fields.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.use_heuristic = len(self.models) == 0
+        self.model = None

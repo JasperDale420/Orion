@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any
 
 from dotenv import load_dotenv
 from sqlalchemy import select
@@ -9,10 +9,9 @@ load_dotenv()
 
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.rag.vector_store import VectorStore
-from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
-from orion.storage.db import init_db
+from orion.storage.db import async_session_factory, init_db
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from orion.storage.models_solvers import MetaExperiment, Solver, SolverMetrics
 
@@ -39,13 +38,10 @@ class IndexerService:
         """
         Indexes CandidateTrades.
         """
-
-        async def fetch_candidates(session: Any) -> List[Any]:
+        async with async_session_factory() as session:
             stmt = select(CandidateTrade).order_by(CandidateTrade.timestamp_utc.desc()).limit(limit)
             result = await session.execute(stmt)
-            return result.scalars().all()
-
-        candidates = await db_query(fetch_candidates)
+            candidates = result.scalars().all()
         logger.info(f"Indexing {len(candidates)} candidates...")
 
         for c in candidates:
@@ -93,12 +89,10 @@ class IndexerService:
         PRD 14.1: strategy_backtest_report
         """
 
-        async def fetch_metrics(session: Any) -> List[Any]:
+        async with async_session_factory() as session:
             stmt = select(SolverMetrics).order_by(SolverMetrics.evaluated_at_utc.desc()).limit(limit)
             result = await session.execute(stmt)
-            return result.scalars().all()
-
-        metrics_list = await db_query(fetch_metrics)
+            metrics_list = result.scalars().all()
         logger.info(f"Indexing {len(metrics_list)} solver metrics...")
 
         for m in metrics_list:
@@ -128,12 +122,10 @@ class IndexerService:
         PRD 14.1: trade_journal_doc
         """
 
-        async def fetch_decisions(session: Any) -> List[Any]:
+        async with async_session_factory() as session:
             stmt = select(StrategyDecision).order_by(StrategyDecision.timestamp_utc.desc()).limit(limit)
             result = await session.execute(stmt)
-            return result.scalars().all()
-
-        decisions = await db_query(fetch_decisions)
+            decisions = result.scalars().all()
         logger.info(f"Indexing {len(decisions)} strategy decisions...")
 
         for d in decisions:
@@ -176,12 +168,10 @@ class IndexerService:
         Indexes MetaExperiments (Evolution Cycles).
         """
 
-        async def fetch_experiments(session: Any) -> List[Any]:
+        async with async_session_factory() as session:
             stmt = select(MetaExperiment).order_by(MetaExperiment.start_time_utc.desc()).limit(limit)
             result = await session.execute(stmt)
-            return result.scalars().all()
-
-        experiments = await db_query(fetch_experiments)
+            experiments = result.scalars().all()
         logger.info(f"Indexing {len(experiments)} meta experiments...")
 
         for exp in experiments:
@@ -213,16 +203,14 @@ class IndexerService:
         Indexes Solver DNA and status.
         """
 
-        async def fetch_solvers(session: Any) -> List[Any]:
+        async with async_session_factory() as session:
             stmt = (
                 select(Solver)
                 .where((Solver.status == "active") | ((Solver.status.is_(None)) & (Solver.is_active)))
                 .limit(limit)
             )
             result = await session.execute(stmt)
-            return result.scalars().all()
-
-        solvers = await db_query(fetch_solvers)
+            solvers = result.scalars().all()
         logger.info(f"Indexing {len(solvers)} solver profiles...")
 
         for s in solvers:

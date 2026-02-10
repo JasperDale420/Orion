@@ -39,8 +39,8 @@ class NormalizationEngine:
         ts_str = payload.get("timestamp") or payload.get("created_at")
         flow_ts = parse_timestamptz(ts_str, strict=True)
 
-        # Normalize sweep flag - UW uses 'has_sweep' not 'sweep'
-        is_sweep = payload.get("has_sweep", False)
+        # Normalize sweep flag - support both has_sweep and sweep.
+        is_sweep = payload.get("has_sweep", payload.get("sweep", False))
         if isinstance(is_sweep, str):
             is_sweep = is_sweep.lower() == "true"
         is_block = payload.get("has_floor", False) or payload.get("trade_type") == "BLOCK"

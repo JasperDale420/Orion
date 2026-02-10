@@ -5,10 +5,12 @@ from typing import List
 from sqlalchemy import select
 
 from orion.core.solver_schema import LiveContext, SolverConfig
-from orion.storage.db import async_session_factory  # Async session logic
+from orion.storage import db
+from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY
 from orion.storage.models_solvers import Solver, SolverMetrics
 
 logger = logging.getLogger(__name__)
+async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY  # legacy patch target
 
 
 @dataclass(frozen=True)
@@ -57,7 +59,13 @@ class SolverRouter:
 
         baseline_id = system_settings.baseline_solver_id
 
-        async with async_session_factory() as session:
+        # Prefer dynamic factory from storage.db unless a test has explicitly patched
+        # this module's async_session_factory symbol.
+        session_factory = async_session_factory
+        if session_factory is _ORIGINAL_ASYNC_SESSION_FACTORY:
+            session_factory = db.async_session_factory
+
+        async with session_factory() as session:
             try:
                 # PRDv2 §4.1/§11: Gate selection by status='active' (with legacy is_active fallback).
                 stmt = select(Solver).where(

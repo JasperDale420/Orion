@@ -14,8 +14,12 @@ class RiskSettings(BaseSettings):
     max_daily_loss: float = 1000.0
     max_drawdown_pct: float = 0.05
     max_order_size_pct: float = 0.05  # 5% of account equity
+    # Legacy compatibility field used by older tests/callers.
+    max_order_size_usd: Optional[float] = None
     max_positions: int = 5
     max_ticker_exposure_pct: float = 0.10  # 10% of account equity
+    # Legacy compatibility field used by older tests/callers.
+    max_ticker_exposure_usd: Optional[float] = None
     risk_per_trade_pct: float = 0.01
     enable_shorting: bool = False
     default_stop_loss_pct: float = 0.02
@@ -140,13 +144,21 @@ class SystemSettings(BaseSettings):
 
     # SQLite tuning
     sqlite_lock_retry_attempts: int = Field(default=2, ge=0, validation_alias="ORION_SQLITE_LOCK_RETRY_ATTEMPTS")
-    sqlite_lock_retry_base_delay_seconds: float = Field(default=0.05, ge=0.0, validation_alias="ORION_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS")
-    sqlite_lock_retry_max_delay_seconds: float = Field(default=0.5, ge=0.0, validation_alias="ORION_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS")
+    sqlite_lock_retry_base_delay_seconds: float = Field(
+        default=0.05, ge=0.0, validation_alias="ORION_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS"
+    )
+    sqlite_lock_retry_max_delay_seconds: float = Field(
+        default=0.5, ge=0.0, validation_alias="ORION_SQLITE_LOCK_RETRY_MAX_DELAY_SECONDS"
+    )
 
     # Heber preference flags
     validate_features_prefer_heber: bool = Field(default=True, validation_alias="ORION_VALIDATE_FEATURES_PREFER_HEBER")
-    window_feature_job_prefer_heber: bool = Field(default=True, validation_alias="ORION_WINDOW_FEATURE_JOB_PREFER_HEBER")
-    data_quality_checker_prefer_heber: bool = Field(default=True, validation_alias="ORION_DATA_QUALITY_CHECKER_PREFER_HEBER")
+    window_feature_job_prefer_heber: bool = Field(
+        default=True, validation_alias="ORION_WINDOW_FEATURE_JOB_PREFER_HEBER"
+    )
+    data_quality_checker_prefer_heber: bool = Field(
+        default=True, validation_alias="ORION_DATA_QUALITY_CHECKER_PREFER_HEBER"
+    )
 
     # System Monitor
     monitor_lag_threshold: int = Field(default=300, validation_alias="MONITOR_LAG_THRESHOLD")

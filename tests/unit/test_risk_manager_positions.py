@@ -1,6 +1,4 @@
-"""
-Additional unit tests for RiskManager position tracking.
-"""
+"""Additional unit tests for RiskManager position tracking."""
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,12 +19,12 @@ def risk_manager():
 @pytest.mark.asyncio
 async def test_risk_manager_position_update(risk_manager):
     """Test position tracking after trades."""
-    # Simulate buy order
-    await risk_manager.update_post_trade(ticker="SPY", qty=100, price=500.0, side="BUY", order_id="order_123")
+    # Simulate buy fill
+    await risk_manager.process_fill(ticker="SPY", qty=100, price=500.0, side="BUY", fill_id="fill_123")
 
     # Verify position exists
     assert "SPY" in risk_manager.positions
-    assert risk_manager.positions["SPY"] == 100
+    assert risk_manager.positions["SPY"]["qty"] == 100
     assert risk_manager.open_positions == 1
 
 
@@ -34,13 +32,13 @@ async def test_risk_manager_position_update(risk_manager):
 async def test_risk_manager_close_position(risk_manager):
     """Test closing a position."""
     # Open position
-    await risk_manager.update_post_trade(ticker="SPY", qty=100, price=500.0, side="BUY", order_id="order_1")
+    await risk_manager.process_fill(ticker="SPY", qty=100, price=500.0, side="BUY", fill_id="fill_1")
 
     # Close position
-    await risk_manager.update_post_trade(ticker="SPY", qty=100, price=502.0, side="SELL", order_id="order_2")
+    await risk_manager.process_fill(ticker="SPY", qty=100, price=502.0, side="SELL", fill_id="fill_2")
 
     # Position should be closed
-    assert "SPY" not in risk_manager.positions or risk_manager.positions["SPY"] == 0
+    assert risk_manager.positions["SPY"]["qty"] == 0
     assert risk_manager.open_positions == 0
 
 
@@ -52,15 +50,15 @@ async def test_risk_manager_max_positions_limit(risk_manager):
     rm = RiskManager()
 
     # Add positions up to limit
-    await rm.update_post_trade("SPY", 100, 500.0, "BUY", "o1")
-    await rm.update_post_trade("AAPL", 50, 150.0, "BUY", "o2")
+    await rm.process_fill("SPY", 100, 500.0, "BUY", "fill_o1")
+    await rm.process_fill("AAPL", 50, 150.0, "BUY", "fill_o2")
 
     # Validate should pass for existing positions
-    assert await rm.validate_order_pre_submit(ticker="SPY", side="SELL", qty=50, price=501.0)
+    assert rm.check_order(ticker="SPY", side="SELL", quantity=50, price=501.0)
 
     # Validate should fail for new position when at limit
     # (Validation logic may allow or reject based on implementation)
-    result = await rm.validate_order_pre_submit(ticker="TSLA", side="BUY", qty=10, price=200.0)
+    result = rm.check_order(ticker="TSLA", side="BUY", quantity=10, price=200.0)
     # Just verify it returns a boolean
     assert isinstance(result, bool)
 
@@ -69,17 +67,17 @@ async def test_risk_manager_max_positions_limit(risk_manager):
 async def test_risk_manager_daily_loss_tracking(risk_manager):
     """Test daily loss calculation."""
     # Simulate losing trade
-    await risk_manager.update_post_trade("SPY", 100, 500.0, "BUY", "o1")
-    await risk_manager.update_post_trade("SPY", 100, 490.0, "SELL", "o2")  # $1000 loss
+    await risk_manager.process_fill("SPY", 100, 500.0, "BUY", "fill_o1")
+    await risk_manager.process_fill("SPY", 100, 490.0, "SELL", "fill_o2")  # $1000 loss
 
     # Loss should be tracked
-    assert risk_manager.current_daily_loss < 0
+    assert risk_manager.current_daily_loss > 0
 
 
 @pytest.mark.asyncio
 async def test_risk_manager_pending_orders(risk_manager):
     """Test pending order tracking."""
-    risk_manager.add_pending_order("order_123", "SPY", 100, 500.0)
+    await risk_manager.update_post_trade("SPY", 100, 500.0, "BUY", "order_123")
 
     assert "order_123" in risk_manager.pending_orders
 
@@ -91,14 +89,9 @@ async def test_risk_manager_pending_orders(risk_manager):
 @pytest.mark.asyncio
 async def test_risk_manager_state_persistence(risk_manager):
     """Test risk state persistence to database."""
-    with patch("orion.execution.risk_manager.async_session_factory") as mock_factory:
-        mock_session = AsyncMock()
-        mock_session.__aenter__.return_value = mock_session
-        mock_session.__aexit__.return_value = None
-        mock_factory.return_value = mock_session
+    with patch("orion.execution.risk_manager.db_write", new_callable=AsyncMock) as mock_db_write:
+        # Update position via fill path (calls _save_state)
+        await risk_manager.process_fill("SPY", 100, 500.0, "BUY", "fill_persist")
 
-        # Update position
-        await risk_manager.update_post_trade("SPY", 100, 500.0, "BUY", "o1")
-
-        # Verify session was used
-        assert mock_session.merge.called or mock_session.add.called
+        # Verify persistence hook was invoked
+        assert mock_db_write.await_count >= 1
