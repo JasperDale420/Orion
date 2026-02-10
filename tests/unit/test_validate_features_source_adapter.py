@@ -60,22 +60,18 @@ async def test_fetch_source_summary_prefers_heber(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_summary_falls_back_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_source_summary_returns_empty_when_heber_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def _empty_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):
         assert source == "flow_alerts"
         return None
 
-    async def _local(*, source: str):
-        assert source == "flow_alerts"
-        return {
-            "min_date": "2026-01-01",
-            "max_date": "2026-02-05",
-            "tickers": 7,
-            "backend": "local_db",
-        }
+    async def _fail_local(*, source: str):
+        raise AssertionError("local DB fallback should not be called")
 
     monkeypatch.setattr(validate_features, "_fetch_source_summary_from_heber", _empty_heber)
-    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", _local)
+    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", _fail_local)
 
     summary = await validate_features._fetch_source_summary(
         source="flow_alerts",
@@ -84,8 +80,8 @@ async def test_fetch_source_summary_falls_back_to_local(monkeypatch: pytest.Monk
         prefer_heber=True,
     )
 
-    assert summary["backend"] == "local_db"
-    assert summary["tickers"] == 7
+    assert summary["backend"] in {"heber_unavailable", "source_unavailable"}
+    assert summary["tickers"] == 0
 
 
 @pytest.mark.asyncio
@@ -100,7 +96,11 @@ async def test_fetch_source_summary_accepts_legacy_alias(monkeypatch: pytest.Mon
         }
 
     monkeypatch.setattr(validate_features, "_fetch_source_summary_from_heber", _fake_heber)
-    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_local_db", lambda **_: None)
+    monkeypatch.setattr(
+        validate_features,
+        "_fetch_source_summary_from_local_db",
+        lambda **_: (_ for _ in ()).throw(AssertionError("local DB fallback should not be called")),
+    )
 
     summary = await validate_features._fetch_source_summary(
         source="silver_uw_flow",
@@ -161,29 +161,13 @@ async def test_validate_overnight_gap_prefers_heber_when_available(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_validate_overnight_gap_falls_back_to_local_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_db_query(fn):
-        class _FakeResult:
-            def __init__(self, row):
-                self._row = row
-
-            def fetchone(self):
-                return self._row
-
-        class _FakeSession:
-            def __init__(self):
-                self._count = 0
-
-            async def execute(self, *_args, **_kwargs):
-                self._count += 1
-                if self._count == 1:
-                    return _FakeResult((105.0,))
-                return _FakeResult((100.0,))
-
-        return await fn(_FakeSession())
-
+async def test_validate_overnight_gap_returns_empty_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(validate_features, "_get_overnight_gap_inputs_from_heber_for_validation", lambda **_: None)
-    monkeypatch.setattr(validate_features, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        validate_features,
+        "db_query",
+        lambda _fn: (_ for _ in ()).throw(AssertionError("local DB fallback should not be called")),
+    )
 
     results = await validate_features.validate_overnight_gap(
         {"overnight_gap_pct": 5.0},
@@ -192,24 +176,17 @@ async def test_validate_overnight_gap_falls_back_to_local_when_heber_empty(monke
     )
 
     assert results["failed"] == []
-    assert any("matches raw data" in msg for msg in results["passed"])
+    assert results["passed"] == []
 
 
 @pytest.mark.asyncio
-async def test_validate_darkpool_falls_back_to_local_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_db_query(fn):
-        class _FakeResult:
-            def fetchone(self):
-                return (200,)
-
-        class _FakeSession:
-            async def execute(self, *_args, **_kwargs):
-                return _FakeResult()
-
-        return await fn(_FakeSession())
-
+async def test_validate_darkpool_warns_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(validate_features, "_get_darkpool_volume_from_heber_for_validation", lambda *_: None)
-    monkeypatch.setattr(validate_features, "db_query", _fake_db_query)
+    monkeypatch.setattr(
+        validate_features,
+        "db_query",
+        lambda _fn: (_ for _ in ()).throw(AssertionError("local DB fallback should not be called")),
+    )
 
     results = await validate_features.validate_darkpool(
         {"darkpool_volume_1h": 200},
@@ -217,8 +194,9 @@ async def test_validate_darkpool_falls_back_to_local_when_heber_empty(monkeypatc
         datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
     )
 
+    assert results["passed"] == []
     assert results["failed"] == []
-    assert any("matches" in msg for msg in results["passed"])
+    assert any("no Heber" in msg for msg in results["warnings"])
 
 
 def test_summarize_heber_frame_uses_instrument_key_and_ts_event() -> None:

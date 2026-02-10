@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Reconciliation + Validation Heber-only hardening (TDD, combined pass)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/reconcile_backfill.py`:
+    - removed Bronze-vs-local-Silver SQL fallback comparison path,
+    - reconciliation now compares Bronze counts to Heber-derived counts only,
+    - added explicit dataset skip behavior when Heber is disabled/unavailable.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+    - removed local SQL fallback reads from:
+      - `validate_overnight_gap(...)`,
+      - `validate_darkpool(...)`,
+      - source coverage audit fallback path,
+    - source audit now returns explicit unavailable summaries when Heber data is missing.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_reconcile_backfill_heber_source.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_remediation_rules.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_source_adapter.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_remediation_rules.py`
+    - `pytest -q tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_remediation_rules.py`
+
 - **Position restart-resume guardrail (TDD)**:
   - added regression coverage in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_position_manager_filter.py` to ensure closed positions are not rehydrated as open after process restart (`initialize()` after `ExitDecision` insertion),
   - covers `open -> close -> restart` lifecycle explicitly.

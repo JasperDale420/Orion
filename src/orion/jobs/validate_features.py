@@ -145,39 +145,14 @@ async def validate_overnight_gap(label: Dict, ticker: str, entry_ts: datetime) -
     if label.get("overnight_gap_pct") is None:
         return {"passed": [], "failed": []}
 
-    entry_date = entry_ts.date()
-
-    async def query(session: Any) -> Tuple[Optional[float], Optional[float]]:
-        # Get today's open
-        today_stmt = text("""
-            SELECT open FROM silver_alpaca_bars
-            WHERE ticker = :ticker AND DATE(bar_start_ts_utc) = :entry_date
-            ORDER BY bar_start_ts_utc ASC LIMIT 1
-        """)
-        today_result = await session.execute(today_stmt, {"ticker": ticker, "entry_date": entry_date})
-        today_row = today_result.fetchone()
-        today_open = today_row[0] if today_row else None
-
-        # Get prior day's close
-        prior_stmt = text("""
-            SELECT close FROM silver_alpaca_bars
-            WHERE ticker = :ticker AND DATE(bar_start_ts_utc) < :entry_date
-            ORDER BY bar_start_ts_utc DESC LIMIT 1
-        """)
-        prior_result = await session.execute(prior_stmt, {"ticker": ticker, "entry_date": entry_date})
-        prior_row = prior_result.fetchone()
-        prior_close = prior_row[0] if prior_row else None
-
-        return today_open, prior_close
-
     heber_inputs = _get_overnight_gap_inputs_from_heber_for_validation(
         ticker=ticker,
         entry_ts=entry_ts,
     )
     if heber_inputs is None:
-        today_open, prior_close = await db_query(query)
-    else:
-        today_open, prior_close = heber_inputs
+        return {"passed": passed, "failed": failed}
+
+    today_open, prior_close = heber_inputs
 
     if today_open and prior_close and prior_close > 0:
         expected_gap = ((today_open - prior_close) / prior_close) * 100
@@ -249,7 +224,9 @@ def _get_overnight_gap_inputs_from_heber_for_validation(
     today_rows = normalized[normalized["bar_date"] == entry_date]
     prior_rows = normalized[normalized["bar_date"] < entry_date]
 
-    today_open = float(today_rows.iloc[0]["open"]) if not today_rows.empty and pd.notna(today_rows.iloc[0]["open"]) else None
+    today_open = (
+        float(today_rows.iloc[0]["open"]) if not today_rows.empty and pd.notna(today_rows.iloc[0]["open"]) else None
+    )
     prior_close = (
         float(prior_rows.iloc[-1]["close"]) if not prior_rows.empty and pd.notna(prior_rows.iloc[-1]["close"]) else None
     )
@@ -264,26 +241,13 @@ async def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dic
     def _count_darkpool_from_heber(minutes: int) -> Optional[int]:
         return _get_darkpool_volume_from_heber_for_validation(ticker, entry_ts, minutes)
 
-    async def count_dp(session: Any, minutes: int) -> int:
-        start_ts = entry_ts - timedelta(minutes=minutes)
-        stmt = text("""
-            SELECT COALESCE(SUM(size_shares), 0) as total
-            FROM silver_uw_darkpool
-            WHERE ticker = :ticker
-            AND dark_ts_utc BETWEEN :start_ts AND :entry_ts
-        """)
-        result = await session.execute(stmt, {"ticker": ticker, "start_ts": start_ts, "entry_ts": entry_ts})
-        row = result.fetchone()
-        return int(row[0]) if row else 0
-
     # Check darkpool_1h
     if label.get("darkpool_volume_1h") is not None:
         expected = _count_darkpool_from_heber(60)
-        if expected is None:
-            expected = await db_query(lambda s: count_dp(s, 60))
-
         actual = label["darkpool_volume_1h"]
-        if expected == actual:
+        if expected is None:
+            warnings.append(f"darkpool_1h: no Heber darkpool data found for {ticker}")
+        elif expected == actual:
             passed.append(f"darkpool_1h={actual} matches ✓")
         elif expected == 0:
             warnings.append(f"darkpool_1h: no raw darkpool data found for {ticker}")
@@ -452,49 +416,41 @@ async def run_sanity_checks() -> Dict[str, Any]:
 
 _AUDIT_SOURCE_SPECS: dict[str, dict[str, Any]] = {
     SOURCE_BARS: {
-        "sql": "SELECT MIN(DATE(bar_start_ts_utc)), MAX(DATE(bar_start_ts_utc)), COUNT(DISTINCT ticker) FROM silver_alpaca_bars",
         "features": ["overnight_gap", "vwap", "underlying"],
         "heber_method": "read_bars",
         "row_count_as_tickers": False,
     },
     SOURCE_FLOW: {
-        "sql": "SELECT MIN(DATE(flow_ts_utc)), MAX(DATE(flow_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_flow",
         "features": ["greeks", "iv", "rvol", "flow_aggression", "checkpoints"],
         "heber_method": "read_flow",
         "row_count_as_tickers": False,
     },
     SOURCE_DARKPOOL: {
-        "sql": "SELECT MIN(DATE(dark_ts_utc)), MAX(DATE(dark_ts_utc)), COUNT(DISTINCT ticker) FROM silver_uw_darkpool",
         "features": ["darkpool_*"],
         "heber_method": "read_darkpool",
         "row_count_as_tickers": False,
     },
     SOURCE_GREEK_EXPOSURE: {
-        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(DISTINCT ticker) FROM silver_greek_exposure",
         "features": ["gex", "vex"],
         "heber_method": "read_greek_exposure",
         "row_count_as_tickers": False,
     },
     SOURCE_MAX_PAIN: {
-        "sql": "SELECT MIN(date), MAX(date), COUNT(DISTINCT ticker) FROM silver_max_pain",
         "features": ["max_pain_distance"],
         "heber_method": "read_max_pain",
         "row_count_as_tickers": False,
     },
     SOURCE_MARKET_TIDE: {
-        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_market_tide",
         "features": ["market_tide_30m", "market_tide_direction"],
         "heber_method": "read_market_tide",
         "row_count_as_tickers": True,
     },
     SOURCE_VIX: {
-        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_vix_data",
         "features": ["vix_at_entry", "vix_regime"],
         "heber_method": None,
         "tickers_constant": 1,
     },
     SOURCE_REGIME: {
-        "sql": "SELECT MIN(DATE(ts_utc)), MAX(DATE(ts_utc)), COUNT(*) FROM silver_regime_history",
         "features": ["trend_regime", "vol_regime", "risk_regime", "session_regime"],
         "heber_method": None,
         "tickers_constant": 1,
@@ -637,28 +593,8 @@ async def _fetch_source_summary_from_heber(
 
 
 async def _fetch_source_summary_from_local_db(*, source: str) -> Dict[str, Any]:
-    source_id = _normalize_source_id(source)
-    spec = _AUDIT_SOURCE_SPECS[source_id]
-
-    async def audit(session: Any) -> Any:
-        result = await session.execute(text(spec["sql"]))
-        return result.fetchone()
-
-    row = await db_query(audit)
-    min_date = str(row[0]) if row and row[0] else None
-    max_date = str(row[1]) if row and row[1] else None
-    tickers_constant = spec.get("tickers_constant")
-    if tickers_constant is not None:
-        tickers = int(tickers_constant)
-    else:
-        tickers = int(row[2]) if row and row[2] else 0
-
-    return {
-        "min_date": min_date,
-        "max_date": max_date,
-        "tickers": tickers,
-        "backend": "local_db",
-    }
+    _ = _normalize_source_id(source)
+    return {"min_date": None, "max_date": None, "tickers": 0, "backend": "local_db_disabled"}
 
 
 async def _fetch_source_summary(
@@ -677,7 +613,8 @@ async def _fetch_source_summary(
         )
         if heber_summary is not None:
             return heber_summary
-    return await _fetch_source_summary_from_local_db(source=source_id)
+        return {"min_date": None, "max_date": None, "tickers": 0, "backend": "heber_unavailable"}
+    return {"min_date": None, "max_date": None, "tickers": 0, "backend": "source_unavailable"}
 
 
 async def _load_label_period() -> Dict[str, Any]:

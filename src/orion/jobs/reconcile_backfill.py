@@ -6,12 +6,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
+from sqlalchemy import func, select
+
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
-from orion.storage.models_silver import SilverAlpacaBar, SilverDarkPool, SilverOptionFlow
-from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
@@ -21,32 +21,20 @@ _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 class ReconciliationDataset:
     name: str
     bronze_event_type: str
-    silver_model: Any
-    silver_ts_field: Any
-    silver_ticker_field: Any
 
 
 DATASET_SPECS: tuple[ReconciliationDataset, ...] = (
     ReconciliationDataset(
         name="ALPACA_BAR_1M",
         bronze_event_type="ALPACA_BAR_1M",
-        silver_model=SilverAlpacaBar,
-        silver_ts_field=SilverAlpacaBar.bar_start_ts_utc,
-        silver_ticker_field=SilverAlpacaBar.ticker,
     ),
     ReconciliationDataset(
         name="UW_FLOW",
         bronze_event_type="UW_FLOW",
-        silver_model=SilverOptionFlow,
-        silver_ts_field=SilverOptionFlow.flow_ts_utc,
-        silver_ticker_field=SilverOptionFlow.ticker,
     ),
     ReconciliationDataset(
         name="UW_DARKPOOL",
         bronze_event_type="UW_DARKPOOL",
-        silver_model=SilverDarkPool,
-        silver_ts_field=SilverDarkPool.dark_ts_utc,
-        silver_ticker_field=SilverDarkPool.ticker,
     ),
 )
 
@@ -131,9 +119,8 @@ async def _heber_counts_for_spec(
         return None
 
     if frame.empty:
-        return None
-    counts = _to_counts_map(frame)
-    return counts if counts else None
+        return {}
+    return _to_counts_map(frame)
 
 
 async def run_reconciliation(lookback_days: int = 7) -> None:
@@ -150,6 +137,7 @@ async def run_reconciliation(lookback_days: int = 7) -> None:
         try:
             total_discrepancies = 0
             checked_datasets = 0
+            skipped_datasets = 0
             for spec in DATASET_SPECS:
                 stmt_bronze = (
                     select(
@@ -162,30 +150,30 @@ async def run_reconciliation(lookback_days: int = 7) -> None:
                     .group_by(BronzeEvent.ticker, func.date(BronzeEvent.event_ts_utc))
                 )
 
-                stmt_silver = (
-                    select(
-                        spec.silver_ticker_field.label("ticker"),
-                        func.date(spec.silver_ts_field).label("event_date"),
-                        func.count().label("count"),
-                    )
-                    .where(spec.silver_ts_field >= start_date)
-                    .group_by(spec.silver_ticker_field, func.date(spec.silver_ts_field))
-                )
-
                 result_bronze = await session.execute(stmt_bronze)
                 bronze_rows = result_bronze.all()
                 bronze_counts = {(r.ticker, str(r.event_date)): r.count for r in bronze_rows}
 
-                silver_counts: dict[tuple[str, str], int] = {}
-                if _prefer_heber_source():
-                    heber_counts = await _heber_counts_for_spec(spec, start_date)
-                    if heber_counts is not None:
-                        silver_counts = heber_counts
+                if not _prefer_heber_source():
+                    logger.warning(
+                        "Reconciliation skipped for %s: ORION_RECONCILE_BACKFILL_PREFER_HEBER disabled and "
+                        "local SQL fallback has been removed.",
+                        spec.name,
+                    )
+                    skipped_datasets += 1
+                    continue
 
-                if not silver_counts:
-                    result_silver = await session.execute(stmt_silver)
-                    silver_rows = result_silver.all()
-                    silver_counts = {(r.ticker, str(r.event_date)): r.count for r in silver_rows}
+                heber_counts = await _heber_counts_for_spec(spec, start_date)
+                if heber_counts is None:
+                    logger.warning(
+                        "Reconciliation skipped for %s: Heber source unavailable and local SQL fallback has "
+                        "been removed.",
+                        spec.name,
+                    )
+                    skipped_datasets += 1
+                    continue
+
+                silver_counts = heber_counts
 
                 discrepancies = 0
                 for key, b_count in bronze_counts.items():
@@ -213,12 +201,14 @@ async def run_reconciliation(lookback_days: int = 7) -> None:
                 else:
                     logger.warning(f"Reconciliation [{spec.name}] complete: Found {discrepancies} discrepancies.")
 
-            if total_discrepancies == 0:
+            if total_discrepancies == 0 and skipped_datasets == 0:
                 logger.info(f"Reconciliation Complete: No gaps found across {checked_datasets} datasets.")
             else:
                 logger.warning(
-                    f"Reconciliation Complete: Found {total_discrepancies} discrepancies across "
-                    f"{checked_datasets} datasets."
+                    "Reconciliation Complete: Found %s discrepancies across %s datasets (%s skipped).",
+                    total_discrepancies,
+                    checked_datasets,
+                    skipped_datasets,
                 )
         except Exception as e:
             logger.error(f"Reconciliation Failed: {e}")

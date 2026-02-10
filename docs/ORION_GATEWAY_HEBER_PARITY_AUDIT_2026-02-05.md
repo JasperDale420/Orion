@@ -8809,3 +8809,44 @@ Result:
 - `main_feature_enrichment` active `silver_*` SQL coupling is now reduced to one intentional write surface:
   - `INSERT INTO silver_regime_history` (regime snapshot persistence).
 - active `FROM/JOIN/INSERT/UPDATE silver_*` count in `main_feature_enrichment`: `2 -> 1`.
+
+## 280) Pass 279 Continuation (2026-02-10)
+
+### 280.1 `reconcile_backfill` + `validate_features` Local SQL Fallback Removal (TDD-Backed, Combined)
+
+Finding:
+- two remaining audit/remediation hotspots still contained operational local-SQL fallback paths:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/reconcile_backfill.py` compared Bronze counts to local Silver SQL when Heber was unavailable,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py` still fell back to local SQL for:
+    - overnight gap validation,
+    - darkpool validation,
+    - source coverage summary fallback.
+- this preserved Orion-local table coupling in the exact modules intended to validate centralized Gateway/Heber migration.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/reconcile_backfill.py`:
+  - removed local Silver model query/fallback path entirely,
+  - reconciliation now compares Bronze counts vs Heber-derived counts only,
+  - added explicit dataset skip semantics when Heber is disabled/unavailable (instead of silently falling back to local SQL).
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+  - removed local SQL fallback from `validate_overnight_gap(...)`,
+  - removed local SQL fallback from `validate_darkpool(...)`,
+  - removed local SQL fallback usage from source-audit summary flow (`_fetch_source_summary(...)` now returns explicit unavailable summaries when Heber data is missing),
+  - removed hardcoded per-source local `silver_*` SQL audit query strings from `_AUDIT_SOURCE_SPECS`.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_reconcile_backfill_heber_source.py`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_remediation_rules.py`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_source_adapter.py`
+  - converted fallback assertions to Heber-only/no-local-DB contract assertions.
+
+Verification:
+- `pytest -q tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_remediation_rules.py` passed.
+- `pytest -q tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_remediation_rules.py` passed.
+
+Result:
+- active executable local-SQL coupling is removed from both job modules:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/reconcile_backfill.py`:
+    - `FROM/JOIN/INSERT/UPDATE silver_*`: `0`,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+    - `FROM/JOIN/INSERT/UPDATE silver_*`: `0`.
+- remaining `silver_*` tokens in `validate_features.py` are now legacy source-id aliases only (compatibility mapping), not executable SQL paths.

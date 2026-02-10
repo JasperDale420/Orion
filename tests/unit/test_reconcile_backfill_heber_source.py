@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
+
 from orion.jobs.reconcile_backfill import DATASET_SPECS, run_reconciliation
 
 
@@ -48,7 +49,7 @@ async def test_run_reconciliation_prefers_heber_counts(
 @pytest.mark.asyncio
 @patch("orion.jobs.reconcile_backfill.get_heber_reader")
 @patch("orion.jobs.reconcile_backfill.async_session_factory")
-async def test_run_reconciliation_falls_back_to_local_sql(
+async def test_run_reconciliation_does_not_fall_back_to_local_sql(
     mock_session_factory: MagicMock,
     mock_get_heber_reader: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
@@ -76,4 +77,4 @@ async def test_run_reconciliation_falls_back_to_local_sql(
 
     await run_reconciliation(lookback_days=1)
 
-    assert mock_session.execute.call_count == len(DATASET_SPECS) * 2
+    assert mock_session.execute.call_count == len(DATASET_SPECS)
