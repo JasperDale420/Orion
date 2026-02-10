@@ -17,6 +17,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Execution Recent-Flow + Meta-Search Event Fetching Heber-First (TDD)**:
+  - Updated `src/orion/main_execution.py`:
+    - added Heber-first recent-flow sourcing for exit-rule context with SQL fallback:
+      - env `ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW` (default enabled),
+    - added Heber flow normalization for exit-rule-compatible fields (`flow_ts_utc`, `premium_usd`, `put_call`, `aggressor`, `is_sweep`, `option_chain`, `expiry`, `strike`).
+  - Updated `src/orion/agents/meta_search_agent.py`:
+    - added Heber-first event-fetching for solver backtest windows with SQL fallback:
+      - env `ORION_META_SEARCH_PREFER_HEBER_EVENTS` (default enabled),
+    - split event loading into explicit Heber/local methods,
+    - fixed local SQL fetch path to actually execute before returning.
+  - Added tests:
+    - `tests/unit/test_main_execution_heber_source.py`
+    - `tests/unit/test_meta_search_heber_source.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_main_execution_exit_scope.py tests/unit/test_main_execution_heber_source.py tests/unit/test_meta_search_hardening.py tests/unit/test_meta_search_heber_source.py`
+
 - **Combined Pass: Reconciliation + EOD Regime Bars Heber-First (TDD)**:
   - Updated `src/orion/jobs/reconcile_backfill.py`:
     - added Heber-first reconciliation read mode with SQL fallback:

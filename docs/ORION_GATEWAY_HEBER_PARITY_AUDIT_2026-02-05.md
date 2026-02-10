@@ -8179,3 +8179,49 @@ Verification:
 Result:
 - reconciliation and EOD regime context now align with Heber-first source semantics while preserving fallback safety.
 - remaining migration scope is now increasingly concentrated in large legacy orchestration surfaces (notably `main_price_target_labeler.py`) and cleanup of older baseline test debt unrelated to this pass.
+
+## 262) Pass 261 Continuation (2026-02-10)
+
+### 262.1 Combined Migration Pass: Execution Recent-Flow + Meta-Search Event Fetching Heber-First (TDD-Backed)
+
+Finding:
+- `main_execution.fetch_recent_flow_for_ticker(...)` was SQL-local only (`SilverOptionFlow`), so live exit-rule context did not use Heber reads.
+- `MetaSearchAgent._fetch_silver_events(...)` was SQL-local only and contained a latent defect:
+  - it defined the SQL fetch routine but returned before executing it, producing empty datasets in the local path.
+
+Implemented:
+- Updated `src/orion/main_execution.py`:
+  - added Heber-first recent-flow mode with SQL fallback:
+    - `ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW` (default enabled),
+  - added Heber flow normalization helpers for exit-rule-compatible fields:
+    - `flow_ts_utc`
+    - `premium_usd`
+    - `put_call`
+    - `aggressor`
+    - `is_sweep`
+    - `option_chain`
+    - `expiry`
+    - `strike`.
+- Updated `src/orion/agents/meta_search_agent.py`:
+  - added Heber-first event-source mode:
+    - `ORION_META_SEARCH_PREFER_HEBER_EVENTS` (default enabled),
+  - split event ingestion into explicit methods:
+    - `_fetch_events_from_heber(...)`
+    - `_fetch_events_from_local_sql(...)`
+  - fixed local SQL path to actually execute data retrieval before returning,
+  - retained fallback behavior to SQL when Heber is unavailable/empty.
+- Added tests:
+  - `tests/unit/test_main_execution_heber_source.py`
+  - `tests/unit/test_meta_search_heber_source.py`
+  - validates:
+    - Heber-preferred behavior,
+    - fallback behavior when Heber read fails,
+    - preserved scope behavior for existing exit-rule tests.
+
+Verification:
+- `pytest -q tests/unit/test_main_execution_exit_scope.py tests/unit/test_main_execution_heber_source.py tests/unit/test_meta_search_hardening.py tests/unit/test_meta_search_heber_source.py` passed.
+
+Result:
+- execution loop flow context and meta-search data loading now align with Heber-first source semantics while preserving SQL fallback safety.
+- technical debt note retained from baseline:
+  - `tests/unit/test_meta_search.py::test_meta_search_cycle` fails due missing `_log_experiment` on `MetaSearchAgent`, unrelated to this migration pass.

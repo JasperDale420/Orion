@@ -1,15 +1,19 @@
 import asyncio
+import os
 import re
 import signal
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, List, Optional, Tuple
 
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from sqlalchemy import select
 
+from orion.clients.heber_reader import get_heber_reader
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
 from orion.shared.db_utils import db_query, db_write
@@ -22,6 +26,7 @@ from orion.storage.models_trade_journal import TradeJournalEntry
 
 # Configure Logger
 logger = setup_struct_logger("orion.execution")
+_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 
 def _should_apply_options_exit_rules(position: Any) -> bool:
@@ -52,7 +57,11 @@ def _scope_recent_flow_for_position(position: Any, recent_flow: List[Any]) -> Li
         if flow_chain == position_chain:
             scoped.append(flow)
             continue
-        if not flow_chain and position_contract is not None and _flow_matches_contract_components(flow, position_contract):
+        if (
+            not flow_chain
+            and position_contract is not None
+            and _flow_matches_contract_components(flow, position_contract)
+        ):
             scoped.append(flow)
     return scoped
 
@@ -85,15 +94,142 @@ def _flow_matches_contract_components(flow: Any, contract: Tuple[str, str, float
     except (TypeError, ValueError):
         return False
 
-    return (
-        flow_expiry == expiry
-        and flow_put_call == put_call
-        and abs(flow_strike - strike) < 1e-6
-    )
+    return flow_expiry == expiry and flow_put_call == put_call and abs(flow_strike - strike) < 1e-6
+
+
+def _prefer_heber_recent_flow_source() -> bool:
+    raw = os.getenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "1").strip().lower()
+    return raw not in _PREFER_HEBER_FALSE_VALUES
+
+
+def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _normalize_flow_ticker(value: Any) -> str | None:
+    if value is None:
+        return None
+    ticker = str(value).strip().upper()
+    if not ticker:
+        return None
+    if ":" in ticker:
+        ticker = ticker.split(":")[-1]
+    return ticker or None
+
+
+def _normalize_put_call(value: Any) -> str:
+    if value is None:
+        return ""
+    token = str(value).strip().upper()
+    if token in {"C", "CALL"}:
+        return "C"
+    if token in {"P", "PUT"}:
+        return "P"
+    return token
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] | None:
+    reader = get_heber_reader()
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=minutes)
+    try:
+        frame = await asyncio.to_thread(
+            reader.read_flow,
+            symbols=[ticker],
+            asof_time=now,
+            start_time=cutoff,
+        )
+    except Exception as exc:
+        logger.warning(f"Heber recent flow read failed for {ticker}: {exc}")
+        return None
+
+    if frame.empty:
+        return []
+
+    ticker_col = _first_existing_column(frame, ("ticker", "symbol", "instrument_key"))
+    ts_col = _first_existing_column(frame, ("flow_ts_utc", "ts_event", "timestamp"))
+    premium_col = _first_existing_column(frame, ("premium_usd", "premium"))
+    if ticker_col is None or ts_col is None or premium_col is None:
+        return []
+
+    put_call_col = _first_existing_column(frame, ("put_call", "call_put"))
+    aggressor_col = _first_existing_column(frame, ("aggressor", "aggressor_ind", "side"))
+    sweep_col = _first_existing_column(frame, ("is_sweep", "sweep"))
+    option_chain_col = _first_existing_column(frame, ("option_chain", "option_symbol"))
+    expiry_col = _first_existing_column(frame, ("expiry",))
+    strike_col = _first_existing_column(frame, ("strike",))
+    underlying_col = _first_existing_column(frame, ("underlying_price", "underlying"))
+    event_id_col = _first_existing_column(frame, ("event_id", "id"))
+
+    work = frame.copy()
+    work["_event_ts"] = pd.to_datetime(work[ts_col], utc=True, errors="coerce")
+    work = work.dropna(subset=["_event_ts"]).sort_values("_event_ts", ascending=False).head(100)
+
+    ticker_upper = ticker.upper()
+    rows: List[Any] = []
+    for idx, row in work.iterrows():
+        flow_ticker = _normalize_flow_ticker(row.get(ticker_col))
+        if flow_ticker != ticker_upper:
+            continue
+
+        premium = pd.to_numeric(row.get(premium_col), errors="coerce")
+        if pd.isna(premium):
+            continue
+
+        underlying_price = None
+        if underlying_col is not None:
+            underlying_price_value = pd.to_numeric(row.get(underlying_col), errors="coerce")
+            if not pd.isna(underlying_price_value):
+                underlying_price = float(underlying_price_value)
+
+        strike = None
+        if strike_col is not None:
+            strike_value = pd.to_numeric(row.get(strike_col), errors="coerce")
+            if not pd.isna(strike_value):
+                strike = float(strike_value)
+
+        option_chain = str(row.get(option_chain_col)).strip() if option_chain_col and row.get(option_chain_col) else ""
+        event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
+
+        rows.append(
+            SimpleNamespace(
+                event_id=event_id,
+                ticker=flow_ticker,
+                flow_ts_utc=row["_event_ts"].to_pydatetime(),
+                premium_usd=float(premium),
+                put_call=_normalize_put_call(row.get(put_call_col)) if put_call_col else "",
+                aggressor=str(row.get(aggressor_col)).strip().upper()
+                if aggressor_col and row.get(aggressor_col)
+                else "",
+                is_sweep=_coerce_bool(row.get(sweep_col)) if sweep_col else False,
+                underlying_price=underlying_price,
+                option_chain=option_chain,
+                expiry=row.get(expiry_col) if expiry_col else None,
+                strike=strike,
+            )
+        )
+    return rows
 
 
 async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[Any]:
     """Fetch recent flow data for a ticker for exit rule evaluation."""
+    if _prefer_heber_recent_flow_source():
+        heber_rows = await _fetch_recent_flow_from_heber(ticker=ticker, minutes=minutes)
+        if heber_rows:
+            return heber_rows
 
     async def query_flow(session: Any) -> List[Any]:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)

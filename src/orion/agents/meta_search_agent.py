@@ -5,10 +5,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import pandas as pd
 import yaml
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from orion.clients.heber_reader import get_heber_reader
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
@@ -25,6 +27,7 @@ from orion.storage.models_solvers import (
 )
 
 logger = logging.getLogger(__name__)
+_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 # Refinement loop configuration
 REFINEMENT_SCORE_THRESHOLD = 0.5  # Minimum composite score to promote to paper
@@ -983,15 +986,189 @@ class MetaSearchAgent:
 
         return solver_run, metrics
 
-    async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
+    def _prefer_heber_event_source(self) -> bool:
+        raw = os.getenv("ORION_META_SEARCH_PREFER_HEBER_EVENTS", "1").strip().lower()
+        return raw not in _PREFER_HEBER_FALSE_VALUES
+
+    @staticmethod
+    def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
+        for name in names:
+            if name in df.columns:
+                return name
+        return None
+
+    @staticmethod
+    def _normalize_ticker(value: Any) -> str | None:
+        if value is None:
+            return None
+        ticker = str(value).strip().upper()
+        if not ticker:
+            return None
+        if ":" in ticker:
+            ticker = ticker.split(":")[-1]
+        return ticker or None
+
+    async def _fetch_events_from_heber(
+        self, task: EvaluationTask
+    ) -> Tuple[List[Any], List[Any], Dict[str, Any]] | None:
+        from orion.storage.models import BronzeEvent
+
+        reader = get_heber_reader()
+        asof_time = task.end_time_utc
+        symbols = task.ticker_filter or []
+
+        try:
+            bars_frame = await asyncio.to_thread(
+                reader.read_bars,
+                symbols=symbols,
+                asof_time=asof_time,
+                start_time=task.start_time_utc,
+                end_time=task.end_time_utc,
+            )
+            flow_frame = await asyncio.to_thread(
+                reader.read_flow,
+                symbols=symbols or None,
+                asof_time=asof_time,
+                start_time=task.start_time_utc,
+                min_premium=1000,
+            )
+        except Exception as exc:
+            logger.warning(f"Heber read failed for meta-search events: {exc}")
+            return None
+
+        alpaca_events: List[Any] = []
+        flow_events: List[Any] = []
+        price_data: Dict[str, Any] = {}
+        data_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+
+        if not bars_frame.empty:
+            ticker_col = self._first_existing_column(bars_frame, ("ticker", "symbol", "instrument_key"))
+            ts_col = self._first_existing_column(bars_frame, ("bar_start_ts", "bar_start_ts_utc", "ts_event"))
+            open_col = self._first_existing_column(bars_frame, ("open", "o"))
+            high_col = self._first_existing_column(bars_frame, ("high", "h"))
+            low_col = self._first_existing_column(bars_frame, ("low", "l"))
+            close_col = self._first_existing_column(bars_frame, ("close", "c"))
+            volume_col = self._first_existing_column(bars_frame, ("volume", "v"))
+            vwap_col = self._first_existing_column(bars_frame, ("vwap", "vw"))
+            trades_col = self._first_existing_column(bars_frame, ("trade_count", "n"))
+
+            if ticker_col and ts_col and open_col and high_col and low_col and close_col and volume_col:
+                tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
+                for _, row in bars_frame.iterrows():
+                    ticker = self._normalize_ticker(row.get(ticker_col))
+                    if ticker is None:
+                        continue
+                    if tickers_filter and ticker not in tickers_filter:
+                        continue
+                    bar_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
+                    if pd.isna(bar_ts):
+                        continue
+                    payload = {
+                        "ticker": ticker,
+                        "o": row.get(open_col),
+                        "h": row.get(high_col),
+                        "l": row.get(low_col),
+                        "c": row.get(close_col),
+                        "v": row.get(volume_col),
+                        "vw": row.get(vwap_col) if vwap_col else None,
+                        "t": bar_ts.to_pydatetime(),
+                        "n": row.get(trades_col) if trades_col else None,
+                    }
+                    alpaca_events.append(payload)
+                    data_by_ticker.setdefault(ticker, []).append(
+                        {
+                            "timestamp": bar_ts.to_pydatetime(),
+                            "open": row.get(open_col),
+                            "high": row.get(high_col),
+                            "low": row.get(low_col),
+                            "close": row.get(close_col),
+                            "volume": row.get(volume_col),
+                        }
+                    )
+
+        for ticker, bar_list in data_by_ticker.items():
+            if not bar_list:
+                continue
+            df = pd.DataFrame(bar_list)
+            df.set_index("timestamp", inplace=True)
+            df.sort_index(inplace=True)
+            price_data[ticker] = df
+
+        if not flow_frame.empty:
+            ticker_col = self._first_existing_column(flow_frame, ("ticker", "symbol", "instrument_key"))
+            ts_col = self._first_existing_column(flow_frame, ("flow_ts_utc", "ts_event", "timestamp"))
+            premium_col = self._first_existing_column(flow_frame, ("premium_usd", "premium"))
+            put_call_col = self._first_existing_column(flow_frame, ("put_call", "call_put"))
+            sweep_col = self._first_existing_column(flow_frame, ("is_sweep", "sweep"))
+            aggressor_col = self._first_existing_column(flow_frame, ("aggressor", "aggressor_ind", "side"))
+            underlying_col = self._first_existing_column(flow_frame, ("underlying_price", "underlying"))
+            expiry_col = self._first_existing_column(flow_frame, ("expiry",))
+            event_id_col = self._first_existing_column(flow_frame, ("event_id", "id"))
+
+            if ticker_col and ts_col and premium_col:
+                tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
+                for idx, row in flow_frame.iterrows():
+                    ticker = self._normalize_ticker(row.get(ticker_col))
+                    if ticker is None:
+                        continue
+                    if tickers_filter and ticker not in tickers_filter:
+                        continue
+                    flow_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
+                    if pd.isna(flow_ts):
+                        continue
+                    premium = pd.to_numeric(row.get(premium_col), errors="coerce")
+                    if pd.isna(premium):
+                        continue
+
+                    payload: Dict[str, Any] = {
+                        "ticker": ticker,
+                        "premium": float(premium),
+                        "put_call": str(row.get(put_call_col)).strip().upper()
+                        if put_call_col and row.get(put_call_col)
+                        else "",
+                        "is_sweep": bool(row.get(sweep_col)) if sweep_col else False,
+                        "aggressor_ind": (
+                            str(row.get(aggressor_col)).strip().upper()
+                            if aggressor_col and row.get(aggressor_col)
+                            else ""
+                        ),
+                        "underlying_price": row.get(underlying_col) if underlying_col else None,
+                    }
+                    if expiry_col and row.get(expiry_col):
+                        payload["expiry"] = row.get(expiry_col)
+                        try:
+                            exp_date = pd.to_datetime(row.get(expiry_col), errors="coerce")
+                            if not pd.isna(exp_date):
+                                payload["dte"] = (exp_date.date() - flow_ts.date()).days
+                        except Exception:
+                            pass
+
+                    flow_events.append(
+                        BronzeEvent(
+                            event_id=(
+                                str(row.get(event_id_col)).strip()
+                                if event_id_col and row.get(event_id_col)
+                                else f"heber_flow_{idx}"
+                            ),
+                            event_type="UW_FLOW",
+                            source="BACKTEST",
+                            event_ts_utc=flow_ts.to_pydatetime(),
+                            payload=payload,
+                            ticker=ticker,
+                        )
+                    )
+
+        return alpaca_events, flow_events, price_data
+
+    async def _fetch_events_from_local_sql(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
         from sqlalchemy import and_, select
 
         from orion.storage.models import BronzeEvent
         from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
 
-        alpaca_events = []
-        flow_events = []
-        price_data = {}
+        alpaca_events: List[Any] = []
+        flow_events: List[Any] = []
+        price_data: Dict[str, Any] = {}
 
         async def fetch_bars_and_flow(session: Any) -> None:
             stmt_bars = (
@@ -1011,7 +1188,7 @@ class MetaSearchAgent:
             res_bars = await session.execute(stmt_bars)
             bars = res_bars.scalars().all()
 
-            data_by_ticker = {}
+            data_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
             for b in bars:
                 payload = {
                     "ticker": b.ticker,
@@ -1026,9 +1203,7 @@ class MetaSearchAgent:
                 }
                 alpaca_events.append(payload)
 
-                if b.ticker not in data_by_ticker:
-                    data_by_ticker[b.ticker] = []
-                data_by_ticker[b.ticker].append(
+                data_by_ticker.setdefault(b.ticker, []).append(
                     {
                         "timestamp": b.bar_start_ts_utc,
                         "open": b.open,
@@ -1038,9 +1213,6 @@ class MetaSearchAgent:
                         "volume": b.volume,
                     }
                 )
-
-            # Build price_data DataFrames from collected bars
-            import pandas as pd
 
             for ticker, bar_list in data_by_ticker.items():
                 if bar_list:
@@ -1081,17 +1253,31 @@ class MetaSearchAgent:
                     except Exception:
                         pass
 
-                be = BronzeEvent(
-                    event_id=f.event_id,
-                    event_type="UW_FLOW",
-                    source="BACKTEST",
-                    event_ts_utc=f.flow_ts_utc,
-                    payload=payload,
-                    ticker=f.ticker,
+                flow_events.append(
+                    BronzeEvent(
+                        event_id=f.event_id,
+                        event_type="UW_FLOW",
+                        source="BACKTEST",
+                        event_ts_utc=f.flow_ts_utc,
+                        payload=payload,
+                        ticker=f.ticker,
+                    )
                 )
-                flow_events.append(be)
+
+        async with async_session_factory() as session:
+            await fetch_bars_and_flow(session)
 
         return alpaca_events, flow_events, price_data
+
+    async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
+        if self._prefer_heber_event_source():
+            heber_data = await self._fetch_events_from_heber(task)
+            if heber_data is not None:
+                alpaca_events, flow_events, price_data = heber_data
+                if alpaca_events or flow_events:
+                    return heber_data
+
+        return await self._fetch_events_from_local_sql(task)
 
     async def scan_for_promotions(self) -> None:
         from orion.core.promotion_rules import STAGE_ORDER, evaluate_stage_transition
