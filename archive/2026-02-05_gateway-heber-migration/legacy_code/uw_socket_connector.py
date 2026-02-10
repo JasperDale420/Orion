@@ -63,6 +63,17 @@ class UWWebsocketConnector:
         logger.info(f"Connecting to UW Websocket: {self.WS_URL}")
 
         while True:
+            # P1 Audit Fix: Check circuit breaker before connecting
+            from orion.core.circuit_breaker import CircuitBreaker
+
+            if await CircuitBreaker().is_open():
+                logger.warning(
+                    "Circuit breaker OPEN, pausing UW websocket connection",
+                    extra={"event_type": "CIRCUIT_BREAKER_SKIP", "component": "UW_SOCKET"},
+                )
+                await asyncio.sleep(30)  # Wait before checking again
+                continue
+
             try:
                 async with websockets.connect(self.WS_URL) as websocket:
                     # Reset backoff on successful connection
