@@ -8225,3 +8225,38 @@ Result:
 - execution loop flow context and meta-search data loading now align with Heber-first source semantics while preserving SQL fallback safety.
 - technical debt note retained from baseline:
   - `tests/unit/test_meta_search.py::test_meta_search_cycle` fails due missing `_log_experiment` on `MetaSearchAgent`, unrelated to this migration pass.
+
+## 263) Pass 262 Continuation (2026-02-10)
+
+### 263.1 Combined Cleanup Pass: Darkpool Contract Drift Hardening + Legacy Helper Decommission (TDD-Backed)
+
+Finding:
+- Darkpool naming remained split across projects (`darkpool_trades` vs `darkpool`), which risked silent empty reads when Silver partitions are keyed by `feed=darkpool`.
+- `main_execution.py` still retained dead legacy helpers (`get_pending_candidates`, `update_candidate_status`) that are no longer part of the active Heber-first execution path.
+
+Implemented:
+- Updated `src/orion/clients/heber_reader.py`:
+  - added darkpool dataset alias fallback order:
+    - `darkpool_trades`
+    - `darkpool`
+  - `read_darkpool(...)` now resolves aliases in order and returns the first non-empty dataset.
+  - added optional `darkpool_dataset` constructor override for deterministic local overrides.
+- Updated `src/orion/main_execution.py`:
+  - removed dead legacy helper surface:
+    - `get_pending_candidates`
+    - `update_candidate_status`
+  - kept the active execution helper contract unchanged:
+    - `fetch_pending_candidates`
+    - `update_decision_status`.
+- Added tests:
+  - `tests/unit/test_heber_reader.py`
+    - `test_read_darkpool_falls_back_to_alias_dataset`
+  - `tests/unit/test_main_execution_decommission.py`
+    - `test_legacy_candidate_status_helpers_removed`.
+
+Verification:
+- `pytest -q tests/unit/test_heber_reader.py tests/unit/test_main_execution_decommission.py tests/unit/test_main_execution_heber_source.py tests/unit/test_main_execution_exit_scope.py` passed.
+
+Result:
+- Orion darkpool reads are now resilient to the current Gateway/Heber naming drift during migration.
+- execution code surface is cleaner and less ambiguous, with legacy helper debt explicitly removed.

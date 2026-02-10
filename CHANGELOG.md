@@ -17,6 +17,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Combined Pass: Heber Darkpool Alias Compatibility + Legacy Execution Helper Decommission (TDD)**:
+  - Updated `src/orion/clients/heber_reader.py`:
+    - added darkpool dataset alias fallback support for Silver reads:
+      - primary `darkpool_trades`
+      - fallback alias `darkpool`,
+    - `read_darkpool(...)` now tries configured aliases in order and returns the first non-empty dataset,
+    - added optional constructor override for darkpool dataset selection.
+  - Updated `src/orion/main_execution.py`:
+    - removed dead legacy helper functions no longer used in runtime flow:
+      - `get_pending_candidates`
+      - `update_candidate_status`,
+    - retained active replacement helpers (`fetch_pending_candidates`, `update_decision_status`).
+  - Added/updated tests:
+    - `tests/unit/test_heber_reader.py`
+      - `test_read_darkpool_falls_back_to_alias_dataset`
+    - `tests/unit/test_main_execution_decommission.py`
+      - `test_legacy_candidate_status_helpers_removed`
+  - Verified with:
+    - `pytest -q tests/unit/test_heber_reader.py tests/unit/test_main_execution_decommission.py tests/unit/test_main_execution_heber_source.py tests/unit/test_main_execution_exit_scope.py`
+
 - **Meta-Search Sonar Remediation Pass (TDD validation)**:
   - Updated `src/orion/agents/meta_search_agent.py` to resolve Sonar reliability/code-smell findings:
     - replaced sync YAML file reads in async ingestion path with `asyncio.to_thread(...)`,

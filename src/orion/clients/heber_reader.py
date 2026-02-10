@@ -26,6 +26,7 @@ logger = structlog.get_logger(__name__)
 _SILVER_BARS_DATASET = "bars"
 _SILVER_FLOW_DATASET = "flow_alerts"
 _SILVER_DARKPOOL_DATASET = "darkpool_trades"
+_SILVER_DARKPOOL_DATASET_ALIASES = ("darkpool_trades", "darkpool")
 _SILVER_MARKET_TIDE_DATASET = "market_tide"
 _SILVER_GREEK_EXPOSURE_DATASET = "greek_exposure"
 _SILVER_MAX_PAIN_DATASET = "max_pain"
@@ -41,10 +42,16 @@ class HeberReader:
         catalog_url: str | None = None,
         data_root: str | Path | None = None,
         http_client: httpx.Client | None = None,
+        darkpool_dataset: str | None = None,
     ):
         self.catalog_url = catalog_url or system_settings.heber_catalog_url
         self.data_root = Path(data_root) if data_root is not None else Path(system_settings.heber_data_root)
         self._client = http_client
+        preferred_darkpool_dataset = darkpool_dataset or _SILVER_DARKPOOL_DATASET
+        self._silver_darkpool_datasets = self._resolve_dataset_alias_order(
+            preferred=preferred_darkpool_dataset,
+            aliases=_SILVER_DARKPOOL_DATASET_ALIASES,
+        )
 
     @property
     def client(self) -> httpx.Client:
@@ -131,7 +138,7 @@ class HeberReader:
         normalized_timeframe = timeframe.strip().lower()
         if normalized_timeframe not in _SUPPORTED_BAR_TIMEFRAMES:
             raise ValueError(
-                f"Unsupported bars timeframe '{timeframe}'. " f"Supported values: {sorted(_SUPPORTED_BAR_TIMEFRAMES)}"
+                f"Unsupported bars timeframe '{timeframe}'. Supported values: {sorted(_SUPPORTED_BAR_TIMEFRAMES)}"
             )
 
         instrument_keys = self._to_instrument_keys(symbols)
@@ -191,14 +198,17 @@ class HeberReader:
     ) -> pd.DataFrame:
         """Read darkpool prints from Heber Silver (`feed=darkpool_trades`)."""
         instrument_keys = self._to_instrument_keys(symbols) if symbols else None
-
-        return self._read_silver_dataset(
-            dataset=_SILVER_DARKPOOL_DATASET,
-            instrument_keys=instrument_keys,
-            start_time=start_time,
-            end_time=None,
-            asof_time=asof_time,
-        )
+        for dataset in self._silver_darkpool_datasets:
+            df = self._read_silver_dataset(
+                dataset=dataset,
+                instrument_keys=instrument_keys,
+                start_time=start_time,
+                end_time=None,
+                asof_time=asof_time,
+            )
+            if not df.empty:
+                return df
+        return pd.DataFrame()
 
     def read_market_tide(
         self,
@@ -326,6 +336,15 @@ class HeberReader:
             if column in df.columns:
                 return column
         return None
+
+    @staticmethod
+    def _resolve_dataset_alias_order(preferred: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
+        ordered: list[str] = []
+        for dataset in (preferred, *aliases):
+            name = dataset.strip()
+            if name and name not in ordered:
+                ordered.append(name)
+        return tuple(ordered)
 
     @staticmethod
     def _to_utc_timestamp(value: datetime) -> pd.Timestamp:

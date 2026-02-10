@@ -367,31 +367,6 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -
         logger.error(f"Failed to persist signals_live/trade journal: {e}")
 
 
-async def get_pending_candidates() -> list:
-    """Get candidates not yet executed."""
-
-    async def fetch_candidates(session: Any) -> None:
-        result = await session.execute(
-            select(CandidateTrade).where(CandidateTrade.status == "pending").order_by(CandidateTrade.created_at_utc)
-        )
-        return result.scalars().all()
-
-    return await db_query(fetch_candidates)
-
-
-async def update_candidate_status(candidate_id: str, status: str) -> None:
-    """Update candidate execution status."""
-
-    async def update_status(session: Any) -> None:
-        result = await session.execute(select(CandidateTrade).where(CandidateTrade.candidate_id == candidate_id))
-        candidate = result.scalars().first()
-        if candidate:
-            candidate.status = status
-            candidate.updated_at_utc = datetime.now(timezone.utc)
-
-    await db_write(update_status)
-
-
 async def update_decision_status(decision_id: str, status: str) -> None:
     async def update_status(session: Any) -> None:
         stmt = select(StrategyDecision).where(StrategyDecision.decision_id == decision_id)
