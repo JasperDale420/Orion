@@ -4,9 +4,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
-import orion.main_price_target_labeler as labeler
 import pandas as pd
 import pytest
+
+import orion.main_price_target_labeler as labeler
 
 
 def test_get_heber_vix_proxy_snapshot_uses_latest_and_prior_close(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,7 +115,7 @@ async def test_get_regime_at_entry_falls_back_to_sql_when_heber_vix_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_get_regime_at_entry_uses_shared_market_tide_sql_fallback_helper(
+async def test_get_regime_at_entry_leaves_market_tide_none_when_heber_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import orion.analysis.regime as regime_module
@@ -134,9 +135,6 @@ async def test_get_regime_at_entry_uses_shared_market_tide_sql_fallback_helper(
                 vix_regime=SimpleNamespace(value="NORMAL"),
             )
 
-    async def _fake_market_tide_sql(*_args: Any, **_kwargs: Any):
-        return {"net_premium": 321.0, "direction": "BULLISH"}
-
     async def _fail_db_query(_callback):
         raise AssertionError("db_query should not be called directly for market tide fallback")
 
@@ -148,10 +146,9 @@ async def test_get_regime_at_entry_uses_shared_market_tide_sql_fallback_helper(
         raising=False,
     )
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: None, raising=False)
-    monkeypatch.setattr(labeler, "_get_market_tide_before_entry_sql", _fake_market_tide_sql, raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     result = await labeler.get_regime_at_entry(entry_ts)
 
-    assert captured["market_tide_net"] == 321.0
+    assert captured["market_tide_net"] is None
     assert result["vix_at_entry"] == 19.0

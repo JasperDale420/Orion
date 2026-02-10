@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import orion.main_price_target_labeler as labeler
 import pandas as pd
 import pytest
+
+import orion.main_price_target_labeler as labeler
 
 
 @pytest.mark.asyncio
@@ -31,24 +32,65 @@ async def test_get_gex_at_entry_prefers_heber_when_available(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_get_gex_at_entry_falls_back_to_sql_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_gex_at_entry_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
 
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_sql_fallback(ticker: str, ts: datetime):
-        assert ticker == "AAPL"
-        assert ts == entry_ts
-        return {"gex": 77.0, "vex": 7.7}
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber GEX is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_gex_at_entry_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_gex_at_entry_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_gex_at_entry("AAPL", entry_ts)
 
-    assert result == {"gex": 77.0, "vex": 7.7}
+    assert result == {"gex": None, "vex": None}
+
+
+@pytest.mark.asyncio
+async def test_get_gex_rolling_averages_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {"ts_utc": entry_ts - timedelta(days=2), "gex_oi": 100.0, "vex_oi": 50.0},
+                    {"ts_utc": entry_ts - timedelta(days=1), "gex_oi": 120.0, "vex_oi": 70.0},
+                ]
+            )
+
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _days: int = 20):
+        raise AssertionError("SQL fallback should not run when Heber rolling GEX is available")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_gex_rolling_averages_sql", _fail_sql_fallback, raising=False)
+
+    result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=3)
+
+    assert result == {"gex_rolling_avg": 110.0, "vex_rolling_avg": 60.0}
+
+
+@pytest.mark.asyncio
+async def test_get_gex_rolling_averages_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeHeberReader:
+        def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _days: int = 20):
+        raise AssertionError("SQL fallback should not run when Heber rolling GEX is unavailable")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "_get_gex_rolling_averages_sql", _fail_sql_fallback, raising=False)
+
+    result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=20)
+
+    assert result == {"gex_rolling_avg": None, "vex_rolling_avg": None}
 
 
 @pytest.mark.asyncio
@@ -79,7 +121,7 @@ async def test_get_market_tide_before_entry_prefers_heber_when_available(
 
 
 @pytest.mark.asyncio
-async def test_get_market_tide_before_entry_falls_back_to_sql_when_heber_shape_missing(
+async def test_get_market_tide_before_entry_returns_none_when_heber_shape_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
@@ -88,17 +130,15 @@ async def test_get_market_tide_before_entry_falls_back_to_sql_when_heber_shape_m
         def read_market_tide(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame([{"ts_utc": entry_ts - timedelta(minutes=10), "unexpected": 1}])
 
-    async def _fake_sql_fallback(ts: datetime, minutes: int = 30):
-        assert ts == entry_ts
-        assert minutes == 30
-        return {"net_premium": -50.0, "direction": "BEARISH"}
+    async def _fail_sql_fallback(_entry_ts: datetime, _minutes: int = 30):
+        raise AssertionError("SQL fallback should not run for market tide")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_market_tide_before_entry_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_market_tide_before_entry_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
 
-    assert result == {"net_premium": -50.0, "direction": "BEARISH"}
+    assert result == {"net_premium": None, "direction": None}
 
 
 @pytest.mark.asyncio
@@ -126,7 +166,7 @@ async def test_get_darkpool_volume_prefers_heber_when_available(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_get_darkpool_volume_falls_back_to_sql_when_heber_empty(
+async def test_get_darkpool_volume_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
@@ -135,17 +175,14 @@ async def test_get_darkpool_volume_falls_back_to_sql_when_heber_empty(
         def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_sql_fallback(ticker: str, ts: datetime, window_minutes: int = 60):
-        assert ticker == "AAPL"
-        assert ts == entry_ts
-        assert window_minutes == 60
-        return 777.0
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime, _window_minutes: int = 60):
+        raise AssertionError("SQL fallback should not run when Heber darkpool is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_darkpool_volume_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_darkpool_volume_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_darkpool_volume("AAPL", entry_ts, window_minutes=60)
-    assert result == 777.0
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -177,33 +214,29 @@ async def test_get_rvol_metrics_prefers_heber_when_available(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_get_rvol_metrics_falls_back_to_sql_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_rvol_metrics_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    expected = {
-        "rvol_1h": 1.0,
-        "rvol_daily": 1.2,
-        "rvol_weekly": 0.9,
-        "rvol_30m": 1.0,
-        "rvol_3d": 1.2,
-        "rvol_monthly": 0.9,
-    }
-
-    async def _fake_sql_fallback(ticker: str, ts: datetime):
-        assert ticker == "AAPL"
-        assert ts == entry_ts
-        return expected
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber bars are unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_rvol_metrics_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_rvol_metrics_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_rvol_metrics("AAPL", entry_ts)
 
-    assert result == expected
+    assert result == {
+        "rvol_1h": None,
+        "rvol_daily": None,
+        "rvol_weekly": None,
+        "rvol_30m": None,
+        "rvol_3d": None,
+        "rvol_monthly": None,
+    }
 
 
 @pytest.mark.asyncio

@@ -83,6 +83,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler Context Fallback De-Coupling (TDD, combined pass)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed local SQL fallbacks for:
+      - market tide (`_get_market_tide_before_entry_sql`),
+      - GEX snapshot (`_get_gex_at_entry_sql`),
+      - GEX rolling averages (`_get_gex_rolling_averages_sql`),
+      - darkpool volume (`_get_darkpool_volume_sql`),
+      - RVOL metrics (`_get_rvol_metrics_sql`),
+    - Heber-unavailable behavior now returns explicit null-shaped values instead of querying local `silver_*` tables.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+      - no-SQL-fallback assertions for GEX / rolling GEX / darkpool / RVOL,
+      - added rolling GEX Heber coverage.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+      - regime tide path now asserts `market_tide_net is None` when Heber tide is unavailable.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py`
+
 - **Price Target Labeler Max-Pain SQL Fallback Removal (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - removed `_get_max_pain_distance_sql(...)` local fallback (`silver_max_pain`),

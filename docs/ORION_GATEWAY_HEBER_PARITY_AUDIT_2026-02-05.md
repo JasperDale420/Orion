@@ -15,7 +15,7 @@ Current state:
 - A significant amount of legacy code/tests/scripts still referenced removed modules (`orion.main_ingest`, `orion.connectors.uw_flow_connector`), blocking test collection and increasing maintenance drag.
 
 Bottom line:
-- We need a two-track migration: 
+- We need a two-track migration:
   1. Stabilize Orion runtime contracts with Gateway/Heber.
   2. Decide which Orion-specific feature/label logic should move into Heber vs be retired.
 
@@ -8489,3 +8489,43 @@ Verification:
 Result:
 - max-pain feature sourcing is now Heber-only in `main_price_target_labeler`.
 - targeted coupling improved again (`silver_*` references in `src/orion`: 49 -> 48; `main_price_target_labeler`: 19 -> 18).
+
+## 271) Pass 270 Continuation (2026-02-10)
+
+### 271.1 `main_price_target_labeler` Context Fallbacks De-Coupled from Local SQL (TDD-Backed, Combined)
+
+Finding:
+- `main_price_target_labeler` still carried local SQL fallback paths for core context features when Heber datasets were unavailable:
+  - market tide (`silver_market_tide`),
+  - GEX snapshot / rolling averages (`silver_greek_exposure`),
+  - darkpool volume (`silver_uw_darkpool`),
+  - RVOL metrics (`silver_alpaca_bars`).
+- This kept high-frequency label assembly partially dependent on Orion-local silver tables even after prior Heber-first migrations.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - `get_market_tide_before_entry(...)` now returns `{"net_premium": None, "direction": None}` when Heber tide is unavailable (removed local SQL helper fallback),
+  - `get_regime_at_entry(...)` no longer falls back to local market-tide SQL and now passes `market_tide_net=None` when Heber tide is unavailable,
+  - `get_gex_at_entry(...)` now returns `{"gex": None, "vex": None}` when Heber snapshot is unavailable (removed `_get_gex_at_entry_sql(...)`),
+  - `get_gex_rolling_averages(...)` now returns `{"gex_rolling_avg": None, "vex_rolling_avg": None}` when Heber rolling window is unavailable (removed `_get_gex_rolling_averages_sql(...)`),
+  - `get_darkpool_volume(...)` now returns `None` when Heber darkpool is unavailable (removed `_get_darkpool_volume_sql(...)`),
+  - `get_rvol_metrics(...)` now returns a null-shaped RVOL payload when Heber bars are unavailable (removed `_get_rvol_metrics_sql(...)`).
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+    - converted fallback assertions to enforce no SQL fallback for GEX, rolling GEX, darkpool, and RVOL,
+    - added rolling-GEX Heber coverage:
+      - `test_get_gex_rolling_averages_prefers_heber_when_available`
+      - `test_get_gex_rolling_averages_returns_none_when_heber_empty`.
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+    - updated regime market-tide fallback assertion:
+      - `test_get_regime_at_entry_leaves_market_tide_none_when_heber_unavailable`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_vix_proxy.py` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+
+Result:
+- context feature enrichment in `main_price_target_labeler` is now Heber-only for market tide / GEX / darkpool / RVOL paths (with explicit null outputs instead of local SQL fallbacks).
+- targeted coupling reduced further:
+  - `silver_(uw_flow|market_tide|greek_exposure|max_pain|iv_rank|uw_darkpool)` refs in `src/orion`: `48 -> 44`,
+  - same targeted refs in `main_price_target_labeler.py`: `18 -> 14`.

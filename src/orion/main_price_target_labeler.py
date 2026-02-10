@@ -873,24 +873,7 @@ async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     if heber_result is not None:
         return heber_result
 
-    return await _get_gex_at_entry_sql(ticker, entry_ts)
-
-
-async def _get_gex_at_entry_sql(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT gex_oi, vex_oi, spot_price
-            FROM silver_greek_exposure
-            WHERE ticker = :ticker AND ts_utc <= :entry_ts
-            ORDER BY ts_utc DESC LIMIT 1
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts})
-        row = result.fetchone()
-        return {"gex": row[0], "vex": row[1]} if row else {"gex": None, "vex": None}
-
-    return await db_query(query)
+    return {"gex": None, "vex": None}
 
 
 async def get_gex_rolling_averages(ticker: str, entry_ts: datetime, days: int = 20) -> Dict[str, Optional[float]]:
@@ -899,7 +882,7 @@ async def get_gex_rolling_averages(ticker: str, entry_ts: datetime, days: int = 
     if heber_result is not None:
         return heber_result
 
-    return await _get_gex_rolling_averages_sql(ticker, entry_ts, days=days)
+    return {"gex_rolling_avg": None, "vex_rolling_avg": None}
 
 
 def _get_gex_rolling_averages_from_heber(
@@ -948,35 +931,6 @@ def _get_gex_rolling_averages_from_heber(
     return {"gex_rolling_avg": gex_val, "vex_rolling_avg": vex_val}
 
 
-async def _get_gex_rolling_averages_sql(
-    ticker: str,
-    entry_ts: datetime,
-    days: int = 20,
-) -> Dict[str, Optional[float]]:
-    start_ts = entry_ts - timedelta(days=max(days, 1))
-
-    async def query(session: Any) -> Dict[str, Optional[float]]:
-        stmt = text(
-            """
-            SELECT AVG(gex_oi), AVG(vex_oi)
-            FROM silver_greek_exposure
-            WHERE ticker = :ticker
-              AND ts_utc <= :entry_ts
-              AND ts_utc > :start_ts
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "entry_ts": entry_ts, "start_ts": start_ts})
-        row = result.fetchone()
-        if not row:
-            return {"gex_rolling_avg": None, "vex_rolling_avg": None}
-        return {
-            "gex_rolling_avg": row[0],
-            "vex_rolling_avg": row[1],
-        }
-
-    return await db_query(query)
-
-
 async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     """Get latest gold window feature payload by period for a ticker at entry time."""
 
@@ -1021,30 +975,7 @@ async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) ->
     if heber_result is not None:
         return heber_result
 
-    return await _get_market_tide_before_entry_sql(entry_ts, minutes)
-
-
-async def _get_market_tide_before_entry_sql(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
-    """SQL fallback for market tide lookup."""
-    start_ts = entry_ts - timedelta(minutes=minutes)
-
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT COALESCE(SUM(net_call_premium), 0), COALESCE(SUM(net_put_premium), 0)
-            FROM silver_market_tide
-            WHERE ts_utc > :start_ts AND ts_utc <= :entry_ts
-        """
-        )
-        result = await session.execute(stmt, {"start_ts": start_ts, "entry_ts": entry_ts})
-        row = result.fetchone()
-        if row:
-            net = float(row[0] or 0) + float(row[1] or 0)
-            direction = "BULLISH" if net > 0 else "BEARISH" if net < 0 else "NEUTRAL"
-            return {"net_premium": net, "direction": direction}
-        return {"net_premium": None, "direction": None}
-
-    return await db_query(query)
+    return {"net_premium": None, "direction": None}
 
 
 def _get_gex_at_entry_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
@@ -1423,9 +1354,6 @@ async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
     if vix_data.get("vix") is None:
         vix_data = await db_query(query_vix)
     tide_net = _get_heber_market_tide_net_premium(entry_ts, minutes=30)
-    if tide_net is None:
-        tide_snapshot = await _get_market_tide_before_entry_sql(entry_ts, minutes=30)
-        tide_net = tide_snapshot.get("net_premium") if isinstance(tide_snapshot, dict) else None
 
     # Detect regime snapshot
     snapshot = detector.detect(
@@ -1844,7 +1772,7 @@ async def get_darkpool_volume(ticker: str, entry_ts: datetime, window_minutes: i
     if heber_volume is not None:
         return heber_volume
 
-    return await _get_darkpool_volume_sql(ticker, entry_ts, window_minutes)
+    return None
 
 
 def _get_darkpool_volume_from_heber(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> Optional[float]:
@@ -1882,26 +1810,6 @@ def _get_darkpool_volume_from_heber(ticker: str, entry_ts: datetime, window_minu
         return None
 
     return float(total)
-
-
-async def _get_darkpool_volume_sql(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> Optional[float]:
-    start_ts = entry_ts - timedelta(minutes=window_minutes)
-
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT SUM(size_shares) as total_volume
-            FROM silver_uw_darkpool
-            WHERE ticker = :ticker
-            AND dark_ts_utc >= :start_ts
-            AND dark_ts_utc < :entry_ts
-        """
-        )
-        result = await session.execute(stmt, {"ticker": ticker, "start_ts": start_ts, "entry_ts": entry_ts})
-        row = result.fetchone()
-        return row[0] if row and row[0] else None
-
-    return await db_query(query)
 
 
 async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
@@ -1955,7 +1863,14 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
     if heber_rvol is not None:
         return heber_rvol
 
-    return await _get_rvol_metrics_sql(ticker, entry_ts)
+    return {
+        "rvol_1h": None,
+        "rvol_daily": None,
+        "rvol_weekly": None,
+        "rvol_30m": None,
+        "rvol_3d": None,
+        "rvol_monthly": None,
+    }
 
 
 def _get_rvol_metrics_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
@@ -2042,127 +1957,6 @@ def _get_rvol_metrics_from_heber(ticker: str, entry_ts: datetime) -> Optional[Di
         "rvol_3d": rvol_3d,
         "rvol_monthly": rvol_monthly,
     }
-
-
-async def _get_rvol_metrics_sql(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
-    entry_hour_start = entry_ts.replace(minute=0, second=0, microsecond=0)
-    entry_day_start = entry_ts.replace(hour=0, minute=0, second=0, microsecond=0)
-    days_since_monday = entry_ts.weekday()
-    entry_week_start = (entry_ts - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-    lookback_start = entry_ts - timedelta(days=20)
-    lookback_4w = entry_ts - timedelta(days=28)
-
-    async def query(session: Any) -> Dict[str, Optional[float]]:
-        hour_stmt = text(
-            """
-            SELECT SUM(volume)
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc >= :hour_start
-            AND bar_start_ts_utc < :entry_ts
-        """
-        )
-        hour_result = await session.execute(
-            hour_stmt, {"ticker": ticker, "hour_start": entry_hour_start, "entry_ts": entry_ts}
-        )
-        current_hour_vol = hour_result.scalar() or 0
-
-        avg_hour_stmt = text(
-            """
-            SELECT AVG(hourly_vol) FROM (
-                SELECT date_trunc('hour', bar_start_ts_utc) as h, SUM(volume) as hourly_vol
-                FROM silver_alpaca_bars
-                WHERE ticker = :ticker
-                AND bar_start_ts_utc >= :lookback
-                AND bar_start_ts_utc < :entry_ts
-                GROUP BY h
-            ) subq
-        """
-        )
-        avg_result = await session.execute(
-            avg_hour_stmt, {"ticker": ticker, "lookback": lookback_start, "entry_ts": entry_ts}
-        )
-        avg_hour_vol = avg_result.scalar() or 0
-
-        day_stmt = text(
-            """
-            SELECT SUM(volume)
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc >= :day_start
-            AND bar_start_ts_utc < :entry_ts
-        """
-        )
-        day_result = await session.execute(
-            day_stmt, {"ticker": ticker, "day_start": entry_day_start, "entry_ts": entry_ts}
-        )
-        current_day_vol = day_result.scalar() or 0
-
-        avg_day_stmt = text(
-            """
-            SELECT AVG(daily_vol) FROM (
-                SELECT date_trunc('day', bar_start_ts_utc) as d, SUM(volume) as daily_vol
-                FROM silver_alpaca_bars
-                WHERE ticker = :ticker
-                AND bar_start_ts_utc >= :lookback
-                AND bar_start_ts_utc < :day_start
-                GROUP BY d
-            ) subq
-        """
-        )
-        avg_day_result = await session.execute(
-            avg_day_stmt, {"ticker": ticker, "lookback": lookback_start, "day_start": entry_day_start}
-        )
-        avg_day_vol = avg_day_result.scalar() or 0
-
-        week_stmt = text(
-            """
-            SELECT SUM(volume)
-            FROM silver_alpaca_bars
-            WHERE ticker = :ticker
-            AND bar_start_ts_utc >= :week_start
-            AND bar_start_ts_utc < :entry_ts
-        """
-        )
-        week_result = await session.execute(
-            week_stmt, {"ticker": ticker, "week_start": entry_week_start, "entry_ts": entry_ts}
-        )
-        current_week_vol = week_result.scalar() or 0
-
-        avg_week_stmt = text(
-            """
-            SELECT AVG(weekly_vol) FROM (
-                SELECT date_trunc('week', bar_start_ts_utc) as w, SUM(volume) as weekly_vol
-                FROM silver_alpaca_bars
-                WHERE ticker = :ticker
-                AND bar_start_ts_utc >= :lookback_4w
-                AND bar_start_ts_utc < :week_start
-                GROUP BY w
-            ) subq
-        """
-        )
-        avg_week_result = await session.execute(
-            avg_week_stmt, {"ticker": ticker, "lookback_4w": lookback_4w, "week_start": entry_week_start}
-        )
-        avg_week_vol = avg_week_result.scalar() or 0
-
-        rvol_1h = current_hour_vol / avg_hour_vol if avg_hour_vol > 0 else None
-        rvol_daily = current_day_vol / avg_day_vol if avg_day_vol > 0 else None
-        rvol_weekly = current_week_vol / avg_week_vol if avg_week_vol > 0 else None
-        rvol_30m = (current_hour_vol * 0.5) / (avg_hour_vol * 0.5) if avg_hour_vol > 0 else None
-        rvol_3d = (current_day_vol * 3) / (avg_day_vol * 3) if avg_day_vol > 0 else rvol_daily
-        rvol_monthly = current_week_vol / avg_week_vol if avg_week_vol > 0 else rvol_weekly
-
-        return {
-            "rvol_1h": rvol_1h,
-            "rvol_daily": rvol_daily,
-            "rvol_weekly": rvol_weekly,
-            "rvol_30m": rvol_30m,
-            "rvol_3d": rvol_3d,
-            "rvol_monthly": rvol_monthly,
-        }
-
-    return await db_query(query)
 
 
 async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
@@ -3302,7 +3096,7 @@ async def _get_sector_correlation_features_sql(ticker: str, entry_ts: datetime) 
                 t_mean = sum(t_ret) / n
                 s_mean = sum(s_ret) / n
 
-                numerator = sum((t - t_mean) * (s - s_mean) for t, s in zip(t_ret, s_ret))
+                numerator = sum((t - t_mean) * (s - s_mean) for t, s in zip(t_ret, s_ret, strict=False))
                 t_var = sum((t - t_mean) ** 2 for t in t_ret)
                 s_var = sum((s - s_mean) ** 2 for s in s_ret)
 
@@ -4487,7 +4281,7 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
 
                     logger.info(
                         f"Labeled {count} entries | Total: {total_labeled} | "
-                        f"Hit50: {hit_50} | Stopped: {stopped} | AvgHold: {avg_holding/60:.0f}min",
+                        f"Hit50: {hit_50} | Stopped: {stopped} | AvgHold: {avg_holding / 60:.0f}min",
                         extra={
                             "event_type": "BATCH_LABELED",
                             "batch_size": count,
