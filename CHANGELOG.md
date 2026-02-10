@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Price target labeler sector/correlation Heber-only migration (TDD)**:
+  - removed sector/correlation SQL fallback in `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`,
+  - `get_sector_correlation_features(...)` now returns null-safe defaults when Heber data is unavailable,
+  - updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py` to enforce no SQL fallback execution in empty-Heber path.
+
+- **Error envelope compatibility fix (TDD)**:
+  - restored `OrionError.code` enum semantics expected by runtime and tests,
+  - preserved `details` alias and normalized `to_dict()` output in `/Users/jacobmcmillan/Empire/Orion/src/orion/core/errors.py`.
+
 - **Price target labeler Heber-only fallback guardrails (TDD)**:
   - removed remaining SQL fallback paths in `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` for:
     - entry signal reads,
@@ -92,6 +101,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Exception mappings: `HTTPError→HTTPStatusError`, `Timeout→TimeoutException`, `ConnectionError→ConnectError`, `RequestException→HTTPError`
 
 ### Added
+
+- **Price Target Labeler Event-Flow SQL Fallback Removal (TDD, combined pass)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed event-flow SQL fallback helpers:
+      - `_get_entry_signals_sql(...)`
+      - `_get_subsequent_prices_sql(...)`
+      - `_get_flow_greeks_sql(...)`,
+    - Heber-unavailable behavior now returns safe defaults:
+      - entry signals: empty list,
+      - subsequent prices: empty list,
+      - flow greeks: null-shaped payload.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py`
+      - `test_get_entry_signals_returns_empty_when_heber_empty`
+      - `test_get_subsequent_prices_returns_empty_when_heber_missing_columns`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+      - `test_get_flow_greeks_returns_null_payload_when_heber_missing`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_context.py -k "entry_signals or subsequent_prices or flow_greeks"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py`
 
 - **Price Target Labeler Phase Feature SQL Fallback Removal (TDD, combined pass)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:

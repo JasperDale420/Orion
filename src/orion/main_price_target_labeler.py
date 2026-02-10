@@ -2389,7 +2389,12 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
     if heber_result is not None:
         return heber_result
 
-    return await _get_sector_correlation_features_sql(ticker, entry_ts)
+    return {
+        "sector_net_premium_1h": None,
+        "sector_flow_direction": None,
+        "spy_correlation_5d": None,
+        "spy_return_1h": None,
+    }
 
 
 def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
@@ -2536,147 +2541,6 @@ def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime)
     if any(value is not None for value in result.values()):
         return result
     return None
-
-
-async def _get_sector_correlation_features_sql(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """SQL fallback for sector flow and correlation features."""
-    result: Dict[str, Any] = {
-        "sector_net_premium_1h": None,
-        "sector_flow_direction": None,
-        "spy_correlation_5d": None,
-        "spy_return_1h": None,
-    }
-
-    entry_date = entry_ts.date()
-    lookback_1h = entry_ts - timedelta(hours=1)
-    lookback_5d = entry_date - timedelta(days=5)
-
-    async def query(session: Any) -> Dict[str, Any]:
-        # Get ticker's sector (gracefully handle if table doesn't exist)
-        sector = None
-        try:
-            sector_stmt = text(
-                """
-                SELECT sector FROM silver_ticker_info WHERE ticker = :ticker LIMIT 1
-            """
-            )
-            sector_result = await session.execute(sector_stmt, {"ticker": ticker})
-            sector_row = sector_result.fetchone()
-            sector = sector_row[0] if sector_row else None
-        except Exception as e:
-            # Table may not exist - skip sector features
-            _record_price_target_fallback("sector_lookup", e, ticker=ticker)
-
-        if sector:
-            try:
-                # Get net premium for same-sector tickers in last hour
-                sector_flow_stmt = text(
-                    """
-                    SELECT
-                        SUM(CASE WHEN sf.put_call = 'C' THEN sf.premium ELSE -sf.premium END) as net_premium
-                    FROM silver_uw_flow sf
-                    JOIN silver_ticker_info sti ON sf.ticker = sti.ticker
-                    WHERE sti.sector = :sector
-                    AND sf.flow_ts_utc >= :lookback_1h
-                    AND sf.flow_ts_utc < :entry_ts
-                """
-                )
-                flow_result = await session.execute(
-                    sector_flow_stmt, {"sector": sector, "lookback_1h": lookback_1h, "entry_ts": entry_ts}
-                )
-                flow_row = flow_result.fetchone()
-                net_premium = flow_row[0] if flow_row and flow_row[0] else 0
-                result["sector_net_premium_1h"] = float(net_premium) if net_premium else None
-
-                # Determine direction
-                if net_premium and net_premium > 1000000:
-                    result["sector_flow_direction"] = "BULLISH"
-                elif net_premium and net_premium < -1000000:
-                    result["sector_flow_direction"] = "BEARISH"
-                else:
-                    result["sector_flow_direction"] = "NEUTRAL"
-            except Exception as e:
-                _record_price_target_fallback("sector_net_premium_1h", e, ticker=ticker, sector=sector)
-
-        # SPY return in last hour (market context)
-        try:
-            spy_return_stmt = text(
-                """
-                SELECT
-                    (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :entry_ts ORDER BY bar_start_ts_utc DESC LIMIT 1) as current_close,
-                    (SELECT close FROM silver_alpaca_bars WHERE ticker = 'SPY' AND bar_start_ts_utc < :lookback_1h ORDER BY bar_start_ts_utc DESC LIMIT 1) as prior_close
-            """
-            )
-            spy_result = await session.execute(spy_return_stmt, {"entry_ts": entry_ts, "lookback_1h": lookback_1h})
-            spy_row = spy_result.fetchone()
-            if spy_row and spy_row[0] and spy_row[1] and spy_row[1] > 0:
-                result["spy_return_1h"] = ((spy_row[0] - spy_row[1]) / spy_row[1]) * 100
-        except Exception as e:
-            # SPY data may not exist for pre-market times - skip this feature
-            _record_price_target_fallback("spy_return_1h", e, ticker=ticker)
-
-        # 5-day correlation with SPY
-        # Get daily returns for ticker and SPY
-        try:
-            ticker_returns_stmt = text(
-                """
-                SELECT DATE(bar_start_ts_utc) as d,
-                       (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
-                       LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
-                FROM silver_alpaca_bars
-                WHERE ticker = :ticker
-                AND DATE(bar_start_ts_utc) >= :lookback_5d
-                AND DATE(bar_start_ts_utc) < :entry_date
-                GROUP BY DATE(bar_start_ts_utc)
-                ORDER BY d
-            """
-            )
-            spy_returns_stmt = text(
-                """
-                SELECT DATE(bar_start_ts_utc) as d,
-                       (MAX(close) - LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc))) /
-                       LAG(MAX(close)) OVER (ORDER BY DATE(bar_start_ts_utc)) as daily_return
-                FROM silver_alpaca_bars
-                WHERE ticker = 'SPY'
-                AND DATE(bar_start_ts_utc) >= :lookback_5d
-                AND DATE(bar_start_ts_utc) < :entry_date
-                GROUP BY DATE(bar_start_ts_utc)
-                ORDER BY d
-            """
-            )
-            ticker_result = await session.execute(
-                ticker_returns_stmt, {"ticker": ticker, "lookback_5d": lookback_5d, "entry_date": entry_date}
-            )
-            spy_result = await session.execute(spy_returns_stmt, {"lookback_5d": lookback_5d, "entry_date": entry_date})
-
-            ticker_returns = [r[1] for r in ticker_result.fetchall() if r[1] is not None]
-            spy_returns = [r[1] for r in spy_result.fetchall() if r[1] is not None]
-
-            # Calculate correlation if we have enough data points
-            if len(ticker_returns) >= 3 and len(spy_returns) >= 3:
-                # Simple Pearson correlation
-                n = min(len(ticker_returns), len(spy_returns))
-                t_ret = ticker_returns[:n]
-                s_ret = spy_returns[:n]
-
-                t_mean = sum(t_ret) / n
-                s_mean = sum(s_ret) / n
-
-                numerator = sum((t - t_mean) * (s - s_mean) for t, s in zip(t_ret, s_ret, strict=False))
-                t_var = sum((t - t_mean) ** 2 for t in t_ret)
-                s_var = sum((s - s_mean) ** 2 for s in s_ret)
-
-                if t_var > 0 and s_var > 0:
-                    result["spy_correlation_5d"] = numerator / ((t_var * s_var) ** 0.5)
-        except Exception as e:
-            # Correlation data may be incomplete - skip this feature
-            _record_price_target_fallback("spy_correlation_5d", e, ticker=ticker)
-
-        return result
-
-    db_result = await db_query(query)
-    result.update(db_result)
-    return result
 
 
 # Ticker info cache to avoid repeated API calls

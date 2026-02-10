@@ -452,7 +452,7 @@ async def test_get_sector_correlation_features_prefers_heber_when_available(
 
 
 @pytest.mark.asyncio
-async def test_get_sector_correlation_features_falls_back_to_sql_when_heber_empty(
+async def test_get_sector_correlation_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
@@ -464,24 +464,20 @@ async def test_get_sector_correlation_features_falls_back_to_sql_when_heber_empt
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    expected = {
-        "sector_net_premium_1h": 123.0,
-        "sector_flow_direction": "NEUTRAL",
-        "spy_correlation_5d": 0.44,
-        "spy_return_1h": -0.55,
-    }
-
-    async def _fake_sql_fallback(ticker: str, ts: datetime):
-        assert ticker == "AAPL"
-        assert ts == entry_ts
-        return expected
+    async def _fail_sql_fallback(_ticker: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber sector/correlation data is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_sector_correlation_features_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_sector_correlation_features_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_sector_correlation_features("AAPL", entry_ts)
 
-    assert result == expected
+    assert result == {
+        "sector_net_premium_1h": None,
+        "sector_flow_direction": None,
+        "spy_correlation_5d": None,
+        "spy_return_1h": None,
+    }
 
 
 @pytest.mark.asyncio

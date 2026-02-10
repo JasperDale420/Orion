@@ -44,8 +44,20 @@ class OrionError(Exception):
     ):
         super().__init__(message)
         self.message = message
-        self.code = code
+        # Preserve ErrorCode enum compatibility used across runtime and tests.
+        self.code = code if isinstance(code, ErrorCode) else ErrorCode(str(code))
         self.context = context or {}
+        # Alias for newer envelope helpers.
+        self.details = self.context
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to standard Empire error envelope."""
+        return {
+            "error": True,
+            "code": self.code.value,
+            "message": self.message,
+            "details": self.details,
+        }
 
 
 class ProviderError(OrionError):
