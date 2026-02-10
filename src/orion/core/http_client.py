@@ -54,13 +54,13 @@ def _log_response(response: httpx.Response) -> None:
     )
 
 
-async def _async_log_request(request: httpx.Request) -> None:
-    """Async event hook: log outgoing HTTP requests at DEBUG level."""
+def _async_log_request(request: httpx.Request) -> None:
+    """Event hook: log outgoing HTTP requests at DEBUG level."""
     _log_request(request)
 
 
-async def _async_log_response(response: httpx.Response) -> None:
-    """Async event hook: log incoming HTTP responses at DEBUG level."""
+def _async_log_response(response: httpx.Response) -> None:
+    """Event hook: log incoming HTTP responses at DEBUG level."""
     _log_response(response)
 
 

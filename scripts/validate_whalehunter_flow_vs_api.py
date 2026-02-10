@@ -154,6 +154,105 @@ def fetch_flow_alerts_for_day(day: str) -> list[FlowAlert]:
     return alerts
 
 
+def _match_flow_rows_to_alerts(
+    df: "pd.DataFrame", by_chain: dict[str, list[FlowAlert]]
+) -> tuple[int, int, int, int, dict[str, float], dict[str, float]]:
+    """Match CSV bot rows to API alert windows by option_chain and timestamp."""
+    total_rows = 0
+    matched_rows = 0
+    unmatched_rows = 0
+    missing_chain = 0
+    per_alert_sum_size: dict[str, float] = {}
+    per_alert_sum_premium: dict[str, float] = {}
+
+    for row in df.to_dict(orient="records"):
+        total_rows += 1
+        chain = row.get("option_chain_id")
+        if not isinstance(chain, str) or not chain:
+            missing_chain += 1
+            continue
+
+        executed_at = row.get("executed_at")
+        if not executed_at:
+            unmatched_rows += 1
+            continue
+
+        try:
+            exec_ms = _parse_iso_to_ms(str(executed_at))
+        except Exception:
+            unmatched_rows += 1
+            continue
+
+        candidates = by_chain.get(chain)
+        if not candidates:
+            unmatched_rows += 1
+            continue
+
+        match = _find_alert_match(candidates, exec_ms)
+        if not match:
+            unmatched_rows += 1
+            continue
+
+        matched_rows += 1
+        size = _as_float(row.get("size")) or 0.0
+        premium = _as_float(row.get("premium")) or 0.0
+        per_alert_sum_size[match.alert_id] = per_alert_sum_size.get(match.alert_id, 0.0) + size
+        per_alert_sum_premium[match.alert_id] = per_alert_sum_premium.get(match.alert_id, 0.0) + premium
+
+    return total_rows, matched_rows, unmatched_rows, missing_chain, per_alert_sum_size, per_alert_sum_premium
+
+
+def _find_alert_match(candidates: list[FlowAlert], exec_ms: int) -> FlowAlert | None:
+    """Find the matching alert for a given execution timestamp."""
+    for a in candidates:
+        if a.start_ms <= exec_ms <= a.end_ms:
+            return a
+        # Tolerate minor clock differences: +/- 1000ms
+        if (a.start_ms - 1000) <= exec_ms <= (a.end_ms + 1000):
+            return a
+    return None
+
+
+def _print_flow_report(
+    day: str,
+    total_rows: int,
+    api_count: int,
+    matched_rows: int,
+    unmatched_rows: int,
+    missing_chain: int,
+    per_alert_sum_size: dict[str, float],
+    per_alert_sum_premium: dict[str, float],
+    api_alerts: list[FlowAlert],
+) -> None:
+    """Print validation comparison report."""
+    alert_by_id = {a.alert_id: a for a in api_alerts}
+    compared = 0
+    size_match = 0
+    premium_match = 0
+
+    for alert_id, size_sum in per_alert_sum_size.items():
+        a = alert_by_id.get(alert_id)
+        if not a:
+            continue
+        compared += 1
+        if a.total_size is not None and abs(a.total_size - size_sum) < 1e-6:
+            size_match += 1
+        prem_sum = per_alert_sum_premium.get(alert_id, 0.0)
+        if a.total_premium is not None and abs(a.total_premium - prem_sum) <= 0.01:
+            premium_match += 1
+
+    print(f"Day: {day}")
+    print(f"Bot CSV rows checked: {total_rows}")
+    print(f"API flow-alerts fetched: {api_count}")
+    print(
+        f"Row match rate (bot row -> some API alert window): {matched_rows}/{total_rows} ({matched_rows / max(1, total_rows):.1%})"
+    )
+    print(f"Unmatched rows: {unmatched_rows} (missing_chain={missing_chain})")
+    print(f"Per-alert aggregate comparisons: {compared}")
+    print(f"Exact total_size matches: {size_match}/{compared} ({size_match / max(1, compared):.1%})")
+    print(f"Total_premium matches (<= $0.01): {premium_match}/{compared} ({premium_match / max(1, compared):.1%})")
+
+
 def validate(day: str, uw_raw_root: Path, sample_n: int) -> None:
     flow_csv = uw_raw_root / "options_flow" / f"bot-eod-report-{day}.csv"
     if not flow_csv.exists():
@@ -185,86 +284,21 @@ def validate(day: str, uw_raw_root: Path, sample_n: int) -> None:
     for _chain, items in by_chain.items():
         items.sort(key=lambda x: x.start_ms)
 
-    total_rows = 0
-    matched_rows = 0
-    unmatched_rows = 0
-    missing_chain = 0
-
-    # Map bot rows into alert windows; then compare aggregates per alert_id.
-    per_alert_sum_size: dict[str, float] = {}
-    per_alert_sum_premium: dict[str, float] = {}
-
-    for row in df.to_dict(orient="records"):
-        total_rows += 1
-        chain = row.get("option_chain_id")
-        if not isinstance(chain, str) or not chain:
-            missing_chain += 1
-            continue
-
-        executed_at = row.get("executed_at")
-        if not executed_at:
-            unmatched_rows += 1
-            continue
-
-        try:
-            exec_ms = _parse_iso_to_ms(str(executed_at))
-        except Exception:
-            unmatched_rows += 1
-            continue
-
-        candidates = by_chain.get(chain)
-        if not candidates:
-            unmatched_rows += 1
-            continue
-
-        # Linear scan: candidate list is typically small per chain.
-        match: FlowAlert | None = None
-        for a in candidates:
-            if a.start_ms <= exec_ms <= a.end_ms:
-                match = a
-                break
-            # tolerate minor clock differences: +/- 1000ms
-            if (a.start_ms - 1000) <= exec_ms <= (a.end_ms + 1000):
-                match = a
-                break
-
-        if not match:
-            unmatched_rows += 1
-            continue
-
-        matched_rows += 1
-        size = _as_float(row.get("size")) or 0.0
-        premium = _as_float(row.get("premium")) or 0.0
-        per_alert_sum_size[match.alert_id] = per_alert_sum_size.get(match.alert_id, 0.0) + size
-        per_alert_sum_premium[match.alert_id] = per_alert_sum_premium.get(match.alert_id, 0.0) + premium
-
-    # Aggregate validation
-    alert_by_id = {a.alert_id: a for a in api_alerts}
-    compared = 0
-    size_match = 0
-    premium_match = 0
-
-    for alert_id, size_sum in per_alert_sum_size.items():
-        a = alert_by_id.get(alert_id)
-        if not a:
-            continue
-        compared += 1
-        if a.total_size is not None and abs(a.total_size - size_sum) < 1e-6:
-            size_match += 1
-        prem_sum = per_alert_sum_premium.get(alert_id, 0.0)
-        if a.total_premium is not None and abs(a.total_premium - prem_sum) <= 0.01:
-            premium_match += 1
-
-    print(f"Day: {day}")
-    print(f"Bot CSV rows checked: {total_rows}")
-    print(f"API flow-alerts fetched: {len(api_alerts)}")
-    print(
-        f"Row match rate (bot row -> some API alert window): {matched_rows}/{total_rows} ({matched_rows/ max(1,total_rows):.1%})"
+    total_rows, matched_rows, unmatched_rows, missing_chain, per_alert_sum_size, per_alert_sum_premium = (
+        _match_flow_rows_to_alerts(df, by_chain)
     )
-    print(f"Unmatched rows: {unmatched_rows} (missing_chain={missing_chain})")
-    print(f"Per-alert aggregate comparisons: {compared}")
-    print(f"Exact total_size matches: {size_match}/{compared} ({size_match/ max(1,compared):.1%})")
-    print(f"Total_premium matches (<= $0.01): {premium_match}/{compared} ({premium_match/ max(1,compared):.1%})")
+
+    _print_flow_report(
+        day,
+        total_rows,
+        len(api_alerts),
+        matched_rows,
+        unmatched_rows,
+        missing_chain,
+        per_alert_sum_size,
+        per_alert_sum_premium,
+        api_alerts,
+    )
 
 
 def main() -> None:

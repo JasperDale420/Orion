@@ -93,21 +93,8 @@ def fetch_darkpool_for_ticker_day(ticker: str, day: str) -> list[DarkpoolPrint]:
     return out
 
 
-def validate(day: str, uw_raw_root: Path, sample_n: int, max_tickers: int) -> None:
-    dp_csv = uw_raw_root / "dark_pool" / f"dp-eod-report-{day}.csv"
-    if not dp_csv.exists():
-        raise FileNotFoundError(str(dp_csv))
-
-    df = pd.read_csv(dp_csv, low_memory=False)
-    required = {"ticker", "executed_at", "price", "size"}
-    missing = required - set(df.columns)
-    if missing:
-        raise RuntimeError(f"Unexpected darkpool CSV schema; missing columns: {sorted(missing)}")
-
-    if sample_n > 0 and len(df) > sample_n:
-        df = df.sample(sample_n, random_state=7)
-
-    # Normalize CSV sample into prints per ticker
+def _parse_csv_to_prints(df: "pd.DataFrame") -> tuple[dict[str, list[DarkpoolPrint]], int]:
+    """Parse CSV rows into DarkpoolPrint objects grouped by ticker."""
     sample_by_ticker: dict[str, list[DarkpoolPrint]] = defaultdict(list)
     bad_rows = 0
     for row in df.to_dict(orient="records"):
@@ -125,6 +112,88 @@ def validate(day: str, uw_raw_root: Path, sample_n: int, max_tickers: int) -> No
         except Exception:
             bad_rows += 1
             continue
+    return dict(sample_by_ticker), bad_rows
+
+
+def _match_ticker_prints(csv_prints: list[DarkpoolPrint], api_prints: list[DarkpoolPrint]) -> tuple[int, int, int, int]:
+    """Match CSV prints against API prints for a single ticker, returning (matched, total, covered_matched, covered_total)."""
+    api_keys: set[tuple[int, float, float]] = set()
+    api_min_ts: int | None = None
+    for p in api_prints:
+        ts_sec = int(p.executed_at_utc.timestamp())
+        api_keys.add((ts_sec, round(p.price, 4), round(p.size, 2)))
+        api_min_ts = ts_sec if api_min_ts is None else min(api_min_ts, ts_sec)
+
+    t_matched = 0
+    t_total = 0
+    t_covered_matched = 0
+    t_covered_total = 0
+
+    for p in csv_prints:
+        t_total += 1
+        key = (int(p.executed_at_utc.timestamp()), round(p.price, 4), round(p.size, 2))
+
+        is_covered = api_min_ts is not None and key[0] >= (api_min_ts - 1)
+        if is_covered:
+            t_covered_total += 1
+
+        is_match = key in api_keys
+        if not is_match:
+            # Tolerate +/- 1 second on timestamp
+            key_m1 = (key[0] - 1, key[1], key[2])
+            key_p1 = (key[0] + 1, key[1], key[2])
+            is_match = key_m1 in api_keys or key_p1 in api_keys
+
+        if is_match:
+            t_matched += 1
+            if is_covered:
+                t_covered_matched += 1
+
+    return t_matched, t_total, t_covered_matched, t_covered_total
+
+
+def _print_darkpool_report(
+    day: str,
+    df_len: int,
+    bad_rows: int,
+    tickers: list[str],
+    max_tickers: int,
+    per_ticker: list[tuple[str, int, int, int, int, int]],
+    matched: int,
+    total: int,
+    covered_matched: int,
+    covered_total: int,
+) -> None:
+    """Print darkpool validation comparison report."""
+    print(f"Day: {day}")
+    print(f"Darkpool CSV sampled rows: {df_len} (bad_rows_skipped={bad_rows})")
+    print(f"Tickers compared: {len(tickers)} (max_tickers={max_tickers})")
+    print(f"Row match rate (overall): {matched}/{max(1, total)} ({matched / max(1, total):.1%})")
+    print(
+        f"Row match rate (within API-covered window): {covered_matched}/{max(1, covered_total)} ({covered_matched / max(1, covered_total):.1%})"
+    )
+    print("Per-ticker (matched/total, covered_matched/covered_total, api_rows):")
+    for t, m, tot, cm, ctot, api_n in per_ticker:
+        print(
+            f"  {t}: {m}/{tot} ({m / max(1, tot):.1%}), covered={cm}/{max(1, ctot)} ({cm / max(1, ctot):.1%}), api={api_n}"
+        )
+
+
+def validate(day: str, uw_raw_root: Path, sample_n: int, max_tickers: int) -> None:
+    dp_csv = uw_raw_root / "dark_pool" / f"dp-eod-report-{day}.csv"
+    if not dp_csv.exists():
+        raise FileNotFoundError(str(dp_csv))
+
+    df = pd.read_csv(dp_csv, low_memory=False)
+    required = {"ticker", "executed_at", "price", "size"}
+    missing = required - set(df.columns)
+    if missing:
+        raise RuntimeError(f"Unexpected darkpool CSV schema; missing columns: {sorted(missing)}")
+
+    if sample_n > 0 and len(df) > sample_n:
+        df = df.sample(sample_n, random_state=7)
+
+    sample_by_ticker, bad_rows = _parse_csv_to_prints(df)
 
     tickers = sorted(sample_by_ticker.keys())
     if max_tickers > 0:
@@ -134,70 +203,33 @@ def validate(day: str, uw_raw_root: Path, sample_n: int, max_tickers: int) -> No
     for t in tickers:
         api_by_ticker[t] = fetch_darkpool_for_ticker_day(t, day)
 
-    # Build lookup per ticker keyed by (ts_seconds, price, size) with tolerance on time.
-    # Also compute the API coverage window: if API is capped (commonly 500), it likely only covers the most recent
-    # portion of the day. We'll report match rate within that window separately.
     matched = 0
     total = 0
-    covered_total = 0
     covered_matched = 0
+    covered_total = 0
     per_ticker = []
 
     for t in tickers:
         api = api_by_ticker.get(t, [])
-        api_keys = set()
-        api_min_ts: int | None = None
-        for p in api:
-            ts_sec = int(p.executed_at_utc.timestamp())
-            api_keys.add((ts_sec, round(p.price, 4), round(p.size, 2)))
-            api_min_ts = ts_sec if api_min_ts is None else min(api_min_ts, ts_sec)
-
-        t_total = 0
-        t_matched = 0
-        t_covered_total = 0
-        t_covered_matched = 0
-        for p in sample_by_ticker[t]:
-            t_total += 1
-            total += 1
-            key = (int(p.executed_at_utc.timestamp()), round(p.price, 4), round(p.size, 2))
-
-            # Covered window: only count prints that the API response could plausibly include.
-            # If API returned 0 items we treat coverage as 0. If it returned items, treat coverage as
-            # [min(api_ts)-1s, +inf) since we don't have pagination for older prints.
-            is_covered = api_min_ts is not None and key[0] >= (api_min_ts - 1)
-            if is_covered:
-                t_covered_total += 1
-                covered_total += 1
-
-            if key in api_keys:
-                t_matched += 1
-                matched += 1
-                if is_covered:
-                    t_covered_matched += 1
-                    covered_matched += 1
-                continue
-            # tolerate +/- 1 second on timestamp
-            key_m1 = (key[0] - 1, key[1], key[2])
-            key_p1 = (key[0] + 1, key[1], key[2])
-            if key_m1 in api_keys or key_p1 in api_keys:
-                t_matched += 1
-                matched += 1
-                if is_covered:
-                    t_covered_matched += 1
-                    covered_matched += 1
-
+        t_matched, t_total, t_covered_matched, t_covered_total = _match_ticker_prints(sample_by_ticker.get(t, []), api)
+        matched += t_matched
+        total += t_total
+        covered_matched += t_covered_matched
+        covered_total += t_covered_total
         per_ticker.append((t, t_matched, t_total, t_covered_matched, t_covered_total, len(api)))
 
-    print(f"Day: {day}")
-    print(f"Darkpool CSV sampled rows: {len(df)} (bad_rows_skipped={bad_rows})")
-    print(f"Tickers compared: {len(tickers)} (max_tickers={max_tickers})")
-    print(f"Row match rate (overall): {matched}/{max(1,total)} ({matched/max(1,total):.1%})")
-    print(
-        f"Row match rate (within API-covered window): {covered_matched}/{max(1,covered_total)} ({covered_matched/max(1,covered_total):.1%})"
+    _print_darkpool_report(
+        day,
+        len(df),
+        bad_rows,
+        tickers,
+        max_tickers,
+        per_ticker,
+        matched,
+        total,
+        covered_matched,
+        covered_total,
     )
-    print("Per-ticker (matched/total, covered_matched/covered_total, api_rows):")
-    for t, m, tot, cm, ctot, api_n in per_ticker:
-        print(f"  {t}: {m}/{tot} ({m/max(1,tot):.1%}), covered={cm}/{max(1,ctot)} ({cm/max(1,ctot):.1%}), api={api_n}")
 
 
 def main() -> None:
