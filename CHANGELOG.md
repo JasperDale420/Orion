@@ -102,6 +102,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler `silver_ticker_info` + Regime/Underlying SQL Fallback Cleanup (TDD, combined pass)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed local SQL fallback usage in:
+      - `get_regime_at_entry(...)` (no local VIX SQL fallback),
+      - `get_underlying_price_at_entry(...)`,
+      - `get_underlying_price_at_offset(...)`,
+    - removed DB-backed ticker sector cache helpers:
+      - `_get_sector_from_db(...)`
+      - `_persist_ticker_info(...)`,
+    - `get_ticker_info(...)` now uses in-memory cache + UW API only.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+      - `test_get_regime_at_entry_leaves_vix_none_when_heber_vix_unavailable`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_bars.py`
+      - `test_get_underlying_price_at_entry_returns_none_when_heber_has_no_bar`
+      - `test_get_underlying_price_at_offset_returns_none_when_heber_has_no_bar`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_market_tide.py`
+      - `test_get_regime_at_entry_uses_heber_tide_without_sql_fallback`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+      - `test_get_ticker_info_returns_defaults_without_db_lookup`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "ticker_info_returns_defaults_without_db_lookup"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py`
+
 - **Price Target Labeler VIX/Underlying SQL Fallback Removal (TDD, combined pass)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - removed local SQL fallback usage for:

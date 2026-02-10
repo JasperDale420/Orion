@@ -421,6 +421,32 @@ async def test_get_sector_correlation_features_returns_none_when_heber_empty(
 
 
 @pytest.mark.asyncio
+async def test_get_ticker_info_returns_defaults_without_db_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticker = "ZZZZ"
+    labeler._ticker_info_cache.pop(ticker, None)
+    calls = {"db_query": 0}
+
+    async def _record_db_query(_callback):
+        calls["db_query"] += 1
+        return None
+
+    monkeypatch.setattr(labeler, "db_query", _record_db_query, raising=False)
+    monkeypatch.setattr(labeler, "_get_uw_client", lambda: None, raising=False)
+
+    result = await labeler.get_ticker_info(ticker)
+
+    assert result == {
+        "sector": None,
+        "next_earnings_date": None,
+        "announce_time": None,
+        "last_earnings_date": None,
+    }
+    assert calls["db_query"] == 0
+
+
+@pytest.mark.asyncio
 async def test_get_opposing_flow_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
     end_ts = entry_ts + timedelta(hours=2)

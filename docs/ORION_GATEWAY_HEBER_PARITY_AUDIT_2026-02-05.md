@@ -8679,3 +8679,43 @@ Result:
   - `silver_ticker_info` (sector cache read/write).
 - current `main_price_target_labeler` SQL-coupled statement count:
   - `FROM/JOIN/INSERT/UPDATE silver_*`: `3`.
+
+## 276) Pass 275 Continuation (2026-02-10)
+
+### 276.1 `silver_ticker_info` + Regime/Underlying SQL Fallback Cleanup in `main_price_target_labeler` (TDD-Backed, Combined)
+
+Finding:
+- after prior fallback removals, `main_price_target_labeler` still contained local-SQL coupling for:
+  - regime VIX fallback (`silver_vix_data` + VIXY `silver_alpaca_bars`),
+  - underlying price fallback (`silver_alpaca_bars`),
+  - ticker sector cache persistence/read (`silver_ticker_info`).
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - `get_regime_at_entry(...)` now uses only Heber VIX proxy snapshot and no longer executes local SQL VIX fallback,
+  - `get_underlying_price_at_entry(...)` and `get_underlying_price_at_offset(...)` now return Heber values or `None` (removed local SQL fallback),
+  - removed DB-backed sector cache from `get_ticker_info(...)`:
+    - removed `_get_sector_from_db(...)`,
+    - removed `_persist_ticker_info(...)`,
+    - lookup now stays in-memory + UW API.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+    - `test_get_regime_at_entry_leaves_vix_none_when_heber_vix_unavailable`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_bars.py`
+    - `test_get_underlying_price_at_entry_returns_none_when_heber_has_no_bar`
+    - `test_get_underlying_price_at_offset_returns_none_when_heber_has_no_bar`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_market_tide.py`
+    - `test_get_regime_at_entry_uses_heber_tide_without_sql_fallback`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+    - `test_get_ticker_info_returns_defaults_without_db_lookup`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "ticker_info_returns_defaults_without_db_lookup"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py tests/unit/test_price_target_labeler_heber_bars.py` passed.
+
+Result:
+- active local SQL coupling in `main_price_target_labeler` is now effectively narrowed to one query surface:
+  - `silver_option_quotes` (quote lookup).
+- current `main_price_target_labeler` SQL-coupled statement count:
+  - `FROM/JOIN/INSERT/UPDATE silver_*`: `1`.

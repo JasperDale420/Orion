@@ -2485,26 +2485,11 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
     """Fetch ticker info from UW API with caching.
 
     Uses both /api/stock/{ticker}/info and /api/earnings/{ticker} endpoints
-    to maximize data coverage. Persists sector to silver_ticker_info.
+    to maximize data coverage.
     """
     # Return cached if available
     if ticker in _ticker_info_cache:
         return _ticker_info_cache[ticker]
-
-    # Check database first (persisted from previous API calls)
-    try:
-        db_sector = await _get_sector_from_db(ticker)
-        if db_sector:
-            cache_entry = {
-                "sector": db_sector,
-                "next_earnings_date": None,
-                "announce_time": None,
-                "last_earnings_date": None,
-            }
-            _ticker_info_cache[ticker] = cache_entry
-            return cache_entry
-    except Exception as e:
-        _record_price_target_fallback("cached_sector_db_lookup", e, ticker=ticker)
 
     # Initialize empty cache entry
     cache_entry: Dict[str, Any] = {
@@ -2579,45 +2564,8 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
         except Exception as e:
             logger.debug(f"Failed to fetch earnings for {ticker}: {e}")
 
-    # Persist sector to database for future lookups
-    if cache_entry["sector"]:
-        try:
-            await _persist_ticker_info(ticker, cache_entry["sector"])
-        except Exception as e:
-            logger.debug(f"Failed to persist ticker info for {ticker}: {e}")
-
     _ticker_info_cache[ticker] = cache_entry
     return cache_entry
-
-
-async def _get_sector_from_db(ticker: str) -> Optional[str]:
-    """Check silver_ticker_info for cached sector."""
-
-    async def query(session: Any) -> Optional[str]:
-        stmt = text("SELECT sector FROM silver_ticker_info WHERE ticker = :ticker")
-        result = await session.execute(stmt, {"ticker": ticker})
-        row = result.fetchone()
-        return row[0] if row else None
-
-    return await db_query(query)
-
-
-async def _persist_ticker_info(ticker: str, sector: str) -> None:
-    """Persist ticker sector to silver_ticker_info."""
-
-    async def write(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO silver_ticker_info (ticker, sector, last_updated)
-            VALUES (:ticker, :sector, NOW())
-            ON CONFLICT (ticker) DO UPDATE SET
-                sector = EXCLUDED.sector,
-                last_updated = NOW()
-        """
-        )
-        await session.execute(stmt, {"ticker": ticker, "sector": sector})
-
-    await db_write(write)
 
 
 async def get_sector_info(ticker: str) -> Dict[str, Optional[str]]:
