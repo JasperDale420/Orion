@@ -86,3 +86,58 @@ async def test_fetch_open_positions_filters_exited(setup_test_db):
     assert "OPEN_POS" in tickers, "OPEN_POS should be loaded"
     assert "CLOSED_POS" not in tickers, "CLOSED_POS should NOT be loaded (it has an ExitDecision)"
     assert len(open_positions) == 1, f"Expected 1 position, got {len(open_positions)}"
+
+
+@pytest.mark.asyncio
+async def test_initialize_does_not_rehydrate_closed_position_after_restart(setup_test_db):
+    """
+    Regression guard:
+    1) Position is opened (EXECUTE without ExitDecision) and appears after initialize().
+    2) Position is closed (ExitDecision inserted).
+    3) Fresh PositionManager initialize() must not rehydrate it as open.
+    """
+    candidate_id = str(uuid.uuid4())
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    async with async_session_factory() as session:
+        open_candidate = CandidateTrade(
+            candidate_id=candidate_id,
+            ticker="RESTART_POS",
+            timestamp_utc=now,
+            rule_id="rule1",
+            direction="LONG",
+            confidence=0.9,
+            evidence={},
+        )
+        open_decision = StrategyDecision(
+            decision_id=str(uuid.uuid4()),
+            candidate_id=candidate_id,
+            timestamp_utc=now,
+            ticker="RESTART_POS",
+            strategy_version_id="v1",
+            decision="EXECUTE",
+            executed_successfully="TRUE",
+            execution_params={"limit_price": 100},
+        )
+        session.add_all([open_candidate, open_decision])
+        await session.commit()
+
+    pm_before_close = PositionManager()
+    await pm_before_close.initialize()
+    assert any(p.candidate_id == candidate_id for p in pm_before_close.get_open_positions())
+
+    async with async_session_factory() as session:
+        exit_decision = ExitDecision(
+            exit_id=str(uuid.uuid4()),
+            ticker="RESTART_POS",
+            candidate_id=candidate_id,
+            rule_id="exit_rule",
+            exit_reason="TP",
+            exit_ts_utc=now + datetime.timedelta(minutes=5),
+        )
+        session.add(exit_decision)
+        await session.commit()
+
+    pm_after_restart = PositionManager()
+    await pm_after_restart.initialize()
+    assert all(p.candidate_id != candidate_id for p in pm_after_restart.get_open_positions())

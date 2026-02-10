@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Position restart-resume guardrail (TDD)**:
+  - added regression coverage in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_position_manager_filter.py` to ensure closed positions are not rehydrated as open after process restart (`initialize()` after `ExitDecision` insertion),
+  - covers `open -> close -> restart` lifecycle explicitly.
+
 - **Price target labeler sector/correlation Heber-only migration (TDD)**:
   - removed sector/correlation SQL fallback in `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`,
   - `get_sector_correlation_features(...)` now returns null-safe defaults when Heber data is unavailable,
