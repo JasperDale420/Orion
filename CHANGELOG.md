@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Backfill ML features: remove `silver_uw_flow` join dependency (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
+    - removed `LEFT JOIN silver_uw_flow` from `get_records_to_backfill(...)`,
+    - added Heber-based option-chain lookup helper `_get_option_chain_for_event(...)`,
+    - `update_ml_features(...)` now resolves missing `option_chain` via Heber before computing P2/P3 features.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_ml_features_selection.py`:
+      - `test_get_records_to_backfill_uses_deterministic_ordering` now enforces no `silver_uw_flow` join,
+      - added `test_get_option_chain_for_event_prefers_heber`.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_ml_features_selection.py`
+    - `pytest -q tests/unit/test_backfill_ml_features_signature.py tests/unit/test_backfill_ml_features_time_alignment.py tests/unit/test_backfill_ml_features_selection.py`
+    - `pytest -q tests/unit/test_backfill_ml_features_signature.py tests/unit/test_backfill_ml_features_time_alignment.py tests/unit/test_backfill_ml_features_selection.py tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_remediation_rules.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py -k "max_pain or validate_features or reconcile_backfill or data_quality_checker or window_feature_job or option_quote_tracker or vix_proxy or sync_earnings or remediation_rules or backfill_ml_features"`
+    - `ruff check src/orion/jobs/backfill_ml_features.py tests/unit/test_backfill_ml_features_selection.py`
+
 - **UW max-pain connector current-price Heber migration (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_max_pain_connector.py`:
     - replaced `_get_current_price(...)` local `silver_alpaca_bars` query with Heber `read_bars(...)`,

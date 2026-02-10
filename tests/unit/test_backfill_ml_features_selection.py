@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from orion.jobs import backfill_ml_features
@@ -32,8 +33,31 @@ async def test_get_records_to_backfill_uses_deterministic_ordering(
     records = await backfill_ml_features.get_records_to_backfill(limit=25)
 
     assert records == []
+    assert "LEFT JOIN silver_uw_flow" not in captured["sql"]
     assert "ORDER BY p.entry_ts ASC, p.event_id ASC" in captured["sql"]
     assert captured["params"]["limit"] == 25
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_for_event_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+    flow_df = pd.DataFrame(
+        {
+            "event_id": ["evt-1", "evt-2"],
+            "option_chain": ["AAPL260220C00200000", "AAPL260220P00190000"],
+            "ts_event": [now - timedelta(minutes=3), now - timedelta(minutes=1)],
+        }
+    )
+
+    class _FakeReader:
+        def read_flow(self, **_kwargs):
+            return flow_df
+
+    monkeypatch.setattr(backfill_ml_features, "get_heber_reader", lambda: _FakeReader())
+
+    option_chain = await backfill_ml_features._get_option_chain_for_event("evt-2")
+
+    assert option_chain == "AAPL260220P00190000"
 
 
 @pytest.mark.asyncio

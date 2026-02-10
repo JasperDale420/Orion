@@ -15,13 +15,17 @@ Usage:
 
 import argparse
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from sqlalchemy import text
+
+from orion.clients.heber_reader import get_heber_reader
 from orion.main_price_target_labeler import (
     get_darkpool_metrics as get_labeler_darkpool_metrics,
 )
@@ -81,7 +85,6 @@ from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
-from sqlalchemy import text
 
 logger = setup_struct_logger("orion.backfill.ml_features")
 
@@ -253,9 +256,8 @@ async def get_records_to_backfill(
 
         stmt = text(
             f"""
-            SELECT p.event_id, p.ticker, p.entry_ts, p.expiry, p.dte, f.option_chain
+            SELECT p.event_id, p.ticker, p.entry_ts, p.expiry, p.dte
             FROM price_target_labels p
-            LEFT JOIN silver_uw_flow f ON p.event_id = f.event_id
             WHERE (
                 p.entry_hour IS NULL OR p.overnight_gap_pct IS NULL OR p.gex_at_entry IS NULL
                 OR p.oi_change_1d IS NULL
@@ -270,6 +272,48 @@ async def get_records_to_backfill(
         return [dict(row._mapping) for row in rows]
 
     return await db_query(query)
+
+
+def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+
+async def _get_option_chain_for_event(event_id: str) -> str:
+    """Best-effort Heber lookup for option chain by event_id."""
+    event_id_str = str(event_id)
+    try:
+        flow_df = await asyncio.to_thread(
+            get_heber_reader().read_flow,
+            asof_time=datetime.now(timezone.utc),
+            start_time=datetime.now(timezone.utc) - timedelta(days=365),
+        )
+    except Exception as e:
+        logger.debug(f"Failed to load flow rows for option_chain lookup: {e}")
+        return ""
+
+    if flow_df is None or flow_df.empty:
+        return ""
+
+    event_col = _first_existing_column(flow_df, ["event_id", "source_event_id", "id"])
+    option_col = _first_existing_column(flow_df, ["option_chain", "option_symbol", "contract", "contract_symbol"])
+    ts_col = _first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    if event_col is None or option_col is None:
+        return ""
+
+    matched = flow_df[flow_df[event_col].astype(str) == event_id_str]
+    if matched.empty:
+        return ""
+
+    if ts_col is not None:
+        matched = matched.assign(_ts=pd.to_datetime(matched[ts_col], utc=True, errors="coerce")).sort_values("_ts")
+    row = matched.iloc[-1]
+    value = row.get(option_col)
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return str(value)
 
 
 async def _load_backfill_cursor() -> tuple[datetime | None, str | None]:
@@ -400,6 +444,8 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
     updates["vix_regime_at_entry"] = regime_data.get("vix_regime")
 
     option_chain = record.get("option_chain", "")
+    if not option_chain:
+        option_chain = await _get_option_chain_for_event(event_id)
     expiry = record.get("expiry")
 
     p2 = await get_p2_features(ticker, option_chain, entry_ts)

@@ -8953,3 +8953,32 @@ Verification:
 Result:
 - `uw_max_pain_connector` no longer reads local `silver_alpaca_bars`.
 - remaining `silver_*` references in this connector are limited to intentional `silver_max_pain` persistence writes.
+
+## 284) Pass 283 Continuation (2026-02-10)
+
+### 284.1 `backfill_ml_features` Selection Query De-Coupled from `silver_uw_flow` (TDD-Backed)
+
+Finding:
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py` still used:
+  - `LEFT JOIN silver_uw_flow` in `get_records_to_backfill(...)` to retrieve `option_chain`,
+- keeping backfill selection coupled to Orion-local Silver flow storage.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
+  - removed local `silver_uw_flow` join from `get_records_to_backfill(...)`,
+  - added Heber-backed helper `_get_option_chain_for_event(event_id)` to resolve `option_chain`,
+  - updated `update_ml_features(...)` to fetch `option_chain` via Heber when record payload lacks it.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_ml_features_selection.py`:
+    - `test_get_records_to_backfill_uses_deterministic_ordering` now asserts no `LEFT JOIN silver_uw_flow`,
+    - added `test_get_option_chain_for_event_prefers_heber`.
+
+Verification:
+- `pytest -q tests/unit/test_backfill_ml_features_selection.py` passed.
+- `pytest -q tests/unit/test_backfill_ml_features_signature.py tests/unit/test_backfill_ml_features_time_alignment.py tests/unit/test_backfill_ml_features_selection.py` passed.
+- `pytest -q tests/unit/test_backfill_ml_features_signature.py tests/unit/test_backfill_ml_features_time_alignment.py tests/unit/test_backfill_ml_features_selection.py tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_reconcile_backfill_heber_source.py tests/unit/test_remediation_rules.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py -k "max_pain or validate_features or reconcile_backfill or data_quality_checker or window_feature_job or option_quote_tracker or vix_proxy or sync_earnings or remediation_rules or backfill_ml_features"` passed.
+- `ruff check src/orion/jobs/backfill_ml_features.py tests/unit/test_backfill_ml_features_selection.py` passed.
+
+Result:
+- removed the last active `silver_uw_flow` SQL read dependency from `backfill_ml_features`.
+- remaining `silver_*` SQL usage in the repo is now mostly intentional persistence/read surfaces (`silver_option_quotes`, `silver_vix_data`, `silver_earnings_calendar`, and connector sink tables), plus limited remaining migration candidates.
