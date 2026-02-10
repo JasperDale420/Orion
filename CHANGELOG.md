@@ -49,6 +49,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler Regime Fallback De-Duping (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed the inline `silver_market_tide` fallback query in `get_regime_at_entry(...)`,
+    - `get_regime_at_entry(...)` now reuses shared fallback helper `_get_market_tide_before_entry_sql(...)` and consumes `net_premium`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_vix_proxy.py`:
+    - added `test_get_regime_at_entry_uses_shared_market_tide_sql_fallback_helper`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_vix_proxy.py -k "shared_market_tide_sql_fallback_helper or falls_back_to_sql_when_heber_vix_unavailable or prefers_heber_vix_proxy"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+
 - **Price Target Labeler IV-Rank Heber-First Fallback Hardening (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - `get_iv_rank_at_entry(...)` now falls back to local `silver_iv_rank` lookup before any estimation path,

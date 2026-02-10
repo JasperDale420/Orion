@@ -111,3 +111,47 @@ async def test_get_regime_at_entry_falls_back_to_sql_when_heber_vix_unavailable(
     assert captured["vix"] == 22.0
     assert captured["vix_1d_change"] == 1.0
     assert result["vix_at_entry"] == 22.0
+
+
+@pytest.mark.asyncio
+async def test_get_regime_at_entry_uses_shared_market_tide_sql_fallback_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import orion.analysis.regime as regime_module
+
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    captured: dict[str, Any] = {}
+
+    class _FakeDetector:
+        def detect(self, **kwargs: Any):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                trend=SimpleNamespace(value="UP"),
+                vol=SimpleNamespace(value="NORMAL"),
+                risk=SimpleNamespace(value="RISK_ON"),
+                session=SimpleNamespace(value="OPEN"),
+                vix_level=kwargs.get("vix"),
+                vix_regime=SimpleNamespace(value="NORMAL"),
+            )
+
+    async def _fake_market_tide_sql(*_args: Any, **_kwargs: Any):
+        return {"net_premium": 321.0, "direction": "BULLISH"}
+
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not be called directly for market tide fallback")
+
+    monkeypatch.setattr(regime_module, "MultiAxisRegimeDetector", _FakeDetector)
+    monkeypatch.setattr(
+        labeler,
+        "_get_heber_vix_proxy_snapshot_at_or_before",
+        lambda _entry_ts: {"vix": 19.0, "vix_1d_change": 0.3, "vix_regime": "NORMAL"},
+        raising=False,
+    )
+    monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(labeler, "_get_market_tide_before_entry_sql", _fake_market_tide_sql, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
+
+    result = await labeler.get_regime_at_entry(entry_ts)
+
+    assert captured["market_tide_net"] == 321.0
+    assert result["vix_at_entry"] == 19.0

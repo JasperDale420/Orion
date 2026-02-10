@@ -8413,3 +8413,27 @@ Verification:
 Result:
 - IV-rank entry lookup now stays Heber-first even in fallback scenarios and no longer depends on local `silver_uw_flow` SQL for IV-rank computation.
 - targeted local coupling count reduced further (`silver_*` references in `src/orion`: 54 -> 51).
+
+## 268) Pass 267 Continuation (2026-02-10)
+
+### 268.1 `get_regime_at_entry` Market-Tide Fallback De-Duped to Shared Helper (TDD-Backed)
+
+Finding:
+- `get_regime_at_entry(...)` carried an inline local SQL fallback (`query_tide`) over `silver_market_tide`, duplicating logic already implemented in `_get_market_tide_before_entry_sql(...)`.
+- This duplicate path increased maintenance surface and kept an extra direct local-table reference in the labeler hot path.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - removed inline `query_tide` fallback in `get_regime_at_entry(...)`,
+  - now reuses `_get_market_tide_before_entry_sql(entry_ts, minutes=30)` when Heber market-tide context is unavailable and reads `net_premium` from the shared helper response.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+    - added `test_get_regime_at_entry_uses_shared_market_tide_sql_fallback_helper`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_vix_proxy.py -k "shared_market_tide_sql_fallback_helper or falls_back_to_sql_when_heber_vix_unavailable or prefers_heber_vix_proxy"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py` passed.
+
+Result:
+- one duplicate local SQL path removed from the regime enrichment flow,
+- targeted coupling improved again (`silver_*` references in `src/orion`: 51 -> 50; `main_price_target_labeler`: 21 -> 20).

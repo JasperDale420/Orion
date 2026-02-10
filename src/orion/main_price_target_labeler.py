@@ -1449,26 +1449,13 @@ async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
 
         return {}
 
-    # Get market tide sum for risk scoring
-    async def query_tide(session: Any) -> Optional[float]:
-        start_ts = entry_ts - timedelta(minutes=30)
-        stmt = text(
-            """
-            SELECT COALESCE(SUM(net_call_premium), 0) + COALESCE(SUM(net_put_premium), 0)
-            FROM silver_market_tide
-            WHERE ts_utc > :start_ts AND ts_utc <= :entry_ts
-        """
-        )
-        result = await session.execute(stmt, {"start_ts": start_ts, "entry_ts": entry_ts})
-        row = result.fetchone()
-        return float(row[0]) if row and row[0] else None
-
     vix_data = _get_heber_vix_proxy_snapshot_at_or_before(entry_ts) or {}
     if vix_data.get("vix") is None:
         vix_data = await db_query(query_vix)
     tide_net = _get_heber_market_tide_net_premium(entry_ts, minutes=30)
     if tide_net is None:
-        tide_net = await db_query(query_tide)
+        tide_snapshot = await _get_market_tide_before_entry_sql(entry_ts, minutes=30)
+        tide_net = tide_snapshot.get("net_premium") if isinstance(tide_snapshot, dict) else None
 
     # Detect regime snapshot
     snapshot = detector.detect(
