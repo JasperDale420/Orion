@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -50,22 +49,20 @@ async def test_get_entry_signals_prefers_heber_flow_when_available(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_get_entry_signals_falls_back_to_sql_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_entry_signals_returns_empty_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_get_entry_signals_sql(limit: int):
-        assert limit == 3
-        return [SimpleNamespace(event_id="sql-1")]
+    async def _fail_sql_fallback(_limit: int):
+        raise AssertionError("SQL fallback should not run when Heber flow is unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_entry_signals_sql", _fake_get_entry_signals_sql, raising=False)
+    monkeypatch.setattr(labeler, "_get_entry_signals_sql", _fail_sql_fallback, raising=False)
 
     entries = await labeler.get_entry_signals(limit=3)
 
-    assert len(entries) == 1
-    assert entries[0].event_id == "sql-1"
+    assert entries == []
 
 
 @pytest.mark.asyncio
@@ -104,7 +101,7 @@ async def test_get_subsequent_prices_prefers_heber_flow_when_available(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_get_subsequent_prices_falls_back_to_sql_when_heber_missing_columns(
+async def test_get_subsequent_prices_returns_empty_when_heber_missing_columns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
@@ -113,14 +110,12 @@ async def test_get_subsequent_prices_falls_back_to_sql_when_heber_missing_column
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame([{"unexpected": "shape"}])
 
-    async def _fake_sql_fallback(option_chain: str, ts: datetime):
-        assert option_chain == "AAPL250117C00200000"
-        assert ts == entry_ts
-        return [{"price": 2.0, "ts": entry_ts + timedelta(minutes=1)}]
+    async def _fail_sql_fallback(_option_chain: str, _entry_ts: datetime):
+        raise AssertionError("SQL fallback should not run when Heber flow has unusable shape")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_subsequent_prices_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_subsequent_prices_sql", _fail_sql_fallback, raising=False)
 
     prices = await labeler.get_subsequent_prices("AAPL250117C00200000", entry_ts)
 
-    assert prices == [{"price": 2.0, "ts": entry_ts + timedelta(minutes=1)}]
+    assert prices == []

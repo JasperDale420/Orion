@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Price target labeler Heber-only fallback guardrails (TDD)**:
+  - tightened Heber-source contract tests to enforce no SQL fallback when Heber data is missing/unusable for:
+    - entry signal reads,
+    - subsequent price reads,
+    - flow Greeks context reads.
+  - updated:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_flow.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+  - validation: `uv run pytest -q` (`744 passed, 6 skipped`).
+
 - **Execution/position tracking hardening (TDD)**:
   - fixed `PositionManager` identity handling to track positions by `candidate_id` (instead of ticker), preventing same-ticker contract overwrite in multi-position books,
   - preserved backward compatibility for ticker-based lookups/removals while making close-path removal candidate-specific in execution loop,

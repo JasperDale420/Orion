@@ -1028,7 +1028,7 @@ async def test_get_flow_greeks_prefers_heber_when_available(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_get_flow_greeks_falls_back_to_sql_when_heber_missing(
+async def test_get_flow_greeks_returns_null_payload_when_heber_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_id = "evt-999"
@@ -1037,35 +1037,22 @@ async def test_get_flow_greeks_falls_back_to_sql_when_heber_missing(
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_sql_fallback(received_event_id: str):
-        assert received_event_id == event_id
-        return {
-            "volume": 75,
-            "open_interest": 150,
-            "iv": 0.25,
-            "underlying_price": 100.0,
-            "strike": 95.0,
-            "put_call": "C",
-            "expiry": "2026-03-20",
-            "flow_ts": datetime(2026, 2, 11, 14, 0, tzinfo=timezone.utc),
-            "option_chain": "AAPL260320C00095000",
-            "delta_stored": 0.60,
-            "gamma_stored": 0.04,
-            "theta_stored": -0.09,
-            "vega_stored": 0.12,
-            "rho_stored": 0.02,
-            "iv_alpaca_stored": 0.26,
-        }
+    async def _fail_sql_fallback(_event_id: str):
+        raise AssertionError("SQL fallback should not run when Heber flow Greeks are unavailable")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "_get_flow_greeks_sql", _fake_sql_fallback, raising=False)
+    monkeypatch.setattr(labeler, "_get_flow_greeks_sql", _fail_sql_fallback, raising=False)
 
     result = await labeler.get_flow_greeks(event_id)
 
-    assert result["delta"] == pytest.approx(0.60)
-    assert result["gamma"] == pytest.approx(0.04)
-    assert result["theta"] == pytest.approx(-0.09)
-    assert result["vega"] == pytest.approx(0.12)
-    assert result["rho"] == pytest.approx(0.02)
-    assert result["iv"] == pytest.approx(0.25)
-    assert result["iv_alpaca"] == pytest.approx(0.26)
+    assert result == {
+        "delta": None,
+        "gamma": None,
+        "theta": None,
+        "vega": None,
+        "rho": None,
+        "volume": None,
+        "open_interest": None,
+        "iv": None,
+        "iv_alpaca": None,
+    }
