@@ -107,3 +107,6 @@ ignore = ["E402", "E501", "B008"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+plugins = ["pydantic.mypy", "numpy.typing.mypy"]
