@@ -1,6 +1,6 @@
 
-# Use Python 3.12 slim image
-FROM python:3.12-slim
+# Use Python 3.12 slim bookworm image
+FROM python:3.12-slim-bookworm
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -18,7 +18,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Prepend poetry and venv to path
 ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
 
-# Install system dependencies (gcc, libpq-dev for asyncpg/psycopg2)
+# Install system dependencies (gcc, libpq-dev for asyncpg/psycopg2) and curl for healthcheck
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
     curl \
@@ -48,3 +48,20 @@ COPY alembic.ini .
 
 # Set PYTHONPATH
 ENV PYTHONPATH=/app/src
+
+# Security: Create non-root user
+RUN groupadd -r appgroup && useradd -r -g appgroup -s /bin/bash appuser \
+    && chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose port
+EXPOSE 8000
+
+# Default command
+CMD ["python", "-m", "uvicorn", "orion.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
