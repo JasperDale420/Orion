@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **HTTP Client: requests → httpx** — Migrated all HTTP clients from `requests` to `httpx`:
+  - 4 UW connectors: `uw_greek_exposure_connector.py`, `uw_iv_rank_connector.py`, `uw_market_tide_connector.py`, `uw_max_pain_connector.py`
+  - `gateway_contract_probe.py`
+  - 3 scripts: `raw_flow_backfill.py`, `validate_whalehunter_darkpool_vs_api.py`, `validate_whalehunter_flow_vs_api.py`
+  - Updated `test_uw_gateway_connector_retry_contract.py` to use `httpx.HTTPStatusError`
+  - Exception mappings: `HTTPError→HTTPStatusError`, `Timeout→TimeoutException`, `ConnectionError→ConnectError`, `RequestException→HTTPError`
+
 ### Added
 
 - **Pydantic Settings Migration (os.getenv → SystemSettings/AgentSettings)**:
