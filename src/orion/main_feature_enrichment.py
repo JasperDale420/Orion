@@ -44,6 +44,7 @@ DEFAULT_LOOP_SLEEP_SECONDS = 30.0
 DEFAULT_LOOP_ERROR_WARN_STREAK = 3
 DEFAULT_NON_HEBER_WARN_STREAK = 3
 STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
+_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 _heber_reader = HeberReader()
 
@@ -90,6 +91,110 @@ def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> List
 
     counts = tickers.value_counts()
     return counts.head(limit).index.tolist()
+
+
+def _prefer_heber_context_reads() -> bool:
+    raw = os.getenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", "1").strip().lower()
+    return raw not in _PREFER_HEBER_FALSE_VALUES
+
+
+def _first_existing_column(df: pd.DataFrame, candidates: List[str]) -> str | None:
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def _coerce_time_series(df: pd.DataFrame) -> pd.Series:
+    ts_col = _first_existing_column(df, ["ts_event", "ts_utc", "bar_start_ts", "bar_start_ts_utc", "timestamp"])
+    if ts_col is None:
+        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+    return pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+
+
+def _get_latest_market_tide_from_heber() -> float | None:
+    try:
+        now = datetime.now(timezone.utc)
+        tide_df = _heber_reader.read_market_tide(
+            asof_time=now,
+            start_time=now - pd.Timedelta(days=2),
+        )
+    except Exception:
+        logger.debug("Heber market tide read failed, falling back to local DB", exc_info=True)
+        return None
+
+    if tide_df.empty:
+        return None
+
+    tide_df = tide_df.copy()
+    tide_df["_ts"] = _coerce_time_series(tide_df)
+    if tide_df["_ts"].notna().any():
+        tide_df = tide_df.dropna(subset=["_ts"]).sort_values("_ts", ascending=False)
+    if tide_df.empty:
+        return None
+
+    latest = tide_df.iloc[0]
+    net_col = _first_existing_column(tide_df, ["net_premium", "market_tide_net"])
+    if net_col is not None:
+        value = pd.to_numeric(pd.Series([latest.get(net_col)]), errors="coerce").iloc[0]
+        if pd.notna(value):
+            return float(value)
+
+    call_col = _first_existing_column(tide_df, ["net_call_premium", "call_premium"])
+    put_col = _first_existing_column(tide_df, ["net_put_premium", "put_premium"])
+    if call_col is None or put_col is None:
+        return None
+
+    call_value = pd.to_numeric(pd.Series([latest.get(call_col)]), errors="coerce").iloc[0]
+    put_value = pd.to_numeric(pd.Series([latest.get(put_col)]), errors="coerce").iloc[0]
+    if pd.isna(call_value) or pd.isna(put_value):
+        return None
+    return float(call_value - put_value)
+
+
+def _get_spy_cumulative_return_from_heber() -> float | None:
+    try:
+        now = datetime.now(timezone.utc)
+        bars_df = _heber_reader.read_bars(
+            symbols=["SPY"],
+            asof_time=now,
+            start_time=now - pd.Timedelta(days=2),
+        )
+    except Exception:
+        logger.debug("Heber SPY bars read failed, falling back to local DB", exc_info=True)
+        return None
+
+    if bars_df.empty:
+        return None
+
+    bars_df = bars_df.copy()
+    symbol_col = _first_existing_column(bars_df, ["symbol", "ticker", "underlying", "instrument_key"])
+    if symbol_col is not None:
+        symbols = bars_df[symbol_col].astype(str).str.upper().str.split(":").str[-1]
+        bars_df = bars_df.loc[symbols == "SPY"]
+    if bars_df.empty:
+        return None
+
+    close_col = _first_existing_column(bars_df, ["close", "c"])
+    if close_col is None:
+        return None
+
+    bars_df["_ts"] = _coerce_time_series(bars_df)
+    if bars_df["_ts"].notna().any():
+        bars_df = bars_df.dropna(subset=["_ts"]).sort_values("_ts", ascending=False)
+
+    bars_df["_close"] = pd.to_numeric(bars_df[close_col], errors="coerce")
+    bars_df = bars_df.dropna(subset=["_close"]).head(20)
+    if bars_df.empty:
+        return None
+    if len(bars_df) < 2:
+        return 0.0
+
+    latest_close = float(bars_df.iloc[0]["_close"])
+    oldest_close = float(bars_df.iloc[-1]["_close"])
+    if oldest_close == 0:
+        return 0.0
+    return (latest_close - oldest_close) / oldest_close
 
 
 def _zero_write_warn_streak_threshold() -> int:
@@ -340,6 +445,10 @@ async def get_latest_vix_data() -> dict:
 
 async def get_latest_market_tide() -> float | None:
     """Get latest market tide net premium (calls - puts)."""
+    if _prefer_heber_context_reads():
+        heber_net = _get_latest_market_tide_from_heber()
+        if heber_net is not None:
+            return heber_net
 
     async def query(session: Any) -> float | None:
         stmt = text(
@@ -362,6 +471,10 @@ async def get_latest_market_tide() -> float | None:
 
 async def get_spy_cumulative_return() -> float:
     """Get SPY cumulative return over past 20 bars (approximate trend)."""
+    if _prefer_heber_context_reads():
+        heber_return = _get_spy_cumulative_return_from_heber()
+        if heber_return is not None:
+            return heber_return
 
     async def query(session: Any) -> float:
         stmt = text(

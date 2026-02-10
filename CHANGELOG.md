@@ -86,6 +86,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
       - bars Heber-first and fallback coverage.
   - Verified with:
     - `pytest -q tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_legacy_label_pipeline_gates.py`
+- **Feature Enrichment Heber-First Regime Context Reads (TDD)**:
+  - Updated `src/orion/main_feature_enrichment.py`:
+    - added Heber-first context read mode for regime inputs:
+      - env `ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT` (default enabled),
+    - `get_latest_market_tide()` now reads Heber `market_tide` first and falls back to local SQL,
+    - `get_spy_cumulative_return()` now reads Heber `bars` (SPY) first and falls back to local SQL,
+    - added robust column/time normalization helpers for schema compatibility.
+  - Added tests:
+    - `tests/unit/test_feature_enrichment_context_heber_source.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_gateway_contract.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_legacy_label_pipeline_gates.py`
 - **Validate Features Heber-First Source Audit Adapter (TDD)**:
   - Updated `src/orion/jobs/validate_features.py`:
     - added Heber-first source-audit adapter for dataset coverage checks with local SQL fallback,

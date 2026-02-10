@@ -8107,3 +8107,36 @@ Verification:
 Result:
 - option-quote checkpoint scheduling and bars-quality monitoring now participate in Heber-first contract semantics.
 - local `silver_uw_flow` / `silver_alpaca_bars` coupling is reduced further in operational paths while preserving fallback safety during rollout.
+
+## 260) Pass 259 Continuation (2026-02-10)
+
+### 260.1 `main_feature_enrichment` Regime Context Reads Moved to Heber-First (TDD-Backed)
+
+Finding:
+- `main_feature_enrichment` still sourced core regime-context inputs directly from Orion-local tables:
+  - `get_latest_market_tide()` -> `silver_market_tide`,
+  - `get_spy_cumulative_return()` -> `silver_alpaca_bars`.
+- this kept one of the central runtime loops partially tied to local silver reads even after prior migration of ticker discovery and downstream quality jobs.
+
+Implemented:
+- Updated `src/orion/main_feature_enrichment.py`:
+  - added Heber-first context-read toggle:
+    - `ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT` (default enabled),
+  - added Heber-backed context helpers:
+    - market-tide latest net premium derivation from Heber silver market-tide frames,
+    - SPY cumulative-return derivation from Heber silver bars,
+  - retained SQL fallback behavior for both functions when Heber data is unavailable/empty,
+  - added schema-normalization helpers for time and column-name compatibility across Heber/local representations.
+- Added tests:
+  - `tests/unit/test_feature_enrichment_context_heber_source.py`
+    - Heber-preferred market-tide path,
+    - Heber-preferred SPY cumulative-return path,
+    - SQL fallback behavior,
+    - env-based disable path.
+
+Verification:
+- `pytest -q tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_feature_enrichment_gateway_contract.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_window_feature_job_heber_source.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py tests/unit/test_legacy_label_pipeline_gates.py` passed.
+
+Result:
+- regime-context reads in feature enrichment now align with Heber-first migration semantics.
+- this further reduces runtime dependency on Orion-local `silver_market_tide`/`silver_alpaca_bars` while preserving operational fallback safety.
