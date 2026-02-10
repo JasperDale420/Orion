@@ -8464,3 +8464,28 @@ Verification:
 Result:
 - IV-rank enrichment now remains Heber-backed end-to-end for both entry and offset lookups.
 - targeted coupling improved again (`silver_*` references in `src/orion`: 50 -> 49; `main_price_target_labeler`: 20 -> 19).
+
+## 270) Pass 269 Continuation (2026-02-10)
+
+### 270.1 `main_price_target_labeler` Max-Pain Local SQL Fallback Removed (TDD-Backed)
+
+Finding:
+- `get_max_pain_distance(...)` still used a local SQL fallback over `silver_max_pain` when Heber max-pain data was unavailable.
+- This kept an extra local-table dependency in core label feature assembly.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+  - removed `_get_max_pain_distance_sql(...)`,
+  - `get_max_pain_distance(...)` now returns Heber-derived value (or `None` when unavailable).
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`:
+    - replaced SQL-fallback expectation with Heber-only no-data behavior:
+      - `test_get_max_pain_distance_returns_none_when_heber_empty`.
+
+Verification:
+- `pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k "max_pain_distance or iv_rank"` passed.
+- `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py` passed.
+
+Result:
+- max-pain feature sourcing is now Heber-only in `main_price_target_labeler`.
+- targeted coupling improved again (`silver_*` references in `src/orion`: 49 -> 48; `main_price_target_labeler`: 19 -> 18).

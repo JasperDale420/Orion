@@ -72,6 +72,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Price Target Labeler Max-Pain SQL Fallback Removal (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - removed `_get_max_pain_distance_sql(...)` local fallback (`silver_max_pain`),
+    - `get_max_pain_distance(...)` now uses Heber-derived max-pain distance only (returns `None` when unavailable).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py`:
+    - `test_get_max_pain_distance_returns_none_when_heber_empty`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py -k "max_pain_distance or iv_rank"`
+    - `pytest -q tests/unit/test_price_target_labeler_heber_flow.py tests/unit/test_price_target_labeler_heber_market_tide.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_price_target_labeler_heber_max_pain_iv_rank.py tests/unit/test_price_target_labeler_heber_vix_proxy.py`
+
 - **Price Target Labeler IV-Rank SQL Fallback Removal (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - removed `_get_iv_at_offset_sql(...)` (`silver_iv_rank` SQL fallback),

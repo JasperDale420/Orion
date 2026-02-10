@@ -42,7 +42,7 @@ async def test_get_max_pain_distance_prefers_heber_when_available(monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_get_max_pain_distance_falls_back_to_sql_when_heber_empty(
+async def test_get_max_pain_distance_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
@@ -52,14 +52,14 @@ async def test_get_max_pain_distance_falls_back_to_sql_when_heber_empty(
         def read_max_pain(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
 
-    async def _fake_db_query(_callback):
-        return 4.2
+    async def _fail_db_query(_callback):
+        raise AssertionError("db_query should not be used for max pain fallback")
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     distance = await labeler.get_max_pain_distance("AAPL", expiry_dt, entry_ts)
-    assert distance == 4.2
+    assert distance is None
 
 
 @pytest.mark.asyncio

@@ -1243,33 +1243,7 @@ async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], en
         return None
 
     heber_distance = _get_max_pain_distance_from_heber(ticker, expiry_date, entry_ts)
-    if heber_distance is not None:
-        return heber_distance
-
-    return await _get_max_pain_distance_sql(ticker, expiry_date, entry_ts)
-
-
-async def _get_max_pain_distance_sql(ticker: str, expiry_date: Any, entry_ts: datetime) -> Optional[float]:
-    async def query(session: Any) -> Optional[float]:
-        stmt = text(
-            """
-            SELECT distance_to_max_pain_pct FROM silver_max_pain
-            WHERE ticker = :ticker AND expiry = :expiry AND date <= :entry_date
-            ORDER BY date DESC LIMIT 1
-        """
-        )
-        result = await session.execute(
-            stmt,
-            {
-                "ticker": ticker,
-                "expiry": expiry_date.date() if isinstance(expiry_date, datetime) else expiry_date,
-                "entry_date": entry_ts.date(),
-            },
-        )
-        row = result.fetchone()
-        return row[0] if row else None
-
-    return await db_query(query)
+    return heber_distance
 
 
 def _get_max_pain_distance_from_heber(
