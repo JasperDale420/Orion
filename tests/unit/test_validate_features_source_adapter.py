@@ -139,6 +139,63 @@ async def test_validate_darkpool_prefers_heber_when_available(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+async def test_validate_overnight_gap_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail_db_query(_fn):
+        raise AssertionError("local DB fallback should not be used when Heber bars are available")
+
+    monkeypatch.setattr(
+        validate_features,
+        "_get_overnight_gap_inputs_from_heber_for_validation",
+        lambda **_: (110.0, 100.0),
+    )
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+
+    results = await validate_features.validate_overnight_gap(
+        {"overnight_gap_pct": 10.0},
+        "AAPL",
+        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+    )
+
+    assert results["failed"] == []
+    assert any("matches raw data" in msg for msg in results["passed"])
+
+
+@pytest.mark.asyncio
+async def test_validate_overnight_gap_falls_back_to_local_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_db_query(fn):
+        class _FakeResult:
+            def __init__(self, row):
+                self._row = row
+
+            def fetchone(self):
+                return self._row
+
+        class _FakeSession:
+            def __init__(self):
+                self._count = 0
+
+            async def execute(self, *_args, **_kwargs):
+                self._count += 1
+                if self._count == 1:
+                    return _FakeResult((105.0,))
+                return _FakeResult((100.0,))
+
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(validate_features, "_get_overnight_gap_inputs_from_heber_for_validation", lambda **_: None)
+    monkeypatch.setattr(validate_features, "db_query", _fake_db_query)
+
+    results = await validate_features.validate_overnight_gap(
+        {"overnight_gap_pct": 5.0},
+        "AAPL",
+        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+    )
+
+    assert results["failed"] == []
+    assert any("matches raw data" in msg for msg in results["passed"])
+
+
+@pytest.mark.asyncio
 async def test_validate_darkpool_falls_back_to_local_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_db_query(fn):
         class _FakeResult:

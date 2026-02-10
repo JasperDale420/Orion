@@ -8362,3 +8362,26 @@ Verification:
 
 Result:
 - validate-features spot checks now align better with Heber-first migration semantics while preserving local fallback behavior.
+
+## 266) Pass 265 Continuation (2026-02-10)
+
+### 266.1 `validate_features` Overnight-Gap Spot Check Moved Heber-First (TDD-Backed)
+
+Finding:
+- `validate_overnight_gap(...)` still validated against Orion-local SQL bars only (`silver_alpaca_bars`), unlike other migrated spot-check paths (for example darkpool) that already used Heber-first reads.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+  - added `_get_overnight_gap_inputs_from_heber_for_validation(...)` to derive `(today_open, prior_close)` from Heber bars (`read_bars`) with robust time/ticker/column normalization,
+  - updated `validate_overnight_gap(...)` to prefer Heber-derived validation inputs and fall back to existing SQL lookup only when Heber data is unavailable.
+- Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_source_adapter.py`:
+  - `test_validate_overnight_gap_prefers_heber_when_available`
+  - `test_validate_overnight_gap_falls_back_to_local_when_heber_empty`.
+
+Verification:
+- `pytest -q tests/unit/test_validate_features_source_adapter.py -k "overnight_gap"` passed.
+- `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py` passed.
+- `ruff check src/orion/jobs/validate_features.py tests/unit/test_validate_features_source_adapter.py` passed.
+
+Result:
+- overnight-gap spot-check validation now follows the same Heber-first contract as other migrated validation sources, reducing local-SQL coupling in `validate_features` while preserving fallback behavior.

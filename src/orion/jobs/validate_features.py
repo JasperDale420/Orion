@@ -170,7 +170,14 @@ async def validate_overnight_gap(label: Dict, ticker: str, entry_ts: datetime) -
 
         return today_open, prior_close
 
-    today_open, prior_close = await db_query(query)
+    heber_inputs = _get_overnight_gap_inputs_from_heber_for_validation(
+        ticker=ticker,
+        entry_ts=entry_ts,
+    )
+    if heber_inputs is None:
+        today_open, prior_close = await db_query(query)
+    else:
+        today_open, prior_close = heber_inputs
 
     if today_open and prior_close and prior_close > 0:
         expected_gap = ((today_open - prior_close) / prior_close) * 100
@@ -182,6 +189,72 @@ async def validate_overnight_gap(label: Dict, ticker: str, entry_ts: datetime) -
             failed.append(f"overnight_gap mismatch: got {actual_gap:.4f}, expected {expected_gap:.4f}")
 
     return {"passed": passed, "failed": failed}
+
+
+def _get_overnight_gap_inputs_from_heber_for_validation(
+    *,
+    ticker: str,
+    entry_ts: datetime,
+) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """Return (today_open, prior_close) from Heber bars for validation window."""
+    try:
+        bars_df = get_heber_reader().read_bars(
+            symbols=[ticker],
+            start_time=entry_ts - timedelta(days=7),
+            asof_time=entry_ts,
+        )
+    except Exception as exc:
+        logger.warning("validate_overnight_gap_heber_lookup_failed", ticker=ticker, error=str(exc))
+        return None
+
+    if bars_df.empty:
+        return None
+
+    ts_col = _pick_first_existing_column(bars_df, ["bar_start_ts_utc", "bar_start_ts", "ts_event", "ts_utc"])
+    open_col = _pick_first_existing_column(bars_df, ["open", "o"])
+    close_col = _pick_first_existing_column(bars_df, ["close", "c"])
+    if ts_col is None or open_col is None or close_col is None:
+        return None
+
+    temp_df = bars_df.copy()
+    if "ticker" not in temp_df.columns:
+        if "symbol" in temp_df.columns:
+            temp_df["ticker"] = temp_df["symbol"]
+        elif "instrument_key" in temp_df.columns:
+            temp_df["ticker"] = temp_df["instrument_key"].astype(str).str.split(":").str[-1]
+
+    ts_series = pd.to_datetime(temp_df[ts_col], utc=True, errors="coerce")
+    ticker_series = temp_df.get("ticker", pd.Series(index=temp_df.index, dtype=str)).astype(str).str.upper()
+    open_series = pd.to_numeric(temp_df[open_col], errors="coerce")
+    close_series = pd.to_numeric(temp_df[close_col], errors="coerce")
+
+    normalized = pd.DataFrame(
+        {
+            "ticker": ticker_series,
+            "ts_utc": ts_series,
+            "open": open_series,
+            "close": close_series,
+        }
+    ).dropna(subset=["ts_utc"])
+
+    if not normalized.empty and "ticker" in normalized.columns:
+        normalized = normalized[normalized["ticker"] == ticker.upper()]
+    if normalized.empty:
+        return None
+
+    normalized = normalized.sort_values("ts_utc")
+    entry_date = entry_ts.date()
+    normalized["bar_date"] = normalized["ts_utc"].dt.date
+
+    today_rows = normalized[normalized["bar_date"] == entry_date]
+    prior_rows = normalized[normalized["bar_date"] < entry_date]
+
+    today_open = float(today_rows.iloc[0]["open"]) if not today_rows.empty and pd.notna(today_rows.iloc[0]["open"]) else None
+    prior_close = (
+        float(prior_rows.iloc[-1]["close"]) if not prior_rows.empty and pd.notna(prior_rows.iloc[-1]["close"]) else None
+    )
+
+    return today_open, prior_close
 
 
 async def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dict[str, List[str]]:
