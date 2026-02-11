@@ -9021,3 +9021,38 @@ Result:
   - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`,
   - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`.
 - remaining `silver_earnings_calendar` and `silver_option_quotes` references are model declarations plus one non-executable legacy comment in `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`.
+
+## 286) Pass 285 Continuation (2026-02-11)
+
+### 286.1 `vix_proxy_connector` Local `silver_vix_data` Persistence Removal + Timeframe Contract Fix (TDD-Backed)
+
+Finding:
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py` still:
+  - wrote computed proxy values into local `silver_vix_data`,
+  - read current VIX proxy from local `silver_vix_data`,
+  - requested Heber bars with `timeframe="1d"`, which conflicts with Orion's Heber reader contract (`1m` only).
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`:
+  - removed local SQL persistence/read paths for `silver_vix_data`,
+  - added in-process latest snapshot cache (`self._latest_vix_snapshot`) used by `_persist(...)` and `get_current_vix(...)`,
+  - changed `_get_vixy_bars(...)` to use Heber minute-bar reads and derive daily closes via UTC-day aggregation.
+- Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_vix_proxy_connector_heber_source.py`:
+  - `test_get_vixy_bars_uses_default_supported_timeframe`
+  - `test_persist_and_get_current_vix_use_in_memory_cache`
+  - adjusted no-local-db guard assertions to tolerate removed db adapter symbols (`raising=False`).
+
+Verification:
+- `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py` passed.
+- `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/connectors/vix_proxy_connector.py tests/unit/test_vix_proxy_connector_heber_source.py src/orion/jobs/sync_earnings.py src/orion/main_option_quote_tracker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py` passed.
+
+Result:
+- removed the last executable local-Silver read/write coupling from `vix_proxy_connector`.
+- remaining executable `silver_*` SQL references in Orion are now limited to intentional write surfaces:
+  - `silver_greek_exposure`,
+  - `silver_iv_rank`,
+  - `silver_market_tide`,
+  - `silver_max_pain`,
+  - `silver_vix_data` (in `vix_connector` only),
+  - `silver_regime_history`.

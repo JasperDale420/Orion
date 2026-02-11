@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **VIX proxy local `silver_vix_data` coupling removal + timeframe contract fix (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`:
+    - removed local `silver_vix_data` read/write SQL paths,
+    - switched persistence to in-process latest snapshot cache (`self._latest_vix_snapshot`),
+    - changed VIXY sourcing to Heber minute bars with UTC-day close aggregation (avoids unsupported `1d` timeframe call).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_vix_proxy_connector_heber_source.py`:
+    - added `test_get_vixy_bars_uses_default_supported_timeframe`,
+    - added `test_persist_and_get_current_vix_use_in_memory_cache`.
+  - Verified with:
+    - `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py`
+    - `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py`
+    - `ruff check src/orion/connectors/vix_proxy_connector.py tests/unit/test_vix_proxy_connector_heber_source.py src/orion/jobs/sync_earnings.py src/orion/main_option_quote_tracker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py`
+
 - **Earnings + option-quote legacy local-silver persistence removal (TDD, combined)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`:
     - removed executable `silver_earnings_calendar` SQL paths,
