@@ -9093,3 +9093,39 @@ Result:
 - remaining executable `silver_*` SQL references in Orion are now reduced to:
   - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` (`INSERT INTO silver_vix_data`),
   - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py` (`INSERT INTO silver_regime_history`).
+
+## 288) Pass 287 Continuation (2026-02-11)
+
+### 288.1 `main_feature_enrichment` Regime Snapshot Sink De-Coupling + Legacy `vix_connector` Archival (TDD-Backed)
+
+Finding:
+- remaining executable local-Silver coupling was narrowed to:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py` (`INSERT INTO silver_regime_history`),
+  - unused `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` (`INSERT INTO silver_vix_data`).
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+  - removed `silver_regime_history` SQL insert path from `persist_regime_snapshot(...)`,
+  - replaced persistence with bounded in-process cache (`_recent_regime_snapshots`),
+  - removed now-unused SQL/db-write imports from this module.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_runtime_signals.py`:
+    - added `test_persist_regime_snapshot_avoids_local_db_write`,
+    - updated no-local-db guards to tolerate removed DB symbols (`raising=False`).
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_context_heber_source.py`:
+    - updated no-local-db monkeypatch guards to `raising=False` for removed DB symbols.
+- Archived dead legacy connector code:
+  - moved `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` to:
+    - `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-11_gateway-heber-migration-wave11/legacy_code/vix_connector.py`.
+  - added archive note:
+    - `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-11_gateway-heber-migration-wave11/README.md`.
+
+Verification:
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py -k "persist_regime_snapshot_avoids_local_db_write"` passed (after RED->GREEN cycle).
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py` passed.
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/main_feature_enrichment.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_vix_proxy_connector_heber_source.py` passed.
+
+Result:
+- `rg -n "(INSERT INTO|FROM|JOIN|UPDATE)\s+silver_" src/orion` now returns no executable local-Silver SQL paths.
+- Orion runtime code is now de-coupled from direct local `silver_*` SQL usage; remaining `silver_*` references are non-executable identifiers/comments/model metadata.

@@ -16,8 +16,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import text
-
 from orion.analysis.regime import MultiAxisRegimeDetector
 from orion.clients.heber_reader import HeberReader
 from orion.config import system_settings
@@ -26,7 +24,6 @@ from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
 from orion.connectors.uw_max_pain_connector import UWMaxPainConnector
 from orion.connectors.vix_proxy_connector import VIXProxyConnector
-from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -47,6 +44,7 @@ STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 _heber_reader = HeberReader()
+_recent_regime_snapshots: list[dict[str, Any]] = []
 
 
 def _gateway_runtime_contract() -> tuple[str, str]:
@@ -491,42 +489,27 @@ async def persist_regime_snapshot(
     snapshot: Any,
     ticker: str = "SPY",
 ) -> None:
-    """Persist regime snapshot to silver_regime_history."""
+    """Persist regime snapshot in memory while centralized sinks are externalized."""
     import json
 
-    async def write(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO silver_regime_history (
-                ts_utc, ticker, trend_regime, vol_regime, risk_regime,
-                session_regime, vix_regime, vix_level, realized_vol,
-                trend_strength, risk_score, confidence_json
-            ) VALUES (
-                :ts_utc, :ticker, :trend_regime, :vol_regime, :risk_regime,
-                :session_regime, :vix_regime, :vix_level, :realized_vol,
-                :trend_strength, :risk_score, :confidence_json
-            )
-        """
-        )
-        await session.execute(
-            stmt,
-            {
-                "ts_utc": ts,
-                "ticker": ticker,
-                "trend_regime": snapshot.trend.value if snapshot.trend else None,
-                "vol_regime": snapshot.vol.value if snapshot.vol else None,
-                "risk_regime": snapshot.risk.value if snapshot.risk else None,
-                "session_regime": snapshot.session.value if snapshot.session else None,
-                "vix_regime": snapshot.vix_regime.value if snapshot.vix_regime else None,
-                "vix_level": snapshot.vix_level,
-                "realized_vol": snapshot.realized_vol,
-                "trend_strength": snapshot.trend_strength,
-                "risk_score": snapshot.risk_score,
-                "confidence_json": json.dumps(snapshot.confidence) if snapshot.confidence else None,
-            },
-        )
+    record = {
+        "ts_utc": ts,
+        "ticker": ticker,
+        "trend_regime": snapshot.trend.value if snapshot.trend else None,
+        "vol_regime": snapshot.vol.value if snapshot.vol else None,
+        "risk_regime": snapshot.risk.value if snapshot.risk else None,
+        "session_regime": snapshot.session.value if snapshot.session else None,
+        "vix_regime": snapshot.vix_regime.value if snapshot.vix_regime else None,
+        "vix_level": snapshot.vix_level,
+        "realized_vol": snapshot.realized_vol,
+        "trend_strength": snapshot.trend_strength,
+        "risk_score": snapshot.risk_score,
+        "confidence_json": json.dumps(snapshot.confidence) if snapshot.confidence else None,
+    }
 
-    await db_write(write)
+    _recent_regime_snapshots.append(record)
+    if len(_recent_regime_snapshots) > 2000:
+        del _recent_regime_snapshots[:1000]
 
 
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:

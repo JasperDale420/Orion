@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -25,7 +28,7 @@ async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.
     async def _fail_db_query(_query_fn):
         raise AssertionError("db_query fallback should not be called when Heber returns tickers")
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query)
+    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
@@ -46,7 +49,7 @@ async def test_get_active_tickers_with_source_falls_back_to_static_without_db(mo
         db_calls["count"] += 1
         return ["SHOULD_NOT_BE_USED"]
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query)
+    monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query, raising=False)
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
@@ -68,7 +71,7 @@ async def test_get_active_tickers_with_source_falls_back_to_static(monkeypatch: 
         db_calls["count"] += 1
         return ["SHOULD_NOT_BE_USED"]
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query)
+    monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query, raising=False)
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
@@ -266,3 +269,33 @@ def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pyt
         tickers_count=5,
     )
     assert streak == 0
+
+
+@pytest.mark.asyncio
+async def test_persist_regime_snapshot_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail_db_write(_fn):
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(feature_enrichment, "db_write", _fail_db_write, raising=False)
+    monkeypatch.setattr(feature_enrichment, "_recent_regime_snapshots", [], raising=False)
+
+    snapshot = SimpleNamespace(
+        trend=SimpleNamespace(value="bull"),
+        vol=SimpleNamespace(value="normal"),
+        risk=SimpleNamespace(value="risk_on"),
+        session=SimpleNamespace(value="regular"),
+        vix_regime=SimpleNamespace(value="normal"),
+        vix_level=18.2,
+        realized_vol=0.21,
+        trend_strength=0.33,
+        risk_score=0.45,
+        confidence={"trend": 0.8},
+    )
+
+    await feature_enrichment.persist_regime_snapshot(
+        ts=datetime(2026, 2, 11, 20, 0, tzinfo=timezone.utc),
+        snapshot=snapshot,
+        ticker="SPY",
+    )
+
+    assert feature_enrichment._recent_regime_snapshots

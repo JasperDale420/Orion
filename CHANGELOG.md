@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Feature enrichment regime sink de-coupling + legacy VIX connector archival (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+    - removed `silver_regime_history` SQL insert from `persist_regime_snapshot(...)`,
+    - replaced persistence with bounded in-process cache (`_recent_regime_snapshots`).
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_runtime_signals.py`
+      - added `test_persist_regime_snapshot_avoids_local_db_write`,
+      - migrated local-db monkeypatch guards to `raising=False`.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_context_heber_source.py`
+      - migrated local-db monkeypatch guards to `raising=False`.
+  - Archived unused legacy connector:
+    - moved `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` to `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-11_gateway-heber-migration-wave11/legacy_code/vix_connector.py`
+    - added `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-11_gateway-heber-migration-wave11/README.md`.
+  - Verified with:
+    - `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py`
+    - `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py`
+    - `ruff check src/orion/main_feature_enrichment.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_vix_proxy_connector_heber_source.py`
+
 - **UW enrichment connector local silver sink removal (TDD, combined)**:
   - Updated:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`

@@ -9,11 +9,11 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List
 
+from sqlalchemy import text
+
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from sqlalchemy import text
-
 from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
