@@ -1,5 +1,5 @@
 # Orion Comprehensive 22-Point Audit
-**Generated**: 2025-12-30  
+**Generated**: 2025-12-30
 **Status**: Complete
 
 ---
@@ -116,7 +116,7 @@
 - **Status**: ✅ Follows vertical slice architecture
 - **Evidence**: Complete slices for ingestion, execution, meta-search
 
-**P3-A1: Lakehouse Layer Organization**  
+**P3-A1: Lakehouse Layer Organization**
 - **Status**: ✅ Bronze/Silver/Gold layers correctly implemented
 - **Files**: Storage models organized by layer
 
@@ -524,3 +524,70 @@
 2. ✅ Feature flag system - `feature_flags.py` exists
 3. ✅ Runbooks - `docs/RUNBOOKS.md` added
 
+---
+
+## 23. Heber vs Orion Parity Audit (2026-02-11)
+
+### Snapshot
+
+- **Heber canonical Silver datasets**: 44 (`/Users/jacobmcmillan/Empire/Heber/heber/schemas/silver.py`)
+- **Orion Heber reader datasets currently consumed**: 7 (`bars`, `flow_alerts`, `darkpool`, `market_tide`, `greek_exposure`, `max_pain`, `iv_rank`) in `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`
+- **Orion local legacy Silver tables still defined**: 6 (`silver_signals`, `silver_uw_flow`, `silver_uw_darkpool`, `silver_alpaca_bars`, `silver_uw_alerts`, `silver_option_quotes`) in `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py`
+- **Orion local legacy label tables still used**: `flow_labels`, `price_target_labels`
+- **Orion local Gold tables (execution state, keep for now)**: `candidate_trades`, `exit_decisions`, `strategy_decisions`, `gold_ticker_rollup`, `candidate_labels`
+- **Orion local Gold ML/label tables (migration candidates)**: `labels_event`, `labels_window`, `gold_feature_events`, `gold_feature_windows`
+
+### Side-by-Side Parity
+
+| Capability Area | Heber (source of truth) | Orion (current state) | Recommendation |
+|-----------------|--------------------------|------------------------|----------------|
+| Bars | `bars` Silver dataset | Legacy table `silver_alpaca_bars` still exists in schema; runtime reads moved to Heber | Keep Heber path; archive local table/model after final gate cleanup |
+| Options flow | `flow_alerts` Silver dataset | Legacy table `silver_uw_flow` still exists in schema/comments | Keep Heber path; remove local schema + stale comments |
+| Darkpool | `darkpool` Silver dataset | Legacy table `silver_uw_darkpool` still exists in schema | Keep Heber path; remove local schema |
+| Market tide | `market_tide` Silver dataset | Read from Heber in runtime | Keep; no local table dependency remains |
+| Greek exposure | `greek_exposure` Silver dataset | Read from Heber in runtime; legacy comment references remain | Keep Heber path; clean stale references |
+| Max pain | `max_pain` Silver dataset | Read from Heber in runtime | Keep |
+| IV rank | `iv_rank` Silver dataset | Read from Heber in runtime; legacy local naming remains in comments | Keep Heber path; clean stale references |
+| Label outcomes | `labels_alert_barriers` Gold dataset (`heber.watch.writer`) | Legacy `flow_labels` and `price_target_labels` local writes still present | Migrate to Heber labels; archive local labeler loops |
+| Label features | `meta_label_features` Gold dataset (`heber.watch.features`) | Legacy `gold_feature_events` / `gold_feature_windows` and `price_target_labels` enrichment | Define field mapping, then archive local feature materialization |
+
+### Heber Inventory Orion Is Not Using Yet
+
+Orion currently consumes **7/44** canonical Heber Silver datasets. The largest unused groups:
+
+- **Market microstructure/reference**: `quotes`, `trades`, `option_contract`, `option_chain_snapshot`, `option_history`
+- **Macro/fundamental/news**: `news`, `economic_events`, `stock_fundamentals`, `analyst_ratings`
+- **Flow breadth analytics**: `net_premium_tick`, `group_flow`, `iv_term_structure`, `volatility_stats`, `oi_change`, `sector_tide`
+
+These are not blockers for current Orion runtime, but they are opportunity areas if we want feature parity expansion in Heber-first mode.
+
+### Remaining Orion Local SQL Coupling (Audit Finding)
+
+Local SQL references are now mostly concentrated around legacy labels/training paths:
+
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_exit_columns.py` (`UPDATE price_target_labels`)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py` (`FROM/UPDATE price_target_labels`)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py` (`FROM price_target_labels`)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py` (`SELECT DISTINCT ticker FROM price_target_labels`)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py` (`FROM price_target_labels`)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` (`FROM price_target_labels`)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py` (`FROM price_target_labels`)
+
+### Keep / Decide / Archive Plan
+
+**Keep in Orion (system-specific execution state):**
+- `candidate_trades`
+- `exit_decisions`
+- `strategy_decisions`
+
+**Needs product decision before migration:**
+- Which Orion-only label columns are still needed versus replaced by Heber watch fields
+- Which Orion feature columns should become `meta_label_features` columns versus be retired
+
+**Archive after mapping signoff:**
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py`
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` (legacy local Silver table models)
+- Legacy local label/feature update jobs that only mutate `price_target_labels`

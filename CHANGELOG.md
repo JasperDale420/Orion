@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber vs Orion parity audit refresh (repo-level inventory)**:
+  - appended a new parity section to `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:
+    - canonical Heber Silver inventory (`44` datasets) vs Orion current Heber consumption (`7` datasets),
+    - Orion legacy local Silver/label/gold table inventory,
+    - side-by-side keep/migrate/archive recommendations,
+    - concrete list of remaining local SQL coupling points centered on `price_target_labels` / legacy labelers.
+
 - **Feature enrichment regime sink de-coupling + legacy VIX connector archival (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
     - removed `silver_regime_history` SQL insert from `persist_regime_snapshot(...)`,
