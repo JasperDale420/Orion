@@ -29,7 +29,7 @@ async def test_get_flow_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -
     async def _fail_db_query(_fn):
         raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(dqc, "db_query", _fail_db_query)
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query, raising=False)
 
     summary = await dqc.get_flow_summary()
 
@@ -51,7 +51,7 @@ async def test_get_flow_summary_returns_empty_when_heber_unavailable(monkeypatch
     async def _fail_db_query(_fn):
         raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(dqc, "db_query", _fail_db_query)
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query, raising=False)
 
     summary = await dqc.get_flow_summary()
 
@@ -103,7 +103,7 @@ async def test_get_darkpool_summary_prefers_heber(monkeypatch: pytest.MonkeyPatc
     async def _fail_db_query(_fn):
         raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(dqc, "db_query", _fail_db_query)
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query, raising=False)
 
     summary = await dqc.get_darkpool_summary()
 
@@ -134,7 +134,7 @@ async def test_get_bars_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -
     async def _fail_db_query(_fn):
         raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(dqc, "db_query", _fail_db_query)
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query, raising=False)
 
     summary = await dqc.get_bars_summary()
 
@@ -208,9 +208,104 @@ async def test_get_bars_summary_returns_empty_when_heber_unavailable(monkeypatch
     async def _fail_db_query(_fn):
         raise AssertionError("local fallback should not be called")
 
-    monkeypatch.setattr(dqc, "db_query", _fail_db_query)
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query, raising=False)
 
     summary = await dqc.get_bars_summary()
 
     assert summary["backend"] in {"heber_unavailable", "source_unavailable"}
     assert summary["total_bars_24h"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_ml_features_summary_prefers_heber_gold(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+    outcomes_df = pd.DataFrame(
+        {
+            "alert_id": ["a1", "a2", "a3"],
+            "underlying": ["AAPL", "MSFT", "QQQ"],
+            "ts_event": [now - timedelta(hours=3), now - timedelta(hours=2), now - timedelta(hours=1)],
+        }
+    )
+    features_df = pd.DataFrame(
+        {
+            "alert_id": ["a1", "a2"],
+            "delta": [0.5, 0.4],
+            "gamma": [0.1, 0.2],
+            "iv": [0.4, 0.35],
+            "iv_rank": [60.0, 55.0],
+            "volume": [200.0, 300.0],
+            "open_interest": [1000.0, 900.0],
+            "hour_of_day": [10, 11],
+            "minutes_to_close": [120, 80],
+            "days_to_expiry": [3, 5],
+        }
+    )
+
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return outcomes_df
+            if dataset == "meta_label_features":
+                return features_df
+            raise AssertionError(f"unexpected dataset: {dataset}")
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be called")
+
+    monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query, raising=False)
+
+    summary = await dqc.get_ml_features_summary()
+
+    assert summary["backend"] == "heber"
+    assert summary["total_labels"] == 3
+    assert summary["ml_ready_count"] == 2
+    assert summary["delta_pct"] == pytest.approx(66.7, abs=0.1)
+    assert summary["gamma_pct"] == pytest.approx(66.7, abs=0.1)
+    assert summary["iv_rank_pct"] == pytest.approx(66.7, abs=0.1)
+    assert summary["entry_hour_pct"] == pytest.approx(66.7, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_check_recent_labels_features_prefers_heber_gold(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+    outcomes_df = pd.DataFrame(
+        {
+            "alert_id": ["a1", "a2", "old"],
+            "underlying": ["AAPL", "MSFT", "QQQ"],
+            "ts_event": [now - timedelta(hours=3), now - timedelta(hours=1), now - timedelta(hours=30)],
+        }
+    )
+    features_df = pd.DataFrame(
+        {
+            "alert_id": ["a1", "old"],
+            "delta": [0.5, 0.2],
+            "gamma": [0.1, 0.1],
+            "iv_rank": [60.0, 40.0],
+        }
+    )
+
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return outcomes_df
+            if dataset == "meta_label_features":
+                return features_df
+            raise AssertionError(f"unexpected dataset: {dataset}")
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be called")
+
+    monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(dqc, "db_query", _fail_db_query, raising=False)
+
+    summary = await dqc.check_recent_labels_features()
+
+    assert summary["backend"] == "heber"
+    assert summary["recent_labels"] == 2
+    assert summary["ml_ready"] == 1
+    assert summary["delta_pct"] == pytest.approx(50.0, abs=0.1)
+    assert summary["gamma_pct"] == pytest.approx(50.0, abs=0.1)
+    assert summary["iv_rank_pct"] == pytest.approx(50.0, abs=0.1)

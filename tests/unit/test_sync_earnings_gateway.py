@@ -182,3 +182,48 @@ async def test_upsert_earnings_direct_noops_without_db_write(monkeypatch: pytest
         revenue_estimate=10.0,
         revenue_actual=12.0,
     )
+
+
+@pytest.mark.asyncio
+async def test_backfill_all_earnings_uses_heber_gold_tickers_without_local_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return [
+                    {"underlying": "AAPL"},
+                    {"underlying": "MSFT"},
+                    {"instrument_key": "equity:QQQ"},
+                ]
+            if dataset == "meta_label_features":
+                return [
+                    {"symbol": "NVDA"},
+                    {"symbol": "AAPL"},
+                ]
+            raise AssertionError(f"unexpected dataset requested: {dataset}")
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    called: list[str] = []
+
+    async def _fake_backfill_ticker_earnings(ticker: str) -> int:
+        called.append(ticker)
+        return 2
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sync_earnings, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(sync_earnings, "db_query", _fail_db_query, raising=False)
+    monkeypatch.setattr(sync_earnings, "backfill_ticker_earnings", _fake_backfill_ticker_earnings)
+    monkeypatch.setattr(sync_earnings.asyncio, "sleep", _fake_sleep)
+
+    result = await sync_earnings.backfill_all_earnings()
+
+    assert result["tickers"] == 4
+    assert result["earnings"] == 8
+    assert result["errors"] == 0
+    assert sorted(called) == ["AAPL", "MSFT", "NVDA", "QQQ"]

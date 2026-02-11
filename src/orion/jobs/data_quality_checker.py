@@ -20,11 +20,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import pandas as pd
-from sqlalchemy import text
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
-from orion.shared.db_utils import db_query
 from orion.storage.db import init_db
 
 logger = logging.getLogger(__name__)
@@ -202,149 +200,25 @@ async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
 
 
 async def get_ml_features_summary() -> Dict:
-    """Get ML features population summary for ALL features in price_target_labels."""
+    """Get ML feature population summary from Heber watch Gold datasets."""
+    if not _prefer_heber_source():
+        return _empty_ml_features_summary(backend="source_unavailable")
 
-    async def query(session: Any) -> Dict:
-        # Check ALL nullable feature columns
-        stmt = text(
-            """
-            SELECT
-                COUNT(*) as total_labels,
-                COUNT(*) FILTER (WHERE ml_ready) as ml_ready_count,
-                -- Core identifiers (should be 100%)
-                COUNT(event_id) as has_event_id,
-                COUNT(ticker) as has_ticker,
-                COUNT(entry_ts) as has_entry_ts,
-                -- Greeks/Pricing (critical for ML)
-                COUNT(delta_at_entry) as has_delta,
-                COUNT(gamma_at_entry) as has_gamma,
-                COUNT(iv_at_entry) as has_iv,
-                COUNT(iv_rank_at_entry) as has_iv_rank,
-                COUNT(underlying_at_entry) as has_underlying,
-                -- Context features
-                COUNT(sector) as has_sector,
-                COUNT(vix_at_entry) as has_vix,
-                COUNT(trend_regime_at_entry) as has_trend_regime,
-                COUNT(vol_regime_at_entry) as has_vol_regime,
-                COUNT(gex_at_entry) as has_gex,
-                COUNT(market_tide_30m) as has_tide,
-                COUNT(max_pain_distance_pct) as has_max_pain,
-                -- Volume/Flow features
-                COUNT(volume_at_entry) as has_volume,
-                COUNT(open_interest_at_entry) as has_oi,
-                COUNT(rvol_1h) as has_rvol,
-                COUNT(darkpool_volume_1h) as has_darkpool,
-                -- Time features
-                COUNT(entry_hour) as has_entry_hour,
-                COUNT(minutes_to_close) as has_minutes,
-                COUNT(dte) as has_dte,
-                -- Price checkpoints
-                COUNT(return_at_1h) as has_return_1h,
-                COUNT(return_at_2h) as has_return_2h,
-                COUNT(return_at_4h) as has_return_4h,
-                COUNT(return_at_eod) as has_return_eod,
-                -- Misc features
-                COUNT(spy_return_1h) as has_spy,
-                COUNT(overnight_gap_pct) as has_gap,
-                COUNT(vwap_distance_pct) as has_vwap,
-                MAX(entry_ts) as latest_entry
-            FROM price_target_labels
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        total = row[0] or 1
-
-        # Build comprehensive coverage dict
-        features = {
-            "total_labels": row[0] or 0,
-            "ml_ready_count": row[1] or 0,
-        }
-
-        # Feature categories with their indices
-        feature_map = [
-            ("event_id", 2),
-            ("ticker", 3),
-            ("entry_ts", 4),
-            ("delta", 5),
-            ("gamma", 6),
-            ("iv", 7),
-            ("iv_rank", 8),
-            ("underlying", 9),
-            ("sector", 10),
-            ("vix", 11),
-            ("trend_regime", 12),
-            ("vol_regime", 13),
-            ("gex", 14),
-            ("market_tide", 15),
-            ("max_pain", 16),
-            ("volume", 17),
-            ("oi", 18),
-            ("rvol", 19),
-            ("darkpool", 20),
-            ("entry_hour", 21),
-            ("minutes_to_close", 22),
-            ("dte", 23),
-            ("return_1h", 24),
-            ("return_2h", 25),
-            ("return_4h", 26),
-            ("return_eod", 27),
-            ("spy_return", 28),
-            ("overnight_gap", 29),
-            ("vwap", 30),
-        ]
-
-        for name, idx in feature_map:
-            features[f"{name}_pct"] = round(100 * (row[idx] or 0) / total, 1)
-
-        features["latest_entry"] = row[31]
-        return features
-
-    return await db_query(query)
+    summary = await _get_ml_features_summary_from_heber()
+    if summary is not None:
+        return summary
+    return _empty_ml_features_summary(backend="heber_unavailable")
 
 
 async def check_recent_labels_features() -> Dict:
-    """Check ML feature population for labels created in last 24 hours."""
+    """Check 24h ML feature population from Heber watch Gold datasets."""
+    if not _prefer_heber_source():
+        return _empty_recent_labels_summary(backend="source_unavailable")
 
-    async def query(session: Any) -> Dict:
-        stmt = text(
-            """
-            SELECT
-                COUNT(*) as total,
-                COUNT(*) FILTER (WHERE ml_ready) as ml_ready,
-                -- Critical features
-                COUNT(delta_at_entry) as has_delta,
-                COUNT(gamma_at_entry) as has_gamma,
-                COUNT(iv_rank_at_entry) as has_iv_rank,
-                COUNT(sector) as has_sector,
-                COUNT(vix_at_entry) as has_vix,
-                -- Other features
-                COUNT(rvol_1h) as has_rvol,
-                COUNT(spy_return_1h) as has_spy,
-                COUNT(darkpool_volume_1h) as has_dp
-            FROM price_target_labels
-            WHERE entry_ts > NOW() - INTERVAL '24 hours'
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        total = row[0] or 1
-        return {
-            "recent_labels": row[0] or 0,
-            "ml_ready": row[1] or 0,
-            # Critical (these must stay near 100%)
-            "delta_pct": round(100 * (row[2] or 0) / total, 1),
-            "gamma_pct": round(100 * (row[3] or 0) / total, 1),
-            "iv_rank_pct": round(100 * (row[4] or 0) / total, 1),
-            "sector_pct": round(100 * (row[5] or 0) / total, 1),
-            "vix_pct": round(100 * (row[6] or 0) / total, 1),
-            # Others
-            "rvol_pct": round(100 * (row[7] or 0) / total, 1),
-            "spy_pct": round(100 * (row[8] or 0) / total, 1),
-            "darkpool_pct": round(100 * (row[9] or 0) / total, 1),
-        }
-
-    return await db_query(query)
+    summary = await _get_recent_labels_features_from_heber()
+    if summary is not None:
+        return summary
+    return _empty_recent_labels_summary(backend="heber_unavailable")
 
 
 # =============================================================================
@@ -514,6 +388,244 @@ def _latest_event_time(df: pd.DataFrame) -> datetime | None:
     if series.empty:
         return None
     return series.max().to_pydatetime()
+
+
+def _empty_ml_features_summary(backend: str) -> Dict[str, Any]:
+    return {
+        "total_labels": 0,
+        "ml_ready_count": 0,
+        "event_id_pct": 0.0,
+        "ticker_pct": 0.0,
+        "entry_ts_pct": 0.0,
+        "delta_pct": 0.0,
+        "gamma_pct": 0.0,
+        "iv_pct": 0.0,
+        "iv_rank_pct": 0.0,
+        "underlying_pct": 0.0,
+        "sector_pct": 0.0,
+        "vix_pct": 0.0,
+        "trend_regime_pct": 0.0,
+        "vol_regime_pct": 0.0,
+        "gex_pct": 0.0,
+        "market_tide_pct": 0.0,
+        "max_pain_pct": 0.0,
+        "volume_pct": 0.0,
+        "oi_pct": 0.0,
+        "rvol_pct": 0.0,
+        "darkpool_pct": 0.0,
+        "entry_hour_pct": 0.0,
+        "minutes_to_close_pct": 0.0,
+        "dte_pct": 0.0,
+        "return_1h_pct": 0.0,
+        "return_2h_pct": 0.0,
+        "return_4h_pct": 0.0,
+        "return_eod_pct": 0.0,
+        "spy_return_pct": 0.0,
+        "overnight_gap_pct": 0.0,
+        "vwap_pct": 0.0,
+        "latest_entry": None,
+        "backend": backend,
+    }
+
+
+def _empty_recent_labels_summary(backend: str) -> Dict[str, Any]:
+    return {
+        "recent_labels": 0,
+        "ml_ready": 0,
+        "delta_pct": 0.0,
+        "gamma_pct": 0.0,
+        "iv_rank_pct": 0.0,
+        "sector_pct": 0.0,
+        "vix_pct": 0.0,
+        "rvol_pct": 0.0,
+        "spy_pct": 0.0,
+        "darkpool_pct": 0.0,
+        "backend": backend,
+    }
+
+
+def _coerce_dataframe_payload(payload: Any) -> pd.DataFrame:
+    if isinstance(payload, pd.DataFrame):
+        return payload.copy()
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if isinstance(payload, dict):
+        return pd.DataFrame([payload])
+    return pd.DataFrame()
+
+
+async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame | None:
+    now = datetime.now(timezone.utc)
+    reader = get_heber_reader()
+    try:
+        payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset=dataset,
+            asof_time=now,
+        )
+    except Exception as exc:
+        logger.warning(
+            "heber_gold_read_failed",
+            extra={"event_type": "HEBER_GOLD_READ_FAILED", "dataset": dataset, "error": str(exc)},
+        )
+        return None
+    return _coerce_dataframe_payload(payload)
+
+
+def _resolve_join_key_column(df: pd.DataFrame) -> str | None:
+    return _first_existing_column(df, ["alert_id", "event_id", "watch_id"])
+
+
+def _to_joinable_frame(df: pd.DataFrame, key_column: str | None, key_name: str = "__join_key") -> pd.DataFrame:
+    frame = df.copy()
+    if key_column is None or key_column not in frame.columns:
+        frame[key_name] = pd.Series(index=frame.index, dtype=object)
+        return frame
+    frame[key_name] = frame[key_column].astype(str)
+    frame.loc[frame[key_column].isna(), key_name] = None
+    return frame
+
+
+def _extract_ticker_series(df: pd.DataFrame) -> pd.Series:
+    if df.empty:
+        return pd.Series(index=df.index, dtype=object)
+    ticker_col = _first_existing_column(df, ["ticker", "underlying", "symbol", "instrument_key"])
+    if ticker_col is None:
+        return pd.Series(index=df.index, dtype=object)
+    series = df[ticker_col].astype(str)
+    if ticker_col == "instrument_key":
+        series = series.str.split(":").str[-1]
+    return series.str.upper()
+
+
+def _extract_time_series(df: pd.DataFrame) -> pd.Series:
+    if df.empty:
+        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+    time_col = _first_existing_column(df, ["ts_event", "alert_time", "entry_ts", "ts_available"])
+    if time_col is None:
+        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+    return pd.to_datetime(df[time_col], utc=True, errors="coerce")
+
+
+def _coverage_pct(df: pd.DataFrame, total: int, candidate_columns: List[str]) -> float:
+    if total <= 0 or df.empty:
+        return 0.0
+    mask = pd.Series(False, index=df.index)
+    for column in candidate_columns:
+        if column in df.columns:
+            mask = mask | df[column].notna()
+    return round(100 * float(mask.sum()) / float(total), 1)
+
+
+def _build_label_feature_coverage(outcomes_df: pd.DataFrame, features_df: pd.DataFrame) -> Dict[str, Any]:
+    base = _empty_ml_features_summary(backend="heber")
+    if outcomes_df.empty:
+        return base
+
+    out_key = _resolve_join_key_column(outcomes_df)
+    feat_key = _resolve_join_key_column(features_df)
+    outcomes = _to_joinable_frame(outcomes_df, out_key)
+    features = _to_joinable_frame(features_df, feat_key)
+
+    outcomes["__ticker"] = _extract_ticker_series(outcomes)
+    outcomes["__entry_ts"] = _extract_time_series(outcomes)
+
+    if features.empty:
+        merged = outcomes.copy()
+        feature_match_mask = pd.Series(False, index=merged.index)
+    else:
+        merged = outcomes.merge(features, on="__join_key", how="left", suffixes=("", "_feature"), indicator=True)
+        feature_match_mask = merged["_merge"] == "both"
+
+    total = int(len(merged))
+    latest_entry = None
+    if "__entry_ts" in merged.columns:
+        latest_ts = pd.to_datetime(merged["__entry_ts"], utc=True, errors="coerce").dropna()
+        if not latest_ts.empty:
+            latest_entry = latest_ts.max().to_pydatetime()
+
+    base.update(
+        {
+            "total_labels": total,
+            "ml_ready_count": int(feature_match_mask.sum()),
+            "event_id_pct": _coverage_pct(merged, total, ["__join_key"]),
+            "ticker_pct": _coverage_pct(merged, total, ["__ticker"]),
+            "entry_ts_pct": _coverage_pct(merged, total, ["__entry_ts"]),
+            "delta_pct": _coverage_pct(merged, total, ["delta", "delta_at_entry"]),
+            "gamma_pct": _coverage_pct(merged, total, ["gamma", "gamma_at_entry"]),
+            "iv_pct": _coverage_pct(merged, total, ["iv", "iv_at_entry"]),
+            "iv_rank_pct": _coverage_pct(merged, total, ["iv_rank", "iv_rank_at_entry"]),
+            "underlying_pct": _coverage_pct(merged, total, ["spot_price", "underlying_at_entry"]),
+            "sector_pct": _coverage_pct(merged, total, ["sector"]),
+            "vix_pct": _coverage_pct(merged, total, ["vix_at_entry", "vix"]),
+            "trend_regime_pct": _coverage_pct(merged, total, ["trend_regime_at_entry", "trend_regime"]),
+            "vol_regime_pct": _coverage_pct(merged, total, ["vol_regime_at_entry", "vol_regime"]),
+            "gex_pct": _coverage_pct(merged, total, ["gex_at_entry", "gex"]),
+            "market_tide_pct": _coverage_pct(merged, total, ["market_tide_30m", "market_tide"]),
+            "max_pain_pct": _coverage_pct(merged, total, ["max_pain_distance_pct", "max_pain_distance"]),
+            "volume_pct": _coverage_pct(merged, total, ["volume", "volume_at_entry"]),
+            "oi_pct": _coverage_pct(merged, total, ["open_interest", "open_interest_at_entry"]),
+            "rvol_pct": _coverage_pct(merged, total, ["rvol_1h", "rvol"]),
+            "darkpool_pct": _coverage_pct(merged, total, ["darkpool_volume_1h", "darkpool_1h"]),
+            "entry_hour_pct": _coverage_pct(merged, total, ["hour_of_day", "entry_hour"]),
+            "minutes_to_close_pct": _coverage_pct(merged, total, ["minutes_to_close"]),
+            "dte_pct": _coverage_pct(merged, total, ["days_to_expiry", "dte"]),
+            "return_1h_pct": _coverage_pct(merged, total, ["return_at_1h"]),
+            "return_2h_pct": _coverage_pct(merged, total, ["return_at_2h"]),
+            "return_4h_pct": _coverage_pct(merged, total, ["return_at_4h"]),
+            "return_eod_pct": _coverage_pct(merged, total, ["return_at_eod"]),
+            "spy_return_pct": _coverage_pct(merged, total, ["spy_return_1h"]),
+            "overnight_gap_pct": _coverage_pct(merged, total, ["overnight_gap_pct"]),
+            "vwap_pct": _coverage_pct(merged, total, ["vwap_distance_pct"]),
+            "latest_entry": latest_entry,
+            "backend": "heber",
+        }
+    )
+    return base
+
+
+async def _get_ml_features_summary_from_heber() -> Dict[str, Any] | None:
+    outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
+    if outcomes_df is None:
+        return None
+    features_df = await _read_heber_gold_dataset("meta_label_features")
+    if features_df is None:
+        return None
+    return _build_label_feature_coverage(outcomes_df, features_df)
+
+
+async def _get_recent_labels_features_from_heber() -> Dict[str, Any] | None:
+    outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
+    if outcomes_df is None:
+        return None
+    features_df = await _read_heber_gold_dataset("meta_label_features")
+    if features_df is None:
+        return None
+
+    entry_ts = _extract_time_series(outcomes_df)
+    cutoff = pd.Timestamp(datetime.now(timezone.utc) - pd.Timedelta(hours=24))
+    recent_mask = entry_ts >= cutoff
+    recent_outcomes = outcomes_df[recent_mask].copy()
+
+    if recent_outcomes.empty:
+        summary = _empty_recent_labels_summary(backend="heber")
+        return summary
+
+    coverage = _build_label_feature_coverage(recent_outcomes, features_df)
+    return {
+        "recent_labels": int(coverage["total_labels"]),
+        "ml_ready": int(coverage["ml_ready_count"]),
+        "delta_pct": float(coverage["delta_pct"]),
+        "gamma_pct": float(coverage["gamma_pct"]),
+        "iv_rank_pct": float(coverage["iv_rank_pct"]),
+        "sector_pct": float(coverage["sector_pct"]),
+        "vix_pct": float(coverage["vix_pct"]),
+        "rvol_pct": float(coverage["rvol_pct"]),
+        "spy_pct": float(coverage["spy_return_pct"]),
+        "darkpool_pct": float(coverage["darkpool_pct"]),
+        "backend": "heber",
+    }
 
 
 async def _read_heber_flow_24h() -> pd.DataFrame | None:

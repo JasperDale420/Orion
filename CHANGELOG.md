@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber gold migration (TDD): earnings backfill ticker discovery + ML coverage checks**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`:
+    - removed local `price_target_labels` ticker discovery from `backfill_all_earnings()`,
+    - added Heber gold ticker discovery from `labels_alert_barriers` and `meta_label_features`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py`:
+    - removed local `price_target_labels` SQL reads from:
+      - `get_ml_features_summary()`,
+      - `check_recent_labels_features()`,
+    - implemented Heber gold-backed coverage summaries using:
+      - `labels_alert_barriers`,
+      - `meta_label_features`.
+  - Added tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_sync_earnings_gateway.py`
+      - `test_backfill_all_earnings_uses_heber_gold_tickers_without_local_db`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_data_quality_checker_heber_source.py`
+      - `test_get_ml_features_summary_prefers_heber_gold`
+      - `test_check_recent_labels_features_prefers_heber_gold`
+  - Verified with:
+    - `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_data_quality_checker_heber_source.py`
+    - `ruff check src/orion/jobs/sync_earnings.py src/orion/jobs/data_quality_checker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_data_quality_checker_heber_source.py`
+
 - **Heber vs Orion parity audit refresh (repo-level inventory)**:
   - appended a new parity section to `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:
     - canonical Heber Silver inventory (`44` datasets) vs Orion current Heber consumption (`7` datasets),
