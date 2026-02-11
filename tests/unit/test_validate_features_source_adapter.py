@@ -216,3 +216,58 @@ def test_summarize_heber_frame_uses_instrument_key_and_ts_event() -> None:
     assert summary["min_date"] == "2026-02-03"
     assert summary["max_date"] == "2026-02-05"
     assert summary["tickers"] == 2
+
+
+@pytest.mark.asyncio
+async def test_load_label_period_prefers_heber_gold_without_local_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcomes_df = pd.DataFrame(
+        {
+            "ts_event": [
+                datetime(2026, 2, 3, 14, tzinfo=timezone.utc),
+                datetime(2026, 2, 5, 15, tzinfo=timezone.utc),
+            ],
+            "underlying": ["AAPL", "MSFT"],
+        }
+    )
+
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            assert dataset == "labels_alert_barriers"
+            return outcomes_df
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+
+    period = await validate_features._load_label_period()
+
+    assert period["min_date"] == "2026-02-03"
+    assert period["max_date"] == "2026-02-05"
+    assert period["tickers"] == 2
+
+
+@pytest.mark.asyncio
+async def test_load_label_period_returns_empty_when_heber_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (dataset, asof_time, symbols)
+            raise RuntimeError("heber unavailable")
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+
+    period = await validate_features._load_label_period()
+
+    assert period["min_date"] is None
+    assert period["max_date"] is None
+    assert period["tickers"] == 0

@@ -568,6 +568,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 **Update (2026-02-11 remediation pass):**
 - `sync_earnings` ticker discovery migrated to Heber Gold datasets (`labels_alert_barriers`, `meta_label_features`)
 - `data_quality_checker` ML coverage summaries migrated to Heber Gold datasets (no local `price_target_labels` reads)
+- `validate_features` label period loader migrated to Heber Gold (`labels_alert_barriers`) for source-audit windowing
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)

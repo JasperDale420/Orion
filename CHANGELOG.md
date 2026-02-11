@@ -19,15 +19,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - implemented Heber gold-backed coverage summaries using:
       - `labels_alert_barriers`,
       - `meta_label_features`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+    - migrated `_load_label_period()` from local `price_target_labels` SQL to Heber gold `labels_alert_barriers` summary reads.
   - Added tests:
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_sync_earnings_gateway.py`
       - `test_backfill_all_earnings_uses_heber_gold_tickers_without_local_db`
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_data_quality_checker_heber_source.py`
       - `test_get_ml_features_summary_prefers_heber_gold`
       - `test_check_recent_labels_features_prefers_heber_gold`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_source_adapter.py`
+      - `test_load_label_period_prefers_heber_gold_without_local_db`
+      - `test_load_label_period_returns_empty_when_heber_unavailable`
   - Verified with:
-    - `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_data_quality_checker_heber_source.py`
-    - `ruff check src/orion/jobs/sync_earnings.py src/orion/jobs/data_quality_checker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_data_quality_checker_heber_source.py`
+    - `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_validate_features_source_adapter.py`
+    - `ruff check src/orion/jobs/sync_earnings.py src/orion/jobs/data_quality_checker.py src/orion/jobs/validate_features.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_data_quality_checker_heber_source.py tests/unit/test_validate_features_source_adapter.py`
 
 - **Heber vs Orion parity audit refresh (repo-level inventory)**:
   - appended a new parity section to `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:

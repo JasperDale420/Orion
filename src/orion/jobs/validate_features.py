@@ -470,7 +470,7 @@ _AUDIT_SOURCE_ORDER = [
 
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 _SOURCE_TIME_COLUMNS = ["ts_event", "ts_utc", "bar_start_ts", "flow_ts_utc", "dark_ts_utc", "date"]
-_SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "instrument_key"]
+_SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "underlying", "instrument_key"]
 
 
 def _prefer_heber_source_from_env() -> bool:
@@ -618,28 +618,57 @@ async def _fetch_source_summary(
 
 
 async def _load_label_period() -> Dict[str, Any]:
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT MIN(DATE(entry_ts)) as min_date, MAX(DATE(entry_ts)) as max_date,
-                   COUNT(DISTINCT ticker) as ticker_count
-            FROM price_target_labels WHERE ml_ready
-            """
+    reader = get_heber_reader()
+    now = datetime.now(timezone.utc)
+    try:
+        df = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset="labels_alert_barriers",
+            asof_time=now,
         )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        min_date = row[0] if row else None
-        max_date = row[1] if row else None
-        ticker_count = int(row[2]) if row and row[2] else 0
+    except Exception as exc:
+        logger.warning("load_label_period_heber_failed", error=str(exc))
         return {
-            "min_date_raw": min_date,
-            "max_date_raw": max_date,
-            "min_date": str(min_date) if min_date else None,
-            "max_date": str(max_date) if max_date else None,
-            "tickers": ticker_count,
+            "min_date_raw": None,
+            "max_date_raw": None,
+            "min_date": None,
+            "max_date": None,
+            "tickers": 0,
         }
 
-    return await db_query(query)
+    if not isinstance(df, pd.DataFrame):
+        if isinstance(df, list):
+            rows = [row for row in df if isinstance(row, dict)]
+            df = pd.DataFrame(rows) if rows else pd.DataFrame()
+        elif isinstance(df, dict):
+            df = pd.DataFrame([df])
+        else:
+            df = pd.DataFrame()
+
+    summary = _summarize_heber_source_frame(df)
+    min_date_str = summary.get("min_date")
+    max_date_str = summary.get("max_date")
+
+    min_date_raw: Optional[date] = None
+    max_date_raw: Optional[date] = None
+    if isinstance(min_date_str, str):
+        try:
+            min_date_raw = date.fromisoformat(min_date_str)
+        except ValueError:
+            min_date_raw = None
+    if isinstance(max_date_str, str):
+        try:
+            max_date_raw = date.fromisoformat(max_date_str)
+        except ValueError:
+            max_date_raw = None
+
+    return {
+        "min_date_raw": min_date_raw,
+        "max_date_raw": max_date_raw,
+        "min_date": min_date_str,
+        "max_date": max_date_str,
+        "tickers": int(summary.get("tickers") or 0),
+    }
 
 
 # Feature-to-source mapping for all 130+ features
