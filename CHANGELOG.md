@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **UW enrichment connector local silver sink removal (TDD, combined)**:
+  - Updated:
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_greek_exposure_connector.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_iv_rank_connector.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_max_pain_connector.py`
+  - Removed local SQL sink writes (`silver_market_tide`, `silver_greek_exposure`, `silver_iv_rank`, `silver_max_pain`) and replaced persistence with bounded in-process caches for legacy compatibility.
+  - Added tests in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_uw_gateway_connector_retry_contract.py`:
+    - `test_market_tide_fetch_and_store_avoids_local_db_write`
+    - `test_greek_exposure_fetch_and_store_avoids_local_db_write`
+    - `test_iv_rank_fetch_and_store_avoids_local_db_write`
+    - `test_max_pain_fetch_and_store_avoids_local_db_write`
+  - Verified with:
+    - `pytest -q tests/unit/test_uw_gateway_connector_retry_contract.py -k "avoids_local_db_write or handles_retry_exhaustion_gracefully"`
+    - `pytest -q tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py`
+    - `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py`
+    - `ruff check src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_gateway_connector_retry_contract.py`
+
 - **VIX proxy local `silver_vix_data` coupling removal + timeframe contract fix (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`:
     - removed local `silver_vix_data` read/write SQL paths,

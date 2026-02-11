@@ -9056,3 +9056,40 @@ Result:
   - `silver_max_pain`,
   - `silver_vix_data` (in `vix_connector` only),
   - `silver_regime_history`.
+
+## 287) Pass 286 Continuation (2026-02-11)
+
+### 287.1 UW Connector Local Silver Sink Removal (`market_tide`, `greek_exposure`, `iv_rank`, `max_pain`) (TDD-Backed, Combined)
+
+Finding:
+- four UW enrichment connectors still persisted fetched Gateway data into Orion-local Silver tables:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py` (`silver_market_tide`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_greek_exposure_connector.py` (`silver_greek_exposure`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_iv_rank_connector.py` (`silver_iv_rank`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_max_pain_connector.py` (`silver_max_pain`).
+- these were remaining local write sinks after source-read migration to Gateway/Heber.
+
+Implemented:
+- Updated all four connector modules to remove local SQL sink writes and keep only in-process compatibility caches:
+  - `UWMarketTideConnector._persist_tick(...)` now caches ticks in memory (`_latest_ticks`),
+  - `UWGreekExposureConnector._persist_exposure(...)` now caches rows in memory (`_latest_exposures`),
+  - `UWIVRankConnector._persist_iv_rank(...)` now caches rows in memory (`_latest_iv_rank_rows`),
+  - `UWMaxPainConnector._persist_max_pain(...)` now caches rows in memory (`_latest_max_pain_rows`).
+- removed direct SQL sink imports/usages (`sqlalchemy.text`, `db_write`) from these modules.
+- Added TDD coverage in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_uw_gateway_connector_retry_contract.py`:
+  - `test_market_tide_fetch_and_store_avoids_local_db_write`
+  - `test_greek_exposure_fetch_and_store_avoids_local_db_write`
+  - `test_iv_rank_fetch_and_store_avoids_local_db_write`
+  - `test_max_pain_fetch_and_store_avoids_local_db_write`
+
+Verification:
+- `pytest -q tests/unit/test_uw_gateway_connector_retry_contract.py -k "avoids_local_db_write or handles_retry_exhaustion_gracefully"` passed.
+- `pytest -q tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py` passed.
+- `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_gateway_connector_retry_contract.py` passed.
+
+Result:
+- removed executable local-Silver sink writes from all UW connector enrichment modules.
+- remaining executable `silver_*` SQL references in Orion are now reduced to:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` (`INSERT INTO silver_vix_data`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py` (`INSERT INTO silver_regime_history`).

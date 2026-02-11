@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
@@ -123,3 +124,136 @@ async def test_fetch_and_store_handles_retry_exhaustion_gracefully(
 
     stored = await connector.fetch_and_store(*call_args)
     assert stored == 0
+
+
+@pytest.mark.asyncio
+async def test_market_tide_fetch_and_store_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    connector = UWMarketTideConnector(gateway_url="http://gateway:8080", gateway_key="gw-key")
+
+    async def _fail_db_write(_fn: Any) -> Any:
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(tide_module, "db_write", _fail_db_write, raising=False)
+    monkeypatch.setattr(
+        connector,
+        "_fetch_market_tide",
+        lambda _market_date=None: {
+            "data": [
+                {
+                    "timestamp": "2026-02-11T20:00:00Z",
+                    "net_call_premium": 100.0,
+                    "net_put_premium": 75.0,
+                    "net_volume": 42,
+                }
+            ]
+        },
+    )
+
+    stored = await connector.fetch_and_store(date(2026, 2, 11))
+
+    assert stored == 1
+
+
+@pytest.mark.asyncio
+async def test_greek_exposure_fetch_and_store_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    connector = UWGreekExposureConnector(gateway_url="http://gateway:8080", gateway_key="gw-key")
+
+    async def _fail_db_write(_fn: Any) -> Any:
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(greek_module, "db_write", _fail_db_write, raising=False)
+    monkeypatch.setattr(
+        connector,
+        "_fetch_greek_exposure",
+        lambda _ticker: {
+            "data": {
+                "call_gamma": 10.0,
+                "put_gamma": 5.0,
+                "call_vanna": 1.0,
+                "put_vanna": 2.0,
+                "call_charm": 3.0,
+                "put_charm": 4.0,
+                "call_delta": 0.25,
+                "put_delta": -0.15,
+            }
+        },
+    )
+
+    async def _fast_sleep(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(greek_module.asyncio, "sleep", _fast_sleep)
+
+    stored = await connector.fetch_and_store(["AAPL"])
+
+    assert stored == 1
+
+
+@pytest.mark.asyncio
+async def test_iv_rank_fetch_and_store_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    connector = UWIVRankConnector(gateway_url="http://gateway:8080", gateway_key="gw-key")
+
+    async def _fail_db_write(_fn: Any) -> Any:
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(iv_module, "db_write", _fail_db_write, raising=False)
+    monkeypatch.setattr(
+        connector,
+        "_fetch_iv_rank",
+        lambda _ticker: {
+            "data": {
+                "iv_rank": 55.0,
+                "iv_percentile": 62.0,
+                "current_iv": 0.38,
+                "iv_high": 0.65,
+                "iv_low": 0.21,
+                "iv_30d": 0.4,
+            }
+        },
+    )
+
+    async def _fast_sleep(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(iv_module.asyncio, "sleep", _fast_sleep)
+
+    stored = await connector.fetch_and_store(["AAPL"])
+
+    assert stored == 1
+
+
+@pytest.mark.asyncio
+async def test_max_pain_fetch_and_store_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    connector = UWMaxPainConnector(gateway_url="http://gateway:8080", gateway_key="gw-key")
+
+    async def _fail_db_write(_fn: Any) -> Any:
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(max_pain_module, "db_write", _fail_db_write, raising=False)
+    monkeypatch.setattr(
+        connector,
+        "_fetch_max_pain",
+        lambda _ticker: {
+            "data": [
+                {
+                    "expiry": "2026-03-20",
+                    "max_pain": 510,
+                    "price": 500,
+                }
+            ]
+        },
+    )
+
+    async def _fake_price(_ticker: str) -> float:
+        return 500.0
+
+    monkeypatch.setattr(connector, "_get_current_price", _fake_price)
+
+    async def _fast_sleep(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(max_pain_module.asyncio, "sleep", _fast_sleep)
+
+    stored = await connector.fetch_and_store(["AAPL"])
+
+    assert stored == 1

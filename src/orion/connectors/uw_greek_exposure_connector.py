@@ -10,11 +10,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.config import system_settings
-from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -31,6 +29,7 @@ class UWGreekExposureConnector:
         self.gateway_url = gateway_url or system_settings.data_gateway_url
         self.gateway_key = gateway_key or system_settings.data_gateway_api_key
         self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
+        self._latest_exposures: list[Dict[str, Any]] = []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_greek_exposure(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -136,24 +135,7 @@ class UWGreekExposureConnector:
         return stored
 
     async def _persist_exposure(self, record: Dict[str, Any]) -> None:
-        """Persist greek exposure to database."""
-
-        async def write(session: Any) -> None:
-            stmt = text(
-                """
-                INSERT INTO silver_greek_exposure (
-                    ticker, ts_utc, gex_oi, gex_volume,
-                    vex_oi, vex_volume, cex_oi, cex_volume,
-                    call_delta, put_delta, call_fill_delta, put_fill_delta,
-                    spot_price
-                ) VALUES (
-                    :ticker, :ts_utc, :gex_oi, :gex_volume,
-                    :vex_oi, :vex_volume, :cex_oi, :cex_volume,
-                    :call_delta, :put_delta, :call_fill_delta, :put_fill_delta,
-                    :spot_price
-                )
-            """
-            )
-            await session.execute(stmt, record)
-
-        await db_write(write)
+        """Persist latest greek exposure samples in memory."""
+        self._latest_exposures.append(dict(record))
+        if len(self._latest_exposures) > 2000:
+            self._latest_exposures = self._latest_exposures[-1000:]

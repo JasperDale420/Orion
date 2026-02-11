@@ -10,11 +10,9 @@ from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 import httpx
-from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.config import system_settings
-from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -31,6 +29,7 @@ class UWMarketTideConnector:
         self.gateway_url = gateway_url or system_settings.data_gateway_url
         self.gateway_key = gateway_key or system_settings.data_gateway_api_key
         self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
+        self._latest_ticks: list[Dict[str, Any]] = []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_market_tide(self, market_date: Optional[date] = None) -> Optional[Dict[str, Any]]:
@@ -104,19 +103,7 @@ class UWMarketTideConnector:
         return stored
 
     async def _persist_tick(self, record: Dict[str, Any]) -> None:
-        """Persist market tide tick to database."""
-
-        async def write(session: Any) -> None:
-            stmt = text(
-                """
-                INSERT INTO silver_market_tide (
-                    ts_utc, date, net_call_premium, net_put_premium, net_volume
-                ) VALUES (
-                    :ts_utc, :date, :net_call_premium, :net_put_premium, :net_volume
-                )
-                ON CONFLICT (ts_utc) DO NOTHING
-            """
-            )
-            await session.execute(stmt, record)
-
-        await db_write(write)
+        """Persist market tide tick in memory while centralized sinks are externalized."""
+        self._latest_ticks.append(dict(record))
+        if len(self._latest_ticks) > 2000:
+            self._latest_ticks = self._latest_ticks[-1000:]
