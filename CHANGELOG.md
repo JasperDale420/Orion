@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Earnings + option-quote legacy local-silver persistence removal (TDD, combined)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`:
+    - removed executable `silver_earnings_calendar` SQL paths,
+    - `get_earnings_for_ticker(...)` now computes earnings proximity from Data Gateway ticker timeline reads,
+    - `_upsert_earnings_direct(...)` is now a compatibility no-op while storage is centralized.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`:
+    - removed executable `silver_option_quotes` SQL paths,
+    - replaced checkpoint read/write with in-process cache (`_quote_checkpoint_cache`) for legacy-gated runtime use.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_sync_earnings_gateway.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_option_quote_tracker_heber_source.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_sync_earnings_gateway.py`
+    - `pytest -q tests/unit/test_option_quote_tracker_heber_source.py`
+    - `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py`
+    - `ruff check src/orion/jobs/sync_earnings.py src/orion/main_option_quote_tracker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py`
+
 - **Backfill ML features: remove `silver_uw_flow` join dependency (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
     - removed `LEFT JOIN silver_uw_flow` from `get_records_to_backfill(...)`,

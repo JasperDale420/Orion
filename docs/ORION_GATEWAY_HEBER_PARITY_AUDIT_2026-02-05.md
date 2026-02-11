@@ -8982,3 +8982,42 @@ Verification:
 Result:
 - removed the last active `silver_uw_flow` SQL read dependency from `backfill_ml_features`.
 - remaining `silver_*` SQL usage in the repo is now mostly intentional persistence/read surfaces (`silver_option_quotes`, `silver_vix_data`, `silver_earnings_calendar`, and connector sink tables), plus limited remaining migration candidates.
+
+## 285) Pass 284 Continuation (2026-02-11)
+
+### 285.1 `sync_earnings` + `main_option_quote_tracker` Local-Silver Persistence Removal (TDD-Backed, Combined)
+
+Finding:
+- two remaining migration hotspots still contained active local-Silver table coupling:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py` read/wrote `silver_earnings_calendar`,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py` read/wrote `silver_option_quotes`.
+- this kept startup earnings sync and legacy quote checkpoint tracking dependent on Orion-local silver tables.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`:
+  - removed local-SQL persistence logic from `_upsert_earnings_direct(...)` (compatibility shim now no-ops),
+  - migrated `get_earnings_for_ticker(...)` to Data Gateway (`/api/v1/uw/earnings/{ticker}`) timeline reads,
+  - removed executable `silver_earnings_calendar` SQL query paths.
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`:
+  - replaced `silver_option_quotes` reads/writes with in-process checkpoint cache (`_quote_checkpoint_cache`),
+  - `get_existing_quotes(...)` now serves from cache,
+  - `store_quote(...)` now records checkpoints in cache.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_sync_earnings_gateway.py`:
+    - `test_get_earnings_for_ticker_uses_gateway_data_without_local_db`
+    - `test_upsert_earnings_direct_noops_without_db_write`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_option_quote_tracker_heber_source.py`:
+    - `test_store_quote_and_get_existing_quotes_use_in_memory_cache`
+    - adjusted no-local-db guards to use `raising=False` now that local DB adapters are removed from module scope.
+
+Verification:
+- `pytest -q tests/unit/test_sync_earnings_gateway.py` passed.
+- `pytest -q tests/unit/test_option_quote_tracker_heber_source.py` passed.
+- `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/jobs/sync_earnings.py src/orion/main_option_quote_tracker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py` passed.
+
+Result:
+- removed active executable local-Silver table coupling from:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`.
+- remaining `silver_earnings_calendar` and `silver_option_quotes` references are model declarations plus one non-executable legacy comment in `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`.

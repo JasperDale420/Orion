@@ -137,3 +137,48 @@ async def test_backfill_ticker_earnings_counts_valid_rows(monkeypatch: pytest.Mo
     assert writes[0]["ticker"] == "AAPL"
     assert writes[0]["report_date"] == date(2026, 2, 1)
     assert writes[0]["announce_time"] == "afterhours"
+
+
+@pytest.mark.asyncio
+async def test_get_earnings_for_ticker_uses_gateway_data_without_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_fetch(endpoint: str, params=None):
+        assert endpoint.endswith("/AAPL")
+        assert params == {"limit": 100}
+        return [
+            {"date": "2026-02-20", "time": "afterhours"},
+            {"date": "2026-02-01", "time": "premarket"},
+            {"date": "bad-date"},
+        ]
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    monkeypatch.setattr(sync_earnings, "_fetch_gateway_earnings", _fake_fetch)
+    monkeypatch.setattr(sync_earnings, "db_query", _fail_db_query, raising=False)
+
+    result = await sync_earnings.get_earnings_for_ticker("aapl", date(2026, 2, 10))
+
+    assert result == {
+        "days_to_earnings": 10,
+        "is_post_earnings": False,
+        "next_earnings_date": date(2026, 2, 20),
+        "last_earnings_date": date(2026, 2, 1),
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_earnings_direct_noops_without_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail_db_write(_fn):
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(sync_earnings, "db_write", _fail_db_write, raising=False)
+
+    await sync_earnings._upsert_earnings_direct(
+        ticker="AAPL",
+        report_date=date(2026, 2, 11),
+        announce_time="afterhours",
+        eps_estimate=1.1,
+        eps_actual=1.2,
+        revenue_estimate=10.0,
+        revenue_actual=12.0,
+    )
