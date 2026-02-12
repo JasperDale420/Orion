@@ -575,6 +575,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `backfill_ml_features` candidate discovery migrated to Heber Gold (`labels_alert_barriers` + `meta_label_features`) with keyset cursor filtering
 - `backfill_ml_features` cursor key renamed to Heber-neutral `backfill_ml_features.heber_gold.cursor` with fallback reads from legacy cursor keys for resume continuity
 - `cleanup_legacy_backfill_watermarks` now includes real `.cursor` watermark keys used by active backfill jobs (`backfill_ml_features.price_target_labels.cursor`, `backfill_exit_columns.velocity.cursor`, `backfill_exit_columns.checkpoint.cursor`)
+- `validate_features` source-audit adapter now runs canonical source IDs only; legacy `silver_*` aliases are rejected as `source_unavailable` (fix-forward, no backward alias normalization)
 - `main_pattern_miner` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_PATTERN_MINER`) and exits before DB init when disabled
 - `nightly_backfill` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL`) and exits before DB init when disabled
 - `quality_guardrails` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS`) and exits before DB init when disabled
@@ -749,7 +750,6 @@ Top remaining files by reference count (`price_target_labels` / `flow_labels` / 
 - `src/orion/ml/exit_classifier.py`: 6 refs
 - `src/orion/storage/models_silver.py`: 3 refs
 - `src/orion/ml/pattern_miner.py`: 3 refs
-- `src/orion/jobs/validate_features.py`: 3 refs
 
 Interpretation:
 

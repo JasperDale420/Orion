@@ -35,18 +35,6 @@ SOURCE_MARKET_TIDE = "market_tide"
 SOURCE_VIX = "vix_data"
 SOURCE_REGIME = "regime_history"
 
-LEGACY_SOURCE_ALIASES = {
-    "silver_alpaca_bars": SOURCE_BARS,
-    "silver_uw_flow": SOURCE_FLOW,
-    "silver_uw_darkpool": SOURCE_DARKPOOL,
-    "silver_greek_exposure": SOURCE_GREEK_EXPOSURE,
-    "silver_max_pain": SOURCE_MAX_PAIN,
-    "silver_market_tide": SOURCE_MARKET_TIDE,
-    "silver_vix_data": SOURCE_VIX,
-    "silver_regime_history": SOURCE_REGIME,
-}
-
-
 # ============================================================================
 # SPOT-CHECK VALIDATION
 # ============================================================================
@@ -652,7 +640,7 @@ def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optiona
 
 
 def _normalize_source_id(source: str) -> str:
-    return LEGACY_SOURCE_ALIASES.get(source, source)
+    return source
 
 
 def _label_date_bounds(
@@ -771,6 +759,10 @@ async def _fetch_source_summary(
     prefer_heber: bool,
 ) -> Dict[str, Any]:
     source_id = _normalize_source_id(source)
+    if source_id not in _AUDIT_SOURCE_SPECS:
+        logger.warning("audit_source_unknown_source_id", source=source_id)
+        return {"min_date": None, "max_date": None, "tickers": 0, "backend": "source_unavailable"}
+
     if prefer_heber:
         heber_summary = await _fetch_source_summary_from_heber(
             source=source_id,

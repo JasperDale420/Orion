@@ -22,10 +22,10 @@ def test_prefer_heber_source_from_env_false_values(
     assert validate_features._prefer_heber_source_from_env() is False
 
 
-def test_normalize_source_id_legacy_alias_maps_to_canonical() -> None:
-    assert validate_features._normalize_source_id("silver_uw_flow") == "flow_alerts"
-    assert validate_features._normalize_source_id("silver_uw_darkpool") == "darkpool"
-    assert validate_features._normalize_source_id("silver_alpaca_bars") == "bars"
+def test_normalize_source_id_no_longer_maps_legacy_aliases() -> None:
+    assert validate_features._normalize_source_id("silver_uw_flow") == "silver_uw_flow"
+    assert validate_features._normalize_source_id("silver_uw_darkpool") == "silver_uw_darkpool"
+    assert validate_features._normalize_source_id("silver_alpaca_bars") == "silver_alpaca_bars"
     assert validate_features._normalize_source_id("flow_alerts") == "flow_alerts"
 
 
@@ -85,17 +85,12 @@ async def test_fetch_source_summary_returns_empty_when_heber_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_summary_accepts_legacy_alias(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):
-        assert source == "flow_alerts"
-        return {
-            "min_date": "2026-02-01",
-            "max_date": "2026-02-05",
-            "tickers": 3,
-            "backend": "heber",
-        }
-
-    monkeypatch.setattr(validate_features, "_fetch_source_summary_from_heber", _fake_heber)
+async def test_fetch_source_summary_rejects_legacy_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        validate_features,
+        "_fetch_source_summary_from_heber",
+        lambda **_: (_ for _ in ()).throw(AssertionError("Heber read should not run for unknown source ids")),
+    )
     monkeypatch.setattr(
         validate_features,
         "_fetch_source_summary_from_local_db",
@@ -109,8 +104,8 @@ async def test_fetch_source_summary_accepts_legacy_alias(monkeypatch: pytest.Mon
         prefer_heber=True,
     )
 
-    assert summary["backend"] == "heber"
-    assert summary["tickers"] == 3
+    assert summary["backend"] == "source_unavailable"
+    assert summary["tickers"] == 0
 
 
 def test_feature_source_mapping_uses_canonical_source_ids() -> None:

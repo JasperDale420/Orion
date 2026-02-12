@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Feature validation source audit now rejects legacy `silver_*` aliases (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+    - removed legacy alias normalization for `silver_*` source IDs in audit paths.
+    - `_fetch_source_summary(...)` now explicitly returns `source_unavailable` for unknown source IDs.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_source_adapter.py`:
+    - replaced alias-mapping expectation with fix-forward canonical-only behavior.
+    - added coverage for unknown/legacy source rejection.
+  - Verified with:
+    - `pytest -q tests/unit/test_validate_features_source_adapter.py tests/unit/test_validate_features_guardrails.py`
+    - `ruff check src/orion/jobs/validate_features.py tests/unit/test_validate_features_source_adapter.py`
+
 - **Trainer source parsing now fails safely to Heber on invalid env values (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
     - `_exit_classifier_training_source()` now defaults and falls back to `heber_gold` when source env is invalid.
