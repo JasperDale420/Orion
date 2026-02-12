@@ -33,7 +33,6 @@ from orion.storage.models_silver import SilverSignal
 from orion.storage.models_solvers import SolverEdits
 
 logger = setup_struct_logger("orion.agents.eod_review_agent")
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 
 class EODReviewAgent(BaseAgent):
@@ -275,13 +274,7 @@ class EODReviewAgent(BaseAgent):
             return (limit_price - fill_price) / limit_price * 10000.0
         return None
 
-    def _prefer_heber_regime_bars(self) -> bool:
-        raw = os.getenv("ORION_EOD_REVIEW_PREFER_HEBER_BARS", "1").strip().lower()
-        return raw not in _PREFER_HEBER_FALSE_VALUES
-
-    async def _load_regime_bars_from_heber(
-        self, tickers: List[str], start_ts: datetime, end_ts: datetime
-    ) -> List[Any] | None:
+    async def _load_regime_bars_from_heber(self, tickers: List[str], start_ts: datetime, end_ts: datetime) -> List[Any]:
         if not tickers:
             return []
 
@@ -296,7 +289,7 @@ class EODReviewAgent(BaseAgent):
             )
         except Exception:
             logger.debug("Heber bars read failed for EOD regime context", exc_info=True)
-            return None
+            return []
 
         if frame.empty:
             return []
@@ -332,7 +325,6 @@ class EODReviewAgent(BaseAgent):
         from orion.storage.models_dlq import DeadLetterQueue
         from orion.storage.models_execution import FillRecord, OrderRecord
         from orion.storage.models_signals import SignalLive
-        from orion.storage.models_silver import SilverAlpacaBar
         from orion.storage.models_trade_journal import TradeJournalEntry
 
         start_ts, end_ts = self._day_bounds_utc(date)
@@ -446,23 +438,11 @@ class EODReviewAgent(BaseAgent):
             tickers_for_regime = {s.ticker for s in sigs if s.ticker} | {t.ticker for t in trade_journal if t.ticker}
 
             if tickers_for_regime:
-                heber_bars: List[Any] | None = None
-                if self._prefer_heber_regime_bars():
-                    heber_bars = await self._load_regime_bars_from_heber(
-                        tickers=sorted(tickers_for_regime),
-                        start_ts=start_ts,
-                        end_ts=end_ts,
-                    )
-
-                if heber_bars:
-                    bars = heber_bars
-                else:
-                    bars_stmt = select(SilverAlpacaBar).where(
-                        SilverAlpacaBar.ticker.in_(sorted(tickers_for_regime)),
-                        SilverAlpacaBar.bar_start_ts_utc >= start_ts,
-                        SilverAlpacaBar.bar_start_ts_utc < end_ts,
-                    )
-                    bars = (await session.execute(bars_stmt)).scalars().all()
+                bars = await self._load_regime_bars_from_heber(
+                    tickers=sorted(tickers_for_regime),
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                )
             else:
                 bars = []
 

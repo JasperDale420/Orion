@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **EOD review regime-bar sourcing is now Heber-only (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/eod_review_agent.py`:
+    - removed env-toggle + local `SilverAlpacaBar` fallback for regime bars.
+    - `_gather_data(...)` now sources regime bars from Heber only.
+    - `_load_regime_bars_from_heber(...)` now returns empty list on read errors.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_eod_review_agent_heber_bars.py`:
+    - updated failure-path expectation to empty list.
+    - added regression assertion that the legacy toggle method is removed.
+  - Verified with:
+    - `pytest -q tests/unit/test_eod_review_agent_heber_bars.py tests/agents/test_eod_review_agent.py`
+    - `ruff check src/orion/agents/eod_review_agent.py tests/unit/test_eod_review_agent_heber_bars.py`
+
 - **Daemon worker health checks now use process liveness instead of HTTP probes (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
     - added explicit `healthcheck` blocks for `feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, and `indexer`.
