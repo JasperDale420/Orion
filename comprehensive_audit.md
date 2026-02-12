@@ -590,8 +590,8 @@ Local SQL references are now mostly concentrated around legacy labels/training p
   - `legacy_sql`: `price_target_labels` SQL path with schema-aware optional window feature columns (no `gold_feature_windows` lateral join)
 - `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
 - `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
+- `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
 
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` (`FROM price_target_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py` (`FROM price_target_labels`)
@@ -630,9 +630,9 @@ Source references used in this pass:
 
 ### Legacy Label Tables vs Heber Watch (Column-Level Audit)
 
-#### `flow_labels` (`main_labeler.py`)
+#### `flow_labels` (`main_labeler.py`, archived 2026-02-12)
 
-- Orion local write surface: **28 columns** in `INSERT INTO flow_labels (...)`.
+- Orion local write surface was **28 columns** in `INSERT INTO flow_labels (...)`.
 - Direct overlap with Heber watch outcomes/features: **5/28**:
   - `put_call`
   - `aggressor`
@@ -640,6 +640,7 @@ Source references used in this pass:
   - `iv`
   - `expiry`
 - Non-overlap columns (examples): `return_15m`, `return_30m`, `return_1h`, `label_1h`, `primary_label`, `trade_type`.
+- Status: archived with legacy module decommission (`archive/2026-02-12_label-stack-wave13/legacy_code/main_labeler.py`).
 
 #### `price_target_labels` payload surface (`main_price_target_labeler.py`)
 
@@ -731,7 +732,6 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 - Which Orion feature columns should become `meta_label_features` columns versus be retired
 
 **Archive after mapping signoff:**
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py`
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` (legacy local Silver table models)
 - Legacy local label/feature update jobs that only mutate `price_target_labels`
@@ -740,9 +740,9 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*` / `gold_feature_windows`):
 
-- `src/orion/main_price_target_labeler.py`: 10 refs
-- `src/orion/ml/exit_classifier.py`: 7 refs
-- `src/orion/storage/models_silver.py`: 4 refs
+- `src/orion/main_price_target_labeler.py`: 9 refs
+- `src/orion/ml/exit_classifier.py`: 6 refs
+- `src/orion/storage/models_silver.py`: 3 refs
 - `src/orion/ml/pattern_miner.py`: 3 refs
 - `src/orion/jobs/validate_features.py`: 3 refs
 
@@ -765,3 +765,7 @@ Interpretation:
   - `src/orion/jobs/window_feature_job.py` -> `archive/2026-02-12_label-stack-wave12/legacy_code/window_feature_job.py`
   - `tests/unit/test_window_feature_job_heber_source.py` -> `archive/2026-02-12_label-stack-wave12/legacy_tests/test_window_feature_job_heber_source.py`
   - Archive manifest: `archive/2026-02-12_label-stack-wave12/README.md`
+- Archived legacy flow-label writer under `archive/2026-02-12_label-stack-wave13/`:
+  - `src/orion/main_labeler.py` -> `archive/2026-02-12_label-stack-wave13/legacy_code/main_labeler.py`
+  - `tests/unit/test_main_labeler_heber_migration.py` -> `archive/2026-02-12_label-stack-wave13/legacy_tests/test_main_labeler_heber_migration.py`
+  - Archive manifest: `archive/2026-02-12_label-stack-wave13/README.md`

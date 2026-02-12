@@ -8,7 +8,6 @@ def test_compose_wires_per_service_legacy_gate_env_vars() -> None:
     assert (
         "- ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}" in compose_text
     )
-    assert "- ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-false}" in compose_text
     assert (
         "- ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}" in compose_text
     )
@@ -26,7 +25,7 @@ def _service_block(compose_text: str, service_name: str) -> str:
 def test_legacy_label_services_use_on_failure_restart_policy() -> None:
     compose_text = Path("docker-compose.yml").read_text()
 
-    for service_name in ("labeler", "price_target_labeler", "option_quote_tracker"):
+    for service_name in ("price_target_labeler", "option_quote_tracker"):
         block = _service_block(compose_text, service_name)
         assert "restart: on-failure" in block
 
@@ -35,7 +34,6 @@ def test_legacy_label_stack_services_are_profiled_for_opt_in() -> None:
     compose_text = Path("docker-compose.yml").read_text()
 
     for service_name in (
-        "labeler",
         "price_target_labeler",
         "option_quote_tracker",
         "nightly-backfill",
@@ -80,7 +78,6 @@ def test_compose_default_legacy_profile_preserves_model_storage_paths() -> None:
     compose_text = Path("docker-compose.yml").read_text()
 
     for service_name in (
-        "labeler",
         "price_target_labeler",
         "option_quote_tracker",
         "pattern-miner",
@@ -89,9 +86,6 @@ def test_compose_default_legacy_profile_preserves_model_storage_paths() -> None:
     ):
         block = _service_block(compose_text, service_name)
         assert "- ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}" in block
-
-    labeler_block = _service_block(compose_text, "labeler")
-    assert "- ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-false}" in labeler_block
 
     price_target_block = _service_block(compose_text, "price_target_labeler")
     assert (
@@ -123,3 +117,9 @@ def test_compose_default_legacy_profile_preserves_model_storage_paths() -> None:
     assert (
         "- ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS=${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}" in guardrails_block
     )
+
+
+def test_compose_does_not_include_decommissioned_flow_labeler_service() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    assert "\n  labeler:\n" not in compose_text
+    assert "ORION_ENABLE_LEGACY_FLOW_LABELER" not in compose_text

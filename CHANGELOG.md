@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Flow-labeler decommissioned and archived (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - removed legacy `labeler` service (`python -m orion.main_labeler`) from orchestration.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
+    - removed dead `ORION_ENABLE_LEGACY_FLOW_LABELER` setting.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_config_centralization.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
+  - Archived legacy flow-labeler module/tests:
+    - moved `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` to `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave13/legacy_code/main_labeler.py`
+    - moved `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_main_labeler_heber_migration.py` to `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave13/legacy_tests/test_main_labeler_heber_migration.py`
+    - added `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave13/README.md`
+  - Verified with:
+    - `pytest -q tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py tests/unit/test_legacy_label_pipeline_gates.py`
+    - `ruff check src/orion/config.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py tests/unit/test_legacy_label_pipeline_gates.py`
+    - `docker compose config -q`
+
 - **Window-context reads migrated to Heber and orphan producer archived (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - `get_window_features_at_entry(ticker, entry_ts)` now computes `1h`/`1d`/`1w` features directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`.

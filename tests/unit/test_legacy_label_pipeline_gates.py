@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from orion import main_labeler, main_option_quote_tracker, main_pattern_miner, main_price_target_labeler
+from orion import main_option_quote_tracker, main_pattern_miner, main_price_target_labeler
 from orion.jobs import nightly_backfill, quality_guardrails
 
 
@@ -21,24 +21,6 @@ def test_option_quote_tracker_control_key_prefers_specific(monkeypatch: pytest.M
 
     assert enabled is False
     assert key == "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER"
-    assert raw == "false"
-
-
-def test_flow_labeler_specific_gate_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
-    monkeypatch.setenv("ORION_ENABLE_LEGACY_FLOW_LABELER", "false")
-
-    assert main_labeler._legacy_label_pipelines_enabled() is False
-
-
-def test_flow_labeler_control_key_falls_back_to_global(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "false")
-    monkeypatch.delenv("ORION_ENABLE_LEGACY_FLOW_LABELER", raising=False)
-
-    enabled, key, raw = main_labeler._legacy_label_pipeline_control()
-
-    assert enabled is False
-    assert key == "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
     assert raw == "false"
 
 
@@ -115,19 +97,6 @@ async def test_option_quote_tracker_returns_early_when_specific_gate_disabled(mo
 
 
 @pytest.mark.asyncio
-async def test_flow_labeler_does_not_init_db_when_specific_gate_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
-    monkeypatch.setenv("ORION_ENABLE_LEGACY_FLOW_LABELER", "false")
-
-    async def _fail_init_db() -> None:
-        raise AssertionError("init_db should not be called when flow labeler is disabled")
-
-    monkeypatch.setattr(main_labeler, "init_db", _fail_init_db)
-
-    await asyncio.wait_for(main_labeler.run_labeling_loop(asyncio.Event()), timeout=0.5)
-
-
-@pytest.mark.asyncio
 async def test_price_target_labeler_does_not_init_db_when_specific_gate_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -181,21 +150,6 @@ async def test_quality_guardrails_does_not_init_db_when_specific_gate_disabled(
     monkeypatch.setattr(quality_guardrails, "init_db", _fail_init_db)
 
     await asyncio.wait_for(quality_guardrails.run_guardrail_loop(), timeout=0.5)
-
-
-@pytest.mark.asyncio
-async def test_flow_labeler_persist_labels_skips_local_write_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
-    monkeypatch.setenv("ORION_ENABLE_LEGACY_FLOW_LABELER", "false")
-
-    async def _fail_db_write(_operation):
-        raise AssertionError("db_write should not be called when flow labeler is disabled")
-
-    monkeypatch.setattr(main_labeler, "db_write", _fail_db_write)
-
-    persisted = await main_labeler.persist_labels([{"event_id": "evt-disabled"}])
-
-    assert persisted == 0
 
 
 @pytest.mark.asyncio

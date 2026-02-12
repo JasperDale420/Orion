@@ -54,28 +54,6 @@ services:
     entrypoint: >
       /bin/sh -c " /usr/bin/mc alias set orion http://minio:9000 minio_admin minio_password; /usr/bin/mc mb orion/lakehouse --ignore-existing; /usr/bin/mc anonymous set public orion/lakehouse; exit 0; "
 
-  labeler:
-    build: .
-    container_name: orion_labeler
-    profiles: [ "legacy-labels" ]
-    restart: on-failure
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    volumes:
-      - .:/app
-    environment:
-      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      - ORION_RUN_ID=docker_persistent
-      - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
-      - ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-false}
-    command: [ "python", "-m", "orion.main_labeler" ]
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-
   price_target_labeler:
     build: .
     container_name: orion_price_target

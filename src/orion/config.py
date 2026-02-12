@@ -77,10 +77,6 @@ class SystemSettings(BaseSettings):
         default=True,
         validation_alias="ORION_ENABLE_LEGACY_LABEL_PIPELINES",
     )
-    legacy_flow_labeler_enabled: Optional[bool] = Field(
-        default=None,
-        validation_alias="ORION_ENABLE_LEGACY_FLOW_LABELER",
-    )
     legacy_option_quote_tracker_enabled: Optional[bool] = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER",

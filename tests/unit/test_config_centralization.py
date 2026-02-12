@@ -87,7 +87,6 @@ def test_legacy_label_gate_settings_env_mapping():
         os.environ,
         {
             "ORION_ENABLE_LEGACY_LABEL_PIPELINES": "false",
-            "ORION_ENABLE_LEGACY_FLOW_LABELER": "true",
             "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER": "false",
             "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER": "true",
             "ORION_ENABLE_LEGACY_PATTERN_MINER": "false",
@@ -104,7 +103,6 @@ def test_legacy_label_gate_settings_env_mapping():
 
         s = SystemSettings()
         assert s.legacy_label_pipelines_enabled is False
-        assert s.legacy_flow_labeler_enabled is True
         assert s.legacy_option_quote_tracker_enabled is False
         assert s.legacy_price_target_labeler_enabled is True
         assert s.legacy_pattern_miner_enabled is False
@@ -123,6 +121,14 @@ def test_training_source_defaults_follow_safe_local_defaults() -> None:
         s = SystemSettings()
         assert s.pattern_miner_training_source == "heber_gold"
         assert s.exit_classifier_training_source == "legacy_sql"
+
+
+def test_system_settings_no_longer_exposes_decommissioned_flow_labeler_gate() -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert not hasattr(s, "legacy_flow_labeler_enabled")
 
 
 @pytest.mark.asyncio
