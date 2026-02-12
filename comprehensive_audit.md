@@ -570,7 +570,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `data_quality_checker` ML coverage summaries migrated to Heber Gold datasets (no local `price_target_labels` reads)
 - `validate_features` label period loader migrated to Heber Gold (`labels_alert_barriers`) for source-audit windowing
 - `validate_features` spot-check and sanity paths migrated to Heber Gold labels/features (no local label SQL reads)
-- `backfill_exit_columns` local update writes disabled; job now skips local label mutation while storage is centralized
+- `backfill_exit_columns` was archived after local-write decommission; `nightly_backfill` no longer runs the obsolete exit-column stage
 - `backfill_ml_features` local update writes disabled; job now skips local label mutation while storage is centralized
 - `backfill_ml_features` candidate discovery migrated to Heber Gold (`labels_alert_barriers` + `meta_label_features`) with keyset cursor filtering
 - `backfill_ml_features` cursor key renamed to Heber-neutral `backfill_ml_features.heber_gold.cursor` with fallback reads from legacy cursor keys for resume continuity
@@ -773,5 +773,10 @@ Interpretation:
   - `src/orion/main_labeler.py` -> `archive/2026-02-12_label-stack-wave13/legacy_code/main_labeler.py`
   - `tests/unit/test_main_labeler_heber_migration.py` -> `archive/2026-02-12_label-stack-wave13/legacy_tests/test_main_labeler_heber_migration.py`
   - Archive manifest: `archive/2026-02-12_label-stack-wave13/README.md`
+- Archived decommissioned exit-column backfill path under `archive/2026-02-12_label-stack-wave14/`:
+  - `src/orion/jobs/backfill_exit_columns.py` -> `archive/2026-02-12_label-stack-wave14/legacy_code/backfill_exit_columns.py`
+  - `tests/unit/test_backfill_exit_columns_selection.py` -> `archive/2026-02-12_label-stack-wave14/legacy_tests/test_backfill_exit_columns_selection.py`
+  - `src/orion/jobs/nightly_backfill.py` now runs ML-feature backfill only.
+  - Archive manifest: `archive/2026-02-12_label-stack-wave14/README.md`
 - Decommissioned orphan local window-feature ORM definition:
   - removed `GoldFeatureWindow` from `src/orion/storage/models_gold.py`

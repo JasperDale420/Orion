@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Nightly backfill decommissioned exit-column stage and archived module/tests (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/nightly_backfill.py`:
+    - removed `backfill_exit_columns` orchestration; nightly run now executes ML-feature backfill only.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_nightly_backfill_schedule.py`:
+    - added `test_nightly_backfill_no_longer_exposes_exit_backfill_runner`,
+    - added `test_run_nightly_backfill_executes_only_ml_backfill`.
+  - Archived decommissioned exit-column backfill implementation:
+    - moved `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_exit_columns.py` to `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave14/legacy_code/backfill_exit_columns.py`
+    - moved `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_exit_columns_selection.py` to `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave14/legacy_tests/test_backfill_exit_columns_selection.py`
+    - added `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave14/README.md`
+  - Verified with:
+    - `pytest -q tests/unit/test_nightly_backfill_schedule.py tests/unit/test_legacy_label_pipeline_gates.py -k "nightly_backfill or executes_only_ml_backfill or no_longer_exposes_exit_backfill_runner"`
+    - `ruff check src/orion/jobs/nightly_backfill.py tests/unit/test_nightly_backfill_schedule.py`
+
 - **Backfill ML cursor key renamed to Heber-neutral key with legacy fallback (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
     - active cursor key changed to `backfill_ml_features.heber_gold.cursor`,
