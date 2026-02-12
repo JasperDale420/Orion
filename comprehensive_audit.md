@@ -573,6 +573,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `backfill_exit_columns` local update writes disabled; job now skips local label mutation while storage is centralized
 - `backfill_ml_features` local update writes disabled; job now skips local label mutation while storage is centralized
 - `backfill_ml_features` candidate discovery migrated to Heber Gold (`labels_alert_barriers` + `meta_label_features`) with keyset cursor filtering
+- `main_pattern_miner` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_PATTERN_MINER`) and exits before DB init when disabled
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)

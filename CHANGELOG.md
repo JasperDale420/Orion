@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy-gate hardening (TDD): `pattern-miner` per-service disable control**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_pattern_miner.py`:
+    - added legacy-gate helpers:
+      - `_legacy_label_pipeline_control()`
+      - `_legacy_label_pipelines_enabled()`
+    - `run_mining_job()` now exits before `init_db()` when disabled.
+    - `main()` now exits before `init_db()` when disabled.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
+    - added `legacy_pattern_miner_enabled` (`ORION_ENABLE_LEGACY_PATTERN_MINER`).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - `pattern-miner` now wires:
+      - `ORION_ENABLE_LEGACY_LABEL_PIPELINES`
+      - `ORION_ENABLE_LEGACY_PATTERN_MINER`
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
+      - `test_pattern_miner_specific_gate_overrides_global_off`
+      - `test_pattern_miner_control_key_prefers_specific`
+      - `test_pattern_miner_does_not_init_db_when_specific_gate_disabled`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+      - extended `test_pattern_miner_is_profiled_with_legacy_label_stack` to assert env wiring.
+  - Verified with:
+    - `pytest -q tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py`
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py`
+    - `ruff check src/orion/config.py src/orion/main_pattern_miner.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py`
+
 - **Heber parity deep-audit (ML trainer compatibility)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with field-level schema parity for:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`

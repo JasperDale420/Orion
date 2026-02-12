@@ -89,6 +89,10 @@ class SystemSettings(BaseSettings):
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER",
     )
+    legacy_pattern_miner_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER",
+    )
     ml_prefilter_threshold: float = Field(
         default=0.5,
         ge=0.0,

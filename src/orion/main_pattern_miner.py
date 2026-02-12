@@ -9,6 +9,7 @@ import signal
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from orion.config import SystemSettings
 from orion.core.logging_config import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.ml.pattern_miner import run_all_pattern_mining
@@ -22,10 +23,43 @@ RUN_DAYS = [0, 4]  # Monday=0, Friday=4
 POST_CLOSE_DELAY_MINUTES = 60
 
 
+def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
+    specific_key = "ORION_ENABLE_LEGACY_PATTERN_MINER"
+    if settings.legacy_pattern_miner_enabled is not None:
+        enabled = settings.legacy_pattern_miner_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
+
+    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
+
+
+def _legacy_label_pipelines_enabled() -> bool:
+    enabled, _, _ = _legacy_label_pipeline_control()
+    return enabled
+
+
 async def run_mining_job() -> None:
     """
     Run the pattern mining job once.
     """
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Legacy local pattern miner disabled by config",
+            extra={
+                "event": "legacy_label_pipeline_disabled",
+                "pipeline": "orion.main_pattern_miner",
+                "control_key": control_key,
+                "control_raw": control_raw,
+            },
+        )
+        return
+
     await init_db()
 
     logger.info(
@@ -149,6 +183,19 @@ async def main() -> None:
     - Monday and Friday after market close (scheduled)
     - Any day when drift flag is set by EOD agent (triggered)
     """
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Legacy local pattern miner disabled by config",
+            extra={
+                "event": "legacy_label_pipeline_disabled",
+                "pipeline": "orion.main_pattern_miner",
+                "control_key": control_key,
+                "control_raw": control_raw,
+            },
+        )
+        return
+
     await init_db()
 
     shutdown_event = asyncio.Event()
