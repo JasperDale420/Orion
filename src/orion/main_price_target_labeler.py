@@ -20,23 +20,14 @@ from scipy.stats import norm
 
 load_dotenv()
 
-from sqlalchemy import text
 
 from orion.clients.heber_reader import HeberReader
 from orion.config import SystemSettings
 from orion.labeler import (
     BATCH_SIZE,
-    POLL_INTERVAL_SECONDS,
     RISK_FREE_RATE,
 )
-from orion.labeler.schema_guard import (
-    SchemaValidationError,
-    fetch_table_columns,
-    resolve_insert_columns,
-)
-from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
 from orion.unusualwhales.api.stock import get_info
 from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
@@ -45,7 +36,6 @@ logger = setup_struct_logger("orion.price_target")
 _heber_reader = HeberReader()
 
 _PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
-_PRICE_TARGET_LABEL_COLUMNS: Optional[Set[str]] = None
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
@@ -537,27 +527,18 @@ def _is_truthy(value: Any) -> bool:
 
 
 async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
+    """Legacy no-op; local labeled-event lookup is decommissioned."""
     if not event_ids:
         return set()
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Skipping labeled event lookup because legacy pipeline is disabled",
-            extra={
-                "event_type": "DEPRECATED_PIPELINE_DISABLED",
-                "pipeline": "orion.main_price_target_labeler",
-                "operation": "get_labeled_price_target_event_ids",
-                "control": f"{control_key}={control_raw}",
-            },
-        )
-        return set()
-
-    async def query(session: Any) -> Set[str]:
-        stmt = text("SELECT event_id FROM price_target_labels WHERE event_id = ANY(:event_ids)")
-        result = await session.execute(stmt, {"event_ids": event_ids})
-        return {str(row[0]) for row in result.fetchall()}
-
-    return await db_query(query)
+    logger.warning(
+        "Labeled event lookup is decommissioned; local label storage is disabled",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "get_labeled_price_target_event_ids",
+        },
+    )
+    return set()
 
 
 async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
@@ -3594,139 +3575,32 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
 
 async def persist_labels(labels: List[Dict[str, Any]]) -> int:
-    """Persist labeled records to database using dynamic INSERT.
-
-    Includes only schema-validated columns from each label dict.
-    Unknown/missing required columns fail fast.
-    """
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Skipping local price-target label persistence because legacy pipeline is disabled",
-            extra={
-                "event_type": "DEPRECATED_PIPELINE_DISABLED",
-                "pipeline": "orion.main_price_target_labeler",
-                "control": f"{control_key}={control_raw}",
-            },
-        )
-        return 0
-
+    """Legacy no-op; local label persistence is decommissioned."""
     if not labels:
         return 0
-
-    async def write(session: Any) -> None:
-        global _PRICE_TARGET_LABEL_COLUMNS
-        if _PRICE_TARGET_LABEL_COLUMNS is None:
-            _PRICE_TARGET_LABEL_COLUMNS = await fetch_table_columns(session, "price_target_labels")
-
-        for label in labels:
-            try:
-                columns = resolve_insert_columns(
-                    label,
-                    _PRICE_TARGET_LABEL_COLUMNS,
-                    required_columns={"event_id"},
-                )
-            except SchemaValidationError as e:
-                _record_price_target_fallback(
-                    "label_schema_validation",
-                    e,
-                    event_id=label.get("event_id"),
-                    unknown_columns=list(e.unknown_columns),
-                    missing_columns=list(e.missing_columns),
-                )
-                raise
-
-            # Build dynamic INSERT statement
-            cols_str = ", ".join(columns)
-            vals_str = ", ".join([f":{c}" for c in columns])
-
-            stmt = text(
-                f"""
-                INSERT INTO price_target_labels ({cols_str})
-                VALUES ({vals_str})
-                ON CONFLICT (event_id) DO NOTHING
-            """
-            )
-
-            # Only pass the columns we're inserting
-            params = {k: v for k, v in label.items() if k in columns}
-            await session.execute(stmt, params)
-
-    await db_write(write)
-    return len(labels)
+    logger.warning(
+        "Local price-target label persistence is decommissioned; labels must flow through heber.watch",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "persist_labels",
+        },
+    )
+    return 0
 
 
 async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
-    """Main labeling loop."""
+    """Legacy no-op; local price-target labeling loop is decommissioned."""
+    _ = shutdown_event
     logger.warning(
-        "Legacy local price-target labeler is active",
+        "Local price-target labeling loop is decommissioned",
         extra={
-            "event_type": "DEPRECATED_PIPELINE_ACTIVE",
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
             "pipeline": "orion.main_price_target_labeler",
             "replacement_path": "heber.watch datasets (labels_alert_barriers/meta_label_features) after field mapping signoff",
         },
     )
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Legacy local price-target labeler disabled by config",
-            extra={
-                "event_type": "DEPRECATED_PIPELINE_DISABLED",
-                "pipeline": "orion.main_price_target_labeler",
-                "control": f"{control_key}={control_raw}",
-            },
-        )
-        return
-    await init_db()
-    logger.info("Starting Price Target Labeling Service (v2 - comprehensive metrics)...")
-
-    total_labeled = 0
-
-    while not shutdown_event.is_set():
-        try:
-            entries = await get_entry_signals(BATCH_SIZE)
-
-            if entries:
-                labels = []
-                for entry in entries:
-                    label = await label_entry(entry)
-                    if label:
-                        labels.append(label)
-
-                if labels:
-                    count = await persist_labels(labels)
-                    total_labeled += count
-
-                    hit_50 = sum(1 for label in labels if label.get("hit_50_pct_ts"))
-                    stopped = sum(1 for label in labels if label.get("hit_stop_20_pct_ts"))
-                    avg_holding = sum(label.get("holding_period_seconds", 0) or 0 for label in labels) / len(labels)
-
-                    logger.info(
-                        f"Labeled {count} entries | Total: {total_labeled} | "
-                        f"Hit50: {hit_50} | Stopped: {stopped} | AvgHold: {avg_holding / 60:.0f}min",
-                        extra={
-                            "event_type": "BATCH_LABELED",
-                            "batch_size": count,
-                            "hit_50_pct": hit_50,
-                            "stopped_out": stopped,
-                            "avg_holding_min": avg_holding / 60,
-                        },
-                    )
-            else:
-                logger.debug("No unlabeled entries found, waiting...")
-
-        except Exception as e:
-            logger.error(f"Labeling error: {e}", exc_info=True)
-            await asyncio.sleep(5)
-            continue
-
-        try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=POLL_INTERVAL_SECONDS)
-            break
-        except asyncio.TimeoutError:
-            pass
-
-    logger.info(f"Price Target Labeling stopped. Total: {total_labeled}")
+    return
 
 
 async def backfill_missing_features(batch_size: int = 100) -> int:

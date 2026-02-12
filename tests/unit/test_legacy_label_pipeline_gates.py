@@ -260,3 +260,52 @@ async def test_price_target_labeler_backfill_missing_features_is_decommissioned_
     updated = await main_price_target_labeler.backfill_missing_features(batch_size=10)
 
     assert updated == 0
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_persist_labels_is_decommissioned_even_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "true")
+
+    async def _fail_db_write(_operation):
+        raise AssertionError("db_write should not be called for decommissioned local label persistence")
+
+    monkeypatch.setattr(main_price_target_labeler, "db_write", _fail_db_write, raising=False)
+
+    persisted = await main_price_target_labeler.persist_labels([{"event_id": "evt-enabled"}])
+
+    assert persisted == 0
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_labeled_event_lookup_is_decommissioned_even_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "true")
+
+    async def _fail_db_query(_operation):
+        raise AssertionError("db_query should not be called for decommissioned labeled-event lookup")
+
+    monkeypatch.setattr(main_price_target_labeler, "db_query", _fail_db_query, raising=False)
+
+    labeled = await main_price_target_labeler._get_labeled_price_target_event_ids(["evt-enabled"])
+
+    assert labeled == set()
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_run_loop_is_decommissioned_even_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "true")
+
+    async def _fail_init_db() -> None:
+        raise AssertionError("init_db should not be called for decommissioned local label loop")
+
+    monkeypatch.setattr(main_price_target_labeler, "init_db", _fail_init_db)
+
+    await asyncio.wait_for(main_price_target_labeler.run_labeling_loop(asyncio.Event()), timeout=0.5)

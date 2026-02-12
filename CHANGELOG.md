@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
       - switched backfill-candidate coverage from SQL-shape assertions to no-op behavior assertions.
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
       - added `test_price_target_labeler_backfill_missing_features_is_decommissioned_even_when_enabled`.
+      - added `test_price_target_labeler_persist_labels_is_decommissioned_even_when_enabled`.
+      - added `test_price_target_labeler_labeled_event_lookup_is_decommissioned_even_when_enabled`.
+      - added `test_price_target_labeler_run_loop_is_decommissioned_even_when_enabled`.
   - Verified with:
     - `pytest -q tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_legacy_label_pipeline_gates.py`
     - `ruff check src/orion/main_price_target_labeler.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_legacy_label_pipeline_gates.py`
@@ -39,7 +42,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
     - `ruff` now excludes archived/notebook/vendor paths from repo-wide checks (`archive`, `qlib-main`, `src/alpaca`, `scripts`),
     - enabled pragmatic per-file lint ignore set for legacy tests/alembic migration files,
-    - removed unavailable `numpy.typing.mypy` plugin from mypy configuration.
+    - removed unavailable `numpy.typing.mypy` plugin from mypy configuration,
+    - added practical mypy scope (`exclude` + `follow_imports = "skip"`) and strict overrides for migration-critical Orion modules.
   - Added `/Users/jacobmcmillan/Empire/Orion/scripts/run_system_burnin.sh`:
     - builds/recreates core Orion services,
     - runs timed burn-in,
@@ -52,6 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `pytest -q tests/unit/test_meta_search.py tests/unit/test_flow_enricher_delegation.py tests/ml/test_flow_processor.py tests/unit/test_risk_manager_basic.py tests/unit/test_risk_manager_positions.py tests/storage/test_lakehouse.py`
     - `ruff check .`
+    - `pytest -q && ruff check . && mypy .`
 
 - **Price-target labeler legacy gate now blocks all local backfill/query helpers when disabled (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
