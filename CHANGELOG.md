@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Model-local retention profile finalized (TDD + audit update)**:
+  - Added regression test to confirm specific pattern-miner gate can stay enabled when global legacy pipelines are disabled:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
+      - `test_pattern_miner_specific_true_overrides_global_off`
+  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with the recommended toggle profile for keeping local model artifacts/metadata while disabling legacy labeling paths.
+  - Verified with:
+    - `pytest -q tests/unit/test_legacy_label_pipeline_gates.py`
+    - `ruff check tests/unit/test_legacy_label_pipeline_gates.py`
+
 - **Model-storage preservation lock-in (TDD + audit clarification)**:
   - Added gate-override tests to preserve local model-training capability when global legacy pipelines are off:
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`

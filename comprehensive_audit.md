@@ -652,6 +652,11 @@ Source references used in this pass:
   - Local model information storage remains in Orion:
     - model artifacts under `ORION_MODEL_DIR` (pickle outputs consumed by `ml/scorer.py`),
     - model metadata tables `ml_pattern_insights` and `ml_feature_importance_history`.
+  - Recommended toggle profile to keep model storage while minimizing legacy local labeling:
+    - `ORION_ENABLE_LEGACY_LABEL_PIPELINES=false`
+    - `ORION_ENABLE_LEGACY_PATTERN_MINER=true`
+    - `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`
+    - `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`
 - Move to Heber (required before decommission):
   - Define a **v2 training contract** in Heber that includes:
     - normalized entry feature names expected by Orion scoring/inference, or a mapping layer,

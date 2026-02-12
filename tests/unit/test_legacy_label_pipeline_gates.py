@@ -78,6 +78,13 @@ def test_pattern_miner_control_key_prefers_specific(monkeypatch: pytest.MonkeyPa
     assert raw == "false"
 
 
+def test_pattern_miner_specific_true_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "false")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PATTERN_MINER", "true")
+
+    assert main_pattern_miner._legacy_label_pipelines_enabled() is True
+
+
 def test_nightly_backfill_specific_gate_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
     monkeypatch.setenv("ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL", "false")
