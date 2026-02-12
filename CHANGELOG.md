@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Aggressive dependency uplift pass completed (installer maintenance)**:
+  - Updated runtime dependency constraints in `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
+    - `pandas` -> `^3.0.0`
+    - `tenacity` -> `^9.1.4`
+    - `fastapi` -> `^0.128.8`
+    - `uvicorn` -> `^0.40.0`
+    - `alpaca-py` -> `^0.43.2`
+    - `pandera` -> `^0.29.0`
+    - `prometheus-client` -> `^0.24.1`
+    - `s3fs` -> `^2026.2.0`
+    - `fsspec` -> `^2026.2.0`
+    - `aiobotocore` -> `^3.1.2`
+    - `boto3` -> `^1.42.0` (resolved to `1.42.42` for botocore compatibility)
+  - Updated dev dependency constraints:
+    - `pre-commit` -> `^4.5.1`
+    - `pytest-asyncio` -> `^1.3.0`
+    - `pytest-cov` -> `^7.0.0`
+    - `ruff` -> `^0.15.0`
+  - Regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock`.
+  - Verified with:
+    - `pytest -q && ruff check . && mypy .`
+    - `docker compose build`
+
 - **Dependency/tooling refresh (installer maintenance)**:
   - Updated Poetry-managed dependencies and regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock` (`poetry update`).
   - Updated pre-commit hook pins in `/Users/jacobmcmillan/Empire/Orion/.pre-commit-config.yaml`:
