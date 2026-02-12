@@ -109,6 +109,14 @@ class SystemSettings(BaseSettings):
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING",
     )
+    pattern_miner_training_source: str = Field(
+        default="heber_gold",
+        validation_alias="ORION_PATTERN_MINER_TRAINING_SOURCE",
+    )
+    exit_classifier_training_source: str = Field(
+        default="legacy_sql",
+        validation_alias="ORION_EXIT_CLASSIFIER_TRAINING_SOURCE",
+    )
     ml_prefilter_threshold: float = Field(
         default=0.5,
         ge=0.0,

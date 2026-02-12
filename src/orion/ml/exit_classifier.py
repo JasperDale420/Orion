@@ -87,6 +87,26 @@ def _legacy_exit_training_enabled() -> bool:
     return enabled
 
 
+def _exit_classifier_training_source() -> str:
+    settings = SystemSettings()
+    raw_source = (settings.exit_classifier_training_source or "legacy_sql").strip().lower()
+
+    if raw_source in {"heber", "heber_gold", "gold"}:
+        return "heber_gold"
+    if raw_source in {"legacy", "legacy_sql", "local", "local_sql"}:
+        return "legacy_sql"
+
+    logger.warning(
+        f"Invalid exit-classifier training source '{raw_source}', falling back to legacy_sql",
+        extra={
+            "event": "exit_classifier_training_source_invalid",
+            "training_source": raw_source,
+            "fallback_training_source": "legacy_sql",
+        },
+    )
+    return "legacy_sql"
+
+
 def _safe_float(val: Any, default: float = 0.0) -> float:
     """Safely convert value to float, handling None and string values."""
     if val is None:
@@ -642,6 +662,19 @@ async def build_bucket_training_data(
     checkpoints = BUCKET_CHECKPOINTS.get(bucket, [])
     if not checkpoints:
         logger.warning(f"No checkpoints defined for bucket {bucket}")
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
+
+    training_source = _exit_classifier_training_source()
+    if training_source == "heber_gold":
+        logger.warning(
+            "Exit-classifier Heber training source enabled, but checkpoint contract is not available yet",
+            extra={
+                "event": "exit_classifier_heber_training_contract_unavailable",
+                "bucket": bucket,
+                "training_source": training_source,
+            },
+        )
         X_empty, y_empty = _empty_training_arrays(len(feature_names))
         return X_empty, y_empty, feature_names
 

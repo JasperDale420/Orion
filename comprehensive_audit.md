@@ -582,6 +582,12 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `docker-compose.yml` `legacy-labels` profile now defaults to:
   - local labeling loops disabled (`ORION_ENABLE_LEGACY_LABEL_PIPELINES=false` plus service-specific labeler/guardrail/backfill toggles `false`),
   - model-training paths preserved (`ORION_ENABLE_LEGACY_PATTERN_MINER=true`, `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`, `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`)
+- `pattern_miner` now supports explicit training source control (`ORION_PATTERN_MINER_TRAINING_SOURCE`):
+  - `heber_gold`: reads `labels_alert_barriers` + `meta_label_features` and builds a compatibility training frame without local SQL reads
+  - `legacy_sql`: existing `price_target_labels` SQL path
+- `exit_classifier` now supports explicit training source control (`ORION_EXIT_CLASSIFIER_TRAINING_SOURCE`):
+  - `heber_gold`: intentionally short-circuits with empty dataset until Heber v2 checkpoint contract exists
+  - `legacy_sql`: existing `price_target_labels` + `gold_feature_windows` SQL path
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)
@@ -660,6 +666,8 @@ Source references used in this pass:
     - `ORION_ENABLE_LEGACY_PATTERN_MINER=true`
     - `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`
     - `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`
+    - `ORION_PATTERN_MINER_TRAINING_SOURCE=heber_gold`
+    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=legacy_sql`
 - Move to Heber (required before decommission):
   - Define a **v2 training contract** in Heber that includes:
     - normalized entry feature names expected by Orion scoring/inference, or a mapping layer,

@@ -79,6 +79,12 @@ def test_exit_classifier_training_control_specific_true_overrides_global_false(
     assert raw == "true"
 
 
+def test_exit_classifier_training_source_prefers_heber_gold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_TRAINING_SOURCE", "HeBeR")
+
+    assert exit_classifier._exit_classifier_training_source() == "heber_gold"
+
+
 @pytest.mark.asyncio
 async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_query(
     monkeypatch: pytest.MonkeyPatch,
@@ -105,6 +111,30 @@ async def test_build_bucket_training_data_returns_empty_when_legacy_training_dis
 ) -> None:
     monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
     monkeypatch.setenv("ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING", "false")
+    db_calls = {"count": 0}
+
+    async def _db_query(_operation):
+        db_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert isinstance(X, np.ndarray)
+    assert isinstance(y, np.ndarray)
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
+    assert db_calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_heber_source_short_circuits_without_local_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING", "true")
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_TRAINING_SOURCE", "heber_gold")
     db_calls = {"count": 0}
 
     async def _db_query(_operation):

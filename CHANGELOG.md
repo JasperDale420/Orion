@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Trainer source controls added for Heber-first migration (TDD)**:
+  - Added config/env controls:
+    - `ORION_PATTERN_MINER_TRAINING_SOURCE` (`heber_gold` or `legacy_sql`)
+    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE` (`legacy_sql` or `heber_gold`)
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
+    - supports `heber_gold` training reads from Heber Gold datasets (`labels_alert_barriers`, `meta_label_features`) without local SQL dependency.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
+    - supports explicit source control and short-circuits in `heber_gold` mode until checkpoint-contract parity exists.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` `pattern-miner` env wiring:
+    - `ORION_PATTERN_MINER_TRAINING_SOURCE` default `heber_gold`
+    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE` default `legacy_sql`
+  - Added tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_config_centralization.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+    - `ruff check src/orion/config.py src/orion/ml/pattern_miner.py src/orion/ml/exit_classifier.py tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+
 - **Legacy standalone SQL scripts archived**:
   - Moved these scripts into `/Users/jacobmcmillan/Empire/Orion/archive/legacy-sql-scripts/`:
     - `backfill_ml_features.py`

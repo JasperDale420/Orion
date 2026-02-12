@@ -95,6 +95,8 @@ def test_legacy_label_gate_settings_env_mapping():
             "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS": "false",
             "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING": "true",
             "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING": "false",
+            "ORION_PATTERN_MINER_TRAINING_SOURCE": "heber_gold",
+            "ORION_EXIT_CLASSIFIER_TRAINING_SOURCE": "legacy_sql",
         },
         clear=True,
     ):
@@ -110,6 +112,8 @@ def test_legacy_label_gate_settings_env_mapping():
         assert s.legacy_quality_guardrails_enabled is False
         assert s.legacy_exit_classifier_training_enabled is True
         assert s.legacy_pattern_miner_training_enabled is False
+        assert s.pattern_miner_training_source == "heber_gold"
+        assert s.exit_classifier_training_source == "legacy_sql"
 
 
 @pytest.mark.asyncio
