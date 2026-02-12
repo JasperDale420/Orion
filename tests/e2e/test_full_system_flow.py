@@ -135,7 +135,7 @@ async def test_full_system_flow():
             (await session.execute(pytest.importorskip("sqlalchemy").select(SilverOptionFlow))).scalars().all()
         )
 
-    assert len(silver_flows) == 1
+    assert len(silver_flows) == 0
 
     # Process (Pass Bronze Events)
     signals = fe.process_uw_flow_events(unique)  # Returns SilverSignal objects

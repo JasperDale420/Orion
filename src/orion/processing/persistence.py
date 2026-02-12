@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, List
 
@@ -12,6 +13,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+_FALSE_VALUES = {"0", "false", "no", "off", "n"}
+
+
+def _local_silver_persistence_enabled() -> bool:
+    raw = os.getenv("ORION_ENABLE_LOCAL_SILVER_PERSISTENCE", "false").strip().lower()
+    return raw not in _FALSE_VALUES
 
 
 async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]) -> None:
@@ -141,6 +148,9 @@ async def _enrich_flows_with_greeks(flow_rows: List[dict]) -> None:
 
 async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeEvent]) -> None:
     if not events:
+        return
+    if not _local_silver_persistence_enabled():
+        logger.info("Skipping local Silver persistence; Heber is the canonical Silver source")
         return
 
     flow_rows = []

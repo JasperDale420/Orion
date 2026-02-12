@@ -608,6 +608,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `ml/darkpool_features.get_darkpool_features(...)` now reads Heber darkpool rows and no longer aggregates from local `SilverDarkPool` SQL tables
 - `processing/feature_engine.FeatureEngine.hydrate_history(...)` now reads Heber bars and no longer queries local `SilverAlpacaBar`
 - `agents/eod_review_agent` regime context now reads Heber bars only and no longer falls back to local `SilverAlpacaBar`
+- `processing/persistence.persist_silver_from_bronze(...)` is now gated behind `ORION_ENABLE_LOCAL_SILVER_PERSISTENCE` (default `false`), so local Silver writes are opt-in only
 
 ### Heber vs Orion ML-Training Field Parity (Deep Audit)
 
@@ -764,7 +765,7 @@ Interpretation:
 
 `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` is still imported by active runtime paths, not only historical tests. Current direct usage includes:
 
-- Processing pipeline (`src/orion/processing/feature_engine.py`, `src/orion/processing/persistence.py`, rule-engine modules)
+- Processing pipeline (`src/orion/processing/feature_engine.py` signal model usage, `src/orion/processing/persistence.py` optional legacy local Silver writes, rule-engine modules)
 - Ingestion/service layer (`src/orion/ingestion/service.py`)
 
 Decision: keep `models_silver.py` for now and treat it as an active compatibility surface until those live readers are migrated to Heber-native adapters.
@@ -772,7 +773,7 @@ Decision: keep `models_silver.py` for now and treat it as an active compatibilit
 ### Remaining Active Remediation Target
 
 - No active local label-table SQL training paths remain in runtime trainers.
-- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely (highest-impact remaining consumer: `processing/persistence`).
+- Next migration target is cleanup-oriented: archive or remove optional local Silver write paths in `processing/persistence.py` after legacy replay requirements are fully retired.
 
 ### Archive Actions Completed (this pass)
 

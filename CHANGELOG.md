@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Local Silver persistence is now opt-in (Heber-first default, TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/persistence.py`:
+    - added `ORION_ENABLE_LOCAL_SILVER_PERSISTENCE` gate (default `false`).
+    - `persist_silver_from_bronze(...)` now skips local Silver writes by default so Heber remains canonical.
+    - legacy local Silver writes remain available only when gate is explicitly enabled.
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_persistence_heber_gate.py`:
+    - verifies default behavior does not execute local Silver inserts.
+    - verifies explicit gate enablement restores local insert behavior.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/e2e/test_full_system_flow.py`:
+    - aligned E2E expectation with Heber-first default (`SilverOptionFlow` remains empty unless legacy gate is enabled).
+  - Verified with:
+    - `pytest -q tests/unit/test_persistence_heber_gate.py tests/e2e/test_full_system_flow.py tests/integration/test_pipeline_ingest_to_signal.py tests/unit/test_dlq_consumer.py`
+    - `ruff check src/orion/processing/persistence.py tests/unit/test_persistence_heber_gate.py tests/e2e/test_full_system_flow.py`
+
 - **EOD review regime-bar sourcing is now Heber-only (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/eod_review_agent.py`:
     - removed env-toggle + local `SilverAlpacaBar` fallback for regime bars.
