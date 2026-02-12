@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import orion.ml.exit_classifier as exit_classifier
@@ -129,7 +130,7 @@ async def test_build_bucket_training_data_returns_empty_when_legacy_training_dis
 
 
 @pytest.mark.asyncio
-async def test_build_bucket_training_data_heber_source_short_circuits_without_local_db(
+async def test_build_bucket_training_data_heber_source_uses_gold_datasets_without_local_db(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
@@ -141,14 +142,47 @@ async def test_build_bucket_training_data_heber_source_short_circuits_without_lo
         db_calls["count"] += 1
         return []
 
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time) -> pd.DataFrame:  # type: ignore[no-untyped-def]
+            if dataset == "labels_alert_barriers":
+                return pd.DataFrame(
+                    [
+                        {
+                            "alert_id": "evt-1",
+                            "outcome_return": 0.65,
+                            "hit_tp_first": 1,
+                            "trading_minutes_to_hit": 45,
+                        }
+                    ]
+                )
+            if dataset == "meta_label_features":
+                return pd.DataFrame(
+                    [
+                        {
+                            "alert_id": "evt-1",
+                            "premium": 125000.0,
+                            "days_to_expiry": 0,
+                            "is_sweep": 1,
+                            "iv_rank": 60.0,
+                            "delta": 0.31,
+                            "theta": -0.02,
+                            "iv": 0.41,
+                        }
+                    ]
+                )
+            return pd.DataFrame()
+
     monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+    monkeypatch.setattr(exit_classifier, "get_heber_reader", lambda: _FakeReader(), raising=False)
 
     X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
 
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
-    assert X.shape == (0, len(feature_names))
-    assert y.shape == (0,)
+    assert X.shape == (1, len(feature_names))
+    assert y.shape == (1,)
+    assert y[0] == 1
+    assert X[0][0] == pytest.approx(0.65)
     assert db_calls["count"] == 0
 
 

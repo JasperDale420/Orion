@@ -11,9 +11,11 @@ Buckets and their time horizons:
 - POSITION: Days to weeks (1d, 2d, 3d, 1w)
 """
 
+import asyncio
 import pickle
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import isnan
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,6 +23,7 @@ import numpy as np
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
+from orion.clients.heber_reader import get_heber_reader
 from orion.config import SystemSettings, system_settings
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
@@ -293,6 +296,243 @@ def _group_missing_columns_by_family(
 def _group_count_map(grouped_columns: dict[str, list[str]]) -> dict[str, int]:
     """Return grouped missing-column counts for lightweight metrics/alerts."""
     return {group: len(columns) for group, columns in grouped_columns.items()}
+
+
+def _first_existing_column(frame: Any, candidates: list[str]) -> str | None:
+    for column in candidates:
+        if column in frame.columns:
+            return column
+    return None
+
+
+def _coerce_dataframe(payload: Any) -> Any:
+    import pandas as pd
+
+    if payload is None:
+        return pd.DataFrame()
+    if isinstance(payload, pd.DataFrame):
+        return payload
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if isinstance(payload, dict):
+        return pd.DataFrame([payload])
+    return pd.DataFrame()
+
+
+def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
+    import pandas as pd
+
+    if frame.empty:
+        return pd.DataFrame(columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit"])
+
+    event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
+    outcome_return_column = _first_existing_column(frame, ["outcome_return", "return", "contract_return"])
+    hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
+    outcome_column = _first_existing_column(frame, ["outcome", "outcome_reason", "status"])
+    trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
+
+    if event_column is None:
+        return pd.DataFrame(columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit"])
+
+    normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+    normalized["outcome_return"] = pd.to_numeric(
+        frame[outcome_return_column] if outcome_return_column else None,
+        errors="coerce",
+    )
+
+    if hit_tp_column:
+        normalized["hit_tp_first"] = pd.to_numeric(frame[hit_tp_column], errors="coerce").fillna(0).astype(int)
+    else:
+        outcomes = (
+            frame[outcome_column].astype(str).str.lower()
+            if outcome_column
+            else pd.Series(index=frame.index, dtype=object)
+        )
+        normalized["hit_tp_first"] = outcomes.isin({"hit_tp", "tp", "take_profit"}).astype(int)
+
+    normalized["trading_minutes_to_hit"] = pd.to_numeric(
+        frame[trading_minutes_column] if trading_minutes_column else None,
+        errors="coerce",
+    ).fillna(0.0)
+
+    normalized = normalized.dropna(subset=["event_id"])
+    normalized["event_id"] = normalized["event_id"].astype(str)
+    return normalized
+
+
+def _normalize_heber_features_for_exit(frame: Any) -> Any:
+    import pandas as pd
+
+    if frame.empty:
+        return pd.DataFrame(columns=["event_id"])
+
+    event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
+    if event_column is None:
+        return pd.DataFrame(columns=["event_id"])
+
+    normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+
+    mapped_columns: dict[str, list[str]] = {
+        "premium_usd": ["premium_usd", "premium"],
+        "dte_at_entry": ["dte_at_entry", "dte", "days_to_expiry"],
+        "is_sweep": ["is_sweep"],
+        "iv_rank_at_entry": ["iv_rank_at_entry", "iv_rank"],
+        "vix_at_entry": ["vix_at_entry"],
+        "gex_at_entry": ["gex_at_entry", "gex"],
+        "market_tide_30m": ["market_tide_30m"],
+        "delta_at_entry": ["delta_at_entry", "delta"],
+        "theta_at_entry": ["theta_at_entry", "theta"],
+        "iv_at_entry": ["iv_at_entry", "iv"],
+        "ask_side_ratio": ["ask_side_ratio"],
+        "window_call_put_imbalance_1h": ["window_call_put_imbalance_1h"],
+        "window_sweep_ratio_1h": ["window_sweep_ratio_1h"],
+        "window_flow_count_1h": ["window_flow_count_1h"],
+        "window_call_put_imbalance_1d": ["window_call_put_imbalance_1d"],
+        "window_sweep_ratio_1d": ["window_sweep_ratio_1d"],
+        "window_dp_volume_1d": ["window_dp_volume_1d"],
+        "window_call_put_ratio_1d": ["window_call_put_ratio_1d"],
+        "window_call_put_imbalance_1w": ["window_call_put_imbalance_1w"],
+        "window_sweep_ratio_1w": ["window_sweep_ratio_1w"],
+        "window_call_put_ratio_1w": ["window_call_put_ratio_1w"],
+    }
+
+    for target, candidates in mapped_columns.items():
+        source = _first_existing_column(frame, candidates)
+        normalized[target] = frame[source] if source else 0.0
+
+    normalized["is_sweep"] = normalized["is_sweep"].map(
+        lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+    )
+    return normalized
+
+
+def _apply_bucket_filter_for_exit(dataframe: Any, bucket: str) -> Any:
+    import pandas as pd
+
+    dte = pd.to_numeric(dataframe["dte_at_entry"], errors="coerce")
+    upper_bucket = bucket.upper()
+
+    if upper_bucket == "0DTE":
+        return dataframe[dte == 0]
+    if upper_bucket == "SHORT_SWING":
+        return dataframe[(dte >= 1) & (dte <= 2)]
+    if upper_bucket == "SWING":
+        return dataframe[(dte >= 3) & (dte <= 14)]
+    if upper_bucket == "POSITION":
+        return dataframe[dte >= 15]
+    return dataframe.iloc[0:0]
+
+
+async def _build_bucket_training_data_from_heber(
+    bucket: str,
+    feature_names: list[str],
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    reader = get_heber_reader()
+    now = datetime.now(timezone.utc)
+
+    try:
+        outcomes_payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset="labels_alert_barriers",
+            asof_time=now,
+        )
+        features_payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset="meta_label_features",
+            asof_time=now,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Failed to read Heber gold datasets for exit training: {exc}",
+            extra={"event": "exit_classifier_heber_training_read_failed", "bucket": bucket},
+        )
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
+
+    outcomes = _normalize_heber_outcomes_for_exit(_coerce_dataframe(outcomes_payload))
+    features = _normalize_heber_features_for_exit(_coerce_dataframe(features_payload))
+    if outcomes.empty:
+        logger.warning(
+            "No Heber outcomes available for exit-classifier training",
+            extra={"event": "exit_classifier_heber_training_empty_outcomes", "bucket": bucket},
+        )
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
+
+    merged = outcomes.merge(features, on="event_id", how="left")
+    merged = _apply_bucket_filter_for_exit(merged, bucket)
+
+    X_list: list[list[float]] = []
+    y_list: list[int] = []
+
+    for row in merged.to_dict("records"):
+        outcome_return = _safe_float(row.get("outcome_return"), default=float("nan"))
+        if isnan(outcome_return):
+            continue
+
+        trading_minutes = max(_safe_float(row.get("trading_minutes_to_hit")), 0.0)
+        time_held_hours = trading_minutes / 60.0
+
+        delta_entry = _safe_float(row.get("delta_at_entry"))
+        gamma_entry = _safe_float(row.get("gamma_at_entry"))
+        theta_entry = _safe_float(row.get("theta_at_entry"))
+        iv_entry = _safe_float(row.get("iv_at_entry"))
+        dte_entry = int(_safe_float(row.get("dte_at_entry")))
+
+        features_vector = [
+            outcome_return,
+            time_held_hours,
+            delta_entry,
+            gamma_entry,
+            theta_entry,
+            iv_entry,
+            float(max(dte_entry, 0)),
+            0.0,
+            0.0,
+            _safe_float(row.get("premium_usd")),
+            float(max(dte_entry, 0)),
+            1.0 if _is_truthy(row.get("is_sweep")) else 0.0,
+            _safe_float(row.get("iv_rank_at_entry"), default=50.0),
+            _safe_float(row.get("vix_at_entry"), default=20.0),
+            _safe_float(row.get("gex_at_entry")),
+            _safe_float(row.get("market_tide_30m")),
+            delta_entry,
+            theta_entry,
+            iv_entry,
+            _safe_float(row.get("ask_side_ratio")),
+            _safe_float(row.get("window_call_put_imbalance_1h")),
+            _safe_float(row.get("window_sweep_ratio_1h")),
+            _safe_float(row.get("window_flow_count_1h")),
+            _safe_float(row.get("window_call_put_imbalance_1d")),
+            _safe_float(row.get("window_sweep_ratio_1d")),
+            _safe_float(row.get("window_dp_volume_1d")),
+            _safe_float(row.get("window_call_put_ratio_1d")),
+            _safe_float(row.get("window_call_put_imbalance_1w")),
+            _safe_float(row.get("window_sweep_ratio_1w")),
+            _safe_float(row.get("window_call_put_ratio_1w")),
+        ]
+
+        if len(features_vector) != len(feature_names):
+            continue
+
+        target = 1 if _safe_float(row.get("hit_tp_first"), default=0.0) > 0 else 0
+        X_list.append(features_vector)
+        y_list.append(target)
+
+    logger.info(
+        "Built Heber exit-classifier training data",
+        extra={
+            "event": "exit_classifier_heber_training_data",
+            "bucket": bucket,
+            "samples": len(X_list),
+        },
+    )
+    if not X_list:
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
+
+    return np.array(X_list, dtype=float), np.array(y_list, dtype=int), feature_names
 
 
 # Bucket-specific checkpoint configurations
@@ -667,16 +907,7 @@ async def build_bucket_training_data(
 
     training_source = _exit_classifier_training_source()
     if training_source == "heber_gold":
-        logger.warning(
-            "Exit-classifier Heber training source enabled, but checkpoint contract is not available yet",
-            extra={
-                "event": "exit_classifier_heber_training_contract_unavailable",
-                "bucket": bucket,
-                "training_source": training_source,
-            },
-        )
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
-        return X_empty, y_empty, feature_names
+        return await _build_bucket_training_data_from_heber(bucket, feature_names)
 
     required_columns = _required_price_target_columns_for_bucket(checkpoints)
     if force_schema_refresh:

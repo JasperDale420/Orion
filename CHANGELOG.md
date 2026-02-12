@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Exit-classifier Heber training path now returns real samples (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
+    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=heber_gold` now reads Heber Gold datasets (`labels_alert_barriers`, `meta_label_features`) and builds a compatibility training matrix instead of returning empty arrays by default.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`:
+    - `test_build_bucket_training_data_heber_source_uses_gold_datasets_without_local_db`
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py -k heber_source_uses_gold_datasets_without_local_db`
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py tests/unit/test_legacy_label_pipeline_gates.py`
+    - `ruff check src/orion/ml/exit_classifier.py tests/unit/test_exit_classifier_window_query.py`
+
 - **Trainer source controls added for Heber-first migration (TDD)**:
   - Added config/env controls:
     - `ORION_PATTERN_MINER_TRAINING_SOURCE` (`heber_gold` or `legacy_sql`)

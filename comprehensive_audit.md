@@ -586,7 +586,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
   - `heber_gold`: reads `labels_alert_barriers` + `meta_label_features` and builds a compatibility training frame without local SQL reads
   - `legacy_sql`: existing `price_target_labels` SQL path
 - `exit_classifier` now supports explicit training source control (`ORION_EXIT_CLASSIFIER_TRAINING_SOURCE`):
-  - `heber_gold`: intentionally short-circuits with empty dataset until Heber v2 checkpoint contract exists
+  - `heber_gold`: builds a coarse compatibility training frame from `labels_alert_barriers` + `meta_label_features` without local SQL reads
   - `legacy_sql`: existing `price_target_labels` + `gold_feature_windows` SQL path
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
