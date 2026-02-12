@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Audit decisions expanded for Heber v2 field scope (keep vs dispose)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with an explicit decision matrix:
+    - field families to promote into Heber v2 training projection,
+    - field families to retire instead of porting,
+    - migration sequence for archiving legacy local label loops.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/README.md` with a plain-language section documenting current `legacy-labels` defaults and override env vars.
+
 - **Legacy-labels compose defaults now align with model-local retention**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` `legacy-labels` profile defaults:
     - local label pipelines/labeler loops default to disabled (`false`),

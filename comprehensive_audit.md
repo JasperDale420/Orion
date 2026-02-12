@@ -669,6 +669,42 @@ Source references used in this pass:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
 
+### Heber v2 Contract Proposal (What To Keep vs Dispose)
+
+Goal: keep Orion model quality while reducing local-table complexity before final archival.
+
+#### Keep + Promote to Heber v2 (high value for training)
+
+- Entry-time contract and flow context:
+  - `put_call`, `aggressor`, `is_sweep`, `premium_usd`, `dte`, `minutes_to_close`
+- Entry-time risk/greeks context:
+  - `iv_rank_at_entry`, `iv_at_entry`, `delta_at_entry`, `gamma_at_entry`, `theta_at_entry`, `vega_at_entry`
+- Market/regime context used by Orion models:
+  - `gex_at_entry`, `vix_at_entry`, `market_tide_30m`, `entry_hour`, `entry_day_of_week`, `entry_session`, `days_to_earnings`
+- Outcome surface needed for model targets:
+  - `outcome`, `hit_tp_first`, `outcome_return`, `mfe`, `mae`, `bars_to_hit`, `trading_minutes_to_hit`
+
+#### Keep Local in Orion (do not migrate now)
+
+- Model artifacts under `ORION_MODEL_DIR` (`*.pkl` used by scorers/trainers)
+- Model metadata tables:
+  - `ml_pattern_insights`
+  - `ml_feature_importance_history`
+
+#### Dispose / Do Not Port (low-value schema bloat)
+
+- Full checkpoint explosion columns from legacy `price_target_labels`:
+  - `return_at_*`, `price_at_*`, `delta_at_*`, `gamma_at_*`, `theta_at_*`, `iv_at_*`, `dte_at_*`, `time_value_pct_at_*`, `theta_decay_pct_at_*`
+- Duplicate outcome aliases (example: overlapping `mfe`/`contract_mfe` style duplicates)
+- Local job bookkeeping columns only used for legacy backfill loops
+
+#### Recommended Migration Sequence
+
+1. Freeze new column additions to local `price_target_labels`.
+2. Define `heber.watch` v2 training projection with the "Keep + Promote" fields above.
+3. Re-point Orion trainers (`pattern_miner`, `exit_classifier`) to the Heber v2 projection.
+4. Archive legacy label/table mutation loops and local label backfill scripts.
+
 ### Keep / Decide / Archive Plan
 
 **Keep in Orion (system-specific execution state):**
