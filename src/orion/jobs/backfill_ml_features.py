@@ -471,19 +471,14 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
 
     updates["iv_rank_at_entry"] = await get_iv_rank_at_entry(ticker, entry_ts)
 
-    # Build update query
-    set_clauses = []
-    for k in updates:
-        set_clauses.append(f"{k} = :{k}")
+    if not updates:
+        return False
 
-    query = f"UPDATE price_target_labels SET {', '.join(set_clauses)} WHERE event_id = :event_id"
-    updates["event_id"] = event_id
-
-    async def write(session: Any) -> None:
-        await session.execute(text(query), updates)
-
-    await db_write(write)
-    return True
+    logger.warning(
+        "Skipping legacy local ML feature backfill write; label storage is centralized",
+        extra={"event_type": "DEPRECATED_LOCAL_WRITE_SKIPPED", "event_id": event_id},
+    )
+    return False
 
 
 async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:

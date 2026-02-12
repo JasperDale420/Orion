@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber migration (TDD): legacy backfill ML-feature write path disabled**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
+    - disabled local `price_target_labels` mutation in `update_ml_features(...)`,
+    - backfill now logs explicit skip events for deprecated local writes.
+  - Updated test:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_ml_features_signature.py`
+      - `test_update_ml_features_calls_sector_corr_with_two_args` now enforces no local db write.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_ml_features_signature.py tests/unit/test_backfill_ml_features_selection.py`
+    - `ruff check src/orion/jobs/backfill_ml_features.py tests/unit/test_backfill_ml_features_signature.py tests/unit/test_backfill_ml_features_selection.py`
+
 - **Heber migration (TDD): legacy backfill exit-column write path disabled**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_exit_columns.py`:
     - disabled local `price_target_labels` mutation in:
