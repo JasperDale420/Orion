@@ -592,6 +592,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
 - `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
 - `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
+- `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` (`FROM price_target_labels`)
@@ -739,7 +740,7 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 
 ### Remaining Local-SQL Coupling Inventory (2026-02-12 snapshot)
 
-Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*` / `gold_feature_windows`):
+Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
 
 - `src/orion/main_price_target_labeler.py`: 9 refs
 - `src/orion/ml/exit_classifier.py`: 6 refs
@@ -770,3 +771,5 @@ Interpretation:
   - `src/orion/main_labeler.py` -> `archive/2026-02-12_label-stack-wave13/legacy_code/main_labeler.py`
   - `tests/unit/test_main_labeler_heber_migration.py` -> `archive/2026-02-12_label-stack-wave13/legacy_tests/test_main_labeler_heber_migration.py`
   - Archive manifest: `archive/2026-02-12_label-stack-wave13/README.md`
+- Decommissioned orphan local window-feature ORM definition:
+  - removed `GoldFeatureWindow` from `src/orion/storage/models_gold.py`

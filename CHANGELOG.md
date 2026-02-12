@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Orphan `GoldFeatureWindow` model decommissioned (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_gold.py`:
+    - removed unused `GoldFeatureWindow` ORM model for local `gold_feature_windows`.
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_models_gold_decommission.py`:
+    - `test_gold_feature_window_model_is_decommissioned`.
+  - Verified with:
+    - `pytest -q tests/unit/test_models_gold_decommission.py`
+    - `ruff check src/orion/storage/models_gold.py tests/unit/test_models_gold_decommission.py`
+
 - **Legacy watermark cleanup now targets real cursor keys (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/cleanup_legacy_backfill_watermarks.py`:
     - `LEGACY_BACKFILL_WATERMARK_KEYS` now includes both legacy base keys and actual `.cursor` keys used by backfill jobs.

@@ -218,23 +218,3 @@ class GoldFeatureEvent(Base):
     created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("ix_gold_feat_event_ticker_ts", "ticker", "event_ts_utc"),)
-
-
-class GoldFeatureWindow(Base):
-    """
-    PRD 6.3: Window/Aggregated features (e.g. 5m, 1h).
-    """
-
-    __tablename__ = "gold_feature_windows"
-
-    # Composite PK
-    ticker = Column(String, primary_key=True)
-    window_end_ts_utc = Column(DateTime(timezone=True), primary_key=True)
-    period = Column(String, primary_key=True)  # e.g. "5m", "1h"
-    feature_set_id = Column(String, primary_key=True)
-
-    features = Column(JSON, nullable=False)
-
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-
-    __table_args__ = (Index("ix_gold_feat_window_ticker_ts", "ticker", "window_end_ts_utc"),)
