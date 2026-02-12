@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy standalone SQL script archived**:
+  - Moved `/Users/jacobmcmillan/Empire/Orion/scripts/backfill_ml_features.py` to:
+    - `/Users/jacobmcmillan/Empire/Orion/archive/legacy-sql-scripts/backfill_ml_features.py`
+  - Added `/Users/jacobmcmillan/Empire/Orion/archive/legacy-sql-scripts/README.md` documenting archive intent.
+  - Expanded `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with:
+    - remaining local-SQL coupling inventory by file,
+    - completed archive action log.
+
 - **Audit decisions expanded for Heber v2 field scope (keep vs dispose)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with an explicit decision matrix:
     - field families to promote into Heber v2 training projection,

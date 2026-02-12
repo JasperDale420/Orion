@@ -725,3 +725,25 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` (legacy local Silver table models)
 - Legacy local label/feature update jobs that only mutate `price_target_labels`
+
+### Remaining Local-SQL Coupling Inventory (2026-02-11 snapshot)
+
+Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*` / `gold_feature_windows`):
+
+- `src/orion/main_price_target_labeler.py`: 10 refs
+- `src/orion/ml/exit_classifier.py`: 7 refs
+- `src/orion/storage/models_silver.py`: 4 refs
+- `src/orion/ml/pattern_miner.py`: 3 refs
+- `src/orion/jobs/window_feature_job.py`: 3 refs
+- `src/orion/jobs/validate_features.py`: 3 refs
+
+Interpretation:
+
+- Runtime risk is now concentrated in the legacy labeling + trainer source path.
+- Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
+
+### Archive Actions Completed (this pass)
+
+- Archived standalone legacy SQL script superseded by module job entrypoint:
+  - moved `scripts/backfill_ml_features.py` -> `archive/legacy-sql-scripts/backfill_ml_features.py`
+  - archive note added at `archive/legacy-sql-scripts/README.md`
