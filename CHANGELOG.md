@@ -8,11 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Audit backlog is now narrowed to one remaining local-SQL trainer path**:
+- **Audit backlog is now narrowed to runtime `models_silver` compatibility scope**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:
     - documented why `src/orion/storage/models_silver.py` remains active (runtime dependency map across API/execution/processing/agents),
-    - marked `src/orion/ml/exit_classifier.py` as the final active local-`price_target_labels` remediation target,
+    - removed `src/orion/ml/exit_classifier.py` from active local-SQL remediation targets after decommission,
     - clarified that model artifact + ML metadata storage remains intentionally local.
+
+- **Exit-classifier local SQL training fallback is fully decommissioned (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
+    - `_exit_classifier_training_source()` now routes legacy aliases (`legacy_sql`, `local_sql`) to `heber_gold` with decommission warning logs.
+    - removed active local `price_target_labels` training-query path from `build_bucket_training_data(...)`.
+    - retained compatibility helpers (`_load_price_target_label_columns`, `_clear_price_target_label_schema_cache`) as explicit no-op stubs for refresh-flow stability.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`:
+    - replaced legacy SQL query-contract tests with Heber-only training-source tests.
+    - added `test_exit_classifier_training_source_legacy_sql_falls_back_to_heber_gold`.
+    - added `test_build_bucket_training_data_legacy_source_still_uses_heber_without_local_db`.
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `pytest -q tests/ml/test_exit_classifier.py tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_config_centralization.py`
+    - `ruff check src/orion/ml/exit_classifier.py tests/unit/test_exit_classifier_window_query.py`
 
 - **Pattern-miner local SQL training fallback is fully decommissioned (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:

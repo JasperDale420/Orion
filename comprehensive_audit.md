@@ -593,7 +593,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
   - `legacy_sql` aliases are now decommissioned and routed to `heber_gold` (no `price_target_labels` query path)
 - `exit_classifier` now supports explicit training source control (`ORION_EXIT_CLASSIFIER_TRAINING_SOURCE`):
   - `heber_gold`: builds a coarse compatibility training frame from `labels_alert_barriers` + `meta_label_features` without local SQL reads
-  - `legacy_sql`: `price_target_labels` SQL path with schema-aware optional window feature columns (no `gold_feature_windows` lateral join)
+  - `legacy_sql` aliases are now decommissioned and routed to `heber_gold` (local SQL query path removed)
 - `SystemSettings.exit_classifier_training_source` default is now `heber_gold` (matching compose defaults), reducing accidental local SQL usage when env vars are unset
 - `exit_classifier` + `pattern_miner` training-source parsers now fail safely to `heber_gold` on invalid env values (instead of falling back to `legacy_sql`), reducing accidental local SQL reactivation from bad config
 - `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
@@ -602,8 +602,6 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
 - `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
 - `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
-
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` (`FROM price_target_labels`)
 
 ### Heber vs Orion ML-Training Field Parity (Deep Audit)
 
@@ -750,11 +748,10 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
 
 - `src/orion/storage/models_silver.py`: 3 refs
-- `src/orion/ml/exit_classifier.py`: 2 refs
 
 Interpretation:
 
-- Runtime risk is now concentrated in local Silver model definitions and the legacy exit-classifier SQL compatibility path.
+- Runtime risk is now concentrated in local Silver model definitions.
 - Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
 
 ### Why `models_silver.py` Is Still Active (Not Yet Archivable)
@@ -770,9 +767,8 @@ Decision: keep `models_silver.py` for now and treat it as an active compatibilit
 
 ### Remaining Active Remediation Target
 
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
-  - still contains the last active local `price_target_labels` SQL training path and related schema-preflight logic.
-  - next migration block should mirror the pattern-miner decommission approach: Heber-only training source, legacy SQL path archived/removed.
+- No active local label-table SQL training paths remain in runtime trainers.
+- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely.
 
 ### Archive Actions Completed (this pass)
 
