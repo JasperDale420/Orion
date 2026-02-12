@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy-labels compose defaults now align with model-local retention**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` `legacy-labels` profile defaults:
+    - local label pipelines/labeler loops default to disabled (`false`),
+    - pattern-miner and training gates remain enabled (`true`) so local model artifacts/metadata workflows remain available.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py` with a new profile-level assertion:
+    - `test_compose_default_legacy_profile_preserves_model_storage_paths`
+  - Verified with:
+    - `pytest -q tests/unit/test_compose_legacy_gate_wiring.py`
+    - `ruff check tests/unit/test_compose_legacy_gate_wiring.py`
+
 - **Model-local retention profile finalized (TDD + audit update)**:
   - Added regression test to confirm specific pattern-miner gate can stay enabled when global legacy pipelines are disabled:
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`

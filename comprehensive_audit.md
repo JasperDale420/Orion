@@ -579,6 +579,9 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `exit_classifier` training path now has explicit gate (`ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`) and returns empty training datasets without DB access when disabled
 - `pattern_miner` training data path now has explicit gate (`ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING`) and returns empty training datasets without DB access when disabled
 - `main_labeler.persist_labels(...)` and `main_price_target_labeler.persist_labels(...)` now skip local DB writes when their legacy gates are disabled
+- `docker-compose.yml` `legacy-labels` profile now defaults to:
+  - local labeling loops disabled (`ORION_ENABLE_LEGACY_LABEL_PIPELINES=false` plus service-specific labeler/guardrail/backfill toggles `false`),
+  - model-training paths preserved (`ORION_ENABLE_LEGACY_PATTERN_MINER=true`, `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`, `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`)
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)

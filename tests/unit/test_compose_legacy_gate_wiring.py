@@ -6,11 +6,11 @@ def test_compose_wires_per_service_legacy_gate_env_vars() -> None:
     compose_text = Path("docker-compose.yml").read_text()
 
     assert (
-        "- ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-true}" in compose_text
+        "- ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}" in compose_text
     )
-    assert "- ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-true}" in compose_text
+    assert "- ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-false}" in compose_text
     assert (
-        "- ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-true}" in compose_text
+        "- ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}" in compose_text
     )
 
 
@@ -66,9 +66,58 @@ def test_nightly_backfill_and_quality_guardrails_wire_specific_legacy_gates() ->
     compose_text = Path("docker-compose.yml").read_text()
 
     nightly_block = _service_block(compose_text, "nightly-backfill")
-    assert "- ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL=${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-true}" in nightly_block
+    assert "- ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL=${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}" in nightly_block
 
     guardrails_block = _service_block(compose_text, "quality-guardrails")
     assert (
-        "- ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS=${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-true}" in guardrails_block
+        "- ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS=${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}" in guardrails_block
+    )
+
+
+def test_compose_default_legacy_profile_preserves_model_storage_paths() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    for service_name in (
+        "labeler",
+        "price_target_labeler",
+        "option_quote_tracker",
+        "pattern-miner",
+        "nightly-backfill",
+        "quality-guardrails",
+    ):
+        block = _service_block(compose_text, service_name)
+        assert "- ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}" in block
+
+    labeler_block = _service_block(compose_text, "labeler")
+    assert "- ORION_ENABLE_LEGACY_FLOW_LABELER=${ORION_ENABLE_LEGACY_FLOW_LABELER:-false}" in labeler_block
+
+    price_target_block = _service_block(compose_text, "price_target_labeler")
+    assert (
+        "- ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}"
+        in price_target_block
+    )
+
+    option_quote_block = _service_block(compose_text, "option_quote_tracker")
+    assert (
+        "- ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}"
+        in option_quote_block
+    )
+
+    pattern_miner_block = _service_block(compose_text, "pattern-miner")
+    assert "- ORION_ENABLE_LEGACY_PATTERN_MINER=${ORION_ENABLE_LEGACY_PATTERN_MINER:-true}" in pattern_miner_block
+    assert (
+        "- ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=${ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING:-true}"
+        in pattern_miner_block
+    )
+    assert (
+        "- ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}"
+        in pattern_miner_block
+    )
+
+    nightly_block = _service_block(compose_text, "nightly-backfill")
+    assert "- ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL=${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}" in nightly_block
+
+    guardrails_block = _service_block(compose_text, "quality-guardrails")
+    assert (
+        "- ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS=${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}" in guardrails_block
     )
