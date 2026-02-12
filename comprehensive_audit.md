@@ -615,6 +615,34 @@ Source references used in this pass:
 - Direct overlap with Heber watch features + outcomes combined: **1/147** (`is_sweep`).
 - Missing in Heber watch v1 surface: **146/147**, including all checkpoint return/Greek/time-decay columns.
 
+### Legacy Label Tables vs Heber Watch (Column-Level Audit)
+
+#### `flow_labels` (`main_labeler.py`)
+
+- Orion local write surface: **28 columns** in `INSERT INTO flow_labels (...)`.
+- Direct overlap with Heber watch outcomes/features: **5/28**:
+  - `put_call`
+  - `aggressor`
+  - `is_sweep`
+  - `iv`
+  - `expiry`
+- Non-overlap columns (examples): `return_15m`, `return_30m`, `return_1h`, `label_1h`, `primary_label`, `trade_type`.
+
+#### `price_target_labels` payload surface (`main_price_target_labeler.py`)
+
+- Orion label payload key surface discovered from `label[...]` + `label.update(...)`: **163 keys**.
+- Direct overlap with Heber watch outcomes/features: **1/163** (`minutes_to_close`).
+- Non-overlap groups include:
+  - checkpoint returns/prices (`return_at_*`, `price_at_*`),
+  - checkpoint Greeks/time decay (`delta_at_*`, `gamma_at_*`, `theta_at_*`, `iv_at_*`, `theta_decay_pct_at_*`, `time_value_pct_at_*`),
+  - legacy target timestamps (`hit_50_pct_ts`, `hit_100_pct_ts`, `hit_stop_20_pct_ts`, etc.),
+  - Orion-specific regime/context fields (`market_tide_30m`, `risk_regime_at_entry`, `vex_at_entry`, etc.).
+
+#### Decision Impact
+
+- The parity gap confirms local `flow_labels` / `price_target_labels` are currently **schema forks**, not thin replicas of Heber watch datasets.
+- Migration should be treated as a **contract redesign** (v2 schema + mapping), not a simple table swap.
+
 #### Decision Guidance (Keep / Move / Archive)
 
 - Keep for now (legacy profile only):

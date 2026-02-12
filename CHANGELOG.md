@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber parity deep-audit (label-table column surface)**:
+  - Extended `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with column-level comparisons:
+    - `flow_labels` (`main_labeler`) vs Heber watch outcomes/features: `5/28` direct overlap.
+    - `price_target_labels` payload surface (`main_price_target_labeler`) vs Heber watch outcomes/features: `1/163` direct overlap.
+  - Added explicit migration implication: local label tables are schema forks and require a contract redesign (not a direct table swap).
+
 - **Legacy-gate hardening (TDD): `exit_classifier` training path control**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
     - added `legacy_exit_classifier_training_enabled` (`ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`).
