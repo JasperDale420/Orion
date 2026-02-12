@@ -359,7 +359,7 @@ class HeberReader:
 
         asof_ts = self._to_utc_timestamp(asof_time)
         available = pd.to_datetime(df["ts_available"], utc=True, errors="coerce")
-        return df[available <= asof_ts]
+        return cast(pd.DataFrame, df[available <= asof_ts])
 
     def _apply_time_range_filter(
         self,

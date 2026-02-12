@@ -239,3 +239,24 @@ async def test_price_target_labeler_backfill_missing_features_skips_local_work_w
     updated = await main_price_target_labeler.backfill_missing_features(batch_size=10)
 
     assert updated == 0
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_backfill_missing_features_is_decommissioned_even_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "true")
+
+    async def _fail_init_db() -> None:
+        raise AssertionError("init_db should not be called for decommissioned local backfill")
+
+    async def _fail_db_query(_operation):
+        raise AssertionError("db_query should not be called for decommissioned local backfill")
+
+    monkeypatch.setattr(main_price_target_labeler, "init_db", _fail_init_db)
+    monkeypatch.setattr(main_price_target_labeler, "db_query", _fail_db_query, raising=False)
+
+    updated = await main_price_target_labeler.backfill_missing_features(batch_size=10)
+
+    assert updated == 0

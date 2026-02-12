@@ -419,43 +419,17 @@ async def get_velocity_backfill_candidates(
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Get price-target rows that still need velocity columns backfilled."""
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Skipping velocity backfill candidate lookup because legacy pipeline is disabled",
-            extra={
-                "event_type": "DEPRECATED_PIPELINE_DISABLED",
-                "pipeline": "orion.main_price_target_labeler",
-                "operation": "get_velocity_backfill_candidates",
-                "control": f"{control_key}={control_raw}",
-            },
-        )
-        return []
-
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit}
-        cursor_clause = _build_backfill_cursor_clause(after_entry_ts, after_event_id, params)
-
-        stmt = text(
-            f"""
-            SELECT event_id, ticker, option_chain, entry_ts, entry_option_price,
-                   hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts
-            FROM price_target_labels
-            WHERE (
-                (time_to_75_pct_seconds IS NULL AND hit_75_pct_ts IS NOT NULL)
-                OR (time_to_100_pct_seconds IS NULL AND hit_100_pct_ts IS NOT NULL)
-                OR (time_to_150_pct_seconds IS NULL AND hit_150_pct_ts IS NOT NULL)
-            )
-            {cursor_clause}
-            ORDER BY entry_ts ASC, event_id ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, params)
-        return [dict(row._mapping) for row in result.fetchall()]
-
-    return await db_query(query)
+    """Legacy no-op; local velocity backfill candidate discovery is decommissioned."""
+    _ = (limit, after_entry_ts, after_event_id)
+    logger.warning(
+        "Velocity backfill candidate lookup is decommissioned; local label backfill is disabled",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "get_velocity_backfill_candidates",
+        },
+    )
+    return []
 
 
 async def get_checkpoint_backfill_candidates(
@@ -463,46 +437,17 @@ async def get_checkpoint_backfill_candidates(
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Get price-target rows that still need checkpoint columns backfilled."""
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Skipping checkpoint backfill candidate lookup because legacy pipeline is disabled",
-            extra={
-                "event_type": "DEPRECATED_PIPELINE_DISABLED",
-                "pipeline": "orion.main_price_target_labeler",
-                "operation": "get_checkpoint_backfill_candidates",
-                "control": f"{control_key}={control_raw}",
-            },
-        )
-        return []
-
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit}
-        cursor_clause = _build_backfill_cursor_clause(after_entry_ts, after_event_id, params)
-
-        stmt = text(
-            f"""
-            SELECT event_id, option_chain, entry_ts, entry_option_price
-            FROM price_target_labels
-            WHERE (
-                price_at_15m IS NULL OR return_at_15m IS NULL
-                OR price_at_30m IS NULL OR return_at_30m IS NULL
-                OR price_at_8h IS NULL OR return_at_8h IS NULL
-                OR price_at_1d IS NULL OR return_at_1d IS NULL
-                OR price_at_2d IS NULL OR return_at_2d IS NULL
-                OR price_at_3d IS NULL OR return_at_3d IS NULL
-                OR price_at_1w IS NULL OR return_at_1w IS NULL
-            )
-            {cursor_clause}
-            ORDER BY entry_ts ASC, event_id ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, params)
-        return [dict(row._mapping) for row in result.fetchall()]
-
-    return await db_query(query)
+    """Legacy no-op; local checkpoint backfill candidate discovery is decommissioned."""
+    _ = (limit, after_entry_ts, after_event_id)
+    logger.warning(
+        "Checkpoint backfill candidate lookup is decommissioned; local label backfill is disabled",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "get_checkpoint_backfill_candidates",
+        },
+    )
+    return []
 
 
 def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
@@ -3785,158 +3730,17 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
 
 
 async def backfill_missing_features(batch_size: int = 100) -> int:
-    """Backfill missing ML features for existing records.
-
-    Finds records with NULL values in key feature columns and updates them.
-    Can be run periodically to catch any gaps.
-    """
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Skipping local feature backfill because legacy pipeline is disabled",
-            extra={
-                "event_type": "DEPRECATED_PIPELINE_DISABLED",
-                "pipeline": "orion.main_price_target_labeler",
-                "operation": "backfill_missing_features",
-                "control": f"{control_key}={control_raw}",
-            },
-        )
-        return 0
-
-    await init_db()
-    total_updated = 0
-
-    async def get_records_to_backfill(session: Any) -> List[Dict[str, Any]]:
-        """Get records with missing features."""
-        stmt = text(
-            """
-            SELECT event_id, ticker, option_chain, entry_ts, expiry, dte
-            FROM price_target_labels
-            WHERE rvol_1h IS NULL
-               OR sector_net_premium_1h IS NULL
-               OR high_52w_distance_pct IS NULL
-               OR spy_correlation_5d IS NULL
-            ORDER BY entry_ts DESC
-            LIMIT :batch_size
-        """
-        )
-        result = await session.execute(stmt, {"batch_size": batch_size})
-        rows = result.fetchall()
-        return [
-            {
-                "event_id": r[0],
-                "ticker": r[1],
-                "option_chain": r[2],
-                "entry_ts": r[3],
-                "expiry": r[4],
-                "dte": r[5],
-            }
-            for r in rows
-        ]
-
-    records = await db_query(get_records_to_backfill)
-
-    while records:
-        logger.info(f"Backfilling {len(records)} records...")
-
-        for record in records:
-            try:
-                ticker = record["ticker"]
-                option_chain = record["option_chain"]
-                entry_ts = record["entry_ts"]
-                expiry = record["expiry"]
-                dte = record["dte"] or 0
-
-                # Calculate all missing features
-                rvol = await get_rvol_metrics(ticker, entry_ts)
-                flow_agg = await get_flow_aggression(ticker, entry_ts)
-                dp_metrics = await get_darkpool_metrics(ticker, entry_ts)
-                phase1 = await get_phase1_bucket_features(ticker, entry_ts, dte)
-                p2 = await get_p2_features(ticker, option_chain, entry_ts)
-                p3 = await get_p3_features(ticker, option_chain, expiry, entry_ts)
-                sector_corr = await get_sector_correlation_features(ticker, entry_ts)
-
-                # Build update dict (iv_vs_hv computed in p2 features)
-                updates = {
-                    "rvol_1h": rvol.get("rvol_1h"),
-                    "rvol_daily": rvol.get("rvol_daily"),
-                    "rvol_weekly": rvol.get("rvol_weekly"),
-                    "rvol_30m": rvol.get("rvol_30m"),
-                    "rvol_3d": rvol.get("rvol_3d"),
-                    "rvol_monthly": rvol.get("rvol_monthly"),
-                    "ask_side_ratio": flow_agg.get("ask_side_ratio"),
-                    "sweep_ratio_1h": flow_agg.get("sweep_ratio_1h"),
-                    "same_ticker_premium_1h": flow_agg.get("same_ticker_premium_1h"),
-                    "darkpool_15m": dp_metrics.get("darkpool_15m"),
-                    "darkpool_3d": dp_metrics.get("darkpool_3d"),
-                    "darkpool_4w": dp_metrics.get("darkpool_4w"),
-                    "minutes_to_close": phase1.get("minutes_to_close"),
-                    "overnight_gap_pct": phase1.get("overnight_gap_pct"),
-                    "price_change_5d_prior": phase1.get("price_change_5d_prior"),
-                    "vwap_distance_pct": phase1.get("vwap_distance_pct"),
-                    "oi_change_1d": p2.get("oi_change_1d"),
-                    "oi_change_pct": p2.get("oi_change_pct"),
-                    "high_52w_distance_pct": p3.get("high_52w_distance_pct"),
-                    "is_spread_leg": p3.get("is_spread_leg"),
-                    "same_expiry_trades_1h": p3.get("same_expiry_trades_1h"),
-                    "sector_net_premium_1h": sector_corr.get("sector_net_premium_1h"),
-                    "sector_flow_direction": sector_corr.get("sector_flow_direction"),
-                    "spy_correlation_5d": sector_corr.get("spy_correlation_5d"),
-                    "spy_return_1h": sector_corr.get("spy_return_1h"),
-                }
-
-                # Update record - bind loop variables to avoid B023
-                event_id = record["event_id"]
-
-                async def update_record(session: Any, upd: Dict[str, Any] = updates, eid: str = event_id) -> None:
-                    update_stmt = text(
-                        """
-                        UPDATE price_target_labels SET
-                            rvol_1h = :rvol_1h,
-                            rvol_daily = :rvol_daily,
-                            rvol_weekly = :rvol_weekly,
-                            rvol_30m = :rvol_30m,
-                            rvol_3d = :rvol_3d,
-                            rvol_monthly = :rvol_monthly,
-                            ask_side_ratio = :ask_side_ratio,
-                            sweep_ratio_1h = :sweep_ratio_1h,
-                            same_ticker_premium_1h = :same_ticker_premium_1h,
-                            darkpool_15m = :darkpool_15m,
-                            darkpool_3d = :darkpool_3d,
-                            darkpool_4w = :darkpool_4w,
-                            minutes_to_close = :minutes_to_close,
-                            overnight_gap_pct = :overnight_gap_pct,
-                            price_change_5d_prior = :price_change_5d_prior,
-                            vwap_distance_pct = :vwap_distance_pct,
-                            oi_change_1d = :oi_change_1d,
-                            oi_change_pct = :oi_change_pct,
-                            high_52w_distance_pct = :high_52w_distance_pct,
-                            is_spread_leg = :is_spread_leg,
-                            same_expiry_trades_1h = :same_expiry_trades_1h,
-                            sector_net_premium_1h = :sector_net_premium_1h,
-                            sector_flow_direction = :sector_flow_direction,
-                            spy_correlation_5d = :spy_correlation_5d,
-                            spy_return_1h = :spy_return_1h
-                        WHERE event_id = :event_id
-                    """
-                    )
-                    await session.execute(update_stmt, {**upd, "event_id": eid})
-
-                await db_write(update_record)
-                total_updated += 1
-
-                if total_updated % 50 == 0:
-                    logger.info(f"Backfilled {total_updated} records so far...")
-
-            except Exception as e:
-                logger.error(f"Error backfilling {record['event_id']}: {e}")
-                continue
-
-        # Get next batch
-        records = await db_query(get_records_to_backfill)
-
-    logger.info(f"Backfill complete. Updated {total_updated} records.")
-    return total_updated
+    """Legacy no-op; local ML feature backfill is decommissioned."""
+    _ = batch_size
+    logger.warning(
+        "Local feature backfill is decommissioned; use heber.watch feature pipelines",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "backfill_missing_features",
+        },
+    )
+    return 0
 
 
 async def main() -> None:

@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy local price-target backfill helpers are now explicit no-op stubs (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - `get_velocity_backfill_candidates(...)` now returns `[]` with decommission warning.
+    - `get_checkpoint_backfill_candidates(...)` now returns `[]` with decommission warning.
+    - `backfill_missing_features(...)` now returns `0` with decommission warning.
+    - removed legacy local `price_target_labels` backfill SQL from these paths.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
+      - switched backfill-candidate coverage from SQL-shape assertions to no-op behavior assertions.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
+      - added `test_price_target_labeler_backfill_missing_features_is_decommissioned_even_when_enabled`.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_legacy_label_pipeline_gates.py`
+    - `ruff check src/orion/main_price_target_labeler.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_legacy_label_pipeline_gates.py`
+
 - **Heber reader now handles both partition-schema conflicts and transient corrupt parquet files (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
     - reads datasets with `partitioning=None` to avoid hive-partition merge conflicts (`instrument_type` string vs dictionary),

@@ -120,3 +120,18 @@ ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
 plugins = ["pydantic.mypy"]
+exclude = "(^archive/|^qlib-main/|^scripts/|^tests/|^src/alpaca/|^alembic/)"
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["orion.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+    "orion.clients.heber_reader",
+    "orion.main_feature_enrichment",
+    "orion.jobs.gateway_contract_probe",
+]
+ignore_errors = false
+strict = true

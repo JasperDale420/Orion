@@ -598,6 +598,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `exit_classifier` + `pattern_miner` training-source parsers now fail safely to `heber_gold` on invalid env values (instead of falling back to `legacy_sql`), reducing accidental local SQL reactivation from bad config
 - `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
 - `main_price_target_labeler` now short-circuits local helper paths when legacy gates are disabled (`get_velocity_backfill_candidates`, `get_checkpoint_backfill_candidates`, `_get_labeled_price_target_event_ids`, `backfill_missing_features`)
+- `main_price_target_labeler` local backfill helper paths are now decommissioned no-ops regardless gate (`get_velocity_backfill_candidates`, `get_checkpoint_backfill_candidates`, `backfill_missing_features`)
 - `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
 - `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
 - `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
@@ -750,7 +751,7 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
 
-- `src/orion/main_price_target_labeler.py`: 9 refs
+- `src/orion/main_price_target_labeler.py`: 5 refs
 - `src/orion/storage/models_silver.py`: 3 refs
 - `src/orion/ml/exit_classifier.py`: 2 refs
 - `src/orion/jobs/cleanup_legacy_backfill_watermarks.py`: 2 refs
