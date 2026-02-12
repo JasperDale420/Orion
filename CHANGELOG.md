@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Audit backlog is now narrowed to one remaining local-SQL trainer path**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:
+    - documented why `src/orion/storage/models_silver.py` remains active (runtime dependency map across API/execution/processing/agents),
+    - marked `src/orion/ml/exit_classifier.py` as the final active local-`price_target_labels` remediation target,
+    - clarified that model artifact + ML metadata storage remains intentionally local.
+
 - **Pattern-miner local SQL training fallback is fully decommissioned (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
     - `_pattern_miner_training_source()` now routes legacy aliases (`legacy_sql`, `local_sql`) to `heber_gold` with decommission warning logs.

@@ -757,6 +757,23 @@ Interpretation:
 - Runtime risk is now concentrated in local Silver model definitions and the legacy exit-classifier SQL compatibility path.
 - Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
 
+### Why `models_silver.py` Is Still Active (Not Yet Archivable)
+
+`/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` is still imported by active runtime paths, not only historical tests. Current direct usage includes:
+
+- API and execution query paths (`src/orion/api/main.py`, `src/orion/main_execution.py`)
+- Processing pipeline (`src/orion/processing/feature_engine.py`, `src/orion/processing/persistence.py`, rule-engine modules)
+- Ingestion/service layer (`src/orion/ingestion/service.py`)
+- Agents consuming local signal history (`src/orion/agents/eod_review_agent.py`, `src/orion/agents/meta_search_agent.py`)
+
+Decision: keep `models_silver.py` for now and treat it as an active compatibility surface until those live readers are migrated to Heber-native adapters.
+
+### Remaining Active Remediation Target
+
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
+  - still contains the last active local `price_target_labels` SQL training path and related schema-preflight logic.
+  - next migration block should mirror the pattern-miner decommission approach: Heber-only training source, legacy SQL path archived/removed.
+
 ### Archive Actions Completed (this pass)
 
 - Archived standalone legacy SQL scripts under `archive/legacy-sql-scripts/`:
