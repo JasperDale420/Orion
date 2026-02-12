@@ -1,5 +1,7 @@
 import hashlib
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -7,10 +9,9 @@ try:
     import pandas_ta as ta
 except ImportError:
     ta = None
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
 
 import dateutil.parser
+from orion.clients.heber_reader import get_heber_reader
 from orion.shared.db_utils import db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
@@ -66,43 +67,53 @@ class FeatureEngine:
             logger.error(f"Failed to hydrate FeatureEngine: {e}")
 
     async def _hydrate_single_ticker(self, ticker: str) -> None:
-        from orion.storage.models_silver import SilverAlpacaBar
-        from sqlalchemy import select
-
         try:
-            from orion.storage.db import async_session_factory
-
-            async with async_session_factory() as session:
-                stmt = (
-                    select(SilverAlpacaBar)
-                    .where(SilverAlpacaBar.ticker == ticker)
-                    .order_by(SilverAlpacaBar.bar_start_ts_utc.desc())
-                    .limit(self.max_history_len)
-                )
-                result = await session.execute(stmt)
-                bars = result.scalars().all()
-
-            if not bars:
+            reader = get_heber_reader()
+            asof_time = datetime.now(timezone.utc)
+            start_time = asof_time - timedelta(days=5)
+            frame = reader.read_bars(
+                symbols=[ticker],
+                asof_time=asof_time,
+                start_time=start_time,
+                end_time=asof_time,
+            )
+            if frame.empty:
                 return
 
-            # Sort ascending for DataFrame
-            bars = sorted(bars, key=lambda x: x.bar_start_ts_utc)
+            ticker_col = self._first_existing_column(frame, ("ticker", "symbol", "instrument_key"))
+            ts_col = self._first_existing_column(frame, ("bar_start_ts", "bar_start_ts_utc", "ts_event", "t"))
+            open_col = self._first_existing_column(frame, ("open", "o"))
+            high_col = self._first_existing_column(frame, ("high", "h"))
+            low_col = self._first_existing_column(frame, ("low", "l"))
+            close_col = self._first_existing_column(frame, ("close", "c"))
+            volume_col = self._first_existing_column(frame, ("volume", "v"))
+            vwap_col = self._first_existing_column(frame, ("vwap", "vw"))
+            required_cols = (ticker_col, ts_col, open_col, high_col, low_col, close_col, volume_col)
+            if any(col is None for col in required_cols):
+                return
 
-            data = []
-            for b in bars:
-                data.append(
-                    {
-                        "ts": b.bar_start_ts_utc,
-                        "open": b.open,
-                        "high": b.high,
-                        "low": b.low,
-                        "close": b.close,
-                        "volume": b.volume,
-                        "vwap": b.vwap,
-                    }
-                )
+            selected_cols = [ticker_col, ts_col, open_col, high_col, low_col, close_col, volume_col]
+            if vwap_col:
+                selected_cols.append(vwap_col)
+            rows = frame[selected_cols].copy()
+            rows["ticker_norm"] = rows[ticker_col].map(self._normalize_ticker)
+            rows = rows[rows["ticker_norm"] == ticker.upper()]
+            if rows.empty:
+                return
 
-            df = pd.DataFrame(data)
+            rows["ts"] = pd.to_datetime(rows[ts_col], utc=True, errors="coerce")
+            rows["open"] = pd.to_numeric(rows[open_col], errors="coerce")
+            rows["high"] = pd.to_numeric(rows[high_col], errors="coerce")
+            rows["low"] = pd.to_numeric(rows[low_col], errors="coerce")
+            rows["close"] = pd.to_numeric(rows[close_col], errors="coerce")
+            rows["volume"] = pd.to_numeric(rows[volume_col], errors="coerce")
+            rows["vwap"] = pd.to_numeric(rows[vwap_col], errors="coerce") if vwap_col else None
+            rows = rows.dropna(subset=["ts", "open", "high", "low", "close", "volume"])
+            if rows.empty:
+                return
+
+            rows = rows.sort_values("ts").tail(self.max_history_len)
+            df = rows[["ts", "open", "high", "low", "close", "volume", "vwap"]].copy()
             df.set_index("ts", inplace=True)
 
             # Compute Indicators immediately
@@ -115,6 +126,24 @@ class FeatureEngine:
             self.history[ticker] = df
         except Exception as e:
             logger.warning(f"Indicator hydration failed for {ticker}: {e}")
+
+    @staticmethod
+    def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
+        for name in names:
+            if name in df.columns:
+                return name
+        return None
+
+    @staticmethod
+    def _normalize_ticker(value: Any) -> str | None:
+        if value is None:
+            return None
+        ticker = str(value).strip().upper()
+        if not ticker:
+            return None
+        if ":" in ticker:
+            ticker = ticker.split(":")[-1]
+        return ticker or None
 
     async def persist_features(
         self, ticker: str, ts: datetime, features: Dict[str, float], feature_set_id: str = "v1_legacy"

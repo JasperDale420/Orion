@@ -606,6 +606,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `main_execution.fetch_recent_flow_for_ticker(...)` now reads recent flow from Heber only and no longer falls back to local `SilverOptionFlow` SQL rows
 - `meta_search_agent._fetch_silver_events(...)` now reads Heber only and no longer falls back to local `SilverAlpacaBar`/`SilverOptionFlow` SQL tables
 - `ml/darkpool_features.get_darkpool_features(...)` now reads Heber darkpool rows and no longer aggregates from local `SilverDarkPool` SQL tables
+- `processing/feature_engine.FeatureEngine.hydrate_history(...)` now reads Heber bars and no longer queries local `SilverAlpacaBar`
 
 ### Heber vs Orion ML-Training Field Parity (Deep Audit)
 
@@ -771,7 +772,7 @@ Decision: keep `models_silver.py` for now and treat it as an active compatibilit
 ### Remaining Active Remediation Target
 
 - No active local label-table SQL training paths remain in runtime trainers.
-- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely (highest-impact remaining consumers: `processing/persistence`, `processing/feature_engine`, `agents/eod_review_agent`).
+- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely (highest-impact remaining consumers: `processing/persistence`, `agents/eod_review_agent`).
 
 ### Archive Actions Completed (this pass)
 

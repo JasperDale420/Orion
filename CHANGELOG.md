@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **FeatureEngine history hydration is now Heber-only (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py`:
+    - removed local `SilverAlpacaBar` SQL hydration query path.
+    - `hydrate_history()` now pulls bars from `get_heber_reader().read_bars(...)` for watchlist tickers.
+    - added normalized Heber column handling for ticker/time/OHLCV keys and safe row filtering.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_remediation_v2.py`:
+    - replaced DB-mocked hydration test with Heber-sourced hydration tests.
+    - added unavailable-Heber regression test to verify safe no-data behavior without local DB fallback.
+  - Verified with:
+    - `pytest -q tests/unit/test_remediation_v2.py -k "feature_engine_hydration"`
+    - `pytest -q tests/unit/test_feature_engine_core.py tests/unit/test_feature_engine_v2.py tests/unit/test_feature_latency.py tests/unit/test_feature_engine_persistence.py tests/unit/test_remediation_v2.py`
+    - `ruff check src/orion/processing/feature_engine.py tests/unit/test_remediation_v2.py`
+
 - **Darkpool feature aggregation is now Heber-only (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/darkpool_features.py`:
     - removed local `SilverDarkPool` SQL aggregation query path.
