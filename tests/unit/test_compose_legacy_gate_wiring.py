@@ -141,3 +141,16 @@ def test_mcp_server_wires_sec_contact_email() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "mcp-server")
     assert "- SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}" in block
+
+
+def test_mcp_server_wires_explicit_auth_env_contract() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "mcp-server")
+    assert "- MCP_API_KEY=${MCP_API_KEY:-}" in block
+    assert "- MCP_API_KEY_HEADER=${MCP_API_KEY_HEADER:-X-MCP-API-Key}" in block
+    assert "- MCP_AUTH_REQUIRED=${MCP_AUTH_REQUIRED:-false}" in block
+
+
+def test_compose_drops_obsolete_top_level_version_key() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    assert not compose_text.lstrip().startswith("version:")

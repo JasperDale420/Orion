@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg16
@@ -383,6 +381,9 @@ services:
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8001
       - MCP_TRANSPORT=sse
+      - MCP_API_KEY=${MCP_API_KEY:-}
+      - MCP_API_KEY_HEADER=${MCP_API_KEY_HEADER:-X-MCP-API-Key}
+      - MCP_AUTH_REQUIRED=${MCP_AUTH_REQUIRED:-false}
       - UW_API_KEY=${UW_API_KEY}
       - SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}
       - APCA_API_KEY_ID=${ALPACA_API_KEY}

@@ -6,6 +6,7 @@ Uses httpx.AsyncClient with FastAPI dependency overrides.
 from typing import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
 from httpx import ASGITransport, AsyncClient
 from orion.api.main import app
@@ -271,8 +272,16 @@ class TestFlowsEndpoint:
         self,
         override_deps: None,
         mock_audit_logging: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Get flows should return empty list when no flows exist."""
+
+        class _FakeReader:
+            def read_flow(self, **_kwargs):  # type: ignore[no-untyped-def]
+                return pd.DataFrame()
+
+        monkeypatch.setattr("orion.api.main.get_heber_reader", lambda: _FakeReader())
+
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/flows")
 
@@ -284,8 +293,16 @@ class TestFlowsEndpoint:
         self,
         override_deps: None,
         mock_audit_logging: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Get flows should accept filter parameters."""
+
+        class _FakeReader:
+            def read_flow(self, **_kwargs):  # type: ignore[no-untyped-def]
+                return pd.DataFrame()
+
+        monkeypatch.setattr("orion.api.main.get_heber_reader", lambda: _FakeReader())
+
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/flows", params={"ticker": "TSLA", "min_premium_usd": 10000})
 

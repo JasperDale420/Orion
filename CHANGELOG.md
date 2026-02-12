@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Compose contract updates for MCP auth envs and modern Compose spec**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - removed obsolete top-level `version:` key.
+    - added explicit MCP auth env contract for `mcp-server`:
+      - `MCP_API_KEY`
+      - `MCP_API_KEY_HEADER`
+      - `MCP_AUTH_REQUIRED`
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`:
+    - added assertions for MCP auth env wiring.
+    - added regression assertion that top-level `version:` key is not present.
+
+- **`/flows` API endpoint now reads Heber Silver flow data (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/api/main.py`:
+    - removed local `SilverOptionFlow` SQL query path from `get_flows(...)`.
+    - endpoint now reads flow rows via `get_heber_reader().read_flow(...)` in a worker thread.
+    - added robust field normalization for common Heber flow column variants (`instrument_key`/`ticker`, `premium`/`premium_usd`, `call_put`/`put_call`, etc.).
+    - keeps existing API contract (`event_id`, `ticker`, `flow_ts_utc`, `premium_usd`, etc.) while sourcing data from Heber.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/api/test_flow_filters.py`
+      - replaced local-DB setup with Heber-reader stubs.
+      - added regression coverage for min premium filter + Heber read failure handling.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/api/test_main.py`
+      - flows endpoint tests now stub Heber reader to deterministic empty payloads.
+  - Verified with:
+    - `pytest -q tests/api/test_flow_filters.py tests/api/test_main.py -k "flows"`
+    - `ruff check src/orion/api/main.py tests/api/test_flow_filters.py tests/api/test_main.py`
+
 - **Audit backlog is now narrowed to runtime `models_silver` compatibility scope**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:
     - documented why `src/orion/storage/models_silver.py` remains active (runtime dependency map across API/execution/processing/agents),
