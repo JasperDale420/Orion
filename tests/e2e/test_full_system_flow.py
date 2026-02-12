@@ -121,21 +121,12 @@ async def test_full_system_flow():
         # Ingest
         unique = await ingest_bronze_events(session, [raw_event], run_id="e2e_run", trace_id="e2e_trace")
         await persist_bronze_events(session, unique)
-        await persist_silver_from_bronze(session, unique)  # Creates SilverFlow
+        await persist_silver_from_bronze(session, unique)  # No-op: Heber is canonical Silver
         await session.commit()
 
     # 4. Step 2: Processing (Features & Rules)
     # Feature Engine
     fe = FeatureEngine()
-
-    from orion.storage.models_silver import SilverOptionFlow
-
-    async with test_session_factory() as session:
-        silver_flows = (
-            (await session.execute(pytest.importorskip("sqlalchemy").select(SilverOptionFlow))).scalars().all()
-        )
-
-    assert len(silver_flows) == 0
 
     # Process (Pass Bronze Events)
     signals = fe.process_uw_flow_events(unique)  # Returns SilverSignal objects

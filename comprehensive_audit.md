@@ -532,7 +532,7 @@
 
 - **Heber canonical Silver datasets**: 44 (`/Users/jacobmcmillan/Empire/Heber/heber/schemas/silver.py`)
 - **Orion Heber reader datasets currently consumed**: 7 (`bars`, `flow_alerts`, `darkpool`, `market_tide`, `greek_exposure`, `max_pain`, `iv_rank`) in `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`
-- **Orion local legacy Silver tables still defined**: 6 (`silver_signals`, `silver_uw_flow`, `silver_uw_darkpool`, `silver_alpaca_bars`, `silver_uw_alerts`, `silver_option_quotes`) in `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py`
+- **Orion local Silver tables still defined**: 2 (`silver_signals`, `silver_uw_alerts`) in `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py`
 - **Orion local legacy label tables still used**: `flow_labels`, `price_target_labels`
 - **Orion local Gold tables (execution state, keep for now)**: `candidate_trades`, `exit_decisions`, `strategy_decisions`, `gold_ticker_rollup`, `candidate_labels`
 - **Orion local Gold ML/label tables (migration candidates)**: `labels_event`, `labels_window`, `gold_feature_events`, `gold_feature_windows`
@@ -541,15 +541,15 @@
 
 | Capability Area | Heber (source of truth) | Orion (current state) | Recommendation |
 |-----------------|--------------------------|------------------------|----------------|
-| Bars | `bars` Silver dataset | Legacy table `silver_alpaca_bars` still exists in schema; runtime reads moved to Heber | Keep Heber path; archive local table/model after final gate cleanup |
-| Options flow | `flow_alerts` Silver dataset | Legacy table `silver_uw_flow` still exists in schema/comments | Keep Heber path; remove local schema + stale comments |
-| Darkpool | `darkpool` Silver dataset | Legacy table `silver_uw_darkpool` still exists in schema | Keep Heber path; remove local schema |
+| Bars | `bars` Silver dataset | Runtime reads moved to Heber; local `silver_alpaca_bars` model removed | Keep Heber path |
+| Options flow | `flow_alerts` Silver dataset | Runtime reads moved to Heber; local `silver_uw_flow` model removed | Keep Heber path |
+| Darkpool | `darkpool` Silver dataset | Runtime reads moved to Heber; local `silver_uw_darkpool` model removed | Keep Heber path |
 | Market tide | `market_tide` Silver dataset | Read from Heber in runtime | Keep; no local table dependency remains |
 | Greek exposure | `greek_exposure` Silver dataset | Read from Heber in runtime; legacy comment references remain | Keep Heber path; clean stale references |
 | Max pain | `max_pain` Silver dataset | Read from Heber in runtime | Keep |
 | IV rank | `iv_rank` Silver dataset | Read from Heber in runtime; legacy local naming remains in comments | Keep Heber path; clean stale references |
 | Label outcomes | `labels_alert_barriers` Gold dataset (`heber.watch.writer`) | Legacy `flow_labels` and `price_target_labels` local writes still present | Migrate to Heber labels; archive local labeler loops |
-| Label features | `meta_label_features` Gold dataset (`heber.watch.features`) | Legacy `gold_feature_events` / `gold_feature_windows` and `price_target_labels` enrichment | Define field mapping, then archive local feature materialization |
+| Label features | `meta_label_features` Gold dataset (`heber.watch.features`) | Legacy `gold_feature_events` and `price_target_labels` enrichment | Define field mapping, then archive local feature materialization |
 
 ### Heber Inventory Orion Is Not Using Yet
 
@@ -609,6 +609,9 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `processing/feature_engine.FeatureEngine.hydrate_history(...)` now reads Heber bars and no longer queries local `SilverAlpacaBar`
 - `agents/eod_review_agent` regime context now reads Heber bars only and no longer falls back to local `SilverAlpacaBar`
 - `processing/persistence.persist_silver_from_bronze(...)` local Silver materialization is decommissioned and now runs as a no-op
+- `models_silver.py` decommissioned unused legacy ORM classes: `SilverOptionFlow`, `SilverDarkPool`, `SilverAlpacaBar`, `SilverOptionQuote`
+- archived legacy compliance script that depended on removed local Silver models:
+  - `tests/compliance_check_v2.py` -> `archive/2026-02-12_models-silver-wave15/legacy_tests/compliance_check_v2.py`
 
 ### Heber vs Orion ML-Training Field Parity (Deep Audit)
 
@@ -747,14 +750,14 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 
 **Archive after mapping signoff:**
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` (legacy local Silver table models)
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` (remaining compatibility models: `silver_signals`, `silver_uw_alerts`)
 - Legacy local label/feature update jobs that only mutate `price_target_labels`
 
 ### Remaining Local-SQL Coupling Inventory (2026-02-12 snapshot)
 
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
 
-- `src/orion/storage/models_silver.py`: 6 refs
+- `src/orion/storage/models_silver.py`: compatibility surface only (`SilverSignal`, `SilverUWAlert`)
 
 Interpretation:
 
@@ -767,9 +770,10 @@ Interpretation:
 `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` is still imported by active runtime paths, not only historical tests. Current direct usage includes:
 
 - Processing pipeline (`src/orion/processing/feature_engine.py` signal model usage, `src/orion/processing/persistence.py` no-op compatibility surface, rule-engine modules)
-- Ingestion/service layer (`src/orion/ingestion/service.py`)
+- Universe hydration (`src/orion/core/universe_manager.py`) via `SilverUWAlert`
+- Ingestion/service orchestration (`src/orion/ingestion/service.py`) for `SilverSignal` persistence
 
-Decision: keep `models_silver.py` for now and treat it as an active compatibility surface until those live readers are migrated to Heber-native adapters.
+Decision: keep `models_silver.py` for now as a narrowed compatibility surface for `SilverSignal`/`SilverUWAlert` only.
 
 ### Remaining Active Remediation Target
 
@@ -801,3 +805,21 @@ Decision: keep `models_silver.py` for now and treat it as an active compatibilit
   - Archive manifest: `archive/2026-02-12_label-stack-wave14/README.md`
 - Decommissioned orphan local window-feature ORM definition:
   - removed `GoldFeatureWindow` from `src/orion/storage/models_gold.py`
+- Archived legacy compliance script that depended on removed local Silver ORM models under `archive/2026-02-12_models-silver-wave15/`:
+  - `tests/compliance_check_v2.py` -> `archive/2026-02-12_models-silver-wave15/legacy_tests/compliance_check_v2.py`
+  - Archive manifest: `archive/2026-02-12_models-silver-wave15/README.md`
+
+### Closeout Checklist (2026-02-12)
+
+- [x] Runtime bar/flow/darkpool context reads migrated to Heber (`main_execution`, `api/main`, `meta_search_agent`, `eod_review_agent`, `darkpool_features`, `feature_engine` hydration).
+- [x] Local Silver materialization from Bronze decommissioned (`persist_silver_from_bronze` no-op).
+- [x] Unused local Silver ORM classes removed (`SilverOptionFlow`, `SilverDarkPool`, `SilverAlpacaBar`, `SilverOptionQuote`).
+- [x] Legacy/unused code archived with dated manifests.
+- [x] Full quality gate green after remediation (`pytest -q && ruff check . && mypy .`).
+
+### Intentionally Local (Not Migration Targets)
+
+- Model artifacts under `ORION_MODEL_DIR`.
+- Model metadata tables: `ml_pattern_insights`, `ml_feature_importance_history`.
+- Execution/runtime decision tables: `candidate_trades`, `exit_decisions`, `strategy_decisions`.
+- Compatibility Silver models still in active use: `SilverSignal`, `SilverUWAlert`.

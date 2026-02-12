@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy Silver ORM model cleanup completed (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py`:
+    - removed decommissioned local Silver ORM models:
+      - `SilverOptionFlow`
+      - `SilverDarkPool`
+      - `SilverAlpacaBar`
+      - `SilverOptionQuote`
+    - retained active compatibility models:
+      - `SilverSignal`
+      - `SilverUWAlert`
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_models_silver_decommission.py`:
+    - enforces absence of removed legacy ORM classes.
+  - Updated tests that still referenced removed local models:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/integration/test_meta_search_flow.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/e2e/test_full_system_flow.py`
+  - Archived obsolete legacy compliance script:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/compliance_check_v2.py` ->
+      `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_models-silver-wave15/legacy_tests/compliance_check_v2.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_models_silver_decommission.py tests/integration/test_meta_search_flow.py tests/e2e/test_full_system_flow.py tests/unit/test_persistence_heber_gate.py`
+    - `ruff check src/orion/storage/models_silver.py tests/unit/test_models_silver_decommission.py tests/integration/test_meta_search_flow.py tests/e2e/test_full_system_flow.py`
+
 - **Legacy Silver table-name references removed from active runtime modules**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py` comments to reflect Heber bar hydration.
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/flow_processor.py` comments to remove `SilverOptionFlow` coupling language.
