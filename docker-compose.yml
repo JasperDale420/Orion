@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg16
@@ -22,6 +20,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    restart: unless-stopped
 
   minio:
     image: minio/minio:latest
@@ -45,6 +44,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    restart: unless-stopped
 
   createbuckets:
     image: minio/mc
@@ -72,6 +72,8 @@ services:
       - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
       - ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}
     command: [ "python", "-m", "orion.main_price_target_labeler" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -96,6 +98,8 @@ services:
       - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}
       - ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -120,6 +124,8 @@ services:
       - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
       - ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}
     command: [ "python", "-m", "orion.main_option_quote_tracker" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -144,6 +150,8 @@ services:
       - ORION_RUN_ID=docker_persistent_exec
       - ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false
     command: [ "python", "-m", "orion.main_execution" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -169,6 +177,8 @@ services:
       - ORION_RUN_ID=docker_position_monitor
       - ORION_MODEL_DIR=/app/models
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -193,6 +203,8 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-reasoner}
     command: [ "python", "-m", "orion.main_eod" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -212,6 +224,8 @@ services:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     command: [ "python", "-m", "orion.main_meta", "--base-solver", "v1_legacy" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -235,6 +249,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
     command: [ "python", "-m", "orion.main_meta_weekly", "--scheduled" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -260,6 +276,8 @@ services:
       - ORION_PATTERN_MINER_TRAINING_SOURCE=${ORION_PATTERN_MINER_TRAINING_SOURCE:-heber_gold}
       - ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-heber_gold}
     command: [ "python", "-m", "orion.main_pattern_miner" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -285,6 +303,8 @@ services:
       - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
       - ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL=${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}
     command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -314,6 +334,8 @@ services:
       - ORION_QUALITY_CHECK_INTERVAL_SECONDS=${ORION_QUALITY_CHECK_INTERVAL_SECONDS:-1800}
       - ORION_FEATURE_VALIDATE_INTERVAL_SECONDS=${ORION_FEATURE_VALIDATE_INTERVAL_SECONDS:-3600}
     command: [ "python", "-m", "orion.jobs.quality_guardrails" ]
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -334,6 +356,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     command: [ "python", "-m", "orion.rag.indexer", "--daemon", "--interval", "600" ]
     # 600s = 10 minutes interval
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:
@@ -372,6 +396,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    restart: unless-stopped
 
   mcp-server:
     build: ../Shared-MCP-Server

@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Worker container health checks now match runtime type (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` to disable inherited Dockerfile HTTP healthchecks for non-HTTP worker services (`feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, `indexer`, and other worker-only profile services).
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py::test_non_http_workers_disable_inherited_http_healthcheck`.
+  - Resolved false `unhealthy` container states caused by inherited `curl http://localhost:8000/health` probes on background worker processes.
+
 - **Heber reader now handles both partition-schema conflicts and transient corrupt parquet files (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
     - reads datasets with `partitioning=None` to avoid hive-partition merge conflicts (`instrument_type` string vs dictionary),

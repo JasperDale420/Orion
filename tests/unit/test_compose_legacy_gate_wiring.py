@@ -141,3 +141,34 @@ def test_mcp_server_wires_sec_contact_email() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "mcp-server")
     assert "- SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}" in block
+
+
+def test_infra_services_use_unless_stopped_restart_policy() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    for service_name in ("timescaledb", "minio", "redpanda"):
+        block = _service_block(compose_text, service_name)
+        assert "restart: unless-stopped" in block
+
+
+def test_indexer_depends_on_timescaledb_health() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "indexer")
+    assert "depends_on:" in block
+    assert "timescaledb:" in block
+    assert "condition: service_healthy" in block
+
+
+def test_non_http_workers_disable_inherited_http_healthcheck() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    for service_name in (
+        "feature_enrichment",
+        "execution",
+        "position-monitor",
+        "eod-agent",
+        "indexer",
+    ):
+        block = _service_block(compose_text, service_name)
+        assert "healthcheck:" in block
+        assert "disable: true" in block
