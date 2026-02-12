@@ -135,6 +135,7 @@ If you need to explicitly override:
 - Exit classifier training gate: `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`
 - Pattern miner training source: `ORION_PATTERN_MINER_TRAINING_SOURCE` (`heber_gold` or `legacy_sql`)
 - Exit classifier training source: `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE` (`legacy_sql` or `heber_gold`)
+  - In `docker-compose.yml`, both trainer source defaults are now `heber_gold`.
 
 ## How to Run (Legacy / Dev Mode)
 

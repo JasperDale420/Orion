@@ -667,7 +667,7 @@ Source references used in this pass:
     - `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`
     - `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`
     - `ORION_PATTERN_MINER_TRAINING_SOURCE=heber_gold`
-    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=legacy_sql`
+    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=heber_gold`
 - Move to Heber (required before decommission):
   - Define a **v2 training contract** in Heber that includes:
     - normalized entry feature names expected by Orion scoring/inference, or a mapping layer,

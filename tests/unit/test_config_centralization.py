@@ -116,6 +116,15 @@ def test_legacy_label_gate_settings_env_mapping():
         assert s.exit_classifier_training_source == "legacy_sql"
 
 
+def test_training_source_defaults_follow_safe_local_defaults() -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.pattern_miner_training_source == "heber_gold"
+        assert s.exit_classifier_training_source == "legacy_sql"
+
+
 @pytest.mark.asyncio
 async def test_eod_review_uses_config():
     """Verify EODReviewAgent uses configured paths."""

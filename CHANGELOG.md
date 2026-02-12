@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Compose defaults now use Heber-first source for both trainers**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE` default changed to `heber_gold` (pattern miner already `heber_gold`).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py` to assert the new compose default.
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_config_centralization.py` default-source coverage:
+    - `test_training_source_defaults_follow_safe_local_defaults`
+  - Notes:
+    - Compose/runtime default is now Heber-first for both trainers.
+    - Code-level safe fallback remains `legacy_sql` for `exit_classifier` when env is unset outside compose.
+
 - **Exit-classifier legacy SQL path decoupled from `gold_feature_windows` join (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
     - removed lateral join against `gold_feature_windows`,

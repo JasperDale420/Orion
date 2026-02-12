@@ -61,7 +61,7 @@ def test_pattern_miner_is_profiled_with_legacy_label_stack() -> None:
         "- ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}" in block
     )
     assert "- ORION_PATTERN_MINER_TRAINING_SOURCE=${ORION_PATTERN_MINER_TRAINING_SOURCE:-heber_gold}" in block
-    assert "- ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-legacy_sql}" in block
+    assert "- ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-heber_gold}" in block
 
 
 def test_nightly_backfill_and_quality_guardrails_wire_specific_legacy_gates() -> None:
