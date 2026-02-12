@@ -385,22 +385,13 @@ async def test_load_backfill_cursor_does_not_fallback_to_legacy_watermark(
 
 
 @pytest.mark.asyncio
-async def test_load_backfill_cursor_falls_back_to_legacy_cursor_key(
+async def test_load_backfill_cursor_only_checks_canonical_heber_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested_keys: list[str] = []
 
-    class _Cursor:
-        def __init__(self, ts: datetime, event_id: str) -> None:
-            self.last_seen_ts_utc = ts
-            self.last_seen_id = event_id
-
-    legacy_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
-
     async def _fake_get_cursor_state(_session: Any, key: str):
         requested_keys.append(key)
-        if key == "backfill_ml_features.price_target_labels.cursor":
-            return _Cursor(legacy_ts, "evt-legacy")
         return None
 
     class _FakeSession:
@@ -414,9 +405,8 @@ async def test_load_backfill_cursor_falls_back_to_legacy_cursor_key(
 
     loaded = await backfill_ml_features._load_backfill_cursor()
 
-    assert loaded == (legacy_ts, "evt-legacy")
-    assert requested_keys[0] == backfill_ml_features.BACKFILL_CURSOR_KEY
-    assert "backfill_ml_features.price_target_labels.cursor" in requested_keys
+    assert loaded == (None, None)
+    assert requested_keys == [backfill_ml_features.BACKFILL_CURSOR_KEY]
 
 
 @pytest.mark.asyncio

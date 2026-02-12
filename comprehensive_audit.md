@@ -573,8 +573,8 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `backfill_exit_columns` was archived after local-write decommission; `nightly_backfill` no longer runs the obsolete exit-column stage
 - `backfill_ml_features` local update writes disabled; job now skips local label mutation while storage is centralized
 - `backfill_ml_features` candidate discovery migrated to Heber Gold (`labels_alert_barriers` + `meta_label_features`) with keyset cursor filtering
-- `backfill_ml_features` cursor key renamed to Heber-neutral `backfill_ml_features.heber_gold.cursor` with fallback reads from legacy cursor keys for resume continuity
-- `cleanup_legacy_backfill_watermarks` now includes real `.cursor` watermark keys used by active backfill jobs (`backfill_ml_features.price_target_labels.cursor`, `backfill_exit_columns.velocity.cursor`, `backfill_exit_columns.checkpoint.cursor`)
+- `backfill_ml_features` cursor resume now reads only the canonical Heber key (`backfill_ml_features.heber_gold.cursor`) with no legacy `price_target_labels` fallback lookups
+- `cleanup_legacy_backfill_watermarks` now targets archived exit-column watermark keys only (`backfill_exit_columns.velocity*`, `backfill_exit_columns.checkpoint*`) and no longer references `price_target_labels` keys
 - `validate_features` source-audit adapter now runs canonical source IDs only; legacy `silver_*` aliases are rejected as `source_unavailable` (fix-forward, no backward alias normalization)
 - `main_feature_enrichment` now defaults to Heber-only context reads (`ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=false`) and skips Data-Gateway polling/credential contract unless explicitly enabled
 - compose now mounts Heber data root (`/Volumes/heber/data`) for Heber-consuming services (`execution`, `feature_enrichment`, `eod-agent`) and wires `SEC_CONTACT_EMAIL` in `mcp-server`
@@ -752,13 +752,11 @@ Top remaining files by reference count (`price_target_labels` / `flow_labels` / 
 
 - `src/orion/storage/models_silver.py`: 3 refs
 - `src/orion/ml/exit_classifier.py`: 2 refs
-- `src/orion/jobs/cleanup_legacy_backfill_watermarks.py`: 2 refs
-- `src/orion/jobs/backfill_ml_features.py`: 2 refs
 - `src/orion/ml/pattern_miner.py`: 1 ref
 
 Interpretation:
 
-- Runtime risk is now concentrated in local Silver model definitions and legacy-training/backfill compatibility paths.
+- Runtime risk is now concentrated in local Silver model definitions and legacy-training compatibility paths.
 - Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
 
 ### Archive Actions Completed (this pass)

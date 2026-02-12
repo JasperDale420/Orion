@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Backfill cursor reads are now canonical-Heber only; legacy watermark key cleanup narrowed (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
+    - `_load_backfill_cursor()` now reads only `backfill_ml_features.heber_gold.cursor`.
+    - removed legacy fallback lookup keys (`backfill_ml_features.price_target_labels*`) from active cursor-loading code.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/cleanup_legacy_backfill_watermarks.py`:
+    - removed `backfill_ml_features.price_target_labels*` from `LEGACY_BACKFILL_WATERMARK_KEYS`.
+    - cleanup now targets only archived exit-column watermark keys.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_ml_features_selection.py`
+      - replaced legacy fallback expectation with canonical-key-only cursor-loading expectation.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_cleanup_legacy_backfill_watermarks.py`
+      - asserts `price_target_labels` watermark keys are no longer in cleanup key set.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_ml_features_selection.py tests/unit/test_cleanup_legacy_backfill_watermarks.py`
+    - `ruff check src/orion/jobs/backfill_ml_features.py src/orion/jobs/cleanup_legacy_backfill_watermarks.py tests/unit/test_backfill_ml_features_selection.py tests/unit/test_cleanup_legacy_backfill_watermarks.py`
+
 - **Legacy local price-target backfill helpers are now explicit no-op stubs (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
     - `get_velocity_backfill_candidates(...)` now returns `[]` with decommission warning.
