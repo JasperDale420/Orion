@@ -604,6 +604,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
 - `/flows` API endpoint (`src/orion/api/main.py`) now reads Heber Silver flow data (`reader.read_flow`) and no longer queries local `SilverOptionFlow` SQL rows
 - `main_execution.fetch_recent_flow_for_ticker(...)` now reads recent flow from Heber only and no longer falls back to local `SilverOptionFlow` SQL rows
+- `meta_search_agent._fetch_silver_events(...)` now reads Heber only and no longer falls back to local `SilverAlpacaBar`/`SilverOptionFlow` SQL tables
 
 ### Heber vs Orion ML-Training Field Parity (Deep Audit)
 
@@ -762,7 +763,7 @@ Interpretation:
 
 - Processing pipeline (`src/orion/processing/feature_engine.py`, `src/orion/processing/persistence.py`, rule-engine modules)
 - Ingestion/service layer (`src/orion/ingestion/service.py`)
-- Agents consuming local signal history (`src/orion/agents/eod_review_agent.py`, `src/orion/agents/meta_search_agent.py`)
+- Agents consuming local signal history (`src/orion/agents/eod_review_agent.py`)
 - Darkpool feature aggregates (`src/orion/ml/darkpool_features.py`)
 
 Decision: keep `models_silver.py` for now and treat it as an active compatibility surface until those live readers are migrated to Heber-native adapters.
@@ -770,7 +771,7 @@ Decision: keep `models_silver.py` for now and treat it as an active compatibilit
 ### Remaining Active Remediation Target
 
 - No active local label-table SQL training paths remain in runtime trainers.
-- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely (highest-impact remaining consumers: `meta_search_agent`, `processing/persistence`, `ml/darkpool_features`).
+- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely (highest-impact remaining consumers: `processing/persistence`, `processing/feature_engine`, `agents/eod_review_agent`, `ml/darkpool_features`).
 
 ### Archive Actions Completed (this pass)
 

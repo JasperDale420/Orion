@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Meta-search event sourcing is now Heber-only (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py`:
+    - removed local `SilverAlpacaBar`/`SilverOptionFlow` fallback methods (`_fetch_events_from_local_sql`, `_fetch_local_bars`, `_fetch_local_flows`, local mapping helpers).
+    - removed env-based source toggle path and now always sources evaluation events from Heber.
+    - `_fetch_silver_events(...)` now returns `([], [], {})` when Heber is unavailable instead of querying local Silver SQL tables.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_meta_search_heber_source.py`:
+    - replaced local-fallback assertions with Heber-only behavior assertions.
+    - added regression assertion that `MetaSearchAgent` no longer exposes local SQL fallback methods.
+  - Verified with:
+    - `pytest -q tests/unit/test_meta_search_heber_source.py`
+    - `pytest -q tests/integration/test_meta_search_flow.py`
+    - `ruff check src/orion/agents/meta_search_agent.py tests/unit/test_meta_search_heber_source.py`
+
 - **Execution recent-flow lookup is now Heber-only (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_execution.py`:
     - removed local `SilverOptionFlow` SQL fallback path from `fetch_recent_flow_for_ticker(...)`.

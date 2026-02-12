@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -49,21 +49,17 @@ async def test_fetch_silver_events_prefers_heber(monkeypatch: pytest.MonkeyPatch
         }
     )
 
-    local_fetch = AsyncMock(return_value=([], [], {}))
-    monkeypatch.delenv("ORION_META_SEARCH_PREFER_HEBER_EVENTS", raising=False)
     monkeypatch.setattr("orion.agents.meta_search_agent.get_heber_reader", lambda: fake_reader)
-    monkeypatch.setattr(agent, "_fetch_events_from_local_sql", local_fetch, raising=False)
 
     bars, flows, price_data = await agent._fetch_silver_events(task)
 
     assert len(bars) == 2
     assert len(flows) == 1
     assert "AAPL" in price_data
-    assert local_fetch.await_count == 0
 
 
 @pytest.mark.asyncio
-async def test_fetch_silver_events_falls_back_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_silver_events_returns_empty_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     agent = MetaSearchAgent.__new__(MetaSearchAgent)
     now = datetime.now(timezone.utc)
     task = EvaluationTask(
@@ -77,16 +73,11 @@ async def test_fetch_silver_events_falls_back_to_local(monkeypatch: pytest.Monke
     fake_reader.read_bars.side_effect = RuntimeError("heber unavailable")
     fake_reader.read_flow.side_effect = RuntimeError("heber unavailable")
 
-    expected = ([{"ticker": "AAPL"}], [MagicMock()], {"AAPL": pd.DataFrame()})
-    local_fetch = AsyncMock(return_value=expected)
-
-    monkeypatch.delenv("ORION_META_SEARCH_PREFER_HEBER_EVENTS", raising=False)
     monkeypatch.setattr("orion.agents.meta_search_agent.get_heber_reader", lambda: fake_reader)
-    monkeypatch.setattr(agent, "_fetch_events_from_local_sql", local_fetch, raising=False)
+    assert not hasattr(MetaSearchAgent, "_fetch_events_from_local_sql")
 
     bars, flows, price_data = await agent._fetch_silver_events(task)
 
-    assert bars == expected[0]
-    assert flows == expected[1]
-    assert price_data == expected[2]
-    assert local_fetch.await_count == 1
+    assert bars == []
+    assert flows == []
+    assert price_data == {}
