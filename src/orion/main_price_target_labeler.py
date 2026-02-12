@@ -1437,7 +1437,7 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     """Get Greeks from stored values or Alpaca API, with Black-Scholes fallback.
 
     Priority:
-    1. Stored Greeks from silver_uw_flow (captured at ingestion time)
+    1. Stored Greeks from Heber flow alerts (captured at ingestion time)
     2. Alpaca API (for flows ingested before Greeks enrichment)
     3. Black-Scholes fallback (if Alpaca unavailable)
     """
@@ -1466,7 +1466,7 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
 
     option_chain = flow_data.get("option_chain")
 
-    # Priority 1: Use stored Greeks from silver_uw_flow (captured at ingestion)
+    # Priority 1: Use stored Greeks from Heber flow alerts (captured at ingestion)
     if flow_data.get("delta_stored") is not None:
         result["delta"] = flow_data.get("delta_stored")
         result["gamma"] = flow_data.get("gamma_stored")

@@ -603,7 +603,6 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
 - `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
 
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` (`FROM price_target_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py` (`FROM price_target_labels`)
 
@@ -751,7 +750,6 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
 
-- `src/orion/main_price_target_labeler.py`: 5 refs
 - `src/orion/storage/models_silver.py`: 3 refs
 - `src/orion/ml/exit_classifier.py`: 2 refs
 - `src/orion/jobs/cleanup_legacy_backfill_watermarks.py`: 2 refs
@@ -760,7 +758,7 @@ Top remaining files by reference count (`price_target_labels` / `flow_labels` / 
 
 Interpretation:
 
-- Runtime risk is now concentrated in the remaining legacy label-table mutation/query paths plus local Silver model definitions.
+- Runtime risk is now concentrated in local Silver model definitions and legacy-training/backfill compatibility paths.
 - Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
 
 ### Archive Actions Completed (this pass)

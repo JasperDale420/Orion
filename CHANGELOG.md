@@ -13,7 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - `get_velocity_backfill_candidates(...)` now returns `[]` with decommission warning.
     - `get_checkpoint_backfill_candidates(...)` now returns `[]` with decommission warning.
     - `backfill_missing_features(...)` now returns `0` with decommission warning.
+    - `_get_labeled_price_target_event_ids(...)` now returns `set()` with decommission warning.
+    - `persist_labels(...)` now returns `0` with decommission warning.
+    - `run_labeling_loop(...)` now exits immediately with decommission warning.
     - removed legacy local `price_target_labels` backfill SQL from these paths.
+    - removed stale `silver_uw_flow` references from inline docs/comments.
   - Updated tests:
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
       - switched backfill-candidate coverage from SQL-shape assertions to no-op behavior assertions.
