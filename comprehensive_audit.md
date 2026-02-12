@@ -573,6 +573,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `backfill_exit_columns` local update writes disabled; job now skips local label mutation while storage is centralized
 - `backfill_ml_features` local update writes disabled; job now skips local label mutation while storage is centralized
 - `backfill_ml_features` candidate discovery migrated to Heber Gold (`labels_alert_barriers` + `meta_label_features`) with keyset cursor filtering
+- `cleanup_legacy_backfill_watermarks` now includes real `.cursor` watermark keys used by active backfill jobs (`backfill_ml_features.price_target_labels.cursor`, `backfill_exit_columns.velocity.cursor`, `backfill_exit_columns.checkpoint.cursor`)
 - `main_pattern_miner` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_PATTERN_MINER`) and exits before DB init when disabled
 - `nightly_backfill` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL`) and exits before DB init when disabled
 - `quality_guardrails` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS`) and exits before DB init when disabled

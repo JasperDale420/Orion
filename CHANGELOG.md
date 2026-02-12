@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy watermark cleanup now targets real cursor keys (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/cleanup_legacy_backfill_watermarks.py`:
+    - `LEGACY_BACKFILL_WATERMARK_KEYS` now includes both legacy base keys and actual `.cursor` keys used by backfill jobs.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_cleanup_legacy_backfill_watermarks.py`:
+    - added `test_legacy_backfill_watermark_keys_include_cursor_suffixes`.
+  - Verified with:
+    - `pytest -q tests/unit/test_cleanup_legacy_backfill_watermarks.py`
+    - `ruff check src/orion/jobs/cleanup_legacy_backfill_watermarks.py tests/unit/test_cleanup_legacy_backfill_watermarks.py`
+
 - **Flow-labeler decommissioned and archived (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
     - removed legacy `labeler` service (`python -m orion.main_labeler`) from orchestration.

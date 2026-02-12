@@ -16,16 +16,17 @@ logger = setup_struct_logger("orion.cleanup.legacy_backfill_watermarks")
 
 LEGACY_BACKFILL_WATERMARK_KEYS: tuple[str, ...] = (
     "backfill_ml_features.price_target_labels",
+    "backfill_ml_features.price_target_labels.cursor",
     "backfill_exit_columns.velocity",
+    "backfill_exit_columns.velocity.cursor",
     "backfill_exit_columns.checkpoint",
+    "backfill_exit_columns.checkpoint.cursor",
 )
 
 
 async def _count_legacy_backfill_watermarks(session: AsyncSession) -> int:
     stmt = (
-        select(func.count())
-        .select_from(IngestWatermark)
-        .where(IngestWatermark.key.in_(LEGACY_BACKFILL_WATERMARK_KEYS))
+        select(func.count()).select_from(IngestWatermark).where(IngestWatermark.key.in_(LEGACY_BACKFILL_WATERMARK_KEYS))
     )
     result = await session.execute(stmt)
     return int(result.scalar_one())
