@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from orion import main_labeler, main_option_quote_tracker, main_pattern_miner, main_price_target_labeler
+from orion.jobs import nightly_backfill, quality_guardrails
 
 
 def test_option_quote_tracker_specific_gate_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,6 +78,20 @@ def test_pattern_miner_control_key_prefers_specific(monkeypatch: pytest.MonkeyPa
     assert raw == "false"
 
 
+def test_nightly_backfill_specific_gate_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL", "false")
+
+    assert nightly_backfill._legacy_label_pipelines_enabled() is False
+
+
+def test_quality_guardrails_specific_gate_overrides_global_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS", "false")
+
+    assert quality_guardrails._legacy_label_pipelines_enabled() is False
+
+
 @pytest.mark.asyncio
 async def test_option_quote_tracker_returns_early_when_specific_gate_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
@@ -131,3 +146,31 @@ async def test_pattern_miner_does_not_init_db_when_specific_gate_disabled(monkey
     monkeypatch.setattr(main_pattern_miner, "init_db", _fail_init_db)
 
     await asyncio.wait_for(main_pattern_miner.run_mining_job(), timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_nightly_backfill_does_not_init_db_when_specific_gate_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL", "false")
+
+    async def _fail_init_db() -> None:
+        raise AssertionError("init_db should not be called when nightly backfill is disabled")
+
+    monkeypatch.setattr(nightly_backfill, "init_db", _fail_init_db)
+
+    await asyncio.wait_for(nightly_backfill.main(), timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_quality_guardrails_does_not_init_db_when_specific_gate_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS", "false")
+
+    async def _fail_init_db() -> None:
+        raise AssertionError("init_db should not be called when quality guardrails is disabled")
+
+    monkeypatch.setattr(quality_guardrails, "init_db", _fail_init_db)
+
+    await asyncio.wait_for(quality_guardrails.run_guardrail_loop(), timeout=0.5)

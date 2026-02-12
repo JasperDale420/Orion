@@ -90,6 +90,9 @@ def test_legacy_label_gate_settings_env_mapping():
             "ORION_ENABLE_LEGACY_FLOW_LABELER": "true",
             "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER": "false",
             "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER": "true",
+            "ORION_ENABLE_LEGACY_PATTERN_MINER": "false",
+            "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL": "true",
+            "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS": "false",
         },
         clear=True,
     ):
@@ -100,6 +103,9 @@ def test_legacy_label_gate_settings_env_mapping():
         assert s.legacy_flow_labeler_enabled is True
         assert s.legacy_option_quote_tracker_enabled is False
         assert s.legacy_price_target_labeler_enabled is True
+        assert s.legacy_pattern_miner_enabled is False
+        assert s.legacy_nightly_backfill_enabled is True
+        assert s.legacy_quality_guardrails_enabled is False
 
 
 @pytest.mark.asyncio

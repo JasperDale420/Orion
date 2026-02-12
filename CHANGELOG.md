@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy-gate hardening (TDD): `nightly_backfill` + `quality_guardrails` per-service disable controls**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
+    - added:
+      - `legacy_nightly_backfill_enabled` (`ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL`)
+      - `legacy_quality_guardrails_enabled` (`ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS`)
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/nightly_backfill.py`:
+    - added legacy gate helpers and early return in `main()` before `init_db()` when disabled.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/quality_guardrails.py`:
+    - added legacy gate helpers and early return in `run_guardrail_loop()` before `init_db()` when disabled.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - `nightly-backfill` now wires:
+      - `ORION_ENABLE_LEGACY_LABEL_PIPELINES`
+      - `ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL`
+    - `quality-guardrails` now wires:
+      - `ORION_ENABLE_LEGACY_LABEL_PIPELINES`
+      - `ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS`
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
+      - new gate-resolution + no-DB-init tests for nightly backfill and quality guardrails.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+      - added compose env-wiring assertions for both services.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_config_centralization.py`
+      - extended legacy-gate env mapping assertions.
+  - Verified with:
+    - `pytest -q tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py -k "legacy or pattern_miner or nightly_backfill or quality_guardrails"`
+    - `pytest -q tests/unit/test_nightly_backfill_schedule.py tests/unit/test_quality_guardrails.py tests/unit/test_quality_guardrails_results.py`
+    - `ruff check src/orion/config.py src/orion/jobs/nightly_backfill.py src/orion/jobs/quality_guardrails.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+
 - **Legacy-gate hardening (TDD): `pattern-miner` per-service disable control**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_pattern_miner.py`:
     - added legacy-gate helpers:

@@ -93,6 +93,14 @@ class SystemSettings(BaseSettings):
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER",
     )
+    legacy_nightly_backfill_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL",
+    )
+    legacy_quality_guardrails_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS",
+    )
     ml_prefilter_threshold: float = Field(
         default=0.5,
         ge=0.0,

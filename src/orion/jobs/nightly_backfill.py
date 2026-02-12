@@ -12,8 +12,8 @@ Usage:
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import NoReturn
 
+from orion.config import SystemSettings
 from orion.core.market_schedule import MarketSchedule
 from orion.jobs.backfill_exit_columns import run_backfill as run_exit_backfill
 from orion.jobs.backfill_ml_features import run_backfill as run_ml_backfill
@@ -24,6 +24,26 @@ logger = setup_struct_logger("orion.nightly_backfill")
 
 BACKFILL_DELAY_MINUTES = 30
 _MARKET_SCHEDULE = MarketSchedule()
+
+
+def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
+    specific_key = "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL"
+    if settings.legacy_nightly_backfill_enabled is not None:
+        enabled = settings.legacy_nightly_backfill_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
+
+    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
+
+
+def _legacy_label_pipelines_enabled() -> bool:
+    enabled, _, _ = _legacy_label_pipeline_control()
+    return enabled
 
 
 def is_trading_day(dt: datetime) -> bool:
@@ -89,8 +109,21 @@ async def run_nightly_backfill() -> None:
         logger.error(f"Nightly backfill failed: {e}", exc_info=True)
 
 
-async def main() -> NoReturn:
+async def main() -> None:
     """Main loop - waits for market close and runs backfill daily."""
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Legacy nightly backfill disabled by config",
+            extra={
+                "event": "legacy_label_pipeline_disabled",
+                "pipeline": "orion.jobs.nightly_backfill",
+                "control_key": control_key,
+                "control_raw": control_raw,
+            },
+        )
+        return
+
     await init_db()
 
     logger.info("Nightly backfill service started")
@@ -100,7 +133,7 @@ async def main() -> NoReturn:
         now = datetime.now(timezone.utc)
         wait_seconds = (next_run - now).total_seconds()
 
-        logger.info(f"Next backfill scheduled for {next_run.isoformat()} (in {wait_seconds/3600:.1f} hours)")
+        logger.info(f"Next backfill scheduled for {next_run.isoformat()} (in {wait_seconds / 3600:.1f} hours)")
 
         # Wait until scheduled time
         await asyncio.sleep(wait_seconds)
