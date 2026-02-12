@@ -56,6 +56,9 @@ def test_pattern_miner_is_profiled_with_legacy_label_stack() -> None:
     block = _service_block(compose_text, "pattern-miner")
     assert 'profiles: [ "legacy-labels" ]' in block
     assert "- ORION_ENABLE_LEGACY_PATTERN_MINER=${ORION_ENABLE_LEGACY_PATTERN_MINER:-true}" in block
+    assert (
+        "- ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}" in block
+    )
 
 
 def test_nightly_backfill_and_quality_guardrails_wire_specific_legacy_gates() -> None:

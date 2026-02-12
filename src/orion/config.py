@@ -101,6 +101,10 @@ class SystemSettings(BaseSettings):
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS",
     )
+    legacy_exit_classifier_training_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING",
+    )
     ml_prefilter_threshold: float = Field(
         default=0.5,
         ge=0.0,

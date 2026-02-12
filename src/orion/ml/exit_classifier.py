@@ -21,7 +21,7 @@ import numpy as np
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from orion.config import system_settings
+from orion.config import SystemSettings, system_settings
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
@@ -65,6 +65,26 @@ EXIT_FEATURE_NAMES: tuple[str, ...] = (
     "window_sweep_ratio_1w",
     "window_call_put_ratio_1w",
 )
+
+
+def _legacy_exit_training_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
+    specific_key = "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING"
+    if settings.legacy_exit_classifier_training_enabled is not None:
+        enabled = settings.legacy_exit_classifier_training_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
+
+    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
+
+
+def _legacy_exit_training_enabled() -> bool:
+    enabled, _, _ = _legacy_exit_training_control()
+    return enabled
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -605,6 +625,20 @@ async def build_bucket_training_data(
     Uses bucket-appropriate checkpoints from price_target_labels.
     """
     feature_names = list(EXIT_FEATURE_NAMES)
+    enabled, control_key, control_raw = _legacy_exit_training_control()
+    if not enabled:
+        logger.warning(
+            "Legacy exit-classifier training disabled by config",
+            extra={
+                "event": "legacy_label_pipeline_disabled",
+                "pipeline": "orion.ml.exit_classifier",
+                "control_key": control_key,
+                "control_raw": control_raw,
+            },
+        )
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        return X_empty, y_empty, feature_names
+
     checkpoints = BUCKET_CHECKPOINTS.get(bucket, [])
     if not checkpoints:
         logger.warning(f"No checkpoints defined for bucket {bucket}")

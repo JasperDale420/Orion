@@ -93,6 +93,7 @@ def test_legacy_label_gate_settings_env_mapping():
             "ORION_ENABLE_LEGACY_PATTERN_MINER": "false",
             "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL": "true",
             "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS": "false",
+            "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING": "true",
         },
         clear=True,
     ):
@@ -106,6 +107,7 @@ def test_legacy_label_gate_settings_env_mapping():
         assert s.legacy_pattern_miner_enabled is False
         assert s.legacy_nightly_backfill_enabled is True
         assert s.legacy_quality_guardrails_enabled is False
+        assert s.legacy_exit_classifier_training_enabled is True
 
 
 @pytest.mark.asyncio

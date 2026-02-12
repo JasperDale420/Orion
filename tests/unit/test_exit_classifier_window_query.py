@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
-import orion.ml.exit_classifier as exit_classifier
 import pytest
+
+import orion.ml.exit_classifier as exit_classifier
 
 
 def test_can_train_with_labels_rejects_single_class_and_sparse_classes() -> None:
@@ -54,6 +55,17 @@ def test_group_missing_columns_by_family_assigns_expected_buckets() -> None:
     assert grouped["other"] == ["unknown_column"]
 
 
+def test_exit_classifier_training_control_prefers_specific_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING", "false")
+
+    enabled, key, raw = exit_classifier._legacy_exit_training_control()
+
+    assert enabled is False
+    assert key == "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING"
+    assert raw == "false"
+
+
 @pytest.mark.asyncio
 async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_query(
     monkeypatch: pytest.MonkeyPatch,
@@ -72,6 +84,29 @@ async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_
     assert len(feature_names) > 0
     assert X.shape == (0, len(feature_names))
     assert y.shape == (0,)
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_returns_empty_when_legacy_training_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING", "false")
+    db_calls = {"count": 0}
+
+    async def _db_query(_operation):
+        db_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert isinstance(X, np.ndarray)
+    assert isinstance(y, np.ndarray)
+    assert X.shape == (0, len(feature_names))
+    assert y.shape == (0,)
+    assert db_calls["count"] == 0
 
 
 @pytest.mark.asyncio
@@ -598,8 +633,10 @@ async def test_train_bucket_exit_classifier_passes_force_schema_refresh(
     async def _fake_build_bucket_training_data(bucket: str, force_schema_refresh: bool = False):
         captured["bucket"] = bucket
         captured["force_schema_refresh"] = force_schema_refresh
-        return np.empty((0, len(exit_classifier.EXIT_FEATURE_NAMES))), np.empty((0,), dtype=int), list(
-            exit_classifier.EXIT_FEATURE_NAMES
+        return (
+            np.empty((0, len(exit_classifier.EXIT_FEATURE_NAMES))),
+            np.empty((0,), dtype=int),
+            list(exit_classifier.EXIT_FEATURE_NAMES),
         )
 
     monkeypatch.setattr(

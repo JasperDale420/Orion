@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy-gate hardening (TDD): `exit_classifier` training path control**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
+    - added `legacy_exit_classifier_training_enabled` (`ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
+    - added training-gate helpers:
+      - `_legacy_exit_training_control()`
+      - `_legacy_exit_training_enabled()`
+    - `build_bucket_training_data(...)` now exits early with empty arrays when legacy exit training is disabled (before any DB query).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - `pattern-miner` now wires `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`
+      - `test_exit_classifier_training_control_prefers_specific_gate`
+      - `test_build_bucket_training_data_returns_empty_when_legacy_training_disabled`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+      - pattern-miner block now asserts `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING` wiring.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_config_centralization.py`
+      - extended legacy-gate env mapping assertions with exit-classifier training gate.
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+    - `ruff check src/orion/config.py src/orion/ml/exit_classifier.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+
 - **Legacy-gate hardening (TDD): `nightly_backfill` + `quality_guardrails` per-service disable controls**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
     - added:
