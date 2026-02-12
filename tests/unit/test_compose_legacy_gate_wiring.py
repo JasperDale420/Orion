@@ -156,6 +156,14 @@ def test_compose_drops_obsolete_top_level_version_key() -> None:
     assert not compose_text.lstrip().startswith("version:")
 
 
+def test_mcp_server_healthcheck_uses_liveness_endpoint() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "mcp-server")
+    assert "healthcheck:" in block
+    assert 'test: [ "CMD", "curl", "-f", "http://localhost:8001/health/live" ]' in block
+    assert '"http://localhost:8001/health" ]' not in block
+
+
 def test_long_running_worker_services_override_http_healthcheck() -> None:
     compose_text = Path("docker-compose.yml").read_text()
 

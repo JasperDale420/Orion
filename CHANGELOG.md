@@ -8,16 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Local Silver persistence is now opt-in (Heber-first default, TDD)**:
+- **Local Silver materialization from Bronze is decommissioned (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/persistence.py`:
-    - added `ORION_ENABLE_LOCAL_SILVER_PERSISTENCE` gate (default `false`).
-    - `persist_silver_from_bronze(...)` now skips local Silver writes by default so Heber remains canonical.
-    - legacy local Silver writes remain available only when gate is explicitly enabled.
+    - removed local Silver write logic from `persist_silver_from_bronze(...)`.
+    - function is now an explicit no-op with logging so Heber remains canonical for Silver data.
   - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_persistence_heber_gate.py`:
     - verifies default behavior does not execute local Silver inserts.
-    - verifies explicit gate enablement restores local insert behavior.
+    - verifies behavior remains a no-op even when legacy env flags are set.
   - Updated `/Users/jacobmcmillan/Empire/Orion/tests/e2e/test_full_system_flow.py`:
-    - aligned E2E expectation with Heber-first default (`SilverOptionFlow` remains empty unless legacy gate is enabled).
+    - aligned E2E expectation with decommissioned local Silver materialization (`SilverOptionFlow` remains empty).
   - Verified with:
     - `pytest -q tests/unit/test_persistence_heber_gate.py tests/e2e/test_full_system_flow.py tests/integration/test_pipeline_ingest_to_signal.py tests/unit/test_dlq_consumer.py`
     - `ruff check src/orion/processing/persistence.py tests/unit/test_persistence_heber_gate.py tests/e2e/test_full_system_flow.py`

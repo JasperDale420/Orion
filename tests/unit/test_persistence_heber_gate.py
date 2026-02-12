@@ -45,17 +45,12 @@ async def test_persist_silver_from_bronze_skips_local_writes_by_default(
 
 
 @pytest.mark.asyncio
-async def test_persist_silver_from_bronze_writes_when_gate_enabled(
+async def test_persist_silver_from_bronze_remains_noop_even_if_legacy_gate_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ORION_ENABLE_LOCAL_SILVER_PERSISTENCE", "true")
     session = AsyncMock()
 
-    async def _noop_enrich(_rows: list[dict]) -> None:
-        return None
-
-    monkeypatch.setattr(persistence, "_enrich_flows_with_greeks", _noop_enrich, raising=False)
-
     await persistence.persist_silver_from_bronze(session, [_sample_flow_event()])
 
-    assert session.execute.await_count > 0
+    assert session.execute.await_count == 0
