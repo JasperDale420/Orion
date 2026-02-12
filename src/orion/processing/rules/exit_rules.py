@@ -35,7 +35,7 @@ class ExitRule(ABC):
     def should_exit(
         self,
         position: Any,  # OpenPosition
-        recent_flow: List[Any],  # List of SilverOptionFlow records
+        recent_flow: List[Any],  # List of normalized flow records
         context: Optional[Dict[str, Any]] = None,
     ) -> Optional[ExitSignal]:
         """
@@ -378,7 +378,7 @@ class IVContractionExitRule(ExitRule):
             if iv_drop >= self.iv_drop_threshold:
                 return ExitSignal(
                     rule_id=self.rule_id,
-                    reason=f"IV dropped {iv_drop:.1f} points (from {entry_iv*100:.1f}% to {current_iv*100:.1f}%)",
+                    reason=f"IV dropped {iv_drop:.1f} points (from {entry_iv * 100:.1f}% to {current_iv * 100:.1f}%)",
                     urgency="IMMEDIATE",
                     confidence=0.75,
                     details={"entry_iv": entry_iv, "current_iv": current_iv, "iv_drop": iv_drop},

@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy Silver table-name references removed from active runtime modules**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py` comments to reflect Heber bar hydration.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/flow_processor.py` comments to remove `SilverOptionFlow` coupling language.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/rules/exit_rules.py` comments to use normalized-flow wording.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` inventory notes to reflect that remaining legacy table-name references are concentrated in `models_silver.py`.
+
 - **Local Silver materialization from Bronze is decommissioned (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/persistence.py`:
     - removed local Silver write logic from `persist_silver_from_bronze(...)`.

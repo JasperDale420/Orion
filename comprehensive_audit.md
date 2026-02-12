@@ -754,10 +754,11 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
 
-- `src/orion/storage/models_silver.py`: 3 refs
+- `src/orion/storage/models_silver.py`: 6 refs
 
 Interpretation:
 
+- Legacy table-name references outside model definitions have been removed from active runtime modules.
 - Runtime risk is now concentrated in local Silver model definitions.
 - Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
 

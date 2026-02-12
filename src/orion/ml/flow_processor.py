@@ -43,7 +43,7 @@ class MLFlowProcessor:
         parity with training data, use process_flows_enriched() instead.
 
         Args:
-            flows: List of flow dicts (from SilverOptionFlow or raw payload)
+            flows: List of normalized flow dictionaries
 
         Returns:
             List of CandidateTrade objects for high-scoring flows

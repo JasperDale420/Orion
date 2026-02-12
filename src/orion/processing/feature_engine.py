@@ -46,7 +46,7 @@ class FeatureEngine:
 
     async def hydrate_history(self) -> None:
         """
-        Hydrates in-memory history from SilverAlpacaBar to avoid cold-start issues.
+        Hydrates in-memory history from Heber bars to avoid cold-start issues.
         """
 
         from orion.config import system_settings
