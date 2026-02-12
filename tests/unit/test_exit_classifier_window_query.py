@@ -66,6 +66,19 @@ def test_exit_classifier_training_control_prefers_specific_gate(monkeypatch: pyt
     assert raw == "false"
 
 
+def test_exit_classifier_training_control_specific_true_overrides_global_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "false")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING", "true")
+
+    enabled, key, raw = exit_classifier._legacy_exit_training_control()
+
+    assert enabled is True
+    assert key == "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING"
+    assert raw == "true"
+
+
 @pytest.mark.asyncio
 async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_query(
     monkeypatch: pytest.MonkeyPatch,

@@ -101,6 +101,19 @@ def test_pattern_miner_training_control_prefers_specific_gate(monkeypatch: pytes
     assert raw == "false"
 
 
+def test_pattern_miner_training_control_specific_true_overrides_global_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "false")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING", "true")
+
+    enabled, key, raw = pattern_miner._legacy_pattern_training_control()
+
+    assert enabled is True
+    assert key == "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING"
+    assert raw == "true"
+
+
 @pytest.mark.asyncio
 async def test_fetch_training_data_returns_empty_when_legacy_training_disabled(
     monkeypatch: pytest.MonkeyPatch,

@@ -649,6 +649,9 @@ Source references used in this pass:
 
 - Keep for now (legacy profile only):
   - `pattern-miner` and `nightly-backfill` compose services stay under `legacy-labels` profile until a Heber-native training dataset is defined.
+  - Local model information storage remains in Orion:
+    - model artifacts under `ORION_MODEL_DIR` (pickle outputs consumed by `ml/scorer.py`),
+    - model metadata tables `ml_pattern_insights` and `ml_feature_importance_history`.
 - Move to Heber (required before decommission):
   - Define a **v2 training contract** in Heber that includes:
     - normalized entry feature names expected by Orion scoring/inference, or a mapping layer,
@@ -664,6 +667,10 @@ Source references used in this pass:
 - `candidate_trades`
 - `exit_decisions`
 - `strategy_decisions`
+- Model artifacts in `/app/models` (`ORION_MODEL_DIR`)
+- ML metadata tables in `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_ml.py`:
+  - `ml_pattern_insights`
+  - `ml_feature_importance_history`
 
 **Needs product decision before migration:**
 - Which Orion-only label columns are still needed versus replaced by Heber watch fields

@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Model-storage preservation lock-in (TDD + audit clarification)**:
+  - Added gate-override tests to preserve local model-training capability when global legacy pipelines are off:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`
+      - `test_exit_classifier_training_control_specific_true_overrides_global_false`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`
+      - `test_pattern_miner_training_control_specific_true_overrides_global_false`
+  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:
+    - explicitly marks local model storage as **keep**:
+      - model artifacts (`ORION_MODEL_DIR`),
+      - model metadata tables (`ml_pattern_insights`, `ml_feature_importance_history`).
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py -k "training_control"`
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py -k "pattern_miner_training_control"`
+
 - **Legacy-gate hardening (TDD): label persistence skips when local labelers are disabled**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py`:
     - `persist_labels(...)` now exits early and skips `db_write(...)` when `ORION_ENABLE_LEGACY_FLOW_LABELER` (or global legacy gate) is disabled.
