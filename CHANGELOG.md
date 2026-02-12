@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber migration (TDD): ML backfill candidate selection moved off local labels SQL**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
+    - `get_records_to_backfill(...)` now sources candidates from Heber gold datasets:
+      - `labels_alert_barriers`
+      - `meta_label_features`
+    - preserved deterministic keyset pagination semantics with `entry_ts,event_id` ordering and cursor filtering.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_ml_features_selection.py`
+      - migrated candidate-selection assertions from local SQL string checks to Heber-source behavioral checks.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_ml_features_selection.py tests/unit/test_backfill_ml_features_signature.py`
+    - `ruff check src/orion/jobs/backfill_ml_features.py tests/unit/test_backfill_ml_features_selection.py tests/unit/test_backfill_ml_features_signature.py`
+
 - **Heber migration (TDD): legacy backfill ML-feature write path disabled**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
     - disabled local `price_target_labels` mutation in `update_ml_features(...)`,
