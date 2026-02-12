@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - `fsspec` -> `^2026.2.0`
     - `aiobotocore` -> `^3.1.2`
     - `boto3` -> `^1.42.0` (resolved to `1.42.42` for botocore compatibility)
+    - `pytz` -> `^2025.2` (explicitly added for Alpaca SDK import compatibility under the upgraded dependency set)
   - Updated dev dependency constraints:
     - `pre-commit` -> `^4.5.1`
     - `pytest-asyncio` -> `^1.3.0`
@@ -29,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock`.
   - Verified with:
     - `pytest -q && ruff check . && mypy .`
+    - `poetry run pytest -q && poetry run ruff check . && poetry run mypy .`
     - `docker compose build`
 
 - **Dependency/tooling refresh (installer maintenance)**:
