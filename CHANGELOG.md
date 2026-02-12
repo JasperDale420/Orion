@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Darkpool feature aggregation is now Heber-only (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/darkpool_features.py`:
+    - removed local `SilverDarkPool` SQL aggregation query path.
+    - now reads darkpool rows from `get_heber_reader().read_darkpool(...)` and computes the same aggregate features in-memory.
+    - added robust column normalization for Heber variants (`ticker`/`symbol`/`instrument_key`, `dark_ts_utc`/`ts_event`, `trade_price`/`price`, `size_shares`/`size`).
+    - keeps existing fallback behavior: returns zeroed features when data is unavailable.
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_darkpool_features_heber_source.py`:
+    - validates correct Heber aggregation math (volume, count, VWAP, max block, dollar volume).
+    - validates zeroed output when Heber is unavailable.
+  - Verified with:
+    - `pytest -q tests/unit/test_darkpool_features_heber_source.py`
+    - `ruff check src/orion/ml/darkpool_features.py tests/unit/test_darkpool_features_heber_source.py`
+
 - **Meta-search event sourcing is now Heber-only (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py`:
     - removed local `SilverAlpacaBar`/`SilverOptionFlow` fallback methods (`_fetch_events_from_local_sql`, `_fetch_local_bars`, `_fetch_local_flows`, local mapping helpers).

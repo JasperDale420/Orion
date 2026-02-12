@@ -4,16 +4,44 @@ Darkpool Feature Aggregator.
 Aggregates darkpool data into ML features for scoring.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
-from sqlalchemy import and_, func, select
+import pandas as pd
 
-from orion.shared.db_utils import db_query
+from orion.clients.heber_reader import get_heber_reader
 from orion.shared.logger import setup_struct_logger
-from orion.storage.models_silver import SilverDarkPool
 
 logger = setup_struct_logger("orion.ml.darkpool_features")
+
+
+def _zero_darkpool_features() -> Dict[str, Any]:
+    return {
+        "darkpool_volume_24h": 0.0,
+        "darkpool_trade_count": 0,
+        "darkpool_avg_price": 0.0,
+        "darkpool_max_block": 0.0,
+        "darkpool_dollar_volume": 0.0,
+    }
+
+
+def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _normalize_ticker(value: Any) -> str | None:
+    if value is None:
+        return None
+    ticker = str(value).strip().upper()
+    if not ticker:
+        return None
+    if ":" in ticker:
+        ticker = ticker.split(":")[-1]
+    return ticker or None
 
 
 async def get_darkpool_features(
@@ -42,57 +70,53 @@ async def get_darkpool_features(
         as_of = as_of.replace(tzinfo=timezone.utc)
 
     cutoff = as_of - timedelta(hours=lookback_hours)
-
-    async def _query(session: Any) -> Dict[str, Any]:
-        # Aggregate query
-        stmt = select(
-            func.sum(SilverDarkPool.size_shares).label("total_volume"),
-            func.count(SilverDarkPool.event_id).label("trade_count"),
-            func.avg(SilverDarkPool.trade_price).label("avg_price"),
-            func.max(SilverDarkPool.size_shares).label("max_block"),
-            func.sum(SilverDarkPool.size_shares * SilverDarkPool.trade_price).label("dollar_volume"),
-        ).where(
-            and_(
-                SilverDarkPool.ticker == ticker,
-                SilverDarkPool.dark_ts_utc >= cutoff,
-                SilverDarkPool.dark_ts_utc < as_of,
-            )
+    try:
+        reader = get_heber_reader()
+        frame = await asyncio.to_thread(
+            reader.read_darkpool,
+            symbols=[ticker],
+            asof_time=as_of,
+            start_time=cutoff,
         )
 
-        result = await session.execute(stmt)
-        row = result.first()
+        if frame.empty:
+            return _zero_darkpool_features()
 
-        if row and row.total_volume:
-            # Calculate VWAP
-            vwap = row.dollar_volume / row.total_volume if row.total_volume > 0 else None
+        ticker_col = _first_existing_column(frame, ("ticker", "symbol", "instrument_key"))
+        ts_col = _first_existing_column(frame, ("dark_ts_utc", "ts_event", "timestamp"))
+        price_col = _first_existing_column(frame, ("trade_price", "price", "last_price"))
+        size_col = _first_existing_column(frame, ("size_shares", "size", "shares"))
+        if not (ticker_col and ts_col and price_col and size_col):
+            return _zero_darkpool_features()
 
-            return {
-                "darkpool_volume_24h": float(row.total_volume or 0),
-                "darkpool_trade_count": int(row.trade_count or 0),
-                "darkpool_avg_price": float(vwap or row.avg_price or 0),
-                "darkpool_max_block": float(row.max_block or 0),
-                "darkpool_dollar_volume": float(row.dollar_volume or 0),
-            }
+        rows = frame[[ticker_col, ts_col, price_col, size_col]].copy()
+        rows["ticker_norm"] = rows[ticker_col].map(_normalize_ticker)
+        rows["ts"] = pd.to_datetime(rows[ts_col], utc=True, errors="coerce")
+        rows["price"] = pd.to_numeric(rows[price_col], errors="coerce")
+        rows["size"] = pd.to_numeric(rows[size_col], errors="coerce")
+
+        ticker_norm = ticker.strip().upper()
+        rows = rows[(rows["ticker_norm"] == ticker_norm) & (rows["ts"] >= cutoff) & (rows["ts"] < as_of)]
+        rows = rows[rows["price"].notna() & rows["size"].notna() & (rows["size"] > 0)]
+        if rows.empty:
+            return _zero_darkpool_features()
+
+        total_volume = float(rows["size"].sum())
+        trade_count = int(rows.shape[0])
+        dollar_volume = float((rows["size"] * rows["price"]).sum())
+        max_block = float(rows["size"].max())
+        avg_price = float(dollar_volume / total_volume) if total_volume > 0 else 0.0
 
         return {
-            "darkpool_volume_24h": 0.0,
-            "darkpool_trade_count": 0,
-            "darkpool_avg_price": 0.0,
-            "darkpool_max_block": 0.0,
-            "darkpool_dollar_volume": 0.0,
+            "darkpool_volume_24h": total_volume,
+            "darkpool_trade_count": trade_count,
+            "darkpool_avg_price": avg_price,
+            "darkpool_max_block": max_block,
+            "darkpool_dollar_volume": dollar_volume,
         }
-
-    try:
-        return await db_query(_query)
     except Exception as e:
         logger.warning(f"Failed to fetch darkpool features for {ticker}: {e}")
-        return {
-            "darkpool_volume_24h": 0.0,
-            "darkpool_trade_count": 0,
-            "darkpool_avg_price": 0.0,
-            "darkpool_max_block": 0.0,
-            "darkpool_dollar_volume": 0.0,
-        }
+        return _zero_darkpool_features()
 
 
 def get_darkpool_score_boost(features: Dict[str, Any], underlying_price: float) -> float:
