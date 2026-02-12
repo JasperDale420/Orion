@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Trainer source parsing now fails safely to Heber on invalid env values (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
+    - `_exit_classifier_training_source()` now defaults and falls back to `heber_gold` when source env is invalid.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
+    - `_pattern_miner_training_source()` now defaults and falls back to `heber_gold` when source env is invalid.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`
+      - added `test_exit_classifier_training_source_invalid_falls_back_to_heber_gold`
+      - added autouse default `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=legacy_sql` fixture for legacy SQL query-contract tests
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`
+      - added `test_pattern_miner_training_source_invalid_falls_back_to_heber_gold`
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `ruff check src/orion/ml/exit_classifier.py src/orion/ml/pattern_miner.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_pattern_miner_exit_refresh_config.py`
+
 - **Nightly backfill decommissioned exit-column stage and archived module/tests (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/nightly_backfill.py`:
     - removed `backfill_exit_columns` orchestration; nightly run now executes ML-feature backfill only.
@@ -104,7 +119,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - `test_training_source_defaults_follow_safe_local_defaults`
   - Notes:
     - Compose/runtime default is now Heber-first for both trainers.
-    - Code-level safe fallback remains `legacy_sql` for `exit_classifier` when env is unset outside compose.
+    - Code-level invalid-source fallback is now `heber_gold` for both trainers.
 
 - **Exit-classifier legacy SQL path decoupled from `gold_feature_windows` join (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:

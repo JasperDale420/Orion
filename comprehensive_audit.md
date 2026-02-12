@@ -591,6 +591,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
   - `heber_gold`: builds a coarse compatibility training frame from `labels_alert_barriers` + `meta_label_features` without local SQL reads
   - `legacy_sql`: `price_target_labels` SQL path with schema-aware optional window feature columns (no `gold_feature_windows` lateral join)
 - `SystemSettings.exit_classifier_training_source` default is now `heber_gold` (matching compose defaults), reducing accidental local SQL usage when env vars are unset
+- `exit_classifier` + `pattern_miner` training-source parsers now fail safely to `heber_gold` on invalid env values (instead of falling back to `legacy_sql`), reducing accidental local SQL reactivation from bad config
 - `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
 - `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
 - `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it

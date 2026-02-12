@@ -153,7 +153,7 @@ def _legacy_pattern_training_enabled() -> bool:
 
 def _pattern_miner_training_source() -> str:
     settings = SystemSettings()
-    raw_source = (settings.pattern_miner_training_source or "legacy_sql").strip().lower()
+    raw_source = (settings.pattern_miner_training_source or "heber_gold").strip().lower()
 
     if raw_source in {"heber", "heber_gold", "gold"}:
         return "heber_gold"
@@ -161,14 +161,14 @@ def _pattern_miner_training_source() -> str:
         return "legacy_sql"
 
     logger.warning(
-        f"Invalid pattern-miner training source '{raw_source}', falling back to legacy_sql",
+        f"Invalid pattern-miner training source '{raw_source}', falling back to heber_gold",
         extra={
             "event": "pattern_miner_training_source_invalid",
             "training_source": raw_source,
-            "fallback_training_source": "legacy_sql",
+            "fallback_training_source": "heber_gold",
         },
     )
-    return "legacy_sql"
+    return "heber_gold"
 
 
 def _first_existing_column(frame: Any, candidates: list[str]) -> str | None:

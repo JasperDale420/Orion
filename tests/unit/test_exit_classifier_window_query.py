@@ -7,6 +7,11 @@ import pytest
 import orion.ml.exit_classifier as exit_classifier
 
 
+@pytest.fixture(autouse=True)
+def _default_exit_classifier_training_source_legacy_sql(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_TRAINING_SOURCE", "legacy_sql")
+
+
 def test_can_train_with_labels_rejects_single_class_and_sparse_classes() -> None:
     can_train, reason = exit_classifier._can_train_with_labels(np.zeros(100, dtype=int), min_samples=100)
     assert can_train is False
@@ -82,6 +87,14 @@ def test_exit_classifier_training_control_specific_true_overrides_global_false(
 
 def test_exit_classifier_training_source_prefers_heber_gold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_EXIT_CLASSIFIER_TRAINING_SOURCE", "HeBeR")
+
+    assert exit_classifier._exit_classifier_training_source() == "heber_gold"
+
+
+def test_exit_classifier_training_source_invalid_falls_back_to_heber_gold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_TRAINING_SOURCE", "not-a-real-source")
 
     assert exit_classifier._exit_classifier_training_source() == "heber_gold"
 

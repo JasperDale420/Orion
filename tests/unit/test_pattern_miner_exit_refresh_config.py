@@ -121,6 +121,14 @@ def test_pattern_miner_training_source_prefers_heber_gold(monkeypatch: pytest.Mo
     assert pattern_miner._pattern_miner_training_source() == "heber_gold"
 
 
+def test_pattern_miner_training_source_invalid_falls_back_to_heber_gold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_PATTERN_MINER_TRAINING_SOURCE", "not-a-real-source")
+
+    assert pattern_miner._pattern_miner_training_source() == "heber_gold"
+
+
 @pytest.mark.asyncio
 async def test_fetch_training_data_returns_empty_when_legacy_training_disabled(
     monkeypatch: pytest.MonkeyPatch,

@@ -92,7 +92,7 @@ def _legacy_exit_training_enabled() -> bool:
 
 def _exit_classifier_training_source() -> str:
     settings = SystemSettings()
-    raw_source = (settings.exit_classifier_training_source or "legacy_sql").strip().lower()
+    raw_source = (settings.exit_classifier_training_source or "heber_gold").strip().lower()
 
     if raw_source in {"heber", "heber_gold", "gold"}:
         return "heber_gold"
@@ -100,14 +100,14 @@ def _exit_classifier_training_source() -> str:
         return "legacy_sql"
 
     logger.warning(
-        f"Invalid exit-classifier training source '{raw_source}', falling back to legacy_sql",
+        f"Invalid exit-classifier training source '{raw_source}', falling back to heber_gold",
         extra={
             "event": "exit_classifier_training_source_invalid",
             "training_source": raw_source,
-            "fallback_training_source": "legacy_sql",
+            "fallback_training_source": "heber_gold",
         },
     )
-    return "legacy_sql"
+    return "heber_gold"
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
