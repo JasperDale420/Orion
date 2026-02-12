@@ -590,7 +590,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
   - model-training paths preserved (`ORION_ENABLE_LEGACY_PATTERN_MINER=true`, `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`, `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`)
 - `pattern_miner` now supports explicit training source control (`ORION_PATTERN_MINER_TRAINING_SOURCE`):
   - `heber_gold`: reads `labels_alert_barriers` + `meta_label_features` and builds a compatibility training frame without local SQL reads
-  - `legacy_sql`: existing `price_target_labels` SQL path
+  - `legacy_sql` aliases are now decommissioned and routed to `heber_gold` (no `price_target_labels` query path)
 - `exit_classifier` now supports explicit training source control (`ORION_EXIT_CLASSIFIER_TRAINING_SOURCE`):
   - `heber_gold`: builds a coarse compatibility training frame from `labels_alert_barriers` + `meta_label_features` without local SQL reads
   - `legacy_sql`: `price_target_labels` SQL path with schema-aware optional window feature columns (no `gold_feature_windows` lateral join)
@@ -604,7 +604,6 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` (`FROM price_target_labels`)
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py` (`FROM price_target_labels`)
 
 ### Heber vs Orion ML-Training Field Parity (Deep Audit)
 
@@ -752,11 +751,10 @@ Top remaining files by reference count (`price_target_labels` / `flow_labels` / 
 
 - `src/orion/storage/models_silver.py`: 3 refs
 - `src/orion/ml/exit_classifier.py`: 2 refs
-- `src/orion/ml/pattern_miner.py`: 1 ref
 
 Interpretation:
 
-- Runtime risk is now concentrated in local Silver model definitions and legacy-training compatibility paths.
+- Runtime risk is now concentrated in local Silver model definitions and the legacy exit-classifier SQL compatibility path.
 - Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
 
 ### Archive Actions Completed (this pass)

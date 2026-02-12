@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Pattern-miner local SQL training fallback is fully decommissioned (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
+    - `_pattern_miner_training_source()` now routes legacy aliases (`legacy_sql`, `local_sql`) to `heber_gold` with decommission warning logs.
+    - `fetch_training_data(...)` now uses the Heber Gold training frame path only.
+    - removed direct `price_target_labels` SQL query branch from active training-data fetch.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`:
+    - added `test_pattern_miner_training_source_legacy_sql_falls_back_to_heber_gold`.
+    - added `test_fetch_training_data_legacy_source_still_uses_heber_without_local_db`.
+  - Verified with:
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `ruff check src/orion/ml/pattern_miner.py tests/unit/test_pattern_miner_exit_refresh_config.py`
+
 - **Backfill cursor reads are now canonical-Heber only; legacy watermark key cleanup narrowed (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
     - `_load_backfill_cursor()` now reads only `backfill_ml_features.heber_gold.cursor`.
