@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber gold migration (TDD): validate_features spot-check + sanity paths**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
+    - removed local `price_target_labels` SQL reads from:
+      - `spot_check_record(...)`,
+      - `run_sanity_checks(...)`,
+    - added Heber gold-backed label assembly and sanity-stat computation from:
+      - `labels_alert_barriers`,
+      - `meta_label_features`.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_guardrails.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_validate_features_source_adapter.py`
+      - added Heber-only regression coverage for `spot_check_record(...)`.
+  - Verified with:
+    - `pytest -q tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_data_quality_checker_heber_source.py`
+    - `ruff check src/orion/jobs/validate_features.py tests/unit/test_validate_features_guardrails.py tests/unit/test_validate_features_source_adapter.py`
+
 - **Heber gold migration (TDD): earnings backfill ticker discovery + ML coverage checks**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`:
     - removed local `price_target_labels` ticker discovery from `backfill_all_earnings()`,

@@ -126,7 +126,7 @@ async def test_validate_darkpool_prefers_heber_when_available(monkeypatch: pytes
         raise AssertionError("local DB fallback should not be used when Heber volume is available")
 
     monkeypatch.setattr(validate_features, "_get_darkpool_volume_from_heber_for_validation", lambda *_: 150)
-    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
     results = await validate_features.validate_darkpool(
         {"darkpool_volume_1h": 150},
@@ -148,7 +148,7 @@ async def test_validate_overnight_gap_prefers_heber_when_available(monkeypatch: 
         "_get_overnight_gap_inputs_from_heber_for_validation",
         lambda **_: (110.0, 100.0),
     )
-    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
     results = await validate_features.validate_overnight_gap(
         {"overnight_gap_pct": 10.0},
@@ -167,6 +167,7 @@ async def test_validate_overnight_gap_returns_empty_when_heber_empty(monkeypatch
         validate_features,
         "db_query",
         lambda _fn: (_ for _ in ()).throw(AssertionError("local DB fallback should not be called")),
+        raising=False,
     )
 
     results = await validate_features.validate_overnight_gap(
@@ -186,6 +187,7 @@ async def test_validate_darkpool_warns_when_heber_empty(monkeypatch: pytest.Monk
         validate_features,
         "db_query",
         lambda _fn: (_ for _ in ()).throw(AssertionError("local DB fallback should not be called")),
+        raising=False,
     )
 
     results = await validate_features.validate_darkpool(
@@ -242,7 +244,7 @@ async def test_load_label_period_prefers_heber_gold_without_local_db(
         raise AssertionError("local db_query should not be used")
 
     monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
     period = await validate_features._load_label_period()
 
@@ -264,10 +266,88 @@ async def test_load_label_period_returns_empty_when_heber_unavailable(
         raise AssertionError("local db_query should not be used")
 
     monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(validate_features, "db_query", _fail_db_query)
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
     period = await validate_features._load_label_period()
 
     assert period["min_date"] is None
     assert period["max_date"] is None
     assert period["tickers"] == 0
+
+
+@pytest.mark.asyncio
+async def test_spot_check_record_prefers_heber_gold_without_local_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return [
+                    {
+                        "alert_id": "evt-1",
+                        "underlying": "AAPL",
+                        "ts_event": "2026-02-11T15:00:00Z",
+                    }
+                ]
+            if dataset == "meta_label_features":
+                return [
+                    {
+                        "alert_id": "evt-1",
+                        "hour_of_day": 15,
+                        "day_of_week": 2,
+                        "minutes_to_close": 120,
+                        "overnight_gap_pct": 10.0,
+                        "darkpool_1h": 50,
+                        "delta": 0.4,
+                        "gamma": 0.02,
+                        "iv_rank": 55.0,
+                        "iv": 0.5,
+                    }
+                ]
+            raise AssertionError(f"unexpected dataset requested: {dataset}")
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
+    monkeypatch.setattr(
+        validate_features,
+        "_get_overnight_gap_inputs_from_heber_for_validation",
+        lambda **_: (110.0, 100.0),
+    )
+    monkeypatch.setattr(
+        validate_features,
+        "_get_darkpool_volume_from_heber_for_validation",
+        lambda *_args: 50,
+    )
+
+    result = await validate_features.spot_check_record("evt-1")
+
+    assert result["failed"] == []
+    assert any("entry_hour" in item for item in result["passed"])
+    assert any("overnight_gap_pct" in item for item in result["passed"])
+    assert any("darkpool_1h" in item for item in result["passed"])
+
+
+@pytest.mark.asyncio
+async def test_spot_check_record_returns_not_found_when_event_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (dataset, asof_time, symbols)
+            return []
+
+    monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(
+        validate_features,
+        "db_query",
+        lambda _fn: (_ for _ in ()).throw(AssertionError("local db_query should not be used")),
+        raising=False,
+    )
+
+    result = await validate_features.spot_check_record("missing-event")
+
+    assert any("Record not found" in msg for msg in result["failed"])
