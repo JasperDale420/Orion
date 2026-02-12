@@ -34,7 +34,6 @@ from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
-from sqlalchemy import text
 
 logger = setup_struct_logger("orion.backfill.exit_columns")
 
@@ -204,15 +203,11 @@ async def update_velocity_columns(record: Dict[str, Any]) -> bool:
     if not updates:
         return False
 
-    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
-    query = f"UPDATE price_target_labels SET {set_clause} WHERE event_id = :event_id"
-    updates["event_id"] = event_id
-
-    async def write(session: Any) -> None:
-        await session.execute(text(query), updates)
-
-    await db_write(write)
-    return True
+    logger.warning(
+        "Skipping legacy local velocity backfill write; label storage is centralized",
+        extra={"event_type": "DEPRECATED_LOCAL_WRITE_SKIPPED", "event_id": event_id},
+    )
+    return False
 
 
 async def update_checkpoint_columns(record: Dict[str, Any]) -> bool:
@@ -259,15 +254,11 @@ async def update_checkpoint_columns(record: Dict[str, Any]) -> bool:
     if not updates:
         return False
 
-    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
-    query = f"UPDATE price_target_labels SET {set_clause} WHERE event_id = :event_id"
-    updates["event_id"] = event_id
-
-    async def write(session: Any) -> None:
-        await session.execute(text(query), updates)
-
-    await db_write(write)
-    return True
+    logger.warning(
+        "Skipping legacy local checkpoint backfill write; label storage is centralized",
+        extra={"event_type": "DEPRECATED_LOCAL_WRITE_SKIPPED", "event_id": event_id},
+    )
+    return False
 
 
 async def _update_record_with_retry(

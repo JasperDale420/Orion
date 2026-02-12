@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber migration (TDD): legacy backfill exit-column write path disabled**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_exit_columns.py`:
+    - disabled local `price_target_labels` mutation in:
+      - `update_velocity_columns(...)`,
+      - `update_checkpoint_columns(...)`,
+    - backfill now logs explicit skip events for deprecated local writes.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_exit_columns_selection.py`
+      - `test_update_velocity_columns_avoids_local_db_write`
+      - `test_update_checkpoint_columns_avoids_local_db_write`
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_exit_columns_selection.py`
+    - `ruff check src/orion/jobs/backfill_exit_columns.py tests/unit/test_backfill_exit_columns_selection.py`
+
 - **Heber gold migration (TDD): validate_features spot-check + sanity paths**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
     - removed local `price_target_labels` SQL reads from:

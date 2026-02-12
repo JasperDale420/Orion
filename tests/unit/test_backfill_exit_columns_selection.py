@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+
 from orion.jobs import backfill_exit_columns
 
 
@@ -118,6 +119,49 @@ async def test_get_subsequent_prices_delegates_to_labeler(monkeypatch: pytest.Mo
         "option_chain": "AAPL260221C00100000",
         "entry_ts": entry_ts,
     }
+
+
+@pytest.mark.asyncio
+async def test_update_velocity_columns_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    record = {
+        "event_id": "vel-1",
+        "entry_ts": entry_ts,
+        "hit_75_pct_ts": entry_ts,
+        "hit_100_pct_ts": entry_ts,
+        "hit_150_pct_ts": entry_ts,
+    }
+
+    async def _fail_db_write(_fn):
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(backfill_exit_columns, "db_write", _fail_db_write, raising=False)
+
+    updated = await backfill_exit_columns.update_velocity_columns(record)
+    assert updated is False
+
+
+@pytest.mark.asyncio
+async def test_update_checkpoint_columns_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    record = {
+        "event_id": "cp-1",
+        "option_chain": "AAPL260221C00100000",
+        "entry_ts": entry_ts,
+        "entry_option_price": 1.0,
+    }
+
+    async def _fake_subsequent_prices(_option_chain: str, _entry_ts: datetime):
+        return [{"ts": entry_ts.replace(minute=15), "price": 1.1}]
+
+    async def _fail_db_write(_fn):
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(backfill_exit_columns, "get_subsequent_prices", _fake_subsequent_prices, raising=False)
+    monkeypatch.setattr(backfill_exit_columns, "db_write", _fail_db_write, raising=False)
+
+    updated = await backfill_exit_columns.update_checkpoint_columns(record)
+    assert updated is False
 
 
 @pytest.mark.asyncio
