@@ -174,3 +174,35 @@ async def test_quality_guardrails_does_not_init_db_when_specific_gate_disabled(
     monkeypatch.setattr(quality_guardrails, "init_db", _fail_init_db)
 
     await asyncio.wait_for(quality_guardrails.run_guardrail_loop(), timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_flow_labeler_persist_labels_skips_local_write_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_FLOW_LABELER", "false")
+
+    async def _fail_db_write(_operation):
+        raise AssertionError("db_write should not be called when flow labeler is disabled")
+
+    monkeypatch.setattr(main_labeler, "db_write", _fail_db_write)
+
+    persisted = await main_labeler.persist_labels([{"event_id": "evt-disabled"}])
+
+    assert persisted == 0
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_persist_labels_skips_local_write_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
+
+    async def _fail_db_write(_operation):
+        raise AssertionError("db_write should not be called when price-target labeler is disabled")
+
+    monkeypatch.setattr(main_price_target_labeler, "db_write", _fail_db_write)
+
+    persisted = await main_price_target_labeler.persist_labels([{"event_id": "evt-disabled"}])
+
+    assert persisted == 0

@@ -26,17 +26,8 @@ from orion.clients.heber_reader import HeberReader
 from orion.config import SystemSettings
 from orion.labeler import (
     BATCH_SIZE,
-    CHECKPOINT_OFFSETS,
     POLL_INTERVAL_SECONDS,
     RISK_FREE_RATE,
-    SECTOR_MAPPING,
-    calculate_black_scholes_delta,
-    calculate_black_scholes_gamma,
-    calculate_iv_rank_from_history,
-    calculate_volatility,
-    get_price_at_offset,
-    get_price_at_offset_days,
-    get_price_at_offset_minutes,
 )
 from orion.labeler.schema_guard import (
     SchemaValidationError,
@@ -3512,6 +3503,18 @@ async def persist_labels(labels: List[Dict[str, Any]]) -> int:
     Includes only schema-validated columns from each label dict.
     Unknown/missing required columns fail fast.
     """
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Skipping local price-target label persistence because legacy pipeline is disabled",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_price_target_labeler",
+                "control": f"{control_key}={control_raw}",
+            },
+        )
+        return 0
+
     if not labels:
         return 0
 

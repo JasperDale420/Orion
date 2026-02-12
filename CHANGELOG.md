@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy-gate hardening (TDD): label persistence skips when local labelers are disabled**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py`:
+    - `persist_labels(...)` now exits early and skips `db_write(...)` when `ORION_ENABLE_LEGACY_FLOW_LABELER` (or global legacy gate) is disabled.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - `persist_labels(...)` now exits early and skips `db_write(...)` when `ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER` (or global legacy gate) is disabled.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
+      - `test_flow_labeler_persist_labels_skips_local_write_when_disabled`
+      - `test_price_target_labeler_persist_labels_skips_local_write_when_disabled`
+  - Verified with:
+    - `pytest -q tests/unit/test_legacy_label_pipeline_gates.py -k "persist_labels_skips_local_write_when_disabled or does_not_init_db_when_specific_gate_disabled"`
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+
 - **Legacy-gate hardening (TDD): `pattern_miner` training data path control**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
     - added `legacy_pattern_miner_training_enabled` (`ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING`).
