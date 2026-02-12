@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Dependency/tooling refresh (installer maintenance)**:
+  - Updated Poetry-managed dependencies and regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock` (`poetry update`).
+  - Updated pre-commit hook pins in `/Users/jacobmcmillan/Empire/Orion/.pre-commit-config.yaml`:
+    - `astral-sh/ruff-pre-commit`: `v0.9.4` -> `v0.15.0`
+    - `pre-commit/pre-commit-hooks`: `v5.0.0` -> `v6.0.0`
+  - Confirmed no npm manifests exist in this repository (`package.json`/`package-lock.json` not present), so npm upgrade was not applicable in `/Users/jacobmcmillan/Empire/Orion`.
+  - Attempted to refresh `/Users/jacobmcmillan/Empire/Orion/uv.lock`, but `uv` cannot lock this project because `pyproject.toml` uses `[tool.poetry]` and does not define a `[project]` table.
+  - Verified with:
+    - `pytest -q && ruff check . && mypy .`
+
 - **Legacy Silver ORM model cleanup completed (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py`:
     - removed decommissioned local Silver ORM models:
