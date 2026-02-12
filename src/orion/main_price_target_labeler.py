@@ -420,6 +420,18 @@ async def get_velocity_backfill_candidates(
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
     """Get price-target rows that still need velocity columns backfilled."""
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Skipping velocity backfill candidate lookup because legacy pipeline is disabled",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_price_target_labeler",
+                "operation": "get_velocity_backfill_candidates",
+                "control": f"{control_key}={control_raw}",
+            },
+        )
+        return []
 
     async def query(session: Any) -> List[Dict[str, Any]]:
         params: Dict[str, Any] = {"limit": limit}
@@ -452,6 +464,18 @@ async def get_checkpoint_backfill_candidates(
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
     """Get price-target rows that still need checkpoint columns backfilled."""
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Skipping checkpoint backfill candidate lookup because legacy pipeline is disabled",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_price_target_labeler",
+                "operation": "get_checkpoint_backfill_candidates",
+                "control": f"{control_key}={control_raw}",
+            },
+        )
+        return []
 
     async def query(session: Any) -> List[Dict[str, Any]]:
         params: Dict[str, Any] = {"limit": limit}
@@ -569,6 +593,18 @@ def _is_truthy(value: Any) -> bool:
 
 async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
     if not event_ids:
+        return set()
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Skipping labeled event lookup because legacy pipeline is disabled",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_price_target_labeler",
+                "operation": "get_labeled_price_target_event_ids",
+                "control": f"{control_key}={control_raw}",
+            },
+        )
         return set()
 
     async def query(session: Any) -> Set[str]:
@@ -3754,6 +3790,19 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
     Finds records with NULL values in key feature columns and updates them.
     Can be run periodically to catch any gaps.
     """
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Skipping local feature backfill because legacy pipeline is disabled",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_price_target_labeler",
+                "operation": "backfill_missing_features",
+                "control": f"{control_key}={control_raw}",
+            },
+        )
+        return 0
+
     await init_db()
     total_updated = 0
 

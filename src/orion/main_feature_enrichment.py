@@ -47,6 +47,11 @@ _heber_reader = HeberReader()
 _recent_regime_snapshots: list[dict[str, Any]] = []
 
 
+def _gateway_fetch_enabled() -> bool:
+    raw = os.getenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on", "y"}
+
+
 def _gateway_runtime_contract() -> tuple[str, str]:
     gateway_url = (system_settings.data_gateway_url or "").strip()
     if not gateway_url:
@@ -514,20 +519,30 @@ async def persist_regime_snapshot(
 
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
-    gateway_url, gateway_api_key = _gateway_runtime_contract()
+    gateway_fetch_enabled = _gateway_fetch_enabled()
     zero_write_warn_streak = _zero_write_warn_streak_threshold()
     loop_sleep_seconds = _loop_sleep_seconds()
     loop_error_warn_streak = _loop_error_warn_streak_threshold()
     non_heber_warn_streak = _non_heber_warn_streak_threshold()
     await init_db()
 
-    # Initialize connectors (now using Data Gateway)
-    greek_connector = UWGreekExposureConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-    tide_connector = UWMarketTideConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-    max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-    iv_connector = UWIVRankConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+    greek_connector: UWGreekExposureConnector | None = None
+    tide_connector: UWMarketTideConnector | None = None
+    max_pain_connector: UWMaxPainConnector | None = None
+    iv_connector: UWIVRankConnector | None = None
+    if gateway_fetch_enabled:
+        gateway_url, gateway_api_key = _gateway_runtime_contract()
+        greek_connector = UWGreekExposureConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+        tide_connector = UWMarketTideConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+        max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+        iv_connector = UWIVRankConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+    else:
+        logger.info(
+            "Feature enrichment gateway polling disabled; relying on Data-Gateway -> Heber feeds",
+            extra={"event": "feature_enrichment_gateway_fetch_disabled"},
+        )
     regime_detector = MultiAxisRegimeDetector()
-    vix_connector = VIXProxyConnector()  # Uses VIXY bars from silver_alpaca_bars
+    vix_connector = VIXProxyConnector()  # Uses VIXY bars from Heber bars feed
 
     last_tide = datetime.min.replace(tzinfo=timezone.utc)
     last_greek = datetime.min.replace(tzinfo=timezone.utc)
@@ -559,14 +574,22 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
             )
 
             # Market Tide - every minute
-            if (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and tide_connector is not None
+                and (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL
+            ):
                 count = await tide_connector.fetch_and_store()
                 logger.info(f"Market Tide: stored {count} ticks")
                 _note_fetch_count("market_tide", count, zero_write_streaks, zero_write_warn_streak)
                 last_tide = now
 
             # Greek Exposure - every 5 minutes
-            if (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and greek_connector is not None
+                and (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL
+            ):
                 count = await greek_connector.fetch_and_store(tickers)
                 logger.info(f"Greek Exposure: stored {count} records for {len(tickers)} tickers")
                 _note_fetch_count(
@@ -579,7 +602,11 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 last_greek = now
 
             # Max Pain - every hour
-            if (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and max_pain_connector is not None
+                and (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL
+            ):
                 count = await max_pain_connector.fetch_and_store(tickers)
                 logger.info(f"Max Pain: stored {count} records")
                 _note_fetch_count(
@@ -592,7 +619,11 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 last_max_pain = now
 
             # IV Rank - every 15 minutes
-            if (now - last_iv).total_seconds() >= IV_RANK_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and iv_connector is not None
+                and (now - last_iv).total_seconds() >= IV_RANK_INTERVAL
+            ):
                 count = await iv_connector.fetch_and_store(tickers)
                 logger.info(f"IV Rank: stored {count} records")
                 _note_fetch_count(

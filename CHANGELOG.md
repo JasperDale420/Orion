@@ -8,6 +8,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber reader now handles hive partition schema conflicts with a safe fallback path (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
+    - added `_read_table(...)` helper to centralize pyarrow read behavior,
+    - added partition-conflict detection via `_is_partition_schema_conflict(...)`,
+    - when hive-partition schema merge fails, reader retries with `partitioning=None`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_heber_reader.py`:
+    - added coverage for bars and market-tide reads when parquet files include partition-column conflicts.
+  - Verified with:
+    - `pytest -q tests/unit/test_heber_reader.py`
+    - `ruff check src/orion/clients/heber_reader.py tests/unit/test_heber_reader.py`
+
+- **Price-target labeler legacy gate now blocks all local backfill/query helpers when disabled (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - `get_velocity_backfill_candidates(...)` returns early when legacy label pipeline is disabled,
+    - `get_checkpoint_backfill_candidates(...)` returns early when legacy label pipeline is disabled,
+    - `_get_labeled_price_target_event_ids(...)` returns early when legacy label pipeline is disabled,
+    - `backfill_missing_features(...)` returns early before DB init when legacy label pipeline is disabled.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`:
+    - added regression tests proving these paths do not call local DB when the gate is off.
+  - Verified with:
+    - `pytest -q tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_price_target_labeler_heber_context.py`
+    - `ruff check src/orion/main_price_target_labeler.py tests/unit/test_legacy_label_pipeline_gates.py`
+
+- **Feature enrichment now defaults to Heber-only context reads (no redundant UW Gateway polling) and Docker build is Poetry-2 compatible (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+    - added `ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH` gate (default `false`),
+    - `run_feature_loop` now skips Gateway credential contract + UW connector polling unless explicitly enabled.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - feature-enrichment now wires `GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}` (no missing-var warning),
+    - added `ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/Dockerfile`:
+    - upgraded container Poetry runtime to `2.3.2` to match Poetry 2 lockfile metadata.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_runtime_signals.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+  - Verified with:
+    - `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py -k "gateway_fetch_enabled or run_feature_loop"`
+    - `pytest -q tests/unit/test_compose_legacy_gate_wiring.py`
+    - `ruff check src/orion/main_feature_enrichment.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_compose_legacy_gate_wiring.py`
+
+- **Compose runtime now mounts Heber data for Heber readers and configures MCP SEC contact env (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - mounted `/Volumes/heber/data:/Volumes/heber/data:ro` for `execution`, `feature_enrichment`, and `eod-agent`,
+    - added `SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}` in `mcp-server` environment.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`:
+    - added `test_heber_data_root_is_mounted_for_heber_consumers`,
+    - added `test_mcp_server_wires_sec_contact_email`.
+  - Verified with:
+    - `pytest -q tests/unit/test_compose_legacy_gate_wiring.py -k "heber_data_root_is_mounted_for_heber_consumers or mcp_server_wires_sec_contact_email"`
+    - `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_compose_legacy_gate_wiring.py`
+    - `ruff check src/orion/main_feature_enrichment.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_compose_legacy_gate_wiring.py`
+
 - **Feature validation source audit now rejects legacy `silver_*` aliases (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/validate_features.py`:
     - removed legacy alias normalization for `silver_*` source IDs in audit paths.

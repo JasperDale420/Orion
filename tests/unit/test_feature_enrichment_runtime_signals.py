@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -227,6 +228,59 @@ def test_non_heber_warn_streak_threshold_invalid_env_uses_default(monkeypatch: p
 
     assert value == feature_enrichment.DEFAULT_NON_HEBER_WARN_STREAK
     assert warnings[-1]["event"] == "feature_enrichment_non_heber_warn_streak_invalid"
+
+
+def test_gateway_fetch_enabled_defaults_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", raising=False)
+    assert feature_enrichment._gateway_fetch_enabled() is False
+
+
+def test_gateway_fetch_enabled_parses_truthy_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", "true")
+    assert feature_enrichment._gateway_fetch_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_run_feature_loop_skips_gateway_contract_when_gateway_fetch_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", "false")
+
+    async def _noop_init_db() -> None:
+        return None
+
+    def _should_not_call_gateway_contract() -> tuple[str, str]:
+        raise AssertionError("gateway contract should not be required when gateway fetch is disabled")
+
+    monkeypatch.setattr(feature_enrichment, "init_db", _noop_init_db)
+    monkeypatch.setattr(feature_enrichment, "_gateway_runtime_contract", _should_not_call_gateway_contract)
+
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+
+    await feature_enrichment.run_feature_loop(shutdown_event)
+
+
+@pytest.mark.asyncio
+async def test_run_feature_loop_requires_gateway_contract_when_gateway_fetch_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", "true")
+
+    async def _noop_init_db() -> None:
+        return None
+
+    def _missing_gateway_contract() -> tuple[str, str]:
+        raise ValueError("gateway credentials missing")
+
+    monkeypatch.setattr(feature_enrichment, "init_db", _noop_init_db)
+    monkeypatch.setattr(feature_enrichment, "_gateway_runtime_contract", _missing_gateway_contract)
+
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+
+    with pytest.raises(ValueError, match="gateway credentials missing"):
+        await feature_enrichment.run_feature_loop(shutdown_event)
 
 
 def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pytest.MonkeyPatch) -> None:

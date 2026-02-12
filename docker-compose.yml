@@ -64,6 +64,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - /Volumes/heber/data:/Volumes/heber/data:ro
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_RUN_ID=docker_persistent
@@ -86,12 +87,14 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - /Volumes/heber/data:/Volumes/heber/data:ro
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - UW_API_KEY=${UW_API_KEY}
       - ORION_RUN_ID=docker_persistent
       - GATEWAY_URL=http://host.docker.internal:8080
-      - GATEWAY_API_KEY=${GATEWAY_API_KEY}
+      - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}
+      - ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
     logging:
       driver: json-file
@@ -132,6 +135,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - /Volumes/heber/data:/Volumes/heber/data:ro
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ALPACA_API_KEY=${ALPACA_API_KEY}
@@ -181,6 +185,7 @@ services:
     volumes:
       - .:/app
       - ~/.codex:/root/.codex:ro # Mount host codex credentials (read-only)
+      - /Volumes/heber/data:/Volumes/heber/data:ro
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_RUN_ID=docker_persistent_eod
@@ -379,6 +384,7 @@ services:
       - MCP_PORT=8001
       - MCP_TRANSPORT=sse
       - UW_API_KEY=${UW_API_KEY}
+      - SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}
       - APCA_API_KEY_ID=${ALPACA_API_KEY}
       - APCA_API_SECRET_KEY=${ALPACA_SECRET_KEY}
       - APCA_API_BASE_URL=https://paper-api.alpaca.markets

@@ -576,6 +576,9 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `backfill_ml_features` cursor key renamed to Heber-neutral `backfill_ml_features.heber_gold.cursor` with fallback reads from legacy cursor keys for resume continuity
 - `cleanup_legacy_backfill_watermarks` now includes real `.cursor` watermark keys used by active backfill jobs (`backfill_ml_features.price_target_labels.cursor`, `backfill_exit_columns.velocity.cursor`, `backfill_exit_columns.checkpoint.cursor`)
 - `validate_features` source-audit adapter now runs canonical source IDs only; legacy `silver_*` aliases are rejected as `source_unavailable` (fix-forward, no backward alias normalization)
+- `main_feature_enrichment` now defaults to Heber-only context reads (`ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=false`) and skips Data-Gateway polling/credential contract unless explicitly enabled
+- compose now mounts Heber data root (`/Volumes/heber/data`) for Heber-consuming services (`execution`, `feature_enrichment`, `eod-agent`) and wires `SEC_CONTACT_EMAIL` in `mcp-server`
+- `HeberReader` now includes partition-schema conflict fallback (`partitioning=None`) when hive partition metadata collides with parquet file column types
 - `main_pattern_miner` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_PATTERN_MINER`) and exits before DB init when disabled
 - `nightly_backfill` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL`) and exits before DB init when disabled
 - `quality_guardrails` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS`) and exits before DB init when disabled
@@ -594,6 +597,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `SystemSettings.exit_classifier_training_source` default is now `heber_gold` (matching compose defaults), reducing accidental local SQL usage when env vars are unset
 - `exit_classifier` + `pattern_miner` training-source parsers now fail safely to `heber_gold` on invalid env values (instead of falling back to `legacy_sql`), reducing accidental local SQL reactivation from bad config
 - `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
+- `main_price_target_labeler` now short-circuits local helper paths when legacy gates are disabled (`get_velocity_backfill_candidates`, `get_checkpoint_backfill_candidates`, `_get_labeled_price_target_event_ids`, `backfill_missing_features`)
 - `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
 - `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
 - `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
@@ -747,13 +751,15 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
 
 - `src/orion/main_price_target_labeler.py`: 9 refs
-- `src/orion/ml/exit_classifier.py`: 6 refs
 - `src/orion/storage/models_silver.py`: 3 refs
-- `src/orion/ml/pattern_miner.py`: 3 refs
+- `src/orion/ml/exit_classifier.py`: 2 refs
+- `src/orion/jobs/cleanup_legacy_backfill_watermarks.py`: 2 refs
+- `src/orion/jobs/backfill_ml_features.py`: 2 refs
+- `src/orion/ml/pattern_miner.py`: 1 ref
 
 Interpretation:
 
-- Runtime risk is now concentrated in the legacy labeling + trainer source path.
+- Runtime risk is now concentrated in the remaining legacy label-table mutation/query paths plus local Silver model definitions.
 - Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
 
 ### Archive Actions Completed (this pass)

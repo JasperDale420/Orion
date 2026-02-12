@@ -5,6 +5,8 @@ from pathlib import Path
 
 import httpx
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from orion.clients.heber_reader import HeberReader
@@ -13,6 +15,28 @@ from orion.clients.heber_reader import HeberReader
 def _write_parquet(path: Path, df: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, index=False)
+
+
+def _write_partition_conflict_parquet(path: Path, ts: datetime) -> None:
+    """Write a file where hive partition keys overlap with file columns."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    table = pa.table(
+        {
+            "instrument_type": pa.array(["equity"], type=pa.string()),
+            "instrument_key": pa.array(["equity:AAPL"], type=pa.string()),
+            "bar_start_ts": pa.array([ts]),
+            "ts_event": pa.array([ts]),
+            "ts_available": pa.array([ts]),
+            "open": pa.array([100.0]),
+            "high": pa.array([101.0]),
+            "low": pa.array([99.0]),
+            "close": pa.array([100.5]),
+            "volume": pa.array([10]),
+            "net_call_premium": pa.array([150.0]),
+            "net_put_premium": pa.array([-25.0]),
+        }
+    )
+    pq.write_table(table, path)
 
 
 def test_health_check_uses_supported_endpoint() -> None:
@@ -290,3 +314,66 @@ def test_read_iv_rank_filters_symbol_and_asof(tmp_path: Path) -> None:
     assert len(result) == 1
     assert set(result["instrument_key"]) == {"equity:AAPL"}
     assert float(result.iloc[0]["iv_rank"]) == 25.0
+
+
+def test_read_bars_handles_hive_partition_column_type_conflict(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    _write_partition_conflict_parquet(
+        tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05" / "part-0.parquet",
+        ts=base,
+    )
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_bars(symbols=["AAPL"], asof_time=base + timedelta(minutes=1))
+
+    assert len(result) == 1
+    assert set(result["instrument_key"]) == {"equity:AAPL"}
+
+
+def test_read_market_tide_handles_hive_partition_column_type_conflict(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    _write_partition_conflict_parquet(
+        tmp_path / "silver" / "feed=market_tide" / "instrument_type=equity" / "dt=2026-02-05" / "part-0.parquet",
+        ts=base,
+    )
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_market_tide(asof_time=base + timedelta(minutes=1))
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["net_call_premium"]) == 150.0
+
+
+def test_read_bars_skips_corrupt_parquet_file_and_keeps_valid_rows(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    valid = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "bar_start_ts": [base],
+            "ts_available": [base],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [10],
+        }
+    )
+
+    valid_path = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
+    _write_parquet(valid_path / "part-valid.parquet", valid)
+    (valid_path / "part-corrupt.parquet").write_text("not parquet data", encoding="utf-8")
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_bars(symbols=["AAPL"], asof_time=base + timedelta(minutes=1))
+
+    assert len(result) == 1
+    assert set(result["instrument_key"]) == {"equity:AAPL"}
+
+
+def test_is_corrupt_parquet_error_detects_dataset_open_variant() -> None:
+    exc = RuntimeError(
+        "Error creating dataset. Could not open Parquet input source '/tmp/bad.parquet': "
+        "ArrowInvalid: malformed parquet metadata"
+    )
+
+    assert HeberReader._is_corrupt_parquet_error(exc) is True

@@ -38,7 +38,7 @@ MODEL_DIR = system_settings.model_dir
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
 # These features are known at trade entry and don't reveal the outcome
 FEATURE_COLUMNS = [
-    # Entry context (from price_target_labels)
+    # Entry context (from legacy local label table)
     "iv_rank_at_entry",
     "gex_at_entry",
     "vex_at_entry",
@@ -510,7 +510,7 @@ async def fetch_training_data(
     quick_winner_seconds: int = 3600,
 ) -> Tuple[Any, List[str]]:
     """
-    Fetch training data from price_target_labels.
+    Fetch training data for pattern miner.
 
     Args:
         window_days: Number of days to look back

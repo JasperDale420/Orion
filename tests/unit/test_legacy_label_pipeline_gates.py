@@ -167,3 +167,75 @@ async def test_price_target_labeler_persist_labels_skips_local_write_when_disabl
     persisted = await main_price_target_labeler.persist_labels([{"event_id": "evt-disabled"}])
 
     assert persisted == 0
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_velocity_backfill_candidates_skip_local_query_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
+
+    async def _fail_db_query(_operation):
+        raise AssertionError("db_query should not be called when price-target labeler is disabled")
+
+    monkeypatch.setattr(main_price_target_labeler, "db_query", _fail_db_query, raising=False)
+
+    rows = await main_price_target_labeler.get_velocity_backfill_candidates(limit=10)
+
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_checkpoint_backfill_candidates_skip_local_query_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
+
+    async def _fail_db_query(_operation):
+        raise AssertionError("db_query should not be called when price-target labeler is disabled")
+
+    monkeypatch.setattr(main_price_target_labeler, "db_query", _fail_db_query, raising=False)
+
+    rows = await main_price_target_labeler.get_checkpoint_backfill_candidates(limit=10)
+
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_labeled_event_lookup_skips_local_query_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
+
+    async def _fail_db_query(_operation):
+        raise AssertionError("db_query should not be called when price-target labeler is disabled")
+
+    monkeypatch.setattr(main_price_target_labeler, "db_query", _fail_db_query, raising=False)
+
+    labeled = await main_price_target_labeler._get_labeled_price_target_event_ids(["evt-1"])
+
+    assert labeled == set()
+
+
+@pytest.mark.asyncio
+async def test_price_target_labeler_backfill_missing_features_skips_local_work_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER", "false")
+
+    async def _fail_init_db() -> None:
+        raise AssertionError("init_db should not be called when price-target labeler is disabled")
+
+    async def _fail_db_query(_operation):
+        raise AssertionError("db_query should not be called when price-target labeler is disabled")
+
+    monkeypatch.setattr(main_price_target_labeler, "init_db", _fail_init_db)
+    monkeypatch.setattr(main_price_target_labeler, "db_query", _fail_db_query, raising=False)
+
+    updated = await main_price_target_labeler.backfill_missing_features(batch_size=10)
+
+    assert updated == 0

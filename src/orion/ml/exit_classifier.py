@@ -2,7 +2,7 @@
 Exit Classifier v2 - Bucket-Specific Exit Timing.
 
 ML classifier to predict optimal exit timing for open positions.
-Uses price_target_labels data with bucket-appropriate checkpoints.
+Uses legacy local label-table data with bucket-appropriate checkpoints.
 
 Buckets and their time horizons:
 - 0DTE: Minutes (5m, 10m, 15m, 30m, 1h)
@@ -198,7 +198,7 @@ def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float
 
 
 async def _load_price_target_label_columns(force_refresh: bool = False) -> set[str]:
-    """Return currently available columns in price_target_labels."""
+    """Return currently available columns in the legacy local label table."""
     global _schema_cache_columns, _schema_cache_loaded_at
 
     now = time.monotonic()
@@ -906,7 +906,7 @@ async def build_bucket_training_data(
     """
     Build training dataset for a specific bucket.
 
-    Uses bucket-appropriate checkpoints from price_target_labels.
+    Uses bucket-appropriate checkpoints from the configured training source.
     """
     feature_names = list(EXIT_FEATURE_NAMES)
     enabled, control_key, control_raw = _legacy_exit_training_control()
@@ -943,7 +943,7 @@ async def build_bucket_training_data(
         if missing_columns:
             missing_by_family = _group_missing_columns_by_family(set(missing_columns), checkpoints)
             logger.warning(
-                "Skipping exit training due to missing price_target_labels columns",
+                "Skipping exit training due to missing legacy label-table columns",
                 extra={
                     "event": "exit_training_schema_missing_columns",
                     "bucket": bucket,

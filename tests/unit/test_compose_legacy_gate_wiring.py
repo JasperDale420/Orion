@@ -46,7 +46,11 @@ def test_legacy_label_stack_services_are_profiled_for_opt_in() -> None:
 def test_feature_enrichment_wires_gateway_api_key_env() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "feature_enrichment")
-    assert "- GATEWAY_API_KEY=${GATEWAY_API_KEY}" in block
+    assert "- GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}" in block
+    assert (
+        "- ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}"
+        in block
+    )
 
 
 def test_pattern_miner_is_profiled_with_legacy_label_stack() -> None:
@@ -123,3 +127,17 @@ def test_compose_does_not_include_decommissioned_flow_labeler_service() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     assert "\n  labeler:\n" not in compose_text
     assert "ORION_ENABLE_LEGACY_FLOW_LABELER" not in compose_text
+
+
+def test_heber_data_root_is_mounted_for_heber_consumers() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    for service_name in ("execution", "feature_enrichment", "eod-agent"):
+        block = _service_block(compose_text, service_name)
+        assert "- /Volumes/heber/data:/Volumes/heber/data:ro" in block
+
+
+def test_mcp_server_wires_sec_contact_email() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "mcp-server")
+    assert "- SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}" in block
