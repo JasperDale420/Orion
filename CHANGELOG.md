@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Daemon worker health checks now use process liveness instead of HTTP probes (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - added explicit `healthcheck` blocks for `feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, and `indexer`.
+    - these workers now use `test: [ "CMD-SHELL", "kill -0 1" ]` so daemon runtime is checked correctly.
+    - this overrides the image-level `localhost:8000/health` probe that only applies to API mode.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`:
+    - added coverage that the five daemon services include explicit non-HTTP health checks.
+    - added coverage that those service blocks do not probe `localhost:8000/health`.
+  - Verified with:
+    - `pytest -q tests/unit/test_compose_legacy_gate_wiring.py`
+    - `docker compose up -d --build feature_enrichment execution position-monitor eod-agent indexer`
+    - post-deploy health status for all five services is now `healthy`.
+
 - **FeatureEngine history hydration is now Heber-only (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py`:
     - removed local `SilverAlpacaBar` SQL hydration query path.

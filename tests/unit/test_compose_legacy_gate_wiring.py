@@ -154,3 +154,32 @@ def test_mcp_server_wires_explicit_auth_env_contract() -> None:
 def test_compose_drops_obsolete_top_level_version_key() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     assert not compose_text.lstrip().startswith("version:")
+
+
+def test_long_running_worker_services_override_http_healthcheck() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    for service_name in (
+        "feature_enrichment",
+        "execution",
+        "position-monitor",
+        "eod-agent",
+        "indexer",
+    ):
+        block = _service_block(compose_text, service_name)
+        assert "healthcheck:" in block
+        assert 'test: [ "CMD-SHELL", "kill -0 1" ]' in block
+
+
+def test_worker_healthcheck_blocks_do_not_probe_localhost_8000() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    for service_name in (
+        "feature_enrichment",
+        "execution",
+        "position-monitor",
+        "eod-agent",
+        "indexer",
+    ):
+        block = _service_block(compose_text, service_name)
+        assert "localhost:8000/health" not in block

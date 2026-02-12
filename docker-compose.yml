@@ -94,6 +94,11 @@ services:
       - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}
       - ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "kill -0 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     logging:
       driver: json-file
       options:
@@ -142,6 +147,11 @@ services:
       - ORION_RUN_ID=docker_persistent_exec
       - ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE=false
     command: [ "python", "-m", "orion.main_execution" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "kill -0 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     logging:
       driver: json-file
       options:
@@ -167,6 +177,11 @@ services:
       - ORION_RUN_ID=docker_position_monitor
       - ORION_MODEL_DIR=/app/models
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "kill -0 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     logging:
       driver: json-file
       options:
@@ -191,6 +206,11 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-reasoner}
     command: [ "python", "-m", "orion.main_eod" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "kill -0 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     logging:
       driver: json-file
       options:
@@ -332,6 +352,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     command: [ "python", "-m", "orion.rag.indexer", "--daemon", "--interval", "600" ]
     # 600s = 10 minutes interval
+    healthcheck:
+      test: [ "CMD-SHELL", "kill -0 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     logging:
       driver: json-file
       options:
