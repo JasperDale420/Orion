@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from sqlalchemy import text
 
-from orion.config import system_settings
+from orion.config import SystemSettings, system_settings
 from orion.ml.schemas import (
     FeatureImportance,
     MLInsightsSummary,
@@ -128,6 +128,26 @@ TARGETS = {
 }
 
 
+def _legacy_pattern_training_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
+    specific_key = "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING"
+    if settings.legacy_pattern_miner_training_enabled is not None:
+        enabled = settings.legacy_pattern_miner_training_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
+
+    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
+
+
+def _legacy_pattern_training_enabled() -> bool:
+    enabled, _, _ = _legacy_pattern_training_control()
+    return enabled
+
+
 def get_quick_winner_target(seconds_threshold: int) -> str:
     """Generate quick_winner target SQL with bucket-specific time threshold."""
     return f"""
@@ -147,10 +167,14 @@ def _exit_classifier_schema_refresh_config_from_env() -> tuple[bool, bool]:
 
 def _exit_classifier_schema_refresh_config_details_from_env() -> tuple[bool, bool, str]:
     """Read schema-refresh config with source metadata for observability."""
-    strategy = os.getenv(
-        "ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY",
-        "",
-    ).strip().lower()
+    strategy = (
+        os.getenv(
+            "ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY",
+            "",
+        )
+        .strip()
+        .lower()
+    )
     if strategy:
         if strategy in {"off", "disabled", "none", "false"}:
             return False, False, "strategy_env"
@@ -251,6 +275,19 @@ async def fetch_training_data(
         Tuple of (pandas DataFrame, list of feature names)
     """
     import pandas as pd
+
+    enabled, control_key, control_raw = _legacy_pattern_training_control()
+    if not enabled:
+        logger.warning(
+            "Legacy pattern-miner training disabled by config",
+            extra={
+                "event": "legacy_label_pipeline_disabled",
+                "pipeline": "orion.ml.pattern_miner",
+                "control_key": control_key,
+                "control_raw": control_raw,
+            },
+        )
+        return None, []
 
     feature_cols = ", ".join(FEATURE_COLUMNS + CATEGORICAL_COLUMNS)
 
@@ -425,7 +462,7 @@ def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int 
 
         # Skip if either class is missing
         if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
-            logger.warning(f"Fold {fold+1}: Skipped due to single class")
+            logger.warning(f"Fold {fold + 1}: Skipped due to single class")
             continue
 
         model = lgb.LGBMClassifier(**params)
@@ -435,7 +472,7 @@ def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int 
         fold_auc = roc_auc_score(y_test, test_pred)
         fold_aucs.append(fold_auc)
 
-        logger.debug(f"Fold {fold+1}/{n_splits}: AUC={fold_auc:.3f}")
+        logger.debug(f"Fold {fold + 1}/{n_splits}: AUC={fold_auc:.3f}")
 
     if not fold_aucs:
         logger.warning("Walk-forward CV failed: no valid folds")

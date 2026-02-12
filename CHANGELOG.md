@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Legacy-gate hardening (TDD): `pattern_miner` training data path control**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
+    - added `legacy_pattern_miner_training_enabled` (`ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING`).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
+    - added training-gate helpers:
+      - `_legacy_pattern_training_control()`
+      - `_legacy_pattern_training_enabled()`
+    - `fetch_training_data(...)` now exits early with `(None, [])` when legacy pattern training is disabled (before DB query).
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - `pattern-miner` now wires `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING`.
+  - Updated tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`
+      - `test_pattern_miner_training_control_prefers_specific_gate`
+      - `test_fetch_training_data_returns_empty_when_legacy_training_disabled`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+      - pattern-miner block now asserts `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING` wiring.
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_config_centralization.py`
+      - extended legacy-gate env mapping assertions with pattern-miner training gate.
+  - Verified with:
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+    - `ruff check src/orion/config.py src/orion/ml/pattern_miner.py tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py`
+
 - **Heber parity deep-audit (label-table column surface)**:
   - Extended `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with column-level comparisons:
     - `flow_labels` (`main_labeler`) vs Heber watch outcomes/features: `5/28` direct overlap.

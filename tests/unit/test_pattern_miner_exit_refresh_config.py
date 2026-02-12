@@ -90,6 +90,38 @@ def test_exit_classifier_schema_refresh_mode_labels() -> None:
     assert pattern_miner._exit_classifier_schema_refresh_mode(True, True) == "per_bucket"
 
 
+def test_pattern_miner_training_control_prefers_specific_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING", "false")
+
+    enabled, key, raw = pattern_miner._legacy_pattern_training_control()
+
+    assert enabled is False
+    assert key == "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING"
+    assert raw == "false"
+
+
+@pytest.mark.asyncio
+async def test_fetch_training_data_returns_empty_when_legacy_training_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING", "false")
+    db_calls = {"count": 0}
+
+    async def _db_query(_operation):
+        db_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(pattern_miner, "db_query", _db_query, raising=False)
+
+    df, feature_names = await pattern_miner.fetch_training_data(window_days=30, min_samples=1)
+
+    assert df is None
+    assert feature_names == []
+    assert db_calls["count"] == 0
+
+
 @pytest.mark.asyncio
 async def test_run_all_pattern_mining_passes_exit_refresh_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}

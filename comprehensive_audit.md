@@ -577,6 +577,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `nightly_backfill` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL`) and exits before DB init when disabled
 - `quality_guardrails` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS`) and exits before DB init when disabled
 - `exit_classifier` training path now has explicit gate (`ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`) and returns empty training datasets without DB access when disabled
+- `pattern_miner` training data path now has explicit gate (`ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING`) and returns empty training datasets without DB access when disabled
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)

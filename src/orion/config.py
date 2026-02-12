@@ -105,6 +105,10 @@ class SystemSettings(BaseSettings):
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING",
     )
+    legacy_pattern_miner_training_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING",
+    )
     ml_prefilter_threshold: float = Field(
         default=0.5,
         ge=0.0,
