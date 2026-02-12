@@ -603,6 +603,7 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
 - `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
 - `/flows` API endpoint (`src/orion/api/main.py`) now reads Heber Silver flow data (`reader.read_flow`) and no longer queries local `SilverOptionFlow` SQL rows
+- `main_execution.fetch_recent_flow_for_ticker(...)` now reads recent flow from Heber only and no longer falls back to local `SilverOptionFlow` SQL rows
 
 ### Heber vs Orion ML-Training Field Parity (Deep Audit)
 
@@ -759,17 +760,17 @@ Interpretation:
 
 `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` is still imported by active runtime paths, not only historical tests. Current direct usage includes:
 
-- Execution query paths (`src/orion/main_execution.py`)
 - Processing pipeline (`src/orion/processing/feature_engine.py`, `src/orion/processing/persistence.py`, rule-engine modules)
 - Ingestion/service layer (`src/orion/ingestion/service.py`)
 - Agents consuming local signal history (`src/orion/agents/eod_review_agent.py`, `src/orion/agents/meta_search_agent.py`)
+- Darkpool feature aggregates (`src/orion/ml/darkpool_features.py`)
 
 Decision: keep `models_silver.py` for now and treat it as an active compatibility surface until those live readers are migrated to Heber-native adapters.
 
 ### Remaining Active Remediation Target
 
 - No active local label-table SQL training paths remain in runtime trainers.
-- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely.
+- Next migration target is architectural: move or retire remaining local `models_silver.py` readers where Heber-native adapters can replace them safely (highest-impact remaining consumers: `meta_search_agent`, `processing/persistence`, `ml/darkpool_features`).
 
 ### Archive Actions Completed (this pass)
 

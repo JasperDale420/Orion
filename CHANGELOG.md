@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Execution recent-flow lookup is now Heber-only (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_execution.py`:
+    - removed local `SilverOptionFlow` SQL fallback path from `fetch_recent_flow_for_ticker(...)`.
+    - function now returns Heber-sourced rows (or empty list) and logs when Heber flow source is explicitly disabled.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_main_execution_heber_source.py`:
+    - replaced SQL fallback expectations with Heber-only behavior assertions.
+    - added explicit guard assertions that local `db_query` is not called in unavailable/disabled Heber scenarios.
+  - Verified with:
+    - `pytest -q tests/unit/test_main_execution_heber_source.py`
+    - `ruff check src/orion/main_execution.py tests/unit/test_main_execution_heber_source.py`
+
 - **Compose contract updates for MCP auth envs and modern Compose spec**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
     - removed obsolete top-level `version:` key.
