@@ -187,7 +187,7 @@ async def test_build_bucket_training_data_heber_source_uses_gold_datasets_withou
 
 
 @pytest.mark.asyncio
-async def test_build_bucket_training_data_uses_single_lateral_window_lookup(
+async def test_build_bucket_training_data_uses_direct_window_columns_without_lateral_join(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -221,13 +221,9 @@ async def test_build_bucket_training_data_uses_single_lateral_window_lookup(
     assert y.shape == (0,)
 
     sql = captured["sql"]
-    assert "LEFT JOIN LATERAL" in sql
-    assert sql.count("LEFT JOIN LATERAL") == 1
-    assert "jsonb_object_agg(period, features)" in sql
-    assert "period IN ('1h', '1d', '1w')" in sql
-    assert "w1h" not in sql
-    assert "w1d" not in sql
-    assert "w1w" not in sql
+    assert "LEFT JOIN LATERAL" not in sql
+    assert "jsonb_object_agg(period, features)" not in sql
+    assert "w.features_by_period" not in sql
 
 
 @pytest.mark.asyncio
@@ -551,8 +547,46 @@ async def test_build_bucket_training_data_query_coalesces_entry_and_window_field
     assert "COALESCE(p.dte, 0) as dte" in sql
     assert "COALESCE(p.iv_rank_at_entry, 50) as iv_rank_at_entry" in sql
     assert "COALESCE(p.vix_at_entry, 20) as vix_at_entry" in sql
-    assert "COALESCE(w.features_by_period->'1h'->>'sweep_ratio', '0') as window_sweep_ratio_1h" in sql
-    assert "COALESCE(w.features_by_period->'1d'->>'dp_volume', '0') as window_dp_volume_1d" in sql
+    assert "0.0 as window_sweep_ratio_1h" in sql
+    assert "0.0 as window_dp_volume_1d" in sql
+
+
+@pytest.mark.asyncio
+async def test_build_bucket_training_data_uses_window_columns_when_present_in_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_columns() -> set[str]:
+        required = exit_classifier._required_price_target_columns_for_bucket(exit_classifier.BUCKET_CHECKPOINTS["0DTE"])
+        required.add("window_sweep_ratio_1h")
+        required.add("window_dp_volume_1d")
+        return required
+
+    class _Result:
+        def mappings(self) -> "_Result":
+            return self
+
+        def all(self) -> list[dict[str, object]]:
+            return []
+
+    class _Session:
+        async def execute(self, stmt, params=None) -> _Result:
+            captured["sql"] = str(stmt)
+            captured["params"] = params
+            return _Result()
+
+    async def _db_query(operation):
+        return await operation(_Session())
+
+    monkeypatch.setattr(exit_classifier, "_load_price_target_label_columns", _fake_columns, raising=False)
+    monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
+
+    await exit_classifier.build_bucket_training_data("0DTE")
+
+    sql = str(captured["sql"])
+    assert "COALESCE(p.window_sweep_ratio_1h, 0.0) as window_sweep_ratio_1h" in sql
+    assert "COALESCE(p.window_dp_volume_1d, 0.0) as window_dp_volume_1d" in sql
 
 
 @pytest.mark.asyncio

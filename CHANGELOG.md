@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Exit-classifier legacy SQL path decoupled from `gold_feature_windows` join (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
+    - removed lateral join against `gold_feature_windows`,
+    - window-context inputs are now selected as direct optional `price_target_labels` columns when present, with `0.0` fallback when absent.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`:
+    - `test_build_bucket_training_data_uses_direct_window_columns_without_lateral_join`
+    - `test_build_bucket_training_data_uses_window_columns_when_present_in_schema`
+  - Verified with:
+    - `pytest -q tests/unit/test_exit_classifier_window_query.py`
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_config_centralization.py tests/unit/test_legacy_label_pipeline_gates.py`
+    - `ruff check src/orion/ml/exit_classifier.py tests/unit/test_exit_classifier_window_query.py`
+
 - **Exit-classifier Heber training path now returns real samples (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
     - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=heber_gold` now reads Heber Gold datasets (`labels_alert_barriers`, `meta_label_features`) and builds a compatibility training matrix instead of returning empty arrays by default.

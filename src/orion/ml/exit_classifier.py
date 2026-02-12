@@ -298,6 +298,30 @@ def _group_count_map(grouped_columns: dict[str, list[str]]) -> dict[str, int]:
     return {group: len(columns) for group, columns in grouped_columns.items()}
 
 
+_WINDOW_FEATURE_COLUMNS: tuple[str, ...] = (
+    "window_call_put_imbalance_1h",
+    "window_sweep_ratio_1h",
+    "window_flow_count_1h",
+    "window_call_put_imbalance_1d",
+    "window_sweep_ratio_1d",
+    "window_dp_volume_1d",
+    "window_call_put_ratio_1d",
+    "window_call_put_imbalance_1w",
+    "window_sweep_ratio_1w",
+    "window_call_put_ratio_1w",
+)
+
+
+def _window_feature_select_expressions(available_columns: set[str]) -> str:
+    expressions: list[str] = []
+    for column in _WINDOW_FEATURE_COLUMNS:
+        if column in available_columns:
+            expressions.append(f"COALESCE(p.{column}, 0.0) as {column}")
+        else:
+            expressions.append(f"0.0 as {column}")
+    return ",\n            ".join(expressions)
+
+
 def _first_existing_column(frame: Any, candidates: list[str]) -> str | None:
     for column in candidates:
         if column in frame.columns:
@@ -932,6 +956,8 @@ async def build_bucket_training_data(
             X_empty, y_empty = _empty_training_arrays(len(feature_names))
             return X_empty, y_empty, feature_names
 
+    window_feature_selects = _window_feature_select_expressions(available_columns)
+
     # Build column list for query - include returns, Greeks, IV, and time value at each checkpoint
     return_cols = ", ".join([f"return_at_{cp[0]}" for cp in checkpoints])
     delta_cols = ", ".join([f"delta_at_{cp[0]}" for cp in checkpoints])
@@ -987,35 +1013,10 @@ async def build_bucket_training_data(
             -- Outcome
             p.max_return_pct, p.max_drawdown_pct,
 
-            -- Window features (1h context at entry)
-            COALESCE(w.features_by_period->'1h'->>'call_put_imbalance', '0') as window_call_put_imbalance_1h,
-            COALESCE(w.features_by_period->'1h'->>'sweep_ratio', '0') as window_sweep_ratio_1h,
-            COALESCE(w.features_by_period->'1h'->>'flow_count', '0') as window_flow_count_1h,
-
-            -- Window features (1d context at entry)
-            COALESCE(w.features_by_period->'1d'->>'call_put_imbalance', '0') as window_call_put_imbalance_1d,
-            COALESCE(w.features_by_period->'1d'->>'sweep_ratio', '0') as window_sweep_ratio_1d,
-            COALESCE(w.features_by_period->'1d'->>'dp_volume', '0') as window_dp_volume_1d,
-            COALESCE(w.features_by_period->'1d'->>'call_put_ratio', '0') as window_call_put_ratio_1d,
-
-            -- Window features (1w context at entry)
-            COALESCE(w.features_by_period->'1w'->>'call_put_imbalance', '0') as window_call_put_imbalance_1w,
-            COALESCE(w.features_by_period->'1w'->>'sweep_ratio', '0') as window_sweep_ratio_1w,
-            COALESCE(w.features_by_period->'1w'->>'call_put_ratio', '0') as window_call_put_ratio_1w
+            -- Window/context features (direct columns when available; 0.0 fallback)
+            {window_feature_selects}
 
         FROM price_target_labels p
-        -- Join latest window features for 1h, 1d, 1w periods in one lateral lookup
-        LEFT JOIN LATERAL (
-            SELECT jsonb_object_agg(period, features) as features_by_period
-            FROM (
-                SELECT DISTINCT ON (period) period, features
-                FROM gold_feature_windows
-                WHERE ticker = p.ticker
-                  AND period IN ('1h', '1d', '1w')
-                  AND window_end_ts_utc <= p.entry_ts
-                ORDER BY period, window_end_ts_utc DESC
-            ) latest_by_period
-        ) w ON true
         WHERE p.trade_type = :trade_type
         AND p.max_return_pct IS NOT NULL
     """
