@@ -9,6 +9,10 @@ import pytest
 from orion.jobs import backfill_ml_features
 
 
+def test_backfill_cursor_key_uses_heber_neutral_name() -> None:
+    assert backfill_ml_features.BACKFILL_CURSOR_KEY == "backfill_ml_features.heber_gold.cursor"
+
+
 @pytest.mark.asyncio
 async def test_get_records_to_backfill_uses_deterministic_ordering(
     monkeypatch: pytest.MonkeyPatch,
@@ -378,6 +382,41 @@ async def test_load_backfill_cursor_does_not_fallback_to_legacy_watermark(
 
     loaded = await backfill_ml_features._load_backfill_cursor()
     assert loaded == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_load_backfill_cursor_falls_back_to_legacy_cursor_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_keys: list[str] = []
+
+    class _Cursor:
+        def __init__(self, ts: datetime, event_id: str) -> None:
+            self.last_seen_ts_utc = ts
+            self.last_seen_id = event_id
+
+    legacy_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+
+    async def _fake_get_cursor_state(_session: Any, key: str):
+        requested_keys.append(key)
+        if key == "backfill_ml_features.price_target_labels.cursor":
+            return _Cursor(legacy_ts, "evt-legacy")
+        return None
+
+    class _FakeSession:
+        pass
+
+    async def _fake_db_query(fn):
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(backfill_ml_features, "get_cursor_state", _fake_get_cursor_state)
+    monkeypatch.setattr(backfill_ml_features, "db_query", _fake_db_query)
+
+    loaded = await backfill_ml_features._load_backfill_cursor()
+
+    assert loaded == (legacy_ts, "evt-legacy")
+    assert requested_keys[0] == backfill_ml_features.BACKFILL_CURSOR_KEY
+    assert "backfill_ml_features.price_target_labels.cursor" in requested_keys
 
 
 @pytest.mark.asyncio

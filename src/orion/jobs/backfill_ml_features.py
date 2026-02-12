@@ -87,7 +87,11 @@ from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
 logger = setup_struct_logger("orion.backfill.ml_features")
 
 BATCH_SIZE = 50
-BACKFILL_CURSOR_KEY = "backfill_ml_features.price_target_labels.cursor"
+BACKFILL_CURSOR_KEY = "backfill_ml_features.heber_gold.cursor"
+LEGACY_BACKFILL_CURSOR_KEYS: tuple[str, ...] = (
+    "backfill_ml_features.price_target_labels.cursor",
+    "backfill_ml_features.price_target_labels",
+)
 
 
 def extract_underlying_ticker(option_symbol: str) -> str:
@@ -453,8 +457,10 @@ async def _load_backfill_cursor() -> tuple[datetime | None, str | None]:
     """Load persisted resume cursor (timestamp + event_id)."""
 
     async def query(session: Any) -> tuple[datetime | None, str | None]:
-        cursor = await get_cursor_state(session, BACKFILL_CURSOR_KEY)
-        if cursor is not None:
+        for key in (BACKFILL_CURSOR_KEY, *LEGACY_BACKFILL_CURSOR_KEYS):
+            cursor = await get_cursor_state(session, key)
+            if cursor is None:
+                continue
             return cursor.last_seen_ts_utc, cursor.last_seen_id
         return None, None
 

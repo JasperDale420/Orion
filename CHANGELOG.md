@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Backfill ML cursor key renamed to Heber-neutral key with legacy fallback (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
+    - active cursor key changed to `backfill_ml_features.heber_gold.cursor`,
+    - loader now falls back to legacy keys (`backfill_ml_features.price_target_labels.cursor`, `backfill_ml_features.price_target_labels`) for resume continuity.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_ml_features_selection.py`:
+    - added `test_backfill_cursor_key_uses_heber_neutral_name`,
+    - added `test_load_backfill_cursor_falls_back_to_legacy_cursor_key`.
+  - Verified with:
+    - `pytest -q tests/unit/test_backfill_ml_features_selection.py`
+    - `ruff check src/orion/jobs/backfill_ml_features.py tests/unit/test_backfill_ml_features_selection.py`
+
 - **Exit-classifier training default is now Heber-first in code and compose (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
     - `SystemSettings.exit_classifier_training_source` default changed from `legacy_sql` to `heber_gold`.
