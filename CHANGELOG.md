@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Window-context reads migrated to Heber and orphan producer archived (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
+    - `get_window_features_at_entry(ticker, entry_ts)` now computes `1h`/`1d`/`1w` features directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`:
+    - replaced local-query assertions with Heber-derived aggregation assertions and local-DB bypass guards.
+  - Archived unwired legacy window-feature producer:
+    - moved `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/window_feature_job.py` to `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave12/legacy_code/window_feature_job.py`
+    - moved `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_window_feature_job_heber_source.py` to `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave12/legacy_tests/test_window_feature_job_heber_source.py`
+    - added `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_label-stack-wave12/README.md`
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
+    - removed dead `ORION_WINDOW_FEATURE_JOB_PREFER_HEBER` setting.
+  - Verified with:
+    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py -k "window_features_at_entry"`
+    - `pytest -q tests/unit/test_flow_enricher_delegation.py -k "window_features"`
+    - `ruff check src/orion/main_price_target_labeler.py tests/unit/test_price_target_labeler_heber_context.py src/orion/config.py`
+
 - **Compose defaults now use Heber-first source for both trainers**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
     - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE` default changed to `heber_gold` (pattern miner already `heber_gold`).

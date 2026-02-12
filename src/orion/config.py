@@ -181,9 +181,6 @@ class SystemSettings(BaseSettings):
 
     # Heber preference flags
     validate_features_prefer_heber: bool = Field(default=True, validation_alias="ORION_VALIDATE_FEATURES_PREFER_HEBER")
-    window_feature_job_prefer_heber: bool = Field(
-        default=True, validation_alias="ORION_WINDOW_FEATURE_JOB_PREFER_HEBER"
-    )
     data_quality_checker_prefer_heber: bool = Field(
         default=True, validation_alias="ORION_DATA_QUALITY_CHECKER_PREFER_HEBER"
     )

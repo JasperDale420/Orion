@@ -854,41 +854,156 @@ def _get_gex_rolling_averages_from_heber(
 
 
 async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get latest gold window feature payload by period for a ticker at entry time."""
-
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT period, features
-            FROM (
-                SELECT DISTINCT ON (period) period, features
-                FROM gold_feature_windows
-                WHERE ticker = :ticker
-                  AND period IN ('1h', '1d', '1w')
-                  AND window_end_ts_utc <= :entry_ts
-                ORDER BY period, window_end_ts_utc DESC
-            ) latest_by_period
-        """
-        )
-        result = await session.execute(
-            stmt,
-            {"ticker": ticker, "entry_ts": entry_ts},
-        )
-        rows = result.fetchall()
-
-        features_by_period: Dict[str, Any] = {}
-        for row in rows:
-            period = row[0]
-            features = row[1] if len(row) > 1 else None
-            if period and features:
-                features_by_period[period] = features
-        return features_by_period
-
-    try:
-        return await db_query(query)
-    except Exception as e:
-        logger.debug(f"Window features lookup failed for {ticker}: {e}")
+    """Build 1h/1d/1w window features directly from Heber silver datasets."""
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
         return {}
+
+    longest_window = timedelta(weeks=1)
+    try:
+        flow_df = _heber_reader.read_flow(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=entry_utc - longest_window,
+        )
+        darkpool_df = _heber_reader.read_darkpool(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=entry_utc - longest_window,
+        )
+    except Exception as e:
+        _record_price_target_fallback("window_features_heber_lookup", e, ticker=ticker)
+        return {}
+
+    flow_frame = _normalize_window_flow_frame(flow_df, ticker=ticker)
+    if flow_frame.empty:
+        return {}
+
+    darkpool_frame = _normalize_window_darkpool_frame(darkpool_df, ticker=ticker)
+    period_windows = {
+        "1h": timedelta(hours=1),
+        "1d": timedelta(days=1),
+        "1w": timedelta(weeks=1),
+    }
+
+    features_by_period: Dict[str, Any] = {}
+    for period, window_size in period_windows.items():
+        start_utc = entry_utc - window_size
+        flow_window = flow_frame[(flow_frame["ts"] > start_utc) & (flow_frame["ts"] <= entry_utc)]
+        if flow_window.empty:
+            continue
+
+        premium_series = flow_window["premium"]
+        put_call_series = flow_window["put_call"]
+        sweep_series = flow_window["is_sweep"]
+        aggressor_series = flow_window["aggressor"]
+
+        call_premium = float(premium_series[put_call_series == "C"].sum())
+        put_premium = float(premium_series[put_call_series == "P"].sum())
+        total_premium = float(premium_series.sum())
+        flow_count = int(len(flow_window))
+        sweep_count = int(sweep_series.sum())
+        ask_side = int((aggressor_series == "ASK").sum())
+
+        darkpool_window = darkpool_frame[(darkpool_frame["ts"] > start_utc) & (darkpool_frame["ts"] <= entry_utc)]
+        dp_volume = float(darkpool_window["size"].sum()) if not darkpool_window.empty else 0.0
+        dp_count = int(len(darkpool_window))
+
+        features_by_period[period] = {
+            "flow_count": flow_count,
+            "sweep_count": sweep_count,
+            "dp_count": dp_count,
+            "call_premium": call_premium,
+            "put_premium": put_premium,
+            "total_premium": total_premium,
+            "dp_volume": dp_volume,
+            "call_put_ratio": call_premium / put_premium if put_premium > 0 else None,
+            "call_put_imbalance": (call_premium - put_premium) / total_premium if total_premium > 0 else 0.0,
+            "sweep_ratio": sweep_count / flow_count if flow_count > 0 else 0.0,
+            "ask_ratio": ask_side / flow_count if flow_count > 0 else 0.5,
+        }
+
+    return features_by_period
+
+
+def _normalize_window_flow_frame(flow_df: pd.DataFrame, *, ticker: str) -> pd.DataFrame:
+    if flow_df.empty:
+        return pd.DataFrame(columns=["ts", "premium", "put_call", "is_sweep", "aggressor"])
+
+    ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    premium_col = _pick_first_existing_column(flow_df, ["premium_usd", "premium"])
+    put_call_col = _pick_first_existing_column(flow_df, ["put_call", "type", "option_type", "right"])
+    ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    sweep_col = _pick_first_existing_column(flow_df, ["is_sweep", "sweep"])
+    aggressor_col = _pick_first_existing_column(flow_df, ["aggressor", "side"])
+    if ts_col is None or premium_col is None:
+        return pd.DataFrame(columns=["ts", "premium", "put_call", "is_sweep", "aggressor"])
+
+    ts_series = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+    premium_series = pd.to_numeric(flow_df[premium_col], errors="coerce")
+
+    if put_call_col is not None:
+        put_call_series = flow_df[put_call_col].map(_normalize_put_call)
+    else:
+        put_call_series = pd.Series(index=flow_df.index, dtype=object)
+    if sweep_col is not None:
+        sweep_series = flow_df[sweep_col].map(_is_truthy)
+    else:
+        sweep_series = pd.Series([False] * len(flow_df))
+    if aggressor_col is not None:
+        aggressor_series = flow_df[aggressor_col].astype(str).str.upper()
+    else:
+        aggressor_series = pd.Series([""] * len(flow_df))
+
+    if ticker_col is not None:
+        ticker_series = flow_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+    else:
+        ticker_series = pd.Series([str(ticker).upper()] * len(flow_df))
+
+    frame = pd.DataFrame(
+        {
+            "ts": ts_series,
+            "ticker": ticker_series,
+            "premium": premium_series,
+            "put_call": put_call_series,
+            "is_sweep": sweep_series,
+            "aggressor": aggressor_series,
+        }
+    ).dropna(subset=["ts", "premium"])
+
+    if frame.empty:
+        return frame
+
+    return frame[frame["ticker"] == str(ticker).upper()]
+
+
+def _normalize_window_darkpool_frame(darkpool_df: pd.DataFrame, *, ticker: str) -> pd.DataFrame:
+    if darkpool_df.empty:
+        return pd.DataFrame(columns=["ts", "size"])
+
+    ts_col = _pick_first_existing_column(darkpool_df, ["dark_ts_utc", "ts_utc", "ts_event", "timestamp", "created_at"])
+    size_col = _pick_first_existing_column(darkpool_df, ["size_shares", "size", "shares", "volume"])
+    ticker_col = _pick_first_existing_column(darkpool_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    if ts_col is None or size_col is None:
+        return pd.DataFrame(columns=["ts", "size"])
+
+    ts_series = pd.to_datetime(darkpool_df[ts_col], utc=True, errors="coerce")
+    size_series = pd.to_numeric(darkpool_df[size_col], errors="coerce").fillna(0.0)
+    if ticker_col is not None:
+        ticker_series = darkpool_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+    else:
+        ticker_series = pd.Series([str(ticker).upper()] * len(darkpool_df))
+
+    frame = pd.DataFrame(
+        {
+            "ts": ts_series,
+            "ticker": ticker_series,
+            "size": size_series,
+        }
+    ).dropna(subset=["ts"])
+    if frame.empty:
+        return frame
+    return frame[frame["ticker"] == str(ticker).upper()]
 
 
 async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:

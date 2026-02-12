@@ -588,6 +588,8 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `exit_classifier` now supports explicit training source control (`ORION_EXIT_CLASSIFIER_TRAINING_SOURCE`):
   - `heber_gold`: builds a coarse compatibility training frame from `labels_alert_barriers` + `meta_label_features` without local SQL reads
   - `legacy_sql`: `price_target_labels` SQL path with schema-aware optional window feature columns (no `gold_feature_windows` lateral join)
+- `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
+- `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_labeler.py` (`flow_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py` (`price_target_labels`, legacy `silver_*` references in comments/docs)
@@ -734,7 +736,7 @@ Goal: keep Orion model quality while reducing local-table complexity before fina
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` (legacy local Silver table models)
 - Legacy local label/feature update jobs that only mutate `price_target_labels`
 
-### Remaining Local-SQL Coupling Inventory (2026-02-11 snapshot)
+### Remaining Local-SQL Coupling Inventory (2026-02-12 snapshot)
 
 Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*` / `gold_feature_windows`):
 
@@ -742,7 +744,6 @@ Top remaining files by reference count (`price_target_labels` / `flow_labels` / 
 - `src/orion/ml/exit_classifier.py`: 7 refs
 - `src/orion/storage/models_silver.py`: 4 refs
 - `src/orion/ml/pattern_miner.py`: 3 refs
-- `src/orion/jobs/window_feature_job.py`: 3 refs
 - `src/orion/jobs/validate_features.py`: 3 refs
 
 Interpretation:
@@ -760,3 +761,7 @@ Interpretation:
   - `scripts/reprocess_bronze_flow.py`
 - Archive note and inventory maintained in:
   - `archive/legacy-sql-scripts/README.md`
+- Archived unwired legacy window-feature producer under `archive/2026-02-12_label-stack-wave12/`:
+  - `src/orion/jobs/window_feature_job.py` -> `archive/2026-02-12_label-stack-wave12/legacy_code/window_feature_job.py`
+  - `tests/unit/test_window_feature_job_heber_source.py` -> `archive/2026-02-12_label-stack-wave12/legacy_tests/test_window_feature_job_heber_source.py`
+  - Archive manifest: `archive/2026-02-12_label-stack-wave12/README.md`
