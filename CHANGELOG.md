@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber parity deep-audit (ML trainer compatibility)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with field-level schema parity for:
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
+  - Added quantified overlap findings versus Heber watch datasets:
+    - pattern miner: `4/53` direct feature overlap with Heber watch feature schema,
+    - exit classifier: `1/147` direct required-column overlap with Heber watch outcomes/features.
+  - Documented explicit keep/move/archive guidance for legacy-label training paths.
+
 - **Heber migration (TDD): ML backfill candidate selection moved off local labels SQL**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
     - `get_records_to_backfill(...)` now sources candidates from Heber gold datasets:

@@ -579,6 +579,51 @@ Local SQL references are now mostly concentrated around legacy labels/training p
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` (`FROM price_target_labels`)
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py` (`FROM price_target_labels`)
 
+### Heber vs Orion ML-Training Field Parity (Deep Audit)
+
+Source references used in this pass:
+- Heber outcomes schema: `../Heber/heber/watch/checker.py` (`outcome_to_label_row`)
+- Heber feature schema: `../Heber/heber/watch/features.py` (`AlertFeatures`)
+- Orion training consumers:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
+
+#### Pattern Miner (`pattern_miner.py`)
+
+- Orion expects **53** entry/label features (`FEATURE_COLUMNS + CATEGORICAL_COLUMNS`).
+- Direct overlap with Heber `AlertFeatures` today: **4/53**:
+  - `put_call`
+  - `aggressor`
+  - `is_sweep`
+  - `minutes_to_close`
+- Missing in Heber naming/model surface: **49/53** (examples):
+  - `iv_rank_at_entry`, `gex_at_entry`, `vix_at_entry`, `delta_at_entry`, `theta_at_entry`
+  - `market_tide_30m`, `darkpool_*`, `oi_change_1d`, `sweep_ratio_1h`
+  - `entry_hour`, `entry_session`, `entry_day_of_week`, `days_to_earnings`
+- Target mismatch:
+  - Orion targets depend on legacy columns (`hit_50_pct_ts`, `hit_100_pct_ts`, `hit_stop_20_pct_ts`, `time_to_50_pct_seconds`, `last_tracked_ts`, `trade_type`)
+  - Heber outcomes provide (`outcome`, `hit_tp_first`, `outcome_return`, `mfe`, `mae`, `bars_to_hit`, `trading_minutes_to_hit`) and do not expose the Orion legacy checkpoint columns.
+
+#### Exit Classifier (`exit_classifier.py`)
+
+- Orion required training column surface across buckets: **147** fields
+  - includes `return_at_*`, `delta_at_*`, `gamma_at_*`, `theta_at_*`, `iv_at_*`, `dte_at_*`, `time_value_pct_at_*`, `theta_decay_pct_at_*`, plus `max_return_pct`, `max_drawdown_pct`, `trade_type`, etc.
+- Direct overlap with Heber watch features + outcomes combined: **1/147** (`is_sweep`).
+- Missing in Heber watch v1 surface: **146/147**, including all checkpoint return/Greek/time-decay columns.
+
+#### Decision Guidance (Keep / Move / Archive)
+
+- Keep for now (legacy profile only):
+  - `pattern-miner` and `nightly-backfill` compose services stay under `legacy-labels` profile until a Heber-native training dataset is defined.
+- Move to Heber (required before decommission):
+  - Define a **v2 training contract** in Heber that includes:
+    - normalized entry feature names expected by Orion scoring/inference, or a mapping layer,
+    - checkpoint/outcome targets needed for exit timing (or a revised target definition).
+- Archive after contract signoff:
+  - Local `price_target_labels`-dependent training query paths in:
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
+
 ### Keep / Decide / Archive Plan
 
 **Keep in Orion (system-specific execution state):**
