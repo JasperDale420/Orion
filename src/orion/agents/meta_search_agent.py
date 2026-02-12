@@ -266,7 +266,7 @@ class MetaSearchAgent:
         best_variant = None
         best_score = -999.0
         current_trial_count = int(getattr(experiment, "trial_count", 0) or 0)
-        experiment_id = str(getattr(experiment, "experiment_id"))
+        experiment_id = str(experiment.experiment_id)
 
         for i, edit_record in enumerate(edits_list):
             current_trial_count += 1
@@ -294,6 +294,7 @@ class MetaSearchAgent:
             experiment.best_solver_id = best_solver_id
             experiment.summary = summary
         else:
+
             async def finalize(session_for_update: Any) -> None:
                 await session_for_update.execute(
                     update(MetaExperiment)

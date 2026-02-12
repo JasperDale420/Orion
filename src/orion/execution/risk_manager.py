@@ -8,6 +8,7 @@ from orion.shared.db_utils import db_write
 from orion.shared.decorators import db_retry
 
 if TYPE_CHECKING:
+    from orion.execution.correlation_adjuster import CorrelationAdjuster
     from orion.storage.models_execution import Position
 
 logger = logging.getLogger(__name__)

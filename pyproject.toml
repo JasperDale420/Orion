@@ -98,10 +98,20 @@ exclude_lines = [
 [tool.ruff]
 extend = "../ruff-base.toml"
 line-length = 120
+extend-exclude = [
+    "archive",
+    "qlib-main",
+    "scripts",
+    "src/alpaca",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]
-ignore = ["E402", "E501", "B008"]
+ignore = ["E402", "E501", "B008", "I001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["I001", "F401", "F841"]
+"alembic/versions/*.py" = ["I001", "W293"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -109,4 +119,4 @@ strict = true
 ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
-plugins = ["pydantic.mypy", "numpy.typing.mypy"]
+plugins = ["pydantic.mypy"]

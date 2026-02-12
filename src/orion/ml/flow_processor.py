@@ -56,7 +56,7 @@ class MLFlowProcessor:
         # Batch score all flows
         scores = self.scorer.score_batch(flows)
 
-        for flow, score in zip(flows, scores):
+        for flow, score in zip(flows, scores, strict=True):
             if score >= self.score_threshold:
                 try:
                     candidate = self._flow_to_candidate(flow, score)
@@ -245,7 +245,6 @@ class MLFlowProcessor:
         strike_int = int(strike_price * 1000)
         strike_str = f"{strike_int:08d}"
         return f"{ticker.upper()}{date_str}{opt_type}{strike_str}"
-
 
     def _get_rule_tags(self, flow: Dict[str, Any], score: float) -> List[str]:
         """

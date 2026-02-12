@@ -8,16 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Heber reader now handles hive partition schema conflicts with a safe fallback path (TDD)**:
+- **Heber reader now handles both partition-schema conflicts and transient corrupt parquet files (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
-    - added `_read_table(...)` helper to centralize pyarrow read behavior,
-    - added partition-conflict detection via `_is_partition_schema_conflict(...)`,
-    - when hive-partition schema merge fails, reader retries with `partitioning=None`.
+    - reads datasets with `partitioning=None` to avoid hive-partition merge conflicts (`instrument_type` string vs dictionary),
+    - adds `_read_parquet_filewise(...)` fallback for datasets containing a transient corrupt parquet part,
+    - skips unreadable parquet files (`heber_reader_skip_file`) while preserving valid rows from other files.
   - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_heber_reader.py`:
     - added coverage for bars and market-tide reads when parquet files include partition-column conflicts.
+    - added regression coverage proving bar reads continue when one parquet file is corrupt.
   - Verified with:
     - `pytest -q tests/unit/test_heber_reader.py`
     - `ruff check src/orion/clients/heber_reader.py tests/unit/test_heber_reader.py`
+
+- **Added focused quality gate config and a one-command burn-in monitor script**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
+    - `ruff` now excludes archived/notebook/vendor paths from repo-wide checks (`archive`, `qlib-main`, `src/alpaca`, `scripts`),
+    - enabled pragmatic per-file lint ignore set for legacy tests/alembic migration files,
+    - removed unavailable `numpy.typing.mypy` plugin from mypy configuration.
+  - Added `/Users/jacobmcmillan/Empire/Orion/scripts/run_system_burnin.sh`:
+    - builds/recreates core Orion services,
+    - runs timed burn-in,
+    - captures logs to `.artifacts/burnin/<timestamp>/`,
+    - fails fast on hard-error patterns and on redundant direct UW polling from feature enrichment.
+  - Updated active-code lint issues surfaced by focused checks:
+    - fixed duplicated sector map keys in `/Users/jacobmcmillan/Empire/Orion/src/orion/labeler/constants.py`,
+    - fixed strict-zip lint in `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/flow_enricher.py` and `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/flow_processor.py`,
+    - fixed minor type/lint issues in `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py`, `/Users/jacobmcmillan/Empire/Orion/src/orion/execution/correlation_adjuster.py`, `/Users/jacobmcmillan/Empire/Orion/src/orion/execution/risk_manager.py`, `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/model_registry.py`, and `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/lakehouse.py`.
+  - Verified with:
+    - `pytest -q tests/unit/test_meta_search.py tests/unit/test_flow_enricher_delegation.py tests/ml/test_flow_processor.py tests/unit/test_risk_manager_basic.py tests/unit/test_risk_manager_positions.py tests/storage/test_lakehouse.py`
+    - `ruff check .`
 
 - **Price-target labeler legacy gate now blocks all local backfill/query helpers when disabled (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
