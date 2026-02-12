@@ -3,11 +3,13 @@
 Re-process existing bronze UW_FLOW events through the fixed normalizer
 to populate silver_uw_flow with correct aggressor/sweep values.
 """
+
 import asyncio
 import logging
 import os
 
 from dotenv import load_dotenv
+
 from orion.core.logging_config import setup_logging
 
 load_dotenv()
@@ -22,11 +24,12 @@ logger = logging.getLogger("reprocess")
 
 
 async def reprocess_bronze_to_silver():
+    from sqlalchemy import func, select
+
     from orion.processing.normalizer import NormalizationEngine
     from orion.processing.persistence import persist_silver_from_bronze
     from orion.storage.db import async_session_factory, init_db
     from orion.storage.models import BronzeEvent
-    from sqlalchemy import func, select
 
     await init_db()
 

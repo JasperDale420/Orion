@@ -15,9 +15,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from sqlalchemy import text
+
 from orion.shared.db_utils import db_query
 from orion.storage.db import init_db
-from sqlalchemy import text
 
 
 async def get_labeled_entries() -> List[Dict[str, Any]]:
@@ -273,15 +274,15 @@ def print_results(results: Dict[str, Any]) -> None:
     print(f"\nTotal entries analyzed: {total}")
 
     print("\n--- PURE PRICE TARGET STRATEGY ---")
-    print(f"Winners (hit targets): {pt['winners']} ({100*pt['winners']/total:.1f}%)")
-    print(f"Losers (stopped out): {pt['losers']} ({100*pt['losers']/total:.1f}%)")
+    print(f"Winners (hit targets): {pt['winners']} ({100 * pt['winners'] / total:.1f}%)")
+    print(f"Losers (stopped out): {pt['losers']} ({100 * pt['losers'] / total:.1f}%)")
     print(f"Total return: {pt['total_return']:.1f}%")
     if pt["returns"]:
         avg_return = sum(pt["returns"]) / len(pt["returns"])
         print(f"Average return per trade: {avg_return:.1f}%")
 
     print("\n--- FLOW-BASED EXIT RULES ---")
-    print(f"Would have triggered early exits: {fb['early_exits']} ({100*fb['early_exits']/total:.1f}%)")
+    print(f"Would have triggered early exits: {fb['early_exits']} ({100 * fb['early_exits'] / total:.1f}%)")
     print(f"  - Missed targets (exited before profit): {fb['missed_targets']}")
     print(f"  - Avoided stops (exited before loss): {fb['avoided_stops']}")
     print(f"Exit reasons: {fb['exit_reasons']}")
@@ -290,8 +291,10 @@ def print_results(results: Dict[str, Any]) -> None:
     for tt, data in results["by_trade_type"].items():
         print(f"\n{tt}:")
         print(f"  Total: {data['total']}")
-        print(f"  Price target wins: {data['price_target_wins']} ({100*data['price_target_wins']/data['total']:.1f}%)")
-        print(f"  Flow early exits: {data['flow_early_exits']} ({100*data['flow_early_exits']/data['total']:.1f}%)")
+        print(
+            f"  Price target wins: {data['price_target_wins']} ({100 * data['price_target_wins'] / data['total']:.1f}%)"
+        )
+        print(f"  Flow early exits: {data['flow_early_exits']} ({100 * data['flow_early_exits'] / data['total']:.1f}%)")
 
     # Key insight
     print("\n" + "=" * 60)

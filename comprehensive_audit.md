@@ -744,6 +744,11 @@ Interpretation:
 
 ### Archive Actions Completed (this pass)
 
-- Archived standalone legacy SQL script superseded by module job entrypoint:
-  - moved `scripts/backfill_ml_features.py` -> `archive/legacy-sql-scripts/backfill_ml_features.py`
-  - archive note added at `archive/legacy-sql-scripts/README.md`
+- Archived standalone legacy SQL scripts under `archive/legacy-sql-scripts/`:
+  - `scripts/backfill_ml_features.py` (superseded by `python -m orion.jobs.backfill_ml_features`)
+  - `scripts/analyze_todays_flow.py`
+  - `scripts/backtest_exit_strategies.py`
+  - `scripts/refetch_alpaca_bars.py`
+  - `scripts/reprocess_bronze_flow.py`
+- Archive note and inventory maintained in:
+  - `archive/legacy-sql-scripts/README.md`

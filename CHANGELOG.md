@@ -8,10 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Legacy standalone SQL script archived**:
-  - Moved `/Users/jacobmcmillan/Empire/Orion/scripts/backfill_ml_features.py` to:
-    - `/Users/jacobmcmillan/Empire/Orion/archive/legacy-sql-scripts/backfill_ml_features.py`
-  - Added `/Users/jacobmcmillan/Empire/Orion/archive/legacy-sql-scripts/README.md` documenting archive intent.
+- **Legacy standalone SQL scripts archived**:
+  - Moved these scripts into `/Users/jacobmcmillan/Empire/Orion/archive/legacy-sql-scripts/`:
+    - `backfill_ml_features.py`
+    - `analyze_todays_flow.py`
+    - `backtest_exit_strategies.py`
+    - `refetch_alpaca_bars.py`
+    - `reprocess_bronze_flow.py`
+  - Added/updated `/Users/jacobmcmillan/Empire/Orion/archive/legacy-sql-scripts/README.md` documenting archive intent and inventory.
   - Expanded `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` with:
     - remaining local-SQL coupling inventory by file,
     - completed archive action log.
