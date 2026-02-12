@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Exit-classifier training default is now Heber-first in code and compose (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`:
+    - `SystemSettings.exit_classifier_training_source` default changed from `legacy_sql` to `heber_gold`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_config_centralization.py`:
+    - renamed and updated default expectation test to `test_training_source_defaults_are_heber_first`.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/README.md`:
+    - documented Heber-first defaults for both compose and centralized settings.
+  - Verified with:
+    - `pytest -q tests/unit/test_config_centralization.py -k "legacy_label_gate_settings_env_mapping or training_source_defaults_are_heber_first"`
+    - `ruff check src/orion/config.py tests/unit/test_config_centralization.py`
+
 - **Orphan `GoldFeatureWindow` model decommissioned (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_gold.py`:
     - removed unused `GoldFeatureWindow` ORM model for local `gold_feature_windows`.
