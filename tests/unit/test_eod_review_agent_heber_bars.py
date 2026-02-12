@@ -37,7 +37,7 @@ async def test_load_regime_bars_from_heber_returns_rows(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_load_regime_bars_from_heber_returns_none_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_load_regime_bars_from_heber_returns_empty_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_reader = MagicMock()
     fake_reader.read_bars.side_effect = RuntimeError("heber unavailable")
     monkeypatch.setattr("orion.agents.eod_review_agent.get_heber_reader", lambda: fake_reader)
@@ -50,13 +50,9 @@ async def test_load_regime_bars_from_heber_returns_none_on_error(monkeypatch: py
         end_ts=now,
     )
 
-    assert rows is None
+    assert rows == []
 
 
-def test_prefer_heber_regime_bars_env_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prefer_heber_regime_bars_toggle_is_removed() -> None:
     agent = EODReviewAgent(vector_store=MagicMock(), proposal_builder=MagicMock())
-    monkeypatch.setenv("ORION_EOD_REVIEW_PREFER_HEBER_BARS", "false")
-    assert agent._prefer_heber_regime_bars() is False
-
-    monkeypatch.setenv("ORION_EOD_REVIEW_PREFER_HEBER_BARS", "1")
-    assert agent._prefer_heber_regime_bars() is True
+    assert not hasattr(agent, "_prefer_heber_regime_bars")

@@ -23,7 +23,7 @@ CACHE_TTL_HOURS = 4
 class CorrelationAdjuster:
     """
     Calculates correlation-based position size multiplier.
-    
+
     When a new trade is highly correlated with existing holdings,
     the size is reduced to limit unbounded portfolio risk.
     """
@@ -31,7 +31,7 @@ class CorrelationAdjuster:
     def __init__(self, market_connector: Optional[Any] = None):
         """
         Initialize with optional market connector for fetching price data.
-        
+
         Args:
             market_connector: AlpacaMarketConnector or compatible object with fetch_bars()
         """
@@ -63,9 +63,7 @@ class CorrelationAdjuster:
         for existing in existing_tickers:
             if existing == new_ticker:
                 continue  # Skip self
-            corr = await self._calculate_correlation(
-                new_ticker, existing, cfg.correlation_lookback_days, cfg
-            )
+            corr = await self._calculate_correlation(new_ticker, existing, cfg.correlation_lookback_days, cfg)
             if corr is not None:
                 correlations.append(abs(corr))  # Use absolute correlation
 
@@ -123,9 +121,7 @@ class CorrelationAdjuster:
         except Exception:
             return None
 
-    async def _get_daily_returns(
-        self, ticker: str, lookback_days: int, cfg: RiskSettings
-    ) -> Optional[np.ndarray]:
+    async def _get_daily_returns(self, ticker: str, lookback_days: int, cfg: RiskSettings) -> Optional[np.ndarray]:
         """Fetch daily returns with caching."""
         # Check cache
         cache_key = ticker

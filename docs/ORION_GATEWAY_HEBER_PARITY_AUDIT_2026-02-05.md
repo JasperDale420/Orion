@@ -8982,3 +8982,150 @@ Verification:
 Result:
 - removed the last active `silver_uw_flow` SQL read dependency from `backfill_ml_features`.
 - remaining `silver_*` SQL usage in the repo is now mostly intentional persistence/read surfaces (`silver_option_quotes`, `silver_vix_data`, `silver_earnings_calendar`, and connector sink tables), plus limited remaining migration candidates.
+
+## 285) Pass 284 Continuation (2026-02-11)
+
+### 285.1 `sync_earnings` + `main_option_quote_tracker` Local-Silver Persistence Removal (TDD-Backed, Combined)
+
+Finding:
+- two remaining migration hotspots still contained active local-Silver table coupling:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py` read/wrote `silver_earnings_calendar`,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py` read/wrote `silver_option_quotes`.
+- this kept startup earnings sync and legacy quote checkpoint tracking dependent on Orion-local silver tables.
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`:
+  - removed local-SQL persistence logic from `_upsert_earnings_direct(...)` (compatibility shim now no-ops),
+  - migrated `get_earnings_for_ticker(...)` to Data Gateway (`/api/v1/uw/earnings/{ticker}`) timeline reads,
+  - removed executable `silver_earnings_calendar` SQL query paths.
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`:
+  - replaced `silver_option_quotes` reads/writes with in-process checkpoint cache (`_quote_checkpoint_cache`),
+  - `get_existing_quotes(...)` now serves from cache,
+  - `store_quote(...)` now records checkpoints in cache.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_sync_earnings_gateway.py`:
+    - `test_get_earnings_for_ticker_uses_gateway_data_without_local_db`
+    - `test_upsert_earnings_direct_noops_without_db_write`
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_option_quote_tracker_heber_source.py`:
+    - `test_store_quote_and_get_existing_quotes_use_in_memory_cache`
+    - adjusted no-local-db guards to use `raising=False` now that local DB adapters are removed from module scope.
+
+Verification:
+- `pytest -q tests/unit/test_sync_earnings_gateway.py` passed.
+- `pytest -q tests/unit/test_option_quote_tracker_heber_source.py` passed.
+- `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/jobs/sync_earnings.py src/orion/main_option_quote_tracker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py` passed.
+
+Result:
+- removed active executable local-Silver table coupling from:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/sync_earnings.py`,
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_option_quote_tracker.py`.
+- remaining `silver_earnings_calendar` and `silver_option_quotes` references are model declarations plus one non-executable legacy comment in `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`.
+
+## 286) Pass 285 Continuation (2026-02-11)
+
+### 286.1 `vix_proxy_connector` Local `silver_vix_data` Persistence Removal + Timeframe Contract Fix (TDD-Backed)
+
+Finding:
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py` still:
+  - wrote computed proxy values into local `silver_vix_data`,
+  - read current VIX proxy from local `silver_vix_data`,
+  - requested Heber bars with `timeframe="1d"`, which conflicts with Orion's Heber reader contract (`1m` only).
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_proxy_connector.py`:
+  - removed local SQL persistence/read paths for `silver_vix_data`,
+  - added in-process latest snapshot cache (`self._latest_vix_snapshot`) used by `_persist(...)` and `get_current_vix(...)`,
+  - changed `_get_vixy_bars(...)` to use Heber minute-bar reads and derive daily closes via UTC-day aggregation.
+- Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_vix_proxy_connector_heber_source.py`:
+  - `test_get_vixy_bars_uses_default_supported_timeframe`
+  - `test_persist_and_get_current_vix_use_in_memory_cache`
+  - adjusted no-local-db guard assertions to tolerate removed db adapter symbols (`raising=False`).
+
+Verification:
+- `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py` passed.
+- `pytest -q tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/connectors/vix_proxy_connector.py tests/unit/test_vix_proxy_connector_heber_source.py src/orion/jobs/sync_earnings.py src/orion/main_option_quote_tracker.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py` passed.
+
+Result:
+- removed the last executable local-Silver read/write coupling from `vix_proxy_connector`.
+- remaining executable `silver_*` SQL references in Orion are now limited to intentional write surfaces:
+  - `silver_greek_exposure`,
+  - `silver_iv_rank`,
+  - `silver_market_tide`,
+  - `silver_max_pain`,
+  - `silver_vix_data` (in `vix_connector` only),
+  - `silver_regime_history`.
+
+## 287) Pass 286 Continuation (2026-02-11)
+
+### 287.1 UW Connector Local Silver Sink Removal (`market_tide`, `greek_exposure`, `iv_rank`, `max_pain`) (TDD-Backed, Combined)
+
+Finding:
+- four UW enrichment connectors still persisted fetched Gateway data into Orion-local Silver tables:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py` (`silver_market_tide`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_greek_exposure_connector.py` (`silver_greek_exposure`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_iv_rank_connector.py` (`silver_iv_rank`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_max_pain_connector.py` (`silver_max_pain`).
+- these were remaining local write sinks after source-read migration to Gateway/Heber.
+
+Implemented:
+- Updated all four connector modules to remove local SQL sink writes and keep only in-process compatibility caches:
+  - `UWMarketTideConnector._persist_tick(...)` now caches ticks in memory (`_latest_ticks`),
+  - `UWGreekExposureConnector._persist_exposure(...)` now caches rows in memory (`_latest_exposures`),
+  - `UWIVRankConnector._persist_iv_rank(...)` now caches rows in memory (`_latest_iv_rank_rows`),
+  - `UWMaxPainConnector._persist_max_pain(...)` now caches rows in memory (`_latest_max_pain_rows`).
+- removed direct SQL sink imports/usages (`sqlalchemy.text`, `db_write`) from these modules.
+- Added TDD coverage in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_uw_gateway_connector_retry_contract.py`:
+  - `test_market_tide_fetch_and_store_avoids_local_db_write`
+  - `test_greek_exposure_fetch_and_store_avoids_local_db_write`
+  - `test_iv_rank_fetch_and_store_avoids_local_db_write`
+  - `test_max_pain_fetch_and_store_avoids_local_db_write`
+
+Verification:
+- `pytest -q tests/unit/test_uw_gateway_connector_retry_contract.py -k "avoids_local_db_write or handles_retry_exhaustion_gracefully"` passed.
+- `pytest -q tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py` passed.
+- `pytest -q tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_gateway_connector_retry_contract.py` passed.
+
+Result:
+- removed executable local-Silver sink writes from all UW connector enrichment modules.
+- remaining executable `silver_*` SQL references in Orion are now reduced to:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` (`INSERT INTO silver_vix_data`),
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py` (`INSERT INTO silver_regime_history`).
+
+## 288) Pass 287 Continuation (2026-02-11)
+
+### 288.1 `main_feature_enrichment` Regime Snapshot Sink De-Coupling + Legacy `vix_connector` Archival (TDD-Backed)
+
+Finding:
+- remaining executable local-Silver coupling was narrowed to:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py` (`INSERT INTO silver_regime_history`),
+  - unused `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` (`INSERT INTO silver_vix_data`).
+
+Implemented:
+- Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_feature_enrichment.py`:
+  - removed `silver_regime_history` SQL insert path from `persist_regime_snapshot(...)`,
+  - replaced persistence with bounded in-process cache (`_recent_regime_snapshots`),
+  - removed now-unused SQL/db-write imports from this module.
+- Updated tests:
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_runtime_signals.py`:
+    - added `test_persist_regime_snapshot_avoids_local_db_write`,
+    - updated no-local-db guards to tolerate removed DB symbols (`raising=False`).
+  - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_feature_enrichment_context_heber_source.py`:
+    - updated no-local-db monkeypatch guards to `raising=False` for removed DB symbols.
+- Archived dead legacy connector code:
+  - moved `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/vix_connector.py` to:
+    - `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-11_gateway-heber-migration-wave11/legacy_code/vix_connector.py`.
+  - added archive note:
+    - `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-11_gateway-heber-migration-wave11/README.md`.
+
+Verification:
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py -k "persist_regime_snapshot_avoids_local_db_write"` passed (after RED->GREEN cycle).
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py` passed.
+- `pytest -q tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py tests/unit/test_feature_enrichment_heber_source.py tests/unit/test_sync_earnings_gateway.py tests/unit/test_option_quote_tracker_heber_source.py tests/unit/test_vix_proxy_connector_heber_source.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_uw_max_pain_heber_source.py tests/unit/test_legacy_label_pipeline_gates.py tests/unit/test_compose_legacy_gate_wiring.py tests/unit/test_remediation_rules.py` passed.
+- `ruff check src/orion/main_feature_enrichment.py tests/unit/test_feature_enrichment_runtime_signals.py tests/unit/test_feature_enrichment_context_heber_source.py src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_gateway_connector_retry_contract.py tests/unit/test_vix_proxy_connector_heber_source.py` passed.
+
+Result:
+- `rg -n "(INSERT INTO|FROM|JOIN|UPDATE)\s+silver_" src/orion` now returns no executable local-Silver SQL paths.
+- Orion runtime code is now de-coupled from direct local `silver_*` SQL usage; remaining `silver_*` references are non-executable identifiers/comments/model metadata.

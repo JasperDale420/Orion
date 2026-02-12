@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=off \
     PIP_DISABLE_PIP_VERSION_CHECK=on \
     PIP_DEFAULT_TIMEOUT=100 \
-    POETRY_VERSION=1.7.1 \
+    POETRY_VERSION=2.3.2 \
     POETRY_HOME="/opt/poetry" \
     POETRY_VIRTUALENVS_IN_PROJECT=true \
     POETRY_NO_INTERACTION=1 \
@@ -18,23 +18,21 @@ ENV PYTHONUNBUFFERED=1 \
 # Prepend poetry and venv to path
 ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
 
-# Install system dependencies (gcc, libpq-dev for asyncpg/psycopg2) and curl for healthcheck
+# Install system dependencies and Poetry
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
     curl \
     build-essential \
     libpq-dev \
     git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Poetry
-RUN curl -sSL https://install.python-poetry.org | python3 -
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -sSL https://install.python-poetry.org | python3 -
 
 # Setup work directory
 WORKDIR /app
 
-# Copy dependency files
-COPY pyproject.toml poetry.lock ./
+# Copy dependency manifest
+COPY pyproject.toml ./
 
 # Install dependencies (no devdeps)
 RUN poetry config virtualenvs.create false \

@@ -9,14 +9,13 @@ import asyncio
 import os
 import signal
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, List
 
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-
-from sqlalchemy import text
 
 from orion.analysis.regime import MultiAxisRegimeDetector
 from orion.clients.heber_reader import HeberReader
@@ -26,7 +25,6 @@ from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
 from orion.connectors.uw_max_pain_connector import UWMaxPainConnector
 from orion.connectors.vix_proxy_connector import VIXProxyConnector
-from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -47,6 +45,12 @@ STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 _heber_reader = HeberReader()
+_recent_regime_snapshots: list[dict[str, Any]] = []
+
+
+def _gateway_fetch_enabled() -> bool:
+    raw = os.getenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on", "y"}
 
 
 def _gateway_runtime_contract() -> tuple[str, str]:
@@ -109,7 +113,7 @@ def _coerce_time_series(df: pd.DataFrame) -> pd.Series:
     ts_col = _first_existing_column(df, ["ts_event", "ts_utc", "bar_start_ts", "bar_start_ts_utc", "timestamp"])
     if ts_col is None:
         return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
-    return pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+    return pd.Series(pd.to_datetime(df[ts_col], utc=True, errors="coerce"), index=df.index)
 
 
 def _get_latest_market_tide_from_heber() -> float | None:
@@ -456,7 +460,7 @@ async def get_active_tickers(limit: int = 20) -> List[str]:
     return tickers
 
 
-async def get_latest_vix_data() -> dict:
+async def get_latest_vix_data() -> dict[str, Any]:
     """Get latest VIX context, preferring Heber VIXY proxy bars."""
     if _prefer_heber_context_reads():
         heber_vix = _get_latest_vix_data_from_heber()
@@ -491,60 +495,55 @@ async def persist_regime_snapshot(
     snapshot: Any,
     ticker: str = "SPY",
 ) -> None:
-    """Persist regime snapshot to silver_regime_history."""
+    """Persist regime snapshot in memory while centralized sinks are externalized."""
     import json
 
-    async def write(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO silver_regime_history (
-                ts_utc, ticker, trend_regime, vol_regime, risk_regime,
-                session_regime, vix_regime, vix_level, realized_vol,
-                trend_strength, risk_score, confidence_json
-            ) VALUES (
-                :ts_utc, :ticker, :trend_regime, :vol_regime, :risk_regime,
-                :session_regime, :vix_regime, :vix_level, :realized_vol,
-                :trend_strength, :risk_score, :confidence_json
-            )
-        """
-        )
-        await session.execute(
-            stmt,
-            {
-                "ts_utc": ts,
-                "ticker": ticker,
-                "trend_regime": snapshot.trend.value if snapshot.trend else None,
-                "vol_regime": snapshot.vol.value if snapshot.vol else None,
-                "risk_regime": snapshot.risk.value if snapshot.risk else None,
-                "session_regime": snapshot.session.value if snapshot.session else None,
-                "vix_regime": snapshot.vix_regime.value if snapshot.vix_regime else None,
-                "vix_level": snapshot.vix_level,
-                "realized_vol": snapshot.realized_vol,
-                "trend_strength": snapshot.trend_strength,
-                "risk_score": snapshot.risk_score,
-                "confidence_json": json.dumps(snapshot.confidence) if snapshot.confidence else None,
-            },
-        )
+    record = {
+        "ts_utc": ts,
+        "ticker": ticker,
+        "trend_regime": snapshot.trend.value if snapshot.trend else None,
+        "vol_regime": snapshot.vol.value if snapshot.vol else None,
+        "risk_regime": snapshot.risk.value if snapshot.risk else None,
+        "session_regime": snapshot.session.value if snapshot.session else None,
+        "vix_regime": snapshot.vix_regime.value if snapshot.vix_regime else None,
+        "vix_level": snapshot.vix_level,
+        "realized_vol": snapshot.realized_vol,
+        "trend_strength": snapshot.trend_strength,
+        "risk_score": snapshot.risk_score,
+        "confidence_json": json.dumps(snapshot.confidence) if snapshot.confidence else None,
+    }
 
-    await db_write(write)
+    _recent_regime_snapshots.append(record)
+    if len(_recent_regime_snapshots) > 2000:
+        del _recent_regime_snapshots[:1000]
 
 
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
-    gateway_url, gateway_api_key = _gateway_runtime_contract()
+    gateway_fetch_enabled = _gateway_fetch_enabled()
     zero_write_warn_streak = _zero_write_warn_streak_threshold()
     loop_sleep_seconds = _loop_sleep_seconds()
     loop_error_warn_streak = _loop_error_warn_streak_threshold()
     non_heber_warn_streak = _non_heber_warn_streak_threshold()
     await init_db()
 
-    # Initialize connectors (now using Data Gateway)
-    greek_connector = UWGreekExposureConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-    tide_connector = UWMarketTideConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-    max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-    iv_connector = UWIVRankConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+    greek_connector: UWGreekExposureConnector | None = None
+    tide_connector: UWMarketTideConnector | None = None
+    max_pain_connector: UWMaxPainConnector | None = None
+    iv_connector: UWIVRankConnector | None = None
+    if gateway_fetch_enabled:
+        gateway_url, gateway_api_key = _gateway_runtime_contract()
+        greek_connector = UWGreekExposureConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+        tide_connector = UWMarketTideConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+        max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+        iv_connector = UWIVRankConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
+    else:
+        logger.info(
+            "Feature enrichment gateway polling disabled; relying on Data-Gateway -> Heber feeds",
+            extra={"event": "feature_enrichment_gateway_fetch_disabled"},
+        )
     regime_detector = MultiAxisRegimeDetector()
-    vix_connector = VIXProxyConnector()  # Uses VIXY bars from silver_alpaca_bars
+    vix_connector = VIXProxyConnector()  # Uses VIXY bars from Heber bars feed
 
     last_tide = datetime.min.replace(tzinfo=timezone.utc)
     last_greek = datetime.min.replace(tzinfo=timezone.utc)
@@ -576,14 +575,22 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
             )
 
             # Market Tide - every minute
-            if (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and tide_connector is not None
+                and (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL
+            ):
                 count = await tide_connector.fetch_and_store()
                 logger.info(f"Market Tide: stored {count} ticks")
                 _note_fetch_count("market_tide", count, zero_write_streaks, zero_write_warn_streak)
                 last_tide = now
 
             # Greek Exposure - every 5 minutes
-            if (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and greek_connector is not None
+                and (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL
+            ):
                 count = await greek_connector.fetch_and_store(tickers)
                 logger.info(f"Greek Exposure: stored {count} records for {len(tickers)} tickers")
                 _note_fetch_count(
@@ -596,7 +603,11 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 last_greek = now
 
             # Max Pain - every hour
-            if (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and max_pain_connector is not None
+                and (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL
+            ):
                 count = await max_pain_connector.fetch_and_store(tickers)
                 logger.info(f"Max Pain: stored {count} records")
                 _note_fetch_count(
@@ -609,7 +620,11 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 last_max_pain = now
 
             # IV Rank - every 15 minutes
-            if (now - last_iv).total_seconds() >= IV_RANK_INTERVAL:
+            if (
+                gateway_fetch_enabled
+                and iv_connector is not None
+                and (now - last_iv).total_seconds() >= IV_RANK_INTERVAL
+            ):
                 count = await iv_connector.fetch_and_store(tickers)
                 logger.info(f"IV Rank: stored {count} records")
                 _note_fetch_count(
@@ -686,7 +701,7 @@ async def main() -> None:
         shutdown_event.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
+        loop.add_signal_handler(sig, partial(handle_signal, sig))
 
     await run_feature_loop(shutdown_event)
 

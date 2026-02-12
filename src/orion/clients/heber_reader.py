@@ -359,7 +359,7 @@ class HeberReader:
 
         asof_ts = self._to_utc_timestamp(asof_time)
         available = pd.to_datetime(df["ts_available"], utc=True, errors="coerce")
-        return df[available <= asof_ts]
+        return cast(pd.DataFrame, df[available <= asof_ts])
 
     def _apply_time_range_filter(
         self,
@@ -394,24 +394,84 @@ class HeberReader:
         filters: list[tuple[str, str, Any]] | None = None,
     ) -> pd.DataFrame:
         try:
-            table = pq.read_table(path, columns=columns, filters=filters if filters else None)
+            # Heber paths are hive-partitioned, and some partition keys also exist in parquet
+            # columns (for example `instrument_type`). Disable partition discovery to avoid
+            # Arrow schema merge conflicts (`string` vs `dictionary`).
+            table = self._read_table(path=path, columns=columns, filters=filters, partitioning=None)
             return cast(pd.DataFrame, table.to_pandas())
         except Exception as exc:
-            if filters:
+            if self._is_corrupt_parquet_error(exc):
                 logger.warning(
-                    "heber_reader_filter_fallback",
+                    "heber_reader_filewise_fallback",
                     path=str(path),
                     error=str(exc),
                 )
-                table = pq.read_table(path, columns=columns)
-                return cast(pd.DataFrame, table.to_pandas())
-
+                return self._read_parquet_filewise(path=path, columns=columns, filters=filters)
             logger.error(
                 "heber_read_failed",
                 path=str(path),
                 error=str(exc),
             )
             return pd.DataFrame()
+
+    def _read_table(
+        self,
+        path: Path,
+        columns: list[str] | None,
+        filters: list[tuple[str, str, Any]] | None,
+        partitioning: str | None,
+    ) -> Any:
+        try:
+            return pq.read_table(path, columns=columns, filters=filters if filters else None, partitioning=partitioning)
+        except Exception as exc:
+            if self._is_corrupt_parquet_error(exc):
+                raise
+            if filters:
+                logger.warning(
+                    "heber_reader_filter_fallback",
+                    path=str(path),
+                    error=str(exc),
+                )
+                return pq.read_table(path, columns=columns, partitioning=partitioning)
+            raise
+
+    def _read_parquet_filewise(
+        self,
+        path: Path,
+        columns: list[str] | None,
+        filters: list[tuple[str, str, Any]] | None,
+    ) -> pd.DataFrame:
+        parquet_files = sorted(path.rglob("*.parquet"))
+        if not parquet_files:
+            return pd.DataFrame()
+
+        frames: list[pd.DataFrame] = []
+        for parquet_file in parquet_files:
+            try:
+                table = self._read_table(path=parquet_file, columns=columns, filters=filters, partitioning=None)
+                frame = cast(pd.DataFrame, table.to_pandas())
+                if not frame.empty:
+                    frames.append(frame)
+            except Exception as file_exc:
+                logger.warning(
+                    "heber_reader_skip_file",
+                    path=str(parquet_file),
+                    error=str(file_exc),
+                )
+
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    @staticmethod
+    def _is_corrupt_parquet_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "parquet magic bytes not found in footer" in message
+            or "could not read schema from" in message
+            or "is this a 'parquet' file?" in message
+            or ("error creating dataset" in message and "could not open parquet input source" in message)
+        )
 
 
 @lru_cache

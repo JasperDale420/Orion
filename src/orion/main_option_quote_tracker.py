@@ -13,12 +13,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import pandas as pd
-from sqlalchemy import text
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import SystemSettings
 from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
-from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.option_quote_tracker")
@@ -46,6 +44,7 @@ POLL_INTERVAL_SECONDS = 60
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 shutdown_event = asyncio.Event()
+_quote_checkpoint_cache: Dict[str, set[str]] = {}
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
@@ -212,27 +211,16 @@ async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> List[Dict[st
 
 
 async def get_existing_quotes(event_ids: List[str]) -> Dict[str, set]:
-    """Get checkpoints already fetched for given events."""
+    """Get checkpoints already fetched for given events (in-process cache)."""
     if not event_ids:
         return {}
 
-    async def query(session: Any) -> Dict[str, set]:
-        stmt = text(
-            """
-            SELECT flow_event_id, checkpoint
-            FROM silver_option_quotes
-            WHERE flow_event_id = ANY(:event_ids)
-        """
-        )
-        result = await session.execute(stmt, {"event_ids": event_ids})
-        existing: Dict[str, set] = {}
-        for row in result.fetchall():
-            if row[0] not in existing:
-                existing[row[0]] = set()
-            existing[row[0]].add(row[1])
-        return existing
-
-    return await db_query(query)
+    existing: Dict[str, set] = {}
+    for event_id in event_ids:
+        checkpoints = _quote_checkpoint_cache.get(event_id)
+        if checkpoints:
+            existing[event_id] = set(checkpoints)
+    return existing
 
 
 async def store_quote(
@@ -243,53 +231,10 @@ async def store_quote(
     ts_utc: datetime,
     quote_data: Dict[str, Any],
 ) -> None:
-    """Store option quote to database."""
-
-    async def write(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO silver_option_quotes (
-                flow_event_id, option_symbol, underlying_ticker, checkpoint, ts_utc,
-                bid_price, ask_price, mid_price, last_trade_price,
-                delta, gamma, theta, vega, iv
-            ) VALUES (
-                :flow_event_id, :option_symbol, :underlying_ticker, :checkpoint, :ts_utc,
-                :bid_price, :ask_price, :mid_price, :last_trade_price,
-                :delta, :gamma, :theta, :vega, :iv
-            )
-            ON CONFLICT (flow_event_id, checkpoint) DO UPDATE SET
-                bid_price = EXCLUDED.bid_price,
-                ask_price = EXCLUDED.ask_price,
-                mid_price = EXCLUDED.mid_price,
-                last_trade_price = EXCLUDED.last_trade_price,
-                delta = EXCLUDED.delta,
-                gamma = EXCLUDED.gamma,
-                theta = EXCLUDED.theta,
-                vega = EXCLUDED.vega,
-                iv = EXCLUDED.iv
-        """
-        )
-        await session.execute(
-            stmt,
-            {
-                "flow_event_id": flow_event_id,
-                "option_symbol": option_symbol,
-                "underlying_ticker": underlying_ticker,
-                "checkpoint": checkpoint,
-                "ts_utc": ts_utc,
-                "bid_price": quote_data.get("bid_price"),
-                "ask_price": quote_data.get("ask_price"),
-                "mid_price": quote_data.get("mid_price"),
-                "last_trade_price": quote_data.get("last_trade_price"),
-                "delta": quote_data.get("delta"),
-                "gamma": quote_data.get("gamma"),
-                "theta": quote_data.get("theta"),
-                "vega": quote_data.get("vega"),
-                "iv": quote_data.get("implied_volatility"),
-            },
-        )
-
-    await db_write(write)
+    """Record fetched checkpoints in memory while legacy tracker is active."""
+    _ = (option_symbol, underlying_ticker, ts_utc, quote_data)
+    checkpoints = _quote_checkpoint_cache.setdefault(flow_event_id, set())
+    checkpoints.add(checkpoint)
 
 
 async def run_quote_tracker() -> None:

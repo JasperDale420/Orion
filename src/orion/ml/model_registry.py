@@ -4,7 +4,6 @@ Model Registry for ML Model Versioning and A/B Testing.
 Provides versioning, registration, and rollback capabilities for ML models.
 """
 
-import hashlib
 import json
 import logging
 import shutil
@@ -102,9 +101,7 @@ class ModelRegistry:
                 with open(self._registry_path, "r") as f:
                     data = json.load(f)
                 for model_type, versions in data.get("models", {}).items():
-                    self._models[model_type] = [
-                        ModelMetadata.from_dict(v) for v in versions
-                    ]
+                    self._models[model_type] = [ModelMetadata.from_dict(v) for v in versions]
                 logger.info(f"Loaded {sum(len(v) for v in self._models.values())} model versions from registry")
             except Exception as e:
                 logger.error(f"Failed to load registry: {e}")
@@ -115,10 +112,7 @@ class ModelRegistry:
     def _save_registry(self) -> None:
         """Persist registry to disk."""
         data = {
-            "models": {
-                model_type: [m.to_dict() for m in versions]
-                for model_type, versions in self._models.items()
-            },
+            "models": {model_type: [m.to_dict() for m in versions] for model_type, versions in self._models.items()},
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         with open(self._registry_path, "w") as f:
@@ -279,9 +273,7 @@ class ModelRegistry:
             reverse=True,
         )
 
-    def configure_ab_test(
-        self, model_type: str, versions: Dict[int, float]
-    ) -> None:
+    def configure_ab_test(self, model_type: str, versions: Dict[int, float]) -> None:
         """
         Configure A/B testing weights for model versions.
 

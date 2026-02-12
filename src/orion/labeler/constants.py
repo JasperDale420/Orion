@@ -107,7 +107,6 @@ SECTOR_MAPPING: Dict[str, str] = {
     "LCID": "Consumer Discretionary",
     # Communication Services
     "NFLX": "Communication Services",
-    "GOOG": "Communication Services",
     "DIS": "Communication Services",
     "CMCSA": "Communication Services",
     "T": "Communication Services",
@@ -165,7 +164,6 @@ SECTOR_MAPPING: Dict[str, str] = {
     "PSX": "Energy",
     "VLO": "Energy",
     "HAL": "Energy",
-    "XLE": "Energy",
     # Industrial
     "CAT": "Industrial",
     "DE": "Industrial",
@@ -209,7 +207,6 @@ SECTOR_MAPPING: Dict[str, str] = {
     "XLU": "ETF",
     "XLRE": "ETF",
     "XLC": "ETF",
-    "VIX": "ETF",
     "VIXY": "ETF",
     "VXX": "ETF",
     "TLT": "ETF",

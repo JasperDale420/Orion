@@ -11,10 +11,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import pandas as pd
-from sqlalchemy import text
 
 from orion.clients.heber_reader import get_heber_reader
-from orion.shared.db_utils import db_query, db_write
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +36,9 @@ def classify_vix_regime(vix: float) -> str:
 
 class VIXProxyConnector:
     """Computes VIX proxy from VIXY bars sourced from Heber."""
+
+    def __init__(self) -> None:
+        self._latest_vix_snapshot: Optional[Dict[str, Any]] = None
 
     async def fetch_and_store(self) -> int:
         """Fetch recent VIXY bars and compute VIX proxy metrics."""
@@ -86,7 +87,7 @@ class VIXProxyConnector:
         return stored
 
     async def _get_vixy_bars(self) -> list[Dict[str, Any]]:
-        """Get recent VIXY daily bars from Heber."""
+        """Get recent VIXY daily closes from Heber minute bars."""
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=60)
         try:
@@ -95,7 +96,6 @@ class VIXProxyConnector:
                 symbols=["VIXY"],
                 start_time=start,
                 asof_time=now,
-                timeframe="1d",
             )
         except Exception as e:
             logger.error(f"Failed to fetch VIXY bars: {e}")
@@ -121,7 +121,9 @@ class VIXProxyConnector:
         if temp.empty:
             return []
 
-        temp = temp.sort_values("ts").tail(30)
+        temp = temp.sort_values("ts")
+        temp["day"] = temp["ts"].dt.date
+        temp = temp.groupby("day", as_index=False).last().tail(30)
         return [
             {
                 "ts": row["ts"].to_pydatetime() if isinstance(row["ts"], pd.Timestamp) else row["ts"],
@@ -131,46 +133,18 @@ class VIXProxyConnector:
         ]
 
     async def _persist(self, record: Dict[str, Any]) -> None:
-        """Persist VIX proxy record to database."""
-
-        async def write(session: Any) -> None:
-            stmt = text(
-                """
-                INSERT INTO silver_vix_data (ts_utc, vix, vvix, vix_1d_change, vix_5d_ma, vix_regime)
-                VALUES (:ts_utc, :vix, :vvix, :vix_1d_change, :vix_5d_ma, :vix_regime)
-                ON CONFLICT DO NOTHING
-            """
-            )
-            await session.execute(stmt, record)
-
-        await db_write(write)
+        """Persist the latest computed VIX proxy snapshot in process memory."""
+        self._latest_vix_snapshot = dict(record)
 
     async def get_current_vix(self) -> Optional[Dict[str, Any]]:
         """Get the most recent VIX proxy value."""
-
-        async def query(session: Any) -> Optional[Dict[str, Any]]:
-            stmt = text(
-                """
-                SELECT vix, vix_1d_change, vix_regime
-                FROM silver_vix_data
-                ORDER BY ts_utc DESC
-                LIMIT 1
-            """
-            )
-            result = await session.execute(stmt)
-            row = result.fetchone()
-            if row:
-                return {
-                    "vix": row[0],
-                    "vix_1d_change": row[1],
-                    "vix_regime": row[2],
-                }
+        if self._latest_vix_snapshot is None:
             return None
-
-        try:
-            return await db_query(query)
-        except Exception:
-            return None
+        return {
+            "vix": self._latest_vix_snapshot.get("vix"),
+            "vix_1d_change": self._latest_vix_snapshot.get("vix_1d_change"),
+            "vix_regime": self._latest_vix_snapshot.get("vix_regime"),
+        }
 
 
 def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:

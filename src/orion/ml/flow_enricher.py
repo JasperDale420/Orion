@@ -180,7 +180,7 @@ async def enrich_flow_for_scoring(
         "market_context",
         "window_features",
     ]
-    for task_name, result in zip(task_names, results):
+    for task_name, result in zip(task_names, results, strict=True):
         if isinstance(result, Exception):
             _record_enricher_fallback(task_name, result, ticker=ticker, event_id=event_id)
 

@@ -5,9 +5,11 @@ Core logic for training LightGBM models on trading data and extracting
 human-readable rules for the EOD agent.
 """
 
+import asyncio
 import hashlib
 import os
 import pickle
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from sqlalchemy import text
 
-from orion.config import system_settings
+from orion.clients.heber_reader import get_heber_reader
+from orion.config import SystemSettings, system_settings
 from orion.ml.schemas import (
     FeatureImportance,
     MLInsightsSummary,
@@ -35,7 +38,7 @@ MODEL_DIR = system_settings.model_dir
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
 # These features are known at trade entry and don't reveal the outcome
 FEATURE_COLUMNS = [
-    # Entry context (from price_target_labels)
+    # Entry context (from legacy local label table)
     "iv_rank_at_entry",
     "gex_at_entry",
     "vex_at_entry",
@@ -128,6 +131,278 @@ TARGETS = {
 }
 
 
+def _legacy_pattern_training_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
+    specific_key = "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING"
+    if settings.legacy_pattern_miner_training_enabled is not None:
+        enabled = settings.legacy_pattern_miner_training_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
+
+    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
+
+
+def _legacy_pattern_training_enabled() -> bool:
+    enabled, _, _ = _legacy_pattern_training_control()
+    return enabled
+
+
+def _pattern_miner_training_source() -> str:
+    settings = SystemSettings()
+    raw_source = (settings.pattern_miner_training_source or "heber_gold").strip().lower()
+
+    if raw_source in {"heber", "heber_gold", "gold"}:
+        return "heber_gold"
+    if raw_source in {"legacy", "legacy_sql", "local", "local_sql"}:
+        logger.warning(
+            "Legacy pattern-miner SQL training source is decommissioned; falling back to heber_gold",
+            extra={
+                "event": "pattern_miner_training_source_legacy_decommissioned",
+                "training_source": raw_source,
+                "fallback_training_source": "heber_gold",
+            },
+        )
+        return "heber_gold"
+
+    logger.warning(
+        f"Invalid pattern-miner training source '{raw_source}', falling back to heber_gold",
+        extra={
+            "event": "pattern_miner_training_source_invalid",
+            "training_source": raw_source,
+            "fallback_training_source": "heber_gold",
+        },
+    )
+    return "heber_gold"
+
+
+def _first_existing_column(frame: Any, candidates: list[str]) -> str | None:
+    for column in candidates:
+        if column in frame.columns:
+            return column
+    return None
+
+
+def _coerce_dataframe(payload: Any) -> Any:
+    import pandas as pd
+
+    if payload is None:
+        return pd.DataFrame()
+    if isinstance(payload, pd.DataFrame):
+        return payload
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if isinstance(payload, dict):
+        return pd.DataFrame([payload])
+    return pd.DataFrame()
+
+
+def _normalize_heber_outcomes(frame: Any) -> Any:
+    import pandas as pd
+
+    if frame.empty:
+        return pd.DataFrame(columns=["event_id", "entry_ts", "outcome", "hit_tp_first", "trading_minutes_to_hit"])
+
+    event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
+    ts_column = _first_existing_column(frame, ["entry_ts", "alert_time", "ts_event", "ts_available"])
+    outcome_column = _first_existing_column(frame, ["outcome", "outcome_reason", "status"])
+    hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
+    trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
+
+    event_series = frame[event_column].astype(str) if event_column else pd.Series(index=frame.index, dtype=object)
+    ts_series = (
+        pd.to_datetime(frame[ts_column], utc=True, errors="coerce")
+        if ts_column
+        else pd.Series(index=frame.index, dtype="datetime64[ns, UTC]")
+    )
+    outcome_series = (
+        frame[outcome_column].astype(str).str.lower() if outcome_column else pd.Series(index=frame.index, dtype=object)
+    )
+    hit_tp_series = (
+        pd.to_numeric(frame[hit_tp_column], errors="coerce").fillna(0).astype(int)
+        if hit_tp_column
+        else (outcome_series == "hit_tp").astype(int)
+    )
+    trading_minutes_series = (
+        pd.to_numeric(frame[trading_minutes_column], errors="coerce")
+        if trading_minutes_column
+        else pd.Series(index=frame.index, dtype="float64")
+    )
+
+    normalized = pd.DataFrame(
+        {
+            "event_id": event_series,
+            "entry_ts": ts_series,
+            "outcome": outcome_series,
+            "hit_tp_first": hit_tp_series,
+            "trading_minutes_to_hit": trading_minutes_series,
+        }
+    )
+    normalized = normalized.dropna(subset=["event_id", "entry_ts"])
+    normalized["event_id"] = normalized["event_id"].astype(str)
+    return normalized
+
+
+def _normalize_heber_features(frame: Any) -> Any:
+    import pandas as pd
+
+    if frame.empty:
+        return pd.DataFrame(columns=["event_id"])
+
+    event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
+    if event_column is None:
+        return pd.DataFrame(columns=["event_id"])
+
+    normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+
+    mapped_columns: dict[str, list[str]] = {
+        "put_call": ["put_call"],
+        "aggressor": ["aggressor"],
+        "is_sweep": ["is_sweep"],
+        "premium_usd": ["premium_usd", "premium"],
+        "dte": ["dte", "days_to_expiry"],
+        "minutes_to_close": ["minutes_to_close"],
+        "iv_rank_at_entry": ["iv_rank_at_entry", "iv_rank"],
+        "iv_at_entry": ["iv_at_entry", "iv"],
+        "delta_at_entry": ["delta_at_entry", "delta"],
+        "gamma_at_entry": ["gamma_at_entry", "gamma"],
+        "theta_at_entry": ["theta_at_entry", "theta"],
+        "vega_at_entry": ["vega_at_entry", "vega"],
+        "entry_hour": ["entry_hour", "hour_of_day"],
+        "entry_day_of_week": ["entry_day_of_week", "day_of_week"],
+    }
+
+    for target, candidates in mapped_columns.items():
+        source = _first_existing_column(frame, candidates)
+        if source is None:
+            normalized[target] = pd.NA
+            continue
+        normalized[target] = frame[source]
+
+    normalized["is_sweep"] = normalized["is_sweep"].fillna(0)
+    normalized["is_sweep"] = normalized["is_sweep"].map(
+        lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+    )
+
+    normalized["entry_session"] = pd.NA
+    entry_hour_numeric = pd.to_numeric(normalized["entry_hour"], errors="coerce")
+    normalized.loc[entry_hour_numeric < 11, "entry_session"] = "open"
+    normalized.loc[(entry_hour_numeric >= 11) & (entry_hour_numeric < 14), "entry_session"] = "midday"
+    normalized.loc[entry_hour_numeric >= 14, "entry_session"] = "close"
+    return normalized
+
+
+def _apply_trade_type_filter(dataframe: Any, trade_type_filter: Optional[str]) -> Any:
+    import pandas as pd
+
+    if not trade_type_filter:
+        return dataframe
+
+    match = re.search(r"trade_type\s*=\s*'([^']+)'", trade_type_filter, flags=re.IGNORECASE)
+    if match is None:
+        return dataframe
+
+    bucket = match.group(1).upper()
+    dte = pd.to_numeric(dataframe["dte"], errors="coerce")
+    if bucket == "0DTE":
+        mask = dte == 0
+    elif bucket == "SHORT_SWING":
+        mask = (dte >= 1) & (dte <= 2)
+    elif bucket == "SWING":
+        mask = (dte >= 3) & (dte <= 14)
+    elif bucket == "POSITION":
+        mask = dte >= 15
+    else:
+        return dataframe
+
+    return dataframe[mask]
+
+
+async def _fetch_training_data_from_heber(
+    *,
+    cutoff: datetime,
+    min_samples: int,
+    trade_type_filter: Optional[str],
+    quick_winner_seconds: int,
+) -> Tuple[Any, List[str]]:
+    import pandas as pd
+
+    reader = get_heber_reader()
+    now = datetime.now(timezone.utc)
+
+    try:
+        outcomes_payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset="labels_alert_barriers",
+            asof_time=now,
+        )
+        features_payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset="meta_label_features",
+            asof_time=now,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Failed to read Heber gold training datasets: {exc}",
+            extra={
+                "event": "pattern_miner_heber_training_read_failed",
+                "training_source": "heber_gold",
+            },
+        )
+        return None, []
+
+    outcomes = _normalize_heber_outcomes(_coerce_dataframe(outcomes_payload))
+    features = _normalize_heber_features(_coerce_dataframe(features_payload))
+    if outcomes.empty:
+        logger.warning("No Heber outcomes available for pattern-miner training")
+        return None, []
+
+    merged = outcomes.merge(features, on="event_id", how="left")
+    merged = merged[pd.to_datetime(merged["entry_ts"], utc=True, errors="coerce") >= cutoff]
+    merged = _apply_trade_type_filter(merged, trade_type_filter)
+
+    if len(merged) < min_samples:
+        logger.warning(f"Insufficient Heber samples: {len(merged)} < {min_samples}")
+        return None, []
+
+    feature_names = FEATURE_COLUMNS + CATEGORICAL_COLUMNS
+    for feature_name in feature_names:
+        if feature_name not in merged.columns:
+            merged[feature_name] = pd.NA
+
+    hit_tp = pd.to_numeric(merged["hit_tp_first"], errors="coerce").fillna(0).astype(int) > 0
+    outcome = merged["outcome"].astype(str).str.lower()
+    hit_stop = outcome.isin({"hit_sl", "stop_loss", "stop"})
+
+    merged["target_hit_target_50"] = hit_tp.astype(int)
+    merged["target_avoid_stop"] = (~hit_stop).astype(int)
+    merged["target_hit_target_100"] = hit_tp.astype(int)
+    trading_minutes = pd.to_numeric(merged["trading_minutes_to_hit"], errors="coerce").fillna(float("inf"))
+    merged["target_quick_winner"] = (hit_tp & (trading_minutes * 60 <= quick_winner_seconds)).astype(int)
+
+    columns = (
+        ["event_id", "entry_ts"]
+        + FEATURE_COLUMNS
+        + CATEGORICAL_COLUMNS
+        + ["target_hit_target_50", "target_avoid_stop", "target_hit_target_100", "target_quick_winner"]
+    )
+    merged = merged.reindex(columns=columns)
+
+    logger.info(
+        f"Fetched {len(merged)} pattern-miner samples from Heber gold datasets",
+        extra={
+            "event": "pattern_miner_heber_training_loaded",
+            "sample_count": len(merged),
+            "training_source": "heber_gold",
+        },
+    )
+    return merged, feature_names
+
+
 def get_quick_winner_target(seconds_threshold: int) -> str:
     """Generate quick_winner target SQL with bucket-specific time threshold."""
     return f"""
@@ -147,10 +422,14 @@ def _exit_classifier_schema_refresh_config_from_env() -> tuple[bool, bool]:
 
 def _exit_classifier_schema_refresh_config_details_from_env() -> tuple[bool, bool, str]:
     """Read schema-refresh config with source metadata for observability."""
-    strategy = os.getenv(
-        "ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY",
-        "",
-    ).strip().lower()
+    strategy = (
+        os.getenv(
+            "ORION_EXIT_CLASSIFIER_SCHEMA_REFRESH_STRATEGY",
+            "",
+        )
+        .strip()
+        .lower()
+    )
     if strategy:
         if strategy in {"off", "disabled", "none", "false"}:
             return False, False, "strategy_env"
@@ -239,7 +518,7 @@ async def fetch_training_data(
     quick_winner_seconds: int = 3600,
 ) -> Tuple[Any, List[str]]:
     """
-    Fetch training data from price_target_labels.
+    Fetch training data for pattern miner.
 
     Args:
         window_days: Number of days to look back
@@ -250,61 +529,27 @@ async def fetch_training_data(
     Returns:
         Tuple of (pandas DataFrame, list of feature names)
     """
-    import pandas as pd
-
-    feature_cols = ", ".join(FEATURE_COLUMNS + CATEGORICAL_COLUMNS)
-
-    # Build target columns - include dynamic quick_winner
-    all_targets = dict(TARGETS)
-    all_targets["quick_winner"] = get_quick_winner_target(quick_winner_seconds)
-    target_cols = ", ".join([f"({sql}) as target_{name}" for name, sql in all_targets.items()])
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-
-    # Build WHERE clause with optional trade_type filter
-    where_clause = "entry_ts >= :cutoff AND last_tracked_ts IS NOT NULL"
-    if trade_type_filter:
-        where_clause += f" AND {trade_type_filter}"
-
-    async def query(session: Any) -> List[Any]:
-        stmt = text(
-            f"""
-            SELECT
-                event_id,
-                entry_ts,
-                {feature_cols},
-                {target_cols}
-            FROM price_target_labels
-            WHERE {where_clause}
-            ORDER BY entry_ts ASC
-        """
+    enabled, control_key, control_raw = _legacy_pattern_training_control()
+    if not enabled:
+        logger.warning(
+            "Legacy pattern-miner training disabled by config",
+            extra={
+                "event": "legacy_label_pipeline_disabled",
+                "pipeline": "orion.ml.pattern_miner",
+                "control_key": control_key,
+                "control_raw": control_raw,
+            },
         )
-        result = await session.execute(stmt, {"cutoff": cutoff})
-        return result.fetchall()
-
-    rows = await db_query(query)
-
-    if len(rows) < min_samples:
-        logger.warning(f"Insufficient samples: {len(rows)} < {min_samples}")
         return None, []
 
-    # Column names from query
-    columns = (
-        ["event_id", "entry_ts"]
-        + FEATURE_COLUMNS
-        + CATEGORICAL_COLUMNS
-        + [f"target_{name}" for name in all_targets.keys()]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    _ = _pattern_miner_training_source()
+    return await _fetch_training_data_from_heber(
+        cutoff=cutoff,
+        min_samples=min_samples,
+        trade_type_filter=trade_type_filter,
+        quick_winner_seconds=quick_winner_seconds,
     )
-
-    df = pd.DataFrame(rows, columns=columns)
-
-    filter_desc = f" (filter: {trade_type_filter})" if trade_type_filter else ""
-    logger.info(
-        f"Fetched {len(df)} training samples from last {window_days} days{filter_desc}",
-        extra={"event": "ml_data_fetch", "sample_count": len(df), "window_days": window_days},
-    )
-
-    return df, FEATURE_COLUMNS + CATEGORICAL_COLUMNS
 
 
 def prepare_features(df: Any, feature_names: List[str]) -> Tuple[Any, Any]:
@@ -425,7 +670,7 @@ def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int 
 
         # Skip if either class is missing
         if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
-            logger.warning(f"Fold {fold+1}: Skipped due to single class")
+            logger.warning(f"Fold {fold + 1}: Skipped due to single class")
             continue
 
         model = lgb.LGBMClassifier(**params)
@@ -435,7 +680,7 @@ def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int 
         fold_auc = roc_auc_score(y_test, test_pred)
         fold_aucs.append(fold_auc)
 
-        logger.debug(f"Fold {fold+1}/{n_splits}: AUC={fold_auc:.3f}")
+        logger.debug(f"Fold {fold + 1}/{n_splits}: AUC={fold_auc:.3f}")
 
     if not fold_aucs:
         logger.warning("Walk-forward CV failed: no valid folds")

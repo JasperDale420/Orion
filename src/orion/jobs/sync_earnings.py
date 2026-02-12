@@ -8,14 +8,15 @@ This job:
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+import pandas as pd
+
+from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
 from orion.core.logging_config import setup_logging
-from orion.shared.db_utils import db_query
-from sqlalchemy import text
 
 logger = logging.getLogger("orion.jobs.sync_earnings")
 
@@ -188,14 +189,7 @@ def _extract_eps_estimate(e: Any, UNSET: Any) -> Optional[float]:
 async def backfill_all_earnings() -> Dict[str, int]:
     """Backfill earnings for all unique tickers via Data Gateway."""
     results = {"tickers": 0, "earnings": 0, "errors": 0}
-
-    # Get unique tickers from labels
-    async def get_tickers(session: Any) -> List[str]:
-        stmt = text("SELECT DISTINCT ticker FROM price_target_labels ORDER BY ticker")
-        result = await session.execute(stmt)
-        return [row[0] for row in result.fetchall()]
-
-    tickers = await db_query(get_tickers)
+    tickers = await _get_backfill_tickers_from_heber_gold()
     logger.info(f"Backfilling earnings for {len(tickers)} tickers")
 
     for i, ticker in enumerate(tickers):
@@ -213,6 +207,55 @@ async def backfill_all_earnings() -> Dict[str, int]:
 
     logger.info(f"Earnings backfill complete: {results}")
     return results
+
+
+def _extract_tickers_from_frame(df: pd.DataFrame) -> set[str]:
+    if df.empty:
+        return set()
+
+    tickers: set[str] = set()
+    candidates = ["ticker", "symbol", "underlying", "instrument_key"]
+    for column in candidates:
+        if column not in df.columns:
+            continue
+        series = df[column].dropna().astype(str)
+        if column == "instrument_key":
+            series = series.str.split(":").str[-1]
+        tickers.update(value.strip().upper() for value in series if value and value.strip())
+    return tickers
+
+
+def _coerce_to_frame(payload: Any) -> pd.DataFrame:
+    if isinstance(payload, pd.DataFrame):
+        return payload
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if isinstance(payload, dict):
+        return pd.DataFrame([payload])
+    return pd.DataFrame()
+
+
+async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame:
+    now = datetime.now(timezone.utc)
+    reader = get_heber_reader()
+    try:
+        payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset=dataset,
+            asof_time=now,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to read Heber gold dataset {dataset}: {exc}")
+        return pd.DataFrame()
+    return _coerce_to_frame(payload)
+
+
+async def _get_backfill_tickers_from_heber_gold() -> List[str]:
+    outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
+    features_df = await _read_heber_gold_dataset("meta_label_features")
+    tickers = _extract_tickers_from_frame(outcomes_df) | _extract_tickers_from_frame(features_df)
+    return sorted(tickers)
 
 
 async def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: str) -> None:
@@ -271,52 +314,9 @@ async def _upsert_earnings_direct(
     revenue_estimate: Optional[int] = None,
     revenue_actual: Optional[int] = None,
 ) -> None:
-    """Upsert earnings record directly."""
-    from orion.unusualwhales.types import UNSET
-
-    # Clean up UNSET values
-    if isinstance(eps_estimate, type(UNSET)):
-        eps_estimate = None
-    if isinstance(eps_actual, type(UNSET)):
-        eps_actual = None
-    if isinstance(revenue_estimate, type(UNSET)):
-        revenue_estimate = None
-    if isinstance(revenue_actual, type(UNSET)):
-        revenue_actual = None
-
-    async def upsert(session: Any) -> None:
-        stmt = text(
-            """
-            INSERT INTO silver_earnings_calendar
-                (ticker, report_date, announce_time, eps_estimate, eps_actual, revenue_estimate, revenue_actual, updated_at_utc)
-            VALUES
-                (:ticker, :report_date, :announce_time, :eps_estimate, :eps_actual, :revenue_estimate, :revenue_actual, NOW())
-            ON CONFLICT (ticker, report_date)
-            DO UPDATE SET
-                announce_time = COALESCE(EXCLUDED.announce_time, silver_earnings_calendar.announce_time),
-                eps_estimate = COALESCE(EXCLUDED.eps_estimate, silver_earnings_calendar.eps_estimate),
-                eps_actual = COALESCE(EXCLUDED.eps_actual, silver_earnings_calendar.eps_actual),
-                revenue_estimate = COALESCE(EXCLUDED.revenue_estimate, silver_earnings_calendar.revenue_estimate),
-                revenue_actual = COALESCE(EXCLUDED.revenue_actual, silver_earnings_calendar.revenue_actual),
-                updated_at_utc = NOW()
-        """
-        )
-        await session.execute(
-            stmt,
-            {
-                "ticker": ticker,
-                "report_date": report_date,
-                "announce_time": announce_time,
-                "eps_estimate": eps_estimate,
-                "eps_actual": eps_actual,
-                "revenue_estimate": revenue_estimate,
-                "revenue_actual": revenue_actual,
-            },
-        )
-
-    from orion.shared.db_utils import db_write
-
-    await db_write(upsert)
+    """Compatibility shim while earnings storage is centralized in Gateway/Heber."""
+    _ = (ticker, report_date, announce_time, eps_estimate, eps_actual, revenue_estimate, revenue_actual)
+    return None
 
 
 async def get_earnings_for_ticker(ticker: str, as_of_date: date) -> Dict[str, Any]:
@@ -331,48 +331,46 @@ async def get_earnings_for_ticker(ticker: str, as_of_date: date) -> Dict[str, An
         }
     """
 
-    async def query(session: Any) -> Dict[str, Any]:
-        # Get next earnings (future)
-        next_stmt = text(
-            """
-            SELECT report_date, announce_time FROM silver_earnings_calendar
-            WHERE ticker = :ticker AND report_date >= :as_of
-            ORDER BY report_date ASC LIMIT 1
-        """
+    result = {
+        "days_to_earnings": None,
+        "is_post_earnings": False,
+        "next_earnings_date": None,
+        "last_earnings_date": None,
+    }
+
+    try:
+        rows = await _fetch_gateway_earnings(
+            endpoint=f"/api/v1/uw/earnings/{ticker.upper()}",
+            params={"limit": 100},
         )
-        next_result = await session.execute(next_stmt, {"ticker": ticker, "as_of": as_of_date})
-        next_row = next_result.fetchone()
-
-        # Get last earnings (past)
-        last_stmt = text(
-            """
-            SELECT report_date, announce_time FROM silver_earnings_calendar
-            WHERE ticker = :ticker AND report_date < :as_of
-            ORDER BY report_date DESC LIMIT 1
-        """
-        )
-        last_result = await session.execute(last_stmt, {"ticker": ticker, "as_of": as_of_date})
-        last_row = last_result.fetchone()
-
-        result = {
-            "days_to_earnings": None,
-            "is_post_earnings": False,
-            "next_earnings_date": None,
-            "last_earnings_date": None,
-        }
-
-        if next_row:
-            result["next_earnings_date"] = next_row[0]
-            result["days_to_earnings"] = (next_row[0] - as_of_date).days
-
-        if last_row:
-            result["last_earnings_date"] = last_row[0]
-            days_since = (as_of_date - last_row[0]).days
-            result["is_post_earnings"] = 0 <= days_since <= 5
-
+    except Exception as exc:
+        logger.debug(f"Failed to fetch earnings timeline for {ticker}: {exc}")
         return result
 
-    return await db_query(query)
+    report_dates: list[date] = []
+    for row in rows:
+        report_date = _parse_gateway_date(row.get("date") or row.get("report_date") or row.get("earnings_date"))
+        if report_date is not None:
+            report_dates.append(report_date)
+
+    if not report_dates:
+        return result
+
+    next_dates = [d for d in report_dates if d >= as_of_date]
+    last_dates = [d for d in report_dates if d < as_of_date]
+
+    if next_dates:
+        next_date = min(next_dates)
+        result["next_earnings_date"] = next_date
+        result["days_to_earnings"] = (next_date - as_of_date).days
+
+    if last_dates:
+        last_date = max(last_dates)
+        result["last_earnings_date"] = last_date
+        days_since = (as_of_date - last_date).days
+        result["is_post_earnings"] = 0 <= days_since <= 5
+
+    return result
 
 
 if __name__ == "__main__":

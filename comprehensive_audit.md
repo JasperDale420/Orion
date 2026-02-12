@@ -1,5 +1,5 @@
 # Orion Comprehensive 22-Point Audit
-**Generated**: 2025-12-30  
+**Generated**: 2025-12-30
 **Status**: Complete
 
 ---
@@ -116,7 +116,7 @@
 - **Status**: ✅ Follows vertical slice architecture
 - **Evidence**: Complete slices for ingestion, execution, meta-search
 
-**P3-A1: Lakehouse Layer Organization**  
+**P3-A1: Lakehouse Layer Organization**
 - **Status**: ✅ Bronze/Silver/Gold layers correctly implemented
 - **Files**: Storage models organized by layer
 
@@ -524,3 +524,302 @@
 2. ✅ Feature flag system - `feature_flags.py` exists
 3. ✅ Runbooks - `docs/RUNBOOKS.md` added
 
+---
+
+## 23. Heber vs Orion Parity Audit (2026-02-11)
+
+### Snapshot
+
+- **Heber canonical Silver datasets**: 44 (`/Users/jacobmcmillan/Empire/Heber/heber/schemas/silver.py`)
+- **Orion Heber reader datasets currently consumed**: 7 (`bars`, `flow_alerts`, `darkpool`, `market_tide`, `greek_exposure`, `max_pain`, `iv_rank`) in `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`
+- **Orion local Silver tables still defined**: 2 (`silver_signals`, `silver_uw_alerts`) in `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py`
+- **Orion local legacy label tables still used**: `flow_labels`, `price_target_labels`
+- **Orion local Gold tables (execution state, keep for now)**: `candidate_trades`, `exit_decisions`, `strategy_decisions`, `gold_ticker_rollup`, `candidate_labels`
+- **Orion local Gold ML/label tables (migration candidates)**: `labels_event`, `labels_window`, `gold_feature_events`, `gold_feature_windows`
+
+### Side-by-Side Parity
+
+| Capability Area | Heber (source of truth) | Orion (current state) | Recommendation |
+|-----------------|--------------------------|------------------------|----------------|
+| Bars | `bars` Silver dataset | Runtime reads moved to Heber; local `silver_alpaca_bars` model removed | Keep Heber path |
+| Options flow | `flow_alerts` Silver dataset | Runtime reads moved to Heber; local `silver_uw_flow` model removed | Keep Heber path |
+| Darkpool | `darkpool` Silver dataset | Runtime reads moved to Heber; local `silver_uw_darkpool` model removed | Keep Heber path |
+| Market tide | `market_tide` Silver dataset | Read from Heber in runtime | Keep; no local table dependency remains |
+| Greek exposure | `greek_exposure` Silver dataset | Read from Heber in runtime; legacy comment references remain | Keep Heber path; clean stale references |
+| Max pain | `max_pain` Silver dataset | Read from Heber in runtime | Keep |
+| IV rank | `iv_rank` Silver dataset | Read from Heber in runtime; legacy local naming remains in comments | Keep Heber path; clean stale references |
+| Label outcomes | `labels_alert_barriers` Gold dataset (`heber.watch.writer`) | Legacy `flow_labels` and `price_target_labels` local writes still present | Migrate to Heber labels; archive local labeler loops |
+| Label features | `meta_label_features` Gold dataset (`heber.watch.features`) | Legacy `gold_feature_events` and `price_target_labels` enrichment | Define field mapping, then archive local feature materialization |
+
+### Heber Inventory Orion Is Not Using Yet
+
+Orion currently consumes **7/44** canonical Heber Silver datasets. The largest unused groups:
+
+- **Market microstructure/reference**: `quotes`, `trades`, `option_contract`, `option_chain_snapshot`, `option_history`
+- **Macro/fundamental/news**: `news`, `economic_events`, `stock_fundamentals`, `analyst_ratings`
+- **Flow breadth analytics**: `net_premium_tick`, `group_flow`, `iv_term_structure`, `volatility_stats`, `oi_change`, `sector_tide`
+
+These are not blockers for current Orion runtime, but they are opportunity areas if we want feature parity expansion in Heber-first mode.
+
+### Remaining Orion Local SQL Coupling (Audit Finding)
+
+Local SQL references are now mostly concentrated around legacy labels/training paths:
+
+**Update (2026-02-11 remediation pass):**
+- `sync_earnings` ticker discovery migrated to Heber Gold datasets (`labels_alert_barriers`, `meta_label_features`)
+- `data_quality_checker` ML coverage summaries migrated to Heber Gold datasets (no local `price_target_labels` reads)
+- `validate_features` label period loader migrated to Heber Gold (`labels_alert_barriers`) for source-audit windowing
+- `validate_features` spot-check and sanity paths migrated to Heber Gold labels/features (no local label SQL reads)
+- `backfill_exit_columns` was archived after local-write decommission; `nightly_backfill` no longer runs the obsolete exit-column stage
+- `backfill_ml_features` local update writes disabled; job now skips local label mutation while storage is centralized
+- `backfill_ml_features` candidate discovery migrated to Heber Gold (`labels_alert_barriers` + `meta_label_features`) with keyset cursor filtering
+- `backfill_ml_features` cursor resume now reads only the canonical Heber key (`backfill_ml_features.heber_gold.cursor`) with no legacy `price_target_labels` fallback lookups
+- `cleanup_legacy_backfill_watermarks` now targets archived exit-column watermark keys only (`backfill_exit_columns.velocity*`, `backfill_exit_columns.checkpoint*`) and no longer references `price_target_labels` keys
+- `validate_features` source-audit adapter now runs canonical source IDs only; legacy `silver_*` aliases are rejected as `source_unavailable` (fix-forward, no backward alias normalization)
+- `main_feature_enrichment` now defaults to Heber-only context reads (`ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=false`) and skips Data-Gateway polling/credential contract unless explicitly enabled
+- compose now mounts Heber data root (`/Volumes/heber/data`) for Heber-consuming services (`execution`, `feature_enrichment`, `eod-agent`) and wires `SEC_CONTACT_EMAIL` in `mcp-server`
+- `HeberReader` now includes partition-schema conflict fallback (`partitioning=None`) when hive partition metadata collides with parquet file column types
+- `main_pattern_miner` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_PATTERN_MINER`) and exits before DB init when disabled
+- `nightly_backfill` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL`) and exits before DB init when disabled
+- `quality_guardrails` now has explicit per-service legacy gate (`ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS`) and exits before DB init when disabled
+- `exit_classifier` training path now has explicit gate (`ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`) and returns empty training datasets without DB access when disabled
+- `pattern_miner` training data path now has explicit gate (`ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING`) and returns empty training datasets without DB access when disabled
+- `main_labeler.persist_labels(...)` and `main_price_target_labeler.persist_labels(...)` now skip local DB writes when their legacy gates are disabled
+- `docker-compose.yml` `legacy-labels` profile now defaults to:
+  - local labeling loops disabled (`ORION_ENABLE_LEGACY_LABEL_PIPELINES=false` plus service-specific labeler/guardrail/backfill toggles `false`),
+  - model-training paths preserved (`ORION_ENABLE_LEGACY_PATTERN_MINER=true`, `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`, `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`)
+- `pattern_miner` now supports explicit training source control (`ORION_PATTERN_MINER_TRAINING_SOURCE`):
+  - `heber_gold`: reads `labels_alert_barriers` + `meta_label_features` and builds a compatibility training frame without local SQL reads
+  - `legacy_sql` aliases are now decommissioned and routed to `heber_gold` (no `price_target_labels` query path)
+- `exit_classifier` now supports explicit training source control (`ORION_EXIT_CLASSIFIER_TRAINING_SOURCE`):
+  - `heber_gold`: builds a coarse compatibility training frame from `labels_alert_barriers` + `meta_label_features` without local SQL reads
+  - `legacy_sql` aliases are now decommissioned and routed to `heber_gold` (local SQL query path removed)
+- `SystemSettings.exit_classifier_training_source` default is now `heber_gold` (matching compose defaults), reducing accidental local SQL usage when env vars are unset
+- `exit_classifier` + `pattern_miner` training-source parsers now fail safely to `heber_gold` on invalid env values (instead of falling back to `legacy_sql`), reducing accidental local SQL reactivation from bad config
+- `main_price_target_labeler.get_window_features_at_entry(...)` now builds `1h`/`1d`/`1w` window context directly from Heber Silver (`flow_alerts`, `darkpool`) and no longer queries local `gold_feature_windows`
+- `main_price_target_labeler` now short-circuits local helper paths when legacy gates are disabled (`get_velocity_backfill_candidates`, `get_checkpoint_backfill_candidates`, `_get_labeled_price_target_event_ids`, `backfill_missing_features`)
+- `main_price_target_labeler` local backfill helper paths are now decommissioned no-ops regardless gate (`get_velocity_backfill_candidates`, `get_checkpoint_backfill_candidates`, `backfill_missing_features`)
+- `window_feature_job` was archived as an unwired legacy producer (no active compose/import path), removing residual local `gold_feature_windows` write coupling from active code paths
+- `main_labeler` (legacy `flow_labels` writer) is now archived and removed from compose orchestration; `ORION_ENABLE_LEGACY_FLOW_LABELER` config wiring was removed with it
+- `GoldFeatureWindow` local ORM model was removed from active schema definitions after producer/consumer decommission, reducing stale local table coupling
+- `/flows` API endpoint (`src/orion/api/main.py`) now reads Heber Silver flow data (`reader.read_flow`) and no longer queries local `SilverOptionFlow` SQL rows
+- `main_execution.fetch_recent_flow_for_ticker(...)` now reads recent flow from Heber only and no longer falls back to local `SilverOptionFlow` SQL rows
+- `meta_search_agent._fetch_silver_events(...)` now reads Heber only and no longer falls back to local `SilverAlpacaBar`/`SilverOptionFlow` SQL tables
+- `ml/darkpool_features.get_darkpool_features(...)` now reads Heber darkpool rows and no longer aggregates from local `SilverDarkPool` SQL tables
+- `processing/feature_engine.FeatureEngine.hydrate_history(...)` now reads Heber bars and no longer queries local `SilverAlpacaBar`
+- `agents/eod_review_agent` regime context now reads Heber bars only and no longer falls back to local `SilverAlpacaBar`
+- `processing/persistence.persist_silver_from_bronze(...)` local Silver materialization is decommissioned and now runs as a no-op
+- `models_silver.py` decommissioned unused legacy ORM classes: `SilverOptionFlow`, `SilverDarkPool`, `SilverAlpacaBar`, `SilverOptionQuote`
+- archived legacy compliance script that depended on removed local Silver models:
+  - `tests/compliance_check_v2.py` -> `archive/2026-02-12_models-silver-wave15/legacy_tests/compliance_check_v2.py`
+
+### Heber vs Orion ML-Training Field Parity (Deep Audit)
+
+Source references used in this pass:
+- Heber outcomes schema: `../Heber/heber/watch/checker.py` (`outcome_to_label_row`)
+- Heber feature schema: `../Heber/heber/watch/features.py` (`AlertFeatures`)
+- Orion training consumers:
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`
+  - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
+
+#### Pattern Miner (`pattern_miner.py`)
+
+- Orion expects **53** entry/label features (`FEATURE_COLUMNS + CATEGORICAL_COLUMNS`).
+- Direct overlap with Heber `AlertFeatures` today: **4/53**:
+  - `put_call`
+  - `aggressor`
+  - `is_sweep`
+  - `minutes_to_close`
+- Missing in Heber naming/model surface: **49/53** (examples):
+  - `iv_rank_at_entry`, `gex_at_entry`, `vix_at_entry`, `delta_at_entry`, `theta_at_entry`
+  - `market_tide_30m`, `darkpool_*`, `oi_change_1d`, `sweep_ratio_1h`
+  - `entry_hour`, `entry_session`, `entry_day_of_week`, `days_to_earnings`
+- Target mismatch:
+  - Orion targets depend on legacy columns (`hit_50_pct_ts`, `hit_100_pct_ts`, `hit_stop_20_pct_ts`, `time_to_50_pct_seconds`, `last_tracked_ts`, `trade_type`)
+  - Heber outcomes provide (`outcome`, `hit_tp_first`, `outcome_return`, `mfe`, `mae`, `bars_to_hit`, `trading_minutes_to_hit`) and do not expose the Orion legacy checkpoint columns.
+
+#### Exit Classifier (`exit_classifier.py`)
+
+- Orion required training column surface across buckets: **147** fields
+  - includes `return_at_*`, `delta_at_*`, `gamma_at_*`, `theta_at_*`, `iv_at_*`, `dte_at_*`, `time_value_pct_at_*`, `theta_decay_pct_at_*`, plus `max_return_pct`, `max_drawdown_pct`, `trade_type`, etc.
+- Direct overlap with Heber watch features + outcomes combined: **1/147** (`is_sweep`).
+- Missing in Heber watch v1 surface: **146/147**, including all checkpoint return/Greek/time-decay columns.
+
+### Legacy Label Tables vs Heber Watch (Column-Level Audit)
+
+#### `flow_labels` (`main_labeler.py`, archived 2026-02-12)
+
+- Orion local write surface was **28 columns** in `INSERT INTO flow_labels (...)`.
+- Direct overlap with Heber watch outcomes/features: **5/28**:
+  - `put_call`
+  - `aggressor`
+  - `is_sweep`
+  - `iv`
+  - `expiry`
+- Non-overlap columns (examples): `return_15m`, `return_30m`, `return_1h`, `label_1h`, `primary_label`, `trade_type`.
+- Status: archived with legacy module decommission (`archive/2026-02-12_label-stack-wave13/legacy_code/main_labeler.py`).
+
+#### `price_target_labels` payload surface (`main_price_target_labeler.py`)
+
+- Orion label payload key surface discovered from `label[...]` + `label.update(...)`: **163 keys**.
+- Direct overlap with Heber watch outcomes/features: **1/163** (`minutes_to_close`).
+- Non-overlap groups include:
+  - checkpoint returns/prices (`return_at_*`, `price_at_*`),
+  - checkpoint Greeks/time decay (`delta_at_*`, `gamma_at_*`, `theta_at_*`, `iv_at_*`, `theta_decay_pct_at_*`, `time_value_pct_at_*`),
+  - legacy target timestamps (`hit_50_pct_ts`, `hit_100_pct_ts`, `hit_stop_20_pct_ts`, etc.),
+  - Orion-specific regime/context fields (`market_tide_30m`, `risk_regime_at_entry`, `vex_at_entry`, etc.).
+
+#### Decision Impact
+
+- The parity gap confirms local `flow_labels` / `price_target_labels` are currently **schema forks**, not thin replicas of Heber watch datasets.
+- Migration should be treated as a **contract redesign** (v2 schema + mapping), not a simple table swap.
+
+#### Decision Guidance (Keep / Move / Archive)
+
+- Keep for now (legacy profile only):
+  - `pattern-miner` and `nightly-backfill` compose services stay under `legacy-labels` profile until a Heber-native training dataset is defined.
+  - Local model information storage remains in Orion:
+    - model artifacts under `ORION_MODEL_DIR` (pickle outputs consumed by `ml/scorer.py`),
+    - model metadata tables `ml_pattern_insights` and `ml_feature_importance_history`.
+  - Recommended toggle profile to keep model storage while minimizing legacy local labeling:
+    - `ORION_ENABLE_LEGACY_LABEL_PIPELINES=false`
+    - `ORION_ENABLE_LEGACY_PATTERN_MINER=true`
+    - `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=true`
+    - `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=true`
+    - `ORION_PATTERN_MINER_TRAINING_SOURCE=heber_gold`
+    - `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=heber_gold`
+- Move to Heber (required before decommission):
+  - Define a **v2 training contract** in Heber that includes:
+    - normalized entry feature names expected by Orion scoring/inference, or a mapping layer,
+    - checkpoint/outcome targets needed for exit timing (or a revised target definition).
+- Archive after contract signoff:
+  - Local `price_target_labels`-dependent training query paths in:
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`
+
+### Heber v2 Contract Proposal (What To Keep vs Dispose)
+
+Goal: keep Orion model quality while reducing local-table complexity before final archival.
+
+#### Keep + Promote to Heber v2 (high value for training)
+
+- Entry-time contract and flow context:
+  - `put_call`, `aggressor`, `is_sweep`, `premium_usd`, `dte`, `minutes_to_close`
+- Entry-time risk/greeks context:
+  - `iv_rank_at_entry`, `iv_at_entry`, `delta_at_entry`, `gamma_at_entry`, `theta_at_entry`, `vega_at_entry`
+- Market/regime context used by Orion models:
+  - `gex_at_entry`, `vix_at_entry`, `market_tide_30m`, `entry_hour`, `entry_day_of_week`, `entry_session`, `days_to_earnings`
+- Outcome surface needed for model targets:
+  - `outcome`, `hit_tp_first`, `outcome_return`, `mfe`, `mae`, `bars_to_hit`, `trading_minutes_to_hit`
+
+#### Keep Local in Orion (do not migrate now)
+
+- Model artifacts under `ORION_MODEL_DIR` (`*.pkl` used by scorers/trainers)
+- Model metadata tables:
+  - `ml_pattern_insights`
+  - `ml_feature_importance_history`
+
+#### Dispose / Do Not Port (low-value schema bloat)
+
+- Full checkpoint explosion columns from legacy `price_target_labels`:
+  - `return_at_*`, `price_at_*`, `delta_at_*`, `gamma_at_*`, `theta_at_*`, `iv_at_*`, `dte_at_*`, `time_value_pct_at_*`, `theta_decay_pct_at_*`
+- Duplicate outcome aliases (example: overlapping `mfe`/`contract_mfe` style duplicates)
+- Local job bookkeeping columns only used for legacy backfill loops
+
+#### Recommended Migration Sequence
+
+1. Freeze new column additions to local `price_target_labels`.
+2. Define `heber.watch` v2 training projection with the "Keep + Promote" fields above.
+3. Re-point Orion trainers (`pattern_miner`, `exit_classifier`) to the Heber v2 projection.
+4. Archive legacy label/table mutation loops and local label backfill scripts.
+
+### Keep / Decide / Archive Plan
+
+**Keep in Orion (system-specific execution state):**
+- `candidate_trades`
+- `exit_decisions`
+- `strategy_decisions`
+- Model artifacts in `/app/models` (`ORION_MODEL_DIR`)
+- ML metadata tables in `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_ml.py`:
+  - `ml_pattern_insights`
+  - `ml_feature_importance_history`
+
+**Needs product decision before migration:**
+- Which Orion-only label columns are still needed versus replaced by Heber watch fields
+- Which Orion feature columns should become `meta_label_features` columns versus be retired
+
+**Archive after mapping signoff:**
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` (remaining compatibility models: `silver_signals`, `silver_uw_alerts`)
+- Legacy local label/feature update jobs that only mutate `price_target_labels`
+
+### Remaining Local-SQL Coupling Inventory (2026-02-12 snapshot)
+
+Top remaining files by reference count (`price_target_labels` / `flow_labels` / `silver_*`):
+
+- `src/orion/storage/models_silver.py`: compatibility surface only (`SilverSignal`, `SilverUWAlert`)
+
+Interpretation:
+
+- Legacy table-name references outside model definitions have been removed from active runtime modules.
+- Runtime risk is now concentrated in local Silver model definitions.
+- Model storage paths (`ORION_MODEL_DIR`, `ml_pattern_insights`, `ml_feature_importance_history`) remain intentionally local and should not be treated as decommission targets.
+
+### Why `models_silver.py` Is Still Active (Not Yet Archivable)
+
+`/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py` is still imported by active runtime paths, not only historical tests. Current direct usage includes:
+
+- Processing pipeline (`src/orion/processing/feature_engine.py` signal model usage, `src/orion/processing/persistence.py` no-op compatibility surface, rule-engine modules)
+- Universe hydration (`src/orion/core/universe_manager.py`) via `SilverUWAlert`
+- Ingestion/service orchestration (`src/orion/ingestion/service.py`) for `SilverSignal` persistence
+
+Decision: keep `models_silver.py` for now as a narrowed compatibility surface for `SilverSignal`/`SilverUWAlert` only.
+
+### Remaining Active Remediation Target
+
+- No active local label-table SQL training paths remain in runtime trainers.
+- No high-impact runtime local-Silver fallback reads/writes remain in active Orion execution paths.
+
+### Archive Actions Completed (this pass)
+
+- Archived standalone legacy SQL scripts under `archive/legacy-sql-scripts/`:
+  - `scripts/backfill_ml_features.py` (superseded by `python -m orion.jobs.backfill_ml_features`)
+  - `scripts/analyze_todays_flow.py`
+  - `scripts/backtest_exit_strategies.py`
+  - `scripts/refetch_alpaca_bars.py`
+  - `scripts/reprocess_bronze_flow.py`
+- Archive note and inventory maintained in:
+  - `archive/legacy-sql-scripts/README.md`
+- Archived unwired legacy window-feature producer under `archive/2026-02-12_label-stack-wave12/`:
+  - `src/orion/jobs/window_feature_job.py` -> `archive/2026-02-12_label-stack-wave12/legacy_code/window_feature_job.py`
+  - `tests/unit/test_window_feature_job_heber_source.py` -> `archive/2026-02-12_label-stack-wave12/legacy_tests/test_window_feature_job_heber_source.py`
+  - Archive manifest: `archive/2026-02-12_label-stack-wave12/README.md`
+- Archived legacy flow-label writer under `archive/2026-02-12_label-stack-wave13/`:
+  - `src/orion/main_labeler.py` -> `archive/2026-02-12_label-stack-wave13/legacy_code/main_labeler.py`
+  - `tests/unit/test_main_labeler_heber_migration.py` -> `archive/2026-02-12_label-stack-wave13/legacy_tests/test_main_labeler_heber_migration.py`
+  - Archive manifest: `archive/2026-02-12_label-stack-wave13/README.md`
+- Archived decommissioned exit-column backfill path under `archive/2026-02-12_label-stack-wave14/`:
+  - `src/orion/jobs/backfill_exit_columns.py` -> `archive/2026-02-12_label-stack-wave14/legacy_code/backfill_exit_columns.py`
+  - `tests/unit/test_backfill_exit_columns_selection.py` -> `archive/2026-02-12_label-stack-wave14/legacy_tests/test_backfill_exit_columns_selection.py`
+  - `src/orion/jobs/nightly_backfill.py` now runs ML-feature backfill only.
+  - Archive manifest: `archive/2026-02-12_label-stack-wave14/README.md`
+- Decommissioned orphan local window-feature ORM definition:
+  - removed `GoldFeatureWindow` from `src/orion/storage/models_gold.py`
+- Archived legacy compliance script that depended on removed local Silver ORM models under `archive/2026-02-12_models-silver-wave15/`:
+  - `tests/compliance_check_v2.py` -> `archive/2026-02-12_models-silver-wave15/legacy_tests/compliance_check_v2.py`
+  - Archive manifest: `archive/2026-02-12_models-silver-wave15/README.md`
+
+### Closeout Checklist (2026-02-12)
+
+- [x] Runtime bar/flow/darkpool context reads migrated to Heber (`main_execution`, `api/main`, `meta_search_agent`, `eod_review_agent`, `darkpool_features`, `feature_engine` hydration).
+- [x] Local Silver materialization from Bronze decommissioned (`persist_silver_from_bronze` no-op).
+- [x] Unused local Silver ORM classes removed (`SilverOptionFlow`, `SilverDarkPool`, `SilverAlpacaBar`, `SilverOptionQuote`).
+- [x] Legacy/unused code archived with dated manifests.
+- [x] Full quality gate green after remediation (`pytest -q && ruff check . && mypy .`).
+
+### Intentionally Local (Not Migration Targets)
+
+- Model artifacts under `ORION_MODEL_DIR`.
+- Model metadata tables: `ml_pattern_insights`, `ml_feature_importance_history`.
+- Execution/runtime decision tables: `candidate_trades`, `exit_decisions`, `strategy_decisions`.
+- Compatibility Silver models still in active use: `SilverSignal`, `SilverUWAlert`.

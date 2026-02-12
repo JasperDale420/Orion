@@ -77,10 +77,6 @@ class SystemSettings(BaseSettings):
         default=True,
         validation_alias="ORION_ENABLE_LEGACY_LABEL_PIPELINES",
     )
-    legacy_flow_labeler_enabled: Optional[bool] = Field(
-        default=None,
-        validation_alias="ORION_ENABLE_LEGACY_FLOW_LABELER",
-    )
     legacy_option_quote_tracker_enabled: Optional[bool] = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER",
@@ -88,6 +84,34 @@ class SystemSettings(BaseSettings):
     legacy_price_target_labeler_enabled: Optional[bool] = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER",
+    )
+    legacy_pattern_miner_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER",
+    )
+    legacy_nightly_backfill_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL",
+    )
+    legacy_quality_guardrails_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS",
+    )
+    legacy_exit_classifier_training_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING",
+    )
+    legacy_pattern_miner_training_enabled: Optional[bool] = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING",
+    )
+    pattern_miner_training_source: str = Field(
+        default="heber_gold",
+        validation_alias="ORION_PATTERN_MINER_TRAINING_SOURCE",
+    )
+    exit_classifier_training_source: str = Field(
+        default="heber_gold",
+        validation_alias="ORION_EXIT_CLASSIFIER_TRAINING_SOURCE",
     )
     ml_prefilter_threshold: float = Field(
         default=0.5,
@@ -153,9 +177,6 @@ class SystemSettings(BaseSettings):
 
     # Heber preference flags
     validate_features_prefer_heber: bool = Field(default=True, validation_alias="ORION_VALIDATE_FEATURES_PREFER_HEBER")
-    window_feature_job_prefer_heber: bool = Field(
-        default=True, validation_alias="ORION_WINDOW_FEATURE_JOB_PREFER_HEBER"
-    )
     data_quality_checker_prefer_heber: bool = Field(
         default=True, validation_alias="ORION_DATA_QUALITY_CHECKER_PREFER_HEBER"
     )

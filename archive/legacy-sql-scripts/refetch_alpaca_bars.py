@@ -18,12 +18,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from sqlalchemy import text
+
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from orion.shared.db_utils import db_query, db_write
 from orion.storage.db import init_db
-from sqlalchemy import text
 
 # Alpaca credentials
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")

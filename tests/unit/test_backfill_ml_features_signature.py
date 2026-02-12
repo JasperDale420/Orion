@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import orion.jobs.backfill_ml_features as backfill
 import pytest
+
+import orion.jobs.backfill_ml_features as backfill
 
 
 def _async_return(value):
@@ -40,7 +41,11 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
     )
     monkeypatch.setattr(backfill, "get_gex_at_entry", _async_return({"gex": 1.0, "vex": 2.0}))
     monkeypatch.setattr(backfill, "get_max_pain_distance", _async_return(0.5))
-    monkeypatch.setattr(backfill, "db_write", _async_return(None))
+
+    async def _fail_db_write(_fn):
+        raise AssertionError("local db_write should not be used for ML feature backfill writes")
+
+    monkeypatch.setattr(backfill, "db_write", _fail_db_write, raising=False)
 
     monkeypatch.setattr(
         backfill,
@@ -138,7 +143,7 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
 
     ok = await backfill.update_ml_features(record)
 
-    assert ok is True
+    assert ok is False
     assert captured["ticker"] == "AAPL"
     assert captured["entry_ts"] == record["entry_ts"]
 

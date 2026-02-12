@@ -332,6 +332,18 @@ async def label_flow(flow: Any) -> Optional[Dict[str, Any]]:
 
 async def persist_labels(labels: List[Dict[str, Any]]) -> int:
     """Persist labeled records to database."""
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Skipping local flow label persistence because legacy pipeline is disabled",
+            extra={
+                "event_type": "DEPRECATED_PIPELINE_DISABLED",
+                "pipeline": "orion.main_labeler",
+                "control": f"{control_key}={control_raw}",
+            },
+        )
+        return 0
+
     if not labels:
         return 0
 

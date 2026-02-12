@@ -1,5 +1,5 @@
 """
-Backfill script for price_target_labels ML feature columns.
+Backfill script for label ML feature columns.
 
 Re-processes existing records to populate:
 - Time features: entry_hour, entry_session, entry_day_of_week
@@ -22,8 +22,6 @@ import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-
-from sqlalchemy import text
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.main_price_target_labeler import (
@@ -89,7 +87,7 @@ from orion.storage.watermarks import get_cursor_state, upsert_cursor_state
 logger = setup_struct_logger("orion.backfill.ml_features")
 
 BATCH_SIZE = 50
-BACKFILL_CURSOR_KEY = "backfill_ml_features.price_target_labels.cursor"
+BACKFILL_CURSOR_KEY = "backfill_ml_features.heber_gold.cursor"
 
 
 def extract_underlying_ticker(option_symbol: str) -> str:
@@ -236,42 +234,56 @@ async def get_records_to_backfill(
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Get records missing ML feature columns."""
+    """Get records missing ML feature columns from Heber Gold datasets."""
+    outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
+    if outcomes_df.empty:
+        return []
 
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit}
-        cursor_clause = ""
-        if after_entry_ts is not None and after_event_id is not None:
-            cursor_clause = """
-              AND (p.entry_ts > :after_entry_ts
-                   OR (p.entry_ts = :after_entry_ts AND p.event_id > :after_event_id))
-            """
-            params["after_entry_ts"] = after_entry_ts
-            params["after_event_id"] = after_event_id
-        elif after_entry_ts is not None:
-            cursor_clause = """
-              AND p.entry_ts >= :after_entry_ts
-            """
-            params["after_entry_ts"] = after_entry_ts
+    features_df = await _read_heber_gold_dataset("meta_label_features")
+    outcomes_norm = _normalize_outcomes_for_backfill(outcomes_df)
+    if outcomes_norm.empty:
+        return []
 
-        stmt = text(
-            f"""
-            SELECT p.event_id, p.ticker, p.entry_ts, p.expiry, p.dte
-            FROM price_target_labels p
-            WHERE (
-                p.entry_hour IS NULL OR p.overnight_gap_pct IS NULL OR p.gex_at_entry IS NULL
-                OR p.oi_change_1d IS NULL
-            )
-            {cursor_clause}
-            ORDER BY p.entry_ts ASC, p.event_id ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, params)
-        rows = result.fetchall()
-        return [dict(row._mapping) for row in rows]
+    features_norm = _normalize_features_for_backfill(features_df)
+    merged = outcomes_norm.merge(features_norm, on="event_id", how="left", indicator=True)
 
-    return await db_query(query)
+    missing_columns = [
+        "entry_hour",
+        "minutes_to_close",
+        "overnight_gap_pct",
+        "gex_at_entry",
+        "oi_change_1d",
+    ]
+    missing_mask = merged["_merge"] != "both"
+    for column in missing_columns:
+        if column not in merged.columns:
+            missing_mask = missing_mask | True
+        else:
+            missing_mask = missing_mask | merged[column].isna()
+
+    candidates = merged[missing_mask].copy()
+    if candidates.empty:
+        return []
+
+    if after_entry_ts is not None and after_event_id is not None:
+        candidates = candidates[
+            (candidates["entry_ts"] > after_entry_ts)
+            | ((candidates["entry_ts"] == after_entry_ts) & (candidates["event_id"] > after_event_id))
+        ]
+    elif after_entry_ts is not None:
+        candidates = candidates[candidates["entry_ts"] >= after_entry_ts]
+
+    if candidates.empty:
+        return []
+
+    candidates = candidates.sort_values(["entry_ts", "event_id"], ascending=[True, True]).head(limit)
+    columns = ["event_id", "ticker", "entry_ts", "expiry", "dte", "option_chain"]
+    for column in columns:
+        if column not in candidates.columns:
+            candidates[column] = None
+
+    records = candidates[columns].to_dict("records")
+    return [dict(record) for record in records]
 
 
 def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
@@ -279,6 +291,127 @@ def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
         if name in df.columns:
             return name
     return None
+
+
+def _coerce_dataframe(payload: Any) -> pd.DataFrame:
+    if isinstance(payload, pd.DataFrame):
+        return payload.copy()
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if isinstance(payload, dict):
+        return pd.DataFrame([payload])
+    return pd.DataFrame()
+
+
+async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame:
+    now = datetime.now(timezone.utc)
+    reader = get_heber_reader()
+    try:
+        payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset=dataset,
+            asof_time=now,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to read Heber gold dataset {dataset}: {exc}")
+        return pd.DataFrame()
+    return _coerce_dataframe(payload)
+
+
+def _normalize_ticker_series(df: pd.DataFrame) -> pd.Series:
+    ticker_col = _first_existing_column(df, ["ticker", "underlying", "symbol", "instrument_key"])
+    if ticker_col is None:
+        return pd.Series(index=df.index, dtype=object)
+    series = df[ticker_col].astype(str)
+    if ticker_col == "instrument_key":
+        series = series.str.split(":").str[-1]
+    return series.str.upper()
+
+
+def _normalize_outcomes_for_backfill(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["event_id", "ticker", "entry_ts", "expiry", "dte", "option_chain"])
+
+    event_col = _first_existing_column(df, ["alert_id", "event_id", "watch_id", "instrument_key"])
+    ts_col = _first_existing_column(df, ["entry_ts", "alert_time", "ts_event", "ts_available"])
+    expiry_col = _first_existing_column(df, ["expiry", "expiry_date"])
+    dte_col = _first_existing_column(df, ["dte", "days_to_expiry"])
+    option_col = _first_existing_column(df, ["option_chain", "occ_symbol", "contract_symbol", "option_symbol"])
+
+    event_series = df[event_col].astype(str) if event_col else pd.Series(index=df.index, dtype=object)
+    ts_series = (
+        pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+        if ts_col
+        else pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+    )
+    ticker_series = _normalize_ticker_series(df)
+    expiry_series = df[expiry_col] if expiry_col else pd.Series(index=df.index, dtype=object)
+    dte_series = pd.to_numeric(df[dte_col], errors="coerce") if dte_col else pd.Series(index=df.index, dtype="float64")
+    option_series = df[option_col] if option_col else pd.Series(index=df.index, dtype=object)
+
+    normalized = pd.DataFrame(
+        {
+            "event_id": event_series,
+            "ticker": ticker_series,
+            "entry_ts": ts_series,
+            "expiry": expiry_series,
+            "dte": dte_series,
+            "option_chain": option_series,
+        }
+    )
+    normalized = normalized.dropna(subset=["event_id", "entry_ts"])
+    normalized["event_id"] = normalized["event_id"].astype(str)
+    return normalized
+
+
+def _normalize_features_for_backfill(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(
+            columns=[
+                "event_id",
+                "entry_hour",
+                "minutes_to_close",
+                "overnight_gap_pct",
+                "gex_at_entry",
+                "oi_change_1d",
+            ]
+        )
+
+    event_col = _first_existing_column(df, ["alert_id", "event_id", "watch_id", "instrument_key"])
+    if event_col is None:
+        return pd.DataFrame()
+
+    normalized = pd.DataFrame({"event_id": df[event_col].astype(str)})
+    normalized["entry_hour"] = pd.to_numeric(
+        df[_first_existing_column(df, ["entry_hour", "hour_of_day"])]
+        if _first_existing_column(df, ["entry_hour", "hour_of_day"])
+        else None,
+        errors="coerce",
+    )
+    normalized["minutes_to_close"] = pd.to_numeric(
+        df[_first_existing_column(df, ["minutes_to_close"])]
+        if _first_existing_column(df, ["minutes_to_close"])
+        else None,
+        errors="coerce",
+    )
+    normalized["overnight_gap_pct"] = pd.to_numeric(
+        df[_first_existing_column(df, ["overnight_gap_pct"])]
+        if _first_existing_column(df, ["overnight_gap_pct"])
+        else None,
+        errors="coerce",
+    )
+    normalized["gex_at_entry"] = pd.to_numeric(
+        df[_first_existing_column(df, ["gex_at_entry", "gex"])]
+        if _first_existing_column(df, ["gex_at_entry", "gex"])
+        else None,
+        errors="coerce",
+    )
+    normalized["oi_change_1d"] = pd.to_numeric(
+        df[_first_existing_column(df, ["oi_change_1d"])] if _first_existing_column(df, ["oi_change_1d"]) else None,
+        errors="coerce",
+    )
+    return normalized
 
 
 async def _get_option_chain_for_event(event_id: str) -> str:
@@ -321,9 +454,9 @@ async def _load_backfill_cursor() -> tuple[datetime | None, str | None]:
 
     async def query(session: Any) -> tuple[datetime | None, str | None]:
         cursor = await get_cursor_state(session, BACKFILL_CURSOR_KEY)
-        if cursor is not None:
-            return cursor.last_seen_ts_utc, cursor.last_seen_id
-        return None, None
+        if cursor is None:
+            return None, None
+        return cursor.last_seen_ts_utc, cursor.last_seen_id
 
     return await db_query(query)
 
@@ -471,19 +604,14 @@ async def update_ml_features(record: Dict[str, Any]) -> bool:
 
     updates["iv_rank_at_entry"] = await get_iv_rank_at_entry(ticker, entry_ts)
 
-    # Build update query
-    set_clauses = []
-    for k in updates:
-        set_clauses.append(f"{k} = :{k}")
+    if not updates:
+        return False
 
-    query = f"UPDATE price_target_labels SET {', '.join(set_clauses)} WHERE event_id = :event_id"
-    updates["event_id"] = event_id
-
-    async def write(session: Any) -> None:
-        await session.execute(text(query), updates)
-
-    await db_write(write)
-    return True
+    logger.warning(
+        "Skipping legacy local ML feature backfill write; label storage is centralized",
+        extra={"event_type": "DEPRECATED_LOCAL_WRITE_SKIPPED", "event_id": event_id},
+    )
+    return False
 
 
 async def run_backfill(batch_size: int = BATCH_SIZE, limit: int = 1000) -> None:

@@ -1,5 +1,5 @@
 """
-Feature Validation Script for price_target_labels.
+Feature validation script for label features.
 
 Validates that all 130+ ML features are calculated correctly by:
 1. Spot-checking individual records against raw source data
@@ -18,10 +18,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from sqlalchemy import text
 
 from orion.clients.heber_reader import get_heber_reader
-from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -37,21 +35,166 @@ SOURCE_MARKET_TIDE = "market_tide"
 SOURCE_VIX = "vix_data"
 SOURCE_REGIME = "regime_history"
 
-LEGACY_SOURCE_ALIASES = {
-    "silver_alpaca_bars": SOURCE_BARS,
-    "silver_uw_flow": SOURCE_FLOW,
-    "silver_uw_darkpool": SOURCE_DARKPOOL,
-    "silver_greek_exposure": SOURCE_GREEK_EXPOSURE,
-    "silver_max_pain": SOURCE_MAX_PAIN,
-    "silver_market_tide": SOURCE_MARKET_TIDE,
-    "silver_vix_data": SOURCE_VIX,
-    "silver_regime_history": SOURCE_REGIME,
-}
-
-
 # ============================================================================
 # SPOT-CHECK VALIDATION
 # ============================================================================
+
+
+def _coerce_gold_frame(payload: Any) -> pd.DataFrame:
+    if isinstance(payload, pd.DataFrame):
+        return payload.copy()
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if isinstance(payload, dict):
+        return pd.DataFrame([payload])
+    return pd.DataFrame()
+
+
+async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame | None:
+    reader = get_heber_reader()
+    try:
+        payload = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset=dataset,
+            asof_time=datetime.now(timezone.utc),
+        )
+    except Exception as exc:
+        logger.warning("read_heber_gold_dataset_failed", dataset=dataset, error=str(exc))
+        return None
+    return _coerce_gold_frame(payload)
+
+
+async def _load_heber_label_frames() -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
+    if outcomes_df is None:
+        return None
+    features_df = await _read_heber_gold_dataset("meta_label_features")
+    if features_df is None:
+        return None
+    return outcomes_df, features_df
+
+
+def _coalesce_columns(df: pd.DataFrame, columns: List[str]) -> pd.Series:
+    series = pd.Series(index=df.index, dtype=object)
+    for column in columns:
+        if column in df.columns:
+            values = df[column]
+            series = values.where(series.isna(), series)
+    return series
+
+
+def _coalesce_numeric(df: pd.DataFrame, columns: List[str]) -> pd.Series:
+    series = pd.Series(index=df.index, dtype="float64")
+    for column in columns:
+        if column in df.columns:
+            values = pd.to_numeric(df[column], errors="coerce")
+            series = values.where(series.isna(), series)
+    return series
+
+
+def _join_key_column(df: pd.DataFrame) -> str | None:
+    return _pick_first_existing_column(df, ["alert_id", "event_id", "watch_id", "instrument_key"])
+
+
+def _to_join_frame(df: pd.DataFrame, key_column: str | None) -> pd.DataFrame:
+    frame = df.copy()
+    frame["__join_key"] = None
+    if key_column and key_column in frame.columns:
+        frame["__join_key"] = frame[key_column].astype(str)
+        frame.loc[frame[key_column].isna(), "__join_key"] = None
+    return frame
+
+
+def _build_joined_label_frame(outcomes_df: pd.DataFrame, features_df: pd.DataFrame) -> pd.DataFrame:
+    outcomes = _to_join_frame(outcomes_df, _join_key_column(outcomes_df))
+    features = _to_join_frame(features_df, _join_key_column(features_df))
+    if features.empty:
+        merged = outcomes.copy()
+        merged["__matched"] = False
+    else:
+        merged = outcomes.merge(features, on="__join_key", how="left", suffixes=("", "_feature"), indicator=True)
+        merged["__matched"] = merged["_merge"] == "both"
+
+    merged["entry_ts"] = pd.to_datetime(
+        _coalesce_columns(
+            merged,
+            ["entry_ts", "alert_time", "ts_event", "ts_available", "entry_ts_feature", "alert_time_feature"],
+        ),
+        utc=True,
+        errors="coerce",
+    )
+    merged["ticker"] = _coalesce_columns(
+        merged,
+        [
+            "ticker",
+            "underlying",
+            "symbol",
+            "instrument_key",
+            "ticker_feature",
+            "underlying_feature",
+            "symbol_feature",
+            "instrument_key_feature",
+        ],
+    )
+    if not merged["ticker"].empty:
+        merged["ticker"] = merged["ticker"].astype(str)
+        merged["ticker"] = merged["ticker"].str.split(":").str[-1].str.upper()
+
+    merged["entry_hour"] = _coalesce_numeric(merged, ["entry_hour", "hour_of_day"])
+    merged["entry_day_of_week"] = _coalesce_numeric(merged, ["entry_day_of_week", "day_of_week"])
+    merged["minutes_to_close"] = _coalesce_numeric(merged, ["minutes_to_close"])
+    merged["darkpool_volume_1h"] = _coalesce_numeric(merged, ["darkpool_volume_1h", "darkpool_1h"])
+    merged["delta_at_entry"] = _coalesce_numeric(merged, ["delta_at_entry", "delta"])
+    merged["gamma_at_entry"] = _coalesce_numeric(merged, ["gamma_at_entry", "gamma"])
+    merged["iv_rank_at_entry"] = _coalesce_numeric(merged, ["iv_rank_at_entry", "iv_rank"])
+    merged["iv_at_entry"] = _coalesce_numeric(merged, ["iv_at_entry", "iv"])
+    merged["rvol_1h"] = _coalesce_numeric(merged, ["rvol_1h", "rvol"])
+    merged["overnight_gap_pct"] = _coalesce_numeric(merged, ["overnight_gap_pct"])
+    return merged
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_label_record(row: pd.Series) -> Dict[str, Any]:
+    entry_ts = row.get("entry_ts")
+    ticker = row.get("ticker")
+    return {
+        "event_id": row.get("__join_key"),
+        "ticker": str(ticker) if ticker is not None else None,
+        "entry_ts": entry_ts.to_pydatetime() if isinstance(entry_ts, pd.Timestamp) else entry_ts,
+        "entry_hour": _safe_int(row.get("entry_hour")),
+        "entry_day_of_week": _safe_int(row.get("entry_day_of_week")),
+        "minutes_to_close": _safe_int(row.get("minutes_to_close")),
+        "overnight_gap_pct": row.get("overnight_gap_pct"),
+        "darkpool_volume_1h": row.get("darkpool_volume_1h"),
+        "delta_at_entry": row.get("delta_at_entry"),
+        "gamma_at_entry": row.get("gamma_at_entry"),
+        "iv_rank_at_entry": row.get("iv_rank_at_entry"),
+        "iv_at_entry": row.get("iv_at_entry"),
+        "rvol_1h": row.get("rvol_1h"),
+    }
+
+
+async def _load_label_record_from_heber(event_id: str) -> Optional[Dict[str, Any]]:
+    frames = await _load_heber_label_frames()
+    if frames is None:
+        return None
+    outcomes_df, features_df = frames
+    merged = _build_joined_label_frame(outcomes_df, features_df)
+    if merged.empty:
+        return None
+    row_match = merged[merged["__join_key"] == event_id]
+    if row_match.empty:
+        return None
+    return _to_label_record(row_match.iloc[0])
 
 
 async def spot_check_record(event_id: str) -> Dict[str, Any]:
@@ -67,22 +210,16 @@ async def spot_check_record(event_id: str) -> Dict[str, Any]:
         "warnings": [],
     }
 
-    # Get the label record
-    async def get_label(session: Any) -> Optional[Dict[str, Any]]:
-        stmt = text("""
-            SELECT * FROM price_target_labels WHERE event_id = :event_id
-        """)
-        result = await session.execute(stmt, {"event_id": event_id})
-        row = result.fetchone()
-        return dict(row._mapping) if row else None
-
-    label = await db_query(get_label)
+    label = await _load_label_record_from_heber(event_id)
     if not label:
         results["failed"].append(f"Record not found: {event_id}")
         return results
 
-    ticker = label["ticker"]
-    entry_ts = label["entry_ts"]
+    ticker = label.get("ticker")
+    entry_ts = label.get("entry_ts")
+    if not ticker or not isinstance(entry_ts, datetime):
+        results["failed"].append(f"Record missing required fields for validation: {event_id}")
+        return results
 
     # 1. Validate time features
     time_checks = validate_time_features(label, entry_ts)
@@ -352,31 +489,48 @@ async def run_sanity_checks() -> Dict[str, Any]:
     """Run batch sanity checks on all records."""
     results: Dict[str, Any] = {"passed": 0, "failed": 0, "issues": []}
 
-    async def check(session: Any) -> List[Dict]:
-        stmt = text(
-            """
-            SELECT
-                COUNT(*) as total,
-                COUNT(*) FILTER (WHERE NOT ml_ready) as not_ready,
-                COUNT(*) FILTER (WHERE ml_ready AND (delta_at_entry < -1 OR delta_at_entry > 1)) as bad_delta,
-                COUNT(*) FILTER (WHERE ml_ready AND gamma_at_entry < 0) as bad_gamma,
-                COUNT(*) FILTER (WHERE ml_ready AND (iv_rank_at_entry < 0 OR iv_rank_at_entry > 100)) as bad_iv_rank,
-                COUNT(*) FILTER (
-                    WHERE ml_ready AND (minutes_to_close < 0 OR minutes_to_close > """
-            + str(MINUTES_TO_CLOSE_MAX)
-            + """)
-                ) as bad_mtc,
-                COUNT(*) FILTER (WHERE ml_ready AND (entry_hour < 0 OR entry_hour > 23)) as bad_hour,
-                COUNT(*) FILTER (WHERE ml_ready AND darkpool_volume_1h < 0) as bad_dp,
-                COUNT(*) FILTER (WHERE ml_ready AND rvol_1h < 0) as bad_rvol
-            FROM price_target_labels
-        """
-        )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        return dict(row._mapping)
+    frames = await _load_heber_label_frames()
+    if frames is None:
+        stats = {
+            "total": 0,
+            "bad_delta": 0,
+            "bad_gamma": 0,
+            "bad_iv_rank": 0,
+            "bad_mtc": 0,
+            "bad_hour": 0,
+            "bad_dp": 0,
+            "bad_rvol": 0,
+            "not_ready": 0,
+        }
+    else:
+        outcomes_df, features_df = frames
+        merged = _build_joined_label_frame(outcomes_df, features_df)
+        matched = merged["__matched"] if "__matched" in merged.columns else pd.Series(False, index=merged.index)
+        delta = _coalesce_numeric(merged, ["delta_at_entry"])
+        gamma = _coalesce_numeric(merged, ["gamma_at_entry"])
+        iv_rank = _coalesce_numeric(merged, ["iv_rank_at_entry"])
+        minutes_to_close = _coalesce_numeric(merged, ["minutes_to_close"])
+        entry_hour = _coalesce_numeric(merged, ["entry_hour"])
+        darkpool = _coalesce_numeric(merged, ["darkpool_volume_1h"])
+        rvol = _coalesce_numeric(merged, ["rvol_1h"])
 
-    stats = await db_query(check)
+        stats = {
+            "total": int(len(merged)),
+            "not_ready": int((~matched).sum()),
+            "bad_delta": int((matched & delta.notna() & ((delta < -1) | (delta > 1))).sum()),
+            "bad_gamma": int((matched & gamma.notna() & (gamma < 0)).sum()),
+            "bad_iv_rank": int((matched & iv_rank.notna() & ((iv_rank < 0) | (iv_rank > 100))).sum()),
+            "bad_mtc": int(
+                (
+                    matched
+                    & minutes_to_close.notna()
+                    & ((minutes_to_close < 0) | (minutes_to_close > MINUTES_TO_CLOSE_MAX))
+                ).sum()
+            ),
+            "bad_hour": int((matched & entry_hour.notna() & ((entry_hour < 0) | (entry_hour > 23))).sum()),
+            "bad_dp": int((matched & darkpool.notna() & (darkpool < 0)).sum()),
+            "bad_rvol": int((matched & rvol.notna() & (rvol < 0)).sum()),
+        }
 
     checks = [
         ("delta_at_entry in [-1, 1]", stats["bad_delta"]),
@@ -470,7 +624,7 @@ _AUDIT_SOURCE_ORDER = [
 
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 _SOURCE_TIME_COLUMNS = ["ts_event", "ts_utc", "bar_start_ts", "flow_ts_utc", "dark_ts_utc", "date"]
-_SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "instrument_key"]
+_SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "underlying", "instrument_key"]
 
 
 def _prefer_heber_source_from_env() -> bool:
@@ -486,7 +640,7 @@ def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optiona
 
 
 def _normalize_source_id(source: str) -> str:
-    return LEGACY_SOURCE_ALIASES.get(source, source)
+    return source
 
 
 def _label_date_bounds(
@@ -605,6 +759,10 @@ async def _fetch_source_summary(
     prefer_heber: bool,
 ) -> Dict[str, Any]:
     source_id = _normalize_source_id(source)
+    if source_id not in _AUDIT_SOURCE_SPECS:
+        logger.warning("audit_source_unknown_source_id", source=source_id)
+        return {"min_date": None, "max_date": None, "tickers": 0, "backend": "source_unavailable"}
+
     if prefer_heber:
         heber_summary = await _fetch_source_summary_from_heber(
             source=source_id,
@@ -618,28 +776,57 @@ async def _fetch_source_summary(
 
 
 async def _load_label_period() -> Dict[str, Any]:
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT MIN(DATE(entry_ts)) as min_date, MAX(DATE(entry_ts)) as max_date,
-                   COUNT(DISTINCT ticker) as ticker_count
-            FROM price_target_labels WHERE ml_ready
-            """
+    reader = get_heber_reader()
+    now = datetime.now(timezone.utc)
+    try:
+        df = await asyncio.to_thread(
+            reader.read_gold_features,
+            dataset="labels_alert_barriers",
+            asof_time=now,
         )
-        result = await session.execute(stmt)
-        row = result.fetchone()
-        min_date = row[0] if row else None
-        max_date = row[1] if row else None
-        ticker_count = int(row[2]) if row and row[2] else 0
+    except Exception as exc:
+        logger.warning("load_label_period_heber_failed", error=str(exc))
         return {
-            "min_date_raw": min_date,
-            "max_date_raw": max_date,
-            "min_date": str(min_date) if min_date else None,
-            "max_date": str(max_date) if max_date else None,
-            "tickers": ticker_count,
+            "min_date_raw": None,
+            "max_date_raw": None,
+            "min_date": None,
+            "max_date": None,
+            "tickers": 0,
         }
 
-    return await db_query(query)
+    if not isinstance(df, pd.DataFrame):
+        if isinstance(df, list):
+            rows = [row for row in df if isinstance(row, dict)]
+            df = pd.DataFrame(rows) if rows else pd.DataFrame()
+        elif isinstance(df, dict):
+            df = pd.DataFrame([df])
+        else:
+            df = pd.DataFrame()
+
+    summary = _summarize_heber_source_frame(df)
+    min_date_str = summary.get("min_date")
+    max_date_str = summary.get("max_date")
+
+    min_date_raw: Optional[date] = None
+    max_date_raw: Optional[date] = None
+    if isinstance(min_date_str, str):
+        try:
+            min_date_raw = date.fromisoformat(min_date_str)
+        except ValueError:
+            min_date_raw = None
+    if isinstance(max_date_str, str):
+        try:
+            max_date_raw = date.fromisoformat(max_date_str)
+        except ValueError:
+            max_date_raw = None
+
+    return {
+        "min_date_raw": min_date_raw,
+        "max_date_raw": max_date_raw,
+        "min_date": min_date_str,
+        "max_date": max_date_str,
+        "tickers": int(summary.get("tickers") or 0),
+    }
 
 
 # Feature-to-source mapping for all 130+ features

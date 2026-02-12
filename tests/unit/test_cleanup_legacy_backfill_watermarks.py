@@ -7,6 +7,12 @@ import pytest
 from orion.jobs import cleanup_legacy_backfill_watermarks as cleanup_job
 
 
+def test_legacy_backfill_watermark_keys_include_cursor_suffixes() -> None:
+    assert "backfill_exit_columns.velocity.cursor" in cleanup_job.LEGACY_BACKFILL_WATERMARK_KEYS
+    assert "backfill_exit_columns.checkpoint.cursor" in cleanup_job.LEGACY_BACKFILL_WATERMARK_KEYS
+    assert "backfill_ml_features.price_target_labels.cursor" not in cleanup_job.LEGACY_BACKFILL_WATERMARK_KEYS
+
+
 @pytest.mark.asyncio
 async def test_cleanup_legacy_backfill_watermarks_deletes_known_legacy_keys(
     monkeypatch: pytest.MonkeyPatch,

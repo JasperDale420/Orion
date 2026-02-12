@@ -18,9 +18,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from sqlalchemy import text
+
 from orion.shared.db_utils import db_query, db_write
 from orion.storage.db import init_db
-from sqlalchemy import text
 
 
 async def get_records_to_backfill(batch_size: int) -> List[Dict[str, Any]]:

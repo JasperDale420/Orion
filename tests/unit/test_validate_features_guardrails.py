@@ -1,65 +1,91 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from orion.jobs import validate_features
 
 
 @pytest.mark.asyncio
-async def test_run_sanity_checks_query_uses_consistent_minutes_to_close_bound(
+async def test_run_sanity_checks_uses_minutes_to_close_bound_from_constant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, str] = {}
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return [
+                    {"alert_id": "a1", "underlying": "AAPL", "ts_event": "2026-02-11T15:00:00Z"},
+                    {"alert_id": "a2", "underlying": "MSFT", "ts_event": "2026-02-11T15:00:00Z"},
+                ]
+            if dataset == "meta_label_features":
+                return [
+                    {
+                        "alert_id": "a1",
+                        "delta": 0.3,
+                        "gamma": 0.1,
+                        "iv_rank": 50.0,
+                        "minutes_to_close": 390,
+                        "hour_of_day": 14,
+                        "darkpool_1h": 1.0,
+                        "rvol_1h": 1.0,
+                    },
+                    {
+                        "alert_id": "a2",
+                        "delta": 0.3,
+                        "gamma": 0.1,
+                        "iv_rank": 50.0,
+                        "minutes_to_close": 391,
+                        "hour_of_day": 14,
+                        "darkpool_1h": 1.0,
+                        "rvol_1h": 1.0,
+                    },
+                ]
+            raise AssertionError(f"unexpected dataset: {dataset}")
 
-    class _FakeRow:
-        _mapping = {
-            "total": 10,
-            "bad_delta": 0,
-            "bad_gamma": 0,
-            "bad_iv_rank": 0,
-            "bad_mtc": 0,
-            "bad_hour": 0,
-            "bad_dp": 0,
-            "bad_rvol": 0,
-            "not_ready": 0,
-        }
+    monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
 
-    class _FakeResult:
-        def fetchone(self) -> _FakeRow:
-            return _FakeRow()
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
 
-    class _FakeSession:
-        async def execute(self, stmt: Any) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            return _FakeResult()
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
+    results = await validate_features.run_sanity_checks()
 
-    monkeypatch.setattr(validate_features, "db_query", _fake_db_query)
-
-    await validate_features.run_sanity_checks()
-    assert "minutes_to_close < 0 OR minutes_to_close > 390" in captured["sql"]
+    assert results["failed"] == 1
+    assert any("minutes_to_close in [0, 390]" in issue for issue in results["issues"])
 
 
 @pytest.mark.asyncio
 async def test_run_sanity_checks_flags_unready_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_db_query(_fn):
-        return {
-            "total": 100,
-            "bad_delta": 0,
-            "bad_gamma": 0,
-            "bad_iv_rank": 0,
-            "bad_mtc": 0,
-            "bad_hour": 0,
-            "bad_dp": 0,
-            "bad_rvol": 0,
-            "not_ready": 5,
-        }
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return [
+                    {"alert_id": "a1", "underlying": "AAPL", "ts_event": "2026-02-11T15:00:00Z"},
+                    {"alert_id": "a2", "underlying": "MSFT", "ts_event": "2026-02-11T15:00:00Z"},
+                ]
+            if dataset == "meta_label_features":
+                return [
+                    {
+                        "alert_id": "a1",
+                        "delta": 0.3,
+                        "gamma": 0.1,
+                        "iv_rank": 50.0,
+                        "minutes_to_close": 120,
+                        "hour_of_day": 14,
+                        "darkpool_1h": 1.0,
+                        "rvol_1h": 1.0,
+                    }
+                ]
+            raise AssertionError(f"unexpected dataset: {dataset}")
 
-    monkeypatch.setattr(validate_features, "db_query", _fake_db_query)
+    monkeypatch.setattr(validate_features, "get_heber_reader", lambda: _FakeReader())
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
     results = await validate_features.run_sanity_checks()
 

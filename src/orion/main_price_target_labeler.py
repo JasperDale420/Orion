@@ -20,32 +20,14 @@ from scipy.stats import norm
 
 load_dotenv()
 
-from sqlalchemy import text
 
 from orion.clients.heber_reader import HeberReader
 from orion.config import SystemSettings
 from orion.labeler import (
     BATCH_SIZE,
-    CHECKPOINT_OFFSETS,
-    POLL_INTERVAL_SECONDS,
     RISK_FREE_RATE,
-    SECTOR_MAPPING,
-    calculate_black_scholes_delta,
-    calculate_black_scholes_gamma,
-    calculate_iv_rank_from_history,
-    calculate_volatility,
-    get_price_at_offset,
-    get_price_at_offset_days,
-    get_price_at_offset_minutes,
 )
-from orion.labeler.schema_guard import (
-    SchemaValidationError,
-    fetch_table_columns,
-    resolve_insert_columns,
-)
-from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
 from orion.unusualwhales.api.stock import get_info
 from orion.unusualwhales.client import UnusualWhalesClient
 from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
@@ -54,7 +36,6 @@ logger = setup_struct_logger("orion.price_target")
 _heber_reader = HeberReader()
 
 _PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
-_PRICE_TARGET_LABEL_COLUMNS: Optional[Set[str]] = None
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
@@ -428,31 +409,17 @@ async def get_velocity_backfill_candidates(
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Get price-target rows that still need velocity columns backfilled."""
-
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit}
-        cursor_clause = _build_backfill_cursor_clause(after_entry_ts, after_event_id, params)
-
-        stmt = text(
-            f"""
-            SELECT event_id, ticker, option_chain, entry_ts, entry_option_price,
-                   hit_75_pct_ts, hit_100_pct_ts, hit_150_pct_ts
-            FROM price_target_labels
-            WHERE (
-                (time_to_75_pct_seconds IS NULL AND hit_75_pct_ts IS NOT NULL)
-                OR (time_to_100_pct_seconds IS NULL AND hit_100_pct_ts IS NOT NULL)
-                OR (time_to_150_pct_seconds IS NULL AND hit_150_pct_ts IS NOT NULL)
-            )
-            {cursor_clause}
-            ORDER BY entry_ts ASC, event_id ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, params)
-        return [dict(row._mapping) for row in result.fetchall()]
-
-    return await db_query(query)
+    """Legacy no-op; local velocity backfill candidate discovery is decommissioned."""
+    _ = (limit, after_entry_ts, after_event_id)
+    logger.warning(
+        "Velocity backfill candidate lookup is decommissioned; local label backfill is disabled",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "get_velocity_backfill_candidates",
+        },
+    )
+    return []
 
 
 async def get_checkpoint_backfill_candidates(
@@ -460,34 +427,17 @@ async def get_checkpoint_backfill_candidates(
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Get price-target rows that still need checkpoint columns backfilled."""
-
-    async def query(session: Any) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit}
-        cursor_clause = _build_backfill_cursor_clause(after_entry_ts, after_event_id, params)
-
-        stmt = text(
-            f"""
-            SELECT event_id, option_chain, entry_ts, entry_option_price
-            FROM price_target_labels
-            WHERE (
-                price_at_15m IS NULL OR return_at_15m IS NULL
-                OR price_at_30m IS NULL OR return_at_30m IS NULL
-                OR price_at_8h IS NULL OR return_at_8h IS NULL
-                OR price_at_1d IS NULL OR return_at_1d IS NULL
-                OR price_at_2d IS NULL OR return_at_2d IS NULL
-                OR price_at_3d IS NULL OR return_at_3d IS NULL
-                OR price_at_1w IS NULL OR return_at_1w IS NULL
-            )
-            {cursor_clause}
-            ORDER BY entry_ts ASC, event_id ASC
-            LIMIT :limit
-        """
-        )
-        result = await session.execute(stmt, params)
-        return [dict(row._mapping) for row in result.fetchall()]
-
-    return await db_query(query)
+    """Legacy no-op; local checkpoint backfill candidate discovery is decommissioned."""
+    _ = (limit, after_entry_ts, after_event_id)
+    logger.warning(
+        "Checkpoint backfill candidate lookup is decommissioned; local label backfill is disabled",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "get_checkpoint_backfill_candidates",
+        },
+    )
+    return []
 
 
 def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
@@ -577,15 +527,18 @@ def _is_truthy(value: Any) -> bool:
 
 
 async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
+    """Legacy no-op; local labeled-event lookup is decommissioned."""
     if not event_ids:
         return set()
-
-    async def query(session: Any) -> Set[str]:
-        stmt = text("SELECT event_id FROM price_target_labels WHERE event_id = ANY(:event_ids)")
-        result = await session.execute(stmt, {"event_ids": event_ids})
-        return {str(row[0]) for row in result.fetchall()}
-
-    return await db_query(query)
+    logger.warning(
+        "Labeled event lookup is decommissioned; local label storage is disabled",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "get_labeled_price_target_event_ids",
+        },
+    )
+    return set()
 
 
 async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
@@ -863,41 +816,156 @@ def _get_gex_rolling_averages_from_heber(
 
 
 async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
-    """Get latest gold window feature payload by period for a ticker at entry time."""
-
-    async def query(session: Any) -> Dict[str, Any]:
-        stmt = text(
-            """
-            SELECT period, features
-            FROM (
-                SELECT DISTINCT ON (period) period, features
-                FROM gold_feature_windows
-                WHERE ticker = :ticker
-                  AND period IN ('1h', '1d', '1w')
-                  AND window_end_ts_utc <= :entry_ts
-                ORDER BY period, window_end_ts_utc DESC
-            ) latest_by_period
-        """
-        )
-        result = await session.execute(
-            stmt,
-            {"ticker": ticker, "entry_ts": entry_ts},
-        )
-        rows = result.fetchall()
-
-        features_by_period: Dict[str, Any] = {}
-        for row in rows:
-            period = row[0]
-            features = row[1] if len(row) > 1 else None
-            if period and features:
-                features_by_period[period] = features
-        return features_by_period
-
-    try:
-        return await db_query(query)
-    except Exception as e:
-        logger.debug(f"Window features lookup failed for {ticker}: {e}")
+    """Build 1h/1d/1w window features directly from Heber silver datasets."""
+    entry_utc = _coerce_dt_utc(entry_ts)
+    if entry_utc is None:
         return {}
+
+    longest_window = timedelta(weeks=1)
+    try:
+        flow_df = _heber_reader.read_flow(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=entry_utc - longest_window,
+        )
+        darkpool_df = _heber_reader.read_darkpool(
+            symbols=[ticker],
+            asof_time=entry_utc,
+            start_time=entry_utc - longest_window,
+        )
+    except Exception as e:
+        _record_price_target_fallback("window_features_heber_lookup", e, ticker=ticker)
+        return {}
+
+    flow_frame = _normalize_window_flow_frame(flow_df, ticker=ticker)
+    if flow_frame.empty:
+        return {}
+
+    darkpool_frame = _normalize_window_darkpool_frame(darkpool_df, ticker=ticker)
+    period_windows = {
+        "1h": timedelta(hours=1),
+        "1d": timedelta(days=1),
+        "1w": timedelta(weeks=1),
+    }
+
+    features_by_period: Dict[str, Any] = {}
+    for period, window_size in period_windows.items():
+        start_utc = entry_utc - window_size
+        flow_window = flow_frame[(flow_frame["ts"] > start_utc) & (flow_frame["ts"] <= entry_utc)]
+        if flow_window.empty:
+            continue
+
+        premium_series = flow_window["premium"]
+        put_call_series = flow_window["put_call"]
+        sweep_series = flow_window["is_sweep"]
+        aggressor_series = flow_window["aggressor"]
+
+        call_premium = float(premium_series[put_call_series == "C"].sum())
+        put_premium = float(premium_series[put_call_series == "P"].sum())
+        total_premium = float(premium_series.sum())
+        flow_count = int(len(flow_window))
+        sweep_count = int(sweep_series.sum())
+        ask_side = int((aggressor_series == "ASK").sum())
+
+        darkpool_window = darkpool_frame[(darkpool_frame["ts"] > start_utc) & (darkpool_frame["ts"] <= entry_utc)]
+        dp_volume = float(darkpool_window["size"].sum()) if not darkpool_window.empty else 0.0
+        dp_count = int(len(darkpool_window))
+
+        features_by_period[period] = {
+            "flow_count": flow_count,
+            "sweep_count": sweep_count,
+            "dp_count": dp_count,
+            "call_premium": call_premium,
+            "put_premium": put_premium,
+            "total_premium": total_premium,
+            "dp_volume": dp_volume,
+            "call_put_ratio": call_premium / put_premium if put_premium > 0 else None,
+            "call_put_imbalance": (call_premium - put_premium) / total_premium if total_premium > 0 else 0.0,
+            "sweep_ratio": sweep_count / flow_count if flow_count > 0 else 0.0,
+            "ask_ratio": ask_side / flow_count if flow_count > 0 else 0.5,
+        }
+
+    return features_by_period
+
+
+def _normalize_window_flow_frame(flow_df: pd.DataFrame, *, ticker: str) -> pd.DataFrame:
+    if flow_df.empty:
+        return pd.DataFrame(columns=["ts", "premium", "put_call", "is_sweep", "aggressor"])
+
+    ts_col = _pick_first_existing_column(flow_df, ["flow_ts_utc", "ts_event", "timestamp", "created_at"])
+    premium_col = _pick_first_existing_column(flow_df, ["premium_usd", "premium"])
+    put_call_col = _pick_first_existing_column(flow_df, ["put_call", "type", "option_type", "right"])
+    ticker_col = _pick_first_existing_column(flow_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    sweep_col = _pick_first_existing_column(flow_df, ["is_sweep", "sweep"])
+    aggressor_col = _pick_first_existing_column(flow_df, ["aggressor", "side"])
+    if ts_col is None or premium_col is None:
+        return pd.DataFrame(columns=["ts", "premium", "put_call", "is_sweep", "aggressor"])
+
+    ts_series = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
+    premium_series = pd.to_numeric(flow_df[premium_col], errors="coerce")
+
+    if put_call_col is not None:
+        put_call_series = flow_df[put_call_col].map(_normalize_put_call)
+    else:
+        put_call_series = pd.Series(index=flow_df.index, dtype=object)
+    if sweep_col is not None:
+        sweep_series = flow_df[sweep_col].map(_is_truthy)
+    else:
+        sweep_series = pd.Series([False] * len(flow_df))
+    if aggressor_col is not None:
+        aggressor_series = flow_df[aggressor_col].astype(str).str.upper()
+    else:
+        aggressor_series = pd.Series([""] * len(flow_df))
+
+    if ticker_col is not None:
+        ticker_series = flow_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+    else:
+        ticker_series = pd.Series([str(ticker).upper()] * len(flow_df))
+
+    frame = pd.DataFrame(
+        {
+            "ts": ts_series,
+            "ticker": ticker_series,
+            "premium": premium_series,
+            "put_call": put_call_series,
+            "is_sweep": sweep_series,
+            "aggressor": aggressor_series,
+        }
+    ).dropna(subset=["ts", "premium"])
+
+    if frame.empty:
+        return frame
+
+    return frame[frame["ticker"] == str(ticker).upper()]
+
+
+def _normalize_window_darkpool_frame(darkpool_df: pd.DataFrame, *, ticker: str) -> pd.DataFrame:
+    if darkpool_df.empty:
+        return pd.DataFrame(columns=["ts", "size"])
+
+    ts_col = _pick_first_existing_column(darkpool_df, ["dark_ts_utc", "ts_utc", "ts_event", "timestamp", "created_at"])
+    size_col = _pick_first_existing_column(darkpool_df, ["size_shares", "size", "shares", "volume"])
+    ticker_col = _pick_first_existing_column(darkpool_df, ["ticker", "symbol", "underlying", "instrument_key"])
+    if ts_col is None or size_col is None:
+        return pd.DataFrame(columns=["ts", "size"])
+
+    ts_series = pd.to_datetime(darkpool_df[ts_col], utc=True, errors="coerce")
+    size_series = pd.to_numeric(darkpool_df[size_col], errors="coerce").fillna(0.0)
+    if ticker_col is not None:
+        ticker_series = darkpool_df[ticker_col].astype(str).str.upper().str.split(":").str[-1]
+    else:
+        ticker_series = pd.Series([str(ticker).upper()] * len(darkpool_df))
+
+    frame = pd.DataFrame(
+        {
+            "ts": ts_series,
+            "ticker": ticker_series,
+            "size": size_series,
+        }
+    ).dropna(subset=["ts"])
+    if frame.empty:
+        return frame
+    return frame[frame["ticker"] == str(ticker).upper()]
 
 
 async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
@@ -1369,7 +1437,7 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     """Get Greeks from stored values or Alpaca API, with Black-Scholes fallback.
 
     Priority:
-    1. Stored Greeks from silver_uw_flow (captured at ingestion time)
+    1. Stored Greeks from Heber flow alerts (captured at ingestion time)
     2. Alpaca API (for flows ingested before Greeks enrichment)
     3. Black-Scholes fallback (if Alpaca unavailable)
     """
@@ -1398,7 +1466,7 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
 
     option_chain = flow_data.get("option_chain")
 
-    # Priority 1: Use stored Greeks from silver_uw_flow (captured at ingestion)
+    # Priority 1: Use stored Greeks from Heber flow alerts (captured at ingestion)
     if flow_data.get("delta_stored") is not None:
         result["delta"] = flow_data.get("delta_stored")
         result["gamma"] = flow_data.get("gamma_stored")
@@ -3507,269 +3575,46 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
 
 async def persist_labels(labels: List[Dict[str, Any]]) -> int:
-    """Persist labeled records to database using dynamic INSERT.
-
-    Includes only schema-validated columns from each label dict.
-    Unknown/missing required columns fail fast.
-    """
+    """Legacy no-op; local label persistence is decommissioned."""
     if not labels:
         return 0
-
-    async def write(session: Any) -> None:
-        global _PRICE_TARGET_LABEL_COLUMNS
-        if _PRICE_TARGET_LABEL_COLUMNS is None:
-            _PRICE_TARGET_LABEL_COLUMNS = await fetch_table_columns(session, "price_target_labels")
-
-        for label in labels:
-            try:
-                columns = resolve_insert_columns(
-                    label,
-                    _PRICE_TARGET_LABEL_COLUMNS,
-                    required_columns={"event_id"},
-                )
-            except SchemaValidationError as e:
-                _record_price_target_fallback(
-                    "label_schema_validation",
-                    e,
-                    event_id=label.get("event_id"),
-                    unknown_columns=list(e.unknown_columns),
-                    missing_columns=list(e.missing_columns),
-                )
-                raise
-
-            # Build dynamic INSERT statement
-            cols_str = ", ".join(columns)
-            vals_str = ", ".join([f":{c}" for c in columns])
-
-            stmt = text(
-                f"""
-                INSERT INTO price_target_labels ({cols_str})
-                VALUES ({vals_str})
-                ON CONFLICT (event_id) DO NOTHING
-            """
-            )
-
-            # Only pass the columns we're inserting
-            params = {k: v for k, v in label.items() if k in columns}
-            await session.execute(stmt, params)
-
-    await db_write(write)
-    return len(labels)
+    logger.warning(
+        "Local price-target label persistence is decommissioned; labels must flow through heber.watch",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "persist_labels",
+        },
+    )
+    return 0
 
 
 async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
-    """Main labeling loop."""
+    """Legacy no-op; local price-target labeling loop is decommissioned."""
+    _ = shutdown_event
     logger.warning(
-        "Legacy local price-target labeler is active",
+        "Local price-target labeling loop is decommissioned",
         extra={
-            "event_type": "DEPRECATED_PIPELINE_ACTIVE",
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
             "pipeline": "orion.main_price_target_labeler",
             "replacement_path": "heber.watch datasets (labels_alert_barriers/meta_label_features) after field mapping signoff",
         },
     )
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Legacy local price-target labeler disabled by config",
-            extra={
-                "event_type": "DEPRECATED_PIPELINE_DISABLED",
-                "pipeline": "orion.main_price_target_labeler",
-                "control": f"{control_key}={control_raw}",
-            },
-        )
-        return
-    await init_db()
-    logger.info("Starting Price Target Labeling Service (v2 - comprehensive metrics)...")
-
-    total_labeled = 0
-
-    while not shutdown_event.is_set():
-        try:
-            entries = await get_entry_signals(BATCH_SIZE)
-
-            if entries:
-                labels = []
-                for entry in entries:
-                    label = await label_entry(entry)
-                    if label:
-                        labels.append(label)
-
-                if labels:
-                    count = await persist_labels(labels)
-                    total_labeled += count
-
-                    hit_50 = sum(1 for label in labels if label.get("hit_50_pct_ts"))
-                    stopped = sum(1 for label in labels if label.get("hit_stop_20_pct_ts"))
-                    avg_holding = sum(label.get("holding_period_seconds", 0) or 0 for label in labels) / len(labels)
-
-                    logger.info(
-                        f"Labeled {count} entries | Total: {total_labeled} | "
-                        f"Hit50: {hit_50} | Stopped: {stopped} | AvgHold: {avg_holding / 60:.0f}min",
-                        extra={
-                            "event_type": "BATCH_LABELED",
-                            "batch_size": count,
-                            "hit_50_pct": hit_50,
-                            "stopped_out": stopped,
-                            "avg_holding_min": avg_holding / 60,
-                        },
-                    )
-            else:
-                logger.debug("No unlabeled entries found, waiting...")
-
-        except Exception as e:
-            logger.error(f"Labeling error: {e}", exc_info=True)
-            await asyncio.sleep(5)
-            continue
-
-        try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=POLL_INTERVAL_SECONDS)
-            break
-        except asyncio.TimeoutError:
-            pass
-
-    logger.info(f"Price Target Labeling stopped. Total: {total_labeled}")
+    return
 
 
 async def backfill_missing_features(batch_size: int = 100) -> int:
-    """Backfill missing ML features for existing records.
-
-    Finds records with NULL values in key feature columns and updates them.
-    Can be run periodically to catch any gaps.
-    """
-    await init_db()
-    total_updated = 0
-
-    async def get_records_to_backfill(session: Any) -> List[Dict[str, Any]]:
-        """Get records with missing features."""
-        stmt = text(
-            """
-            SELECT event_id, ticker, option_chain, entry_ts, expiry, dte
-            FROM price_target_labels
-            WHERE rvol_1h IS NULL
-               OR sector_net_premium_1h IS NULL
-               OR high_52w_distance_pct IS NULL
-               OR spy_correlation_5d IS NULL
-            ORDER BY entry_ts DESC
-            LIMIT :batch_size
-        """
-        )
-        result = await session.execute(stmt, {"batch_size": batch_size})
-        rows = result.fetchall()
-        return [
-            {
-                "event_id": r[0],
-                "ticker": r[1],
-                "option_chain": r[2],
-                "entry_ts": r[3],
-                "expiry": r[4],
-                "dte": r[5],
-            }
-            for r in rows
-        ]
-
-    records = await db_query(get_records_to_backfill)
-
-    while records:
-        logger.info(f"Backfilling {len(records)} records...")
-
-        for record in records:
-            try:
-                ticker = record["ticker"]
-                option_chain = record["option_chain"]
-                entry_ts = record["entry_ts"]
-                expiry = record["expiry"]
-                dte = record["dte"] or 0
-
-                # Calculate all missing features
-                rvol = await get_rvol_metrics(ticker, entry_ts)
-                flow_agg = await get_flow_aggression(ticker, entry_ts)
-                dp_metrics = await get_darkpool_metrics(ticker, entry_ts)
-                phase1 = await get_phase1_bucket_features(ticker, entry_ts, dte)
-                p2 = await get_p2_features(ticker, option_chain, entry_ts)
-                p3 = await get_p3_features(ticker, option_chain, expiry, entry_ts)
-                sector_corr = await get_sector_correlation_features(ticker, entry_ts)
-
-                # Build update dict (iv_vs_hv computed in p2 features)
-                updates = {
-                    "rvol_1h": rvol.get("rvol_1h"),
-                    "rvol_daily": rvol.get("rvol_daily"),
-                    "rvol_weekly": rvol.get("rvol_weekly"),
-                    "rvol_30m": rvol.get("rvol_30m"),
-                    "rvol_3d": rvol.get("rvol_3d"),
-                    "rvol_monthly": rvol.get("rvol_monthly"),
-                    "ask_side_ratio": flow_agg.get("ask_side_ratio"),
-                    "sweep_ratio_1h": flow_agg.get("sweep_ratio_1h"),
-                    "same_ticker_premium_1h": flow_agg.get("same_ticker_premium_1h"),
-                    "darkpool_15m": dp_metrics.get("darkpool_15m"),
-                    "darkpool_3d": dp_metrics.get("darkpool_3d"),
-                    "darkpool_4w": dp_metrics.get("darkpool_4w"),
-                    "minutes_to_close": phase1.get("minutes_to_close"),
-                    "overnight_gap_pct": phase1.get("overnight_gap_pct"),
-                    "price_change_5d_prior": phase1.get("price_change_5d_prior"),
-                    "vwap_distance_pct": phase1.get("vwap_distance_pct"),
-                    "oi_change_1d": p2.get("oi_change_1d"),
-                    "oi_change_pct": p2.get("oi_change_pct"),
-                    "high_52w_distance_pct": p3.get("high_52w_distance_pct"),
-                    "is_spread_leg": p3.get("is_spread_leg"),
-                    "same_expiry_trades_1h": p3.get("same_expiry_trades_1h"),
-                    "sector_net_premium_1h": sector_corr.get("sector_net_premium_1h"),
-                    "sector_flow_direction": sector_corr.get("sector_flow_direction"),
-                    "spy_correlation_5d": sector_corr.get("spy_correlation_5d"),
-                    "spy_return_1h": sector_corr.get("spy_return_1h"),
-                }
-
-                # Update record - bind loop variables to avoid B023
-                event_id = record["event_id"]
-
-                async def update_record(session: Any, upd: Dict[str, Any] = updates, eid: str = event_id) -> None:
-                    update_stmt = text(
-                        """
-                        UPDATE price_target_labels SET
-                            rvol_1h = :rvol_1h,
-                            rvol_daily = :rvol_daily,
-                            rvol_weekly = :rvol_weekly,
-                            rvol_30m = :rvol_30m,
-                            rvol_3d = :rvol_3d,
-                            rvol_monthly = :rvol_monthly,
-                            ask_side_ratio = :ask_side_ratio,
-                            sweep_ratio_1h = :sweep_ratio_1h,
-                            same_ticker_premium_1h = :same_ticker_premium_1h,
-                            darkpool_15m = :darkpool_15m,
-                            darkpool_3d = :darkpool_3d,
-                            darkpool_4w = :darkpool_4w,
-                            minutes_to_close = :minutes_to_close,
-                            overnight_gap_pct = :overnight_gap_pct,
-                            price_change_5d_prior = :price_change_5d_prior,
-                            vwap_distance_pct = :vwap_distance_pct,
-                            oi_change_1d = :oi_change_1d,
-                            oi_change_pct = :oi_change_pct,
-                            high_52w_distance_pct = :high_52w_distance_pct,
-                            is_spread_leg = :is_spread_leg,
-                            same_expiry_trades_1h = :same_expiry_trades_1h,
-                            sector_net_premium_1h = :sector_net_premium_1h,
-                            sector_flow_direction = :sector_flow_direction,
-                            spy_correlation_5d = :spy_correlation_5d,
-                            spy_return_1h = :spy_return_1h
-                        WHERE event_id = :event_id
-                    """
-                    )
-                    await session.execute(update_stmt, {**upd, "event_id": eid})
-
-                await db_write(update_record)
-                total_updated += 1
-
-                if total_updated % 50 == 0:
-                    logger.info(f"Backfilled {total_updated} records so far...")
-
-            except Exception as e:
-                logger.error(f"Error backfilling {record['event_id']}: {e}")
-                continue
-
-        # Get next batch
-        records = await db_query(get_records_to_backfill)
-
-    logger.info(f"Backfill complete. Updated {total_updated} records.")
-    return total_updated
+    """Legacy no-op; local ML feature backfill is decommissioned."""
+    _ = batch_size
+    logger.warning(
+        "Local feature backfill is decommissioned; use heber.watch feature pipelines",
+        extra={
+            "event_type": "DEPRECATED_PIPELINE_DISABLED",
+            "pipeline": "orion.main_price_target_labeler",
+            "operation": "backfill_missing_features",
+        },
+    )
+    return 0
 
 
 async def main() -> None:

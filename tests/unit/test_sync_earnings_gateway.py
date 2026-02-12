@@ -137,3 +137,93 @@ async def test_backfill_ticker_earnings_counts_valid_rows(monkeypatch: pytest.Mo
     assert writes[0]["ticker"] == "AAPL"
     assert writes[0]["report_date"] == date(2026, 2, 1)
     assert writes[0]["announce_time"] == "afterhours"
+
+
+@pytest.mark.asyncio
+async def test_get_earnings_for_ticker_uses_gateway_data_without_local_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_fetch(endpoint: str, params=None):
+        assert endpoint.endswith("/AAPL")
+        assert params == {"limit": 100}
+        return [
+            {"date": "2026-02-20", "time": "afterhours"},
+            {"date": "2026-02-01", "time": "premarket"},
+            {"date": "bad-date"},
+        ]
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    monkeypatch.setattr(sync_earnings, "_fetch_gateway_earnings", _fake_fetch)
+    monkeypatch.setattr(sync_earnings, "db_query", _fail_db_query, raising=False)
+
+    result = await sync_earnings.get_earnings_for_ticker("aapl", date(2026, 2, 10))
+
+    assert result == {
+        "days_to_earnings": 10,
+        "is_post_earnings": False,
+        "next_earnings_date": date(2026, 2, 20),
+        "last_earnings_date": date(2026, 2, 1),
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_earnings_direct_noops_without_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail_db_write(_fn):
+        raise AssertionError("local db_write should not be used")
+
+    monkeypatch.setattr(sync_earnings, "db_write", _fail_db_write, raising=False)
+
+    await sync_earnings._upsert_earnings_direct(
+        ticker="AAPL",
+        report_date=date(2026, 2, 11),
+        announce_time="afterhours",
+        eps_estimate=1.1,
+        eps_actual=1.2,
+        revenue_estimate=10.0,
+        revenue_actual=12.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_all_earnings_uses_heber_gold_tickers_without_local_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return [
+                    {"underlying": "AAPL"},
+                    {"underlying": "MSFT"},
+                    {"instrument_key": "equity:QQQ"},
+                ]
+            if dataset == "meta_label_features":
+                return [
+                    {"symbol": "NVDA"},
+                    {"symbol": "AAPL"},
+                ]
+            raise AssertionError(f"unexpected dataset requested: {dataset}")
+
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used")
+
+    called: list[str] = []
+
+    async def _fake_backfill_ticker_earnings(ticker: str) -> int:
+        called.append(ticker)
+        return 2
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sync_earnings, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(sync_earnings, "db_query", _fail_db_query, raising=False)
+    monkeypatch.setattr(sync_earnings, "backfill_ticker_earnings", _fake_backfill_ticker_earnings)
+    monkeypatch.setattr(sync_earnings.asyncio, "sleep", _fake_sleep)
+
+    result = await sync_earnings.backfill_all_earnings()
+
+    assert result["tickers"] == 4
+    assert result["earnings"] == 8
+    assert result["errors"] == 0
+    assert sorted(called) == ["AAPL", "MSFT", "NVDA", "QQQ"]

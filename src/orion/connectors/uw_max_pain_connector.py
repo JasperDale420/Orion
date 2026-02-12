@@ -11,12 +11,10 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import pandas as pd
-from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
-from orion.shared.db_utils import db_write
 
 logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -33,6 +31,7 @@ class UWMaxPainConnector:
         self.gateway_url = gateway_url or system_settings.data_gateway_url
         self.gateway_key = gateway_key or system_settings.data_gateway_api_key
         self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
+        self._latest_max_pain_rows: list[Dict[str, Any]] = []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_max_pain(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -157,25 +156,10 @@ class UWMaxPainConnector:
         return float(latest["close"])
 
     async def _persist_max_pain(self, record: Dict[str, Any]) -> None:
-        """Persist max pain to database."""
-
-        async def write(session: Any) -> None:
-            stmt = text(
-                """
-                INSERT INTO silver_max_pain (
-                    ticker, expiry, date, max_pain_strike, current_price, distance_to_max_pain_pct
-                ) VALUES (
-                    :ticker, :expiry, :date, :max_pain_strike, :current_price, :distance_to_max_pain_pct
-                )
-                ON CONFLICT (ticker, expiry, date) DO UPDATE SET
-                    max_pain_strike = EXCLUDED.max_pain_strike,
-                    current_price = EXCLUDED.current_price,
-                    distance_to_max_pain_pct = EXCLUDED.distance_to_max_pain_pct
-            """
-            )
-            await session.execute(stmt, record)
-
-        await db_write(write)
+        """Persist latest max pain rows in memory."""
+        self._latest_max_pain_rows.append(dict(record))
+        if len(self._latest_max_pain_rows) > 2000:
+            self._latest_max_pain_rows = self._latest_max_pain_rows[-1000:]
 
 
 def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:

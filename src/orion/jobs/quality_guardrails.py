@@ -19,6 +19,7 @@ from typing import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from orion.config import SystemSettings
 from orion.core.logging_config import setup_logging
 from orion.jobs.data_quality_checker import run_quality_checks
 from orion.jobs.reconcile_backfill import run_reconciliation
@@ -31,6 +32,26 @@ from orion.storage.models import RuntimeConfig
 logger = logging.getLogger(__name__)
 JOB_BACKOFF_ENV = "ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS"
 RUNTIME_BACKOFF_CONFIG_KEY = "quality_guardrails.backoff_seconds_jobs"
+
+
+def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
+    settings = SystemSettings()
+
+    specific_key = "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS"
+    if settings.legacy_quality_guardrails_enabled is not None:
+        enabled = settings.legacy_quality_guardrails_enabled
+        raw = "true" if enabled else "false"
+        return enabled, specific_key, raw
+
+    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
+    enabled = settings.legacy_label_pipelines_enabled
+    raw = "true" if enabled else "false"
+    return enabled, global_key, raw
+
+
+def _legacy_label_pipelines_enabled() -> bool:
+    enabled, _, _ = _legacy_label_pipeline_control()
+    return enabled
 
 
 def _env_int(name: str, default: int) -> int:
@@ -260,6 +281,19 @@ async def _run_job(name: str, job: Callable[[], Awaitable[object]]) -> bool:
 
 
 async def run_guardrail_loop() -> None:
+    enabled, control_key, control_raw = _legacy_label_pipeline_control()
+    if not enabled:
+        logger.warning(
+            "Legacy quality guardrails disabled by config",
+            extra={
+                "event": "legacy_label_pipeline_disabled",
+                "pipeline": "orion.jobs.quality_guardrails",
+                "control_key": control_key,
+                "control_raw": control_raw,
+            },
+        )
+        return
+
     await init_db()
 
     loop_sleep_seconds = _env_int("ORION_GUARDRAIL_LOOP_SECONDS", 60)
@@ -270,7 +304,7 @@ async def run_guardrail_loop() -> None:
     failure_backoff_seconds = _env_nonneg_int("ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS", 0)
 
     logger.info(
-        "Quality guardrails scheduler started: " "reconcile=%ss quality=%ss validate=%ss sleep=%ss lookback_days=%s",
+        "Quality guardrails scheduler started: reconcile=%ss quality=%ss validate=%ss sleep=%ss lookback_days=%s",
         reconcile_interval,
         quality_interval,
         feature_validate_interval,

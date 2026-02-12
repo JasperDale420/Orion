@@ -120,6 +120,23 @@ Key variables:
 *   `POSTGRES_USER` / `POSTGRES_PASSWORD`: DB Credentials (default: `orion` / `orion_password`).
 *   `OPENAI_API_KEY`: Required for Meta-Search/LLM agents.
 
+### Legacy Labels Profile (Current Migration Default)
+
+When you run the `legacy-labels` Docker profile, Orion now defaults to:
+
+- Legacy local label loops off (to avoid re-expanding local label storage during migration)
+- Pattern-miner/model-training controls on (so local model files and model metadata still work)
+
+If you need to explicitly override:
+
+- Global legacy gate: `ORION_ENABLE_LEGACY_LABEL_PIPELINES`
+- Pattern miner run gate: `ORION_ENABLE_LEGACY_PATTERN_MINER`
+- Pattern miner training gate: `ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING`
+- Exit classifier training gate: `ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING`
+- Pattern miner training source: `ORION_PATTERN_MINER_TRAINING_SOURCE` (`heber_gold` or `legacy_sql`)
+- Exit classifier training source: `ORION_EXIT_CLASSIFIER_TRAINING_SOURCE` (`legacy_sql` or `heber_gold`)
+  - Defaults are now `heber_gold` in both `docker-compose.yml` and centralized `SystemSettings`.
+
 ## How to Run (Legacy / Dev Mode)
 
 ### Development Mode

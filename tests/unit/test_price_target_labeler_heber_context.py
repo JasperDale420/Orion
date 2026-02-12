@@ -19,6 +19,7 @@ async def test_get_gex_at_entry_prefers_heber_when_available(monkeypatch: pytest
                     {"ts_utc": entry_ts - timedelta(minutes=1), "gex_oi": 125.0, "vex_oi": 12.5},
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_gex_at_entry("AAPL", entry_ts)
@@ -33,6 +34,7 @@ async def test_get_gex_at_entry_returns_none_when_heber_empty(monkeypatch: pytes
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_gex_at_entry("AAPL", entry_ts)
@@ -52,6 +54,7 @@ async def test_get_gex_rolling_averages_prefers_heber_when_available(monkeypatch
                     {"ts_utc": entry_ts - timedelta(days=1), "gex_oi": 120.0, "vex_oi": 70.0},
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=3)
@@ -66,6 +69,7 @@ async def test_get_gex_rolling_averages_returns_none_when_heber_empty(monkeypatc
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=20)
@@ -87,6 +91,7 @@ async def test_get_market_tide_before_entry_prefers_heber_when_available(
                     {"ts_utc": entry_ts - timedelta(minutes=5), "net_call_premium": 50.0, "net_put_premium": -10.0},
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
@@ -104,6 +109,7 @@ async def test_get_market_tide_before_entry_returns_none_when_heber_shape_missin
     class _FakeHeberReader:
         def read_market_tide(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame([{"ts_utc": entry_ts - timedelta(minutes=10), "unexpected": 1}])
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
@@ -124,6 +130,7 @@ async def test_get_darkpool_volume_prefers_heber_when_available(monkeypatch: pyt
                     {"dark_ts_utc": entry_ts - timedelta(minutes=70), "size_shares": 999},
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_darkpool_volume("AAPL", entry_ts, window_minutes=60)
@@ -139,6 +146,7 @@ async def test_get_darkpool_volume_returns_none_when_heber_empty(
     class _FakeHeberReader:
         def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_darkpool_volume("AAPL", entry_ts, window_minutes=60)
@@ -159,6 +167,7 @@ async def test_get_rvol_metrics_prefers_heber_when_available(monkeypatch: pytest
                     {"ts_event": entry_ts - timedelta(days=8, hours=2), "volume": 500},
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_rvol_metrics("AAPL", entry_ts)
@@ -175,6 +184,7 @@ async def test_get_rvol_metrics_returns_none_when_heber_empty(monkeypatch: pytes
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_rvol_metrics("AAPL", entry_ts)
@@ -190,50 +200,80 @@ async def test_get_rvol_metrics_returns_none_when_heber_empty(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_get_window_features_at_entry_uses_single_query_and_maps_periods(
+async def test_get_window_features_at_entry_builds_period_windows_from_heber(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
-    captured: dict[str, Any] = {"execute_calls": 0}
+    flow_df = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:AAPL", "equity:MSFT"],
+            "ts_event": [
+                "2026-02-11T14:30:00Z",
+                "2026-02-11T08:00:00Z",
+                "2026-02-06T16:00:00Z",
+                "2026-02-11T14:30:00Z",
+            ],
+            "put_call": ["C", "P", "C", "C"],
+            "premium_usd": [100.0, 40.0, 60.0, 999.0],
+            "is_sweep": [True, False, True, True],
+            "aggressor": ["ASK", "BID", "ASK", "ASK"],
+        }
+    )
+    darkpool_df = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:AAPL", "equity:MSFT"],
+            "ts_event": [
+                "2026-02-11T14:20:00Z",
+                "2026-02-11T10:00:00Z",
+                "2026-02-08T12:00:00Z",
+                "2026-02-11T14:20:00Z",
+            ],
+            "size_shares": [1000.0, 200.0, 300.0, 9999.0],
+        }
+    )
 
-    class _Result:
-        def fetchall(self) -> list[tuple[str, dict[str, Any]]]:
-            return [
-                ("1h", {"call_put_imbalance": 0.12}),
-                ("1d", {"call_put_imbalance": 0.22, "dp_volume": 1000.0}),
-                ("1w", {"call_put_ratio": 1.4}),
-            ]
+    class _FakeHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            return flow_df
 
-    class _Session:
-        async def execute(self, _stmt, params: dict[str, Any]) -> _Result:
-            captured["execute_calls"] += 1
-            captured["params"] = params
-            return _Result()
+        def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
+            return darkpool_df
 
-    async def _db_query(query):
-        return await query(_Session())
+    async def _fail_db_query(_query: Any) -> Any:
+        raise AssertionError("local db_query should not be used for window features")
 
-    monkeypatch.setattr(labeler, "db_query", _db_query, raising=False)
+    monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     result = await labeler.get_window_features_at_entry("AAPL", entry_ts)
 
-    assert result == {
-        "1h": {"call_put_imbalance": 0.12},
-        "1d": {"call_put_imbalance": 0.22, "dp_volume": 1000.0},
-        "1w": {"call_put_ratio": 1.4},
-    }
-    assert captured["execute_calls"] == 1
-    assert captured["params"]["ticker"] == "AAPL"
-    assert captured["params"]["entry_ts"] == entry_ts
+    assert result["1h"]["flow_count"] == 1
+    assert result["1h"]["call_put_imbalance"] == pytest.approx(1.0)
+    assert result["1h"]["dp_volume"] == pytest.approx(1000.0)
+    assert result["1d"]["flow_count"] == 2
+    assert result["1d"]["call_put_ratio"] == pytest.approx(2.5)
+    assert result["1d"]["dp_volume"] == pytest.approx(1200.0)
+    assert result["1w"]["flow_count"] == 3
+    assert result["1w"]["call_put_ratio"] == pytest.approx(4.0)
+    assert result["1w"]["sweep_count"] == 2
+    assert result["1w"]["dp_volume"] == pytest.approx(1500.0)
 
 
 @pytest.mark.asyncio
-async def test_get_window_features_at_entry_returns_empty_dict_on_query_error(
+async def test_get_window_features_at_entry_returns_empty_dict_when_heber_lookup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fail_db_query(_query):
-        raise RuntimeError("boom")
+    class _FailingHeberReader:
+        def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
+            raise RuntimeError("boom")
 
+        def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
+            raise RuntimeError("boom")
+
+    async def _fail_db_query(_query: Any) -> Any:
+        raise AssertionError("local db_query should not be used for window features")
+
+    monkeypatch.setattr(labeler, "_heber_reader", _FailingHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     result = await labeler.get_window_features_at_entry("AAPL", datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc))
@@ -242,94 +282,39 @@ async def test_get_window_features_at_entry_returns_empty_dict_on_query_error(
 
 
 @pytest.mark.asyncio
-async def test_get_velocity_backfill_candidates_queries_expected_shape(
+async def test_get_velocity_backfill_candidates_is_decommissioned_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    async def _fail_db_query(_fn: Any) -> Any:
+        raise AssertionError("local db_query should not run for decommissioned velocity backfill")
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
-
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     records = await labeler.get_velocity_backfill_candidates(
         limit=12,
-        after_entry_ts=cursor_ts,
+        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
         after_event_id="vel-120",
     )
 
     assert records == []
-    assert "time_to_75_pct_seconds IS NULL" in captured["sql"]
-    assert "time_to_100_pct_seconds IS NULL" in captured["sql"]
-    assert "time_to_150_pct_seconds IS NULL" in captured["sql"]
-    assert "entry_ts > :after_entry_ts" in captured["sql"]
-    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
-    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
-    assert captured["params"]["limit"] == 12
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert captured["params"]["after_event_id"] == "vel-120"
 
 
 @pytest.mark.asyncio
-async def test_get_checkpoint_backfill_candidates_queries_expected_shape(
+async def test_get_checkpoint_backfill_candidates_is_decommissioned_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    async def _fail_db_query(_fn: Any) -> Any:
+        raise AssertionError("local db_query should not run for decommissioned checkpoint backfill")
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
-
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     records = await labeler.get_checkpoint_backfill_candidates(
         limit=20,
-        after_entry_ts=cursor_ts,
+        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
         after_event_id="cp-120",
     )
 
     assert records == []
-    assert "price_at_15m IS NULL" in captured["sql"]
-    assert "return_at_15m IS NULL" in captured["sql"]
-    assert "price_at_30m IS NULL" in captured["sql"]
-    assert "return_at_30m IS NULL" in captured["sql"]
-    assert "price_at_8h IS NULL" in captured["sql"]
-    assert "return_at_8h IS NULL" in captured["sql"]
-    assert "price_at_1d IS NULL" in captured["sql"]
-    assert "return_at_1d IS NULL" in captured["sql"]
-    assert "price_at_2d IS NULL" in captured["sql"]
-    assert "return_at_2d IS NULL" in captured["sql"]
-    assert "price_at_3d IS NULL" in captured["sql"]
-    assert "return_at_3d IS NULL" in captured["sql"]
-    assert "price_at_1w IS NULL" in captured["sql"]
-    assert "return_at_1w IS NULL" in captured["sql"]
-    assert "entry_ts > :after_entry_ts" in captured["sql"]
-    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
-    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
-    assert captured["params"]["limit"] == 20
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert captured["params"]["after_event_id"] == "cp-120"
 
 
 @pytest.mark.asyncio
@@ -386,6 +371,7 @@ async def test_get_sector_correlation_features_prefers_heber_when_available(
                     {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 208.0},
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_sector_correlation_features("AAPL", entry_ts)
@@ -408,6 +394,7 @@ async def test_get_sector_correlation_features_returns_none_when_heber_empty(
 
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_sector_correlation_features("AAPL", entry_ts)
@@ -497,6 +484,7 @@ async def test_get_opposing_flow_prefers_heber_when_available(monkeypatch: pytes
                     },
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
@@ -512,6 +500,7 @@ async def test_get_opposing_flow_returns_zeroes_when_heber_empty(monkeypatch: py
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
@@ -564,6 +553,7 @@ async def test_get_flow_aggression_prefers_heber_when_available(monkeypatch: pyt
                     },
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_flow_aggression("AAPL", entry_ts)
@@ -580,6 +570,7 @@ async def test_get_flow_aggression_returns_none_when_heber_empty(monkeypatch: py
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_flow_aggression("AAPL", entry_ts)
@@ -606,6 +597,7 @@ async def test_get_institutional_flow_1w_prefers_heber_when_available(monkeypatc
                     {"ts_event": entry_ts - timedelta(days=1), "ticker": "MSFT", "premium_usd": 999_999},
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_institutional_flow_1w("AAPL", entry_ts)
@@ -622,6 +614,7 @@ async def test_get_institutional_flow_1w_returns_none_when_heber_empty(
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_institutional_flow_1w("AAPL", entry_ts)
@@ -663,6 +656,7 @@ async def test_get_phase1_bucket_features_prefers_heber_when_available(monkeypat
                     },
                 ]
             )
+
     async def _fake_ticker_info(_ticker: str):
         return {}
 
@@ -686,6 +680,7 @@ async def test_get_phase1_bucket_features_returns_none_when_heber_empty(
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     async def _fake_ticker_info(_ticker: str):
         return {}
 
@@ -744,6 +739,7 @@ async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.
             for idx, close in enumerate(close_values):
                 rows.append({"ts_event": start_day + timedelta(days=idx), "symbol": "AAPL", "close": close})
             return pd.DataFrame(rows)
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
@@ -774,6 +770,7 @@ async def test_get_p2_features_returns_none_when_heber_empty(
 
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_p2_features("AAPL", option_chain, entry_ts)
@@ -847,6 +844,7 @@ async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.
                     },
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
@@ -869,6 +867,7 @@ async def test_get_p3_features_returns_none_when_heber_empty(
 
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_p3_features("AAPL", "AAPL250221C00190000", expiry, entry_ts)
@@ -909,6 +908,7 @@ async def test_get_flow_greeks_prefers_heber_when_available(monkeypatch: pytest.
                     }
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_flow_greeks(event_id)
@@ -933,6 +933,7 @@ async def test_get_flow_greeks_returns_null_payload_when_heber_missing(
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     result = await labeler.get_flow_greeks(event_id)

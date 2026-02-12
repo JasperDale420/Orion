@@ -9,33 +9,45 @@ import pytest
 from orion.jobs import backfill_ml_features
 
 
+def test_backfill_cursor_key_uses_heber_neutral_name() -> None:
+    assert backfill_ml_features.BACKFILL_CURSOR_KEY == "backfill_ml_features.heber_gold.cursor"
+
+
 @pytest.mark.asyncio
 async def test_get_records_to_backfill_uses_deterministic_ordering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return pd.DataFrame(
+                    {
+                        "alert_id": ["evt-2", "evt-1"],
+                        "underlying": ["MSFT", "AAPL"],
+                        "ts_event": [
+                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc),
+                        ],
+                        "expiry": ["2026-02-21", "2026-02-21"],
+                        "dte": [12, 12],
+                    }
+                )
+            if dataset == "meta_label_features":
+                return pd.DataFrame({"alert_id": ["evt-2"], "hour_of_day": [15]})
+            raise AssertionError(f"unexpected dataset requested: {dataset}")
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
+    async def _fail_db_query(_fn):
+        raise AssertionError("local db_query should not be used for candidate selection")
 
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_ml_features, "db_query", _fake_db_query)
+    monkeypatch.setattr(backfill_ml_features, "get_heber_reader", lambda: _FakeReader())
+    monkeypatch.setattr(backfill_ml_features, "db_query", _fail_db_query, raising=False)
 
     records = await backfill_ml_features.get_records_to_backfill(limit=25)
 
-    assert records == []
-    assert "LEFT JOIN silver_uw_flow" not in captured["sql"]
-    assert "ORDER BY p.entry_ts ASC, p.event_id ASC" in captured["sql"]
-    assert captured["params"]["limit"] == 25
+    assert len(records) == 2
+    assert [r["event_id"] for r in records] == ["evt-1", "evt-2"]
+    assert records[0]["ticker"] == "AAPL"
 
 
 @pytest.mark.asyncio
@@ -64,22 +76,26 @@ async def test_get_option_chain_for_event_prefers_heber(monkeypatch: pytest.Monk
 async def test_get_records_to_backfill_supports_cursor_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return pd.DataFrame(
+                    {
+                        "alert_id": ["evt-100", "evt-101", "evt-102"],
+                        "underlying": ["AAPL", "MSFT", "TSLA"],
+                        "ts_event": [
+                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc),
+                        ],
+                    }
+                )
+            if dataset == "meta_label_features":
+                return pd.DataFrame()
+            raise AssertionError(f"unexpected dataset requested: {dataset}")
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
-
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_ml_features, "db_query", _fake_db_query)
+    monkeypatch.setattr(backfill_ml_features, "get_heber_reader", lambda: _FakeReader())
 
     cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
     records = await backfill_ml_features.get_records_to_backfill(
@@ -88,33 +104,33 @@ async def test_get_records_to_backfill_supports_cursor_filter(
         after_event_id="evt-100",
     )
 
-    assert records == []
-    assert "p.entry_ts > :after_entry_ts" in captured["sql"]
-    assert "p.entry_ts = :after_entry_ts AND p.event_id > :after_event_id" in captured["sql"]
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert captured["params"]["after_event_id"] == "evt-100"
+    assert [r["event_id"] for r in records] == ["evt-101", "evt-102"]
 
 
 @pytest.mark.asyncio
 async def test_get_records_to_backfill_supports_timestamp_only_cursor_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time, symbols=None):
+            _ = (asof_time, symbols)
+            if dataset == "labels_alert_barriers":
+                return pd.DataFrame(
+                    {
+                        "alert_id": ["evt-099", "evt-100", "evt-101"],
+                        "underlying": ["AAPL", "MSFT", "TSLA"],
+                        "ts_event": [
+                            datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc),
+                        ],
+                    }
+                )
+            if dataset == "meta_label_features":
+                return pd.DataFrame()
+            raise AssertionError(f"unexpected dataset requested: {dataset}")
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
-
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(backfill_ml_features, "db_query", _fake_db_query)
+    monkeypatch.setattr(backfill_ml_features, "get_heber_reader", lambda: _FakeReader())
 
     cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
     records = await backfill_ml_features.get_records_to_backfill(
@@ -123,10 +139,7 @@ async def test_get_records_to_backfill_supports_timestamp_only_cursor_filter(
         after_event_id=None,
     )
 
-    assert records == []
-    assert "p.entry_ts >= :after_entry_ts" in captured["sql"]
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert "after_event_id" not in captured["params"]
+    assert [r["event_id"] for r in records] == ["evt-100", "evt-101"]
 
 
 @pytest.mark.asyncio
@@ -369,6 +382,31 @@ async def test_load_backfill_cursor_does_not_fallback_to_legacy_watermark(
 
     loaded = await backfill_ml_features._load_backfill_cursor()
     assert loaded == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_load_backfill_cursor_only_checks_canonical_heber_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_keys: list[str] = []
+
+    async def _fake_get_cursor_state(_session: Any, key: str):
+        requested_keys.append(key)
+        return None
+
+    class _FakeSession:
+        pass
+
+    async def _fake_db_query(fn):
+        return await fn(_FakeSession())
+
+    monkeypatch.setattr(backfill_ml_features, "get_cursor_state", _fake_get_cursor_state)
+    monkeypatch.setattr(backfill_ml_features, "db_query", _fake_db_query)
+
+    loaded = await backfill_ml_features._load_backfill_cursor()
+
+    assert loaded == (None, None)
+    assert requested_keys == [backfill_ml_features.BACKFILL_CURSOR_KEY]
 
 
 @pytest.mark.asyncio
