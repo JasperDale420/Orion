@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Dependency conflict rollup for stale Dependabot PRs**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
+    - `sqlalchemy` -> `^2.0.46`
+    - `exchange-calendars` -> `^4.13.1`
+  - Regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock` via `poetry lock`.
+
 - **Aggressive dependency uplift pass completed (installer maintenance)**:
   - Updated runtime dependency constraints in `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
     - `pandas` -> `^3.0.0`
