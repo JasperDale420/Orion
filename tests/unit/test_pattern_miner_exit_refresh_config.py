@@ -336,10 +336,20 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
                         {
                             "alert_id": "evt-no-snap",
                             "ts_event": "2026-02-10T15:00:00Z",
+                            "outcome": "no_snapshot",
+                            "hit_tp_first": 0,
+                            "trading_minutes_to_hit": 60,
+                            "bars_to_hit": 0,
+                            "snapshot_count": 0,
+                        },
+                        {
+                            "alert_id": "evt-expired",
+                            "ts_event": "2026-02-10T15:30:00Z",
                             "outcome": "expired",
                             "hit_tp_first": 0,
                             "trading_minutes_to_hit": 60,
                             "bars_to_hit": 0,
+                            "snapshot_count": 12,
                         },
                         {
                             "alert_id": "evt-valid",
@@ -348,6 +358,7 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
                             "hit_tp_first": 1,
                             "trading_minutes_to_hit": 20,
                             "bars_to_hit": 4,
+                            "snapshot_count": 4,
                         },
                     ]
                 )
@@ -360,6 +371,16 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
                             "aggressor": "ASK",
                             "is_sweep": 0,
                             "premium": 10000.0,
+                            "days_to_expiry": 1,
+                            "hour_of_day": 10,
+                            "day_of_week": 2,
+                        },
+                        {
+                            "alert_id": "evt-expired",
+                            "put_call": "C",
+                            "aggressor": "ASK",
+                            "is_sweep": 0,
+                            "premium": 50000.0,
                             "days_to_expiry": 1,
                             "hour_of_day": 10,
                             "day_of_week": 2,
@@ -383,8 +404,75 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
     df, _ = await pattern_miner.fetch_training_data(window_days=30, min_samples=1, quick_winner_seconds=3600)
 
     assert df is not None
-    assert len(df) == 1
-    assert set(df["event_id"].tolist()) == {"evt-valid"}
+    assert len(df) == 2
+    assert set(df["event_id"].tolist()) == {"evt-expired", "evt-valid"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_training_data_keeps_expired_rows_when_snapshot_metadata_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING", "true")
+    monkeypatch.setenv("ORION_PATTERN_MINER_TRAINING_SOURCE", "heber_gold")
+
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time) -> pd.DataFrame:  # type: ignore[no-untyped-def]
+            if dataset == "labels_alert_barriers":
+                return pd.DataFrame(
+                    [
+                        {
+                            "alert_id": "evt-expired",
+                            "ts_event": "2026-02-10T15:30:00Z",
+                            "outcome": "expired",
+                            "hit_tp_first": 0,
+                            "trading_minutes_to_hit": 60,
+                            "bars_to_hit": 0,
+                        },
+                        {
+                            "alert_id": "evt-valid",
+                            "ts_event": "2026-02-10T16:00:00Z",
+                            "outcome": "hit_tp",
+                            "hit_tp_first": 1,
+                            "trading_minutes_to_hit": 20,
+                            "bars_to_hit": 4,
+                        },
+                    ]
+                )
+            if dataset == "meta_label_features":
+                return pd.DataFrame(
+                    [
+                        {
+                            "alert_id": "evt-expired",
+                            "put_call": "C",
+                            "aggressor": "ASK",
+                            "is_sweep": 0,
+                            "premium": 50000.0,
+                            "days_to_expiry": 1,
+                            "hour_of_day": 10,
+                            "day_of_week": 2,
+                        },
+                        {
+                            "alert_id": "evt-valid",
+                            "put_call": "C",
+                            "aggressor": "ASK",
+                            "is_sweep": 1,
+                            "premium": 125000.0,
+                            "days_to_expiry": 1,
+                            "hour_of_day": 10,
+                            "day_of_week": 2,
+                        },
+                    ]
+                )
+            return pd.DataFrame()
+
+    monkeypatch.setattr(pattern_miner, "get_heber_reader", lambda: _FakeReader(), raising=False)
+
+    df, _ = await pattern_miner.fetch_training_data(window_days=30, min_samples=1, quick_winner_seconds=3600)
+
+    assert df is not None
+    assert len(df) == 2
+    assert set(df["event_id"].tolist()) == {"evt-expired", "evt-valid"}
 
 
 @pytest.mark.asyncio

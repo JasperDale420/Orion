@@ -259,6 +259,8 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
                 "hit_tp_first",
                 "trading_minutes_to_hit",
                 "bars_to_hit",
+                "snapshot_count",
+                "no_snapshot",
             ]
         )
 
@@ -267,7 +269,8 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
     outcome_column = _first_existing_column(frame, ["outcome", "outcome_reason", "status"])
     hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
     trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
-    bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit", "snapshot_count"])
+    bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit"])
+    snapshot_count_column = _first_existing_column(frame, ["snapshot_count"])
 
     event_series = frame[event_column].astype(str) if event_column else pd.Series(index=frame.index, dtype=object)
     ts_series = (
@@ -293,6 +296,17 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
         if bars_to_hit_column
         else pd.Series(index=frame.index, dtype="float64")
     )
+    snapshot_count_series = (
+        pd.to_numeric(frame[snapshot_count_column], errors="coerce")
+        if snapshot_count_column
+        else pd.Series(index=frame.index, dtype="float64")
+    )
+    no_snapshot_series = (
+        outcome_series.astype(str)
+        .str.strip()
+        .str.lower()
+        .str.contains(r"no[_\s-]*snapshot|missing[_\s-]*snapshot|insufficient[_\s-]*snapshot|no[_\s-]*data")
+    )
 
     normalized = pd.DataFrame(
         {
@@ -302,6 +316,8 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
             "hit_tp_first": hit_tp_series,
             "trading_minutes_to_hit": trading_minutes_series,
             "bars_to_hit": bars_to_hit_series,
+            "snapshot_count": snapshot_count_series,
+            "no_snapshot": no_snapshot_series,
         }
     )
     normalized = normalized.dropna(subset=["event_id", "entry_ts"])
@@ -312,14 +328,20 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
 def _drop_no_snapshot_outcomes(dataframe: Any) -> tuple[Any, int]:
     import pandas as pd
 
-    if dataframe.empty or "bars_to_hit" not in dataframe.columns:
+    if dataframe.empty:
         return dataframe, 0
 
-    bars = pd.to_numeric(dataframe["bars_to_hit"], errors="coerce")
-    if not bars.notna().any():
-        return dataframe, 0
+    drop_mask = pd.Series(False, index=dataframe.index)
 
-    filtered = dataframe[bars.fillna(0) > 0].copy()
+    if "no_snapshot" in dataframe.columns:
+        drop_mask = drop_mask | dataframe["no_snapshot"].eq(True)
+
+    if "snapshot_count" in dataframe.columns:
+        snapshots = pd.to_numeric(dataframe["snapshot_count"], errors="coerce")
+        if snapshots.notna().any():
+            drop_mask = drop_mask | (snapshots.fillna(0) <= 0)
+
+    filtered = dataframe[~drop_mask].copy()
     dropped = len(dataframe) - len(filtered)
     return filtered, dropped
 

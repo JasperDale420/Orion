@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **RCA fix for sparse Heber training rows in Orion (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
+    - stopped treating `bars_to_hit <= 0` as a universal no-snapshot signal.
+    - now drops rows only when no-snapshot is explicit (`outcome/outcome_reason` indicates no snapshot) or `snapshot_count <= 0` when snapshot metadata exists.
+    - preserves valid `expired` outcomes (which commonly have `bars_to_hit = 0`) so training keeps real negative examples.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py` with the same no-snapshot filter semantics for exit-model training.
+  - Updated regression tests:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`
+  - Verified:
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py`
+    - `ruff check src/orion/ml/pattern_miner.py src/orion/ml/exit_classifier.py tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py`
+    - `mypy src/orion/ml/pattern_miner.py src/orion/ml/exit_classifier.py`
+    - runtime check: `pattern_miner.fetch_training_data(window_days=365, min_samples=1)` now returns `6812` rows from Heber (up from `4` after prior filter).
+
 - **Heber Gold reader RCA hardening for schema-drifted parquet partitions (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
     - treats Arrow schema-merge cast failures (`Unsupported cast ... cast_null`) as a filewise-fallback condition, not a terminal read failure.

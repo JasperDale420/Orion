@@ -241,17 +241,30 @@ async def test_build_bucket_training_data_ignores_no_snapshot_outcomes(
                     [
                         {
                             "alert_id": "evt-no-snap",
-                            "outcome_return": 0.65,
-                            "hit_tp_first": 1,
+                            "outcome": "no_snapshot",
+                            "outcome_return": 0.10,
+                            "hit_tp_first": 0,
                             "trading_minutes_to_hit": 45,
                             "bars_to_hit": 0,
+                            "snapshot_count": 0,
                         },
                         {
-                            "alert_id": "evt-valid",
+                            "alert_id": "evt-expired",
+                            "outcome": "expired",
                             "outcome_return": -0.20,
                             "hit_tp_first": 0,
                             "trading_minutes_to_hit": 50,
+                            "bars_to_hit": 0,
+                            "snapshot_count": 12,
+                        },
+                        {
+                            "alert_id": "evt-valid",
+                            "outcome": "hit_tp",
+                            "outcome_return": 0.30,
+                            "hit_tp_first": 1,
+                            "trading_minutes_to_hit": 30,
                             "bars_to_hit": 3,
+                            "snapshot_count": 3,
                         },
                     ]
                 )
@@ -267,6 +280,16 @@ async def test_build_bucket_training_data_ignores_no_snapshot_outcomes(
                             "delta": 0.31,
                             "theta": -0.02,
                             "iv": 0.41,
+                        },
+                        {
+                            "alert_id": "evt-expired",
+                            "premium": 110000.0,
+                            "days_to_expiry": 0,
+                            "is_sweep": 0,
+                            "iv_rank": 55.0,
+                            "delta": 0.22,
+                            "theta": -0.01,
+                            "iv": 0.33,
                         },
                         {
                             "alert_id": "evt-valid",
@@ -286,10 +309,11 @@ async def test_build_bucket_training_data_ignores_no_snapshot_outcomes(
 
     X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
 
-    assert X.shape == (1, len(feature_names))
-    assert y.shape == (1,)
-    assert y[0] == 0
+    assert X.shape == (2, len(feature_names))
+    assert y.shape == (2,)
+    assert y.tolist() == [0, 1]
     assert X[0][0] == pytest.approx(-0.20)
+    assert X[1][0] == pytest.approx(0.30)
 
 
 @pytest.mark.asyncio

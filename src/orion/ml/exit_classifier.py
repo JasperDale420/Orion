@@ -320,7 +320,15 @@ def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
 
     if frame.empty:
         return pd.DataFrame(
-            columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit", "bars_to_hit"]
+            columns=[
+                "event_id",
+                "outcome_return",
+                "hit_tp_first",
+                "trading_minutes_to_hit",
+                "bars_to_hit",
+                "snapshot_count",
+                "no_snapshot",
+            ]
         )
 
     event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
@@ -328,11 +336,20 @@ def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
     hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
     outcome_column = _first_existing_column(frame, ["outcome", "outcome_reason", "status"])
     trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
-    bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit", "snapshot_count"])
+    bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit"])
+    snapshot_count_column = _first_existing_column(frame, ["snapshot_count"])
 
     if event_column is None:
         return pd.DataFrame(
-            columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit", "bars_to_hit"]
+            columns=[
+                "event_id",
+                "outcome_return",
+                "hit_tp_first",
+                "trading_minutes_to_hit",
+                "bars_to_hit",
+                "snapshot_count",
+                "no_snapshot",
+            ]
         )
 
     normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
@@ -359,10 +376,42 @@ def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
         frame[bars_to_hit_column] if bars_to_hit_column else None,
         errors="coerce",
     )
+    normalized["snapshot_count"] = pd.to_numeric(
+        frame[snapshot_count_column] if snapshot_count_column else None,
+        errors="coerce",
+    )
+    outcome_text = (
+        frame[outcome_column].astype(str).str.strip().str.lower()
+        if outcome_column
+        else pd.Series(index=frame.index, dtype=object)
+    )
+    normalized["no_snapshot"] = outcome_text.str.contains(
+        r"no[_\s-]*snapshot|missing[_\s-]*snapshot|insufficient[_\s-]*snapshot|no[_\s-]*data"
+    )
 
     normalized = normalized.dropna(subset=["event_id"])
     normalized["event_id"] = normalized["event_id"].astype(str)
     return normalized
+
+
+def _drop_no_snapshot_outcomes_for_exit(dataframe: Any) -> tuple[Any, int]:
+    import pandas as pd
+
+    if dataframe.empty:
+        return dataframe, 0
+
+    drop_mask = pd.Series(False, index=dataframe.index)
+    if "no_snapshot" in dataframe.columns:
+        drop_mask = drop_mask | dataframe["no_snapshot"].eq(True)
+
+    if "snapshot_count" in dataframe.columns:
+        snapshots = pd.to_numeric(dataframe["snapshot_count"], errors="coerce")
+        if snapshots.notna().any():
+            drop_mask = drop_mask | (snapshots.fillna(0) <= 0)
+
+    filtered = dataframe[~drop_mask].copy()
+    dropped = len(dataframe) - len(filtered)
+    return filtered, dropped
 
 
 def _normalize_heber_features_for_exit(frame: Any) -> Any:
@@ -432,8 +481,6 @@ async def _build_bucket_training_data_from_heber(
     bucket: str,
     feature_names: list[str],
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    import pandas as pd
-
     reader = get_heber_reader()
     now = datetime.now(timezone.utc)
 
@@ -458,22 +505,17 @@ async def _build_bucket_training_data_from_heber(
 
     outcomes = _normalize_heber_outcomes_for_exit(_coerce_dataframe(outcomes_payload))
     features = _normalize_heber_features_for_exit(_coerce_dataframe(features_payload))
-    if "bars_to_hit" in outcomes.columns:
-        bars_to_hit = pd.to_numeric(outcomes["bars_to_hit"], errors="coerce")
-        if bars_to_hit.notna().any():
-            before_count = len(outcomes)
-            outcomes = outcomes[bars_to_hit.fillna(0) > 0].copy()
-            dropped_count = before_count - len(outcomes)
-            if dropped_count:
-                logger.warning(
-                    f"Dropped {dropped_count} no-snapshot outcomes from exit training set",
-                    extra={
-                        "event": "exit_classifier_drop_no_snapshot_outcomes",
-                        "bucket": bucket,
-                        "dropped_rows": dropped_count,
-                        "remaining_rows": len(outcomes),
-                    },
-                )
+    outcomes, dropped_count = _drop_no_snapshot_outcomes_for_exit(outcomes)
+    if dropped_count:
+        logger.warning(
+            f"Dropped {dropped_count} no-snapshot outcomes from exit training set",
+            extra={
+                "event": "exit_classifier_drop_no_snapshot_outcomes",
+                "bucket": bucket,
+                "dropped_rows": dropped_count,
+                "remaining_rows": len(outcomes),
+            },
+        )
     if outcomes.empty:
         logger.warning(
             "No Heber outcomes available for exit-classifier training",
