@@ -319,16 +319,21 @@ def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
     import pandas as pd
 
     if frame.empty:
-        return pd.DataFrame(columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit"])
+        return pd.DataFrame(
+            columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit", "bars_to_hit"]
+        )
 
     event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
     outcome_return_column = _first_existing_column(frame, ["outcome_return", "return", "contract_return"])
     hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
     outcome_column = _first_existing_column(frame, ["outcome", "outcome_reason", "status"])
     trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
+    bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit", "snapshot_count"])
 
     if event_column is None:
-        return pd.DataFrame(columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit"])
+        return pd.DataFrame(
+            columns=["event_id", "outcome_return", "hit_tp_first", "trading_minutes_to_hit", "bars_to_hit"]
+        )
 
     normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
     normalized["outcome_return"] = pd.to_numeric(
@@ -350,6 +355,10 @@ def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
         frame[trading_minutes_column] if trading_minutes_column else None,
         errors="coerce",
     ).fillna(0.0)
+    normalized["bars_to_hit"] = pd.to_numeric(
+        frame[bars_to_hit_column] if bars_to_hit_column else None,
+        errors="coerce",
+    )
 
     normalized = normalized.dropna(subset=["event_id"])
     normalized["event_id"] = normalized["event_id"].astype(str)
@@ -423,6 +432,8 @@ async def _build_bucket_training_data_from_heber(
     bucket: str,
     feature_names: list[str],
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    import pandas as pd
+
     reader = get_heber_reader()
     now = datetime.now(timezone.utc)
 
@@ -447,6 +458,22 @@ async def _build_bucket_training_data_from_heber(
 
     outcomes = _normalize_heber_outcomes_for_exit(_coerce_dataframe(outcomes_payload))
     features = _normalize_heber_features_for_exit(_coerce_dataframe(features_payload))
+    if "bars_to_hit" in outcomes.columns:
+        bars_to_hit = pd.to_numeric(outcomes["bars_to_hit"], errors="coerce")
+        if bars_to_hit.notna().any():
+            before_count = len(outcomes)
+            outcomes = outcomes[bars_to_hit.fillna(0) > 0].copy()
+            dropped_count = before_count - len(outcomes)
+            if dropped_count:
+                logger.warning(
+                    f"Dropped {dropped_count} no-snapshot outcomes from exit training set",
+                    extra={
+                        "event": "exit_classifier_drop_no_snapshot_outcomes",
+                        "bucket": bucket,
+                        "dropped_rows": dropped_count,
+                        "remaining_rows": len(outcomes),
+                    },
+                )
     if outcomes.empty:
         logger.warning(
             "No Heber outcomes available for exit-classifier training",

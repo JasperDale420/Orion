@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Pattern-miner/exit-classifier RCA guard: drop no-snapshot outcomes from Heber training inputs (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
+    - normalized `bars_to_hit` from Heber outcomes,
+    - filters out no-snapshot outcomes (`bars_to_hit <= 0`) before target construction,
+    - logs explicit `pattern_miner_drop_no_snapshot_outcomes` warning with dropped/remaining counts.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
+    - normalized `bars_to_hit` for exit training outcomes,
+    - filters out no-snapshot outcomes before bucket merge/training.
+  - Added regression coverage:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`
+  - Verified:
+    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_exit_classifier_window_query.py`
+    - runtime check in container confirms no-snapshot rows are excluded and Orion now reports no valid outcomes instead of training on degenerate all-zero labels.
+
 - **Ingestion startup RCA fix: removed redundant earnings sync + restored Gateway auth defaults (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ingestion/service.py`:
     - removed startup `sync_todays_earnings()` call that produced redundant Gateway requests after earnings storage moved to Data-Gateway/Heber.

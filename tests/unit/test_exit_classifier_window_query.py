@@ -227,6 +227,72 @@ async def test_build_bucket_training_data_legacy_source_still_uses_heber_without
 
 
 @pytest.mark.asyncio
+async def test_build_bucket_training_data_ignores_no_snapshot_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING", "true")
+    monkeypatch.setenv("ORION_EXIT_CLASSIFIER_TRAINING_SOURCE", "heber_gold")
+
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time) -> pd.DataFrame:  # type: ignore[no-untyped-def]
+            if dataset == "labels_alert_barriers":
+                return pd.DataFrame(
+                    [
+                        {
+                            "alert_id": "evt-no-snap",
+                            "outcome_return": 0.65,
+                            "hit_tp_first": 1,
+                            "trading_minutes_to_hit": 45,
+                            "bars_to_hit": 0,
+                        },
+                        {
+                            "alert_id": "evt-valid",
+                            "outcome_return": -0.20,
+                            "hit_tp_first": 0,
+                            "trading_minutes_to_hit": 50,
+                            "bars_to_hit": 3,
+                        },
+                    ]
+                )
+            if dataset == "meta_label_features":
+                return pd.DataFrame(
+                    [
+                        {
+                            "alert_id": "evt-no-snap",
+                            "premium": 125000.0,
+                            "days_to_expiry": 0,
+                            "is_sweep": 1,
+                            "iv_rank": 60.0,
+                            "delta": 0.31,
+                            "theta": -0.02,
+                            "iv": 0.41,
+                        },
+                        {
+                            "alert_id": "evt-valid",
+                            "premium": 100000.0,
+                            "days_to_expiry": 0,
+                            "is_sweep": 0,
+                            "iv_rank": 55.0,
+                            "delta": 0.22,
+                            "theta": -0.01,
+                            "iv": 0.33,
+                        },
+                    ]
+                )
+            return pd.DataFrame()
+
+    monkeypatch.setattr(exit_classifier, "get_heber_reader", lambda: _FakeReader(), raising=False)
+
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+
+    assert X.shape == (1, len(feature_names))
+    assert y.shape == (1,)
+    assert y[0] == 0
+    assert X[0][0] == pytest.approx(-0.20)
+
+
+@pytest.mark.asyncio
 async def test_train_bucket_exit_classifier_passes_force_schema_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

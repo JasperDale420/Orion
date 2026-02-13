@@ -251,13 +251,23 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
     import pandas as pd
 
     if frame.empty:
-        return pd.DataFrame(columns=["event_id", "entry_ts", "outcome", "hit_tp_first", "trading_minutes_to_hit"])
+        return pd.DataFrame(
+            columns=[
+                "event_id",
+                "entry_ts",
+                "outcome",
+                "hit_tp_first",
+                "trading_minutes_to_hit",
+                "bars_to_hit",
+            ]
+        )
 
     event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
     ts_column = _first_existing_column(frame, ["entry_ts", "alert_time", "ts_event", "ts_available"])
     outcome_column = _first_existing_column(frame, ["outcome", "outcome_reason", "status"])
     hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
     trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
+    bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit", "snapshot_count"])
 
     event_series = frame[event_column].astype(str) if event_column else pd.Series(index=frame.index, dtype=object)
     ts_series = (
@@ -278,6 +288,11 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
         if trading_minutes_column
         else pd.Series(index=frame.index, dtype="float64")
     )
+    bars_to_hit_series = (
+        pd.to_numeric(frame[bars_to_hit_column], errors="coerce")
+        if bars_to_hit_column
+        else pd.Series(index=frame.index, dtype="float64")
+    )
 
     normalized = pd.DataFrame(
         {
@@ -286,11 +301,27 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
             "outcome": outcome_series,
             "hit_tp_first": hit_tp_series,
             "trading_minutes_to_hit": trading_minutes_series,
+            "bars_to_hit": bars_to_hit_series,
         }
     )
     normalized = normalized.dropna(subset=["event_id", "entry_ts"])
     normalized["event_id"] = normalized["event_id"].astype(str)
     return normalized
+
+
+def _drop_no_snapshot_outcomes(dataframe: Any) -> tuple[Any, int]:
+    import pandas as pd
+
+    if dataframe.empty or "bars_to_hit" not in dataframe.columns:
+        return dataframe, 0
+
+    bars = pd.to_numeric(dataframe["bars_to_hit"], errors="coerce")
+    if not bars.notna().any():
+        return dataframe, 0
+
+    filtered = dataframe[bars.fillna(0) > 0].copy()
+    dropped = len(dataframe) - len(filtered)
+    return filtered, dropped
 
 
 def _normalize_heber_features(frame: Any) -> Any:
@@ -406,6 +437,16 @@ async def _fetch_training_data_from_heber(
     _validate_heber_training_contract(outcomes_raw, features_raw)
     outcomes = _normalize_heber_outcomes(outcomes_raw)
     features = _normalize_heber_features(features_raw)
+    outcomes, dropped_no_snapshot = _drop_no_snapshot_outcomes(outcomes)
+    if dropped_no_snapshot:
+        logger.warning(
+            f"Dropped {dropped_no_snapshot} no-snapshot outcomes from pattern-miner training set",
+            extra={
+                "event": "pattern_miner_drop_no_snapshot_outcomes",
+                "dropped_rows": dropped_no_snapshot,
+                "remaining_rows": len(outcomes),
+            },
+        )
     if outcomes.empty:
         logger.warning("No Heber outcomes available for pattern-miner training")
         return None, []
