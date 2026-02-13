@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
-from orion.connectors.redpanda_producer import RedpandaProducer
 
 from orion.core.health_monitor import CriticalHealthException, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
@@ -75,8 +74,6 @@ class IngestionService:
                 logger.warning(f"Failed to create streaming connector, falling back to polling: {e}")
                 self.alpaca_stream = None
 
-        self.producer: RedpandaProducer | None = None
-
         # Timezone settings
         self.eastern = ZoneInfo("America/New_York")
         xcals.get_calendar("XNYS")
@@ -89,8 +86,6 @@ class IngestionService:
     async def initialize(self) -> None:
         """Initialize resources that require async execution."""
         logger.info("Initializing Ingestion Service...")
-        self.producer = await RedpandaProducer.get_instance()
-        await self.producer.start()
 
         if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
             try:
@@ -172,8 +167,6 @@ class IngestionService:
     async def stop(self) -> None:
         if self.alpaca_stream:
             await self.alpaca_stream.stop()
-        if self.producer:
-            await self.producer.stop()
         logger.info("Ingestion Service Stopped.")
 
     async def _run_cycle(self) -> None:
@@ -410,18 +403,6 @@ class IngestionService:
     # --- Persistence Wrappers ---
 
     async def _save_events_to_db(self, events: List[BronzeEvent]) -> None:
-        # Redpanda Produce
-        for e in events:
-            try:
-                key = e.ticker if e.ticker else e.event_id
-                payload = self._to_dict(e)
-                if not self.producer:
-                    self.producer = await RedpandaProducer.get_instance()
-                await self.producer.produce_event(topic="orion.events.bronze", key=key, payload=payload)
-            except Exception as e_prod:
-                logger.error(f"Redpanda Produce Failed: {e_prod}")
-                # Add DLQ logic here if needed, omitted for brevity as DB write is primary
-
         async def persist_bronze(session: Any) -> None:
             try:
                 await persist_bronze_events(session, events)
@@ -508,13 +489,3 @@ class IngestionService:
             )
 
         await db_write(persist_crash_op)
-
-    def _to_dict(self, e: BronzeEvent) -> dict[str, Any]:
-        return {
-            "event_id": e.event_id,
-            "source": e.source,
-            "event_type": e.event_type,
-            "ticker": e.ticker,
-            "event_ts_utc": e.event_ts_utc.isoformat() if e.event_ts_utc else None,
-            "payload": e.payload,
-        }

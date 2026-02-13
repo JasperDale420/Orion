@@ -204,6 +204,11 @@ async def test_fetch_training_data_uses_heber_source_without_local_db(
                             "gamma": 0.08,
                             "theta": -0.02,
                             "vega": 0.12,
+                            "volume": 250.0,
+                            "open_interest": 400.0,
+                            "realized_vol_20d": 0.21,
+                            "side": "ask",
+                            "is_block": 1,
                         }
                     ]
                 )
@@ -221,6 +226,12 @@ async def test_fetch_training_data_uses_heber_source_without_local_db(
     assert feature_names == pattern_miner.FEATURE_COLUMNS + pattern_miner.CATEGORICAL_COLUMNS
     assert int(df.iloc[0]["target_hit_target_50"]) == 1
     assert int(df.iloc[0]["target_quick_winner"]) == 1
+    assert float(df.iloc[0]["volume_at_entry"]) == pytest.approx(250.0)
+    assert float(df.iloc[0]["open_interest_at_entry"]) == pytest.approx(400.0)
+    assert float(df.iloc[0]["iv_vs_hv_ratio"]) == pytest.approx(2.0)
+    assert float(df.iloc[0]["ask_side_ratio"]) == pytest.approx(1.0)
+    assert int(df.iloc[0]["is_spread_leg"]) == 1
+    assert str(df.iloc[0]["market_tide_direction"]) == "bullish"
     assert db_calls["count"] == 0
 
 

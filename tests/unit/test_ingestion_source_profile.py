@@ -17,14 +17,6 @@ class _DummyAlpacaStreamConnector:
         return None
 
 
-class _DummyProducer:
-    async def start(self) -> None:
-        return None
-
-    async def stop(self) -> None:
-        return None
-
-
 class _DummyRollupJob:
     def __init__(self, *args, **kwargs) -> None:
         return None
@@ -60,14 +52,10 @@ async def test_initialize_skips_startup_earnings_sync(monkeypatch: pytest.Monkey
         sync_call_count["value"] += 1
         return {"synced": 0, "errors": 0}
 
-    async def _get_producer_instance() -> _DummyProducer:
-        return _DummyProducer()
-
     monkeypatch.setenv("ORION_USE_ALPACA_STREAMING", "false")
     monkeypatch.setattr("orion.ingestion.service.AlpacaMarketConnector", _DummyAlpacaMarketConnector)
     monkeypatch.setattr("orion.ingestion.service.AlpacaStreamConnector", _DummyAlpacaStreamConnector)
     monkeypatch.setattr("orion.ingestion.service.init_db", _async_noop)
-    monkeypatch.setattr("orion.ingestion.service.RedpandaProducer.get_instance", _get_producer_instance)
     monkeypatch.setattr("orion.jobs.sync_earnings.sync_todays_earnings", _sync_todays_earnings)
     monkeypatch.setattr("orion.jobs.rollup_job.RollupJob", _DummyRollupJob)
 

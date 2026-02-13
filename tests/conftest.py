@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 # Must happen before any orion modules are imported to ensure Settings pick these up.
 os.environ["ORION_STAGE"] = "test"
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
-os.environ["REDPANDA_BROKERS"] = "mock:9092"
 os.environ["ALPACA_API_KEY"] = "mock_key"
 os.environ["ALPACA_SECRET_KEY"] = "mock_secret"
 os.environ["ALPACA_PAPER"] = "True"
@@ -44,29 +43,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture(autouse=True)
-async def mock_redpanda_producer(monkeypatch):
-    """
-    Globally mock RedpandaProducer to prevent network calls.
-    Autouse=True ensures it applies to every test logic that might lazily instantiate it.
-    """
-    from orion.connectors.redpanda_producer import RedpandaProducer
-
-    mock_instance = MagicMock(spec=RedpandaProducer)
-    mock_instance.start = AsyncMock()
-    mock_instance.stop = AsyncMock()
-    mock_instance.produce_event = AsyncMock()
-
-    # Patch the singleton using AsyncSingleton's _instances dict
-    # AsyncSingleton uses _instances[cls] not _instance
-    async def mock_get_instance(*args, **kwargs):
-        return mock_instance
-
-    monkeypatch.setattr(RedpandaProducer, "get_instance", mock_get_instance)
-
-    yield mock_instance
 
 
 @pytest.fixture(autouse=True)

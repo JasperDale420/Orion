@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Decommissioned Redpanda, MinIO, and createbuckets Docker services**:
+  - Removed `redpanda`, `minio`, and `createbuckets` services from `docker-compose.yml`.
+  - Removed `redpanda_data` and `minio_data` volume declarations.
+  - Removed `REDPANDA_BROKERS` env var from `ingestion` service.
+  - Removed `UW_API_KEY` env var from `feature_enrichment` service.
+  - Deleted `src/orion/connectors/redpanda_producer.py` (AsyncSingleton Kafka producer).
+  - Removed all `RedpandaProducer` usage from `ingestion/service.py` (import, init, start, stop, produce loop, dead `_to_dict` helper).
+  - Updated `tests/conftest.py`: removed `REDPANDA_BROKERS` env var and `mock_redpanda_producer` autouse fixture.
+  - Updated `tests/unit/test_compose_legacy_gate_wiring.py`: removed `test_ingestion_wires_internal_redpanda_broker_address`.
+  - Updated `tests/unit/test_ingestion_source_profile.py`: removed `_DummyProducer` class and Redpanda monkeypatch.
+  - Stopped and removed `orion_redpanda`, `orion_minio` containers; cleaned orphans (`orion-createbuckets-1`, `orion_labeler`).
+  - Verified: 19/19 affected tests passing, 8 remaining services healthy.
+
 ### Changed
 
 - **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:

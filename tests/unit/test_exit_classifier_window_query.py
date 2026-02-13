@@ -151,6 +151,7 @@ async def test_build_bucket_training_data_heber_source_uses_gold_datasets_withou
                             "delta": 0.31,
                             "theta": -0.02,
                             "iv": 0.41,
+                            "side": "ask",
                         }
                     ]
                 )
@@ -167,6 +168,7 @@ async def test_build_bucket_training_data_heber_source_uses_gold_datasets_withou
     assert y.shape == (1,)
     assert y[0] == 1
     assert X[0][0] == pytest.approx(0.65)
+    assert X[0][19] == pytest.approx(1.0)
     assert db_calls["count"] == 0
 
 

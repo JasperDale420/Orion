@@ -207,10 +207,3 @@ def test_default_stack_includes_ingestion_service_with_heber_mount() -> None:
     assert 'command: [ "python", "-m", "orion.ingestion" ]' in block
     assert "- /Volumes/heber/data:/Volumes/heber/data:ro" in block
     assert "profiles:" not in block
-
-
-def test_ingestion_wires_internal_redpanda_broker_address() -> None:
-    compose_text = Path("docker-compose.yml").read_text()
-    block = _service_block(compose_text, "ingestion")
-
-    assert "- REDPANDA_BROKERS=redpanda:29092" in block

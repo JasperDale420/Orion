@@ -21,37 +21,6 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  minio:
-    image: minio/minio:latest
-    container_name: orion_minio
-    ports:
-      - "9005:9000"
-      - "9001:9001"
-    environment:
-      - MINIO_ROOT_USER=minio_admin
-      - MINIO_ROOT_PASSWORD=minio_password
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-
-  createbuckets:
-    image: minio/mc
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c " /usr/bin/mc alias set orion http://minio:9000 minio_admin minio_password; /usr/bin/mc mb orion/lakehouse --ignore-existing; /usr/bin/mc anonymous set public orion/lakehouse; exit 0; "
-
   price_target_labeler:
     build: .
     container_name: orion_price_target
@@ -94,7 +63,6 @@ services:
       - ORION_RUN_ID=docker_persistent_ingest
       - GATEWAY_URL=http://host.docker.internal:8080
       - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
-      - REDPANDA_BROKERS=redpanda:29092
     command: [ "python", "-m", "orion.ingestion" ]
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
@@ -119,7 +87,6 @@ services:
       - /Volumes/heber/data:/Volumes/heber/data:ro
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      - UW_API_KEY=${UW_API_KEY}
       - ORION_RUN_ID=docker_persistent
       - GATEWAY_URL=http://host.docker.internal:8080
       - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
@@ -394,39 +361,6 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
-    container_name: orion_redpanda
-    command:
-      - redpanda
-      - start
-      - --smp 1
-      - --memory 1G
-      - --reserve-memory 0M
-      - --overprovisioned
-      - --node-id 0
-      - --check=false
-      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
-      - --pandaproxy-addr 0.0.0.0:8082
-      - --advertise-pandaproxy-addr localhost:8082
-    ports:
-      - "9092:9092"
-      - "8081:8081"
-      - "8082:8082"
-    volumes:
-      - redpanda_data:/var/lib/redpanda/data
-    healthcheck:
-      test: [ "CMD-SHELL", "rpk cluster health | grep -E 'Healthy|OK'" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-
   mcp-server:
     build: ../Shared-MCP-Server
     container_name: orion_mcp_server
@@ -458,5 +392,3 @@ services:
 
 volumes:
   timescaledb_data:
-  minio_data:
-  redpanda_data:

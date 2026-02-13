@@ -457,6 +457,28 @@ def _normalize_heber_features_for_exit(frame: Any) -> Any:
     normalized["is_sweep"] = normalized["is_sweep"].map(
         lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
     )
+
+    ask_ratio_source = _first_existing_column(frame, ["ask_side_ratio"])
+    if ask_ratio_source is None:
+        ask_ratio = pd.Series(np.nan, index=normalized.index, dtype="float64")
+    else:
+        ask_ratio = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
+    side_source = _first_existing_column(frame, ["side", "aggressor"])
+    if side_source is not None:
+        side_tokens = frame[side_source].astype(str).str.strip().str.lower()
+
+        def _token_to_ask_ratio(token: str) -> float:
+            if token in {"ask", "buy", "buyer", "bullish"}:
+                return 1.0
+            if token in {"bid", "sell", "seller", "bearish"}:
+                return 0.0
+            if token in {"mid", "midpoint", "neutral"}:
+                return 0.5
+            return np.nan
+
+        side_ratio = side_tokens.map(_token_to_ask_ratio)
+        ask_ratio = ask_ratio.where(ask_ratio.notna(), side_ratio)
+    normalized["ask_side_ratio"] = ask_ratio.fillna(0.5)
     return normalized
 
 

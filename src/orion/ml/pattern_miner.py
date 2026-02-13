@@ -362,6 +362,7 @@ def _normalize_heber_features(frame: Any) -> Any:
         "put_call": ["put_call"],
         "aggressor": ["aggressor"],
         "is_sweep": ["is_sweep"],
+        "is_spread_leg": ["is_spread_leg", "is_block"],
         "premium_usd": ["premium_usd", "premium"],
         "dte": ["dte", "days_to_expiry"],
         "minutes_to_close": ["minutes_to_close"],
@@ -371,6 +372,10 @@ def _normalize_heber_features(frame: Any) -> Any:
         "gamma_at_entry": ["gamma_at_entry", "gamma"],
         "theta_at_entry": ["theta_at_entry", "theta"],
         "vega_at_entry": ["vega_at_entry", "vega"],
+        "volume_at_entry": ["volume_at_entry", "volume"],
+        "open_interest_at_entry": ["open_interest_at_entry", "open_interest"],
+        "rvol_daily": ["rvol_daily", "realized_vol_20d"],
+        "ask_side_ratio": ["ask_side_ratio"],
         "entry_hour": ["entry_hour", "hour_of_day"],
         "entry_day_of_week": ["entry_day_of_week", "day_of_week"],
     }
@@ -386,12 +391,51 @@ def _normalize_heber_features(frame: Any) -> Any:
     normalized["is_sweep"] = normalized["is_sweep"].map(
         lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
     )
+    normalized["is_spread_leg"] = (
+        normalized["is_spread_leg"]
+        .fillna(0)
+        .map(lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"})
+    )
+
+    # Fall back to side/aggressor text when a numeric ask-side ratio is not supplied.
+    ask_ratio = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
+    side_source = _first_existing_column(frame, ["side", "aggressor"])
+    if side_source is not None:
+        side_tokens = frame[side_source].astype(str).str.strip().str.lower()
+
+        def _token_to_ask_ratio(token: str) -> float:
+            if token in {"ask", "buy", "buyer", "bullish"}:
+                return 1.0
+            if token in {"bid", "sell", "seller", "bearish"}:
+                return 0.0
+            if token in {"mid", "midpoint", "neutral"}:
+                return 0.5
+            return np.nan
+
+        side_ratio = side_tokens.map(_token_to_ask_ratio)
+        ask_ratio = ask_ratio.where(ask_ratio.notna(), side_ratio)
+    normalized["ask_side_ratio"] = ask_ratio
+
+    iv_entry = pd.to_numeric(normalized["iv_at_entry"], errors="coerce")
+    realized_vol = pd.to_numeric(normalized["rvol_daily"], errors="coerce")
+    iv_vs_hv = iv_entry / realized_vol
+    iv_vs_hv = iv_vs_hv.where(realized_vol > 0)
+    normalized["iv_vs_hv_ratio"] = iv_vs_hv.replace([np.inf, -np.inf], np.nan)
 
     normalized["entry_session"] = pd.NA
     entry_hour_numeric = pd.to_numeric(normalized["entry_hour"], errors="coerce")
     normalized.loc[entry_hour_numeric < 11, "entry_session"] = "open"
     normalized.loc[(entry_hour_numeric >= 11) & (entry_hour_numeric < 14), "entry_session"] = "midday"
     normalized.loc[entry_hour_numeric >= 14, "entry_session"] = "close"
+
+    normalized["market_tide_direction"] = pd.NA
+    ask_ratio_numeric = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
+    normalized.loc[ask_ratio_numeric >= 0.55, "market_tide_direction"] = "bullish"
+    normalized.loc[ask_ratio_numeric <= 0.45, "market_tide_direction"] = "bearish"
+    normalized.loc[
+        (ask_ratio_numeric > 0.45) & (ask_ratio_numeric < 0.55),
+        "market_tide_direction",
+    ] = "neutral"
     return normalized
 
 
