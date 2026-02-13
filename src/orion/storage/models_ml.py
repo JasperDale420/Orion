@@ -6,7 +6,7 @@ Stores weekly ML insights for pattern mining.
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, DateTime, Float, Integer, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String
 
 from orion.storage.db import Base
 
@@ -61,3 +61,32 @@ class MLFeatureImportanceHistory(Base):
     feature_name = Column(String, nullable=False, index=True)
     importance = Column(Float, nullable=False)
     rank = Column(Integer, nullable=False)
+
+
+class MLPrediction(Base):
+    """
+    Persist ML prediction and realized outcome for accuracy analytics.
+    """
+
+    __tablename__ = "ml_predictions"
+
+    id = Column(String, primary_key=True)
+    prediction_ts = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+
+    symbol = Column(String, nullable=False, index=True)
+    option_chain = Column(String, nullable=True)
+    bucket = Column(String, nullable=True, index=True)
+    model_type = Column(String, nullable=False, index=True)
+
+    prediction_score = Column(Float, nullable=False)
+    prediction_class = Column(Integer, nullable=False)
+    confidence = Column(Float, nullable=True)
+
+    position_id = Column(String, nullable=True, index=True)
+    outcome_ts = Column(DateTime(timezone=True), nullable=True)
+    actual_return_pct = Column(Float, nullable=True)
+    hit_target = Column(Boolean, nullable=True)
+    hit_stop = Column(Boolean, nullable=True)
+    prediction_correct = Column(Boolean, nullable=True)

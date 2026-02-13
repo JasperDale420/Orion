@@ -19,7 +19,12 @@ def _make_engine(url: str, *, echo: bool) -> AsyncEngine:
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
-    return create_async_engine(url, echo=echo)
+    return create_async_engine(
+        url,
+        echo=echo,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+    )
 
 
 engine: AsyncEngine = _make_engine(DB_URL, echo=system_settings.db_echo)
@@ -53,6 +58,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
 
+
 async def init_db() -> None:
     # Ensure all models are imported so Base.metadata is complete for create_all().
     from orion.storage import (  # noqa: F401
@@ -61,6 +67,7 @@ async def init_db() -> None:
         models_dlq,
         models_execution,
         models_gold,
+        models_ml,
         models_rag,
         models_risk,
         models_signals,

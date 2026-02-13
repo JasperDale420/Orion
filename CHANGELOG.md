@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **RCA fix for runtime DB failures and missing ML tracking tables (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/db.py`:
+    - enabled `pool_pre_ping=True` and `pool_recycle=1800` for Postgres async engines to reduce stale-connection failures in long-running workers,
+    - ensured `init_db()` imports `models_ml` so ML tables are included in metadata-driven startup table creation.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_ml.py`:
+    - added `MLPrediction` model (`ml_predictions`) used by performance tracking.
+  - Added `/Users/jacobmcmillan/Empire/Orion/alembic/versions/0023_add_ml_tracking_tables.py`:
+    - creates `ml_pattern_insights`, `ml_feature_importance_history`, and `ml_predictions` with indexes using existence checks.
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_db_resilience_and_ml_schema.py`:
+    - verifies Postgres engine resilience settings and that `init_db()` creates all ML tracking tables.
+  - Operational remediation performed:
+    - rebuilt/restarted core containers,
+    - repaired revision tracking with `alembic stamp 0023_add_ml_tracking_tables`,
+    - verified `alembic upgrade head` succeeds and post-restart service logs show no recurring DB/missing-table errors.
+
 - **Repo-local lint config and deterministic Numba test bootstrap (debt fix)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/pyproject.toml` to extend local `ruff-base.toml` so Ruff works in standalone clones and git worktrees.
   - Added `/Users/jacobmcmillan/Empire/Orion/ruff-base.toml` with Orion baseline lint/format settings.
