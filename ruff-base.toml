@@ -1,0 +1,33 @@
+# Orion-local Ruff base configuration.
+# Keep this file in-repo so linting works from git worktrees and standalone clones.
+
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "N",
+    "W",
+    "UP",
+    "B",
+    "C4",
+    "SIM",
+]
+ignore = [
+    "B008",
+    "B904",
+    "E402",
+    "E501",
+    "SIM102",
+    "SIM108",
+]
+
+[lint.isort]
+known-first-party = []
+
+[format]
+quote-style = "double"
+indent-style = "space"

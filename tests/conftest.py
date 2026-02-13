@@ -12,6 +12,8 @@ os.environ["ALPACA_API_KEY"] = "mock_key"
 os.environ["ALPACA_SECRET_KEY"] = "mock_secret"
 os.environ["ALPACA_PAPER"] = "True"
 os.environ["OPENAI_API_KEY"] = "mock_openai_key"
+os.environ["NUMBA_DISABLE_JIT"] = "1"
+os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
 
 # Ensure `src/` is on sys.path
 REPO_ROOT = Path(__file__).resolve().parents[1]
