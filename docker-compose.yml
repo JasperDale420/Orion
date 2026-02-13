@@ -94,6 +94,7 @@ services:
       - ORION_RUN_ID=docker_persistent_ingest
       - GATEWAY_URL=http://host.docker.internal:8080
       - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}
+      - REDPANDA_BROKERS=redpanda:29092
     command: [ "python", "-m", "orion.ingestion" ]
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]

@@ -282,20 +282,40 @@ class HeberReader:
         symbols: list[str] | None = None,
     ) -> pd.DataFrame:
         """Read Gold features/labels from Heber parquet layout."""
-        gold_path = self.data_root / "gold" / f"dataset={dataset}"
-        if not gold_path.exists():
-            return pd.DataFrame()
-
         instrument_keys = self._to_instrument_keys(symbols) if symbols else None
         filters: list[tuple[str, str, Any]] = []
         if instrument_keys:
             filters.append(("instrument_key", "in", instrument_keys))
 
-        df = self._read_parquet(gold_path, filters=filters)
+        frames: list[pd.DataFrame] = []
+        for gold_path in self._gold_dataset_candidate_paths(dataset):
+            if not gold_path.exists():
+                continue
+            frame = self._read_parquet(gold_path, filters=filters)
+            if frame.empty:
+                continue
+            frames.append(frame)
+
+        if not frames:
+            return pd.DataFrame()
+
+        if len(frames) == 1:
+            df = frames[0]
+        else:
+            df = pd.concat(frames, ignore_index=True).drop_duplicates()
+
         if df.empty:
             return df
 
         return self._apply_asof_filter(df, asof_time)
+
+    def _gold_dataset_candidate_paths(self, dataset: str) -> tuple[Path, ...]:
+        """Resolve supported Heber gold path variants for a dataset."""
+        canonical = self.data_root / "gold" / f"dataset={dataset}"
+        nested_watch = self.data_root / "gold" / "labels_alert_barriers" / f"dataset={dataset}"
+        if canonical == nested_watch:
+            return (canonical,)
+        return (canonical, nested_watch)
 
     def _read_silver_dataset(
         self,

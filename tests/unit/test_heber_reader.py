@@ -228,6 +228,39 @@ def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:
     assert float(result.iloc[0]["momentum_5d"]) == 0.1
 
 
+def test_read_gold_features_supports_nested_watch_layout(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 12, 14, 0, tzinfo=timezone.utc)
+    features = pd.DataFrame(
+        {
+            "alert_id": ["evt-1"],
+            "alert_time": [base],
+            "premium": [125000.0],
+            "ts_available": [base],
+        }
+    )
+    _write_parquet(
+        tmp_path
+        / "gold"
+        / "labels_alert_barriers"
+        / "dataset=meta_label_features"
+        / "project=watch"
+        / "version=v1"
+        / "dt=2026-02-12"
+        / "part-0.parquet",
+        features,
+    )
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="meta_label_features",
+        asof_time=base + timedelta(minutes=1),
+    )
+
+    assert len(result) == 1
+    assert str(result.iloc[0]["alert_id"]) == "evt-1"
+    assert float(result.iloc[0]["premium"]) == 125000.0
+
+
 def test_read_greek_exposure_filters_symbol_and_asof(tmp_path: Path) -> None:
     base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
     greek = pd.DataFrame(

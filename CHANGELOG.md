@@ -11,15 +11,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **RCA hardening for Heber migration runtime (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
     - added a default `ingestion` service (`python -m orion.ingestion`) with Heber read mount (`/Volumes/heber/data:/Volumes/heber/data:ro`) so local stack includes the modern ingestion path by default.
+    - wired internal Redpanda bootstrap for ingestion (`REDPANDA_BROKERS=redpanda:29092`) to match container-network listener advertising and eliminate `localhost:9092` bootstrap failures.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
+    - `read_gold_features(...)` now supports both canonical and nested watch gold layouts:
+      - `/gold/dataset=<dataset>/...`
+      - `/gold/labels_alert_barriers/dataset=<dataset>/...`
+    - prevents silent empty reads when Heber writes watch datasets under nested path layout.
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
     - added strict Heber training contract validation before normalization,
     - now raises `RuntimeError` with clear context when required label semantics are missing from `labels_alert_barriers` / `meta_label_features` instead of silently training on malformed data.
   - Updated tests:
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
     - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_heber_reader.py`
     - added regression coverage for default ingestion wiring and fail-fast Heber contract mismatch behavior.
   - Verified with:
-    - `pytest -q` (788 passed, 6 skipped)
+    - `pytest -q` (790 passed, 6 skipped)
     - `ruff check .`
     - `mypy .`
 
