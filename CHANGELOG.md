@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Performance: /metrics list avoids ORM hydration**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/api/main.py` to select only response columns and return mapping rows for `/metrics`.
+  - Added regression coverage in `/Users/jacobmcmillan/Empire/Orion/tests/api/test_main.py` for mapping-row serialization.
+  - Expected impact: lowers per-row CPU/memory by skipping ORM object creation (faster serialization on large metric sets).
+  - Verification:
+    - `pytest -q tests/api/test_main.py`
+    - `ruff check src/orion/api/main.py tests/api/test_main.py`
+    - `mypy src/orion/api/main.py`
+
 - **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:
   - Updated:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`

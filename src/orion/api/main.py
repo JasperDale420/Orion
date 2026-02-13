@@ -203,11 +203,29 @@ async def list_metrics(
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> List[SolverMetrics]:
+) -> List[SolverMetricsResponse]:
     """
     Get performance metrics, optionally filtered by solver.
     """
-    stmt = select(SolverMetrics).limit(limit).order_by(desc(SolverMetrics.evaluated_at_utc))
+    # Performance: select only response columns to avoid ORM hydration and JSON payload overhead.
+    stmt = (
+        select(
+            SolverMetrics.id,
+            SolverMetrics.solver_id,
+            SolverMetrics.sector,
+            SolverMetrics.dataset_tag,
+            SolverMetrics.num_runs,
+            SolverMetrics.num_trades,
+            SolverMetrics.sharpe_ratio,
+            SolverMetrics.profit_factor,
+            SolverMetrics.max_dd_pct,
+            SolverMetrics.stability_score,
+            SolverMetrics.metrics_json,
+            SolverMetrics.evaluated_at_utc,
+        )
+        .limit(limit)
+        .order_by(desc(SolverMetrics.evaluated_at_utc))
+    )
 
     if solver_id:
         stmt = stmt.where(SolverMetrics.solver_id == solver_id)
@@ -215,7 +233,8 @@ async def list_metrics(
         stmt = stmt.where(SolverMetrics.dataset_tag == dataset_tag)
 
     result = await db.execute(stmt)
-    return result.scalars().all()
+    rows = result.mappings().all()
+    return [dict(row) for row in rows]
 
 
 # --- Experiments ---

@@ -26,6 +26,7 @@ def override_deps() -> Generator[AsyncMock, None, None]:
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = []
     mock_result.scalars.return_value.first.return_value = None
+    mock_result.mappings.return_value.all.return_value = []
     mock_result.first.return_value = None
     mock_session.execute.return_value = mock_result
     mock_session.commit = AsyncMock()
@@ -111,6 +112,36 @@ class TestMetricsEndpoint:
 
         assert response.status_code == 200
         assert response.json() == []
+
+    @pytest.mark.asyncio
+    async def test_list_metrics_maps_rows(
+        self,
+        override_deps: AsyncMock,
+        mock_audit_logging: None,
+    ) -> None:
+        """List metrics should serialize mapping rows into response payloads."""
+        override_deps.execute.return_value.mappings.return_value.all.return_value = [
+            {
+                "id": "m1",
+                "solver_id": "solver-1",
+                "sector": "ALL",
+                "dataset_tag": "test",
+                "num_runs": 1,
+                "num_trades": 5,
+                "sharpe_ratio": 1.2,
+                "profit_factor": 1.4,
+                "max_dd_pct": 0.5,
+                "stability_score": 0.7,
+                "metrics_json": {"edge": 0.1},
+                "evaluated_at_utc": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            }
+        ]
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/metrics")
+
+        assert response.status_code == 200
+        assert response.json()[0]["solver_id"] == "solver-1"
 
 
 class TestExperimentsEndpoint:
