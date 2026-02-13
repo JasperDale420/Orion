@@ -3,6 +3,7 @@ Tests for the Orion Admin API endpoints.
 Uses httpx.AsyncClient with FastAPI dependency overrides.
 """
 
+from datetime import datetime, timezone
 from typing import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +14,7 @@ from orion.api.main import app
 
 
 @pytest.fixture
-def override_deps() -> Generator[None, None, None]:
+def override_deps() -> Generator[AsyncMock, None, None]:
     """Override API dependencies for testing."""
 
     # Mock API key auth
@@ -39,7 +40,7 @@ def override_deps() -> Generator[None, None, None]:
     app.dependency_overrides[require_api_key] = mock_api_key
     app.dependency_overrides[get_db] = mock_get_db
 
-    yield
+    yield mock_session
 
     # Clean up
     app.dependency_overrides.clear()
@@ -71,7 +72,7 @@ class TestSolversEndpoints:
     @pytest.mark.asyncio
     async def test_list_solvers_empty(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """List solvers should return empty list when no solvers exist."""
@@ -84,7 +85,7 @@ class TestSolversEndpoints:
     @pytest.mark.asyncio
     async def test_get_solver_not_found(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Get solver should return 404 for non-existent solver."""
@@ -101,7 +102,7 @@ class TestMetricsEndpoint:
     @pytest.mark.asyncio
     async def test_list_metrics_empty(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """List metrics should return empty list when no metrics exist."""
@@ -118,7 +119,7 @@ class TestExperimentsEndpoint:
     @pytest.mark.asyncio
     async def test_list_experiments_empty(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """List experiments should return empty list when no experiments exist."""
@@ -135,7 +136,7 @@ class TestEventsEndpoint:
     @pytest.mark.asyncio
     async def test_get_event_not_found(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Get event should return 404 for non-existent event."""
@@ -151,7 +152,7 @@ class TestCandidatesEndpoint:
     @pytest.mark.asyncio
     async def test_get_candidate_not_found(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Get candidate should return 404 for non-existent candidate."""
@@ -167,7 +168,7 @@ class TestPromotionsEndpoints:
     @pytest.mark.asyncio
     async def test_list_promotion_recommendations_empty(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """List promotion recommendations should return empty list when none exist."""
@@ -180,7 +181,7 @@ class TestPromotionsEndpoints:
     @pytest.mark.asyncio
     async def test_approve_promotion_not_found(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Approve promotion should return 404 for non-existent recommendation."""
@@ -195,7 +196,7 @@ class TestPromotionsEndpoints:
     @pytest.mark.asyncio
     async def test_reject_promotion_not_found(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Reject promotion should return 404 for non-existent recommendation."""
@@ -214,7 +215,7 @@ class TestSearchEndpoint:
     @pytest.mark.asyncio
     async def test_search_requires_query(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Search should return 422 when query parameter is missing."""
@@ -230,7 +231,7 @@ class TestRollupsEndpoints:
     @pytest.mark.asyncio
     async def test_get_rollups_requires_ticker(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Get rollups should return 422 when ticker is missing."""
@@ -242,7 +243,7 @@ class TestRollupsEndpoints:
     @pytest.mark.asyncio
     async def test_get_rollups_with_ticker(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Get rollups should return data for valid ticker."""
@@ -254,7 +255,7 @@ class TestRollupsEndpoints:
     @pytest.mark.asyncio
     async def test_get_rollup_not_found(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
     ) -> None:
         """Get specific rollup should return 404 when not found."""
@@ -270,7 +271,7 @@ class TestFlowsEndpoint:
     @pytest.mark.asyncio
     async def test_get_flows_empty(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -291,7 +292,7 @@ class TestFlowsEndpoint:
     @pytest.mark.asyncio
     async def test_get_flows_with_filters(
         self,
-        override_deps: None,
+        override_deps: AsyncMock,
         mock_audit_logging: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -307,3 +308,32 @@ class TestFlowsEndpoint:
             response = await client.get("/flows", params={"ticker": "TSLA", "min_premium_usd": 10000})
 
         assert response.status_code == 200
+    @pytest.mark.asyncio
+    async def test_list_solvers_returns_mapping_rows(
+        self,
+        override_deps: AsyncMock,
+        mock_audit_logging: None,
+    ) -> None:
+        """List solvers should accept mapping rows without ORM hydration."""
+        override_deps.execute.return_value.mappings.return_value.all.return_value = [
+            {
+                "solver_id": "solver_1",
+                "family_name": "TrendRider",
+                "stage": "research",
+                "is_active": False,
+                "config": {"param": 1},
+                "created_at_utc": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                "total_pnl": 0.0,
+                "sharpe_ratio": 0.0,
+                "win_rate": 0.0,
+                "trades_count": 0,
+            }
+        ]
+        override_deps.execute.return_value.scalars.return_value.all.return_value = []
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/solvers")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload[0]["solver_id"] == "solver_1"
