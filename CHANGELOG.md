@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Documentation standardization started (agent file naming alignment)**:
+  - Added `/Users/jacobmcmillan/Empire/Orion/AGENTS.md` as the canonical project AI-instructions file.
+  - Removed deprecated `/Users/jacobmcmillan/Empire/Orion/CLAUDE.md` in favor of `AGENTS.md`.
+
 - **Worker container health checks now match runtime type (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` to disable inherited Dockerfile HTTP healthchecks for non-HTTP worker services (`feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, `indexer`, and other worker-only profile services).
   - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py::test_non_http_workers_disable_inherited_http_healthcheck`.

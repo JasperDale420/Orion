@@ -1,0 +1,18 @@
+meta:
+  run_id: 6cc4dd6f-b161-449f-b18d-11b4e326196b
+  created_at: '2026-02-12T21:30:19.463162+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-12_6cc4dd6f-b161-449f-b18d-11b4e326196b.json
+  report_path: artifacts/reports/eod_report_2026-02-12.md
+proposal:
+  type: do_not_trade
+  rationale: No regime data available; trading without regime context is risky
+  evidence_pointers:
+    regime_summary:
+      available: false
+      computed: 0
+  test_plan:
+  - "Check regime\u2011classification service for errors"
+  - Verify regime data is populated before next session
+  recommendation: Pause trading until regime data is available and stable
