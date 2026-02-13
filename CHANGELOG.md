@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Meta-search Heber event mapping now emits proper bar events (TDD bugfix)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py` so Heber bar rows are mapped to `BronzeEvent` objects with `event_type=\"ALPACA_BAR_1M\"` instead of raw dictionaries.
+  - This prevents feature-engine crashes (`'dict' object has no attribute 'event_type'`) during meta-search evaluation.
+  - Tightened `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_meta_search_heber_source.py` to assert Heber bar/flow outputs are event objects with expected event types.
+  - Verified regression path with:
+    - `pytest -q tests/unit/test_meta_search_heber_source.py::test_fetch_silver_events_prefers_heber -q`
+    - `pytest -q tests/integration/test_meta_search_flow.py -q`
+
 - **Documentation standardization started (agent file naming alignment)**:
   - Added `/Users/jacobmcmillan/Empire/Orion/AGENTS.md` as the canonical project AI-instructions file.
   - Removed deprecated `/Users/jacobmcmillan/Empire/Orion/CLAUDE.md` in favor of `AGENTS.md`.
