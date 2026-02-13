@@ -420,7 +420,7 @@ class HeberReader:
             table = self._read_table(path=path, columns=columns, filters=filters, partitioning=None)
             return cast(pd.DataFrame, table.to_pandas())
         except Exception as exc:
-            if self._is_corrupt_parquet_error(exc):
+            if self._is_corrupt_parquet_error(exc) or self._is_schema_merge_parquet_error(exc):
                 logger.warning(
                     "heber_reader_filewise_fallback",
                     path=str(path),
@@ -461,7 +461,9 @@ class HeberReader:
         columns: list[str] | None,
         filters: list[tuple[str, str, Any]] | None,
     ) -> pd.DataFrame:
-        parquet_files = sorted(path.rglob("*.parquet"))
+        parquet_files = [
+            file_path for file_path in sorted(path.rglob("*.parquet")) if not file_path.name.startswith("._")
+        ]
         if not parquet_files:
             return pd.DataFrame()
 
@@ -491,6 +493,13 @@ class HeberReader:
             or "could not read schema from" in message
             or "is this a 'parquet' file?" in message
             or ("error creating dataset" in message and "could not open parquet input source" in message)
+        )
+
+    @staticmethod
+    def _is_schema_merge_parquet_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return ("unsupported cast from" in message and "to null" in message and "cast_null" in message) or (
+            "could not merge schemas" in message
         )
 
 

@@ -410,3 +410,52 @@ def test_is_corrupt_parquet_error_detects_dataset_open_variant() -> None:
     )
 
     assert HeberReader._is_corrupt_parquet_error(exc) is True
+
+
+def test_read_parquet_falls_back_to_filewise_on_schema_merge_error(tmp_path: Path) -> None:
+    reader = HeberReader(data_root=tmp_path)
+    expected = pd.DataFrame({"alert_id": ["evt-1"], "premium": [125000.0]})
+
+    def _raise_schema_merge_error(**_kwargs):  # noqa: ANN003
+        raise RuntimeError("Unsupported cast from double to null using function cast_null")
+
+    reader._read_table = _raise_schema_merge_error  # type: ignore[method-assign]
+    reader._read_parquet_filewise = lambda **_kwargs: expected  # type: ignore[method-assign]
+
+    result = reader._read_parquet(path=tmp_path / "gold" / "dataset=meta_label_features", columns=None, filters=None)
+
+    assert result.equals(expected)
+
+
+def test_read_parquet_filewise_skips_hidden_sidecar_files(tmp_path: Path) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    valid = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "bar_start_ts": [base],
+            "ts_available": [base],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [10],
+        }
+    )
+    dataset_path = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
+    valid_file = dataset_path / "part-valid.parquet"
+    _write_parquet(valid_file, valid)
+    (dataset_path / "._part-valid.parquet").write_text("not parquet data", encoding="utf-8")
+
+    reader = HeberReader(data_root=tmp_path)
+    seen_paths: list[Path] = []
+    original_read_table = reader._read_table
+
+    def _capture_read_table(path: Path, columns, filters, partitioning):  # type: ignore[no-untyped-def]
+        seen_paths.append(path)
+        return original_read_table(path=path, columns=columns, filters=filters, partitioning=partitioning)
+
+    reader._read_table = _capture_read_table  # type: ignore[method-assign]
+    result = reader._read_parquet_filewise(path=dataset_path, columns=None, filters=None)
+
+    assert len(result) == 1
+    assert all(not path.name.startswith("._") for path in seen_paths)

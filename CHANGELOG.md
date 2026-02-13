@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber Gold reader RCA hardening for schema-drifted parquet partitions (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
+    - treats Arrow schema-merge cast failures (`Unsupported cast ... cast_null`) as a filewise-fallback condition, not a terminal read failure.
+    - skips hidden macOS sidecar files (`._*.parquet`) during filewise parquet scans to avoid noisy non-parquet warnings.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_heber_reader.py`:
+    - added regression coverage for schema-merge fallback behavior,
+    - added regression coverage ensuring hidden sidecar files are ignored in filewise reads.
+  - Verified with:
+    - `pytest -q tests/unit/test_heber_reader.py`
+    - `ruff check src/orion/clients/heber_reader.py tests/unit/test_heber_reader.py`
+
 - **Pattern-miner/exit-classifier RCA guard: drop no-snapshot outcomes from Heber training inputs (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
     - normalized `bars_to_hit` from Heber outcomes,
