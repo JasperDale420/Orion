@@ -43,6 +43,48 @@ _FETCH_CASES = [
 ]
 
 
+@pytest.mark.parametrize(
+    "module, connector_cls",
+    [
+        (tide_module, UWMarketTideConnector),
+        (greek_module, UWGreekExposureConnector),
+        (max_pain_module, UWMaxPainConnector),
+        (iv_module, UWIVRankConnector),
+    ],
+)
+def test_connector_requires_gateway_key(
+    monkeypatch: pytest.MonkeyPatch,
+    module: Any,
+    connector_cls: Any,
+) -> None:
+    monkeypatch.setattr(module.system_settings, "data_gateway_url", "http://gateway:8080")
+    monkeypatch.setattr(module.system_settings, "data_gateway_api_key", "")
+
+    with pytest.raises(ValueError, match="DATA_GATEWAY_API_KEY/GATEWAY_API_KEY"):
+        connector_cls()
+
+
+@pytest.mark.parametrize(
+    "module, connector_cls",
+    [
+        (tide_module, UWMarketTideConnector),
+        (greek_module, UWGreekExposureConnector),
+        (max_pain_module, UWMaxPainConnector),
+        (iv_module, UWIVRankConnector),
+    ],
+)
+def test_connector_requires_gateway_url(
+    monkeypatch: pytest.MonkeyPatch,
+    module: Any,
+    connector_cls: Any,
+) -> None:
+    monkeypatch.setattr(module.system_settings, "data_gateway_url", "")
+    monkeypatch.setattr(module.system_settings, "data_gateway_api_key", "gw-key")
+
+    with pytest.raises(ValueError, match="DATA_GATEWAY_URL/GATEWAY_URL"):
+        connector_cls()
+
+
 @pytest.mark.parametrize("module, connector_cls, method_name, call_args", _FETCH_CASES)
 def test_fetch_retries_transient_503_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,

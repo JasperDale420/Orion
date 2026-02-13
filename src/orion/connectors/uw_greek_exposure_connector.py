@@ -26,9 +26,13 @@ class UWGreekExposureConnector:
     """Fetches Greek exposure (GEX, Vanna, Charm) via Data Gateway."""
 
     def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
-        self.gateway_url = gateway_url or system_settings.data_gateway_url
-        self.gateway_key = gateway_key or system_settings.data_gateway_api_key
-        self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
+        self.gateway_url = (gateway_url or system_settings.data_gateway_url or "").strip().rstrip("/")
+        if not self.gateway_url:
+            raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
+        self.gateway_key = (gateway_key or system_settings.data_gateway_api_key or "").strip()
+        if not self.gateway_key:
+            raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
+        self.headers = {"X-Gateway-Key": self.gateway_key}
         self._latest_exposures: list[Dict[str, Any]] = []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))

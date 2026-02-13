@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:
+  - Updated:
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_greek_exposure_connector.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_max_pain_connector.py`
+    - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_iv_rank_connector.py`
+  - Connectors now fail fast on startup when `DATA_GATEWAY_URL/GATEWAY_URL` or `DATA_GATEWAY_API_KEY/GATEWAY_API_KEY` is missing, instead of sending unauthenticated requests that create repeated `401` noise.
+  - Added regression tests in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_uw_gateway_connector_retry_contract.py` for missing URL/key startup validation across all four connectors.
+  - Verified with:
+    - `pytest -q tests/unit/test_uw_gateway_connector_retry_contract.py`
+    - `ruff check src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_max_pain_connector.py tests/unit/test_uw_gateway_connector_retry_contract.py`
+    - `mypy src/orion/connectors/uw_iv_rank_connector.py src/orion/connectors/uw_market_tide_connector.py src/orion/connectors/uw_greek_exposure_connector.py src/orion/connectors/uw_max_pain_connector.py`
+
 - **RCA fix for sparse Heber training rows in Orion (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
     - stopped treating `bars_to_hit <= 0` as a universal no-snapshot signal.
