@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Repo-local lint config and deterministic Numba test bootstrap (debt fix)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/pyproject.toml` to extend local `ruff-base.toml` so Ruff works in standalone clones and git worktrees.
+  - Added `/Users/jacobmcmillan/Empire/Orion/ruff-base.toml` with Orion baseline lint/format settings.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/conftest.py` to set `NUMBA_DISABLE_JIT=1` and a fixed `NUMBA_CACHE_DIR` before optional `pandas_ta` import.
+  - This removes environment-specific commit/test failures without changing runtime behavior.
+
+- **AsyncSingleton now runs optional async initialization hook**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/shared/patterns.py` to call an instance `_async_init()` coroutine once on first creation.
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_async_singleton.py` to assert single-run async init behavior.
+
 - **Meta-search Heber event mapping now emits proper bar events (TDD bugfix)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py` so Heber bar rows are mapped to `BronzeEvent` objects with `event_type=\"ALPACA_BAR_1M\"` instead of raw dictionaries.
   - This prevents feature-engine crashes (`'dict' object has no attribute 'event_type'`) during meta-search evaluation.

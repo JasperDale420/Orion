@@ -99,7 +99,7 @@ exclude_lines = [
 ]
 
 [tool.ruff]
-extend = "../ruff-base.toml"
+extend = "ruff-base.toml"
 line-length = 120
 extend-exclude = [
     "archive",

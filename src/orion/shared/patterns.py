@@ -44,6 +44,11 @@ class AsyncSingleton:
                 if cls not in cls._instances:
                     instance = cls(*args, **kwargs)
                     cls._instances[cls] = instance
+                    async_init = getattr(instance, "_async_init", None)
+                    if async_init is not None:
+                        result = async_init()
+                        if asyncio.iscoroutine(result):
+                            await result
         return cls._instances[cls]  # type: ignore
 
     @classmethod
