@@ -201,6 +201,52 @@ def _coerce_dataframe(payload: Any) -> Any:
     return pd.DataFrame()
 
 
+def _validate_heber_training_contract(outcomes_raw: Any, features_raw: Any) -> None:
+    if outcomes_raw.empty and features_raw.empty:
+        return
+
+    required_outcome_families: dict[str, list[str]] = {
+        "event_id": ["alert_id", "event_id", "watch_id", "instrument_key"],
+        "entry_ts": ["entry_ts", "alert_time", "ts_event", "ts_available"],
+        "outcome_or_hit_tp": ["outcome", "outcome_reason", "status", "hit_tp_first", "contract_hit_tp_first"],
+        "trading_minutes_to_hit": ["trading_minutes_to_hit", "bars_to_hit"],
+    }
+    required_feature_families: dict[str, list[str]] = {
+        "event_id": ["alert_id", "event_id", "watch_id", "instrument_key"],
+    }
+
+    missing_outcome_families = [
+        family
+        for family, candidates in required_outcome_families.items()
+        if _first_existing_column(outcomes_raw, candidates) is None
+    ]
+    missing_feature_families = [
+        family
+        for family, candidates in required_feature_families.items()
+        if _first_existing_column(features_raw, candidates) is None
+    ]
+
+    if not missing_outcome_families and not missing_feature_families:
+        return
+
+    message = (
+        "Heber training contract mismatch: "
+        f"labels_alert_barriers missing {missing_outcome_families or 'none'}, "
+        f"meta_label_features missing {missing_feature_families or 'none'}"
+    )
+    logger.error(
+        message,
+        extra={
+            "event": "pattern_miner_heber_training_contract_mismatch",
+            "missing_outcome_families": missing_outcome_families,
+            "missing_feature_families": missing_feature_families,
+            "outcomes_columns": sorted(str(col) for col in outcomes_raw.columns),
+            "features_columns": sorted(str(col) for col in features_raw.columns),
+        },
+    )
+    raise RuntimeError(message)
+
+
 def _normalize_heber_outcomes(frame: Any) -> Any:
     import pandas as pd
 
@@ -355,8 +401,11 @@ async def _fetch_training_data_from_heber(
         )
         return None, []
 
-    outcomes = _normalize_heber_outcomes(_coerce_dataframe(outcomes_payload))
-    features = _normalize_heber_features(_coerce_dataframe(features_payload))
+    outcomes_raw = _coerce_dataframe(outcomes_payload)
+    features_raw = _coerce_dataframe(features_payload)
+    _validate_heber_training_contract(outcomes_raw, features_raw)
+    outcomes = _normalize_heber_outcomes(outcomes_raw)
+    features = _normalize_heber_features(features_raw)
     if outcomes.empty:
         logger.warning("No Heber outcomes available for pattern-miner training")
         return None, []

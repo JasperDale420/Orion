@@ -191,3 +191,13 @@ def test_worker_healthcheck_blocks_do_not_probe_localhost_8000() -> None:
     ):
         block = _service_block(compose_text, service_name)
         assert "localhost:8000/health" not in block
+
+
+def test_default_stack_includes_ingestion_service_with_heber_mount() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "ingestion")
+
+    assert "restart: unless-stopped" in block
+    assert 'command: [ "python", "-m", "orion.ingestion" ]' in block
+    assert "- /Volumes/heber/data:/Volumes/heber/data:ro" in block
+    assert "profiles:" not in block

@@ -76,6 +76,36 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  ingestion:
+    build: .
+    container_name: orion_ingestion
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /Volumes/heber/data:/Volumes/heber/data:ro
+    environment:
+      - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_PAPER=${ALPACA_PAPER}
+      - ORION_RUN_ID=docker_persistent_ingest
+      - GATEWAY_URL=http://host.docker.internal:8080
+      - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}
+    command: [ "python", "-m", "orion.ingestion" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "kill -0 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
   feature_enrichment:
     build: .
     container_name: orion_feature_enrichment

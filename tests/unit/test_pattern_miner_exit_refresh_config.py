@@ -291,6 +291,36 @@ async def test_fetch_training_data_legacy_source_still_uses_heber_without_local_
 
 
 @pytest.mark.asyncio
+async def test_fetch_training_data_raises_when_heber_training_contract_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")
+    monkeypatch.setenv("ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING", "true")
+    monkeypatch.setenv("ORION_PATTERN_MINER_TRAINING_SOURCE", "heber_gold")
+
+    class _FakeReader:
+        def read_gold_features(self, dataset: str, asof_time) -> pd.DataFrame:  # type: ignore[no-untyped-def]
+            if dataset == "labels_alert_barriers":
+                return pd.DataFrame(
+                    [
+                        {
+                            "alert_id": "evt-1",
+                            "alert_time": "2026-02-10T15:00:00Z",
+                            # Missing required outcome columns like outcome/hit_tp_first
+                        }
+                    ]
+                )
+            if dataset == "meta_label_features":
+                return pd.DataFrame([{"alert_id": "evt-1", "premium": 125000.0}])
+            return pd.DataFrame()
+
+    monkeypatch.setattr(pattern_miner, "get_heber_reader", lambda: _FakeReader(), raising=False)
+
+    with pytest.raises(RuntimeError, match="Heber training contract mismatch"):
+        await pattern_miner.fetch_training_data(window_days=30, min_samples=1, quick_winner_seconds=3600)
+
+
+@pytest.mark.asyncio
 async def test_run_all_pattern_mining_passes_exit_refresh_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
