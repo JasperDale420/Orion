@@ -12,6 +12,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Added `/Users/jacobmcmillan/Empire/Orion/AGENTS.md` as the canonical project AI-instructions file.
   - Removed deprecated `/Users/jacobmcmillan/Empire/Orion/CLAUDE.md` in favor of `AGENTS.md`.
 
+- **Documentation standardization expanded (required/recommended docs + housekeeping)**:
+  - Reworked `/Users/jacobmcmillan/Empire/Orion/README.md` to include clear quick-start, configuration, and cross-doc links.
+  - Expanded `/Users/jacobmcmillan/Empire/Orion/.env.example` with migration and runtime variables used by Orion services.
+  - Added required service docs:
+    - `/Users/jacobmcmillan/Empire/Orion/docs/ARCHITECTURE.md`
+    - `/Users/jacobmcmillan/Empire/Orion/docs/RUNBOOK.md`
+    - `/Users/jacobmcmillan/Empire/Orion/docs/API_REFERENCE.md`
+  - Added supporting docs:
+    - `/Users/jacobmcmillan/Empire/Orion/docs/DATA_CONTRACTS.md`
+    - `/Users/jacobmcmillan/Empire/Orion/CONTRIBUTING.md`
+    - `/Users/jacobmcmillan/Empire/Orion/SECURITY.md`
+    - `/Users/jacobmcmillan/Empire/Orion/DEVELOPER_NOTES.md`
+  - Consolidated PRD/audit fragmentation by moving legacy variants and audit artifacts into `/Users/jacobmcmillan/Empire/Orion/docs/audits/`.
+
 - **Worker container health checks now match runtime type (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` to disable inherited Dockerfile HTTP healthchecks for non-HTTP worker services (`feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, `indexer`, and other worker-only profile services).
   - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py::test_non_http_workers_disable_inherited_http_healthcheck`.
