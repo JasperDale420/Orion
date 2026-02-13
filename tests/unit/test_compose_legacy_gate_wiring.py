@@ -46,11 +46,17 @@ def test_legacy_label_stack_services_are_profiled_for_opt_in() -> None:
 def test_feature_enrichment_wires_gateway_api_key_env() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "feature_enrichment")
-    assert "- GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}" in block
+    assert "- GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}" in block
     assert (
         "- ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}"
         in block
     )
+
+
+def test_ingestion_wires_gateway_api_key_env() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "ingestion")
+    assert "- GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}" in block
 
 
 def test_pattern_miner_is_profiled_with_legacy_label_stack() -> None:

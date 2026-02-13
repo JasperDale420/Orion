@@ -93,7 +93,7 @@ services:
       - ALPACA_PAPER=${ALPACA_PAPER}
       - ORION_RUN_ID=docker_persistent_ingest
       - GATEWAY_URL=http://host.docker.internal:8080
-      - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}
+      - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
       - REDPANDA_BROKERS=redpanda:29092
     command: [ "python", "-m", "orion.ingestion" ]
     healthcheck:
@@ -122,7 +122,7 @@ services:
       - UW_API_KEY=${UW_API_KEY}
       - ORION_RUN_ID=docker_persistent
       - GATEWAY_URL=http://host.docker.internal:8080
-      - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-}
+      - GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
       - ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
     healthcheck:

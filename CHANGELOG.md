@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Ingestion startup RCA fix: removed redundant earnings sync + restored Gateway auth defaults (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ingestion/service.py`:
+    - removed startup `sync_todays_earnings()` call that produced redundant Gateway requests after earnings storage moved to Data-Gateway/Heber.
+    - startup now logs explicit sourcing contract: earnings are read on-demand from Data-Gateway/Heber.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
+    - `ingestion` and `feature_enrichment` now default `GATEWAY_API_KEY` to `gw_orion_trading_key_55555` when `DATA_GATEWAY_API_KEY` is unset, matching local Data-Gateway client config.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/.env.example`:
+    - set `DATA_GATEWAY_API_KEY=gw_orion_trading_key_55555` for local baseline parity.
+  - Added/updated regression coverage:
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_ingestion_source_profile.py`
+    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`
+  - Verified:
+    - `pytest -q tests/unit/test_ingestion_source_profile.py tests/unit/test_compose_legacy_gate_wiring.py`
+    - `docker compose up -d --build ingestion feature_enrichment`
+    - ingestion logs now show successful Gateway WebSocket auth and no startup earnings/key errors.
+
 - **RCA hardening for Heber migration runtime (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
     - added a default `ingestion` service (`python -m orion.ingestion`) with Heber read mount (`/Volumes/heber/data:/Volumes/heber/data:ro`) so local stack includes the modern ingestion path by default.
