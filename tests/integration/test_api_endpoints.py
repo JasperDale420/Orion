@@ -53,6 +53,21 @@ async def override_get_db():
         win_rate=0.6,
         trades_count=10,
     )
+    # /solvers now uses SQLAlchemy mapping rows to avoid ORM hydration overhead.
+    mock_result.mappings.return_value.all.return_value = [
+        {
+            "solver_id": "test_solver_1",
+            "family_name": "TestFamily",
+            "stage": "research",
+            "is_active": True,
+            "config": {"test": "config"},
+            "created_at_utc": datetime.now(timezone.utc),
+            "total_pnl": 100.0,
+            "sharpe_ratio": 1.5,
+            "win_rate": 0.6,
+            "trades_count": 10,
+        }
+    ]
 
     session.execute.return_value = mock_result
     yield session

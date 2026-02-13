@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/api/main.py` to fetch only the fields returned by `/solvers`.
   - This avoids ORM hydration and skips large unused JSON columns, reducing query payload size and CPU on list requests.
   - Added `/Users/jacobmcmillan/Empire/Orion/tests/api/test_main.py::test_list_solvers_returns_mapping_rows` to lock in mapping-row behavior.
+  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/integration/test_api_endpoints.py` mock setup to provide mapping rows for `/solvers`, preserving integration coverage after the query-shape optimization.
 
 - **Meta-search Heber event mapping now emits proper bar events (TDD bugfix)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py` so Heber bar rows are mapped to `BronzeEvent` objects with `event_type=\"ALPACA_BAR_1M\"` instead of raw dictionaries.
