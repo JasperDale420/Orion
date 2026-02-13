@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Data quality checker now uses exchange calendar for market hours (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/data_quality_checker.py` to use `MarketSchedule.is_market_open` for staleness checks with a safe fallback to the legacy UTC-hour gate if the calendar is unavailable.
+  - Added regression tests in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_data_quality_checker_heber_source.py` to cover schedule usage and fallback behavior.
+  - Verified with:
+    - `pytest -q tests/unit/test_data_quality_checker_heber_source.py`
+
 - **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:
   - Updated:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`

@@ -8,6 +8,33 @@ import pytest
 from orion.jobs import data_quality_checker as dqc
 
 
+def test_is_market_open_uses_schedule(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
+
+    class _FakeSchedule:
+        def is_market_open(self, timestamp: datetime) -> bool:
+            assert timestamp == now
+            return True
+
+    monkeypatch.setattr(dqc, "MarketSchedule", lambda: _FakeSchedule())
+
+    assert dqc._is_market_open(now) is True
+
+
+def test_is_market_open_falls_back_to_naive_hours(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2024, 1, 2, 3, 0, tzinfo=timezone.utc)
+
+    class _BrokenSchedule:
+        def is_market_open(self, _timestamp: datetime) -> bool:
+            raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(dqc, "MarketSchedule", lambda: _BrokenSchedule())
+    monkeypatch.setattr(dqc, "MARKET_OPEN_HOUR", 0)
+    monkeypatch.setattr(dqc, "MARKET_CLOSE_HOUR", 24)
+
+    assert dqc._is_market_open(now) is True
+
+
 @pytest.mark.asyncio
 async def test_get_flow_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(timezone.utc)
@@ -75,8 +102,7 @@ async def test_check_flow_staleness_uses_heber(monkeypatch: pytest.MonkeyPatch) 
             return flow_df
 
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(dqc, "MARKET_OPEN_HOUR", 0)
-    monkeypatch.setattr(dqc, "MARKET_CLOSE_HOUR", 24)
+    monkeypatch.setattr(dqc, "_is_market_open", lambda _now: True)
 
     stale = await dqc.check_flow_staleness(stale_minutes=30)
     assert stale is True
@@ -162,8 +188,7 @@ async def test_check_data_staleness_prefers_heber(monkeypatch: pytest.MonkeyPatc
             return bars_df
 
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(dqc, "MARKET_OPEN_HOUR", 0)
-    monkeypatch.setattr(dqc, "MARKET_CLOSE_HOUR", 24)
+    monkeypatch.setattr(dqc, "_is_market_open", lambda _now: True)
     monkeypatch.setattr(dqc, "CRITICAL_TICKERS", ["SPY", "QQQ"])
 
     stale = await dqc.check_data_staleness(stale_minutes=15)
@@ -188,8 +213,7 @@ async def test_check_bar_gaps_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> 
             return bars_df
 
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(dqc, "MARKET_OPEN_HOUR", 0)
-    monkeypatch.setattr(dqc, "MARKET_CLOSE_HOUR", 24)
+    monkeypatch.setattr(dqc, "_is_market_open", lambda _now: True)
 
     gaps = await dqc.check_bar_gaps(ticker="SPY", gap_minutes=5)
 

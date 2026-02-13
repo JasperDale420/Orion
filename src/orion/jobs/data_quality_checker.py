@@ -23,6 +23,7 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
+from orion.core.market_schedule import MarketSchedule
 from orion.storage.db import init_db
 
 logger = logging.getLogger(__name__)
@@ -52,10 +53,7 @@ async def check_zero_valued_bars(lookback_hours: int = 24) -> List[Dict]:
 async def check_data_staleness(stale_minutes: int = 15) -> List[Dict]:
     """Check for tickers with stale data during market hours."""
     now = datetime.now(timezone.utc)
-    current_hour = now.hour
-
-    # Only check during market hours
-    if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
+    if not _is_market_open(now):
         return []
 
     if not _prefer_heber_source():
@@ -136,10 +134,8 @@ async def get_flow_summary() -> Dict:
 async def check_flow_staleness(stale_minutes: int = 30) -> bool:
     """Check if flow data is stale during market hours."""
     now = datetime.now(timezone.utc)
-    current_hour = now.hour
-
-    if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
-        return False  # Outside market hours, no alert
+    if not _is_market_open(now):
+        return False
 
     if not _prefer_heber_source():
         return False
@@ -183,9 +179,7 @@ async def get_darkpool_summary() -> Dict:
 async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
     """Check if darkpool data is stale during market hours."""
     now = datetime.now(timezone.utc)
-    current_hour = now.hour
-
-    if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
+    if not _is_market_open(now):
         return False
 
     if not _prefer_heber_source():
@@ -358,6 +352,20 @@ async def run_quality_checks():
 def _prefer_heber_source() -> bool:
     raw = os.getenv("ORION_DATA_QUALITY_CHECKER_PREFER_HEBER", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
+
+
+def _is_market_open(now: datetime) -> bool:
+    try:
+        return MarketSchedule().is_market_open(now)
+    except Exception as exc:
+        logger.warning(
+            "market_schedule_fallback",
+            extra={
+                "event_type": "MARKET_SCHEDULE_FALLBACK",
+                "error_class": exc.__class__.__name__,
+            },
+        )
+        return MARKET_OPEN_HOUR <= now.hour < MARKET_CLOSE_HOUR
 
 
 def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
