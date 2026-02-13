@@ -32,7 +32,6 @@ async def test_meta_search_flow():
     from orion.agents.meta_search_agent import MetaSearchAgent
     from orion.storage.db import Base
     from orion.storage.models_gold import CandidateTrade
-    from orion.storage.models_silver import SilverAlpacaBar
     from orion.storage.models_solvers import MetaExperiment, Solver, SolverEdits, SolverMetrics
 
     orion.agents.meta_search_agent.async_session_factory = test_session_factory
@@ -97,7 +96,7 @@ async def test_meta_search_flow():
         )
         session.add(base_solver)
 
-        # Insert Mock Eval Data (Candidate + Silver Bar)
+        # Insert Mock Eval Data (candidate only; event context is sourced from Heber adapters)
         cand = CandidateTrade(
             candidate_id="mock_c_eval",
             ticker="SPY",
@@ -107,18 +106,6 @@ async def test_meta_search_flow():
             evidence={},
         )
         session.add(cand)
-
-        bar = SilverAlpacaBar(
-            ticker="SPY",
-            bar_start_ts_utc=datetime.utcnow(),
-            open=100.0,
-            high=105.0,
-            low=95.0,
-            close=102.0,
-            volume=1000,
-            vwap=101.0,
-        )
-        session.add(bar)
 
         await session.commit()
 

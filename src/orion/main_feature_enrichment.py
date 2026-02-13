@@ -9,6 +9,7 @@ import asyncio
 import os
 import signal
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, List
 
 import pandas as pd
@@ -112,7 +113,7 @@ def _coerce_time_series(df: pd.DataFrame) -> pd.Series:
     ts_col = _first_existing_column(df, ["ts_event", "ts_utc", "bar_start_ts", "bar_start_ts_utc", "timestamp"])
     if ts_col is None:
         return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
-    return pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+    return pd.Series(pd.to_datetime(df[ts_col], utc=True, errors="coerce"), index=df.index)
 
 
 def _get_latest_market_tide_from_heber() -> float | None:
@@ -459,7 +460,7 @@ async def get_active_tickers(limit: int = 20) -> List[str]:
     return tickers
 
 
-async def get_latest_vix_data() -> dict:
+async def get_latest_vix_data() -> dict[str, Any]:
     """Get latest VIX context, preferring Heber VIXY proxy bars."""
     if _prefer_heber_context_reads():
         heber_vix = _get_latest_vix_data_from_heber()
@@ -700,7 +701,7 @@ async def main() -> None:
         shutdown_event.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
+        loop.add_signal_handler(sig, partial(handle_signal, sig))
 
     await run_feature_loop(shutdown_event)
 

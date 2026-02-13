@@ -158,7 +158,15 @@ def _pattern_miner_training_source() -> str:
     if raw_source in {"heber", "heber_gold", "gold"}:
         return "heber_gold"
     if raw_source in {"legacy", "legacy_sql", "local", "local_sql"}:
-        return "legacy_sql"
+        logger.warning(
+            "Legacy pattern-miner SQL training source is decommissioned; falling back to heber_gold",
+            extra={
+                "event": "pattern_miner_training_source_legacy_decommissioned",
+                "training_source": raw_source,
+                "fallback_training_source": "heber_gold",
+            },
+        )
+        return "heber_gold"
 
     logger.warning(
         f"Invalid pattern-miner training source '{raw_source}', falling back to heber_gold",
@@ -521,8 +529,6 @@ async def fetch_training_data(
     Returns:
         Tuple of (pandas DataFrame, list of feature names)
     """
-    import pandas as pd
-
     enabled, control_key, control_raw = _legacy_pattern_training_control()
     if not enabled:
         logger.warning(
@@ -537,67 +543,13 @@ async def fetch_training_data(
         return None, []
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-    training_source = _pattern_miner_training_source()
-
-    if training_source == "heber_gold":
-        return await _fetch_training_data_from_heber(
-            cutoff=cutoff,
-            min_samples=min_samples,
-            trade_type_filter=trade_type_filter,
-            quick_winner_seconds=quick_winner_seconds,
-        )
-
-    feature_cols = ", ".join(FEATURE_COLUMNS + CATEGORICAL_COLUMNS)
-
-    # Build target columns - include dynamic quick_winner
-    all_targets = dict(TARGETS)
-    all_targets["quick_winner"] = get_quick_winner_target(quick_winner_seconds)
-    target_cols = ", ".join([f"({sql}) as target_{name}" for name, sql in all_targets.items()])
-
-    # Build WHERE clause with optional trade_type filter
-    where_clause = "entry_ts >= :cutoff AND last_tracked_ts IS NOT NULL"
-    if trade_type_filter:
-        where_clause += f" AND {trade_type_filter}"
-
-    async def query(session: Any) -> List[Any]:
-        stmt = text(
-            f"""
-            SELECT
-                event_id,
-                entry_ts,
-                {feature_cols},
-                {target_cols}
-            FROM price_target_labels
-            WHERE {where_clause}
-            ORDER BY entry_ts ASC
-        """
-        )
-        result = await session.execute(stmt, {"cutoff": cutoff})
-        return result.fetchall()
-
-    rows = await db_query(query)
-
-    if len(rows) < min_samples:
-        logger.warning(f"Insufficient samples: {len(rows)} < {min_samples}")
-        return None, []
-
-    # Column names from query
-    columns = (
-        ["event_id", "entry_ts"]
-        + FEATURE_COLUMNS
-        + CATEGORICAL_COLUMNS
-        + [f"target_{name}" for name in all_targets.keys()]
+    _ = _pattern_miner_training_source()
+    return await _fetch_training_data_from_heber(
+        cutoff=cutoff,
+        min_samples=min_samples,
+        trade_type_filter=trade_type_filter,
+        quick_winner_seconds=quick_winner_seconds,
     )
-
-    df = pd.DataFrame(rows, columns=columns)
-
-    filter_desc = f" (filter: {trade_type_filter})" if trade_type_filter else ""
-    logger.info(
-        f"Fetched {len(df)} training samples from last {window_days} days{filter_desc}",
-        extra={"event": "ml_data_fetch", "sample_count": len(df), "window_days": window_days},
-    )
-
-    return df, FEATURE_COLUMNS + CATEGORICAL_COLUMNS
 
 
 def prepare_features(df: Any, feature_names: List[str]) -> Tuple[Any, Any]:

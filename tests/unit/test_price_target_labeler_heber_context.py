@@ -282,94 +282,39 @@ async def test_get_window_features_at_entry_returns_empty_dict_when_heber_lookup
 
 
 @pytest.mark.asyncio
-async def test_get_velocity_backfill_candidates_queries_expected_shape(
+async def test_get_velocity_backfill_candidates_is_decommissioned_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    async def _fail_db_query(_fn: Any) -> Any:
+        raise AssertionError("local db_query should not run for decommissioned velocity backfill")
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
-
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     records = await labeler.get_velocity_backfill_candidates(
         limit=12,
-        after_entry_ts=cursor_ts,
+        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
         after_event_id="vel-120",
     )
 
     assert records == []
-    assert "time_to_75_pct_seconds IS NULL" in captured["sql"]
-    assert "time_to_100_pct_seconds IS NULL" in captured["sql"]
-    assert "time_to_150_pct_seconds IS NULL" in captured["sql"]
-    assert "entry_ts > :after_entry_ts" in captured["sql"]
-    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
-    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
-    assert captured["params"]["limit"] == 12
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert captured["params"]["after_event_id"] == "vel-120"
 
 
 @pytest.mark.asyncio
-async def test_get_checkpoint_backfill_candidates_queries_expected_shape(
+async def test_get_checkpoint_backfill_candidates_is_decommissioned_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    async def _fail_db_query(_fn: Any) -> Any:
+        raise AssertionError("local db_query should not run for decommissioned checkpoint backfill")
 
-    class _FakeResult:
-        def fetchall(self) -> list[Any]:
-            return []
-
-    class _FakeSession:
-        async def execute(self, stmt: Any, params: dict[str, Any]) -> _FakeResult:
-            captured["sql"] = str(stmt)
-            captured["params"] = params
-            return _FakeResult()
-
-    async def _fake_db_query(fn):
-        return await fn(_FakeSession())
-
-    monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
+    monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
     records = await labeler.get_checkpoint_backfill_candidates(
         limit=20,
-        after_entry_ts=cursor_ts,
+        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
         after_event_id="cp-120",
     )
 
     assert records == []
-    assert "price_at_15m IS NULL" in captured["sql"]
-    assert "return_at_15m IS NULL" in captured["sql"]
-    assert "price_at_30m IS NULL" in captured["sql"]
-    assert "return_at_30m IS NULL" in captured["sql"]
-    assert "price_at_8h IS NULL" in captured["sql"]
-    assert "return_at_8h IS NULL" in captured["sql"]
-    assert "price_at_1d IS NULL" in captured["sql"]
-    assert "return_at_1d IS NULL" in captured["sql"]
-    assert "price_at_2d IS NULL" in captured["sql"]
-    assert "return_at_2d IS NULL" in captured["sql"]
-    assert "price_at_3d IS NULL" in captured["sql"]
-    assert "return_at_3d IS NULL" in captured["sql"]
-    assert "price_at_1w IS NULL" in captured["sql"]
-    assert "return_at_1w IS NULL" in captured["sql"]
-    assert "entry_ts > :after_entry_ts" in captured["sql"]
-    assert "entry_ts = :after_entry_ts AND event_id > :after_event_id" in captured["sql"]
-    assert "ORDER BY entry_ts ASC, event_id ASC" in captured["sql"]
-    assert captured["params"]["limit"] == 20
-    assert captured["params"]["after_entry_ts"] == cursor_ts
-    assert captured["params"]["after_event_id"] == "cp-120"
 
 
 @pytest.mark.asyncio

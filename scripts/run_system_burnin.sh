@@ -46,12 +46,19 @@ hard_error_patterns=(
 redundant_poll_pattern="HTTP Request: GET https://api\\.unusualwhales\\.com"
 hard_error_count=0
 
+count_matches() {
+  local pattern="$1"
+  local target_file="$2"
+  # rg returns exit code 1 when no lines match; treat that as a zero count.
+  (rg -n "$pattern" "$target_file" || true) | wc -l | tr -d ' '
+}
+
 for pattern in "${hard_error_patterns[@]}"; do
-  count=$(rg -n "$pattern" "$OUTPUT_DIR/compose.log" | wc -l | tr -d ' ')
+  count=$(count_matches "$pattern" "$OUTPUT_DIR/compose.log")
   hard_error_count=$((hard_error_count + count))
 done
 
-redundant_poll_count=$(rg -n "$redundant_poll_pattern" "$OUTPUT_DIR/feature_enrichment.log" | wc -l | tr -d ' ')
+redundant_poll_count=$(count_matches "$redundant_poll_pattern" "$OUTPUT_DIR/feature_enrichment.log")
 
 echo ""
 echo "Burn-in summary"

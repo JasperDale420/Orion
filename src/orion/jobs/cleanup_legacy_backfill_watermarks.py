@@ -15,8 +15,6 @@ from orion.storage.watermarks import delete_watermarks
 logger = setup_struct_logger("orion.cleanup.legacy_backfill_watermarks")
 
 LEGACY_BACKFILL_WATERMARK_KEYS: tuple[str, ...] = (
-    "backfill_ml_features.price_target_labels",
-    "backfill_ml_features.price_target_labels.cursor",
     "backfill_exit_columns.velocity",
     "backfill_exit_columns.velocity.cursor",
     "backfill_exit_columns.checkpoint",

@@ -1,7 +1,9 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,7 @@ from starlette.responses import JSONResponse, Response
 from orion.api.auth import require_api_key
 from orion.api.deps import get_db
 from orion.api.schemas import ExperimentResponse, PromotionRecommendationResponse, SolverMetricsResponse, SolverResponse
+from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
 from orion.rag.vector_store import VectorStore
 from orion.shared.db_utils import db_write
@@ -21,7 +24,6 @@ from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
 from orion.storage.models_audit import AuditLog
 from orion.storage.models_gold import CandidateTrade, GoldTickerRollup
-from orion.storage.models_silver import SilverOptionFlow
 from orion.storage.models_solvers import MetaExperiment, PromotionRecommendation, Solver, SolverMetrics
 
 logger = setup_struct_logger("orion.api")
@@ -371,6 +373,72 @@ def _dt_iso(dt: datetime | None) -> str | None:
     return dt.isoformat()
 
 
+def _first_existing_column(frame: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    for column in candidates:
+        if column in frame.columns:
+            return column
+    return None
+
+
+def _normalize_flow_ticker(value: Any) -> str | None:
+    if value is None:
+        return None
+    ticker = str(value).strip().upper()
+    if not ticker:
+        return None
+    if ":" in ticker:
+        ticker = ticker.split(":")[-1]
+    return ticker or None
+
+
+def _normalize_put_call(value: Any) -> str | None:
+    if value is None:
+        return None
+    token = str(value).strip().upper()
+    if token in {"C", "CALL"}:
+        return "C"
+    if token in {"P", "PUT"}:
+        return "P"
+    return token or None
+
+
+def _coerce_flow_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    token = str(value).strip().lower()
+    if token in {"1", "true", "t", "yes", "y"}:
+        return True
+    if token in {"0", "false", "f", "no", "n"}:
+        return False
+    return None
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric):
+        return None
+    return float(numeric)
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric):
+        return None
+    return int(numeric)
+
+
+def _normalize_json_field(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list, str, int, float, bool)):
+        return value
+    return str(value)
+
+
 @app.get("/events/{event_id}")
 async def get_event(
     event_id: str,
@@ -517,7 +585,6 @@ async def get_flows(
     start: Optional[str] = Query(None, description="ISO-8601 start (inclusive)"),
     end: Optional[str] = Query(None, description="ISO-8601 end (exclusive)"),
     limit: int = Query(200, ge=1, le=5000),
-    db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
 ) -> List[Dict[str, Any]]:
     from orion.shared.utils import parse_timestamptz
@@ -525,69 +592,130 @@ async def get_flows(
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
-    # Optimization: Use Core-style selection to avoid full ORM object overhead
-    stmt = (
-        select(
-            SilverOptionFlow.event_id,
-            SilverOptionFlow.source_event_id,
-            SilverOptionFlow.ticker,
-            SilverOptionFlow.flow_ts_utc,
-            SilverOptionFlow.put_call,
-            SilverOptionFlow.expiry,
-            SilverOptionFlow.strike,
-            SilverOptionFlow.option_price,
-            SilverOptionFlow.size_contracts,
-            SilverOptionFlow.premium_usd,
-            SilverOptionFlow.bid,
-            SilverOptionFlow.ask,
-            SilverOptionFlow.underlying_price,
-            SilverOptionFlow.aggressor,
-            SilverOptionFlow.is_sweep,
-            SilverOptionFlow.flags_json,
-            SilverOptionFlow.volume_contract,
-            SilverOptionFlow.open_interest,
-            SilverOptionFlow.ingest,
-            SilverOptionFlow.created_at_utc,
+    reader = get_heber_reader()
+    asof_time = datetime.now(timezone.utc)
+    symbols = [ticker] if ticker else None
+    try:
+        frame = await asyncio.to_thread(
+            reader.read_flow,
+            symbols=symbols,
+            asof_time=asof_time,
+            start_time=start_dt,
+            min_premium=float(min_premium_usd) if min_premium_usd is not None else None,
         )
-        .order_by(desc(SilverOptionFlow.flow_ts_utc))
-        .limit(limit)
-    )
-    if ticker:
-        stmt = stmt.where(SilverOptionFlow.ticker == ticker)
-    if start_dt is not None:
-        stmt = stmt.where(SilverOptionFlow.flow_ts_utc >= start_dt)
-    if end_dt is not None:
-        stmt = stmt.where(SilverOptionFlow.flow_ts_utc < end_dt)
-    if min_premium_usd is not None:
-        stmt = stmt.where(SilverOptionFlow.premium_usd >= float(min_premium_usd))
+    except Exception as exc:
+        logger.warning(
+            "Heber flow read failed",
+            extra={
+                "event_type": "FLOW_READ_FAILED",
+                "ticker": ticker,
+                "start": start,
+                "end": end,
+                "error": str(exc),
+            },
+        )
+        return []
 
-    res = await db.execute(stmt)
-    rows = res.all()
-    return [
-        {
-            "event_id": r.event_id,
-            "source_event_id": r.source_event_id,
-            "ticker": r.ticker,
-            "flow_ts_utc": _dt_iso(r.flow_ts_utc),
-            "put_call": r.put_call,
-            "expiry": r.expiry,
-            "strike": r.strike,
-            "option_price": r.option_price,
-            "size_contracts": r.size_contracts,
-            "premium_usd": r.premium_usd,
-            "bid": r.bid,
-            "ask": r.ask,
-            "underlying_price": r.underlying_price,
-            "aggressor": r.aggressor,
-            "is_sweep": r.is_sweep,
-            "flags_json": r.flags_json,
-            "volume_contract": r.volume_contract,
-            "open_interest": r.open_interest,
-            "ingest": r.ingest,
-            "created_at_utc": _dt_iso(r.created_at_utc),
-        }
-        for r in rows
-    ]
+    if frame.empty:
+        return []
+
+    ticker_col = _first_existing_column(frame, ("ticker", "symbol", "instrument_key", "underlying"))
+    ts_col = _first_existing_column(frame, ("flow_ts_utc", "ts_event", "timestamp", "ts_utc"))
+    premium_col = _first_existing_column(frame, ("premium_usd", "premium"))
+    if ticker_col is None or ts_col is None or premium_col is None:
+        return []
+
+    work = frame.copy()
+    work["_event_ts"] = pd.to_datetime(work[ts_col], utc=True, errors="coerce")
+    work = work.dropna(subset=["_event_ts"])
+    if work.empty:
+        return []
+
+    if ticker:
+        requested = ticker.upper().strip()
+        work = work[work[ticker_col].map(_normalize_flow_ticker) == requested]
+    if work.empty:
+        return []
+
+    if end_dt is not None:
+        end_ts = pd.Timestamp(end_dt)
+        if end_ts.tzinfo is None:
+            end_ts = end_ts.tz_localize("UTC")
+        else:
+            end_ts = end_ts.tz_convert("UTC")
+        work = work[work["_event_ts"] < end_ts]
+    if work.empty:
+        return []
+
+    if min_premium_usd is not None:
+        premium_series = pd.to_numeric(work[premium_col], errors="coerce")
+        work = work[premium_series >= float(min_premium_usd)]
+    if work.empty:
+        return []
+
+    event_id_col = _first_existing_column(work, ("event_id", "id"))
+    source_event_id_col = _first_existing_column(work, ("source_event_id", "source_id"))
+    put_call_col = _first_existing_column(work, ("put_call", "call_put"))
+    expiry_col = _first_existing_column(work, ("expiry", "expiration"))
+    strike_col = _first_existing_column(work, ("strike",))
+    option_price_col = _first_existing_column(work, ("option_price", "price"))
+    size_contracts_col = _first_existing_column(work, ("size_contracts", "size", "contracts"))
+    bid_col = _first_existing_column(work, ("bid", "bid_price"))
+    ask_col = _first_existing_column(work, ("ask", "ask_price"))
+    underlying_col = _first_existing_column(work, ("underlying_price", "underlying"))
+    aggressor_col = _first_existing_column(work, ("aggressor", "side", "aggressor_ind"))
+    is_sweep_col = _first_existing_column(work, ("is_sweep", "sweep"))
+    flags_col = _first_existing_column(work, ("flags_json", "flags"))
+    volume_contract_col = _first_existing_column(work, ("volume_contract", "volume"))
+    open_interest_col = _first_existing_column(work, ("open_interest", "oi"))
+    ingest_col = _first_existing_column(work, ("ingest",))
+    created_col = _first_existing_column(work, ("created_at_utc", "created_at", "ts_available"))
+
+    work = work.sort_values("_event_ts", ascending=False).head(limit)
+    rows: list[dict[str, Any]] = []
+    for idx, row in work.iterrows():
+        event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
+        source_event_id = (
+            str(row.get(source_event_id_col)).strip() if source_event_id_col and row.get(source_event_id_col) else None
+        )
+        normalized_ticker = _normalize_flow_ticker(row.get(ticker_col))
+        if normalized_ticker is None:
+            continue
+        created_at = (
+            pd.to_datetime(row.get(created_col), utc=True, errors="coerce") if created_col else pd.NaT  # type: ignore[arg-type]
+        )
+        created_at_utc = created_at.to_pydatetime() if not pd.isna(created_at) else None
+
+        rows.append(
+            {
+                "event_id": event_id,
+                "source_event_id": source_event_id,
+                "ticker": normalized_ticker,
+                "flow_ts_utc": _dt_iso(row["_event_ts"].to_pydatetime()),
+                "put_call": _normalize_put_call(row.get(put_call_col)) if put_call_col else None,
+                "expiry": str(row.get(expiry_col)) if expiry_col and row.get(expiry_col) is not None else None,
+                "strike": _coerce_optional_float(row.get(strike_col)) if strike_col else None,
+                "option_price": _coerce_optional_float(row.get(option_price_col)) if option_price_col else None,
+                "size_contracts": _coerce_optional_int(row.get(size_contracts_col)) if size_contracts_col else None,
+                "premium_usd": _coerce_optional_float(row.get(premium_col)),
+                "bid": _coerce_optional_float(row.get(bid_col)) if bid_col else None,
+                "ask": _coerce_optional_float(row.get(ask_col)) if ask_col else None,
+                "underlying_price": _coerce_optional_float(row.get(underlying_col)) if underlying_col else None,
+                "aggressor": str(row.get(aggressor_col)).strip().upper()
+                if aggressor_col and row.get(aggressor_col) is not None
+                else None,
+                "is_sweep": _coerce_flow_bool(row.get(is_sweep_col)) if is_sweep_col else None,
+                "flags_json": _normalize_json_field(row.get(flags_col)) if flags_col else None,
+                "volume_contract": _coerce_optional_float(row.get(volume_contract_col))
+                if volume_contract_col
+                else None,
+                "open_interest": _coerce_optional_float(row.get(open_interest_col)) if open_interest_col else None,
+                "ingest": _normalize_json_field(row.get(ingest_col)) if ingest_col else None,
+                "created_at_utc": _dt_iso(created_at_utc),
+            }
+        )
+
+    return rows
 
 
 # --- Dashboard ---

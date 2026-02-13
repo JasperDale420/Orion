@@ -41,20 +41,25 @@ async def test_fetch_recent_flow_for_ticker_prefers_heber(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_fetch_recent_flow_for_ticker_falls_back_to_sql(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_recent_flow_for_ticker_returns_empty_when_heber_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_reader = MagicMock()
     fake_reader.read_flow.side_effect = RuntimeError("heber unavailable")
-    db_rows = [SimpleNamespace(ticker="AAPL", premium_usd=50000.0)]
-    mock_db_query = AsyncMock(return_value=db_rows)
+    db_calls = {"count": 0}
+
+    async def _db_query(_operation):
+        db_calls["count"] += 1
+        return []
 
     monkeypatch.delenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", raising=False)
     monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
-    monkeypatch.setattr(main_execution, "db_query", mock_db_query)
+    monkeypatch.setattr(main_execution, "db_query", _db_query)
 
     rows = await main_execution.fetch_recent_flow_for_ticker("AAPL", minutes=30)
 
-    assert rows == db_rows
-    assert mock_db_query.await_count == 1
+    assert rows == []
+    assert db_calls["count"] == 0
 
 
 def test_prefer_heber_recent_flow_source_env_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,17 +97,21 @@ async def test_fetch_recent_flow_from_heber_returns_empty_on_missing_columns(
 @pytest.mark.asyncio
 async def test_fetch_recent_flow_for_ticker_skips_heber_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_reader = MagicMock()
-    db_rows = [SimpleNamespace(ticker="AAPL", premium_usd=42000.0)]
-    mock_db_query = AsyncMock(return_value=db_rows)
+    db_calls = {"count": 0}
+
+    async def _db_query(_operation):
+        db_calls["count"] += 1
+        return []
 
     monkeypatch.setenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "false")
     monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
-    monkeypatch.setattr(main_execution, "db_query", mock_db_query)
+    monkeypatch.setattr(main_execution, "db_query", _db_query)
 
     rows = await main_execution.fetch_recent_flow_for_ticker("AAPL", minutes=30)
 
-    assert rows == db_rows
+    assert rows == []
     assert fake_reader.read_flow.call_count == 0
+    assert db_calls["count"] == 0
 
 
 @pytest.mark.asyncio

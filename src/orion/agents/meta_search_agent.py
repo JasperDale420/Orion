@@ -28,7 +28,6 @@ from orion.storage.models_solvers import (
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY  # legacy patch target
 
 # Refinement loop configuration
@@ -1087,10 +1086,6 @@ class MetaSearchAgent:
 
         return solver_run, metrics
 
-    def _prefer_heber_event_source(self) -> bool:
-        raw = os.getenv("ORION_META_SEARCH_PREFER_HEBER_EVENTS", "1").strip().lower()
-        return raw not in _PREFER_HEBER_FALSE_VALUES
-
     @staticmethod
     def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
         for name in names:
@@ -1357,140 +1352,11 @@ class MetaSearchAgent:
         except Exception:
             return
 
-    async def _fetch_events_from_local_sql(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
-        bars = await self._fetch_local_bars(task)
-        flows = await self._fetch_local_flows(task)
-        alpaca_events, price_data = self._map_local_bar_events(bars)
-        flow_events = self._map_local_flow_events(flows)
-        return alpaca_events, flow_events, price_data
-
-    async def _fetch_local_bars(self, task: EvaluationTask) -> List[Any]:
-        from orion.storage.models_silver import SilverAlpacaBar
-        from sqlalchemy import and_, select
-
-        async def fetch(session: Any) -> List[Any]:
-            stmt = (
-                select(SilverAlpacaBar)
-                .where(
-                    and_(
-                        SilverAlpacaBar.bar_start_ts_utc >= task.start_time_utc,
-                        SilverAlpacaBar.bar_start_ts_utc <= task.end_time_utc,
-                    )
-                )
-                .order_by(SilverAlpacaBar.bar_start_ts_utc.asc())
-            )
-            if task.ticker_filter:
-                stmt = stmt.where(SilverAlpacaBar.ticker.in_(task.ticker_filter))
-            result = await session.execute(stmt)
-            return result.scalars().all()
-
-        return await db_query(fetch)
-
-    async def _fetch_local_flows(self, task: EvaluationTask) -> List[Any]:
-        from orion.storage.models_silver import SilverOptionFlow
-        from sqlalchemy import and_, select
-
-        async def fetch(session: Any) -> List[Any]:
-            stmt = select(SilverOptionFlow).where(
-                and_(
-                    SilverOptionFlow.flow_ts_utc >= task.start_time_utc,
-                    SilverOptionFlow.flow_ts_utc <= task.end_time_utc,
-                    SilverOptionFlow.premium_usd >= 1000,
-                )
-            )
-            if task.ticker_filter:
-                stmt = stmt.where(SilverOptionFlow.ticker.in_(task.ticker_filter))
-            result = await session.execute(stmt)
-            return result.scalars().all()
-
-        return await db_query(fetch)
-
-    def _map_local_bar_events(self, bars: List[Any]) -> tuple[List[Any], Dict[str, Any]]:
-        from orion.storage.models import BronzeEvent
-
-        alpaca_events: List[Any] = []
-        data_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
-        for bar in bars:
-            payload = {
-                "symbol": bar.ticker,
-                "o": bar.open,
-                "h": bar.high,
-                "l": bar.low,
-                "c": bar.close,
-                "v": bar.volume,
-                "vw": bar.vwap,
-                "t": bar.bar_start_ts_utc,
-                # SilverAlpacaBar does not persist trade count in current schema.
-                "n": getattr(bar, "trade_count", None),
-            }
-            alpaca_events.append(
-                BronzeEvent(
-                    event_id=f"meta_bar_{bar.ticker}_{int(bar.bar_start_ts_utc.timestamp())}",
-                    event_type="ALPACA_BAR_1M",
-                    source="BACKTEST",
-                    event_ts_utc=bar.bar_start_ts_utc,
-                    payload=payload,
-                    ticker=bar.ticker,
-                )
-            )
-            data_by_ticker.setdefault(bar.ticker, []).append(
-                {
-                    "timestamp": bar.bar_start_ts_utc,
-                    "open": bar.open,
-                    "high": bar.high,
-                    "low": bar.low,
-                    "close": bar.close,
-                    "volume": bar.volume,
-                }
-            )
-        return alpaca_events, self._price_data_from_rows(data_by_ticker)
-
-    def _map_local_flow_events(self, flows: List[Any]) -> List[Any]:
-        from orion.storage.models import BronzeEvent
-
-        events: List[Any] = []
-        for flow in flows:
-            payload = {
-                "ticker": flow.ticker,
-                "premium": flow.premium_usd,
-                "put_call": flow.put_call,
-                "is_sweep": flow.is_sweep,
-                "aggressor_ind": flow.aggressor,
-                "underlying_price": flow.underlying_price,
-            }
-            self._maybe_add_local_flow_dte(payload, flow.expiry, flow.flow_ts_utc)
-            events.append(
-                BronzeEvent(
-                    event_id=flow.event_id,
-                    event_type="UW_FLOW",
-                    source="BACKTEST",
-                    event_ts_utc=flow.flow_ts_utc,
-                    payload=payload,
-                    ticker=flow.ticker,
-                )
-            )
-        return events
-
-    def _maybe_add_local_flow_dte(self, payload: Dict[str, Any], expiry: Any, flow_ts_utc: Any) -> None:
-        if not expiry:
-            return
-        try:
-            exp_date = expiry
-            if isinstance(exp_date, str):
-                exp_date = datetime.strptime(exp_date, "%Y-%m-%d").date()
-            payload["dte"] = (exp_date - flow_ts_utc.date()).days
-        except Exception:
-            return
-
     async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
-        if self._prefer_heber_event_source():
-            heber_data = await self._fetch_events_from_heber(task)
-            if heber_data is not None:
-                alpaca_events, flow_events, _price_data = heber_data
-                if alpaca_events or flow_events:
-                    return heber_data
-
-        return await self._fetch_events_from_local_sql(task)
+        heber_data = await self._fetch_events_from_heber(task)
+        if heber_data is None:
+            return [], [], {}
+        return heber_data
 
     async def scan_for_promotions(self) -> None:
         from orion.core.promotion_rules import STAGE_ORDER, evaluate_stage_transition

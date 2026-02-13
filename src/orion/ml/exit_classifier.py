@@ -13,7 +13,6 @@ Buckets and their time horizons:
 
 import asyncio
 import pickle
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isnan
@@ -25,16 +24,11 @@ from sklearn.model_selection import train_test_split
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import SystemSettings, system_settings
-from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.exit_classifier")
 
 MODEL_DIR = system_settings.model_dir
-SCHEMA_CACHE_TTL_SECONDS = 60.0
-
-_schema_cache_columns: Optional[set[str]] = None
-_schema_cache_loaded_at: float = 0.0
 
 EXIT_FEATURE_NAMES: tuple[str, ...] = (
     "current_return_pct",
@@ -97,7 +91,15 @@ def _exit_classifier_training_source() -> str:
     if raw_source in {"heber", "heber_gold", "gold"}:
         return "heber_gold"
     if raw_source in {"legacy", "legacy_sql", "local", "local_sql"}:
-        return "legacy_sql"
+        logger.warning(
+            "Legacy exit-classifier SQL training source is decommissioned; falling back to heber_gold",
+            extra={
+                "event": "exit_classifier_training_source_legacy_decommissioned",
+                "training_source": raw_source,
+                "fallback_training_source": "heber_gold",
+            },
+        )
+        return "heber_gold"
 
     logger.warning(
         f"Invalid exit-classifier training source '{raw_source}', falling back to heber_gold",
@@ -156,10 +158,8 @@ def _empty_training_arrays(feature_count: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _clear_price_target_label_schema_cache() -> None:
-    """Reset schema metadata cache (test/support helper)."""
-    global _schema_cache_columns, _schema_cache_loaded_at
-    _schema_cache_columns = None
-    _schema_cache_loaded_at = 0.0
+    """Compatibility no-op: legacy local schema cache is decommissioned."""
+    return None
 
 
 def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float, str]]) -> set[str]:
@@ -198,38 +198,9 @@ def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float
 
 
 async def _load_price_target_label_columns(force_refresh: bool = False) -> set[str]:
-    """Return currently available columns in the legacy local label table."""
-    global _schema_cache_columns, _schema_cache_loaded_at
-
-    now = time.monotonic()
-    if (
-        not force_refresh
-        and _schema_cache_columns is not None
-        and (now - _schema_cache_loaded_at) < SCHEMA_CACHE_TTL_SECONDS
-    ):
-        return set(_schema_cache_columns)
-
-    async def query(session: Any) -> list[str]:
-        from sqlalchemy import text
-
-        stmt = text(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_name = 'price_target_labels'
-        """
-        )
-        result = await session.execute(stmt)
-        rows = result.fetchall()
-        return [str(row[0]) for row in rows]
-
-    try:
-        columns = await db_query(query)
-    except Exception:
-        return set()
-    _schema_cache_columns = set(columns or [])
-    _schema_cache_loaded_at = now
-    return set(_schema_cache_columns)
+    """Compatibility no-op: local label-table schema preflight is decommissioned."""
+    _ = force_refresh
+    return set()
 
 
 def _group_missing_columns_by_family(
@@ -929,212 +900,9 @@ async def build_bucket_training_data(
         X_empty, y_empty = _empty_training_arrays(len(feature_names))
         return X_empty, y_empty, feature_names
 
-    training_source = _exit_classifier_training_source()
-    if training_source == "heber_gold":
-        return await _build_bucket_training_data_from_heber(bucket, feature_names)
-
-    required_columns = _required_price_target_columns_for_bucket(checkpoints)
-    if force_schema_refresh:
-        available_columns = await _load_price_target_label_columns(force_refresh=True)
-    else:
-        available_columns = await _load_price_target_label_columns()
-    if available_columns:
-        missing_columns = sorted(required_columns - available_columns)
-        if missing_columns:
-            missing_by_family = _group_missing_columns_by_family(set(missing_columns), checkpoints)
-            logger.warning(
-                "Skipping exit training due to missing legacy label-table columns",
-                extra={
-                    "event": "exit_training_schema_missing_columns",
-                    "bucket": bucket,
-                    "missing_columns": missing_columns,
-                    "missing_count": len(missing_columns),
-                    "missing_by_family": missing_by_family,
-                    "missing_by_family_counts": _group_count_map(missing_by_family),
-                },
-            )
-            X_empty, y_empty = _empty_training_arrays(len(feature_names))
-            return X_empty, y_empty, feature_names
-
-    window_feature_selects = _window_feature_select_expressions(available_columns)
-
-    # Build column list for query - include returns, Greeks, IV, and time value at each checkpoint
-    return_cols = ", ".join([f"return_at_{cp[0]}" for cp in checkpoints])
-    delta_cols = ", ".join([f"delta_at_{cp[0]}" for cp in checkpoints])
-    gamma_cols = ", ".join([f"gamma_at_{cp[0]}" for cp in checkpoints])
-    theta_cols = ", ".join([f"theta_at_{cp[0]}" for cp in checkpoints])
-    iv_cols = ", ".join([f"iv_at_{cp[0]}" for cp in checkpoints])
-    dte_cols = ", ".join([f"dte_at_{cp[0]}" for cp in checkpoints])
-    time_value_cols = ", ".join([f"time_value_pct_at_{cp[0]}" for cp in checkpoints])
-    theta_decay_cols = ", ".join([f"theta_decay_pct_at_{cp[0]}" for cp in checkpoints])
-
-    # Determine trade_type filter
-    trade_type_map = {
-        "0DTE": "0DTE",
-        "SHORT_SWING": "SHORT_SWING",
-        "SWING": "SWING",
-        "POSITION": "POSITION",
-    }
-    trade_type = trade_type_map.get(bucket, bucket)
-
-    query = f"""
-        SELECT
-            -- Identifier for window feature lookup
-            p.ticker,
-            p.entry_ts,
-
-            -- Entry context
-            COALESCE(p.premium_usd, 0) as premium_usd,
-            COALESCE(p.dte, 0) as dte,
-            COALESCE(p.is_sweep, false) as is_sweep,
-            COALESCE(p.iv_rank_at_entry, 50) as iv_rank_at_entry,
-            COALESCE(p.vix_at_entry, 20) as vix_at_entry,
-            p.trend_regime_at_entry, p.vol_regime_at_entry,
-            COALESCE(p.gex_at_entry, 0) as gex_at_entry,
-            COALESCE(p.market_tide_30m, 0) as market_tide_30m,
-            COALESCE(p.delta_at_entry, 0) as delta_at_entry,
-            COALESCE(p.gamma_at_entry, 0) as gamma_at_entry,
-            COALESCE(p.theta_at_entry, 0) as theta_at_entry,
-            COALESCE(p.iv_at_entry, 0) as iv_at_entry,
-            COALESCE(p.ask_side_ratio, 0) as ask_side_ratio,
-
-            -- Returns at bucket-specific checkpoints
-            {return_cols},
-
-            -- Greeks at checkpoints (for exit timing)
-            {delta_cols},
-            {gamma_cols},
-            {theta_cols},
-            {iv_cols},
-            {dte_cols},
-            {time_value_cols},
-            {theta_decay_cols},
-
-            -- Outcome
-            p.max_return_pct, p.max_drawdown_pct,
-
-            -- Window/context features (direct columns when available; 0.0 fallback)
-            {window_feature_selects}
-
-        FROM price_target_labels p
-        WHERE p.trade_type = :trade_type
-        AND p.max_return_pct IS NOT NULL
-    """
-
-    async def run_query(session: Any) -> List[Any]:
-        from sqlalchemy import text
-
-        result = await session.execute(text(query), {"trade_type": trade_type})
-        return result.mappings().all()
-
-    try:
-        rows = await db_query(run_query)
-    except Exception as e:
-        logger.warning(
-            f"Failed to build exit training query for bucket {bucket}: {e}",
-            extra={"event": "exit_training_query_failed", "bucket": bucket},
-        )
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
-        return X_empty, y_empty, feature_names
-
-    if not rows:
-        logger.warning(f"No training data for bucket {bucket}")
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
-        return X_empty, y_empty, feature_names
-
-    X_list = []
-    y_list = []
-
-    for row in rows:
-        max_return = _safe_float(row.get("max_return_pct"))
-        if max_return <= 0:
-            continue  # Skip losing trades for exit timing
-
-        threshold = max_return * GOOD_EXIT_THRESHOLD
-
-        # Create sample for each checkpoint
-        for col_suffix, hours, _desc in checkpoints:
-            col_name = f"return_at_{col_suffix}"
-            checkpoint_return = _safe_float(row.get(col_name), default=float("nan"))
-            if isnan(checkpoint_return):
-                continue
-
-            # Get checkpoint-specific Greeks (safely)
-            delta = _safe_float(row.get(f"delta_at_{col_suffix}"))
-            gamma = _safe_float(row.get(f"gamma_at_{col_suffix}"))
-            theta = _safe_float(row.get(f"theta_at_{col_suffix}"))
-            iv = _safe_float(row.get(f"iv_at_{col_suffix}"))
-            dte_cp = _safe_float(row.get(f"dte_at_{col_suffix}"))
-            time_value_pct = _safe_float(row.get(f"time_value_pct_at_{col_suffix}"))
-            theta_decay_pct = _safe_float(row.get(f"theta_decay_pct_at_{col_suffix}"))
-
-            # Features
-            features = [
-                checkpoint_return,  # current return at checkpoint
-                hours,  # time held
-                # Greeks at checkpoint
-                delta,
-                gamma,
-                theta,
-                iv,
-                dte_cp,
-                # Time value
-                time_value_pct,
-                theta_decay_pct,
-                _safe_float(row.get("premium_usd")),
-                int(_safe_float(row.get("dte"))),
-                1.0 if _is_truthy(row.get("is_sweep")) else 0.0,
-                _safe_float(row.get("iv_rank_at_entry"), default=50),
-                _safe_float(row.get("vix_at_entry"), default=20),
-                _safe_float(row.get("gex_at_entry")),
-                _safe_float(row.get("market_tide_30m")),
-                _safe_float(row.get("delta_at_entry")),
-                _safe_float(row.get("theta_at_entry")),
-                _safe_float(row.get("iv_at_entry")),
-                _safe_float(row.get("ask_side_ratio")),
-                # Window features (multi-timeframe flow context)
-                _safe_float(row.get("window_call_put_imbalance_1h")),
-                _safe_float(row.get("window_sweep_ratio_1h")),
-                _safe_float(row.get("window_flow_count_1h")),
-                _safe_float(row.get("window_call_put_imbalance_1d")),
-                _safe_float(row.get("window_sweep_ratio_1d")),
-                _safe_float(row.get("window_dp_volume_1d")),
-                _safe_float(row.get("window_call_put_ratio_1d")),
-                _safe_float(row.get("window_call_put_imbalance_1w")),
-                _safe_float(row.get("window_sweep_ratio_1w")),
-                _safe_float(row.get("window_call_put_ratio_1w")),
-            ]
-
-            if len(features) != len(feature_names):
-                logger.warning(
-                    "Skipping malformed exit training sample due to feature-size mismatch",
-                    extra={
-                        "event": "exit_training_sample_skipped",
-                        "bucket": bucket,
-                        "expected_feature_count": len(feature_names),
-                        "actual_feature_count": len(features),
-                        "checkpoint": col_suffix,
-                    },
-                )
-                continue
-
-            # Target: was this a good exit point?
-            # Good exit = captured >= 80% of max return
-            target = 1 if checkpoint_return >= threshold else 0
-
-            X_list.append(features)
-            y_list.append(target)
-
-    logger.info(
-        f"Built training data for {bucket}: {len(X_list)} samples",
-        extra={"event": "exit_training_data", "bucket": bucket, "samples": len(X_list)},
-    )
-
-    if not X_list:
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
-        return X_empty, y_empty, feature_names
-
-    return np.array(X_list, dtype=float), np.array(y_list, dtype=int), feature_names
+    _ = force_schema_refresh
+    _ = _exit_classifier_training_source()
+    return await _build_bucket_training_data_from_heber(bucket, feature_names)
 
 
 async def train_bucket_exit_classifier(

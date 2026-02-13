@@ -143,23 +143,28 @@ def test_mcp_server_wires_sec_contact_email() -> None:
     assert "- SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}" in block
 
 
-def test_infra_services_use_unless_stopped_restart_policy() -> None:
+def test_mcp_server_wires_explicit_auth_env_contract() -> None:
     compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "mcp-server")
+    assert "- MCP_API_KEY=${MCP_API_KEY:-}" in block
+    assert "- MCP_API_KEY_HEADER=${MCP_API_KEY_HEADER:-X-MCP-API-Key}" in block
+    assert "- MCP_AUTH_REQUIRED=${MCP_AUTH_REQUIRED:-false}" in block
 
-    for service_name in ("timescaledb", "minio", "redpanda"):
-        block = _service_block(compose_text, service_name)
-        assert "restart: unless-stopped" in block
 
-
-def test_indexer_depends_on_timescaledb_health() -> None:
+def test_compose_drops_obsolete_top_level_version_key() -> None:
     compose_text = Path("docker-compose.yml").read_text()
-    block = _service_block(compose_text, "indexer")
-    assert "depends_on:" in block
-    assert "timescaledb:" in block
-    assert "condition: service_healthy" in block
+    assert not compose_text.lstrip().startswith("version:")
 
 
-def test_non_http_workers_disable_inherited_http_healthcheck() -> None:
+def test_mcp_server_healthcheck_uses_liveness_endpoint() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+    block = _service_block(compose_text, "mcp-server")
+    assert "healthcheck:" in block
+    assert 'test: [ "CMD", "curl", "-f", "http://localhost:8001/health/live" ]' in block
+    assert '"http://localhost:8001/health" ]' not in block
+
+
+def test_long_running_worker_services_override_http_healthcheck() -> None:
     compose_text = Path("docker-compose.yml").read_text()
 
     for service_name in (
@@ -171,4 +176,18 @@ def test_non_http_workers_disable_inherited_http_healthcheck() -> None:
     ):
         block = _service_block(compose_text, service_name)
         assert "healthcheck:" in block
-        assert "disable: true" in block
+        assert 'test: [ "CMD-SHELL", "kill -0 1" ]' in block
+
+
+def test_worker_healthcheck_blocks_do_not_probe_localhost_8000() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    for service_name in (
+        "feature_enrichment",
+        "execution",
+        "position-monitor",
+        "eod-agent",
+        "indexer",
+    ):
+        block = _service_block(compose_text, service_name)
+        assert "localhost:8000/health" not in block

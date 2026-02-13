@@ -1,9 +1,11 @@
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import joblib
 import pandas as pd
 import pytest
+from orion.config import system_settings
 from orion.core.model_registry import ModelRegistry
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_schema import SolverConfig
@@ -104,33 +106,47 @@ async def test_solver_pipeline_volatility_penalty():
 
 
 @pytest.mark.asyncio
-async def test_feature_engine_hydration():
-    """Verify hydration logic calls DB."""
-    # Mocking async session
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
+async def test_feature_engine_hydration_prefers_heber(monkeypatch: pytest.MonkeyPatch):
+    """Verify hydration logic reads bars from Heber."""
+    now = pd.Timestamp("2023-01-01 10:00:00", tz="UTC")
+    monkeypatch.setattr(system_settings, "static_watchlist", ["SPY"])
 
-    # Mock bar object
-    bar = MagicMock()
-    bar.ticker = "SPY"
-    bar.bar_start_ts_utc = pd.Timestamp("2023-01-01 10:00:00", tz="UTC")
-    bar.close = 100.0
-    bar.open = 99.0
-    bar.high = 101.0
-    bar.low = 98.0
-    bar.volume = 1000
-    bar.vwap = 100.0
+    frame = pd.DataFrame(
+        {
+            "symbol": ["SPY", "SPY"],
+            "bar_start_ts": [now - timedelta(minutes=1), now],
+            "open": [99.0, 100.0],
+            "high": [100.0, 101.0],
+            "low": [98.0, 99.0],
+            "close": [99.5, 100.5],
+            "volume": [900.0, 1000.0],
+            "vwap": [99.4, 100.4],
+        }
+    )
 
-    mock_result.scalars.return_value.all.return_value = [bar]
-    mock_session.execute.return_value = mock_result
+    reader = MagicMock()
+    reader.read_bars.return_value = frame
+    monkeypatch.setattr("orion.processing.feature_engine.get_heber_reader", lambda: reader)
 
-    mock_factory = MagicMock()
-    mock_factory.return_value.__aenter__.return_value = mock_session
+    fe = FeatureEngine()
+    await fe.hydrate_history()
 
-    with patch("orion.storage.db.async_session_factory", mock_factory):
-        fe = FeatureEngine()
-        await fe.hydrate_history()
+    assert "SPY" in fe.history
+    assert len(fe.history["SPY"]) == 2
+    assert fe.history["SPY"].iloc[-1]["close"] == 100.5
 
-        assert "SPY" in fe.history
-        assert len(fe.history["SPY"]) == 1
-        assert fe.history["SPY"].iloc[0]["close"] == 100.0
+
+@pytest.mark.asyncio
+async def test_feature_engine_hydration_returns_without_local_db_when_heber_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(system_settings, "static_watchlist", ["SPY"])
+
+    reader = MagicMock()
+    reader.read_bars.side_effect = RuntimeError("heber unavailable")
+    monkeypatch.setattr("orion.processing.feature_engine.get_heber_reader", lambda: reader)
+
+    fe = FeatureEngine()
+    await fe.hydrate_history()
+
+    assert fe.history == {}

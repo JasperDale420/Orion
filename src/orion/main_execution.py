@@ -21,7 +21,6 @@ from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from orion.storage.models_signals import SignalLive
-from orion.storage.models_silver import SilverOptionFlow
 from orion.storage.models_trade_journal import TradeJournalEntry
 
 # Configure Logger
@@ -228,26 +227,15 @@ async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[A
     """Fetch recent flow data for a ticker for exit rule evaluation."""
     if _prefer_heber_recent_flow_source():
         heber_rows = await _fetch_recent_flow_from_heber(ticker=ticker, minutes=minutes)
-        if heber_rows:
-            return heber_rows
+        if heber_rows is None:
+            return []
+        return heber_rows
 
-    async def query_flow(session: Any) -> List[Any]:
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-        stmt = (
-            select(SilverOptionFlow)
-            .where(SilverOptionFlow.ticker == ticker)
-            .where(SilverOptionFlow.flow_ts_utc >= cutoff)
-            .order_by(SilverOptionFlow.flow_ts_utc.desc())
-            .limit(100)
-        )
-        result = await session.execute(stmt)
-        return result.scalars().all()
-
-    try:
-        return await db_query(query_flow)
-    except Exception as e:
-        logger.error(f"Failed to fetch recent flow for {ticker}: {e}")
-        return []
+    logger.info(
+        "Recent flow read skipped because Heber source is disabled",
+        extra={"event_type": "RECENT_FLOW_HEBER_DISABLED", "ticker": ticker, "minutes": minutes},
+    )
+    return []
 
 
 async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
