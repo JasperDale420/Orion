@@ -1145,6 +1145,8 @@ class MetaSearchAgent:
             return None
 
     def _map_heber_bar_events(self, task: EvaluationTask, bars_frame: pd.DataFrame) -> tuple[List[Any], Dict[str, Any]]:
+        from orion.storage.models import BronzeEvent
+
         if bars_frame.empty:
             return [], {}
 
@@ -1177,12 +1179,13 @@ class MetaSearchAgent:
                 volume_col=volume_col,
                 vwap_col=vwap_col,
                 trades_col=trades_col,
+                event_factory=BronzeEvent,
             )
             if mapped is None:
                 continue
-            payload, series_row = mapped
-            ticker = payload["ticker"]
-            alpaca_events.append(payload)
+            event, series_row = mapped
+            ticker = event.ticker
+            alpaca_events.append(event)
             data_by_ticker.setdefault(ticker, []).append(series_row)
         return alpaca_events, self._price_data_from_rows(data_by_ticker)
 
@@ -1199,7 +1202,8 @@ class MetaSearchAgent:
         volume_col: str,
         vwap_col: str | None,
         trades_col: str | None,
-    ) -> Optional[tuple[Dict[str, Any], Dict[str, Any]]]:
+        event_factory: Any,
+    ) -> Optional[tuple[Any, Dict[str, Any]]]:
         ticker = self._normalize_ticker(row.get(ticker_col))
         if ticker is None:
             return None
@@ -1210,6 +1214,7 @@ class MetaSearchAgent:
             return None
         ts_value = bar_ts.to_pydatetime()
         payload = {
+            "symbol": ticker,
             "ticker": ticker,
             "o": row.get(open_col),
             "h": row.get(high_col),
@@ -1220,6 +1225,14 @@ class MetaSearchAgent:
             "t": ts_value,
             "n": row.get(trades_col) if trades_col else None,
         }
+        event = event_factory(
+            event_id=f"heber_bar_{ticker}_{int(ts_value.timestamp())}",
+            event_type="ALPACA_BAR_1M",
+            source="BACKTEST",
+            event_ts_utc=ts_value,
+            payload=payload,
+            ticker=ticker,
+        )
         series_row = {
             "timestamp": ts_value,
             "open": row.get(open_col),
@@ -1228,7 +1241,7 @@ class MetaSearchAgent:
             "close": row.get(close_col),
             "volume": row.get(volume_col),
         }
-        return payload, series_row
+        return event, series_row
 
     def _price_data_from_rows(self, data_by_ticker: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
         price_data: Dict[str, Any] = {}

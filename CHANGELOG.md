@@ -8,259 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Dependency conflict rollup for stale Dependabot PRs**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
-    - `sqlalchemy` -> `^2.0.46`
-    - `exchange-calendars` -> `^4.13.1`
-  - Regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock` via `poetry lock`.
+- **Meta-search Heber event mapping now emits proper bar events (TDD bugfix)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py` so Heber bar rows are mapped to `BronzeEvent` objects with `event_type=\"ALPACA_BAR_1M\"` instead of raw dictionaries.
+  - This prevents feature-engine crashes (`'dict' object has no attribute 'event_type'`) during meta-search evaluation.
+  - Tightened `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_meta_search_heber_source.py` to assert Heber bar/flow outputs are event objects with expected event types.
+  - Verified regression path with:
+    - `pytest -q tests/unit/test_meta_search_heber_source.py::test_fetch_silver_events_prefers_heber -q`
+    - `pytest -q tests/integration/test_meta_search_flow.py -q`
 
-- **Aggressive dependency uplift pass completed (installer maintenance)**:
-  - Updated runtime dependency constraints in `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
-    - `pandas` -> `^3.0.0`
-    - `tenacity` -> `^9.1.4`
-    - `fastapi` -> `^0.128.8`
-    - `uvicorn` -> `^0.40.0`
-    - `alpaca-py` -> `^0.43.2`
-    - `pandera` -> `^0.29.0`
-    - `prometheus-client` -> `^0.24.1`
-    - `s3fs` -> `^2026.2.0`
-    - `fsspec` -> `^2026.2.0`
-    - `aiobotocore` -> `^3.1.2`
-    - `boto3` -> `^1.42.0` (resolved to `1.42.42` for botocore compatibility)
-    - `pytz` -> `^2025.2` (explicitly added for Alpaca SDK import compatibility under the upgraded dependency set)
-  - Updated dev dependency constraints:
-    - `pre-commit` -> `^4.5.1`
-    - `pytest-asyncio` -> `^1.3.0`
-    - `pytest-cov` -> `^7.0.0`
-    - `ruff` -> `^0.15.0`
-  - Regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock`.
-  - Verified with:
-    - `pytest -q && ruff check . && mypy .`
-    - `poetry run pytest -q && poetry run ruff check . && poetry run mypy .`
-    - `docker compose build`
+- **Documentation standardization started (agent file naming alignment)**:
+  - Added `/Users/jacobmcmillan/Empire/Orion/AGENTS.md` as the canonical project AI-instructions file.
+  - Removed deprecated `/Users/jacobmcmillan/Empire/Orion/CLAUDE.md` in favor of `AGENTS.md`.
 
-- **Dependency/tooling refresh (installer maintenance)**:
-  - Updated Poetry-managed dependencies and regenerated `/Users/jacobmcmillan/Empire/Orion/poetry.lock` (`poetry update`).
-  - Updated pre-commit hook pins in `/Users/jacobmcmillan/Empire/Orion/.pre-commit-config.yaml`:
-    - `astral-sh/ruff-pre-commit`: `v0.9.4` -> `v0.15.0`
-    - `pre-commit/pre-commit-hooks`: `v5.0.0` -> `v6.0.0`
-  - Confirmed no npm manifests exist in this repository (`package.json`/`package-lock.json` not present), so npm upgrade was not applicable in `/Users/jacobmcmillan/Empire/Orion`.
-  - Attempted to refresh `/Users/jacobmcmillan/Empire/Orion/uv.lock`, but `uv` cannot lock this project because `pyproject.toml` uses `[tool.poetry]` and does not define a `[project]` table.
-  - Verified with:
-    - `pytest -q && ruff check . && mypy .`
+- **Documentation standardization expanded (required/recommended docs + housekeeping)**:
+  - Reworked `/Users/jacobmcmillan/Empire/Orion/README.md` to include clear quick-start, configuration, and cross-doc links.
+  - Expanded `/Users/jacobmcmillan/Empire/Orion/.env.example` with migration and runtime variables used by Orion services.
+  - Added required service docs:
+    - `/Users/jacobmcmillan/Empire/Orion/docs/ARCHITECTURE.md`
+    - `/Users/jacobmcmillan/Empire/Orion/docs/RUNBOOK.md`
+    - `/Users/jacobmcmillan/Empire/Orion/docs/API_REFERENCE.md`
+  - Added supporting docs:
+    - `/Users/jacobmcmillan/Empire/Orion/docs/DATA_CONTRACTS.md`
+    - `/Users/jacobmcmillan/Empire/Orion/CONTRIBUTING.md`
+    - `/Users/jacobmcmillan/Empire/Orion/SECURITY.md`
+    - `/Users/jacobmcmillan/Empire/Orion/DEVELOPER_NOTES.md`
+  - Consolidated PRD/audit fragmentation by moving legacy variants and audit artifacts into `/Users/jacobmcmillan/Empire/Orion/docs/audits/`.
 
-- **Legacy Silver ORM model cleanup completed (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/storage/models_silver.py`:
-    - removed decommissioned local Silver ORM models:
-      - `SilverOptionFlow`
-      - `SilverDarkPool`
-      - `SilverAlpacaBar`
-      - `SilverOptionQuote`
-    - retained active compatibility models:
-      - `SilverSignal`
-      - `SilverUWAlert`
-  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_models_silver_decommission.py`:
-    - enforces absence of removed legacy ORM classes.
-  - Updated tests that still referenced removed local models:
-    - `/Users/jacobmcmillan/Empire/Orion/tests/integration/test_meta_search_flow.py`
-    - `/Users/jacobmcmillan/Empire/Orion/tests/e2e/test_full_system_flow.py`
-  - Archived obsolete legacy compliance script:
-    - `/Users/jacobmcmillan/Empire/Orion/tests/compliance_check_v2.py` ->
-      `/Users/jacobmcmillan/Empire/Orion/archive/2026-02-12_models-silver-wave15/legacy_tests/compliance_check_v2.py`
-  - Verified with:
-    - `pytest -q tests/unit/test_models_silver_decommission.py tests/integration/test_meta_search_flow.py tests/e2e/test_full_system_flow.py tests/unit/test_persistence_heber_gate.py`
-    - `ruff check src/orion/storage/models_silver.py tests/unit/test_models_silver_decommission.py tests/integration/test_meta_search_flow.py tests/e2e/test_full_system_flow.py`
-
-- **Legacy Silver table-name references removed from active runtime modules**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py` comments to reflect Heber bar hydration.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/flow_processor.py` comments to remove `SilverOptionFlow` coupling language.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/rules/exit_rules.py` comments to use normalized-flow wording.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md` inventory notes to reflect that remaining legacy table-name references are concentrated in `models_silver.py`.
-
-- **Local Silver materialization from Bronze is decommissioned (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/persistence.py`:
-    - removed local Silver write logic from `persist_silver_from_bronze(...)`.
-    - function is now an explicit no-op with logging so Heber remains canonical for Silver data.
-  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_persistence_heber_gate.py`:
-    - verifies default behavior does not execute local Silver inserts.
-    - verifies behavior remains a no-op even when legacy env flags are set.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/e2e/test_full_system_flow.py`:
-    - aligned E2E expectation with decommissioned local Silver materialization (`SilverOptionFlow` remains empty).
-  - Verified with:
-    - `pytest -q tests/unit/test_persistence_heber_gate.py tests/e2e/test_full_system_flow.py tests/integration/test_pipeline_ingest_to_signal.py tests/unit/test_dlq_consumer.py`
-    - `ruff check src/orion/processing/persistence.py tests/unit/test_persistence_heber_gate.py tests/e2e/test_full_system_flow.py`
-
-- **EOD review regime-bar sourcing is now Heber-only (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/eod_review_agent.py`:
-    - removed env-toggle + local `SilverAlpacaBar` fallback for regime bars.
-    - `_gather_data(...)` now sources regime bars from Heber only.
-    - `_load_regime_bars_from_heber(...)` now returns empty list on read errors.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_eod_review_agent_heber_bars.py`:
-    - updated failure-path expectation to empty list.
-    - added regression assertion that the legacy toggle method is removed.
-  - Verified with:
-    - `pytest -q tests/unit/test_eod_review_agent_heber_bars.py tests/agents/test_eod_review_agent.py`
-    - `ruff check src/orion/agents/eod_review_agent.py tests/unit/test_eod_review_agent_heber_bars.py`
-
-- **Daemon worker health checks now use process liveness instead of HTTP probes (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
-    - added explicit `healthcheck` blocks for `feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, and `indexer`.
-    - these workers now use `test: [ "CMD-SHELL", "kill -0 1" ]` so daemon runtime is checked correctly.
-    - this overrides the image-level `localhost:8000/health` probe that only applies to API mode.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`:
-    - added coverage that the five daemon services include explicit non-HTTP health checks.
-    - added coverage that those service blocks do not probe `localhost:8000/health`.
-  - Verified with:
-    - `pytest -q tests/unit/test_compose_legacy_gate_wiring.py`
-    - `docker compose up -d --build feature_enrichment execution position-monitor eod-agent indexer`
-    - post-deploy health status for all five services is now `healthy`.
-
-- **FeatureEngine history hydration is now Heber-only (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/processing/feature_engine.py`:
-    - removed local `SilverAlpacaBar` SQL hydration query path.
-    - `hydrate_history()` now pulls bars from `get_heber_reader().read_bars(...)` for watchlist tickers.
-    - added normalized Heber column handling for ticker/time/OHLCV keys and safe row filtering.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_remediation_v2.py`:
-    - replaced DB-mocked hydration test with Heber-sourced hydration tests.
-    - added unavailable-Heber regression test to verify safe no-data behavior without local DB fallback.
-  - Verified with:
-    - `pytest -q tests/unit/test_remediation_v2.py -k "feature_engine_hydration"`
-    - `pytest -q tests/unit/test_feature_engine_core.py tests/unit/test_feature_engine_v2.py tests/unit/test_feature_latency.py tests/unit/test_feature_engine_persistence.py tests/unit/test_remediation_v2.py`
-    - `ruff check src/orion/processing/feature_engine.py tests/unit/test_remediation_v2.py`
-
-- **Darkpool feature aggregation is now Heber-only (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/darkpool_features.py`:
-    - removed local `SilverDarkPool` SQL aggregation query path.
-    - now reads darkpool rows from `get_heber_reader().read_darkpool(...)` and computes the same aggregate features in-memory.
-    - added robust column normalization for Heber variants (`ticker`/`symbol`/`instrument_key`, `dark_ts_utc`/`ts_event`, `trade_price`/`price`, `size_shares`/`size`).
-    - keeps existing fallback behavior: returns zeroed features when data is unavailable.
-  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_darkpool_features_heber_source.py`:
-    - validates correct Heber aggregation math (volume, count, VWAP, max block, dollar volume).
-    - validates zeroed output when Heber is unavailable.
-  - Verified with:
-    - `pytest -q tests/unit/test_darkpool_features_heber_source.py`
-    - `ruff check src/orion/ml/darkpool_features.py tests/unit/test_darkpool_features_heber_source.py`
-
-- **Meta-search event sourcing is now Heber-only (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/agents/meta_search_agent.py`:
-    - removed local `SilverAlpacaBar`/`SilverOptionFlow` fallback methods (`_fetch_events_from_local_sql`, `_fetch_local_bars`, `_fetch_local_flows`, local mapping helpers).
-    - removed env-based source toggle path and now always sources evaluation events from Heber.
-    - `_fetch_silver_events(...)` now returns `([], [], {})` when Heber is unavailable instead of querying local Silver SQL tables.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_meta_search_heber_source.py`:
-    - replaced local-fallback assertions with Heber-only behavior assertions.
-    - added regression assertion that `MetaSearchAgent` no longer exposes local SQL fallback methods.
-  - Verified with:
-    - `pytest -q tests/unit/test_meta_search_heber_source.py`
-    - `pytest -q tests/integration/test_meta_search_flow.py`
-    - `ruff check src/orion/agents/meta_search_agent.py tests/unit/test_meta_search_heber_source.py`
-
-- **Execution recent-flow lookup is now Heber-only (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_execution.py`:
-    - removed local `SilverOptionFlow` SQL fallback path from `fetch_recent_flow_for_ticker(...)`.
-    - function now returns Heber-sourced rows (or empty list) and logs when Heber flow source is explicitly disabled.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_main_execution_heber_source.py`:
-    - replaced SQL fallback expectations with Heber-only behavior assertions.
-    - added explicit guard assertions that local `db_query` is not called in unavailable/disabled Heber scenarios.
-  - Verified with:
-    - `pytest -q tests/unit/test_main_execution_heber_source.py`
-    - `ruff check src/orion/main_execution.py tests/unit/test_main_execution_heber_source.py`
-
-- **Compose contract updates for MCP auth envs and modern Compose spec**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml`:
-    - removed obsolete top-level `version:` key.
-    - added explicit MCP auth env contract for `mcp-server`:
-      - `MCP_API_KEY`
-      - `MCP_API_KEY_HEADER`
-      - `MCP_AUTH_REQUIRED`
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py`:
-    - added assertions for MCP auth env wiring.
-    - added regression assertion that top-level `version:` key is not present.
-
-- **`/flows` API endpoint now reads Heber Silver flow data (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/api/main.py`:
-    - removed local `SilverOptionFlow` SQL query path from `get_flows(...)`.
-    - endpoint now reads flow rows via `get_heber_reader().read_flow(...)` in a worker thread.
-    - added robust field normalization for common Heber flow column variants (`instrument_key`/`ticker`, `premium`/`premium_usd`, `call_put`/`put_call`, etc.).
-    - keeps existing API contract (`event_id`, `ticker`, `flow_ts_utc`, `premium_usd`, etc.) while sourcing data from Heber.
-  - Updated tests:
-    - `/Users/jacobmcmillan/Empire/Orion/tests/api/test_flow_filters.py`
-      - replaced local-DB setup with Heber-reader stubs.
-      - added regression coverage for min premium filter + Heber read failure handling.
-    - `/Users/jacobmcmillan/Empire/Orion/tests/api/test_main.py`
-      - flows endpoint tests now stub Heber reader to deterministic empty payloads.
-  - Verified with:
-    - `pytest -q tests/api/test_flow_filters.py tests/api/test_main.py -k "flows"`
-    - `ruff check src/orion/api/main.py tests/api/test_flow_filters.py tests/api/test_main.py`
-
-- **Audit backlog is now narrowed to runtime `models_silver` compatibility scope**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/comprehensive_audit.md`:
-    - documented why `src/orion/storage/models_silver.py` remains active (runtime dependency map across API/execution/processing/agents),
-    - removed `src/orion/ml/exit_classifier.py` from active local-SQL remediation targets after decommission,
-    - clarified that model artifact + ML metadata storage remains intentionally local.
-
-- **Exit-classifier local SQL training fallback is fully decommissioned (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/exit_classifier.py`:
-    - `_exit_classifier_training_source()` now routes legacy aliases (`legacy_sql`, `local_sql`) to `heber_gold` with decommission warning logs.
-    - removed active local `price_target_labels` training-query path from `build_bucket_training_data(...)`.
-    - retained compatibility helpers (`_load_price_target_label_columns`, `_clear_price_target_label_schema_cache`) as explicit no-op stubs for refresh-flow stability.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_exit_classifier_window_query.py`:
-    - replaced legacy SQL query-contract tests with Heber-only training-source tests.
-    - added `test_exit_classifier_training_source_legacy_sql_falls_back_to_heber_gold`.
-    - added `test_build_bucket_training_data_legacy_source_still_uses_heber_without_local_db`.
-  - Verified with:
-    - `pytest -q tests/unit/test_exit_classifier_window_query.py`
-    - `pytest -q tests/ml/test_exit_classifier.py tests/unit/test_pattern_miner_exit_refresh_config.py tests/unit/test_config_centralization.py`
-    - `ruff check src/orion/ml/exit_classifier.py tests/unit/test_exit_classifier_window_query.py`
-
-- **Pattern-miner local SQL training fallback is fully decommissioned (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
-    - `_pattern_miner_training_source()` now routes legacy aliases (`legacy_sql`, `local_sql`) to `heber_gold` with decommission warning logs.
-    - `fetch_training_data(...)` now uses the Heber Gold training frame path only.
-    - removed direct `price_target_labels` SQL query branch from active training-data fetch.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_pattern_miner_exit_refresh_config.py`:
-    - added `test_pattern_miner_training_source_legacy_sql_falls_back_to_heber_gold`.
-    - added `test_fetch_training_data_legacy_source_still_uses_heber_without_local_db`.
-  - Verified with:
-    - `pytest -q tests/unit/test_pattern_miner_exit_refresh_config.py`
-    - `ruff check src/orion/ml/pattern_miner.py tests/unit/test_pattern_miner_exit_refresh_config.py`
-
-- **Backfill cursor reads are now canonical-Heber only; legacy watermark key cleanup narrowed (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/backfill_ml_features.py`:
-    - `_load_backfill_cursor()` now reads only `backfill_ml_features.heber_gold.cursor`.
-    - removed legacy fallback lookup keys (`backfill_ml_features.price_target_labels*`) from active cursor-loading code.
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/jobs/cleanup_legacy_backfill_watermarks.py`:
-    - removed `backfill_ml_features.price_target_labels*` from `LEGACY_BACKFILL_WATERMARK_KEYS`.
-    - cleanup now targets only archived exit-column watermark keys.
-  - Updated tests:
-    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_backfill_ml_features_selection.py`
-      - replaced legacy fallback expectation with canonical-key-only cursor-loading expectation.
-    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_cleanup_legacy_backfill_watermarks.py`
-      - asserts `price_target_labels` watermark keys are no longer in cleanup key set.
-  - Verified with:
-    - `pytest -q tests/unit/test_backfill_ml_features_selection.py tests/unit/test_cleanup_legacy_backfill_watermarks.py`
-    - `ruff check src/orion/jobs/backfill_ml_features.py src/orion/jobs/cleanup_legacy_backfill_watermarks.py tests/unit/test_backfill_ml_features_selection.py tests/unit/test_cleanup_legacy_backfill_watermarks.py`
-
-- **Legacy local price-target backfill helpers are now explicit no-op stubs (TDD)**:
-  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:
-    - `get_velocity_backfill_candidates(...)` now returns `[]` with decommission warning.
-    - `get_checkpoint_backfill_candidates(...)` now returns `[]` with decommission warning.
-    - `backfill_missing_features(...)` now returns `0` with decommission warning.
-    - `_get_labeled_price_target_event_ids(...)` now returns `set()` with decommission warning.
-    - `persist_labels(...)` now returns `0` with decommission warning.
-    - `run_labeling_loop(...)` now exits immediately with decommission warning.
-    - removed legacy local `price_target_labels` backfill SQL from these paths.
-    - removed stale `silver_uw_flow` references from inline docs/comments.
-  - Updated tests:
-    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_price_target_labeler_heber_context.py`
-      - switched backfill-candidate coverage from SQL-shape assertions to no-op behavior assertions.
-    - `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_legacy_label_pipeline_gates.py`
-      - added `test_price_target_labeler_backfill_missing_features_is_decommissioned_even_when_enabled`.
-      - added `test_price_target_labeler_persist_labels_is_decommissioned_even_when_enabled`.
-      - added `test_price_target_labeler_labeled_event_lookup_is_decommissioned_even_when_enabled`.
-      - added `test_price_target_labeler_run_loop_is_decommissioned_even_when_enabled`.
-  - Verified with:
-    - `pytest -q tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_legacy_label_pipeline_gates.py`
-    - `ruff check src/orion/main_price_target_labeler.py tests/unit/test_price_target_labeler_heber_context.py tests/unit/test_legacy_label_pipeline_gates.py`
+- **Worker container health checks now match runtime type (TDD)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` to disable inherited Dockerfile HTTP healthchecks for non-HTTP worker services (`feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, `indexer`, and other worker-only profile services).
+  - Added `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_compose_legacy_gate_wiring.py::test_non_http_workers_disable_inherited_http_healthcheck`.
+  - Resolved false `unhealthy` container states caused by inherited `curl http://localhost:8000/health` probes on background worker processes.
 
 - **Heber reader now handles both partition-schema conflicts and transient corrupt parquet files (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/clients/heber_reader.py`:
@@ -278,8 +55,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated `/Users/jacobmcmillan/Empire/Orion/pyproject.toml`:
     - `ruff` now excludes archived/notebook/vendor paths from repo-wide checks (`archive`, `qlib-main`, `src/alpaca`, `scripts`),
     - enabled pragmatic per-file lint ignore set for legacy tests/alembic migration files,
-    - removed unavailable `numpy.typing.mypy` plugin from mypy configuration,
-    - added practical mypy scope (`exclude` + `follow_imports = "skip"`) and strict overrides for migration-critical Orion modules.
+    - removed unavailable `numpy.typing.mypy` plugin from mypy configuration.
   - Added `/Users/jacobmcmillan/Empire/Orion/scripts/run_system_burnin.sh`:
     - builds/recreates core Orion services,
     - runs timed burn-in,
@@ -292,7 +68,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Verified with:
     - `pytest -q tests/unit/test_meta_search.py tests/unit/test_flow_enricher_delegation.py tests/ml/test_flow_processor.py tests/unit/test_risk_manager_basic.py tests/unit/test_risk_manager_positions.py tests/storage/test_lakehouse.py`
     - `ruff check .`
-    - `pytest -q && ruff check . && mypy .`
 
 - **Price-target labeler legacy gate now blocks all local backfill/query helpers when disabled (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/main_price_target_labeler.py`:

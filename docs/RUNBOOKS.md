@@ -2,6 +2,9 @@
 
 Standard operating procedures for Orion system maintenance and incident response.
 
+Canonical runbook:
+- `/Users/jacobmcmillan/Empire/Orion/docs/RUNBOOK.md`
+
 ## Service Health Checks
 
 ### Quick Health Check

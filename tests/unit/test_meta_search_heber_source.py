@@ -54,7 +54,11 @@ async def test_fetch_silver_events_prefers_heber(monkeypatch: pytest.MonkeyPatch
     bars, flows, price_data = await agent._fetch_silver_events(task)
 
     assert len(bars) == 2
+    assert bars[0].event_type == "ALPACA_BAR_1M"
+    assert bars[0].ticker == "AAPL"
+    assert bars[0].payload.get("symbol") == "AAPL"
     assert len(flows) == 1
+    assert flows[0].event_type == "UW_FLOW"
     assert "AAPL" in price_data
 
 

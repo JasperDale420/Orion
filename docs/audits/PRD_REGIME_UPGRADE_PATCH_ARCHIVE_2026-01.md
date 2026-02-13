@@ -20,16 +20,16 @@ It keeps the original design goals:
 - Strategies are routed via `strategies_by_regime` in `StrategyEngine`.
 
 **Main issues**
-1. **A single label collapses distinct worlds**  
+1. **A single label collapses distinct worlds**
    “CHOP” can mean low-vol driftless noise or high-vol whipsaw. Those are opposite for sizing and execution risk.
 
-2. **Global SPY regime ≠ symbol regime**  
+2. **Global SPY regime ≠ symbol regime**
    AAPL can be trending hard on news while SPY chops.
 
-3. **Hard gating causes missed opportunity and mode errors**  
+3. **Hard gating causes missed opportunity and mode errors**
    ORB and momentum setups can exist even in a “CHOP” market label; conversely mean-reversion gets murdered during volatility shocks.
 
-4. **No confidence / uncertainty handling**  
+4. **No confidence / uncertainty handling**
    Early session classifications are unstable; the system should express “I’m not sure yet” and size down accordingly.
 
 ---
@@ -456,4 +456,3 @@ If you want the smallest change with maximum benefit:
 3. Replace hard regime gating with ActivationPolicy (even if it only checks vol+session)
 
 This already fixes most “simple BULL/BEAR/CHOP” failure modes for scalping.
-
