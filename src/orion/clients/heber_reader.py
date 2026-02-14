@@ -483,6 +483,9 @@ class HeberReader:
 
         if not frames:
             return pd.DataFrame()
+        if len(frames) == 1:
+            # Optimization: avoid concat overhead when a single parquet file is read.
+            return frames[0]
         return pd.concat(frames, ignore_index=True)
 
     @staticmethod

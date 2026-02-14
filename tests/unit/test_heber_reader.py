@@ -459,3 +459,31 @@ def test_read_parquet_filewise_skips_hidden_sidecar_files(tmp_path: Path) -> Non
 
     assert len(result) == 1
     assert all(not path.name.startswith("._") for path in seen_paths)
+
+
+def test_read_parquet_filewise_single_file_avoids_concat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    valid = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "bar_start_ts": [base],
+            "ts_available": [base],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [10],
+        }
+    )
+    dataset_path = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
+    _write_parquet(dataset_path / "part-0.parquet", valid)
+
+    reader = HeberReader(data_root=tmp_path)
+
+    def _boom(*_args, **_kwargs):  # noqa: ANN001
+        raise AssertionError("pd.concat should not be called for a single parquet file")
+
+    monkeypatch.setattr(pd, "concat", _boom)
+    result = reader._read_parquet_filewise(path=dataset_path, columns=None, filters=None)
+
+    assert len(result) == 1

@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Heber reader filewise read shortcut for single parquet files (perf)**:
+  - Skips `pd.concat` when only one parquet file is read, reducing temporary allocations for common single-partition reads.
+  - Expected impact: lower memory churn and slightly faster filewise reads for single-file partitions.
+
 - **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:
   - Updated:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`
