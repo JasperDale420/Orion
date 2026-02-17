@@ -20,6 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **Docker service cleanup** — removed 7 legacy/unused services from `docker-compose.yml`:
+  - `price_target_labeler`, `option_quote_tracker`, `pattern-miner`, `nightly-backfill`, `quality-guardrails` (all behind `legacy-labels` profile with gates defaulting to `false`, fully replaced by Heber watch)
+  - `meta-search`, `meta-weekly` (rarely-used tools, can be run ad-hoc via CLI)
+  - Remaining services: `timescaledb`, `ingestion`, `feature_enrichment`, `execution`, `position-monitor`, `eod-agent`, `indexer`, `mcp-server`
+- Deleted dead entrypoints: `main_option_quote_tracker.py`, `main_meta.py`, `main_meta_weekly.py`, `main_pattern_miner.py`, `jobs/nightly_backfill.py`, `jobs/quality_guardrails.py`, `jobs/backfill_ml_features.py`
+- Deleted orphaned tests: `test_nightly_backfill_schedule.py`, `test_legacy_label_pipeline_gates.py`, `test_quality_guardrails_results.py`, `test_option_quote_tracker_heber_source.py`
+
 - **Dead connector cleanup** (`refactor/gateway-data-consolidation`, -1,446 lines):
   - Deleted `uw_greek_exposure_connector.py`, `uw_iv_rank_connector.py`, `uw_market_tide_connector.py`, `uw_max_pain_connector.py`, `vix_proxy_connector.py`, `alpaca_option_greeks_connector.py`
   - Cleaned imports from `main_feature_enrichment.py`, `main_price_target_labeler.py`, `main_option_quote_tracker.py`

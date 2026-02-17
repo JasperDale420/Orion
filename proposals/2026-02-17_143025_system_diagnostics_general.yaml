@@ -1,0 +1,22 @@
+meta:
+  run_id: eea66134-d23c-4b30-a42b-f73176a26164
+  created_at: '2026-02-17T14:30:25.679110+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-17_eea66134-d23c-4b30-a42b-f73176a26164.json
+  report_path: artifacts/reports/eod_report_2026-02-17.md
+proposal:
+  type: system_diagnostics
+  priority: 1
+  rationale: Zero trading activity despite no reported errors; need to identify root
+    cause of signal drought
+  evidence_pointers:
+    decisions: 'executed_count: 0, skipped_count: 0'
+    signals_live: 'total: 0'
+    errors_incidents: 'dlq_events.count: 0'
+  test_plan:
+  - Check signal generation logs for missing data or filters blocking all candidates
+  - Verify market data ingestion for the date
+  - Review solver eligibility thresholds (e.g., min_confidence, regime filters)
+  recommendation: Investigate why no signals were produced; adjust filters if market
+    conditions were valid but overly restrictive
