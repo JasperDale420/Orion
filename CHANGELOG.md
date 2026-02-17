@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+#### ML Feature Expansion — GEX, Max Pain, Market Tide
+
+- Added 4 new features to `FEATURE_COLUMNS` in `src/orion/ml/pattern_miner.py`:
+  - `gex_at_entry` — Gamma Exposure at alert time
+  - `vex_at_entry` — Vanna Exposure at alert time
+  - `max_pain_distance_pct` — distance from current price to max pain strike (%)
+  - `market_tide_net_premium` — net market premium flow
+- Added corresponding column mappings in `_map_columns()` for Heber `AlertFeatures` field resolution
+- These features will become active after Heber deploys enrichment and sufficient training data accumulates
+
 ### Removed
 
 - **Dead connector cleanup** (`refactor/gateway-data-consolidation`, -1,446 lines):

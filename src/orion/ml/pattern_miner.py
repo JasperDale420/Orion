@@ -59,6 +59,11 @@ FEATURE_COLUMNS = [
     "underlying_30d_return",
     "realized_vol_20d",
     "iv_rank_at_entry",
+    # Market structure (GEX, Max Pain, Market Tide)
+    "gex_at_entry",
+    "vex_at_entry",
+    "max_pain_distance_pct",
+    "market_tide_net_premium",
     # Timing
     "entry_hour",
     "minutes_to_close",
@@ -348,6 +353,11 @@ def _normalize_heber_features(frame: Any) -> Any:
         "underlying_5d_return": ["underlying_5d_return"],
         "underlying_30d_return": ["underlying_30d_return"],
         "realized_vol_20d": ["realized_vol_20d", "rvol_daily"],
+        # Market structure
+        "gex_at_entry": ["gex_at_entry", "gex"],
+        "vex_at_entry": ["vex_at_entry", "vex"],
+        "max_pain_distance_pct": ["max_pain_distance_pct"],
+        "market_tide_net_premium": ["market_tide_net_premium"],
         # Timing
         "entry_hour": ["entry_hour", "hour_of_day"],
         "minutes_to_close": ["minutes_to_close"],
