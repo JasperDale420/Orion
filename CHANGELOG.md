@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **Dead connector cleanup** (`refactor/gateway-data-consolidation`, -1,446 lines):
+  - Deleted `uw_greek_exposure_connector.py`, `uw_iv_rank_connector.py`, `uw_market_tide_connector.py`, `uw_max_pain_connector.py`, `vix_proxy_connector.py`, `alpaca_option_greeks_connector.py`
+  - Cleaned imports from `main_feature_enrichment.py`, `main_price_target_labeler.py`, `main_option_quote_tracker.py`
+  - All data now sourced via Heber normalized feeds + Black-Scholes fallback
+
 - **Decommissioned Redpanda, MinIO, and createbuckets Docker services**:
   - Removed `redpanda`, `minio`, and `createbuckets` services from `docker-compose.yml`.
   - Removed `redpanda_data` and `minio_data` volume declarations.
