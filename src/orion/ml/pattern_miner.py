@@ -38,75 +38,43 @@ MODEL_DIR = system_settings.model_dir
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
 # These features are known at trade entry and don't reveal the outcome
 FEATURE_COLUMNS = [
-    # Entry context (from legacy local label table)
-    "iv_rank_at_entry",
-    "gex_at_entry",
-    "vex_at_entry",
-    "market_tide_30m",
-    "max_pain_distance_pct",
+    # Entry context
     "premium_usd",
     "dte",
-    "vix_at_entry",
-    # Darkpool features (at entry time)
-    "darkpool_volume_1h",
-    "darkpool_30m",
-    "darkpool_4h",
-    "darkpool_1d",
-    # Options Greeks at entry (critical for options trading)
+    "moneyness",
+    "log_moneyness",
+    # Options Greeks at entry
     "delta_at_entry",
     "gamma_at_entry",
     "theta_at_entry",
     "vega_at_entry",
     "iv_at_entry",
-    "iv_vs_hv_ratio",
     # Volume and OI
     "volume_at_entry",
     "open_interest_at_entry",
-    "rvol_1h",
-    "rvol_daily",
-    "oi_change_1d",
-    "oi_change_pct",
-    # Flow signals
-    "ask_side_ratio",
-    "sweep_ratio_1h",
-    "same_ticker_premium_1h",
-    "sector_net_premium_1h",
+    "volume_oi_ratio",
     # Market context
-    "spy_correlation_5d",
-    "spy_return_1h",
-    "vwap_distance_pct",
-    "high_52w_distance_pct",
-    "overnight_gap_pct",
+    "underlying_1d_return",
+    "underlying_5d_return",
+    "underlying_30d_return",
+    "realized_vol_20d",
+    "iv_rank_at_entry",
     # Timing
     "entry_hour",
     "minutes_to_close",
-    # Earnings/Events
-    "days_to_earnings",
-    # NOTE: Removed outcome features that cause data leakage:
-    # - max_return_pct, max_drawdown_pct, time_to_max_seconds
-    # - holding_period_seconds, return_at_1h/2h/4h, first_exit_type
-    # - opposing_flow_count (during holding period, not at entry)
+    "minutes_since_open",
+    # Tags/Sentiment (Binary)
+    "is_bullish",
+    "is_bearish",
+    "is_unusual",
 ]
 
 CATEGORICAL_COLUMNS = [
     "put_call",
     "aggressor",
     "is_sweep",
-    "is_spread_leg",
-    "is_post_earnings",
-    "earnings_in_dte_window",
-    "entry_session",
+    "is_block",
     "entry_day_of_week",
-    "sector",
-    "industry",
-    # Regimes
-    "vol_regime_at_entry",
-    "risk_regime_at_entry",
-    "session_regime_at_entry",
-    "trend_regime_at_entry",
-    "vix_regime_at_entry",
-    "market_tide_direction",
-    "sector_flow_direction",
 ]
 
 # Target definitions - 4 targets for diverse signal dimensions
@@ -359,25 +327,41 @@ def _normalize_heber_features(frame: Any) -> Any:
     normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
 
     mapped_columns: dict[str, list[str]] = {
-        "put_call": ["put_call"],
-        "aggressor": ["aggressor"],
-        "is_sweep": ["is_sweep"],
-        "is_spread_leg": ["is_spread_leg", "is_block"],
+        # Entry context
         "premium_usd": ["premium_usd", "premium"],
         "dte": ["dte", "days_to_expiry"],
-        "minutes_to_close": ["minutes_to_close"],
-        "iv_rank_at_entry": ["iv_rank_at_entry", "iv_rank"],
-        "iv_at_entry": ["iv_at_entry", "iv"],
+        "moneyness": ["moneyness"],
+        "log_moneyness": ["log_moneyness"],
+        # Greeks
         "delta_at_entry": ["delta_at_entry", "delta"],
         "gamma_at_entry": ["gamma_at_entry", "gamma"],
         "theta_at_entry": ["theta_at_entry", "theta"],
         "vega_at_entry": ["vega_at_entry", "vega"],
+        "iv_at_entry": ["iv_at_entry", "iv"],
+        "iv_rank_at_entry": ["iv_rank_at_entry", "iv_rank"],
+        # Vol/OI
         "volume_at_entry": ["volume_at_entry", "volume"],
         "open_interest_at_entry": ["open_interest_at_entry", "open_interest"],
-        "rvol_daily": ["rvol_daily", "realized_vol_20d"],
-        "ask_side_ratio": ["ask_side_ratio"],
+        "volume_oi_ratio": ["volume_oi_ratio", "vol_oi"],
+        # Market context
+        "underlying_1d_return": ["underlying_1d_return"],
+        "underlying_5d_return": ["underlying_5d_return"],
+        "underlying_30d_return": ["underlying_30d_return"],
+        "realized_vol_20d": ["realized_vol_20d", "rvol_daily"],
+        # Timing
         "entry_hour": ["entry_hour", "hour_of_day"],
+        "minutes_to_close": ["minutes_to_close"],
+        "minutes_since_open": ["minutes_since_open"],
+        # Categoricals (Directly mapped)
+        "put_call": ["put_call"],
+        "aggressor": ["aggressor"],
+        "is_sweep": ["is_sweep"],
+        "is_block": ["is_block"],
         "entry_day_of_week": ["entry_day_of_week", "day_of_week"],
+        # Tags/Sentiment
+        "is_bullish": ["is_bullish"],
+        "is_bearish": ["is_bearish"],
+        "is_unusual": ["is_unusual"],
     }
 
     for target, candidates in mapped_columns.items():
@@ -387,55 +371,19 @@ def _normalize_heber_features(frame: Any) -> Any:
             continue
         normalized[target] = frame[source]
 
-    normalized["is_sweep"] = normalized["is_sweep"].fillna(0)
-    normalized["is_sweep"] = normalized["is_sweep"].map(
-        lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
-    )
-    normalized["is_spread_leg"] = (
-        normalized["is_spread_leg"]
-        .fillna(0)
-        .map(lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"})
-    )
+    # Normalize booleans
+    bool_floats = ["is_bullish", "is_bearish", "is_unusual"]
+    for col in bool_floats:
+        normalized[col] = pd.to_numeric(normalized[col], errors="coerce").fillna(0)
 
-    # Fall back to side/aggressor text when a numeric ask-side ratio is not supplied.
-    ask_ratio = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
-    side_source = _first_existing_column(frame, ["side", "aggressor"])
-    if side_source is not None:
-        side_tokens = frame[side_source].astype(str).str.strip().str.lower()
+    # Normalize boolean-like strings
+    bool_strings = ["is_sweep", "is_block"]
+    for col in bool_strings:
+        normalized[col] = normalized[col].fillna(0)
+        normalized[col] = normalized[col].map(
+            lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+        )
 
-        def _token_to_ask_ratio(token: str) -> float:
-            if token in {"ask", "buy", "buyer", "bullish"}:
-                return 1.0
-            if token in {"bid", "sell", "seller", "bearish"}:
-                return 0.0
-            if token in {"mid", "midpoint", "neutral"}:
-                return 0.5
-            return np.nan
-
-        side_ratio = side_tokens.map(_token_to_ask_ratio)
-        ask_ratio = ask_ratio.where(ask_ratio.notna(), side_ratio)
-    normalized["ask_side_ratio"] = ask_ratio
-
-    iv_entry = pd.to_numeric(normalized["iv_at_entry"], errors="coerce")
-    realized_vol = pd.to_numeric(normalized["rvol_daily"], errors="coerce")
-    iv_vs_hv = iv_entry / realized_vol
-    iv_vs_hv = iv_vs_hv.where(realized_vol > 0)
-    normalized["iv_vs_hv_ratio"] = iv_vs_hv.replace([np.inf, -np.inf], np.nan)
-
-    normalized["entry_session"] = pd.NA
-    entry_hour_numeric = pd.to_numeric(normalized["entry_hour"], errors="coerce")
-    normalized.loc[entry_hour_numeric < 11, "entry_session"] = "open"
-    normalized.loc[(entry_hour_numeric >= 11) & (entry_hour_numeric < 14), "entry_session"] = "midday"
-    normalized.loc[entry_hour_numeric >= 14, "entry_session"] = "close"
-
-    normalized["market_tide_direction"] = pd.NA
-    ask_ratio_numeric = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
-    normalized.loc[ask_ratio_numeric >= 0.55, "market_tide_direction"] = "bullish"
-    normalized.loc[ask_ratio_numeric <= 0.45, "market_tide_direction"] = "bearish"
-    normalized.loc[
-        (ask_ratio_numeric > 0.45) & (ask_ratio_numeric < 0.55),
-        "market_tide_direction",
-    ] = "neutral"
     return normalized
 
 

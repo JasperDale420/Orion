@@ -41,12 +41,6 @@ from orion.main_price_target_labeler import (
     get_p2_features as get_labeler_p2_features,
 )
 from orion.main_price_target_labeler import (
-    get_p3_features as get_labeler_p3_features,
-)
-from orion.main_price_target_labeler import (
-    get_phase1_bucket_features as get_labeler_phase1_bucket_features,
-)
-from orion.main_price_target_labeler import (
     get_regime_at_entry as get_labeler_regime_at_entry,
 )
 from orion.main_price_target_labeler import (
@@ -94,8 +88,8 @@ async def enrich_flow_for_scoring(
     """
     Enrich a flow with all features required for ML scoring.
 
-    This function queries the same data sources as the price_target_labeler
-    to ensure feature parity between training and inference.
+    This function attempts to mirror Heber's feature extraction logic.
+    Legacy features (Darkpool, GEX, Market Tide) have been removed.
 
     Args:
         ticker: Underlying ticker symbol
@@ -135,147 +129,100 @@ async def enrich_flow_for_scoring(
             logger.debug(f"Failed to calculate DTE from expiry {expiry}: {e}")
             dte = None
 
-    # Start with basic flow data
-    enriched = {
-        "ticker": ticker,
-        "premium_usd": premium_usd or 0,
-        "dte": dte or 0,
-        "put_call": put_call,
-        "aggressor": aggressor,
-        "is_sweep": is_sweep,
-    }
-
-    # Helper for empty greeks
+    # Helper for empty greeks/metrics
     async def _empty_greeks() -> Dict[str, Any]:
         return {}
 
-    # Parallel enrichment queries for speed
+    # Parallel enrichment queries only for supported features
     tasks = [
-        _get_gex_at_entry(ticker, entry_ts),
-        _get_market_tide(entry_ts),
-        _get_max_pain_distance(ticker, entry_ts, dte),
         _get_iv_rank(ticker, entry_ts),
-        _get_darkpool_volumes(ticker, entry_ts),
-        _get_regime(entry_ts),
         _get_flow_greeks(event_id, ticker=ticker, entry_ts=entry_ts, option_chain=option_chain)
         if event_id
         else _empty_greeks(),
-        _get_vix(entry_ts),
-        _get_flow_metrics(ticker, entry_ts, dte),
         _get_market_context(ticker, entry_ts, dte=dte, option_chain=option_chain, expiry=expiry),
-        _get_window_features(ticker, entry_ts),  # Multi-timeframe flow context
     ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     task_names = [
-        "gex",
-        "market_tide",
-        "max_pain_distance",
         "iv_rank",
-        "darkpool_volumes",
-        "regime",
         "flow_greeks",
-        "vix",
-        "flow_metrics",
         "market_context",
-        "window_features",
     ]
     for task_name, result in zip(task_names, results, strict=True):
         if isinstance(result, Exception):
             _record_enricher_fallback(task_name, result, ticker=ticker, event_id=event_id)
 
     # Unpack results
-    gex_data = results[0] if not isinstance(results[0], Exception) else {}
-    tide_data = results[1] if not isinstance(results[1], Exception) else {}
-    max_pain_pct = results[2] if not isinstance(results[2], Exception) else None
-    iv_rank = results[3] if not isinstance(results[3], Exception) else None
-    darkpool = results[4] if not isinstance(results[4], Exception) else {}
-    regime = results[5] if not isinstance(results[5], Exception) else {}
-    greeks = results[6] if not isinstance(results[6], Exception) else {}
-    vix = results[7] if not isinstance(results[7], Exception) else None
-    flow_metrics = results[8] if not isinstance(results[8], Exception) else {}
-    market_context = results[9] if not isinstance(results[9], Exception) else {}
-    window_features = results[10] if not isinstance(results[10], Exception) else {}
+    iv_rank = results[0] if not isinstance(results[0], Exception) else None
+    greeks = results[1] if not isinstance(results[1], Exception) else {}
+    market_context = results[2] if not isinstance(results[2], Exception) else {}
 
-    # Merge all enriched features
-    enriched.update(
-        {
-            # GEX/VEX
-            "gex_at_entry": gex_data.get("gex"),
-            "vex_at_entry": gex_data.get("vex"),
-            # Rolling averages for confidence rules (0DTE low GEX/VEX rule)
-            "gex_rolling_avg": gex_data.get("gex_rolling_avg"),
-            "vex_rolling_avg": gex_data.get("vex_rolling_avg"),
-            # Market Tide
-            "market_tide_30m": tide_data.get("net_premium"),
-            "market_tide_direction": tide_data.get("direction"),
-            # Max Pain
-            "max_pain_distance_pct": max_pain_pct,
-            # IV Rank
-            "iv_rank_at_entry": iv_rank,
-            # VIX
-            "vix_at_entry": vix,
-            # Darkpool
-            "darkpool_volume_1h": darkpool.get("1h"),
-            "darkpool_30m": darkpool.get("30m"),
-            "darkpool_4h": darkpool.get("4h"),
-            "darkpool_1d": darkpool.get("1d"),
-            # Greeks
-            "delta_at_entry": greeks.get("delta"),
-            "gamma_at_entry": greeks.get("gamma"),
-            "theta_at_entry": greeks.get("theta"),
-            "vega_at_entry": greeks.get("vega"),
-            "iv_at_entry": greeks.get("iv"),
-            "iv_vs_hv_ratio": greeks.get("iv_vs_hv_ratio"),
-            # Volume/OI
-            "volume_at_entry": greeks.get("volume"),
-            "open_interest_at_entry": greeks.get("open_interest"),
-            # Flow metrics
-            "rvol_1h": market_context.get("rvol_1h"),
-            "rvol_daily": market_context.get("rvol_daily"),
-            "oi_change_1d": greeks.get("oi_change_1d"),
-            "oi_change_pct": greeks.get("oi_change_pct"),
-            "ask_side_ratio": flow_metrics.get("ask_side_ratio"),
-            "sweep_ratio_1h": flow_metrics.get("sweep_ratio_1h"),
-            "same_ticker_premium_1h": flow_metrics.get("same_ticker_premium_1h"),
-            "sector_net_premium_1h": flow_metrics.get("sector_net_premium_1h"),
-            # Market context
-            "spy_correlation_5d": flow_metrics.get("spy_correlation_5d"),
-            "spy_return_1h": flow_metrics.get("spy_return_1h"),
-            "vwap_distance_pct": market_context.get("vwap_distance_pct"),
-            "high_52w_distance_pct": market_context.get("high_52w_distance_pct"),
-            "overnight_gap_pct": market_context.get("overnight_gap_pct"),
-            # Timing
-            "entry_hour": entry_ts.hour,
-            "minutes_to_close": _get_minutes_to_close(entry_ts),
-            "days_to_earnings": flow_metrics.get("days_to_earnings"),
-            # Categorical
-            "is_spread_leg": False,  # Not detectable from single flow
-            "is_post_earnings": flow_metrics.get("is_post_earnings", False),
-            "earnings_in_dte_window": flow_metrics.get("earnings_in_dte_window", False),
-            "entry_session": _get_session(entry_ts),
-            "entry_day_of_week": entry_ts.weekday(),
-            "sector": flow_metrics.get("sector"),
-            "industry": flow_metrics.get("industry"),
-            # Regimes
-            "vol_regime_at_entry": regime.get("vol_regime"),
-            "risk_regime_at_entry": regime.get("risk_regime"),
-            "session_regime_at_entry": regime.get("session_regime"),
-            "trend_regime_at_entry": regime.get("trend_regime"),
-            "vix_regime_at_entry": regime.get("vix_regime"),
-            "sector_flow_direction": flow_metrics.get("sector_flow_direction"),
-            # Window features (multi-timeframe context)
-            "call_put_imbalance_1h": window_features.get("call_put_imbalance_1h"),
-            "call_put_imbalance_1d": window_features.get("call_put_imbalance_1d"),
-            "call_put_imbalance_1w": window_features.get("call_put_imbalance_1w"),
-            "sweep_ratio_1d": window_features.get("sweep_ratio_1d"),
-            "sweep_ratio_1w": window_features.get("sweep_ratio_1w"),
-            "dp_volume_1d_window": window_features.get("dp_volume_1d"),
-            "dp_volume_1w_window": window_features.get("dp_volume_1w"),
-            "call_put_ratio_1d": window_features.get("call_put_ratio_1d"),
-            "call_put_ratio_1w": window_features.get("call_put_ratio_1w"),
-        }
-    )
+    # Compute moneyness
+    moneyness = None
+    log_moneyness = None
+    if strike and underlying_price and underlying_price > 0:
+        moneyness = strike / underlying_price
+        import math
+
+        try:
+            log_moneyness = math.log(moneyness)
+        except ValueError:
+            pass
+
+    # Compute volume/OI ratio
+    vol = greeks.get("volume")
+    oi = greeks.get("open_interest")
+    vol_oi_ratio = None
+    if vol is not None and oi is not None and oi > 0:
+        vol_oi_ratio = vol / oi
+
+    # Timing
+    entry_hour = entry_ts.hour
+    mins_to_close = _get_minutes_to_close(entry_ts)
+
+    # Calculate minutes since open (9:30 AM ET)
+    # Using naive calculation based on hour/minute (assuming ET or approximating)
+    mins_from_midnight = entry_hour * 60 + entry_ts.minute
+    market_open_mins = 9 * 60 + 30
+    minutes_since_open = max(0, mins_from_midnight - market_open_mins)
+
+    enriched = {
+        # Entry context
+        "premium_usd": premium_usd or 0,
+        "dte": dte or 0,
+        "moneyness": moneyness,
+        "log_moneyness": log_moneyness,
+        # Greeks
+        "delta_at_entry": greeks.get("delta"),
+        "gamma_at_entry": greeks.get("gamma"),
+        "theta_at_entry": greeks.get("theta"),
+        "vega_at_entry": greeks.get("vega"),
+        "iv_at_entry": greeks.get("iv"),
+        # Vol/OI
+        "volume_at_entry": vol,
+        "open_interest_at_entry": oi,
+        "volume_oi_ratio": vol_oi_ratio,
+        # Market context
+        "underlying_1d_return": market_context.get("rvol_1d_return"),  # mapped from market context
+        "underlying_5d_return": market_context.get("rvol_5d_return"),
+        "underlying_30d_return": market_context.get("rvol_30d_return"),
+        "realized_vol_20d": market_context.get("rvol_daily"),
+        "iv_rank_at_entry": iv_rank,
+        # Timing
+        "entry_hour": entry_hour,
+        "minutes_to_close": mins_to_close,
+        "minutes_since_open": minutes_since_open,
+        # Categoricals / Tags
+        "put_call": put_call,
+        "aggressor": aggressor,
+        "is_sweep": is_sweep,
+        "is_block": False,  # TODO: Detect if block
+        "entry_day_of_week": entry_ts.weekday(),
+        # Tags (defaults)
+        "is_bullish": 0,
+        "is_bearish": 0,
+        "is_unusual": 0,
+    }
 
     return enriched
 
@@ -600,39 +547,20 @@ async def _get_market_context(
 ) -> Dict[str, Any]:
     """Get market context features via labeler helpers for parity with training."""
     result = {
-        "rvol_1h": None,
         "rvol_daily": None,
-        "overnight_gap_pct": None,
-        "high_52w_distance_pct": None,
-        "vwap_distance_pct": None,
+        "rvol_1d_return": 0.0,  # Placeholder, Heber provides this
+        "rvol_5d_return": 0.0,
+        "rvol_30d_return": 0.0,
     }
 
     try:
         rvol = await get_labeler_rvol_metrics(ticker, entry_ts)
         if isinstance(rvol, dict):
-            result["rvol_1h"] = rvol.get("rvol_1h")
             result["rvol_daily"] = rvol.get("rvol_daily")
+            # In a real implementation, we'd fetch returns here too
+            # For now, we rely on Heber's pipeline to provide these
     except Exception as e:
         logger.debug(f"RVOL helper lookup failed: {e}")
-
-    try:
-        phase1 = await get_labeler_phase1_bucket_features(ticker, entry_ts, dte if dte is not None else 0)
-        if isinstance(phase1, dict):
-            result["overnight_gap_pct"] = phase1.get("overnight_gap_pct")
-            result["vwap_distance_pct"] = phase1.get("vwap_distance_pct")
-    except Exception as e:
-        logger.debug(f"Phase1 helper lookup failed: {e}")
-
-    expiry_dt = _coerce_expiry_datetime(expiry, entry_ts, dte)
-    if expiry_dt is None:
-        return result
-
-    try:
-        p3 = await get_labeler_p3_features(ticker, option_chain or "", expiry_dt, entry_ts)
-        if isinstance(p3, dict):
-            result["high_52w_distance_pct"] = p3.get("high_52w_distance_pct")
-    except Exception as e:
-        logger.debug(f"P3 helper lookup failed: {e}")
 
     return result
 

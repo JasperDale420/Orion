@@ -44,23 +44,17 @@ EXIT_FEATURE_NAMES: tuple[str, ...] = (
     "dte_at_entry",
     "is_sweep",
     "iv_rank_at_entry",
-    "vix_at_entry",
-    "gex_at_entry",
-    "market_tide_30m",
+    "realized_vol_20d",
     "delta_at_entry",
     "theta_at_entry",
     "iv_at_entry",
-    "ask_side_ratio",
-    "window_call_put_imbalance_1h",
-    "window_sweep_ratio_1h",
-    "window_flow_count_1h",
-    "window_call_put_imbalance_1d",
-    "window_sweep_ratio_1d",
-    "window_dp_volume_1d",
-    "window_call_put_ratio_1d",
-    "window_call_put_imbalance_1w",
-    "window_sweep_ratio_1w",
-    "window_call_put_ratio_1w",
+    "volume_oi_ratio",
+    "underlying_1d_return",
+    "underlying_5d_return",
+    "underlying_30d_return",
+    "is_bullish",
+    "is_bearish",
+    "is_unusual",
 )
 
 
@@ -431,23 +425,17 @@ def _normalize_heber_features_for_exit(frame: Any) -> Any:
         "dte_at_entry": ["dte_at_entry", "dte", "days_to_expiry"],
         "is_sweep": ["is_sweep"],
         "iv_rank_at_entry": ["iv_rank_at_entry", "iv_rank"],
-        "vix_at_entry": ["vix_at_entry"],
-        "gex_at_entry": ["gex_at_entry", "gex"],
-        "market_tide_30m": ["market_tide_30m"],
+        "realized_vol_20d": ["realized_vol_20d", "rvol_daily"],
         "delta_at_entry": ["delta_at_entry", "delta"],
         "theta_at_entry": ["theta_at_entry", "theta"],
         "iv_at_entry": ["iv_at_entry", "iv"],
-        "ask_side_ratio": ["ask_side_ratio"],
-        "window_call_put_imbalance_1h": ["window_call_put_imbalance_1h"],
-        "window_sweep_ratio_1h": ["window_sweep_ratio_1h"],
-        "window_flow_count_1h": ["window_flow_count_1h"],
-        "window_call_put_imbalance_1d": ["window_call_put_imbalance_1d"],
-        "window_sweep_ratio_1d": ["window_sweep_ratio_1d"],
-        "window_dp_volume_1d": ["window_dp_volume_1d"],
-        "window_call_put_ratio_1d": ["window_call_put_ratio_1d"],
-        "window_call_put_imbalance_1w": ["window_call_put_imbalance_1w"],
-        "window_sweep_ratio_1w": ["window_sweep_ratio_1w"],
-        "window_call_put_ratio_1w": ["window_call_put_ratio_1w"],
+        "volume_oi_ratio": ["volume_oi_ratio", "vol_oi"],
+        "underlying_1d_return": ["underlying_1d_return"],
+        "underlying_5d_return": ["underlying_5d_return"],
+        "underlying_30d_return": ["underlying_30d_return"],
+        "is_bullish": ["is_bullish"],
+        "is_bearish": ["is_bearish"],
+        "is_unusual": ["is_unusual"],
     }
 
     for target, candidates in mapped_columns.items():
@@ -458,27 +446,11 @@ def _normalize_heber_features_for_exit(frame: Any) -> Any:
         lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
     )
 
-    ask_ratio_source = _first_existing_column(frame, ["ask_side_ratio"])
-    if ask_ratio_source is None:
-        ask_ratio = pd.Series(np.nan, index=normalized.index, dtype="float64")
-    else:
-        ask_ratio = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
-    side_source = _first_existing_column(frame, ["side", "aggressor"])
-    if side_source is not None:
-        side_tokens = frame[side_source].astype(str).str.strip().str.lower()
+    # Normalize booleans
+    bool_floats = ["is_bullish", "is_bearish", "is_unusual"]
+    for col in bool_floats:
+        normalized[col] = pd.to_numeric(normalized[col], errors="coerce").fillna(0)
 
-        def _token_to_ask_ratio(token: str) -> float:
-            if token in {"ask", "buy", "buyer", "bullish"}:
-                return 1.0
-            if token in {"bid", "sell", "seller", "bearish"}:
-                return 0.0
-            if token in {"mid", "midpoint", "neutral"}:
-                return 0.5
-            return np.nan
-
-        side_ratio = side_tokens.map(_token_to_ask_ratio)
-        ask_ratio = ask_ratio.where(ask_ratio.notna(), side_ratio)
-    normalized["ask_side_ratio"] = ask_ratio.fillna(0.5)
     return normalized
 
 
@@ -580,23 +552,17 @@ async def _build_bucket_training_data_from_heber(
             float(max(dte_entry, 0)),
             1.0 if _is_truthy(row.get("is_sweep")) else 0.0,
             _safe_float(row.get("iv_rank_at_entry"), default=50.0),
-            _safe_float(row.get("vix_at_entry"), default=20.0),
-            _safe_float(row.get("gex_at_entry")),
-            _safe_float(row.get("market_tide_30m")),
+            _safe_float(row.get("realized_vol_20d")),
             delta_entry,
             theta_entry,
             iv_entry,
-            _safe_float(row.get("ask_side_ratio")),
-            _safe_float(row.get("window_call_put_imbalance_1h")),
-            _safe_float(row.get("window_sweep_ratio_1h")),
-            _safe_float(row.get("window_flow_count_1h")),
-            _safe_float(row.get("window_call_put_imbalance_1d")),
-            _safe_float(row.get("window_sweep_ratio_1d")),
-            _safe_float(row.get("window_dp_volume_1d")),
-            _safe_float(row.get("window_call_put_ratio_1d")),
-            _safe_float(row.get("window_call_put_imbalance_1w")),
-            _safe_float(row.get("window_sweep_ratio_1w")),
-            _safe_float(row.get("window_call_put_ratio_1w")),
+            _safe_float(row.get("volume_oi_ratio")),
+            _safe_float(row.get("underlying_1d_return")),
+            _safe_float(row.get("underlying_5d_return")),
+            _safe_float(row.get("underlying_30d_return")),
+            _safe_float(row.get("is_bullish")),
+            _safe_float(row.get("is_bearish")),
+            _safe_float(row.get("is_unusual")),
         ]
 
         if len(features_vector) != len(feature_names):

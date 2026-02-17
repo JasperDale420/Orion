@@ -1,8 +1,9 @@
 """
-UW Feature Enrichment Service.
+Feature Enrichment Service.
 
-Periodically fetches GEX, Market Tide, Max Pain, IV Rank for tracked tickers.
-Runs as a background service to populate feature tables for ML.
+Reads market context features (VIX, Market Tide, SPY returns, Regime snapshots)
+from Heber's normalized data feeds. Runs as a background service to populate
+feature tables for ML.
 """
 
 import asyncio
@@ -19,22 +20,13 @@ load_dotenv()
 
 from orion.analysis.regime import MultiAxisRegimeDetector
 from orion.clients.heber_reader import HeberReader
-from orion.config import system_settings
-from orion.connectors.uw_greek_exposure_connector import UWGreekExposureConnector
-from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
-from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
-from orion.connectors.uw_max_pain_connector import UWMaxPainConnector
-from orion.connectors.vix_proxy_connector import VIXProxyConnector
+
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.feature_enrichment")
 
 # Poll intervals
-MARKET_TIDE_INTERVAL = 300  # Every 5 minutes (reduced from 60s to save API calls)
-GREEK_EXPOSURE_INTERVAL = 300  # Every 5 minutes
-MAX_PAIN_INTERVAL = 3600  # Every hour
-IV_RANK_INTERVAL = 900  # Every 15 minutes
 REGIME_SNAPSHOT_INTERVAL = 300  # Every 5 minutes
 VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
 DEFAULT_ZERO_WRITE_WARN_STREAK = 3
@@ -46,23 +38,6 @@ _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 _heber_reader = HeberReader()
 _recent_regime_snapshots: list[dict[str, Any]] = []
-
-
-def _gateway_fetch_enabled() -> bool:
-    raw = os.getenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", "0").strip().lower()
-    return raw in {"1", "true", "yes", "on", "y"}
-
-
-def _gateway_runtime_contract() -> tuple[str, str]:
-    gateway_url = (system_settings.data_gateway_url or "").strip()
-    if not gateway_url:
-        raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
-
-    gateway_api_key = (system_settings.data_gateway_api_key or "").strip()
-    if not gateway_api_key:
-        raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
-
-    return gateway_url.rstrip("/"), gateway_api_key
 
 
 def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> List[str]:
@@ -519,40 +494,21 @@ async def persist_regime_snapshot(
 
 
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
-    """Main feature enrichment loop."""
-    gateway_fetch_enabled = _gateway_fetch_enabled()
-    zero_write_warn_streak = _zero_write_warn_streak_threshold()
+    """Main feature enrichment loop.
+
+    All market context data is now sourced from Heber's normalized feeds.
+    """
     loop_sleep_seconds = _loop_sleep_seconds()
     loop_error_warn_streak = _loop_error_warn_streak_threshold()
     non_heber_warn_streak = _non_heber_warn_streak_threshold()
     await init_db()
 
-    greek_connector: UWGreekExposureConnector | None = None
-    tide_connector: UWMarketTideConnector | None = None
-    max_pain_connector: UWMaxPainConnector | None = None
-    iv_connector: UWIVRankConnector | None = None
-    if gateway_fetch_enabled:
-        gateway_url, gateway_api_key = _gateway_runtime_contract()
-        greek_connector = UWGreekExposureConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-        tide_connector = UWMarketTideConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-        max_pain_connector = UWMaxPainConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-        iv_connector = UWIVRankConnector(gateway_url=gateway_url, gateway_key=gateway_api_key)
-    else:
-        logger.info(
-            "Feature enrichment gateway polling disabled; relying on Data-Gateway -> Heber feeds",
-            extra={"event": "feature_enrichment_gateway_fetch_disabled"},
-        )
     regime_detector = MultiAxisRegimeDetector()
-    vix_connector = VIXProxyConnector()  # Uses VIXY bars from Heber bars feed
 
-    last_tide = datetime.min.replace(tzinfo=timezone.utc)
-    last_greek = datetime.min.replace(tzinfo=timezone.utc)
-    last_max_pain = datetime.min.replace(tzinfo=timezone.utc)
-    last_iv = datetime.min.replace(tzinfo=timezone.utc)
     last_regime = datetime.min.replace(tzinfo=timezone.utc)
     last_vix = datetime.min.replace(tzinfo=timezone.utc)
     last_ticker_source: str | None = None
-    zero_write_streaks: dict[str, int] = {}
+
     loop_error_streak = 0
     non_heber_streak = 0
 
@@ -574,77 +530,12 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 tickers_count=len(tickers),
             )
 
-            # Market Tide - every minute
-            if (
-                gateway_fetch_enabled
-                and tide_connector is not None
-                and (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL
-            ):
-                count = await tide_connector.fetch_and_store()
-                logger.info(f"Market Tide: stored {count} ticks")
-                _note_fetch_count("market_tide", count, zero_write_streaks, zero_write_warn_streak)
-                last_tide = now
-
-            # Greek Exposure - every 5 minutes
-            if (
-                gateway_fetch_enabled
-                and greek_connector is not None
-                and (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL
-            ):
-                count = await greek_connector.fetch_and_store(tickers)
-                logger.info(f"Greek Exposure: stored {count} records for {len(tickers)} tickers")
-                _note_fetch_count(
-                    "greek_exposure",
-                    count,
-                    zero_write_streaks,
-                    zero_write_warn_streak,
-                    tickers_count=len(tickers),
-                )
-                last_greek = now
-
-            # Max Pain - every hour
-            if (
-                gateway_fetch_enabled
-                and max_pain_connector is not None
-                and (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL
-            ):
-                count = await max_pain_connector.fetch_and_store(tickers)
-                logger.info(f"Max Pain: stored {count} records")
-                _note_fetch_count(
-                    "max_pain",
-                    count,
-                    zero_write_streaks,
-                    zero_write_warn_streak,
-                    tickers_count=len(tickers),
-                )
-                last_max_pain = now
-
-            # IV Rank - every 15 minutes
-            if (
-                gateway_fetch_enabled
-                and iv_connector is not None
-                and (now - last_iv).total_seconds() >= IV_RANK_INTERVAL
-            ):
-                count = await iv_connector.fetch_and_store(tickers)
-                logger.info(f"IV Rank: stored {count} records")
-                _note_fetch_count(
-                    "iv_rank",
-                    count,
-                    zero_write_streaks,
-                    zero_write_warn_streak,
-                    tickers_count=len(tickers),
-                )
-                last_iv = now
-
-            # VIX Data - every hour
+            # VIX Data - every hour (from Heber VIXY bars)
             if (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
-                try:
-                    count = await vix_connector.fetch_and_store()
-                    logger.info(f"VIX Proxy: stored {count} records")
-                    _note_fetch_count("vix_proxy", count, zero_write_streaks, zero_write_warn_streak)
-                    last_vix = now
-                except Exception as e:
-                    logger.error(f"VIX proxy fetch error: {e}", exc_info=True)
+                vix_data = await get_latest_vix_data()
+                if vix_data:
+                    logger.info(f"VIX context updated from Heber: vix={vix_data.get('vix')}")
+                last_vix = now
 
             # Regime Snapshot - every 5 minutes
             if (now - last_regime).total_seconds() >= REGIME_SNAPSHOT_INTERVAL:

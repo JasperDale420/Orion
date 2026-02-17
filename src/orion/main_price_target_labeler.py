@@ -1434,15 +1434,12 @@ def _get_heber_close_at_or_before(ticker: str, target_ts: datetime) -> Optional[
 
 
 async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
-    """Get Greeks from stored values or Alpaca API, with Black-Scholes fallback.
+    """Get Greeks from stored values, with Black-Scholes fallback.
 
     Priority:
     1. Stored Greeks from Heber flow alerts (captured at ingestion time)
-    2. Alpaca API (for flows ingested before Greeks enrichment)
-    3. Black-Scholes fallback (if Alpaca unavailable)
+    2. Black-Scholes fallback (computed from flow metadata)
     """
-    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
-
     result = {
         "delta": None,
         "gamma": None,
@@ -1464,8 +1461,6 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     result["open_interest"] = flow_data.get("open_interest")
     result["iv"] = flow_data.get("iv")
 
-    option_chain = flow_data.get("option_chain")
-
     # Priority 1: Use stored Greeks from Heber flow alerts (captured at ingestion)
     if flow_data.get("delta_stored") is not None:
         result["delta"] = flow_data.get("delta_stored")
@@ -1475,18 +1470,6 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
         result["rho"] = flow_data.get("rho_stored")
         result["iv_alpaca"] = flow_data.get("iv_alpaca_stored")
         return result
-
-    # Priority 2: Try Alpaca API (for flows ingested before Greeks enrichment)
-    if option_chain:
-        alpaca_greeks = await get_option_greeks(option_chain)
-        if alpaca_greeks.get("delta") is not None:
-            result["delta"] = alpaca_greeks.get("delta")
-            result["gamma"] = alpaca_greeks.get("gamma")
-            result["theta"] = alpaca_greeks.get("theta")
-            result["vega"] = alpaca_greeks.get("vega")
-            result["rho"] = alpaca_greeks.get("rho")
-            result["iv_alpaca"] = alpaca_greeks.get("implied_volatility")
-            return result
 
     # Fallback to Black-Scholes if Alpaca unavailable
     S = float(flow_data.get("underlying_price") or 0)
@@ -2813,7 +2796,6 @@ async def get_checkpoint_greeks(
     Returns:
         Dict mapping checkpoint suffix to Greeks + decay features + underlying
     """
-    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
 
     now = datetime.now(timezone.utc)
     results: Dict[str, Dict[str, Optional[float]]] = {}
@@ -2834,22 +2816,14 @@ async def get_checkpoint_greeks(
             "underlying": None,
         }
 
-        # Only fetch live data if checkpoint is within 5 minutes of now (real-time labeling)
+        # Fetch underlying price at checkpoint if within window
         time_to_checkpoint = abs((now - checkpoint_ts).total_seconds())
         if time_to_checkpoint < 300:  # 5 minutes
             try:
-                greeks = await get_option_greeks(option_chain)
-                cp_data["delta"] = greeks.get("delta")
-                cp_data["gamma"] = greeks.get("gamma")
-                cp_data["theta"] = greeks.get("theta")
-                cp_data["vega"] = greeks.get("vega")
-                cp_data["iv"] = greeks.get("implied_volatility")
-
-                # Fetch underlying price at checkpoint
                 underlying = await get_underlying_price_at_entry(ticker, checkpoint_ts)
                 cp_data["underlying"] = underlying
             except Exception as e:
-                logger.debug(f"Error fetching data at {cp_suffix}: {e}")
+                logger.debug(f"Error fetching underlying at {cp_suffix}: {e}")
 
         # Calculate time decay features (can be calculated without API)
         if expiry and dte is not None:

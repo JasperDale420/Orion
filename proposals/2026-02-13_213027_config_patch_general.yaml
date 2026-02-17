@@ -1,0 +1,23 @@
+meta:
+  run_id: e334cd5f-b1b1-4cbd-966a-56455a0e64a2
+  created_at: '2026-02-13T21:30:27.850811+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-13_e334cd5f-b1b1-4cbd-966a-56455a0e64a2.json
+  report_path: artifacts/reports/eod_report_2026-02-13.md
+proposal:
+  type: config_patch
+  rationale: Investigate why regime detection is unavailable and why zero signals
+    were generated
+  evidence_pointers:
+    regime_available: false
+    regime_computed: 0
+    signals_total: 0
+    decisions_total: 0
+  test_plan:
+  - Check regime detector service logs
+  - Verify data ingestion pipelines are functioning
+  - Test signal generation with historical data
+  changes:
+    diagnostic_mode: true
+    regime_fallback: NEUTRAL

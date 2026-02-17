@@ -16,7 +16,6 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import SystemSettings
-from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.option_quote_tracker")
@@ -261,9 +260,7 @@ async def run_quote_tracker() -> None:
             },
         )
         return
-    logger.info("Option Quote Tracker starting...")
-
-    connector = AlpacaOptionGreeksConnector()
+    logger.info("Option Quote Tracker starting (deprecated — Greeks fetching disabled)...")
 
     while not shutdown_event.is_set():
         try:
@@ -311,7 +308,7 @@ async def run_quote_tracker() -> None:
 
             for i in range(0, len(all_symbols), BATCH_SIZE):
                 batch_symbols = all_symbols[i : i + BATCH_SIZE]
-                quotes = await connector.get_greeks_batch(batch_symbols)
+                quotes = {}  # Greeks connector removed; checkpoint data populated by Heber watch pipeline
 
                 for symbol in batch_symbols:
                     quote_data = quotes.get(symbol, {})
