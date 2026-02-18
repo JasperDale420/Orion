@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Extracted Heber feature utilities into `orion/data/heber_features.py`**:
+  - Moved 14 public feature functions and their private helpers from `main_price_target_labeler.py` into a dedicated `src/orion/data/heber_features.py` module (1,409 lines).
+  - Functions extracted: `get_gex_at_entry`, `get_gex_rolling_averages`, `get_market_tide_before_entry`, `get_window_features_at_entry`, `get_max_pain_distance`, `get_iv_rank_at_entry`, `get_regime_at_entry`, `get_flow_greeks`, `get_darkpool_metrics`, `get_rvol_metrics`, `get_flow_aggression`, `get_earnings_proximity`, `get_p2_features`, `get_p3_features`, `get_sector_correlation_features`.
+  - Updated `src/orion/ml/flow_enricher.py` imports to reference the new module.
+
 #### ML Feature Expansion — GEX, Max Pain, Market Tide
 
 - Added 4 new features to `FEATURE_COLUMNS` in `src/orion/ml/pattern_miner.py`:
