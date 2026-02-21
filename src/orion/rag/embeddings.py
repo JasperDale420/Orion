@@ -10,7 +10,7 @@ from typing import List, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.config import agent_settings, system_settings
-from orion.core.http_client import create_async_http_client
+from orion.core.http_client import create_async_http_client, raise_for_status
 
 logger = structlog.get_logger(__name__)
 
@@ -77,7 +77,7 @@ class EmbeddingClient:
                 self.ollama_url,
                 json={"model": self.ollama_model, "prompt": text},
             )
-            response.raise_for_status()
+            raise_for_status(response)
             data = response.json()
             embedding = data.get("embedding")
             if not embedding:
