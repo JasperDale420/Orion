@@ -16,6 +16,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `main_price_target_labeler.py`: Removed unnecessary `async` from `get_market_tide_before_entry`, `get_iv_rank_at_entry`, `get_regime_at_entry`, `get_rvol_metrics` (S5765). Updated all callers.
   - `flow_enricher.py`: Updated 5 callers to remove `await` from now-sync labeler functions.
 
+- **SonarQube code quality fixes - Wave 2** (2026-02-21):
+  - `correlation_adjuster.py`: Removed unnecessary `async` from `get_size_multiplier`, `_calculate_correlation`, `_get_daily_returns` (S7503). Updated callers.
+  - `sync_earnings.py`: Removed unnecessary `async` from `_upsert_earnings_direct`, `_process_single_earnings_record`, `_upsert_earnings`, `_upsert_earnings_row` (S7503). Updated callers.
+  - `validate_features.py`: Removed unnecessary `async` from `validate_overnight_gap`, `validate_darkpool`, `_fetch_source_summary_from_local_db` (S7503). Updated callers.
+  - `main_feature_enrichment.py`: Removed unnecessary `async` from `get_active_tickers_with_source`, `get_active_tickers`, `get_latest_vix_data`, `get_latest_market_tide`, `get_spy_cumulative_return`, `persist_regime_snapshot` (S7503). Updated callers.
+  - `risk_manager.py`: Removed cascading `await` in `calculate_size_with_correlation` for now-sync `get_size_multiplier`.
+  - `data_quality_checker.py`: Extracted duplicated `"datetime64[ns, UTC]"` literal into `_UTC_TZ_DTYPE` constant (S1192).
+  - Updated 5 test files to match sync signatures and remove async mocks.
+
 - **Logging: Migrate 46 production files from stdlib `logging` to `structlog`** (2026-02-21):
   - Replaced `import logging` / `logging.getLogger(__name__)` with `setup_struct_logger()` across agents, analysis, connectors, core, execution, jobs, ml, processing, rag, reconciliation, shared, and storage modules.
   - Fixed silent `except: pass` in `execution_engine.py` around price fetching — now logs the error.

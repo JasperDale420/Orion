@@ -123,7 +123,7 @@ async def test_validate_darkpool_prefers_heber_when_available(monkeypatch: pytes
     monkeypatch.setattr(validate_features, "_get_darkpool_volume_from_heber_for_validation", lambda *_: 150)
     monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
-    results = await validate_features.validate_darkpool(
+    results = validate_features.validate_darkpool(
         {"darkpool_volume_1h": 150},
         "AAPL",
         datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
@@ -145,7 +145,7 @@ async def test_validate_overnight_gap_prefers_heber_when_available(monkeypatch: 
     )
     monkeypatch.setattr(validate_features, "db_query", _fail_db_query, raising=False)
 
-    results = await validate_features.validate_overnight_gap(
+    results = validate_features.validate_overnight_gap(
         {"overnight_gap_pct": 10.0},
         "AAPL",
         datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
@@ -165,7 +165,7 @@ async def test_validate_overnight_gap_returns_empty_when_heber_empty(monkeypatch
         raising=False,
     )
 
-    results = await validate_features.validate_overnight_gap(
+    results = validate_features.validate_overnight_gap(
         {"overnight_gap_pct": 5.0},
         "AAPL",
         datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
@@ -185,7 +185,7 @@ async def test_validate_darkpool_warns_when_heber_empty(monkeypatch: pytest.Monk
         raising=False,
     )
 
-    results = await validate_features.validate_darkpool(
+    results = validate_features.validate_darkpool(
         {"darkpool_volume_1h": 200},
         "AAPL",
         datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),

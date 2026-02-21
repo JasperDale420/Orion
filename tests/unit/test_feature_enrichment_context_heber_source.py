@@ -27,7 +27,7 @@ async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    value = await feature_enrichment.get_latest_market_tide()
+    value = feature_enrichment.get_latest_market_tide()
 
     assert value == pytest.approx(50.0)
 
@@ -55,7 +55,7 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    vix_data = await feature_enrichment.get_latest_vix_data()
+    vix_data = feature_enrichment.get_latest_vix_data()
 
     assert vix_data["vix"] == pytest.approx(24.0)
     assert vix_data["vix_1d_change"] == pytest.approx(20.0)
@@ -75,7 +75,7 @@ async def test_get_latest_market_tide_returns_none_when_heber_unavailable(monkey
 
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    value = await feature_enrichment.get_latest_market_tide()
+    value = feature_enrichment.get_latest_market_tide()
 
     assert value is None
 
@@ -93,7 +93,7 @@ async def test_get_latest_vix_data_returns_empty_when_heber_unavailable(monkeypa
 
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    vix_data = await feature_enrichment.get_latest_vix_data()
+    vix_data = feature_enrichment.get_latest_vix_data()
 
     assert vix_data == {}
 
@@ -117,7 +117,7 @@ async def test_get_spy_cumulative_return_prefers_heber(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    value = await feature_enrichment.get_spy_cumulative_return()
+    value = feature_enrichment.get_spy_cumulative_return()
 
     assert value == pytest.approx(0.2)
 
@@ -135,7 +135,7 @@ async def test_get_spy_cumulative_return_returns_zero_when_heber_unavailable(mon
 
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    value = await feature_enrichment.get_spy_cumulative_return()
+    value = feature_enrichment.get_spy_cumulative_return()
 
     assert value == pytest.approx(0.0)
 
@@ -157,7 +157,7 @@ async def test_context_reads_can_disable_heber(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(feature_enrichment._heber_reader, "read_market_tide", _heber_market_tide)
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    value = await feature_enrichment.get_latest_market_tide()
+    value = feature_enrichment.get_latest_market_tide()
 
     assert value is None
     assert db_called["value"] is False

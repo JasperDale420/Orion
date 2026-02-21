@@ -105,7 +105,7 @@ async def _fetch_and_sync_earnings(
         )
         for row in rows:
             try:
-                await _upsert_earnings_row(row=row, fallback_announce_time=fallback_announce_time)
+                _upsert_earnings_row(row=row, fallback_announce_time=fallback_announce_time)
                 results["synced"] += 1
             except Exception as ex:
                 logger.debug(f"Failed to upsert earnings row: {ex}")
@@ -124,14 +124,14 @@ async def backfill_ticker_earnings(ticker: str) -> int:
             params={"limit": 100},
         )
         for row in rows:
-            count += await _process_single_earnings_record(ticker=ticker, row=row)
+            count += _process_single_earnings_record(ticker=ticker, row=row)
     except Exception as e:
         logger.debug(f"Failed to fetch earnings for {ticker}: {e}")
 
     return count
 
 
-async def _process_single_earnings_record(ticker: str, row: Dict[str, Any]) -> int:
+def _process_single_earnings_record(ticker: str, row: Dict[str, Any]) -> int:
     """Process a single earnings record and upsert to database."""
     report_date = _parse_gateway_date(row.get("date") or row.get("report_date") or row.get("earnings_date"))
     if report_date is None:
@@ -140,7 +140,7 @@ async def _process_single_earnings_record(ticker: str, row: Dict[str, Any]) -> i
     try:
         announce = row.get("time") or row.get("announce_time") or row.get("report_time") or row.get("earnings_time")
 
-        await _upsert_earnings_direct(
+        _upsert_earnings_direct(
             ticker=ticker.upper(),
             report_date=report_date,
             announce_time=announce,
@@ -258,7 +258,7 @@ async def _get_backfill_tickers_from_heber_gold() -> List[str]:
     return sorted(tickers)
 
 
-async def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: str) -> None:
+def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: str) -> None:
     """Upsert a single earnings record from API response object."""
     from orion.unusualwhales.types import UNSET
 
@@ -266,7 +266,7 @@ async def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: 
     if not ticker or isinstance(ticker, type(UNSET)):
         return
 
-    await _upsert_earnings_direct(
+    _upsert_earnings_direct(
         ticker=str(ticker),
         report_date=report_date,
         announce_time=announce_time,
@@ -277,7 +277,7 @@ async def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: 
     )
 
 
-async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str) -> None:
+def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str) -> None:
     ticker = (row.get("symbol") or row.get("ticker") or "").strip().upper()
     if not ticker:
         return
@@ -294,7 +294,7 @@ async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str)
         or fallback_announce_time
     )
 
-    await _upsert_earnings_direct(
+    _upsert_earnings_direct(
         ticker=ticker,
         report_date=report_date,
         announce_time=str(announce_time) if announce_time is not None else None,
@@ -305,7 +305,7 @@ async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str)
     )
 
 
-async def _upsert_earnings_direct(
+def _upsert_earnings_direct(
     ticker: str,
     report_date: date,
     announce_time: Optional[str] = None,

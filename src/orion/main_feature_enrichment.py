@@ -412,7 +412,7 @@ def _log_ticker_source_transition(source: str, previous_source: str | None, tick
     return source
 
 
-async def get_active_tickers_with_source(limit: int = 20) -> tuple[List[str], str]:
+def get_active_tickers_with_source(limit: int = 20) -> tuple[List[str], str]:
     """Get tickers with recent flow activity and the source used."""
     try:
         now_utc = datetime.now(timezone.utc)
@@ -429,13 +429,13 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[List[str], st
     return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
 
 
-async def get_active_tickers(limit: int = 20) -> List[str]:
+def get_active_tickers(limit: int = 20) -> List[str]:
     """Get tickers with recent flow activity (Heber first, DB fallback)."""
-    tickers, _source = await get_active_tickers_with_source(limit=limit)
+    tickers, _source = get_active_tickers_with_source(limit=limit)
     return tickers
 
 
-async def get_latest_vix_data() -> dict[str, Any]:
+def get_latest_vix_data() -> dict[str, Any]:
     """Get latest VIX context, preferring Heber VIXY proxy bars."""
     if _prefer_heber_context_reads():
         heber_vix = _get_latest_vix_data_from_heber()
@@ -445,7 +445,7 @@ async def get_latest_vix_data() -> dict[str, Any]:
     return {}
 
 
-async def get_latest_market_tide() -> float | None:
+def get_latest_market_tide() -> float | None:
     """Get latest market tide net premium (calls - puts)."""
     if _prefer_heber_context_reads():
         heber_net = _get_latest_market_tide_from_heber()
@@ -455,7 +455,7 @@ async def get_latest_market_tide() -> float | None:
     return None
 
 
-async def get_spy_cumulative_return() -> float:
+def get_spy_cumulative_return() -> float:
     """Get SPY cumulative return over past 20 bars (approximate trend)."""
     if _prefer_heber_context_reads():
         heber_return = _get_spy_cumulative_return_from_heber()
@@ -465,7 +465,7 @@ async def get_spy_cumulative_return() -> float:
     return 0.0
 
 
-async def persist_regime_snapshot(
+def persist_regime_snapshot(
     ts: datetime,
     snapshot: Any,
     ticker: str = "SPY",
@@ -517,7 +517,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     while not shutdown_event.is_set():
         try:
             now = datetime.now(timezone.utc)
-            tickers, ticker_source = await get_active_tickers_with_source()
+            tickers, ticker_source = get_active_tickers_with_source()
             last_ticker_source = _log_ticker_source_transition(
                 source=ticker_source,
                 previous_source=last_ticker_source,
@@ -532,7 +532,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
 
             # VIX Data - every hour (from Heber VIXY bars)
             if (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
-                vix_data = await get_latest_vix_data()
+                vix_data = get_latest_vix_data()
                 if vix_data:
                     logger.info(f"VIX context updated from Heber: vix={vix_data.get('vix')}")
                 last_vix = now
@@ -540,9 +540,9 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
             # Regime Snapshot - every 5 minutes
             if (now - last_regime).total_seconds() >= REGIME_SNAPSHOT_INTERVAL:
                 try:
-                    vix_data = await get_latest_vix_data()
-                    market_tide_net = await get_latest_market_tide()
-                    cum_ret = await get_spy_cumulative_return()
+                    vix_data = get_latest_vix_data()
+                    market_tide_net = get_latest_market_tide()
+                    cum_ret = get_spy_cumulative_return()
 
                     snapshot = regime_detector.detect(
                         ts=now,
@@ -553,7 +553,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                         market_tide_net=market_tide_net,
                     )
 
-                    await persist_regime_snapshot(now, snapshot)
+                    persist_regime_snapshot(now, snapshot)
                     logger.info(
                         f"Regime Snapshot: trend={snapshot.trend.value}, "
                         f"vol={snapshot.vol.value}, risk={snapshot.risk.value}, "

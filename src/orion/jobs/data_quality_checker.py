@@ -23,6 +23,8 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
+
+_UTC_TZ_DTYPE = "datetime64[ns, UTC]"
 from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.jobs.data_quality_checker")
@@ -501,10 +503,10 @@ def _extract_ticker_series(df: pd.DataFrame) -> pd.Series:
 
 def _extract_time_series(df: pd.DataFrame) -> pd.Series:
     if df.empty:
-        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+        return pd.Series(index=df.index, dtype=_UTC_TZ_DTYPE)
     time_col = _first_existing_column(df, ["ts_event", "alert_time", "entry_ts", "ts_available"])
     if time_col is None:
-        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+        return pd.Series(index=df.index, dtype=_UTC_TZ_DTYPE)
     return pd.to_datetime(df[time_col], utc=True, errors="coerce")
 
 
@@ -765,7 +767,7 @@ async def _read_heber_bars_24h(symbols: List[str] | None = None, lookback_hours:
 def _coerce_bar_time_series(df: pd.DataFrame) -> pd.Series:
     time_col = _first_existing_column(df, ["ts_event", "bar_start_ts", "bar_start_ts_utc", "ts_utc"])
     if time_col is None:
-        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
+        return pd.Series(index=df.index, dtype=_UTC_TZ_DTYPE)
     return pd.to_datetime(df[time_col], utc=True, errors="coerce")
 
 

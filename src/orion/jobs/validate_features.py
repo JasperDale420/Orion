@@ -227,12 +227,12 @@ async def spot_check_record(event_id: str) -> Dict[str, Any]:
     results["failed"].extend(time_checks["failed"])
 
     # 2. Validate overnight_gap from raw bars
-    gap_checks = await validate_overnight_gap(label, ticker, entry_ts)
+    gap_checks = validate_overnight_gap(label, ticker, entry_ts)
     results["passed"].extend(gap_checks["passed"])
     results["failed"].extend(gap_checks["failed"])
 
     # 3. Validate darkpool from raw darkpool table
-    dp_checks = await validate_darkpool(label, ticker, entry_ts)
+    dp_checks = validate_darkpool(label, ticker, entry_ts)
     results["passed"].extend(dp_checks["passed"])
     results["failed"].extend(dp_checks["failed"])
     results["warnings"].extend(dp_checks.get("warnings", []))
@@ -275,7 +275,7 @@ def validate_time_features(label: Dict, entry_ts: datetime) -> Dict[str, List[st
     return {"passed": passed, "failed": failed}
 
 
-async def validate_overnight_gap(label: Dict, ticker: str, entry_ts: datetime) -> Dict[str, List[str]]:
+def validate_overnight_gap(label: Dict, ticker: str, entry_ts: datetime) -> Dict[str, List[str]]:
     """Validate overnight_gap against raw bar data."""
     passed, failed = [], []
 
@@ -371,7 +371,7 @@ def _get_overnight_gap_inputs_from_heber_for_validation(
     return today_open, prior_close
 
 
-async def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dict[str, List[str]]:
+def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dict[str, List[str]]:
     """Validate darkpool volume against raw darkpool table."""
     passed, failed, warnings = [], [], []
 
@@ -746,7 +746,7 @@ async def _fetch_source_summary_from_heber(
     return summary
 
 
-async def _fetch_source_summary_from_local_db(*, source: str) -> Dict[str, Any]:
+def _fetch_source_summary_from_local_db(*, source: str) -> Dict[str, Any]:
     _ = _normalize_source_id(source)
     return {"min_date": None, "max_date": None, "tickers": 0, "backend": "local_db_disabled"}
 

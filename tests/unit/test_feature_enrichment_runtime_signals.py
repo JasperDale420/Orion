@@ -31,7 +31,7 @@ async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.
 
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
-    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+    tickers, source = feature_enrichment.get_active_tickers_with_source(limit=2)
 
     assert tickers == ["AAPL", "MSFT"]
     assert source == "heber"
@@ -52,7 +52,7 @@ async def test_get_active_tickers_with_source_falls_back_to_static_without_db(mo
 
     monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query, raising=False)
 
-    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+    tickers, source = feature_enrichment.get_active_tickers_with_source(limit=2)
 
     assert source == "static_fallback"
     assert tickers[:2] == ["SPY", "QQQ"]
@@ -74,7 +74,7 @@ async def test_get_active_tickers_with_source_falls_back_to_static(monkeypatch: 
 
     monkeypatch.setattr(feature_enrichment, "db_query", _record_db_query, raising=False)
 
-    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+    tickers, source = feature_enrichment.get_active_tickers_with_source(limit=2)
 
     assert source == "static_fallback"
     assert tickers[:2] == ["SPY", "QQQ"]
@@ -346,7 +346,7 @@ async def test_persist_regime_snapshot_avoids_local_db_write(monkeypatch: pytest
         confidence={"trend": 0.8},
     )
 
-    await feature_enrichment.persist_regime_snapshot(
+    feature_enrichment.persist_regime_snapshot(
         ts=datetime(2026, 2, 11, 20, 0, tzinfo=timezone.utc),
         snapshot=snapshot,
         ticker="SPY",

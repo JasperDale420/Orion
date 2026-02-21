@@ -24,7 +24,7 @@ class TestCorrelationMultiplier:
         """Should return 1.0 when no existing positions."""
         adjuster = CorrelationAdjuster()
         cfg = RiskSettings(correlation_size_scaling=True)
-        result = await adjuster.get_size_multiplier("AAPL", [], cfg)
+        result = adjuster.get_size_multiplier("AAPL", [], cfg)
         assert result == 1.0
 
     @pytest.mark.asyncio
@@ -32,7 +32,7 @@ class TestCorrelationMultiplier:
         """Should return 1.0 when correlation scaling is disabled."""
         adjuster = CorrelationAdjuster()
         cfg = RiskSettings(correlation_size_scaling=False)
-        result = await adjuster.get_size_multiplier("AAPL", ["MSFT"], cfg)
+        result = adjuster.get_size_multiplier("AAPL", ["MSFT"], cfg)
         assert result == 1.0
 
     @pytest.mark.asyncio
@@ -46,12 +46,12 @@ class TestCorrelationMultiplier:
         )
 
         # Mock returns with perfect correlation
-        async def mock_returns(ticker, days, cfg):
+        def mock_returns(ticker, days, cfg):
             return np.array([0.01, -0.02, 0.015, -0.01, 0.02] * 5)
 
         adjuster._get_daily_returns = mock_returns
 
-        result = await adjuster.get_size_multiplier("AAPL", ["MSFT"], cfg)
+        result = adjuster.get_size_multiplier("AAPL", ["MSFT"], cfg)
         assert result < 1.0  # Should be penalized
         assert result >= 0.30  # Should not go below penalty factor
 
@@ -67,12 +67,12 @@ class TestCorrelationMultiplier:
         )
 
         # Mock _calculate_correlation directly to control exact correlation value
-        async def mock_corr(a, b, days, cfg):
+        def mock_corr(a, b, days, cfg):
             return 0.50  # Below threshold of 0.70
 
         adjuster._calculate_correlation = mock_corr
 
-        result = await adjuster.get_size_multiplier("AAPL", ["XLE"], cfg)
+        result = adjuster.get_size_multiplier("AAPL", ["XLE"], cfg)
         # Low correlation (abs < 0.70 threshold) should not be penalized
         assert result == pytest.approx(1.0)
 
@@ -85,13 +85,13 @@ class TestCorrelationMultiplier:
         # Mock returns - should skip AAPL in existing
         call_count = {"n": 0}
 
-        async def mock_returns(ticker, days, cfg):
+        def mock_returns(ticker, days, cfg):
             call_count["n"] += 1
             return np.array([0.01, -0.02, 0.015] * 10)
 
         adjuster._get_daily_returns = mock_returns
 
-        result = await adjuster.get_size_multiplier("AAPL", ["AAPL", "MSFT"], cfg)
+        result = adjuster.get_size_multiplier("AAPL", ["AAPL", "MSFT"], cfg)
         # Should still work (correlating with MSFT only)
         assert isinstance(result, float)
 
@@ -109,12 +109,12 @@ class TestCorrelationCalculation:
         )
 
         # Mock returns with too few points
-        async def mock_returns(ticker, days, cfg):
+        def mock_returns(ticker, days, cfg):
             return np.array([0.01, -0.02, 0.015])  # Only 3 points
 
         adjuster._get_daily_returns = mock_returns
 
-        corr = await adjuster._calculate_correlation("AAPL", "MSFT", 30, cfg)
+        corr = adjuster._calculate_correlation("AAPL", "MSFT", 30, cfg)
         assert corr is None
 
     @pytest.mark.asyncio
@@ -124,14 +124,14 @@ class TestCorrelationCalculation:
         cfg = RiskSettings(correlation_size_scaling=True)
 
         # Mock returns with None for one ticker
-        async def mock_returns(ticker, days, cfg):
+        def mock_returns(ticker, days, cfg):
             if ticker == "AAPL":
                 return np.array([0.01, -0.02, 0.015] * 10)
             return None
 
         adjuster._get_daily_returns = mock_returns
 
-        corr = await adjuster._calculate_correlation("AAPL", "MSFT", 30, cfg)
+        corr = adjuster._calculate_correlation("AAPL", "MSFT", 30, cfg)
         assert corr is None
 
 
@@ -178,7 +178,7 @@ class TestRiskManagerIntegration:
 
         # Create mock adjuster that returns 0.5 multiplier
         mock_adjuster = MagicMock()
-        mock_adjuster.get_size_multiplier = AsyncMock(return_value=0.5)
+        mock_adjuster.get_size_multiplier = MagicMock(return_value=0.5)
         rm.set_correlation_adjuster(mock_adjuster)
 
         result = await rm.calculate_size_with_correlation("AAPL", 150.0)

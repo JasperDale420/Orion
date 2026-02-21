@@ -610,7 +610,7 @@ class RiskManager:
             return base_qty
 
         # Get correlation-adjusted multiplier
-        multiplier = await self._correlation_adjuster.get_size_multiplier(ticker, existing_tickers, self.config)
+        multiplier = self._correlation_adjuster.get_size_multiplier(ticker, existing_tickers, self.config)
 
         adjusted_qty = max(1.0, math.floor(base_qty * multiplier))
 

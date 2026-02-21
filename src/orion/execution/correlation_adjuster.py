@@ -37,7 +37,7 @@ class CorrelationAdjuster:
         """
         self.connector = market_connector
 
-    async def get_size_multiplier(
+    def get_size_multiplier(
         self,
         new_ticker: str,
         existing_tickers: List[str],
@@ -63,7 +63,7 @@ class CorrelationAdjuster:
         for existing in existing_tickers:
             if existing == new_ticker:
                 continue  # Skip self
-            corr = await self._calculate_correlation(new_ticker, existing, cfg.correlation_lookback_days, cfg)
+            corr = self._calculate_correlation(new_ticker, existing, cfg.correlation_lookback_days, cfg)
             if corr is not None:
                 correlations.append(abs(corr))  # Use absolute correlation
 
@@ -96,12 +96,12 @@ class CorrelationAdjuster:
 
         return multiplier
 
-    async def _calculate_correlation(
+    def _calculate_correlation(
         self, ticker_a: str, ticker_b: str, lookback_days: int, cfg: RiskSettings
     ) -> Optional[float]:
         """Calculate Pearson correlation between two tickers."""
-        returns_a = await self._get_daily_returns(ticker_a, lookback_days, cfg)
-        returns_b = await self._get_daily_returns(ticker_b, lookback_days, cfg)
+        returns_a = self._get_daily_returns(ticker_a, lookback_days, cfg)
+        returns_b = self._get_daily_returns(ticker_b, lookback_days, cfg)
 
         if returns_a is None or returns_b is None:
             return None
@@ -122,7 +122,7 @@ class CorrelationAdjuster:
             logger.warning(f"Correlation calculation failed for {ticker_a}/{ticker_b}: {e}")
             return None
 
-    async def _get_daily_returns(self, ticker: str, lookback_days: int, cfg: RiskSettings) -> Optional[np.ndarray]:
+    def _get_daily_returns(self, ticker: str, lookback_days: int, cfg: RiskSettings) -> Optional[np.ndarray]:
         """Fetch daily returns with caching."""
         # Check cache
         cache_key = ticker

@@ -98,7 +98,7 @@ async def test_sync_todays_earnings_uses_gateway_row_date(monkeypatch: pytest.Mo
 
     writes: list[dict[str, object]] = []
 
-    async def _fake_upsert_direct(**kwargs):
+    def _fake_upsert_direct(**kwargs):
         writes.append(kwargs)
 
     monkeypatch.setattr(sync_earnings, "_fetch_gateway_earnings", _fake_fetch)
@@ -125,7 +125,7 @@ async def test_backfill_ticker_earnings_counts_valid_rows(monkeypatch: pytest.Mo
 
     writes: list[dict[str, object]] = []
 
-    async def _fake_upsert_direct(**kwargs):
+    def _fake_upsert_direct(**kwargs):
         writes.append(kwargs)
 
     monkeypatch.setattr(sync_earnings, "_fetch_gateway_earnings", _fake_fetch)
@@ -173,7 +173,7 @@ async def test_upsert_earnings_direct_noops_without_db_write(monkeypatch: pytest
 
     monkeypatch.setattr(sync_earnings, "db_write", _fail_db_write, raising=False)
 
-    await sync_earnings._upsert_earnings_direct(
+    sync_earnings._upsert_earnings_direct(
         ticker="AAPL",
         report_date=date(2026, 2, 11),
         announce_time="afterhours",
