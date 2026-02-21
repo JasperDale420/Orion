@@ -147,7 +147,7 @@ class TestRiskManagerIntegration:
         rm = RiskManager(config=cfg)
         rm.current_equity = 100000.0
 
-        result = await rm.calculate_size_with_correlation("AAPL", 150.0)
+        result = rm.calculate_size_with_correlation("AAPL", 150.0)
         base = rm.calculate_size(150.0)
 
         assert result == base
@@ -161,7 +161,7 @@ class TestRiskManagerIntegration:
         rm = RiskManager(config=cfg)
         rm.current_equity = 100000.0
 
-        result = await rm.calculate_size_with_correlation("AAPL", 150.0)
+        result = rm.calculate_size_with_correlation("AAPL", 150.0)
         base = rm.calculate_size(150.0)
 
         assert result == base
@@ -181,7 +181,7 @@ class TestRiskManagerIntegration:
         mock_adjuster.get_size_multiplier = MagicMock(return_value=0.5)
         rm.set_correlation_adjuster(mock_adjuster)
 
-        result = await rm.calculate_size_with_correlation("AAPL", 150.0)
+        result = rm.calculate_size_with_correlation("AAPL", 150.0)
         base = rm.calculate_size(150.0)
 
         assert result < base

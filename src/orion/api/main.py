@@ -609,11 +609,37 @@ async def get_flows(
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
+    frame = await _read_heber_flow(ticker, start_dt, min_premium_usd)
+    if frame is None or frame.empty:
+        return []
+
+    cols = _discover_flow_columns(frame)
+    if cols is None:
+        return []
+
+    work = _filter_flow_frame(frame, cols, ticker, end_dt, min_premium_usd)
+    if work.empty:
+        return []
+
+    work = work.sort_values("_event_ts", ascending=False).head(limit)
+    return [
+        _flow_row_to_dict(idx, row, cols)
+        for idx, row in work.iterrows()
+        if _normalize_flow_ticker(row.get(cols["ticker"])) is not None
+    ]
+
+
+async def _read_heber_flow(
+    ticker: Optional[str],
+    start_dt: Optional[datetime],
+    min_premium_usd: Optional[float],
+) -> Optional[pd.DataFrame]:
+    """Read flow data from Heber, returning None on failure."""
     reader = get_heber_reader()
     asof_time = datetime.now(timezone.utc)
     symbols = [ticker] if ticker else None
     try:
-        frame = await asyncio.to_thread(
+        return await asyncio.to_thread(
             reader.read_flow,
             symbols=symbols,
             asof_time=asof_time,
@@ -626,113 +652,118 @@ async def get_flows(
             extra={
                 "event_type": "FLOW_READ_FAILED",
                 "ticker": ticker,
-                "start": start,
-                "end": end,
                 "error": str(exc),
             },
         )
-        return []
+        return None
 
-    if frame.empty:
-        return []
 
+def _discover_flow_columns(frame: pd.DataFrame) -> Optional[Dict[str, Optional[str]]]:
+    """Discover required and optional column names from a flow DataFrame.
+
+    Returns None if any required column is missing.
+    """
     ticker_col = _first_existing_column(frame, ("ticker", "symbol", "instrument_key", "underlying"))
     ts_col = _first_existing_column(frame, ("flow_ts_utc", "ts_event", "timestamp", "ts_utc"))
     premium_col = _first_existing_column(frame, ("premium_usd", "premium"))
     if ticker_col is None or ts_col is None or premium_col is None:
-        return []
+        return None
 
+    return {
+        "ticker": ticker_col,
+        "ts": ts_col,
+        "premium": premium_col,
+        "event_id": _first_existing_column(frame, ("event_id", "id")),
+        "source_event_id": _first_existing_column(frame, ("source_event_id", "source_id")),
+        "put_call": _first_existing_column(frame, ("put_call", "call_put")),
+        "expiry": _first_existing_column(frame, ("expiry", "expiration")),
+        "strike": _first_existing_column(frame, ("strike",)),
+        "option_price": _first_existing_column(frame, ("option_price", "price")),
+        "size_contracts": _first_existing_column(frame, ("size_contracts", "size", "contracts")),
+        "bid": _first_existing_column(frame, ("bid", "bid_price")),
+        "ask": _first_existing_column(frame, ("ask", "ask_price")),
+        "underlying": _first_existing_column(frame, ("underlying_price", "underlying")),
+        "aggressor": _first_existing_column(frame, ("aggressor", "side", "aggressor_ind")),
+        "is_sweep": _first_existing_column(frame, ("is_sweep", "sweep")),
+        "flags_json": _first_existing_column(frame, ("flags_json", "flags")),
+        "volume_contract": _first_existing_column(frame, ("volume_contract", "volume")),
+        "open_interest": _first_existing_column(frame, ("open_interest", "oi")),
+        "ingest": _first_existing_column(frame, ("ingest",)),
+        "created_at": _first_existing_column(frame, ("created_at_utc", "created_at", "ts_available")),
+    }
+
+
+def _filter_flow_frame(
+    frame: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    ticker: Optional[str],
+    end_dt: Optional[datetime],
+    min_premium_usd: Optional[float],
+) -> pd.DataFrame:
+    """Apply ticker, end-time, and premium filters to the flow DataFrame."""
     work = frame.copy()
-    work["_event_ts"] = pd.to_datetime(work[ts_col], utc=True, errors="coerce")
+    work["_event_ts"] = pd.to_datetime(work[cols["ts"]], utc=True, errors="coerce")
     work = work.dropna(subset=["_event_ts"])
-    if work.empty:
-        return []
 
     if ticker:
         requested = ticker.upper().strip()
-        work = work[work[ticker_col].map(_normalize_flow_ticker) == requested]
-    if work.empty:
-        return []
+        work = work[work[cols["ticker"]].map(_normalize_flow_ticker) == requested]
 
-    if end_dt is not None:
+    if end_dt is not None and not work.empty:
         end_ts = pd.Timestamp(end_dt)
-        if end_ts.tzinfo is None:
-            end_ts = end_ts.tz_localize("UTC")
-        else:
-            end_ts = end_ts.tz_convert("UTC")
+        end_ts = end_ts.tz_localize("UTC") if end_ts.tzinfo is None else end_ts.tz_convert("UTC")
         work = work[work["_event_ts"] < end_ts]
-    if work.empty:
-        return []
 
-    if min_premium_usd is not None:
-        premium_series = pd.to_numeric(work[premium_col], errors="coerce")
+    if min_premium_usd is not None and not work.empty:
+        premium_series = pd.to_numeric(work[cols["premium"]], errors="coerce")
         work = work[premium_series >= float(min_premium_usd)]
-    if work.empty:
-        return []
 
-    event_id_col = _first_existing_column(work, ("event_id", "id"))
-    source_event_id_col = _first_existing_column(work, ("source_event_id", "source_id"))
-    put_call_col = _first_existing_column(work, ("put_call", "call_put"))
-    expiry_col = _first_existing_column(work, ("expiry", "expiration"))
-    strike_col = _first_existing_column(work, ("strike",))
-    option_price_col = _first_existing_column(work, ("option_price", "price"))
-    size_contracts_col = _first_existing_column(work, ("size_contracts", "size", "contracts"))
-    bid_col = _first_existing_column(work, ("bid", "bid_price"))
-    ask_col = _first_existing_column(work, ("ask", "ask_price"))
-    underlying_col = _first_existing_column(work, ("underlying_price", "underlying"))
-    aggressor_col = _first_existing_column(work, ("aggressor", "side", "aggressor_ind"))
-    is_sweep_col = _first_existing_column(work, ("is_sweep", "sweep"))
-    flags_col = _first_existing_column(work, ("flags_json", "flags"))
-    volume_contract_col = _first_existing_column(work, ("volume_contract", "volume"))
-    open_interest_col = _first_existing_column(work, ("open_interest", "oi"))
-    ingest_col = _first_existing_column(work, ("ingest",))
-    created_col = _first_existing_column(work, ("created_at_utc", "created_at", "ts_available"))
+    return work
 
-    work = work.sort_values("_event_ts", ascending=False).head(limit)
-    rows: list[dict[str, Any]] = []
-    for idx, row in work.iterrows():
-        event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
-        source_event_id = (
-            str(row.get(source_event_id_col)).strip() if source_event_id_col and row.get(source_event_id_col) else None
-        )
-        normalized_ticker = _normalize_flow_ticker(row.get(ticker_col))
-        if normalized_ticker is None:
-            continue
-        created_at = (
-            pd.to_datetime(row.get(created_col), utc=True, errors="coerce") if created_col else pd.NaT  # type: ignore[arg-type]
-        )
-        created_at_utc = created_at.to_pydatetime() if not pd.isna(created_at) else None
 
-        rows.append(
-            {
-                "event_id": event_id,
-                "source_event_id": source_event_id,
-                "ticker": normalized_ticker,
-                "flow_ts_utc": _dt_iso(row["_event_ts"].to_pydatetime()),
-                "put_call": _normalize_put_call(row.get(put_call_col)) if put_call_col else None,
-                "expiry": str(row.get(expiry_col)) if expiry_col and row.get(expiry_col) is not None else None,
-                "strike": _coerce_optional_float(row.get(strike_col)) if strike_col else None,
-                "option_price": _coerce_optional_float(row.get(option_price_col)) if option_price_col else None,
-                "size_contracts": _coerce_optional_int(row.get(size_contracts_col)) if size_contracts_col else None,
-                "premium_usd": _coerce_optional_float(row.get(premium_col)),
-                "bid": _coerce_optional_float(row.get(bid_col)) if bid_col else None,
-                "ask": _coerce_optional_float(row.get(ask_col)) if ask_col else None,
-                "underlying_price": _coerce_optional_float(row.get(underlying_col)) if underlying_col else None,
-                "aggressor": str(row.get(aggressor_col)).strip().upper()
-                if aggressor_col and row.get(aggressor_col) is not None
-                else None,
-                "is_sweep": _coerce_flow_bool(row.get(is_sweep_col)) if is_sweep_col else None,
-                "flags_json": _normalize_json_field(row.get(flags_col)) if flags_col else None,
-                "volume_contract": _coerce_optional_float(row.get(volume_contract_col))
-                if volume_contract_col
-                else None,
-                "open_interest": _coerce_optional_float(row.get(open_interest_col)) if open_interest_col else None,
-                "ingest": _normalize_json_field(row.get(ingest_col)) if ingest_col else None,
-                "created_at_utc": _dt_iso(created_at_utc),
-            }
-        )
+def _flow_row_to_dict(idx: Any, row: Any, cols: Dict[str, Optional[str]]) -> Dict[str, Any]:
+    """Convert a single flow DataFrame row to a serializable dict."""
+    eid_col = cols["event_id"]
+    event_id = str(row.get(eid_col)).strip() if eid_col and row.get(eid_col) else f"heber_flow_{idx}"
+    seid_col = cols["source_event_id"]
+    source_event_id = str(row.get(seid_col)).strip() if seid_col and row.get(seid_col) else None
+    normalized_ticker = _normalize_flow_ticker(row.get(cols["ticker"]))
 
-    return rows
+    ca_col = cols["created_at"]
+    created_at = pd.to_datetime(row.get(ca_col), utc=True, errors="coerce") if ca_col else pd.NaT  # type: ignore[arg-type]
+    created_at_utc = created_at.to_pydatetime() if not pd.isna(created_at) else None
+
+    def _opt_float(col_key: str) -> Optional[float]:
+        c = cols[col_key]
+        return _coerce_optional_float(row.get(c)) if c else None
+
+    aggressor_col = cols["aggressor"]
+    aggressor = (
+        str(row.get(aggressor_col)).strip().upper() if aggressor_col and row.get(aggressor_col) is not None else None
+    )
+
+    return {
+        "event_id": event_id,
+        "source_event_id": source_event_id,
+        "ticker": normalized_ticker,
+        "flow_ts_utc": _dt_iso(row["_event_ts"].to_pydatetime()),
+        "put_call": _normalize_put_call(row.get(cols["put_call"])) if cols["put_call"] else None,
+        "expiry": str(row.get(cols["expiry"])) if cols["expiry"] and row.get(cols["expiry"]) is not None else None,
+        "strike": _opt_float("strike"),
+        "option_price": _opt_float("option_price"),
+        "size_contracts": _coerce_optional_int(row.get(cols["size_contracts"])) if cols["size_contracts"] else None,
+        "premium_usd": _coerce_optional_float(row.get(cols["premium"])),
+        "bid": _opt_float("bid"),
+        "ask": _opt_float("ask"),
+        "underlying_price": _opt_float("underlying"),
+        "aggressor": aggressor,
+        "is_sweep": _coerce_flow_bool(row.get(cols["is_sweep"])) if cols["is_sweep"] else None,
+        "flags_json": _normalize_json_field(row.get(cols["flags_json"])) if cols["flags_json"] else None,
+        "volume_contract": _opt_float("volume_contract"),
+        "open_interest": _opt_float("open_interest"),
+        "ingest": _normalize_json_field(row.get(cols["ingest"])) if cols["ingest"] else None,
+        "created_at_utc": _dt_iso(created_at_utc),
+    }
 
 
 # --- Dashboard ---

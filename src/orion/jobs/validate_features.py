@@ -775,6 +775,28 @@ async def _fetch_source_summary(
     return {"min_date": None, "max_date": None, "tickers": 0, "backend": "source_unavailable"}
 
 
+def _coerce_to_dataframe(data: Any) -> pd.DataFrame:
+    """Coerce various data types to a pandas DataFrame."""
+    if isinstance(data, pd.DataFrame):
+        return data
+    if isinstance(data, list):
+        rows = [row for row in data if isinstance(row, dict)]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    if isinstance(data, dict):
+        return pd.DataFrame([data])
+    return pd.DataFrame()
+
+
+def _safe_parse_date(value: Any) -> Optional[date]:
+    """Parse a date string, returning None on failure."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 async def _load_label_period() -> Dict[str, Any]:
     reader = get_heber_reader()
     now = datetime.now(timezone.utc)
@@ -794,35 +816,14 @@ async def _load_label_period() -> Dict[str, Any]:
             "tickers": 0,
         }
 
-    if not isinstance(df, pd.DataFrame):
-        if isinstance(df, list):
-            rows = [row for row in df if isinstance(row, dict)]
-            df = pd.DataFrame(rows) if rows else pd.DataFrame()
-        elif isinstance(df, dict):
-            df = pd.DataFrame([df])
-        else:
-            df = pd.DataFrame()
-
+    df = _coerce_to_dataframe(df)
     summary = _summarize_heber_source_frame(df)
     min_date_str = summary.get("min_date")
     max_date_str = summary.get("max_date")
 
-    min_date_raw: Optional[date] = None
-    max_date_raw: Optional[date] = None
-    if isinstance(min_date_str, str):
-        try:
-            min_date_raw = date.fromisoformat(min_date_str)
-        except ValueError:
-            min_date_raw = None
-    if isinstance(max_date_str, str):
-        try:
-            max_date_raw = date.fromisoformat(max_date_str)
-        except ValueError:
-            max_date_raw = None
-
     return {
-        "min_date_raw": min_date_raw,
-        "max_date_raw": max_date_raw,
+        "min_date_raw": _safe_parse_date(min_date_str),
+        "max_date_raw": _safe_parse_date(max_date_str),
         "min_date": min_date_str,
         "max_date": max_date_str,
         "tickers": int(summary.get("tickers") or 0),

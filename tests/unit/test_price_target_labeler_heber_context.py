@@ -290,7 +290,7 @@ async def test_get_velocity_backfill_candidates_is_decommissioned_noop(
 
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    records = await labeler.get_velocity_backfill_candidates(
+    records = labeler.get_velocity_backfill_candidates(
         limit=12,
         after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
         after_event_id="vel-120",
@@ -308,7 +308,7 @@ async def test_get_checkpoint_backfill_candidates_is_decommissioned_noop(
 
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    records = await labeler.get_checkpoint_backfill_candidates(
+    records = labeler.get_checkpoint_backfill_candidates(
         limit=20,
         after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
         after_event_id="cp-120",
@@ -992,7 +992,7 @@ async def test_get_real_checkpoint_prices_prefers_heber_when_available(
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_real_checkpoint_prices(event_id)
+    result = labeler.get_real_checkpoint_prices(event_id)
 
     assert result == {
         "15m": {
@@ -1028,6 +1028,6 @@ async def test_get_real_checkpoint_prices_returns_empty_when_heber_unavailable(
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_real_checkpoint_prices("evt-none")
+    result = labeler.get_real_checkpoint_prices("evt-none")
 
     assert result == {}

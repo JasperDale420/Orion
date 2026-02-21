@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `data_quality_checker.py`: Extracted duplicated `"datetime64[ns, UTC]"` literal into `_UTC_TZ_DTYPE` constant (S1192).
   - Updated 5 test files to match sync signatures and remove async mocks.
 
+- **SonarQube code quality fixes - Wave 3** (2026-02-21):
+  - `main_price_target_labeler.py`: Removed unnecessary `async` from 7 functions (`get_subsequent_prices`, `get_velocity_backfill_candidates`, `get_checkpoint_backfill_candidates`, `_get_labeled_price_target_event_ids`, `get_real_checkpoint_prices`, `_get_entry_signals_from_heber`, `get_entry_signals`). Removed 4 cascading `await` calls. Extracted `_PIPELINE_NAME` constant for duplicated `"orion.main_price_target_labeler"` literal (S1192).
+  - `risk_manager.py`: Removed `await` from `calculate_size_with_correlation` for now-sync `get_size_multiplier`.
+  - `eod_review_agent.py`: Reduced `_load_regime_bars_from_heber` CC from 18→~8 via `_find_column`/`_extract_regime_bar_row` helpers (S3776).
+  - `validate_features.py`: Reduced `_load_label_period` CC from 16→~8 via `_coerce_to_dataframe`/`_safe_parse_date` helpers (S3776).
+  - `api/main.py`: Reduced `get_flows` CC from 61→~12 via `_read_heber_flow`/`_discover_flow_columns`/`_filter_flow_frame`/`_flow_row_to_dict` helpers (S3776).
+  - Updated 2 test files (9 test adjustments) to match sync signatures and remove async mocks.
+
 - **Logging: Migrate 46 production files from stdlib `logging` to `structlog`** (2026-02-21):
   - Replaced `import logging` / `logging.getLogger(__name__)` with `setup_struct_logger()` across agents, analysis, connectors, core, execution, jobs, ml, processing, rag, reconciliation, shared, and storage modules.
   - Fixed silent `except: pass` in `execution_engine.py` around price fetching — now logs the error.

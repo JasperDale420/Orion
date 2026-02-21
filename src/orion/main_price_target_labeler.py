@@ -36,6 +36,7 @@ logger = setup_struct_logger("orion.price_target")
 _heber_reader = HeberReader()
 
 _PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
+_PIPELINE_NAME = "orion.main_price_target_labeler"
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
@@ -349,7 +350,7 @@ def classify_trade_type(dte: Optional[int]) -> str:
     return "POSITION"
 
 
-async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
+def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
     """Get entries that haven't been labeled for price targets yet.
 
     Criteria:
@@ -363,7 +364,7 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
     """
 
     try:
-        heber_entries = await _get_entry_signals_from_heber(limit)
+        heber_entries = _get_entry_signals_from_heber(limit)
     except Exception as e:
         _record_price_target_fallback("entry_signals_heber", e)
         heber_entries = []
@@ -374,7 +375,7 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
     return []
 
 
-async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
+def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
     """Get all subsequent prices for an option chain after entry."""
     heber_prices = _get_subsequent_prices_from_heber(option_chain, entry_ts)
     if heber_prices is not None:
@@ -404,7 +405,7 @@ def _build_backfill_cursor_clause(
     return ""
 
 
-async def get_velocity_backfill_candidates(
+def get_velocity_backfill_candidates(
     limit: int = 1000,
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
@@ -415,14 +416,14 @@ async def get_velocity_backfill_candidates(
         "Velocity backfill candidate lookup is decommissioned; local label backfill is disabled",
         extra={
             "event_type": "DEPRECATED_PIPELINE_DISABLED",
-            "pipeline": "orion.main_price_target_labeler",
+            "pipeline": _PIPELINE_NAME,
             "operation": "get_velocity_backfill_candidates",
         },
     )
     return []
 
 
-async def get_checkpoint_backfill_candidates(
+def get_checkpoint_backfill_candidates(
     limit: int = 1000,
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
@@ -433,7 +434,7 @@ async def get_checkpoint_backfill_candidates(
         "Checkpoint backfill candidate lookup is decommissioned; local label backfill is disabled",
         extra={
             "event_type": "DEPRECATED_PIPELINE_DISABLED",
-            "pipeline": "orion.main_price_target_labeler",
+            "pipeline": _PIPELINE_NAME,
             "operation": "get_checkpoint_backfill_candidates",
         },
     )
@@ -526,7 +527,7 @@ def _is_truthy(value: Any) -> bool:
     return False
 
 
-async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
+def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
     """Legacy no-op; local labeled-event lookup is decommissioned."""
     if not event_ids:
         return set()
@@ -534,14 +535,14 @@ async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
         "Labeled event lookup is decommissioned; local label storage is disabled",
         extra={
             "event_type": "DEPRECATED_PIPELINE_DISABLED",
-            "pipeline": "orion.main_price_target_labeler",
+            "pipeline": _PIPELINE_NAME,
             "operation": "get_labeled_price_target_event_ids",
         },
     )
     return set()
 
 
-async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
+def _get_entry_signals_from_heber(limit: int) -> List[Any]:
     now_utc = datetime.now(timezone.utc)
     flow_df = _heber_reader.read_flow(
         asof_time=now_utc,
@@ -560,7 +561,7 @@ async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
         return []
 
     candidates.sort(key=lambda item: item.flow_ts_utc)
-    labeled_ids = await _get_labeled_price_target_event_ids([item.event_id for item in candidates])
+    labeled_ids = _get_labeled_price_target_event_ids([item.event_id for item in candidates])
     return [item for item in candidates if item.event_id not in labeled_ids][:limit]
 
 
@@ -599,7 +600,7 @@ def _get_subsequent_prices_from_heber(option_chain: str, entry_ts: datetime) -> 
     return prices
 
 
-async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
+def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
     """Get real option prices and Greeks from Heber event-level checkpoint data."""
     return _get_real_checkpoint_prices_from_heber(event_id)
 
@@ -2860,7 +2861,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     if entry_price <= 0:
         return None
 
-    prices = await get_subsequent_prices(option_chain, entry_ts)
+    prices = get_subsequent_prices(option_chain, entry_ts)
     expiry = parse_expiry(entry.expiry)
     dte = calculate_dte(entry_ts, expiry)
 
@@ -3144,7 +3145,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
     # Price at checkpoints - prefer real Alpaca quotes when available
     # Fetch real quotes from silver_option_quotes (populated by option_quote_tracker)
-    real_quotes = await get_real_checkpoint_prices(entry.event_id)
+    real_quotes = get_real_checkpoint_prices(entry.event_id)
 
     # Helper to get price: prefer real quote, fallback to flow data
     def _get_checkpoint_price(checkpoint: str, flow_price_fn, *flow_args) -> Optional[float]:
@@ -3556,7 +3557,7 @@ async def persist_labels(labels: List[Dict[str, Any]]) -> int:
         "Local price-target label persistence is decommissioned; labels must flow through heber.watch",
         extra={
             "event_type": "DEPRECATED_PIPELINE_DISABLED",
-            "pipeline": "orion.main_price_target_labeler",
+            "pipeline": _PIPELINE_NAME,
             "operation": "persist_labels",
         },
     )
@@ -3570,7 +3571,7 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
         "Local price-target labeling loop is decommissioned",
         extra={
             "event_type": "DEPRECATED_PIPELINE_DISABLED",
-            "pipeline": "orion.main_price_target_labeler",
+            "pipeline": _PIPELINE_NAME,
             "replacement_path": "heber.watch datasets (labels_alert_barriers/meta_label_features) after field mapping signoff",
         },
     )
@@ -3584,7 +3585,7 @@ async def backfill_missing_features(batch_size: int = 100) -> int:
         "Local feature backfill is decommissioned; use heber.watch feature pipelines",
         extra={
             "event_type": "DEPRECATED_PIPELINE_DISABLED",
-            "pipeline": "orion.main_price_target_labeler",
+            "pipeline": _PIPELINE_NAME,
             "operation": "backfill_missing_features",
         },
     )

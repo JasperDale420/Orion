@@ -567,7 +567,7 @@ class RiskManager:
 
         return float(qty)
 
-    async def calculate_size_with_correlation(
+    def calculate_size_with_correlation(
         self,
         ticker: str,
         entry_price: float,

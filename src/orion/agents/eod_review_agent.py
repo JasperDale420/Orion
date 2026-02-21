@@ -35,6 +35,28 @@ from orion.storage.models_solvers import SolverEdits
 logger = setup_struct_logger("orion.agents.eod_review_agent")
 
 
+def _find_column(frame: Any, candidates: tuple) -> Optional[str]:
+    """Return the first column name from *candidates* that exists in *frame*."""
+    for col in candidates:
+        if col in frame.columns:
+            return col
+    return None
+
+
+def _extract_regime_bar_row(row: Any, ticker_col: str, close_col: str, valid_tickers: set) -> Optional[Any]:
+    """Parse a single bar row into a SimpleNamespace, or None if invalid."""
+    ticker_raw = row.get(ticker_col)
+    if ticker_raw is None:
+        return None
+    ticker = str(ticker_raw).upper().split(":")[-1]
+    if ticker not in valid_tickers:
+        return None
+    close = pd.to_numeric(row.get(close_col), errors="coerce")
+    if pd.isna(close):
+        return None
+    return SimpleNamespace(ticker=ticker, close=float(close))
+
+
 class EODReviewAgent(BaseAgent):
     """
     PRD 17: Daily EOD Review Agent.
@@ -294,28 +316,17 @@ class EODReviewAgent(BaseAgent):
         if frame.empty:
             return []
 
-        ticker_col = None
-        for candidate in ("ticker", "symbol", "underlying", "instrument_key"):
-            if candidate in frame.columns:
-                ticker_col = candidate
-                break
-        close_col = "close" if "close" in frame.columns else ("c" if "c" in frame.columns else None)
+        ticker_col = _find_column(frame, ("ticker", "symbol", "underlying", "instrument_key"))
+        close_col = _find_column(frame, ("close", "c"))
         if ticker_col is None or close_col is None:
             return []
 
         tickers_upper = {str(t).upper() for t in tickers}
         rows: List[Any] = []
         for _, row in frame.iterrows():
-            ticker_raw = row.get(ticker_col)
-            if ticker_raw is None:
-                continue
-            ticker = str(ticker_raw).upper().split(":")[-1]
-            if ticker not in tickers_upper:
-                continue
-            close = pd.to_numeric(row.get(close_col), errors="coerce")
-            if pd.isna(close):
-                continue
-            rows.append(SimpleNamespace(ticker=ticker, close=float(close)))
+            ns = _extract_regime_bar_row(row, ticker_col, close_col, tickers_upper)
+            if ns is not None:
+                rows.append(ns)
         return rows
 
     async def _gather_data(self, date: datetime.date, *, run_id: str, reports_dir: str) -> Tuple[Dict[str, Any], str]:
