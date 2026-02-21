@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dotenv import load_dotenv
@@ -71,7 +71,7 @@ async def main() -> None:
 
     # Scan last 24h? Or just 'Today'?
     # Let's scan 'Today' from 09:30 to now (if active) or 16:00.
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # Simple hardcoded window for demo
     start_window = now - timedelta(hours=1)
     end_window = now

@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from orion.core.solver_schema import ExitLogic, SolverConfig
@@ -78,7 +78,7 @@ async def seed_default_solver() -> None:
                 config=solver_config.model_dump(),
                 is_active=True,
                 stage="research",  # Start in research for refinement loop
-                created_at_utc=datetime.utcnow(),
+                created_at_utc=datetime.now(timezone.utc),
                 definition_json=ensure_solver_definition_json(solver_config.model_dump(mode="json"), None),
             )
             session.add(new_solver)

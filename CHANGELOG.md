@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Code Quality: Replace deprecated `datetime.utcnow()`** (2026-02-21):
+  - `regime.py`: Replaced `datetime.utcnow()` with `datetime.now(timezone.utc)` in `detect_session` fallback.
+  - `seed_solvers.py`: Replaced `datetime.utcnow()` with `datetime.now(timezone.utc)` in `created_at_utc` assignment.
+  - `bar_gap_scan.py`: Replaced `datetime.utcnow()` with `datetime.now(timezone.utc)` in `main()`.
+
 ### Removed
 
 - **Dead Code: `BrokerClient.delete_account()`** (2026-02-21):
