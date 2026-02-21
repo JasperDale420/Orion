@@ -459,3 +459,13 @@ def test_read_parquet_filewise_skips_hidden_sidecar_files(tmp_path: Path) -> Non
 
     assert len(result) == 1
     assert all(not path.name.startswith("._") for path in seen_paths)
+
+
+def test_is_dot_underscore_permission_error_detects_macos_metadata_eperm() -> None:
+    exc = Exception(
+        "[Errno 1] Failed stat()ing path '/Volumes/xyz/._part-123.parquet'. Detail: [errno 1] Operation not permitted"
+    )
+    assert HeberReader._is_dot_underscore_permission_error(exc) is True
+
+    exc_other = Exception("[Errno 2] No such file or directory: '/Volumes/xyz/part-123.parquet'")
+    assert HeberReader._is_dot_underscore_permission_error(exc_other) is False

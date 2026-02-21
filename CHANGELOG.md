@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Heber Reader crashing on macOS dot-underscore metadata files**: `heber_reader.py` PyArrow directory scans previously tripped over `._*` resource fork files created by macOS on the Heber volume, causing constant `heber_read_failed` EPERM error spam in `feature_enrichment`. Added a dedicated permission error detector that reroutes to the `_read_parquet_filewise` fallback (which explicitly ignores `._` files).
+
+- **Embedding dimension mismatch in RAG vector store**: `vector_store.py` hardcoded 1536 (OpenAI dimension) but the active embedding model (`nomic-embed-text` via Ollama) produces 768-dim vectors and the pgvector column is `Vector(768)`. All Ollama embeddings were silently discarded, forcing keyword-only search. Now derives the expected dimension from `RagDocument.embedding_vec.type.dim` so it stays in sync with the model definition.
+
 ### Changed
 
 - **Extracted Heber feature utilities into `orion/data/heber_features.py`**:

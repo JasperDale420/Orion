@@ -420,7 +420,11 @@ class HeberReader:
             table = self._read_table(path=path, columns=columns, filters=filters, partitioning=None)
             return cast(pd.DataFrame, table.to_pandas())
         except Exception as exc:
-            if self._is_corrupt_parquet_error(exc) or self._is_schema_merge_parquet_error(exc):
+            if (
+                self._is_corrupt_parquet_error(exc)
+                or self._is_schema_merge_parquet_error(exc)
+                or self._is_dot_underscore_permission_error(exc)
+            ):
                 logger.warning(
                     "heber_reader_filewise_fallback",
                     path=str(path),
@@ -501,6 +505,12 @@ class HeberReader:
         return ("unsupported cast from" in message and "to null" in message and "cast_null" in message) or (
             "could not merge schemas" in message
         )
+
+    @staticmethod
+    def _is_dot_underscore_permission_error(exc: Exception) -> bool:
+        """Detect macOS ._* resource fork metadata files causing EPERM in Docker."""
+        message = str(exc).lower()
+        return "operation not permitted" in message and "/._" in message
 
 
 @lru_cache
