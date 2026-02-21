@@ -29,11 +29,6 @@ class SolverRiskConfig(BaseModel):
             raise ValueError(f"Risk per trade {self.risk_per_trade_bps}bps exceeds system limit {MAX_SYSTEM_BPS}bps")
 
         if self.max_open_positions > MAX_GLOBAL_POSITIONS:
-            # PRD: "Numeric ranges within safe bounds"
-            raise ValueError(f"Max positions {self.max_open_positions} exceeds system limit {MAX_GLOBAL_POSITIONS}")
-
-        if self.max_open_positions > MAX_GLOBAL_POSITIONS:
-            # PRD: "Numeric ranges within safe bounds"
             raise ValueError(f"Max positions {self.max_open_positions} exceeds system limit {MAX_GLOBAL_POSITIONS}")
 
         return self
