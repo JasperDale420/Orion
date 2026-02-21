@@ -72,8 +72,11 @@ class TradingStream:
         )
         r = await self._ws.recv()
         msg = json.loads(r)
-        if msg.get("data").get("status") != "authorized":
-            raise ValueError("failed to authenticate")
+        data = msg.get("data") or {}
+        if data.get("status") != "authorized":
+            raise ValueError(
+                f"failed to authenticate with trading stream: {data.get('status', 'no status in response')}"
+            )
 
     async def _dispatch(self, msg: Dict) -> None:
         """Distributes message from websocket connection to appropriate handler

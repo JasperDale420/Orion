@@ -64,8 +64,7 @@ class ModelRegistry(AsyncSingleton):
             return model
 
         except Exception as e:
-            logger.error(f"Failed to load model from {path}: {e}")
-            return None
+            raise RuntimeError(f"Failed to load model from {path}: {e}") from e
 
     @classmethod
     def clear_cache(cls) -> None:
