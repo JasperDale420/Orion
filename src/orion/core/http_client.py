@@ -66,7 +66,7 @@ def _async_log_response(response: httpx.Response) -> None:
 
 def create_http_client(
     base_url: str = "",
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: float | httpx.Timeout = DEFAULT_TIMEOUT,
     headers: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> httpx.Client:
@@ -83,7 +83,7 @@ def create_http_client(
 
 def create_async_http_client(
     base_url: str = "",
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: float | httpx.Timeout = DEFAULT_TIMEOUT,
     headers: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> httpx.AsyncClient:
