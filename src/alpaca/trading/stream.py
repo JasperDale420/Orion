@@ -101,7 +101,8 @@ class TradingStream:
         """
         result = msg
         if not self._raw_data:
-            result = TradeUpdate(**msg.get("data"))
+            data = msg.get("data") or {}
+            result = TradeUpdate(**data)
         return result
 
     async def _subscribe_trade_updates(self) -> None:
