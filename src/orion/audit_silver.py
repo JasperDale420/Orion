@@ -1,8 +1,8 @@
 import asyncio
 import json
-import logging
 from typing import Any, List
 
+import structlog
 from dotenv import load_dotenv
 from sqlalchemy import select
 
@@ -14,7 +14,7 @@ from orion.core.logging_config import setup_logging
 from orion.storage.models_silver import SilverSignal
 
 setup_logging()
-logger = logging.getLogger("orion.audit")
+logger = structlog.get_logger("orion.audit")
 
 
 async def audit_silver() -> None:

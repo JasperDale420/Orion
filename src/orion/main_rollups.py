@@ -1,14 +1,15 @@
 import asyncio
-import logging
 import signal
 from types import FrameType
 from typing import Optional
+
+import structlog
 
 from orion.core.logging_config import setup_logging
 from orion.jobs.rollup_job import RollupJob
 from orion.storage.db import init_db
 
-logger = logging.getLogger("orion.main_rollups")
+logger = structlog.get_logger("orion.main_rollups")
 
 SHUTDOWN = False
 

@@ -1,8 +1,8 @@
 import asyncio
 import json
-import logging
 from typing import Any, List
 
+import structlog
 from dotenv import load_dotenv
 from sqlalchemy import select
 
@@ -14,7 +14,7 @@ from orion.core.logging_config import setup_logging
 from orion.storage.models_gold import CandidateTrade
 
 setup_logging()
-logger = logging.getLogger("orion.audit_gold")
+logger = structlog.get_logger("orion.audit_gold")
 
 
 async def audit_gold() -> None:

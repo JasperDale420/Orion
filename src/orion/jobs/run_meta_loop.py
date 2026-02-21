@@ -1,5 +1,6 @@
 import asyncio
-import logging
+
+import structlog
 
 from orion.agents.meta_search_agent import MetaSearchAgent
 from orion.config import system_settings
@@ -7,7 +8,7 @@ from orion.core.logging_config import setup_logging
 from orion.storage.db import init_db
 
 setup_logging()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 async def main() -> None:

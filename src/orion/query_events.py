@@ -1,7 +1,7 @@
 import asyncio
-import logging
 from typing import Any, List
 
+import structlog
 from dotenv import load_dotenv
 from sqlalchemy import desc, select
 
@@ -13,7 +13,7 @@ from orion.shared.db_utils import db_query
 from orion.storage.models import BronzeEvent
 
 setup_logging()
-logger = logging.getLogger("orion.query")
+logger = structlog.get_logger("orion.query")
 
 
 async def query_latest_events(limit: int = 10) -> None:

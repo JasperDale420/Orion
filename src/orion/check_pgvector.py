@@ -1,7 +1,7 @@
 import asyncio
-import logging
 from typing import Any
 
+import structlog
 from dotenv import load_dotenv
 from sqlalchemy import text
 
@@ -10,7 +10,7 @@ from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_write
 
 setup_logging()
-logger = logging.getLogger("check_pgvector")
+logger = structlog.get_logger("check_pgvector")
 
 
 async def check_vector() -> None:
