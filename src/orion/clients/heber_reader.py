@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 import structlog
 
 from orion.config import system_settings
+from orion.core.http_client import create_http_client
 
 logger = structlog.get_logger(__name__)
 
@@ -57,7 +58,7 @@ class HeberReader:
     def client(self) -> httpx.Client:
         """Lazy HTTP client initialization for Catalog API calls."""
         if self._client is None:
-            self._client = httpx.Client(
+            self._client = create_http_client(
                 base_url=self.catalog_url,
                 timeout=30.0,
             )

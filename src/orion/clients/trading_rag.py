@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from orion.core.http_client import create_async_http_client
+
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.clients.trading_rag")
@@ -40,7 +42,7 @@ class TradingRAGClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
+            self._client = create_async_http_client(
                 base_url=self.base_url,
                 headers={"X-API-Key": self.api_key},
                 timeout=self.timeout,

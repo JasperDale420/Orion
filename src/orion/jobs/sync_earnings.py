@@ -7,18 +7,18 @@ This job:
 """
 
 import asyncio
-import logging
+import structlog
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import httpx
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.core.http_client import create_async_http_client
 from orion.core.logging_config import setup_logging
 
-logger = logging.getLogger("orion.jobs.sync_earnings")
+logger = structlog.get_logger(__name__)
 
 
 def _gateway_base_url() -> str:
@@ -65,7 +65,7 @@ def _parse_gateway_date(raw: Any) -> Optional[date]:
 async def _fetch_gateway_earnings(endpoint: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     url = f"{_gateway_base_url()}{endpoint}"
     headers = _gateway_headers()
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with create_async_http_client(timeout=30.0) as client:
         response = await client.get(url, params=params, headers=headers)
         response.raise_for_status()
         payload = response.json()

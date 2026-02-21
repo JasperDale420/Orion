@@ -4,15 +4,15 @@ Embedding client that supports both OpenAI and local Ollama inference.
 Uses Ollama by default for local inference, falls back to OpenAI if configured.
 """
 
-import logging
+import structlog
 from typing import List, Optional
 
-import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.config import agent_settings, system_settings
+from orion.core.http_client import create_async_http_client
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Ollama embedding model - nomic-embed-text is purpose-built for RAG
 OLLAMA_EMBEDDING_MODEL = system_settings.ollama_embedding_model
@@ -72,7 +72,7 @@ class EmbeddingClient:
 
     async def _get_ollama_embedding(self, text: str) -> List[float]:
         """Get embedding from local Ollama."""
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with create_async_http_client(timeout=60.0) as client:
             response = await client.post(
                 self.ollama_url,
                 json={"model": self.ollama_model, "prompt": text},
