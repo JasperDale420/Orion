@@ -23,7 +23,7 @@ def _parse_rollup_id(rollup_id: str) -> tuple[str, str, datetime] | None:
     ticker, period, ts_str = parts
     try:
         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-    except Exception:
+    except (ValueError, TypeError):
         return None
     return ticker, period, _ensure_utc(ts)
 
@@ -81,13 +81,13 @@ async def preflight_live_signal(
 
     try:
         price = float(limit_price)
-    except Exception:
+    except (ValueError, TypeError):
         return PreflightResult(ok=False, reason="Invalid limit_price", extra={"limit_price": limit_price})
 
     sl_pct = exec_params.get("stop_loss_pct", None)
     try:
         sl_pct_f = float(sl_pct) if sl_pct is not None else None
-    except Exception:
+    except (ValueError, TypeError):
         sl_pct_f = None
 
     qty = float(risk_manager.calculate_size(entry_price=price, stop_loss_pct=sl_pct_f))
