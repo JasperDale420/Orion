@@ -14,7 +14,7 @@ Usage:
 """
 
 import asyncio
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -25,7 +25,7 @@ from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
 from orion.storage.db import init_db
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.jobs.data_quality_checker")
 
 # Critical tickers that must have continuous data
 CRITICAL_TICKERS = ["SPY", "QQQ", "IWM", "NVDA", "AAPL", "TSLA"]

@@ -4,7 +4,7 @@ Regime-Based Risk Manager.
 Applies position sizing multipliers based on multi-axis regime state.
 """
 
-import logging
+from orion.shared.logger import setup_struct_logger
 from pathlib import Path
 from typing import Any, Dict
 
@@ -18,7 +18,7 @@ from orion.analysis.regime import (
     VolRegime,
 )
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.analysis.regime_risk")
 
 # Load config
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "regime_risk.yaml"

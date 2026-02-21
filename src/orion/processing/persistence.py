@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timezone
 from typing import List
 
@@ -10,7 +10,7 @@ from orion.storage.models_silver import SilverSignal
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.processing.persistence")
 
 
 async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]) -> None:

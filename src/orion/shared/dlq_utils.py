@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -8,7 +8,7 @@ from orion.config import system_settings
 from orion.storage import db  # Import module for dynamic access
 from orion.storage.models_dlq import DeadLetterQueue
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.shared.dlq_utils")
 
 
 class DLQWriter:

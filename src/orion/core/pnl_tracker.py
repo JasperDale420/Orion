@@ -5,15 +5,15 @@ Provides live position P&L calculations, daily summary metrics,
 and alerts for risk thresholds.
 """
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import Dict, List, Optional, Any
 from zoneinfo import ZoneInfo
 
 from orion.config import risk_settings, RiskSettings
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.core.pnl_tracker")
 
 ET = ZoneInfo("America/New_York")
 

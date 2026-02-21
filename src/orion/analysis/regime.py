@@ -1,5 +1,5 @@
 import enum
-import logging
+from orion.shared.logger import setup_struct_logger
 
 import numpy as np
 import pandas as pd
@@ -8,7 +8,7 @@ from sqlalchemy import select
 from orion.storage.db import async_session_factory
 from orion.storage.models_gold import GoldTickerRollup
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.analysis.regime")
 
 
 class MarketRegime(str, enum.Enum):

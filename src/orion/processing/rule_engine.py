@@ -1,11 +1,11 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from typing import Any, Dict, List
 
 from orion.processing.rules.base import TradingRule
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.processing.rule_engine")
 
 
 class RuleEngine:

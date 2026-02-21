@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,7 +10,7 @@ import s3fs
 
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.storage.lakehouse")
 
 
 class LakehouseWriter:

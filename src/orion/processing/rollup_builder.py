@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -8,7 +8,7 @@ from sqlalchemy.future import select
 from orion.storage.models_gold import GoldTickerRollup
 from orion.storage.models_silver import SignalType, SilverSignal
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.processing.rollup_builder")
 
 
 class RollupBuilder:

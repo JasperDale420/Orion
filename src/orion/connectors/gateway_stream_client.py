@@ -8,7 +8,7 @@ leveraging the Gateway's multiplexer to avoid connection limit issues.
 import asyncio
 import hashlib
 import json
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import urlparse, urlunparse
@@ -19,7 +19,7 @@ from websockets.exceptions import ConnectionClosed
 from orion.config import system_settings
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.connectors.gateway_stream_client")
 
 # Reconnection settings
 MAX_RECONNECT_ATTEMPTS = 10
@@ -369,10 +369,7 @@ class GatewayStreamClient:
                 payload = data
 
             instrument_key = (
-                data.get("instrument_key")
-                or envelope.get("instrument_key")
-                or payload.get("instrument_key")
-                or ""
+                data.get("instrument_key") or envelope.get("instrument_key") or payload.get("instrument_key") or ""
             )
             top_symbol = data.get("symbol") or envelope.get("symbol")
             payload_symbol = payload.get("symbol") or payload.get("S")
@@ -389,10 +386,7 @@ class GatewayStreamClient:
 
             # Parse timestamp
             timestamp_value = (
-                payload.get("t")
-                or payload.get("timestamp")
-                or envelope.get("ts_event")
-                or data.get("ts_event")
+                payload.get("t") or payload.get("timestamp") or envelope.get("ts_event") or data.get("ts_event")
             )
             event_ts = self._parse_timestamp(timestamp_value)
 

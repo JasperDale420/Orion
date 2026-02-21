@@ -1,11 +1,11 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 from orion.config import system_settings
 from orion.shared.patterns import AsyncSingleton
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.shared.metrics")
 
 
 class Metrics(AsyncSingleton):

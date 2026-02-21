@@ -1,6 +1,6 @@
 import asyncio
 import inspect
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 import uuid
 from datetime import datetime, timezone
@@ -27,7 +27,7 @@ from orion.storage.models_solvers import (
 )
 from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.agents.meta_search_agent")
 async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY  # legacy patch target
 
 # Refinement loop configuration

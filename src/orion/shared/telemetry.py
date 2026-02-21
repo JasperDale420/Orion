@@ -16,12 +16,12 @@ Usage:
         ...
 """
 
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 from contextlib import contextmanager
 from typing import Any, Generator, Optional
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.shared.telemetry")
 
 # Check if OTEL is enabled
 OTEL_ENABLED = os.getenv("OTEL_ENABLED", "false").lower() in ("true", "1", "yes")
@@ -61,9 +61,7 @@ class NoOpTracer:
     """No-op tracer for when tracing is disabled."""
 
     @contextmanager
-    def start_as_current_span(
-        self, name: str, **kwargs: Any
-    ) -> Generator[NoOpSpan, None, None]:
+    def start_as_current_span(self, name: str, **kwargs: Any) -> Generator[NoOpSpan, None, None]:
         yield NoOpSpan()
 
     def start_span(self, name: str, **kwargs: Any) -> NoOpSpan:

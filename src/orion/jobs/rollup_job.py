@@ -1,5 +1,5 @@
 import asyncio
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
@@ -9,7 +9,7 @@ from orion.processing.rollup_builder import RollupBuilder
 from orion.storage.db import async_session_factory
 from orion.storage.watermarks import get_watermark, upsert_watermark
 
-logger = logging.getLogger("orion.jobs.rollup_job")
+logger = setup_struct_logger("orion.jobs.rollup_job")
 
 
 class RollupJob:

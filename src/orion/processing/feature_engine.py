@@ -1,5 +1,5 @@
 import hashlib
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -17,7 +17,7 @@ from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SignalType, SilverSignal
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.processing.feature_engine")
 
 
 class FeatureEngine:

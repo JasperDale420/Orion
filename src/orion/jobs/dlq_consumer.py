@@ -1,5 +1,5 @@
 import asyncio
-import logging
+from orion.shared.logger import setup_struct_logger
 import uuid
 from datetime import datetime, timezone
 from typing import Any, List
@@ -20,7 +20,7 @@ from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.jobs.dlq_consumer")
 
 
 class DLQConsumer:

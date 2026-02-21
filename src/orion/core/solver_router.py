@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from dataclasses import dataclass
 from typing import List
 
@@ -10,7 +10,7 @@ from orion.storage import db
 from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY
 from orion.storage.models_solvers import Solver, SolverMetrics
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.core.solver_router")
 async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY  # legacy patch target
 
 
@@ -235,10 +235,10 @@ class SolverRouter:
                         fallback_solver = next((s for s in active_solvers if s.solver_id == fallback_id), None)
 
                         # In live stage, only allow fallback when baseline is already among active solver set.
-                        if (
-                            not fallback_solver
-                            and str(getattr(context, "current_stage", "")).lower() in {"live", "limited_live"}
-                        ):
+                        if not fallback_solver and str(getattr(context, "current_stage", "")).lower() in {
+                            "live",
+                            "limited_live",
+                        }:
                             return []
 
                         if not fallback_solver:

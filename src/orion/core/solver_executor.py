@@ -1,10 +1,10 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from typing import Any, Dict, Optional, Tuple
 
 from orion.core.solver_schema import SolverConfig
 from orion.storage.models_gold import CandidateTrade
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.core.solver_executor")
 
 
 class SolverPipeline:

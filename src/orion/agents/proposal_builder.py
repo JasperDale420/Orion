@@ -1,11 +1,11 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import yaml
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.agents.proposal_builder")
 
 
 class ProposalBuilder:

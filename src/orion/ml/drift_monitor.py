@@ -4,22 +4,20 @@ Feature Drift Monitoring using Population Stability Index (PSI).
 Detects when production feature distributions shift from training baseline.
 """
 
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.ml.drift_monitor")
 
 # PSI thresholds
 PSI_THRESHOLD_WARNING = 0.1  # Moderate drift
 PSI_THRESHOLD_CRITICAL = 0.25  # Significant drift requiring investigation
 
 
-def calculate_psi(
-    expected: np.ndarray, actual: np.ndarray, buckets: int = 10
-) -> float:
+def calculate_psi(expected: np.ndarray, actual: np.ndarray, buckets: int = 10) -> float:
     """
     Calculate Population Stability Index between expected and actual distributions.
 
@@ -77,9 +75,7 @@ class FeatureDriftMonitor:
         self._baselines: Dict[str, Dict[str, Any]] = {}
         self._drift_history: List[Dict[str, Any]] = []
 
-    def set_baseline(
-        self, feature_name: str, values: np.ndarray
-    ) -> Dict[str, float]:
+    def set_baseline(self, feature_name: str, values: np.ndarray) -> Dict[str, float]:
         """
         Set baseline distribution for a feature.
 
@@ -125,9 +121,7 @@ class FeatureDriftMonitor:
             if name in df.columns:
                 self.set_baseline(name, df[name].values)
 
-    def check_drift(
-        self, feature_name: str, values: np.ndarray
-    ) -> Dict[str, Any]:
+    def check_drift(self, feature_name: str, values: np.ndarray) -> Dict[str, Any]:
         """
         Check a feature for drift against its baseline.
 

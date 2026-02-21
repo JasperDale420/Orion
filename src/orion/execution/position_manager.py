@@ -7,16 +7,16 @@ Per Dynamic Exit Strategies PDF:
 - Integrates with broker for actual position tracking
 """
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from orion.shared.db_utils import db_query
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
 from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.execution.position_manager")
 
 
 @dataclass

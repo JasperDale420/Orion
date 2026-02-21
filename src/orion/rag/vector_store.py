@@ -1,5 +1,5 @@
 import inspect
-import logging
+from orion.shared.logger import setup_struct_logger
 import math
 from datetime import datetime
 from typing import Any, Iterable, List
@@ -10,7 +10,7 @@ from orion.storage.db import async_session_factory
 from orion.storage.models_rag import RagDocument
 from sqlalchemy import Float, cast, select
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.rag.vector_store")
 
 # Derive the expected embedding dimension from the pgvector column definition
 # so it stays in sync with the model (768 for nomic-embed-text, 1536 for OpenAI, etc.).

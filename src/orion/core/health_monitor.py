@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -7,7 +7,7 @@ from sqlalchemy import func
 
 from orion.config import system_settings
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.core.health_monitor")
 
 
 class CriticalHealthException(Exception):

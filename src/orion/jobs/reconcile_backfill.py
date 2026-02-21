@@ -1,5 +1,5 @@
 import asyncio
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -13,7 +13,7 @@ from orion.core.logging_config import setup_logging
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.jobs.reconcile_backfill")
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 

@@ -4,7 +4,7 @@ Alpaca Options Trading Connector.
 Provides options order submission and quote retrieval via Alpaca Trading API.
 """
 
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime
 from typing import Any, Optional
 
@@ -17,7 +17,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from orion.config import SystemSettings
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.connectors.alpaca_options_connector")
 
 # Network retry strategy
 network_retry = retry(

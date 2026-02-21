@@ -1,5 +1,5 @@
 import asyncio
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -12,7 +12,7 @@ load_dotenv()
 from orion.core.logging_config import setup_logging
 
 setup_logging()
-logger = logging.getLogger("orion.recon.bar_scan")
+logger = setup_struct_logger("orion.reconciliation.bar_gap_scan")
 
 
 async def scan_ticker_gaps(session: Any, ticker: str, start_ts: datetime, end_ts: datetime) -> None:

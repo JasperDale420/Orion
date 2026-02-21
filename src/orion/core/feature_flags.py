@@ -5,11 +5,11 @@ Provides a centralized way to enable/disable features at runtime.
 Flags can be configured via environment variables or database.
 """
 
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 from typing import Dict, Optional
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.core.feature_flags")
 
 
 class FeatureFlags:

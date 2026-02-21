@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
@@ -14,7 +14,7 @@ from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdi
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.agents.meta_agent")
 
 
 class MetaAgent(BaseAgent):

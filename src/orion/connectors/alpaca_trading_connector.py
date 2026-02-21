@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -11,7 +11,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from orion.config import SystemSettings
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.connectors.alpaca_trading_connector")
 
 # Define retry strategy for network operations
 network_retry = retry(

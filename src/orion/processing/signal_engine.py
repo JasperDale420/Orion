@@ -1,5 +1,5 @@
 import hashlib
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,7 +12,7 @@ from orion.core.solver_schema import LiveContext
 from orion.processing.feature_engine import FeatureEngine
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.processing.signal_engine")
 
 
 class SignalEngine:

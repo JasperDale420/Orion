@@ -1,5 +1,5 @@
 import json
-import logging
+from orion.shared.logger import setup_struct_logger
 from typing import Any, Dict
 
 from orion.agents.base import BaseAgent
@@ -11,7 +11,7 @@ from orion.agents.codex_client import (
 from orion.rag.vector_store import VectorStore
 from orion.storage.models_gold import CandidateTrade
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.agents.strategist")
 
 
 class StrategistAgent(BaseAgent):

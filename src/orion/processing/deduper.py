@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from typing import List, Set
 
 from sqlalchemy import select
@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.processing.deduper")
 
 
 class DeduplicationEngine:

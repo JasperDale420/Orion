@@ -1,12 +1,12 @@
-import logging
 import os
 from typing import Any, Dict, Optional
 
 import joblib
 
 from orion.shared.patterns import AsyncSingleton
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.core.model_registry")
 
 
 class ModelRegistry(AsyncSingleton):

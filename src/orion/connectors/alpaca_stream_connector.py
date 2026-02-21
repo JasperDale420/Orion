@@ -8,7 +8,7 @@ connection if Gateway is unavailable.
 
 import asyncio
 import hashlib
-import logging
+from orion.shared.logger import setup_struct_logger
 import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -17,7 +17,7 @@ from orion.config import system_settings
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.connectors.alpaca_stream_connector")
 
 
 class AlpacaStreamConnector:

@@ -1,4 +1,3 @@
-import logging
 import math
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
@@ -6,12 +5,13 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from orion.config import RiskSettings, risk_settings
 from orion.shared.db_utils import db_write
 from orion.shared.decorators import db_retry
+from orion.shared.logger import setup_struct_logger
 
 if TYPE_CHECKING:
     from orion.execution.correlation_adjuster import CorrelationAdjuster
     from orion.storage.models_execution import Position
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.execution.risk_manager")
 
 # Initialize metrics
 _metrics: "Metrics | None" = None

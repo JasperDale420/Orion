@@ -5,7 +5,7 @@ Scales down position size when new asset is highly correlated
 with existing portfolio holdings to reduce concentration risk.
 """
 
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -13,7 +13,7 @@ import numpy as np
 
 from orion.config import RiskSettings, risk_settings
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.execution.correlation_adjuster")
 
 # In-memory cache for daily returns (ticker -> (timestamp, returns_array))
 _returns_cache: Dict[str, tuple[datetime, np.ndarray]] = {}

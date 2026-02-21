@@ -5,13 +5,13 @@ Based on "Dynamic Exit Strategies for Short-Term Options Trades Using Unusual Wh
 Implements 6 flow-based exit signals for 0-16 DTE options positions.
 """
 
-import logging
+from orion.shared.logger import setup_struct_logger
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.processing.rules.exit_rules")
 
 
 @dataclass

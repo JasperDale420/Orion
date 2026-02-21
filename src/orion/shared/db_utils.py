@@ -5,7 +5,7 @@ Provides helpers to reduce boilerplate for database operations.
 """
 
 import asyncio
-import logging
+from orion.shared.logger import setup_struct_logger
 from typing import Awaitable, Callable, TypeVar
 
 from sqlalchemy.exc import DBAPIError, OperationalError
@@ -15,7 +15,7 @@ from orion.config import system_settings
 from orion.storage import db
 from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.shared.db_utils")
 
 T = TypeVar("T")
 

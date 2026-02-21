@@ -1,5 +1,4 @@
 import hashlib
-import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
@@ -8,10 +7,11 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.connectors.alpaca_market_connector")
 
 
 class AlpacaMarketConnector:

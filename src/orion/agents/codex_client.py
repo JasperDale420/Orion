@@ -7,13 +7,13 @@ locally authenticated codex CLI instead of direct API calls.
 
 import asyncio
 import json
-import logging
+from orion.shared.logger import setup_struct_logger
 import shutil
 from typing import Optional
 
 from orion.config import agent_settings
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.agents.codex_client")
 
 
 class CodexClientError(Exception):

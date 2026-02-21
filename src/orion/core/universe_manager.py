@@ -1,4 +1,4 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 import time
 from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Set
@@ -10,7 +10,7 @@ from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SilverUWAlert
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.core.universe_manager")
 
 
 class UniverseManager:

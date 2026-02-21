@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Tuple
@@ -13,12 +12,13 @@ from orion.core.errors import ErrorCode
 from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
 from orion.storage.db import async_session_factory  # legacy patch target for tests
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.execution.execution_engine")
 
 
 class ExecutionEngine:
@@ -276,8 +276,8 @@ class ExecutionEngine:
             price = self.market_connector.get_latest_price(candidate.ticker)
             if price > 0:
                 return price
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("live_price_fetch_failed", ticker=candidate.ticker, error=str(exc))
 
         # Fallback
         ep = decision.execution_params or {}
@@ -412,7 +412,7 @@ class ExecutionEngine:
             )
 
             premium_paid = num_contracts * option_price * 100
-            logger.info(f"OPTIONS Execution Successful {client_order_id} | " f"Premium: ${premium_paid:.2f}")
+            logger.info(f"OPTIONS Execution Successful {client_order_id} | Premium: ${premium_paid:.2f}")
             decision.executed_successfully = "TRUE"
             self._record_result(True)
 

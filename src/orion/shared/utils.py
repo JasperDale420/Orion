@@ -1,9 +1,9 @@
-import logging
+from orion.shared.logger import setup_struct_logger
 from datetime import datetime, timezone
 
 import dateutil.parser
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.shared.utils")
 
 
 def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = False) -> datetime:
@@ -29,7 +29,7 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
         if isinstance(ts_input, str):
             try:
                 # Optimized path for ISO format
-                dt = datetime.fromisoformat(ts_input.replace('Z', '+00:00'))
+                dt = datetime.fromisoformat(ts_input.replace("Z", "+00:00"))
             except ValueError:
                 # Fallback to slower, more flexible parser
                 dt = dateutil.parser.parse(ts_input)
