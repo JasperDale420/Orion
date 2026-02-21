@@ -782,7 +782,7 @@ class BrokerClient(RESTClient):
 
         if response is None:
             # we got here either by error or someone has mis-configured us, so we didn't even try
-            raise Exception("Somehow we never made a request for download!")
+            raise RuntimeError("Somehow we never made a request for download!")
 
         with open(file_path, "wb") as f:
             # we specify chunk_size none which is okay since we set stream to true above, so chunks will be as we

@@ -118,7 +118,8 @@ class CorrelationAdjuster:
         try:
             corr = np.corrcoef(returns_a, returns_b)[0, 1]
             return float(corr) if not np.isnan(corr) else None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Correlation calculation failed for {ticker_a}/{ticker_b}: {e}")
             return None
 
     async def _get_daily_returns(self, ticker: str, lookback_days: int, cfg: RiskSettings) -> Optional[np.ndarray]:
