@@ -40,7 +40,7 @@ class MCPClient:
                             logger.info("mcp_connected", session_url=self.messages_url)
                             return
 
-        except (ConnectionError, OSError) as exc:
+        except OSError as exc:
             logger.error("mcp_connect_failed", error=str(exc), exc_info=True)
 
     async def list_tools(self) -> List[Dict[str, Any]]:
@@ -64,7 +64,7 @@ class MCPClient:
                     return self.tools
                 if "error" in data:
                     logger.error("mcp_list_tools_error", error=data["error"])
-        except (ConnectionError, OSError) as exc:
+        except OSError as exc:
             logger.error("mcp_list_tools_failed", error=str(exc), exc_info=True)
 
         return []
@@ -88,5 +88,5 @@ class MCPClient:
                 if "error" in data:
                     return f"Error: {data['error'].get('message')}"
 
-        except (ConnectionError, OSError) as exc:
+        except OSError as exc:
             return f"RPC Failed: {exc}"
