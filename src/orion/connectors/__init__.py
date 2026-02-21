@@ -1,11 +1,13 @@
 """Orion Connectors.
 
 Connectors for external data sources:
-- Alpaca: Market data and trading
-- Gateway: Centralized data via Data-Gateway
+- Alpaca: Market data, trading, options, and streaming
+- Gateway: Centralized data via Data-Gateway WebSocket client
+- MCP: Model Context Protocol client for AI agent tool access
 
-DEPRECATED: legacy UW connectors archived under archive/2026-02-05_gateway-heber-migration/.
-Data-Gateway now handles flow/darkpool ingestion -> Heber.
+Note: Legacy UW flow/darkpool connectors were archived to
+archive/2026-02-05_gateway-heber-migration/. Data-Gateway now handles
+those data feeds via Heber.
 """
 
 from .alpaca_market_connector import AlpacaMarketConnector

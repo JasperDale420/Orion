@@ -315,29 +315,6 @@ class BrokerClient(RESTClient):
 
         return Account(**response)
 
-    def delete_account(
-        self,
-        account_id: Union[UUID, str],
-    ) -> None:
-        """
-        DEPRECATED:
-            delete_account is deprecated and will be removed in a future version.
-            Please use `close_account(account_id)` instead
-
-        Args:
-            account_id (Union[UUID, str]): The id of the account to be closed
-
-        Returns:
-            None:
-        """
-        warnings.warn(
-            "delete_account is deprecated and will be removed in a future version."
-            "Please use `close_account(account_id)` instead",
-            DeprecationWarning,
-        )
-
-        self.close_account(account_id)
-
     def close_account(
         self,
         account_id: Union[UUID, str],

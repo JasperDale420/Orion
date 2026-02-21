@@ -46,3 +46,14 @@ build/
 
 # Artifacts (generated reports)
 artifacts/
+
+# Aider
+.aider*
+.env
+.env
+.env
+.env
+.env
+.env
+.env
+.env

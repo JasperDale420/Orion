@@ -12,6 +12,10 @@ from sqlalchemy import Float, cast, select
 
 logger = logging.getLogger(__name__)
 
+# Derive the expected embedding dimension from the pgvector column definition
+# so it stays in sync with the model (768 for nomic-embed-text, 1536 for OpenAI, etc.).
+_EMBEDDING_VEC_DIM: int = RagDocument.embedding_vec.type.dim
+
 
 class VectorStore:
     def __init__(self) -> None:
@@ -33,7 +37,7 @@ class VectorStore:
         embedding_vec = None
         try:
             embedding = await self._resolve_embedding(content)
-            embedding_vec = embedding if len(embedding) == 1536 else None
+            embedding_vec = embedding if len(embedding) == _EMBEDDING_VEC_DIM else None
         except Exception as e:
             logger.warning(f"Embedding unavailable; storing document without vector. doc_id={doc_id} err={e}")
 
@@ -134,8 +138,10 @@ class VectorStore:
             try:
                 if not query_embedding:
                     raise ValueError("No query embedding available")
-                if len(query_embedding) != 1536:
-                    raise ValueError(f"Unexpected embedding dimension {len(query_embedding)} (expected 1536)")
+                if len(query_embedding) != _EMBEDDING_VEC_DIM:
+                    raise ValueError(
+                        f"Unexpected embedding dimension {len(query_embedding)} (expected {_EMBEDDING_VEC_DIM})"
+                    )
                 stmt_vec = (
                     stmt_base.where(RagDocument.embedding_vec.is_not(None))
                     .order_by(RagDocument.embedding_vec.l2_distance(query_embedding))

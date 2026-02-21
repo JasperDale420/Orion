@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Dead Code: `BrokerClient.delete_account()`** (2026-02-21):
+  - Removed deprecated wrapper method from `src/alpaca/broker/client.py`. It delegated to `close_account()` and had zero callers.
+
+- **Dead Code: `OPTION_DATA_STREAM` enum** (2026-02-21):
+  - Removed duplicate enum value from `src/alpaca/common/enums.py`. Identical to `MARKET_DATA_STREAM` and had zero references.
+
+- **Fix: Misleading deprecation comment in `connectors/__init__.py`** (2026-02-21):
+  - Clarified that only legacy UW connectors were deprecated, not the entire connectors package which is actively used.
+
 ### Fixed
 
 - **Heber Reader crashing on macOS dot-underscore metadata files**: `heber_reader.py` PyArrow directory scans previously tripped over `._*` resource fork files created by macOS on the Heber volume, causing constant `heber_read_failed` EPERM error spam in `feature_enrichment`. Added a dedicated permission error detector that reroutes to the `_read_parquet_filewise` fallback (which explicitly ignores `._` files).

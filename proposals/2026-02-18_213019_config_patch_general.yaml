@@ -1,0 +1,21 @@
+meta:
+  run_id: 8e53d753-18d7-4a66-afee-976e007f527b
+  created_at: '2026-02-18T21:30:19.220585+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-18_8e53d753-18d7-4a66-afee-976e007f527b.json
+  report_path: artifacts/reports/eod_report_2026-02-18.md
+proposal:
+  type: config_patch
+  priority: 2
+  rationale: Add monitoring for consecutive zero-activity days to detect potential
+    system issues or regime mismatches.
+  evidence_pointers:
+    total_trades: 0
+    signals_live: 0
+  test_plan:
+  - Implement alert after 2 consecutive zero-trade days
+  - Log regime conditions during alert periods
+  changes:
+    monitoring.consecutive_zero_activity_alert_threshold: 2
+    monitoring.zero_activity_regime_logging: true

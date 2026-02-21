@@ -192,34 +192,5 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  mcp-server:
-    build: ../Shared-MCP-Server
-    container_name: orion_mcp_server
-    restart: unless-stopped
-    ports:
-      - "8090:8001"
-    environment:
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8001
-      - MCP_TRANSPORT=sse
-      - MCP_API_KEY=${MCP_API_KEY:-}
-      - MCP_API_KEY_HEADER=${MCP_API_KEY_HEADER:-X-MCP-API-Key}
-      - MCP_AUTH_REQUIRED=${MCP_AUTH_REQUIRED:-false}
-      - UW_API_KEY=${UW_API_KEY}
-      - SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}
-      - APCA_API_KEY_ID=${ALPACA_API_KEY}
-      - APCA_API_SECRET_KEY=${ALPACA_SECRET_KEY}
-      - APCA_API_BASE_URL=https://paper-api.alpaca.markets
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8001/health/live" ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-
 volumes:
   timescaledb_data:
