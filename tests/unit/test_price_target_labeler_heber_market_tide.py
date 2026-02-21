@@ -68,7 +68,7 @@ async def test_get_market_tide_before_entry_prefers_heber_net(monkeypatch: pytes
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", _fake_heber_net, raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_market_tide_before_entry(entry_ts, minutes=45)
+    result = labeler.get_market_tide_before_entry(entry_ts, minutes=45)
     assert result == {"net_premium": 250.0, "direction": "BULLISH"}
 
 
@@ -104,7 +104,7 @@ async def test_get_regime_at_entry_uses_heber_tide_without_sql_fallback(monkeypa
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: 77.0, raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_regime_at_entry(entry_ts)
+    result = labeler.get_regime_at_entry(entry_ts)
 
     assert captured["market_tide_net"] == 77.0
     assert result["vix_at_entry"] == 19.5

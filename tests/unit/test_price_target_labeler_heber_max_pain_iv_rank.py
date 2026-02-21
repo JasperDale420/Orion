@@ -135,7 +135,7 @@ async def test_get_iv_rank_at_entry_prefers_heber_when_available(monkeypatch: py
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    iv_rank = await labeler.get_iv_rank_at_entry("AAPL", entry_ts)
+    iv_rank = labeler.get_iv_rank_at_entry("AAPL", entry_ts)
     assert iv_rank == 44.0
 
 
@@ -158,7 +158,7 @@ async def test_get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_una
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    iv_rank = await labeler.get_iv_rank_at_entry("AAPL", entry_ts)
+    iv_rank = labeler.get_iv_rank_at_entry("AAPL", entry_ts)
     assert iv_rank is None
 
 
@@ -188,5 +188,5 @@ async def test_get_iv_rank_at_entry_estimates_from_heber_flow_when_iv_rank_missi
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fake_db_query, raising=False)
 
-    iv_rank = await labeler.get_iv_rank_at_entry("AAPL", entry_ts)
+    iv_rank = labeler.get_iv_rank_at_entry("AAPL", entry_ts)
     assert iv_rank == 100.0

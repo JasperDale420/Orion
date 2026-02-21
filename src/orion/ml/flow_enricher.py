@@ -252,7 +252,7 @@ async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
 async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
     """Get market tide in window before entry."""
     try:
-        result = await get_labeler_market_tide_before_entry(entry_ts, minutes=minutes)
+        result = get_labeler_market_tide_before_entry(entry_ts, minutes=minutes)
         if isinstance(result, dict):
             return {
                 "net_premium": result.get("net_premium"),
@@ -283,7 +283,7 @@ async def _get_max_pain_distance(ticker: str, entry_ts: datetime, dte: Optional[
 async def _get_iv_rank(ticker: str, entry_ts: datetime) -> Optional[float]:
     """Get IV rank at entry."""
     try:
-        return await get_labeler_iv_rank_at_entry(ticker, entry_ts)
+        return get_labeler_iv_rank_at_entry(ticker, entry_ts)
     except Exception as e:
         logger.debug(f"IV rank lookup failed: {e}")
         return None
@@ -309,7 +309,7 @@ async def _get_darkpool_volumes(ticker: str, entry_ts: datetime) -> Dict[str, Op
 async def _get_regime(entry_ts: datetime) -> Dict[str, str]:
     """Get regime snapshot at entry."""
     try:
-        regime = await get_labeler_regime_at_entry(entry_ts)
+        regime = get_labeler_regime_at_entry(entry_ts)
         if isinstance(regime, dict):
             return {
                 "trend_regime": regime.get("trend_regime"),
@@ -369,7 +369,7 @@ async def _get_flow_greeks(
 async def _get_vix(entry_ts: datetime) -> Optional[float]:
     """Get VIX at entry."""
     try:
-        regime = await get_labeler_regime_at_entry(entry_ts)
+        regime = get_labeler_regime_at_entry(entry_ts)
         if isinstance(regime, dict):
             return regime.get("vix_at_entry")
         return None
@@ -528,7 +528,7 @@ async def _get_market_context(
     }
 
     try:
-        rvol = await get_labeler_rvol_metrics(ticker, entry_ts)
+        rvol = get_labeler_rvol_metrics(ticker, entry_ts)
         if isinstance(rvol, dict):
             result["rvol_daily"] = rvol.get("rvol_daily")
             # In a real implementation, we'd fetch returns here too

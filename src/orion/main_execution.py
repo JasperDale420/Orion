@@ -140,6 +140,51 @@ def _coerce_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
+def _nullable_float(value: Any) -> Optional[float]:
+    """Coerce a value to float or return None if invalid/NaN."""
+    numeric = pd.to_numeric(value, errors="coerce")
+    return float(numeric) if not pd.isna(numeric) else None
+
+
+def _optional_string(row: Any, col: Optional[str], *, upper: bool = False, default: str = "") -> str:
+    """Extract a string from a row column, returning default if the column is absent or empty."""
+    if col is None:
+        return default
+    raw = row.get(col)
+    if not raw:
+        return default
+    result = str(raw).strip()
+    return result.upper() if upper else result
+
+
+def _row_to_flow_namespace(row: Any, idx: Any, col_map: dict[str, Optional[str]]) -> Optional[SimpleNamespace]:
+    """Convert a raw DataFrame row to a SimpleNamespace flow object, filtering bad rows."""
+    flow_ticker = _normalize_flow_ticker(row.get(col_map["ticker"]))
+    if flow_ticker != col_map["_ticker_upper"]:
+        return None
+
+    premium = _nullable_float(row.get(col_map["premium"]))
+    if premium is None:
+        return None
+
+    event_id = _optional_string(row, col_map["event_id"]) or f"heber_flow_{idx}"
+    option_chain = _optional_string(row, col_map["option_chain"])
+
+    return SimpleNamespace(
+        event_id=event_id,
+        ticker=flow_ticker,
+        flow_ts_utc=row["_event_ts"].to_pydatetime(),
+        premium_usd=premium,
+        put_call=_normalize_put_call(row.get(col_map["put_call"])) if col_map["put_call"] else "",
+        aggressor=_optional_string(row, col_map["aggressor"], upper=True),
+        is_sweep=_coerce_bool(row.get(col_map["sweep"])) if col_map["sweep"] else False,
+        underlying_price=_nullable_float(row.get(col_map["underlying"])) if col_map["underlying"] else None,
+        option_chain=option_chain,
+        expiry=row.get(col_map["expiry"]) if col_map["expiry"] else None,
+        strike=_nullable_float(row.get(col_map["strike"])) if col_map["strike"] else None,
+    )
+
+
 async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] | None:
     reader = get_heber_reader()
     now = datetime.now(timezone.utc)
@@ -164,62 +209,29 @@ async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] 
     if ticker_col is None or ts_col is None or premium_col is None:
         return []
 
-    put_call_col = _first_existing_column(frame, ("put_call", "call_put"))
-    aggressor_col = _first_existing_column(frame, ("aggressor", "aggressor_ind", "side"))
-    sweep_col = _first_existing_column(frame, ("is_sweep", "sweep"))
-    option_chain_col = _first_existing_column(frame, ("option_chain", "option_symbol"))
-    expiry_col = _first_existing_column(frame, ("expiry",))
-    strike_col = _first_existing_column(frame, ("strike",))
-    underlying_col = _first_existing_column(frame, ("underlying_price", "underlying"))
-    event_id_col = _first_existing_column(frame, ("event_id", "id"))
+    col_map: dict[str, Optional[str]] = {
+        "ticker": ticker_col,
+        "premium": premium_col,
+        "put_call": _first_existing_column(frame, ("put_call", "call_put")),
+        "aggressor": _first_existing_column(frame, ("aggressor", "aggressor_ind", "side")),
+        "sweep": _first_existing_column(frame, ("is_sweep", "sweep")),
+        "option_chain": _first_existing_column(frame, ("option_chain", "option_symbol")),
+        "expiry": _first_existing_column(frame, ("expiry",)),
+        "strike": _first_existing_column(frame, ("strike",)),
+        "underlying": _first_existing_column(frame, ("underlying_price", "underlying")),
+        "event_id": _first_existing_column(frame, ("event_id", "id")),
+        "_ticker_upper": ticker.upper(),
+    }
 
     work = frame.copy()
     work["_event_ts"] = pd.to_datetime(work[ts_col], utc=True, errors="coerce")
     work = work.dropna(subset=["_event_ts"]).sort_values("_event_ts", ascending=False).head(100)
 
-    ticker_upper = ticker.upper()
     rows: List[Any] = []
     for idx, row in work.iterrows():
-        flow_ticker = _normalize_flow_ticker(row.get(ticker_col))
-        if flow_ticker != ticker_upper:
-            continue
-
-        premium = pd.to_numeric(row.get(premium_col), errors="coerce")
-        if pd.isna(premium):
-            continue
-
-        underlying_price = None
-        if underlying_col is not None:
-            underlying_price_value = pd.to_numeric(row.get(underlying_col), errors="coerce")
-            if not pd.isna(underlying_price_value):
-                underlying_price = float(underlying_price_value)
-
-        strike = None
-        if strike_col is not None:
-            strike_value = pd.to_numeric(row.get(strike_col), errors="coerce")
-            if not pd.isna(strike_value):
-                strike = float(strike_value)
-
-        option_chain = str(row.get(option_chain_col)).strip() if option_chain_col and row.get(option_chain_col) else ""
-        event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
-
-        rows.append(
-            SimpleNamespace(
-                event_id=event_id,
-                ticker=flow_ticker,
-                flow_ts_utc=row["_event_ts"].to_pydatetime(),
-                premium_usd=float(premium),
-                put_call=_normalize_put_call(row.get(put_call_col)) if put_call_col else "",
-                aggressor=str(row.get(aggressor_col)).strip().upper()
-                if aggressor_col and row.get(aggressor_col)
-                else "",
-                is_sweep=_coerce_bool(row.get(sweep_col)) if sweep_col else False,
-                underlying_price=underlying_price,
-                option_chain=option_chain,
-                expiry=row.get(expiry_col) if expiry_col else None,
-                strike=strike,
-            )
-        )
+        ns = _row_to_flow_namespace(row, idx, col_map)
+        if ns is not None:
+            rows.append(ns)
     return rows
 
 
@@ -263,15 +275,32 @@ async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
     return await db_query(query_candidates)
 
 
+def _extract_signal_fields(
+    decision: StrategyDecision,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Extract expected_return and risk_score from decision trace."""
+    if not isinstance(decision.decision_trace_json, dict):
+        return None, None
+    return (
+        decision.decision_trace_json.get("expected_return_bp"),
+        decision.decision_trace_json.get("risk_score"),
+    )
+
+
+def _validate_execute_fields(
+    expected_return: Optional[float],
+    risk_score: Optional[float],
+    p_take: Optional[float],
+) -> bool:
+    """Return True when all required EXECUTE signal fields are present."""
+    return expected_return is not None and risk_score is not None and p_take is not None
+
+
 async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -> None:
     # PRDv2 §11.2: EXECUTE decisions must carry expected_return, p_take, risk_score (for signals_live).
     if decision.decision == "EXECUTE":
-        expected_return = None
-        risk_score = None
-        if isinstance(decision.decision_trace_json, dict):
-            expected_return = decision.decision_trace_json.get("expected_return_bp")
-            risk_score = decision.decision_trace_json.get("risk_score")
-        if expected_return is None or risk_score is None or decision.p_take is None:
+        er, rs = _extract_signal_fields(decision)
+        if not _validate_execute_fields(er, rs, decision.p_take):
             decision.decision = "SKIP"
             decision.reason = "Missing required signal fields (expected_return/risk_score/p_take)"
 
@@ -287,14 +316,10 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -
 
     signal_id = f"sig_{candidate.candidate_id}"
     try:
-        expected_return = None
-        risk_score = None
-        if isinstance(decision.decision_trace_json, dict):
-            expected_return = decision.decision_trace_json.get("expected_return_bp")
-            risk_score = decision.decision_trace_json.get("risk_score")
+        expected_return, risk_score = _extract_signal_fields(decision)
 
         # Fail-fast for PRDv2 §11.2 required fields.
-        if expected_return is None or risk_score is None or decision.p_take is None:
+        if not _validate_execute_fields(expected_return, risk_score, decision.p_take):
             logger.error(
                 "EXECUTE decision missing required fields for signals_live; skipping persistence/execution",
                 extra={
@@ -366,6 +391,106 @@ async def update_decision_status(decision_id: str, status: str) -> None:
     await db_write(update_status)
 
 
+async def _apply_preflight(
+    decision: StrategyDecision,
+    candidate: CandidateTrade,
+    execution_engine: ExecutionEngine,
+) -> None:
+    """Run preflight checks on EXECUTE decisions; downgrade to SKIP if rejected."""
+    if decision.decision != "EXECUTE":
+        return
+
+    from orion.execution.signal_preflight import preflight_live_signal
+
+    async def _run_preflight(session: Any) -> Any:
+        return await preflight_live_signal(
+            session,
+            candidate=candidate,
+            decision=decision,
+            risk_manager=execution_engine.risk_manager,
+        )
+
+    pre = await db_query(_run_preflight)
+    decision.decision_trace_json = decision.decision_trace_json or {}
+    if not pre.ok:
+        decision.decision = "SKIP"
+        decision.executed_successfully = "SKIPPED"
+        decision.reason = f"Preflight reject: {pre.reason}"
+        decision.decision_trace_json["preflight_reject"] = {"reason": pre.reason, **(pre.extra or {})}
+    else:
+        decision.decision_trace_json["rollups"] = (pre.extra or {}).get("rollups", {})
+        decision.decision_trace_json["preflight"] = {k: v for k, v in (pre.extra or {}).items() if k != "rollups"}
+
+
+async def _execute_and_persist(
+    decision: StrategyDecision,
+    candidate: CandidateTrade,
+    execution_engine: ExecutionEngine,
+) -> None:
+    """Execute decision if EXECUTE, then persist status."""
+    exec_status = "SKIPPED"
+    if decision.decision == "EXECUTE":
+        try:
+            await execution_engine.execute_order(decision, candidate)
+            exec_status = "TRUE" if decision.executed_successfully == "TRUE" else "FALSE"
+        except Exception as exe:
+            logger.error(f"Execution Exception: {exe}")
+            exec_status = "FALSE"
+
+    await update_decision_status(decision.decision_id, exec_status)
+
+
+async def _process_candidates(
+    candidates: List[Any],
+    signal_engine: SignalEngine,
+    execution_engine: ExecutionEngine,
+) -> None:
+    """Process a batch of pending candidates through policy, preflight, and execution."""
+    logger.info(f"Processing {len(candidates)} new candidates...")
+    for candidate in candidates:
+        decision = await signal_engine.decide(candidate)
+        await _apply_preflight(decision, candidate, execution_engine)
+        await save_decision(decision, candidate)
+        await _execute_and_persist(decision, candidate, execution_engine)
+
+
+async def _evaluate_exit_rules(
+    position_manager: Any,
+    exit_rules: List[Any],
+    execution_engine: ExecutionEngine,
+) -> None:
+    """Run exit rule evaluation for all open positions."""
+    for position in position_manager.get_open_positions():
+        if not _should_apply_options_exit_rules(position):
+            logger.debug(
+                f"Skipping options exit rules for non-option position: {position.ticker}",
+                extra={"event_type": "EXIT_RULE_SKIP_NON_OPTION", "ticker": position.ticker},
+            )
+            continue
+
+        recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
+        scoped_flow = _scope_recent_flow_for_position(position, recent_flow)
+
+        for rule in exit_rules:
+            exit_sig = rule.should_exit(position, scoped_flow, context={})
+            if not exit_sig:
+                continue
+            logger.info(
+                f"Exit signal triggered: {position.ticker} - {exit_sig.rule_id}: {exit_sig.reason}",
+                extra={"event_type": "EXIT_SIGNAL", "ticker": position.ticker, "rule_id": exit_sig.rule_id},
+            )
+            if exit_sig.urgency == "IMMEDIATE":
+                closed = await execution_engine.close_position(
+                    ticker=position.ticker,
+                    qty=position.qty,
+                    exit_signal=exit_sig,
+                    direction=position.direction,
+                )
+                if closed:
+                    position_manager.remove_position(position.candidate_id)
+                break
+
+
 async def main() -> None:
     # Graceful Shutdown Setup
     loop = asyncio.get_running_loop()
@@ -384,19 +509,15 @@ async def main() -> None:
     signal_engine = SignalEngine()
     execution_engine = ExecutionEngine()
 
-    # Initialize Position Manager and Exit Rules
     from orion.execution.position_manager import PositionManager
     from orion.processing.rules.exit_rules import get_default_exit_rules
 
     position_manager = PositionManager()
     exit_rules = get_default_exit_rules()
 
-    # Initialize history for execution error tracking
     await execution_engine.initialize()
     await signal_engine.initialize()
     await position_manager.initialize()
-
-    # Ensure tables exist (if running standalone)
     await init_db()
 
     logger.info("Engines Initialized. Entering Service Loop.")
@@ -405,10 +526,8 @@ async def main() -> None:
         start_time = loop.time()
 
         try:
-            # 1.5 Poll Fills (Real-time Risk Updates)
             await execution_engine.poll_fills()
 
-            # 1.6 Check Circuit Breaker
             from orion.core.circuit_breaker import CircuitBreaker
 
             cb = CircuitBreaker()
@@ -418,117 +537,30 @@ async def main() -> None:
                 await asyncio.sleep(5.0)
                 continue
 
-            # 2. Poll Pending Candidates
             candidates = await fetch_pending_candidates()
-
             if not candidates:
-                # Sleep and continue
                 await asyncio.sleep(1.0)
                 continue
 
-            logger.info(f"Processing {len(candidates)} new candidates...")
-
-            for candidate in candidates:
-                # 3. Policy Execution
-                decision = await signal_engine.decide(candidate)
-
-                # 3.5 Pre-signal portfolio/risk/rollup filters (PRD §11.2)
-                if decision.decision == "EXECUTE":
-                    from orion.execution.signal_preflight import preflight_live_signal
-
-                    async def run_preflight(session: Any, candidate: Any = candidate, decision: Any = decision) -> Any:
-                        return await preflight_live_signal(
-                            session,
-                            candidate=candidate,
-                            decision=decision,
-                            risk_manager=execution_engine.risk_manager,
-                        )
-
-                    pre = await db_query(run_preflight)
-                    if not pre.ok:
-                        decision.decision = "SKIP"
-                        decision.executed_successfully = "SKIPPED"
-                        decision.reason = f"Preflight reject: {pre.reason}"
-                        decision.decision_trace_json = decision.decision_trace_json or {}
-                        decision.decision_trace_json["preflight_reject"] = {"reason": pre.reason, **(pre.extra or {})}
-                    else:
-                        decision.decision_trace_json = decision.decision_trace_json or {}
-                        decision.decision_trace_json["rollups"] = (pre.extra or {}).get("rollups", {})
-                        decision.decision_trace_json["preflight"] = {
-                            k: v for k, v in (pre.extra or {}).items() if k != "rollups"
-                        }
-
-                # 4. Save Decision Draft
-                await save_decision(decision, candidate)
-
-                # 5. Execute (if EXECUTE)
-                exec_status = "SKIPPED"
-                if decision.decision == "EXECUTE":
-                    try:
-                        # Fix: Call execute_order with decision object
-                        await execution_engine.execute_order(decision, candidate)
-
-                        # Check result in decision object itself (updated by engine)
-                        if decision.executed_successfully == "TRUE":
-                            exec_status = "TRUE"
-                        else:
-                            exec_status = "FALSE"
-
-                    except Exception as exe:
-                        logger.error(f"Execution Exception: {exe}")
-                        exec_status = "FALSE"
-
-                # 6. Update Decision Status
-                await update_decision_status(decision.decision_id, exec_status)
+            await _process_candidates(candidates, signal_engine, execution_engine)
 
         except Exception as e:
             logger.error(f"Main Loop Error: {e}")
-            await asyncio.sleep(5.0)  # Backoff
+            await asyncio.sleep(5.0)
 
-        # Position Manager: Check exit rules for open positions
         try:
-            for position in position_manager.get_open_positions():
-                if not _should_apply_options_exit_rules(position):
-                    logger.debug(
-                        f"Skipping options exit rules for non-option position: {position.ticker}",
-                        extra={"event_type": "EXIT_RULE_SKIP_NON_OPTION", "ticker": position.ticker},
-                    )
-                    continue
-
-                # Fetch recent flow for this ticker (last 30 min)
-                recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
-                scoped_flow = _scope_recent_flow_for_position(position, recent_flow)
-
-                for rule in exit_rules:
-                    exit_sig = rule.should_exit(position, scoped_flow, context={})
-                    if exit_sig:
-                        logger.info(
-                            f"Exit signal triggered: {position.ticker} - {exit_sig.rule_id}: {exit_sig.reason}",
-                            extra={"event_type": "EXIT_SIGNAL", "ticker": position.ticker, "rule_id": exit_sig.rule_id},
-                        )
-                        if exit_sig.urgency == "IMMEDIATE":
-                            closed = await execution_engine.close_position(
-                                ticker=position.ticker,
-                                qty=position.qty,
-                                exit_signal=exit_sig,
-                                direction=position.direction,
-                            )
-                            if closed:
-                                position_manager.remove_position(position.candidate_id)
-                            break  # Exit on first immediate signal
+            await _evaluate_exit_rules(position_manager, exit_rules, execution_engine)
         except Exception as exit_err:
             logger.error(f"Exit rule evaluation error: {exit_err}")
 
         elapsed = loop.time() - start_time
         sleep_time = max(0.1, 1.0 - elapsed)
 
-        # Smart Sleep: Wait for sleep_time OR shutdown_event
-        # If shutdown triggered during sleep, we exit immediately after
         try:
             await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
-            break  # Shutdown set
+            break
         except asyncio.TimeoutError:
-            pass  # Sleep done, continue loop
+            pass
 
     logger.info("Execution Service Stopped.")
 

@@ -196,7 +196,7 @@ class PositionManager:
         """
         pos = self._positions.pop(identifier, None)
         if pos is None:
-            for candidate_id, existing in list(self._positions.items()):
+            for candidate_id, existing in self._positions.items():
                 if existing.ticker == identifier:
                     pos = self._positions.pop(candidate_id)
                     break

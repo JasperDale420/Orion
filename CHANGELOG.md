@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **SonarQube code quality fixes** (2026-02-21):
+  - `meta_search_agent.py`: Extracted duplicated `"unittest.mock"` literal into `_UNITTEST_MOCK_MODULE` constant (S1192).
+  - `scorer.py`: Replaced timezone-naive `datetime.now()`/`datetime.fromtimestamp()` with UTC-aware equivalents (S6903). Reduced `_heuristic_score` CC from 19→~10 by extracting `_premium_score`/`_vol_oi_score` helpers (S3776).
+  - `position_manager.py`: Removed redundant `list()` wrapping `.items()` (S1721).
+  - `main_execution.py`: Reduced `_fetch_recent_flow_from_heber` CC 34→~10 via `_nullable_float`/`_optional_string`/`_row_to_flow_namespace` helpers. Reduced `save_decision` CC 29→~12 via `_extract_signal_fields`/`_validate_execute_fields`. Reduced `main()` CC 62→~12 via `_apply_preflight`/`_execute_and_persist`/`_process_candidates`/`_evaluate_exit_rules`. Fixed loop-closure variable capture (S5765).
+  - `main_price_target_labeler.py`: Removed unnecessary `async` from `get_market_tide_before_entry`, `get_iv_rank_at_entry`, `get_regime_at_entry`, `get_rvol_metrics` (S5765). Updated all callers.
+  - `flow_enricher.py`: Updated 5 callers to remove `await` from now-sync labeler functions.
+
 - **Logging: Migrate 46 production files from stdlib `logging` to `structlog`** (2026-02-21):
   - Replaced `import logging` / `logging.getLogger(__name__)` with `setup_struct_logger()` across agents, analysis, connectors, core, execution, jobs, ml, processing, rag, reconciliation, shared, and storage modules.
   - Fixed silent `except: pass` in `execution_engine.py` around price fetching — now logs the error.

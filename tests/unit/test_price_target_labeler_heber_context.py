@@ -94,7 +94,7 @@ async def test_get_market_tide_before_entry_prefers_heber_when_available(
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
+    result = labeler.get_market_tide_before_entry(entry_ts, minutes=30)
 
     assert result["net_premium"] == 240.0
     assert result["direction"] == "BULLISH"
@@ -112,7 +112,7 @@ async def test_get_market_tide_before_entry_returns_none_when_heber_shape_missin
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_market_tide_before_entry(entry_ts, minutes=30)
+    result = labeler.get_market_tide_before_entry(entry_ts, minutes=30)
 
     assert result == {"net_premium": None, "direction": None}
 
@@ -170,7 +170,7 @@ async def test_get_rvol_metrics_prefers_heber_when_available(monkeypatch: pytest
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_rvol_metrics("AAPL", entry_ts)
+    result = labeler.get_rvol_metrics("AAPL", entry_ts)
 
     assert result["rvol_1h"] is not None
     assert result["rvol_daily"] is not None
@@ -187,7 +187,7 @@ async def test_get_rvol_metrics_returns_none_when_heber_empty(monkeypatch: pytes
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_rvol_metrics("AAPL", entry_ts)
+    result = labeler.get_rvol_metrics("AAPL", entry_ts)
 
     assert result == {
         "rvol_1h": None,

@@ -90,10 +90,10 @@ class MLScorer:
 
             if model_path.exists():
                 # Check model freshness before loading
-                from datetime import datetime
+                from datetime import datetime as _dt, timezone as _tz
 
-                model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime)
-                model_age_days = (datetime.now() - model_mtime).days
+                model_mtime = _dt.fromtimestamp(model_path.stat().st_mtime, tz=_tz.utc)
+                model_age_days = (_dt.now(_tz.utc) - model_mtime).days
 
                 if model_age_days > max_age_days:
                     logger.warning(
@@ -254,6 +254,31 @@ class MLScorer:
             logger.warning(f"Model scoring failed for bucket {bucket}: {e}")
             return self._heuristic_score(flow)
 
+    @staticmethod
+    def _premium_score(premium: float) -> float:
+        """Score contribution from premium size (log scale)."""
+        if premium >= 500000:
+            return 0.25
+        if premium >= 100000:
+            return 0.15
+        if premium >= 50000:
+            return 0.10
+        if premium >= 25000:
+            return 0.05
+        return 0.0
+
+    @staticmethod
+    def _vol_oi_score(flow: Dict[str, Any]) -> float:
+        """Score contribution from volume/OI ratio (unusual activity)."""
+        volume = float(flow.get("volume_contract") or 0)
+        oi = float(flow.get("open_interest") or 1)
+        vol_oi = volume / oi if oi > 0 else 0
+        if vol_oi > 2.0:
+            return 0.10
+        if vol_oi > 1.0:
+            return 0.05
+        return 0.0
+
     def _heuristic_score(self, flow: Dict[str, Any]) -> float:
         """
         Heuristic baseline scorer when no trained model is available.
@@ -262,22 +287,11 @@ class MLScorer:
         get higher scores. CAPPED at 0.50 to prevent heuristic from
         reaching live threshold (0.70) - models are required for live trading.
         """
-        score = 0.3  # Base score
-
-        # Premium factor (log scale)
         premium = float(flow.get("premium_usd") or 0)
-        if premium >= 500000:
-            score += 0.25
-        elif premium >= 100000:
-            score += 0.15
-        elif premium >= 50000:
-            score += 0.10
-        elif premium >= 25000:
-            score += 0.05
+        score = 0.3 + self._premium_score(premium) + self._vol_oi_score(flow)
 
         # Sweep bonus
-        is_sweep = str(flow.get("is_sweep", "")).lower() == "true"
-        if is_sweep:
+        if str(flow.get("is_sweep", "")).lower() == "true":
             score += 0.15
 
         # Aggressor alignment (ASK = bullish intent for calls)
@@ -286,21 +300,11 @@ class MLScorer:
         if (put_call == "C" and aggressor == "ASK") or (put_call == "P" and aggressor == "BID"):
             score += 0.10
 
-        # Volume/OI ratio (unusual activity)
-        volume = float(flow.get("volume_contract") or 0)
-        oi = float(flow.get("open_interest") or 1)
-        vol_oi = volume / oi if oi > 0 else 0
-        if vol_oi > 2.0:
-            score += 0.10
-        elif vol_oi > 1.0:
-            score += 0.05
-
         # Penalize very low premium (noise)
         if premium < 10000:
             score -= 0.20
 
         # In live mode we cap heuristic output to avoid taking untrained-model signals.
-        # In paper/backtest, keep uncapped behavior for compatibility/analysis.
         raw_score = min(max(score, 0.0), 1.0)
         cap_enabled = system_settings.orion_stage == "live"
         capped_score = min(raw_score, 0.50) if cap_enabled else raw_score

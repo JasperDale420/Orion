@@ -968,7 +968,7 @@ def _normalize_window_darkpool_frame(darkpool_df: pd.DataFrame, *, ticker: str) 
     return frame[frame["ticker"] == str(ticker).upper()]
 
 
-async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
+def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
     """Get market tide sum for the period before entry."""
     heber_result = _get_market_tide_before_entry_from_heber(entry_ts, minutes)
     if heber_result is not None:
@@ -1233,7 +1233,7 @@ def _get_max_pain_distance_from_heber(
     return best_distance
 
 
-async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
+def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
     """Get IV rank at entry time with Heber-first sourcing."""
     heber_iv_rank = _get_iv_rank_from_heber(ticker, entry_ts)
     if heber_iv_rank is not None:
@@ -1295,7 +1295,7 @@ def _estimate_iv_rank_from_heber_flow(ticker: str, target_ts: datetime) -> Optio
     return 50.0
 
 
-async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
+def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
     """Get regime snapshot at entry time from Heber VIX proxy + market tide."""
     from orion.analysis.regime import MultiAxisRegimeDetector
 
@@ -1714,7 +1714,7 @@ async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Opt
     }
 
 
-async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
+def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
     """Get relative volume metrics vs historical average.
 
     - rvol_1h: Current hour volume / avg hourly volume (20-day)
@@ -2883,9 +2883,9 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     if not prices:
         # No subsequent data - still lookup entry features
         gex_data = await get_gex_at_entry(ticker, entry_ts)
-        tide_data = await get_market_tide_before_entry(entry_ts, minutes=30)
+        tide_data = get_market_tide_before_entry(entry_ts, minutes=30)
         max_pain_dist = await get_max_pain_distance(ticker, expiry, entry_ts)
-        iv_rank = await get_iv_rank_at_entry(ticker, entry_ts)
+        iv_rank = get_iv_rank_at_entry(ticker, entry_ts)
 
         for key in [
             "max_price_reached",
@@ -2975,7 +2975,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
         label["darkpool_2w"] = dp_metrics.get("darkpool_2w")
         label["darkpool_4w"] = dp_metrics.get("darkpool_4w")
         # P1 ML Features
-        rvol = await get_rvol_metrics(ticker, entry_ts)
+        rvol = get_rvol_metrics(ticker, entry_ts)
         label["rvol_1h"] = rvol.get("rvol_1h")
         label["rvol_daily"] = rvol.get("rvol_daily")
         label["rvol_weekly"] = rvol.get("rvol_weekly")
@@ -3004,7 +3004,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
         label["earnings_in_dte_window"] = phase1.get("earnings_in_dte_window")
         label["vwap_distance_pct"] = phase1.get("vwap_distance_pct")
         # Regime at entry
-        regime_data = await get_regime_at_entry(entry_ts)
+        regime_data = get_regime_at_entry(entry_ts)
         label["trend_regime_at_entry"] = regime_data.get("trend_regime")
         label["vol_regime_at_entry"] = regime_data.get("vol_regime")
         label["risk_regime_at_entry"] = regime_data.get("risk_regime")
@@ -3352,9 +3352,9 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
     # Lookup entry features from feature tables
     gex_data = await get_gex_at_entry(ticker, entry_ts)
-    tide_data = await get_market_tide_before_entry(entry_ts, minutes=30)
+    tide_data = get_market_tide_before_entry(entry_ts, minutes=30)
     max_pain_dist = await get_max_pain_distance(ticker, expiry, entry_ts)
-    iv_rank = await get_iv_rank_at_entry(ticker, entry_ts)
+    iv_rank = get_iv_rank_at_entry(ticker, entry_ts)
 
     # Darkpool metrics for all bucket windows
     dp_metrics = await get_darkpool_metrics(ticker, entry_ts)
@@ -3379,7 +3379,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     )
 
     # P1 ML Features: relative volume and flow aggression
-    rvol = await get_rvol_metrics(ticker, entry_ts)
+    rvol = get_rvol_metrics(ticker, entry_ts)
     flow_agg = await get_flow_aggression(ticker, entry_ts)
     institutional_flow = await get_institutional_flow_1w(ticker, entry_ts)
     # Trade bucket based on DTE
@@ -3455,7 +3455,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     )
 
     # Lookup regime at entry
-    regime_data = await get_regime_at_entry(entry_ts)
+    regime_data = get_regime_at_entry(entry_ts)
     label.update(
         {
             "trend_regime_at_entry": regime_data.get("trend_regime"),

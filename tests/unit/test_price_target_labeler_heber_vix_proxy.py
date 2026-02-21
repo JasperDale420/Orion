@@ -64,7 +64,7 @@ async def test_get_regime_at_entry_prefers_heber_vix_proxy(monkeypatch: pytest.M
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: 25.0, raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_regime_at_entry(entry_ts)
+    result = labeler.get_regime_at_entry(entry_ts)
 
     assert captured["vix"] == 18.0
     assert captured["vix_1d_change"] == 0.5
@@ -103,7 +103,7 @@ async def test_get_regime_at_entry_leaves_vix_none_when_heber_vix_unavailable(
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: 12.0, raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_regime_at_entry(entry_ts)
+    result = labeler.get_regime_at_entry(entry_ts)
 
     assert captured["vix"] is None
     assert captured["vix_1d_change"] is None
@@ -144,7 +144,7 @@ async def test_get_regime_at_entry_leaves_market_tide_none_when_heber_unavailabl
     monkeypatch.setattr(labeler, "_get_heber_market_tide_net_premium", lambda *_args, **_kwargs: None, raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_regime_at_entry(entry_ts)
+    result = labeler.get_regime_at_entry(entry_ts)
 
     assert captured["market_tide_net"] is None
     assert result["vix_at_entry"] == 19.0

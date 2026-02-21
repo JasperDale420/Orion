@@ -29,6 +29,7 @@ from sqlalchemy import select
 
 logger = setup_struct_logger("orion.agents.meta_search_agent")
 async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY  # legacy patch target
+_UNITTEST_MOCK_MODULE = "unittest.mock"
 
 # Refinement loop configuration
 REFINEMENT_SCORE_THRESHOLD = 0.5  # Minimum composite score to promote to paper
@@ -64,7 +65,7 @@ class MetaSearchAgent:
         if sf is _ORIGINAL_ASYNC_SESSION_FACTORY:
             return db.async_session_factory
         sf_mod = getattr(type(sf), "__module__", "")
-        if "unittest.mock" in sf_mod:
+        if _UNITTEST_MOCK_MODULE in sf_mod:
             return sf
         # Guard against leaked global reassignment from tests; prefer current db factory.
         return db.async_session_factory
@@ -285,7 +286,7 @@ class MetaSearchAgent:
         end_ts = datetime.now(timezone.utc)
         best_solver_id = best_variant.solver_id if best_variant else None
         summary = f"best_score={best_score:.4f}"
-        if "unittest.mock" in getattr(type(session), "__module__", ""):
+        if _UNITTEST_MOCK_MODULE in getattr(type(session), "__module__", ""):
             experiment.trial_count = current_trial_count
             experiment.status = "completed"
             experiment.end_time_utc = end_ts
@@ -396,7 +397,7 @@ class MetaSearchAgent:
                 logger.info(f"Ingested proposal {prop['filename']} as Edit {prop['edit_id']}")
             await session.flush()
 
-        if "unittest.mock" in getattr(type(db_write), "__module__", ""):
+        if _UNITTEST_MOCK_MODULE in getattr(type(db_write), "__module__", ""):
             await db_write(save_proposals)
         else:
             await self._db_write_local(save_proposals)
