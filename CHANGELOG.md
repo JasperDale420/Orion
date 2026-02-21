@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cross-Repo Audit: Timezone-Aware Timestamps** (2026-02-21):
+  - Fixed `datetime.fromtimestamp()` + `datetime.now()` → UTC-aware in `src/orion/ml/scorer.py` for model freshness check.
+  - Fixed `datetime.now()` → `datetime.now(timezone.utc)` in `src/orion/ml/pattern_miner.py` (insight ID hash) and `src/orion/agents/proposal_builder.py` (filename timestamp).
+- **Cross-Repo Audit: loguru → structlog** (2026-02-21):
+  - Migrated `scripts/verify_activity.py` from loguru to structlog.
+
 ### Removed
 
 - **Decommissioned Redpanda, MinIO, and createbuckets Docker services**:

@@ -79,7 +79,7 @@ class ProposalBuilder:
             target = proposal.get("target") or proposal.get("target_solver_id") or "general"
 
             # Construct filename: YYYY-MM-DD_type_target_hash.yaml
-            timestamp = datetime.now().strftime("%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%H%M%S")
             filename = f"{date_str}_{timestamp}_{p_type}_{target}.yaml"
             # Sanitize filename
             filename = "".join(c for c in filename if c.isalnum() or c in ("_", "-", ".")).strip()

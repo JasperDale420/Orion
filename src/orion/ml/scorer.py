@@ -90,10 +90,10 @@ class MLScorer:
 
             if model_path.exists():
                 # Check model freshness before loading
-                from datetime import datetime
+                from datetime import datetime, timezone
 
-                model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime)
-                model_age_days = (datetime.now() - model_mtime).days
+                model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime, tz=timezone.utc)
+                model_age_days = (datetime.now(timezone.utc) - model_mtime).days
 
                 if model_age_days > max_age_days:
                     logger.warning(

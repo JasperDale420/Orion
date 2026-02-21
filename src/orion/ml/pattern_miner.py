@@ -1151,7 +1151,7 @@ async def run_pattern_mining(
 
     # 6. Build insight
     insight = PatternInsight(
-        insight_id=hashlib.sha256(f"{model_type}_{datetime.now().isoformat()}".encode()).hexdigest()[:16],
+        insight_id=hashlib.sha256(f"{model_type}_{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:16],
         created_at_utc=datetime.now(timezone.utc),
         model_type=model_type,
         training_window_days=window_days,
