@@ -14,7 +14,7 @@ packages = [{include = "orion", from = "src"}]
 python = "^3.12"
 requests = "^2.31.0"
 pydantic = "^2.5.0"
-pydantic-settings = "^2.1.0"
+pydantic-settings = "^2.13.0"
 sqlalchemy = "^2.0.46"
 asyncpg = "^0.31.0"
 greenlet = "^3.0.1"  # Required for async sqlalchemy
