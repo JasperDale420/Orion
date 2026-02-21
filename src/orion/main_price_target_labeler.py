@@ -605,6 +605,56 @@ def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[fl
     return _get_real_checkpoint_prices_from_heber(event_id)
 
 
+def _discover_checkpoint_columns(
+    df: pd.DataFrame,
+) -> Optional[Dict[str, Optional[str]]]:
+    """Discover required and optional columns for checkpoint price data."""
+    event_col = _pick_first_existing_column(df, ["event_id", "source_event_id", "id"])
+    checkpoint_col = _pick_first_existing_column(df, ["checkpoint", "price_checkpoint", "checkpoint_name"])
+    mid_col = _pick_first_existing_column(df, ["mid_price", "option_mid_price", "quote_mid"])
+    last_col = _pick_first_existing_column(df, ["last_trade_price", "option_price", "price"])
+    if event_col is None or checkpoint_col is None or (mid_col is None and last_col is None):
+        return None
+    return {
+        "event": event_col,
+        "checkpoint": checkpoint_col,
+        "mid": mid_col,
+        "last": last_col,
+        "delta": _pick_first_existing_column(df, ["delta", "delta_alpaca"]),
+        "gamma": _pick_first_existing_column(df, ["gamma", "gamma_alpaca"]),
+        "theta": _pick_first_existing_column(df, ["theta", "theta_alpaca"]),
+        "vega": _pick_first_existing_column(df, ["vega", "vega_alpaca"]),
+        "iv": _pick_first_existing_column(df, ["iv", "iv_alpaca", "implied_volatility"]),
+    }
+
+
+def _checkpoint_row_to_dict(row: Any, cols: Dict[str, Optional[str]]) -> Optional[tuple]:
+    """Convert a checkpoint row to (name, dict) or None if invalid."""
+    checkpoint = str(row.get(cols["checkpoint"]) or "").strip()
+    if not checkpoint:
+        return None
+
+    def _clean(col_key: str) -> Optional[float]:
+        c = cols[col_key]
+        if c is None:
+            return None
+        parsed = _coerce_float(row.get(c))
+        return None if parsed is None or pd.isna(parsed) else parsed
+
+    mid_price = _clean("mid")
+    last_price = _clean("last")
+    price = mid_price if mid_price is not None else last_price
+
+    return checkpoint, {
+        "price": price,
+        "delta": _clean("delta"),
+        "gamma": _clean("gamma"),
+        "theta": _clean("theta"),
+        "vega": _clean("vega"),
+        "iv": _clean("iv"),
+    }
+
+
 def _get_real_checkpoint_prices_from_heber(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
     event_id_str = str(event_id)
     try:
@@ -619,53 +669,24 @@ def _get_real_checkpoint_prices_from_heber(event_id: str) -> Dict[str, Dict[str,
     if flow_df.empty:
         return {}
 
-    event_col = _pick_first_existing_column(flow_df, ["event_id", "source_event_id", "id"])
-    checkpoint_col = _pick_first_existing_column(flow_df, ["checkpoint", "price_checkpoint", "checkpoint_name"])
-    mid_col = _pick_first_existing_column(flow_df, ["mid_price", "option_mid_price", "quote_mid"])
-    last_col = _pick_first_existing_column(flow_df, ["last_trade_price", "option_price", "price"])
-    if event_col is None or checkpoint_col is None or (mid_col is None and last_col is None):
+    cols = _discover_checkpoint_columns(flow_df)
+    if cols is None:
         return {}
 
-    filtered = flow_df[flow_df[event_col].astype(str) == event_id_str]
+    filtered = flow_df[flow_df[cols["event"]].astype(str) == event_id_str]
     if filtered.empty:
         return {}
 
-    delta_col = _pick_first_existing_column(filtered, ["delta", "delta_alpaca"])
-    gamma_col = _pick_first_existing_column(filtered, ["gamma", "gamma_alpaca"])
-    theta_col = _pick_first_existing_column(filtered, ["theta", "theta_alpaca"])
-    vega_col = _pick_first_existing_column(filtered, ["vega", "vega_alpaca"])
-    iv_col = _pick_first_existing_column(filtered, ["iv", "iv_alpaca", "implied_volatility"])
-
     data: Dict[str, Dict[str, Optional[float]]] = {}
-
-    def _clean_float(value: Any) -> Optional[float]:
-        parsed = _coerce_float(value)
-        if parsed is None or pd.isna(parsed):
-            return None
-        return parsed
-
     for _, row in filtered.iterrows():
-        checkpoint = str(row.get(checkpoint_col) or "").strip()
-        if not checkpoint:
-            continue
-
-        mid_price = _clean_float(row.get(mid_col)) if mid_col is not None else None
-        last_price = _clean_float(row.get(last_col)) if last_col is not None else None
-        price = mid_price if mid_price is not None else last_price
-
-        data[checkpoint] = {
-            "price": price,
-            "delta": _clean_float(row.get(delta_col)) if delta_col is not None else None,
-            "gamma": _clean_float(row.get(gamma_col)) if gamma_col is not None else None,
-            "theta": _clean_float(row.get(theta_col)) if theta_col is not None else None,
-            "vega": _clean_float(row.get(vega_col)) if vega_col is not None else None,
-            "iv": _clean_float(row.get(iv_col)) if iv_col is not None else None,
-        }
+        result = _checkpoint_row_to_dict(row, cols)
+        if result is not None:
+            data[result[0]] = result[1]
 
     return data
 
 
-async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
+def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
     """Get opposing flow during holding period."""
     heber_result = _get_opposing_flow_from_heber(ticker, put_call, entry_ts, end_ts)
     if heber_result is not None:
@@ -752,7 +773,7 @@ def _get_opposing_flow_from_heber(
     }
 
 
-async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     """Get the closest GEX values before entry time."""
     heber_result = _get_gex_at_entry_from_heber(ticker, entry_ts)
     if heber_result is not None:
@@ -761,7 +782,7 @@ async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     return {"gex": None, "vex": None}
 
 
-async def get_gex_rolling_averages(ticker: str, entry_ts: datetime, days: int = 20) -> Dict[str, Optional[float]]:
+def get_gex_rolling_averages(ticker: str, entry_ts: datetime, days: int = 20) -> Dict[str, Optional[float]]:
     """Get rolling average GEX/VEX values prior to entry time."""
     heber_result = _get_gex_rolling_averages_from_heber(ticker, entry_ts, days=days)
     if heber_result is not None:
@@ -816,7 +837,48 @@ def _get_gex_rolling_averages_from_heber(
     return {"gex_rolling_avg": gex_val, "vex_rolling_avg": vex_val}
 
 
-async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+def _compute_window_period_features(
+    flow_window: pd.DataFrame,
+    darkpool_frame: pd.DataFrame,
+    start_utc: datetime,
+    entry_utc: datetime,
+) -> Optional[Dict[str, Any]]:
+    """Compute aggregated features for a single time window period."""
+    if flow_window.empty:
+        return None
+
+    premium_series = flow_window["premium"]
+    put_call_series = flow_window["put_call"]
+    sweep_series = flow_window["is_sweep"]
+    aggressor_series = flow_window["aggressor"]
+
+    call_premium = float(premium_series[put_call_series == "C"].sum())
+    put_premium = float(premium_series[put_call_series == "P"].sum())
+    total_premium = float(premium_series.sum())
+    flow_count = int(len(flow_window))
+    sweep_count = int(sweep_series.sum())
+    ask_side = int((aggressor_series == "ASK").sum())
+
+    darkpool_window = darkpool_frame[(darkpool_frame["ts"] > start_utc) & (darkpool_frame["ts"] <= entry_utc)]
+    dp_volume = float(darkpool_window["size"].sum()) if not darkpool_window.empty else 0.0
+    dp_count = int(len(darkpool_window))
+
+    return {
+        "flow_count": flow_count,
+        "sweep_count": sweep_count,
+        "dp_count": dp_count,
+        "call_premium": call_premium,
+        "put_premium": put_premium,
+        "total_premium": total_premium,
+        "dp_volume": dp_volume,
+        "call_put_ratio": call_premium / put_premium if put_premium > 0 else None,
+        "call_put_imbalance": (call_premium - put_premium) / total_premium if total_premium > 0 else 0.0,
+        "sweep_ratio": sweep_count / flow_count if flow_count > 0 else 0.0,
+        "ask_ratio": ask_side / flow_count if flow_count > 0 else 0.5,
+    }
+
+
+def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     """Build 1h/1d/1w window features directly from Heber silver datasets."""
     entry_utc = _coerce_dt_utc(entry_ts)
     if entry_utc is None:
@@ -853,38 +915,9 @@ async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[
     for period, window_size in period_windows.items():
         start_utc = entry_utc - window_size
         flow_window = flow_frame[(flow_frame["ts"] > start_utc) & (flow_frame["ts"] <= entry_utc)]
-        if flow_window.empty:
-            continue
-
-        premium_series = flow_window["premium"]
-        put_call_series = flow_window["put_call"]
-        sweep_series = flow_window["is_sweep"]
-        aggressor_series = flow_window["aggressor"]
-
-        call_premium = float(premium_series[put_call_series == "C"].sum())
-        put_premium = float(premium_series[put_call_series == "P"].sum())
-        total_premium = float(premium_series.sum())
-        flow_count = int(len(flow_window))
-        sweep_count = int(sweep_series.sum())
-        ask_side = int((aggressor_series == "ASK").sum())
-
-        darkpool_window = darkpool_frame[(darkpool_frame["ts"] > start_utc) & (darkpool_frame["ts"] <= entry_utc)]
-        dp_volume = float(darkpool_window["size"].sum()) if not darkpool_window.empty else 0.0
-        dp_count = int(len(darkpool_window))
-
-        features_by_period[period] = {
-            "flow_count": flow_count,
-            "sweep_count": sweep_count,
-            "dp_count": dp_count,
-            "call_premium": call_premium,
-            "put_premium": put_premium,
-            "total_premium": total_premium,
-            "dp_volume": dp_volume,
-            "call_put_ratio": call_premium / put_premium if put_premium > 0 else None,
-            "call_put_imbalance": (call_premium - put_premium) / total_premium if total_premium > 0 else 0.0,
-            "sweep_ratio": sweep_count / flow_count if flow_count > 0 else 0.0,
-            "ask_ratio": ask_side / flow_count if flow_count > 0 else 0.5,
-        }
+        result = _compute_window_period_features(flow_window, darkpool_frame, start_utc, entry_utc)
+        if result is not None:
+            features_by_period[period] = result
 
     return features_by_period
 
@@ -1342,7 +1375,7 @@ def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
     }
 
 
-async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
+def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
     """Get underlying stock price at entry time from bars."""
     heber_price = _get_heber_close_at_or_before(ticker, entry_ts)
     if heber_price is not None:
@@ -1351,7 +1384,7 @@ async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Opti
     return None
 
 
-async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> Optional[float]:
+def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> Optional[float]:
     """Get underlying stock price at offset from entry."""
     target_ts = entry_ts + timedelta(hours=hours)
     heber_price = _get_heber_close_at_or_before(ticker, target_ts)
@@ -1434,7 +1467,7 @@ def _get_heber_close_at_or_before(ticker: str, target_ts: datetime) -> Optional[
     return candidates[0][1]
 
 
-async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
+def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     """Get Greeks from stored values, with Black-Scholes fallback.
 
     Priority:
@@ -2821,7 +2854,7 @@ async def get_checkpoint_greeks(
         time_to_checkpoint = abs((now - checkpoint_ts).total_seconds())
         if time_to_checkpoint < 300:  # 5 minutes
             try:
-                underlying = await get_underlying_price_at_entry(ticker, checkpoint_ts)
+                underlying = get_underlying_price_at_entry(ticker, checkpoint_ts)
                 cp_data["underlying"] = underlying
             except Exception as e:
                 logger.debug(f"Error fetching underlying at {cp_suffix}: {e}")
@@ -2883,7 +2916,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
 
     if not prices:
         # No subsequent data - still lookup entry features
-        gex_data = await get_gex_at_entry(ticker, entry_ts)
+        gex_data = get_gex_at_entry(ticker, entry_ts)
         tide_data = get_market_tide_before_entry(entry_ts, minutes=30)
         max_pain_dist = await get_max_pain_distance(ticker, expiry, entry_ts)
         iv_rank = get_iv_rank_at_entry(ticker, entry_ts)
@@ -3223,7 +3256,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     volatility = calculate_volatility(all_prices)
 
     # Opposing flow
-    opposing = await get_opposing_flow(ticker, put_call, entry_ts, last_tracked_ts)
+    opposing = get_opposing_flow(ticker, put_call, entry_ts, last_tracked_ts)
 
     # Extract Greeks at each checkpoint from Alpaca quote data
     greeks_5m = _get_checkpoint_greeks("5m") if real_quotes else {}
@@ -3352,7 +3385,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     )
 
     # Lookup entry features from feature tables
-    gex_data = await get_gex_at_entry(ticker, entry_ts)
+    gex_data = get_gex_at_entry(ticker, entry_ts)
     tide_data = get_market_tide_before_entry(entry_ts, minutes=30)
     max_pain_dist = await get_max_pain_distance(ticker, expiry, entry_ts)
     iv_rank = get_iv_rank_at_entry(ticker, entry_ts)
@@ -3473,7 +3506,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     label.update(time_features)
 
     # New ML features - Greeks and volume from flow (Alpaca API with Black-Scholes fallback)
-    greeks_data = await get_flow_greeks(entry.event_id)
+    greeks_data = get_flow_greeks(entry.event_id)
     label.update(
         {
             "delta_at_entry": greeks_data.get("delta"),
@@ -3488,8 +3521,8 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     )
 
     # New ML features - Underlying price
-    underlying_entry = await get_underlying_price_at_entry(ticker, entry_ts)
-    underlying_1h = await get_underlying_price_at_offset(ticker, entry_ts, 1)
+    underlying_entry = get_underlying_price_at_entry(ticker, entry_ts)
+    underlying_1h = get_underlying_price_at_offset(ticker, entry_ts, 1)
     underlying_change = None
     if underlying_entry and underlying_1h and underlying_entry > 0:
         underlying_change = ((underlying_1h - underlying_entry) / underlying_entry) * 100

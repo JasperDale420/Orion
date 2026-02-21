@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- chore: workspace sync checkpoint and gitignore audit (2026-02-21)
 ### Fixed
 
 - **SonarQube code quality fixes** (2026-02-21):

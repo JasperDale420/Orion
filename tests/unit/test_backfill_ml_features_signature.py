@@ -164,7 +164,7 @@ async def test_get_underlying_price_at_entry_delegates_to_labeler(monkeypatch: p
     monkeypatch.setattr(backfill, "get_labeler_underlying_price_at_entry", _labeler_entry, raising=False)
     monkeypatch.setattr(backfill, "db_query", _fail_db_query, raising=False)
 
-    value = await backfill.get_underlying_price_at_entry("AAPL", entry_ts)
+    value = backfill.get_underlying_price_at_entry("AAPL", entry_ts)
 
     assert value == 123.45
     assert captured == {"ticker": "AAPL", "entry_ts": entry_ts}
@@ -187,7 +187,7 @@ async def test_get_underlying_price_at_offset_delegates_to_labeler(monkeypatch: 
     monkeypatch.setattr(backfill, "get_labeler_underlying_price_at_offset", _labeler_offset, raising=False)
     monkeypatch.setattr(backfill, "db_query", _fail_db_query, raising=False)
 
-    value = await backfill.get_underlying_price_at_offset("AAPL", entry_ts, hours=2)
+    value = backfill.get_underlying_price_at_offset("AAPL", entry_ts, hours=2)
 
     assert value == 124.0
     assert captured == {"ticker": "AAPL", "entry_ts": entry_ts, "hours": 2}
@@ -207,7 +207,7 @@ async def test_get_flow_greeks_delegates_to_labeler(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(backfill, "get_labeler_flow_greeks", _labeler_flow_greeks, raising=False)
     monkeypatch.setattr(backfill, "db_query", _fail_db_query, raising=False)
 
-    value = await backfill.get_flow_greeks("evt-123")
+    value = backfill.get_flow_greeks("evt-123")
 
     assert value == {"delta": 0.2, "gamma": 0.03, "volume": 11, "open_interest": 70, "iv": 0.5}
     assert captured == {"event_id": "evt-123"}

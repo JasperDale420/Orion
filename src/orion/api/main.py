@@ -721,12 +721,18 @@ def _filter_flow_frame(
     return work
 
 
+def _opt_col_str(row: Any, col: Optional[str]) -> Optional[str]:
+    """Return a stripped string from a column, or None if missing."""
+    if col is None:
+        return None
+    val = row.get(col)
+    return str(val).strip() if val is not None else None
+
+
 def _flow_row_to_dict(idx: Any, row: Any, cols: Dict[str, Optional[str]]) -> Dict[str, Any]:
     """Convert a single flow DataFrame row to a serializable dict."""
-    eid_col = cols["event_id"]
-    event_id = str(row.get(eid_col)).strip() if eid_col and row.get(eid_col) else f"heber_flow_{idx}"
-    seid_col = cols["source_event_id"]
-    source_event_id = str(row.get(seid_col)).strip() if seid_col and row.get(seid_col) else None
+    event_id = _opt_col_str(row, cols["event_id"]) or f"heber_flow_{idx}"
+    source_event_id = _opt_col_str(row, cols["source_event_id"])
     normalized_ticker = _normalize_flow_ticker(row.get(cols["ticker"]))
 
     ca_col = cols["created_at"]
@@ -737,31 +743,33 @@ def _flow_row_to_dict(idx: Any, row: Any, cols: Dict[str, Optional[str]]) -> Dic
         c = cols[col_key]
         return _coerce_optional_float(row.get(c)) if c else None
 
-    aggressor_col = cols["aggressor"]
-    aggressor = (
-        str(row.get(aggressor_col)).strip().upper() if aggressor_col and row.get(aggressor_col) is not None else None
-    )
+    def _opt_transform(col_key: str, fn: Any) -> Any:
+        c = cols[col_key]
+        return fn(row.get(c)) if c else None
+
+    aggressor_raw = _opt_col_str(row, cols["aggressor"])
+    aggressor = aggressor_raw.upper() if aggressor_raw else None
 
     return {
         "event_id": event_id,
         "source_event_id": source_event_id,
         "ticker": normalized_ticker,
         "flow_ts_utc": _dt_iso(row["_event_ts"].to_pydatetime()),
-        "put_call": _normalize_put_call(row.get(cols["put_call"])) if cols["put_call"] else None,
-        "expiry": str(row.get(cols["expiry"])) if cols["expiry"] and row.get(cols["expiry"]) is not None else None,
+        "put_call": _opt_transform("put_call", _normalize_put_call),
+        "expiry": _opt_col_str(row, cols["expiry"]),
         "strike": _opt_float("strike"),
         "option_price": _opt_float("option_price"),
-        "size_contracts": _coerce_optional_int(row.get(cols["size_contracts"])) if cols["size_contracts"] else None,
+        "size_contracts": _opt_transform("size_contracts", _coerce_optional_int),
         "premium_usd": _coerce_optional_float(row.get(cols["premium"])),
         "bid": _opt_float("bid"),
         "ask": _opt_float("ask"),
         "underlying_price": _opt_float("underlying"),
         "aggressor": aggressor,
-        "is_sweep": _coerce_flow_bool(row.get(cols["is_sweep"])) if cols["is_sweep"] else None,
-        "flags_json": _normalize_json_field(row.get(cols["flags_json"])) if cols["flags_json"] else None,
+        "is_sweep": _opt_transform("is_sweep", _coerce_flow_bool),
+        "flags_json": _opt_transform("flags_json", _normalize_json_field),
         "volume_contract": _opt_float("volume_contract"),
         "open_interest": _opt_float("open_interest"),
-        "ingest": _normalize_json_field(row.get(cols["ingest"])) if cols["ingest"] else None,
+        "ingest": _opt_transform("ingest", _normalize_json_field),
         "created_at_utc": _dt_iso(created_at_utc),
     }
 

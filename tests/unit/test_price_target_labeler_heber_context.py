@@ -22,7 +22,7 @@ async def test_get_gex_at_entry_prefers_heber_when_available(monkeypatch: pytest
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_gex_at_entry("AAPL", entry_ts)
+    result = labeler.get_gex_at_entry("AAPL", entry_ts)
 
     assert result == {"gex": 125.0, "vex": 12.5}
 
@@ -37,7 +37,7 @@ async def test_get_gex_at_entry_returns_none_when_heber_empty(monkeypatch: pytes
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_gex_at_entry("AAPL", entry_ts)
+    result = labeler.get_gex_at_entry("AAPL", entry_ts)
 
     assert result == {"gex": None, "vex": None}
 
@@ -57,7 +57,7 @@ async def test_get_gex_rolling_averages_prefers_heber_when_available(monkeypatch
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=3)
+    result = labeler.get_gex_rolling_averages("AAPL", entry_ts, days=3)
 
     assert result == {"gex_rolling_avg": 110.0, "vex_rolling_avg": 60.0}
 
@@ -72,7 +72,7 @@ async def test_get_gex_rolling_averages_returns_none_when_heber_empty(monkeypatc
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_gex_rolling_averages("AAPL", entry_ts, days=20)
+    result = labeler.get_gex_rolling_averages("AAPL", entry_ts, days=20)
 
     assert result == {"gex_rolling_avg": None, "vex_rolling_avg": None}
 
@@ -245,7 +245,7 @@ async def test_get_window_features_at_entry_builds_period_windows_from_heber(
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_window_features_at_entry("AAPL", entry_ts)
+    result = labeler.get_window_features_at_entry("AAPL", entry_ts)
 
     assert result["1h"]["flow_count"] == 1
     assert result["1h"]["call_put_imbalance"] == pytest.approx(1.0)
@@ -276,7 +276,7 @@ async def test_get_window_features_at_entry_returns_empty_dict_when_heber_lookup
     monkeypatch.setattr(labeler, "_heber_reader", _FailingHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_window_features_at_entry("AAPL", datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc))
+    result = labeler.get_window_features_at_entry("AAPL", datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc))
 
     assert result == {}
 
@@ -487,7 +487,7 @@ async def test_get_opposing_flow_prefers_heber_when_available(monkeypatch: pytes
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
+    result = labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
 
     assert result == {"count": 2, "premium": 500_000.0}
 
@@ -503,7 +503,7 @@ async def test_get_opposing_flow_returns_zeroes_when_heber_empty(monkeypatch: py
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
+    result = labeler.get_opposing_flow("AAPL", "C", entry_ts, end_ts)
 
     assert result == {"count": 0, "premium": 0.0}
 
@@ -911,7 +911,7 @@ async def test_get_flow_greeks_prefers_heber_when_available(monkeypatch: pytest.
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_flow_greeks(event_id)
+    result = labeler.get_flow_greeks(event_id)
 
     assert result["delta"] == pytest.approx(0.55)
     assert result["gamma"] == pytest.approx(0.02)
@@ -936,7 +936,7 @@ async def test_get_flow_greeks_returns_null_payload_when_heber_missing(
 
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
-    result = await labeler.get_flow_greeks(event_id)
+    result = labeler.get_flow_greeks(event_id)
 
     assert result == {
         "delta": None,
