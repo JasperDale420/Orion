@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Logging: Migrate 46 production files from stdlib `logging` to `structlog`** (2026-02-21):
+  - Replaced `import logging` / `logging.getLogger(__name__)` with `setup_struct_logger()` across agents, analysis, connectors, core, execution, jobs, ml, processing, rag, reconciliation, shared, and storage modules.
+  - Fixed silent `except: pass` in `execution_engine.py` around price fetching — now logs the error.
+  - Only 3 infrastructure files retain `import logging` (`logging_config.py`, `meta_logging.py`, `http_client.py`) as they work directly with stdlib logging internals.
+
 - **Code Quality: Replace deprecated `datetime.utcnow()`** (2026-02-21):
   - `regime.py`: Replaced `datetime.utcnow()` with `datetime.now(timezone.utc)` in `detect_session` fallback.
   - `seed_solvers.py`: Replaced `datetime.utcnow()` with `datetime.now(timezone.utc)` in `created_at_utc` assignment.
