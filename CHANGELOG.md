@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Cross-Repo Audit: pytz → zoneinfo Migration** (2026-02-22):
+  - Migrated `src/orion/main_meta_weekly.py` and `scripts/verify_ingestion_sleep.py` from deprecated `pytz` to stdlib `zoneinfo`. Replaced `pytz.timezone()` with `ZoneInfo()` and `US/Eastern` with canonical `America/New_York`.
 - **Cross-Repo Audit: Timezone-Aware Timestamps** (2026-02-21):
   - Fixed `datetime.fromtimestamp()` + `datetime.now()` → UTC-aware in `src/orion/ml/scorer.py` for model freshness check.
   - Fixed `datetime.now()` → `datetime.now(timezone.utc)` in `src/orion/ml/pattern_miner.py` (insight ID hash) and `src/orion/agents/proposal_builder.py` (filename timestamp).
