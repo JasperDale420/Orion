@@ -8,7 +8,10 @@ Used when Greeks are not available from external APIs.
 import math
 from typing import Dict, Optional
 
+import structlog
 from scipy.stats import norm
+
+logger = structlog.get_logger()
 
 
 def calculate_greeks(
@@ -75,8 +78,15 @@ def calculate_greeks(
             second_term = risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry_years) * nd2_put
             result["theta"] = (first_term + second_term) / 365
 
-    except Exception:
-        pass  # Return None values on error
+    except Exception as e:
+        logger.warning(
+            "Greeks calculation failed",
+            option_type=option_type,
+            spot=spot,
+            strike=strike,
+            error=str(e),
+            exc_info=True,
+        )
 
     return result
 

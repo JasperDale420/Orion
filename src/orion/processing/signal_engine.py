@@ -126,6 +126,7 @@ class SignalEngine:
                     dte = 0
             except Exception:
                 dte = None
+                logger.debug("DTE calculation failed", extra={"ticker": candidate.ticker}, exc_info=True)
 
         payload = {
             "ticker": candidate.ticker,
