@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Cross-Repo Audit: Financial Precision Fixes** (2026-02-22):
+  - Removed duplicate `max_open_positions` validation in `src/orion/core/solver_schema.py` (copy-paste artifact).
+  - Replaced deprecated `datetime.utcnow` with `datetime.now(timezone.utc)` in `SolverEdit.created_at_utc`.
 - **Cross-Repo Audit: pytz → zoneinfo Migration** (2026-02-22):
   - Migrated `src/orion/main_meta_weekly.py` and `scripts/verify_ingestion_sleep.py` from deprecated `pytz` to stdlib `zoneinfo`. Replaced `pytz.timezone()` with `ZoneInfo()` and `US/Eastern` with canonical `America/New_York`.
 - **Cross-Repo Audit: Timezone-Aware Timestamps** (2026-02-21):

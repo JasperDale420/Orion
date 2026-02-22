@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -27,10 +27,6 @@ class SolverRiskConfig(BaseModel):
 
         if self.risk_per_trade_bps > MAX_SYSTEM_BPS:
             raise ValueError(f"Risk per trade {self.risk_per_trade_bps}bps exceeds system limit {MAX_SYSTEM_BPS}bps")
-
-        if self.max_open_positions > MAX_GLOBAL_POSITIONS:
-            # PRD: "Numeric ranges within safe bounds"
-            raise ValueError(f"Max positions {self.max_open_positions} exceeds system limit {MAX_GLOBAL_POSITIONS}")
 
         if self.max_open_positions > MAX_GLOBAL_POSITIONS:
             # PRD: "Numeric ranges within safe bounds"
@@ -159,7 +155,7 @@ class SolverEdit(BaseModel):
     generated_by: str = Field(..., description="'meta_agent' or 'llm_eod_agent'")
     ops: List[EditOp] = Field(..., description="List of operations applied")
 
-    created_at_utc: datetime = Field(default_factory=datetime.utcnow)
+    created_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class EvaluationTask(BaseModel):
