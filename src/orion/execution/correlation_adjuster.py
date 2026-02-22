@@ -123,13 +123,14 @@ class CorrelationAdjuster:
 
     async def _get_daily_returns(self, ticker: str, lookback_days: int, cfg: RiskSettings) -> Optional[np.ndarray]:
         """Fetch daily returns with caching."""
-        # Check cache
         cache_key = ticker
         if cache_key in _returns_cache:
             cached_ts, cached_returns = _returns_cache[cache_key]
             age_hours = (datetime.now(timezone.utc) - cached_ts).total_seconds() / 3600
             if age_hours < CACHE_TTL_HOURS:
                 return cached_returns
+            # Evict expired entry to prevent unbounded growth
+            del _returns_cache[cache_key]
 
         # Fetch from market connector
         if not self.connector:
