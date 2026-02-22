@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Cross-Repo Audit: Retry standardization** (2026-02-22):
+  - Migrated `UWMaxPainConnector` in `src/orion/connectors/uw_max_pain_connector.py` from raw `httpx.get()` to `create_http_client()` for structured logging hooks and consistent timeout configuration.
+  - Updated retry contract tests to mock `connector._client.get` instead of `module.httpx.get`.
 - **Cross-Repo Audit: Financial Precision Fixes** (2026-02-22):
   - Removed duplicate `max_open_positions` validation in `src/orion/core/solver_schema.py` (copy-paste artifact).
   - Replaced deprecated `datetime.utcnow` with `datetime.now(timezone.utc)` in `SolverEdit.created_at_utc`.

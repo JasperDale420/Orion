@@ -15,6 +15,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.core.http_client import create_http_client
 
 logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -36,13 +37,17 @@ class UWMaxPainConnector:
             raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
         self.headers = {"X-Gateway-Key": self.gateway_key}
         self._latest_max_pain_rows: list[Dict[str, Any]] = []
+        self._client = create_http_client(
+            base_url=self.gateway_url,
+            timeout=30.0,
+            headers=self.headers,
+        )
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_max_pain(self, ticker: str) -> Optional[Dict[str, Any]]:
         """Fetch max pain for a ticker via Data Gateway."""
-        url = f"{self.gateway_url}/api/v1/uw/{ticker}/max-pain"
         try:
-            resp = httpx.get(url, headers=self.headers, timeout=30)
+            resp = self._client.get(f"/api/v1/uw/{ticker}/max-pain")
             if resp.status_code >= 400:
                 if _is_retryable_gateway_status(resp.status_code):
                     resp.raise_for_status()
