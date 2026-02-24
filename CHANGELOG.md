@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Heber reader parquet noise from macOS sidecar files** (`heber_reader.py`): `_read_table()` now pre-filters `._` prefixed files when reading a directory, preventing PyArrow from attempting to stat macOS metadata sidecar files that cause `EPERM` errors and trigger noisy `heber_reader_filewise_fallback` warnings every ~5 minutes.
 - **Cross-Repo Audit: Retry standardization** (2026-02-22):
   - Migrated `UWMaxPainConnector` in `src/orion/connectors/uw_max_pain_connector.py` from raw `httpx.get()` to `create_http_client()` for structured logging hooks and consistent timeout configuration.
   - Updated retry contract tests to mock `connector._client.get` instead of `module.httpx.get`.

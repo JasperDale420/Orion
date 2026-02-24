@@ -442,7 +442,15 @@ class HeberReader:
         partitioning: str | None,
     ) -> Any:
         try:
-            return pq.read_table(path, columns=columns, filters=filters if filters else None, partitioning=partitioning)
+            source: Path | list[str] = path
+            if path.is_dir():
+                # Pre-filter to skip macOS ._ sidecar files that cause
+                # EPERM errors and trigger noisy filewise fallback warnings.
+                valid_files = [str(f) for f in sorted(path.rglob("*.parquet")) if not f.name.startswith("._")]
+                source = valid_files if valid_files else path
+            return pq.read_table(
+                source, columns=columns, filters=filters if filters else None, partitioning=partitioning
+            )
         except Exception as exc:
             if self._is_corrupt_parquet_error(exc):
                 raise
