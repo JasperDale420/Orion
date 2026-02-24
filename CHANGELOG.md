@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Log structured warnings when Alpaca bar timestamps are missing or invalid during normalization.
+
 ### Removed
 
 - **Decommissioned Redpanda, MinIO, and createbuckets Docker services**:

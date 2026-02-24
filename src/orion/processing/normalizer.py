@@ -3,7 +3,10 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import parse_timestamptz
+
+logger = setup_struct_logger(__name__)
 
 
 class NormalizationEngine:
@@ -186,16 +189,32 @@ class NormalizationEngine:
         """
         PRD 6.2 Silver Schema: Alpaca Bars 1m
         """
+        symbol = payload.get("symbol") or payload.get("ticker") or payload.get("S")
         ts_val = payload.get("t")
         bar_ts = None
         if isinstance(ts_val, str):
             try:
                 bar_ts = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "alpaca_bar_timestamp_parse_failed",
+                    event_type="ALPACA_BAR_1M",
+                    source="ALPACA",
+                    symbol=symbol,
+                    timestamp_raw=ts_val,
+                    error_class=exc.__class__.__name__,
+                    exc_info=True,
+                )
+        elif ts_val is None:
+            logger.warning(
+                "alpaca_bar_timestamp_missing",
+                event_type="ALPACA_BAR_1M",
+                source="ALPACA",
+                symbol=symbol,
+            )
 
         return {
-            "ticker": payload.get("symbol") or payload.get("ticker"),
+            "ticker": symbol,
             "bar_start_ts_utc": bar_ts.isoformat() if bar_ts else None,
             "open": float(payload.get("o", 0)),
             "high": float(payload.get("h", 0)),

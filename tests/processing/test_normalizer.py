@@ -47,3 +47,20 @@ def test_normalize_alpaca_bar():
     assert normalized["ticker"] == "SPY"
     assert normalized["close"] == 410.8
     assert normalized["volume"] == 1000
+
+
+def test_normalize_alpaca_bar_missing_timestamp_logs_warning(capsys):
+    payload = {
+        "symbol": "SPY",
+        "o": 410.5,
+        "h": 411.0,
+        "l": 410.0,
+        "c": 410.8,
+        "v": 1000,
+    }
+
+    normalized = NormalizationEngine.normalize_event("ALPACA", "ALPACA_BAR_1M", payload)
+    captured = capsys.readouterr()
+
+    assert normalized["bar_start_ts_utc"] is None
+    assert "alpaca_bar_timestamp_missing" in captured.out
