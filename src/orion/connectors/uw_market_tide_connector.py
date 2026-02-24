@@ -62,11 +62,11 @@ class UWMarketTideConnector:
             logger.warning(f"Transient network error fetching market tide: {e}")
             raise
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to fetch market tide: {e}")
-            return None
+            logger.error("Failed to fetch market tide: %s", e, exc_info=True)
+            raise
         except Exception as e:
-            logger.warning(f"Failed to fetch market tide: {e}")
-            return None
+            logger.error("Unexpected error fetching market tide: %s", e, exc_info=True)
+            raise
 
     async def fetch_and_store(self, market_date: Optional[date] = None) -> int:
         """Fetch market tide and store all ticks."""

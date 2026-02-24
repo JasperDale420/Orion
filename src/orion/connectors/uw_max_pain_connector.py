@@ -65,11 +65,11 @@ class UWMaxPainConnector:
             logger.warning(f"Transient network error fetching max pain for {ticker}: {e}")
             raise
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to fetch max pain for {ticker}: {e}")
-            return None
+            logger.error("Failed to fetch max pain for %s: %s", ticker, e, exc_info=True)
+            raise
         except Exception as e:
-            logger.warning(f"Failed to fetch max pain for {ticker}: {e}")
-            return None
+            logger.error("Unexpected error fetching max pain for %s: %s", ticker, e, exc_info=True)
+            raise
 
     async def fetch_and_store(self, tickers: List[str]) -> int:
         """Fetch max pain for multiple tickers and store."""
@@ -138,8 +138,8 @@ class UWMaxPainConnector:
                 asof_time=now,
             )
         except Exception as exc:
-            logger.warning("max_pain_heber_price_lookup_failed ticker=%s error=%s", ticker, exc)
-            return None
+            logger.error("max_pain_heber_price_lookup_failed ticker=%s error=%s", ticker, exc, exc_info=True)
+            raise
 
         if bars_df is None or bars_df.empty:
             return None

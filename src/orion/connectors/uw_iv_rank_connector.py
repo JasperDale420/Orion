@@ -58,11 +58,11 @@ class UWIVRankConnector:
             logger.warning(f"Transient network error fetching IV rank for {ticker}: {e}")
             raise
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to fetch IV rank for {ticker}: {e}")
-            return None
+            logger.error("Failed to fetch IV rank for %s: %s", ticker, e, exc_info=True)
+            raise
         except Exception as e:
-            logger.warning(f"Failed to fetch IV rank for {ticker}: {e}")
-            return None
+            logger.error("Unexpected error fetching IV rank for %s: %s", ticker, e, exc_info=True)
+            raise
 
     async def fetch_and_store(self, tickers: List[str]) -> int:
         """Fetch IV rank for multiple tickers and store."""

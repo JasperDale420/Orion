@@ -34,13 +34,13 @@ def calculate_black_scholes_delta(
             return float(norm.cdf(d1))
         else:
             return float(norm.cdf(d1) - 1)
-    except (ValueError, ZeroDivisionError):
-        return None
+    except (ValueError, ZeroDivisionError) as e:
+        raise ValueError(
+            f"Failed to calculate Black-Scholes delta (S={S}, K={K}, T={T}, r={r}, sigma={sigma}, type={option_type}): {e}"
+        ) from e
 
 
-def calculate_black_scholes_gamma(
-    S: float, K: float, T: float, r: float, sigma: float
-) -> Optional[float]:
+def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> Optional[float]:
     """Calculate option gamma using Black-Scholes model.
 
     Args:
@@ -58,8 +58,10 @@ def calculate_black_scholes_gamma(
     try:
         d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
         return float(norm.pdf(d1) / (S * sigma * math.sqrt(T)))
-    except (ValueError, ZeroDivisionError):
-        return None
+    except (ValueError, ZeroDivisionError) as e:
+        raise ValueError(
+            f"Failed to calculate Black-Scholes gamma (S={S}, K={K}, T={T}, r={r}, sigma={sigma}): {e}"
+        ) from e
 
 
 def calculate_black_scholes_theta(
@@ -91,13 +93,13 @@ def calculate_black_scholes_theta(
         else:
             second_term = r * K * math.exp(-r * T) * norm.cdf(-d2)
         return float((first_term + second_term) / 365)
-    except (ValueError, ZeroDivisionError):
-        return None
+    except (ValueError, ZeroDivisionError) as e:
+        raise ValueError(
+            f"Failed to calculate Black-Scholes theta (S={S}, K={K}, T={T}, r={r}, sigma={sigma}, type={option_type}): {e}"
+        ) from e
 
 
-def calculate_black_scholes_vega(
-    S: float, K: float, T: float, r: float, sigma: float
-) -> Optional[float]:
+def calculate_black_scholes_vega(S: float, K: float, T: float, r: float, sigma: float) -> Optional[float]:
     """Calculate option vega using Black-Scholes model.
 
     Args:
@@ -116,13 +118,13 @@ def calculate_black_scholes_vega(
         d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
         # Per 1% change (divide by 100)
         return float(S * norm.pdf(d1) * math.sqrt(T) / 100)
-    except (ValueError, ZeroDivisionError):
-        return None
+    except (ValueError, ZeroDivisionError) as e:
+        raise ValueError(
+            f"Failed to calculate Black-Scholes vega (S={S}, K={K}, T={T}, r={r}, sigma={sigma}): {e}"
+        ) from e
 
 
-def calculate_iv_rank_from_history(
-    current_iv: float, iv_history: List[float]
-) -> Optional[float]:
+def calculate_iv_rank_from_history(current_iv: float, iv_history: List[float]) -> Optional[float]:
     """Calculate IV rank as percentile within historical IV range.
 
     Args:
