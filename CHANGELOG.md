@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Monitor heartbeat now warns on naive timestamps (TDD)**:
+  - Added a structured warning (`HEARTBEAT_NAIVE_TS`) when `SystemStatus.last_updated_utc` is naive and normalized to UTC.
+  - Added regression test in `/Users/jacobmcmillan/Empire/Orion/tests/unit/test_monitor_system.py`.
+
 - **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:
   - Updated:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`

@@ -51,3 +51,27 @@ async def test_monitor_logic(caplog, capsys):
     assert "ALERT: Stale Heartbeat for stale_service" in out
     assert "Heartbeat OK: healthy_service" in out
     assert "ALERT: 1 new Failures in DLQ" in out
+
+
+@pytest.mark.asyncio
+async def test_monitor_warns_on_naive_heartbeat_timestamp(capsys):
+    """
+    Verify monitor warns when heartbeat timestamps are naive.
+    """
+    from orion.storage.db import Base, async_session_factory, engine
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with async_session_factory() as session:
+        naive_ts = datetime.now()
+        status = SystemStatus(key="naive_service", status="HEALTHY", last_updated_utc=naive_ts)
+        session.add(status)
+        await session.commit()
+
+    async with async_session_factory() as session:
+        await check_heartbeats(session)
+
+    out = capsys.readouterr().out
+    assert "HEARTBEAT_NAIVE_TS" in out
+    assert "naive_service" in out
