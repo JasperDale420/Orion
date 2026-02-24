@@ -112,6 +112,44 @@ class TestMetricsEndpoint:
         assert response.status_code == 200
         assert response.json() == []
 
+    @pytest.mark.asyncio
+    async def test_list_metrics_returns_mapped_rows(
+        self,
+        override_deps: AsyncMock,
+        mock_audit_logging: None,
+    ) -> None:
+        """List metrics should serialize mapping rows from column selects."""
+        evaluated_at = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        row = {
+            "id": "metric-1",
+            "solver_id": "solver-123",
+            "sector": "ALL",
+            "dataset_tag": "test",
+            "num_runs": 10,
+            "num_trades": 25,
+            "sharpe_ratio": 1.23,
+            "profit_factor": 1.45,
+            "max_dd_pct": 0.12,
+            "stability_score": 0.9,
+            "metrics_json": {"foo": "bar"},
+            "evaluated_at_utc": evaluated_at,
+        }
+        mock_result = MagicMock()
+        mock_result.mappings.return_value.all.return_value = [row]
+        mock_result.scalars.return_value.all.return_value = []
+        override_deps.execute.return_value = mock_result
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/metrics")
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                **row,
+                "evaluated_at_utc": evaluated_at.isoformat().replace("+00:00", "Z"),
+            }
+        ]
+
 
 class TestExperimentsEndpoint:
     """Tests for /experiments endpoint."""
@@ -308,6 +346,7 @@ class TestFlowsEndpoint:
             response = await client.get("/flows", params={"ticker": "TSLA", "min_premium_usd": 10000})
 
         assert response.status_code == 200
+
     @pytest.mark.asyncio
     async def test_list_solvers_returns_mapping_rows(
         self,

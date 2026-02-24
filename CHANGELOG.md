@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Admin metrics endpoint avoids ORM hydration (performance)**:
+  - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/api/main.py` to select only response columns for `/metrics`, reducing ORM object creation and JSON decoding overhead.
+  - Added regression coverage in `/Users/jacobmcmillan/Empire/Orion/tests/api/test_main.py` ensuring mapped rows serialize correctly.
+
 - **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:
   - Updated:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`
