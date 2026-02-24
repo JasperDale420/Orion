@@ -5,6 +5,7 @@ Detects when production feature distributions shift from training baseline.
 """
 
 import logging
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -17,9 +18,7 @@ PSI_THRESHOLD_WARNING = 0.1  # Moderate drift
 PSI_THRESHOLD_CRITICAL = 0.25  # Significant drift requiring investigation
 
 
-def calculate_psi(
-    expected: np.ndarray, actual: np.ndarray, buckets: int = 10
-) -> float:
+def calculate_psi(expected: np.ndarray, actual: np.ndarray, buckets: int = 10) -> float:
     """
     Calculate Population Stability Index between expected and actual distributions.
 
@@ -75,11 +74,9 @@ class FeatureDriftMonitor:
     def __init__(self):
         # Feature baselines: feature_name -> {'values': array, 'mean': float, 'std': float}
         self._baselines: Dict[str, Dict[str, Any]] = {}
-        self._drift_history: List[Dict[str, Any]] = []
+        self._drift_history: deque = deque(maxlen=500)
 
-    def set_baseline(
-        self, feature_name: str, values: np.ndarray
-    ) -> Dict[str, float]:
+    def set_baseline(self, feature_name: str, values: np.ndarray) -> Dict[str, float]:
         """
         Set baseline distribution for a feature.
 
@@ -125,9 +122,7 @@ class FeatureDriftMonitor:
             if name in df.columns:
                 self.set_baseline(name, df[name].values)
 
-    def check_drift(
-        self, feature_name: str, values: np.ndarray
-    ) -> Dict[str, Any]:
+    def check_drift(self, feature_name: str, values: np.ndarray) -> Dict[str, Any]:
         """
         Check a feature for drift against its baseline.
 
@@ -227,7 +222,7 @@ class FeatureDriftMonitor:
 
     def clear_history(self) -> None:
         """Clear drift check history."""
-        self._drift_history = []
+        self._drift_history.clear()
 
     def has_baseline(self, feature_name: str) -> bool:
         """Check if a feature has a baseline set."""
