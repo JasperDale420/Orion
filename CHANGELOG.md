@@ -38,6 +38,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **RCA fix for sparse Heber training rows in Orion (TDD)**:
   - Updated `/Users/jacobmcmillan/Empire/Orion/src/orion/ml/pattern_miner.py`:
+
+### Fixed
+
+- **Alpaca bar normalization now enforces valid timestamps and supports unix seconds**:
+  - Added strict timestamp parsing for Alpaca bars so invalid/empty timestamps are rejected (sent to DLQ by ingestion).
+  - Added unit coverage for unix seconds and invalid timestamp inputs.
     - stopped treating `bars_to_hit <= 0` as a universal no-snapshot signal.
     - now drops rows only when no-snapshot is explicit (`outcome/outcome_reason` indicates no snapshot) or `snapshot_count <= 0` when snapshot metadata exists.
     - preserves valid `expired` outcomes (which commonly have `bars_to_hit = 0`) so training keeps real negative examples.

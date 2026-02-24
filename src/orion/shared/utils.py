@@ -14,7 +14,9 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
     """
     now = datetime.now(timezone.utc)
 
-    if ts_input is None:
+    if ts_input is None or (isinstance(ts_input, str) and ts_input.strip() == ""):
+        if strict:
+            raise ValueError("Timestamp input is required.")
         return now
 
     try:
@@ -29,7 +31,7 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
         if isinstance(ts_input, str):
             try:
                 # Optimized path for ISO format
-                dt = datetime.fromisoformat(ts_input.replace('Z', '+00:00'))
+                dt = datetime.fromisoformat(ts_input.replace("Z", "+00:00"))
             except ValueError:
                 # Fallback to slower, more flexible parser
                 dt = dateutil.parser.parse(ts_input)
@@ -44,6 +46,9 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
         if strict:
             raise ValueError(f"Failed to parse timestamp '{ts_input}': {e}") from e
         logger.warning(f"Failed to parse timestamp '{ts_input}': {e}. Defaulting to now.")
+
+    if strict:
+        raise ValueError(f"Unsupported timestamp type: {type(ts_input).__name__}")
 
     return now
 

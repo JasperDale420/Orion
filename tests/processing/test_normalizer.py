@@ -1,3 +1,5 @@
+import pytest
+
 from orion.processing.normalizer import NormalizationEngine
 
 
@@ -47,3 +49,35 @@ def test_normalize_alpaca_bar():
     assert normalized["ticker"] == "SPY"
     assert normalized["close"] == 410.8
     assert normalized["volume"] == 1000
+
+
+def test_normalize_alpaca_bar_accepts_unix_seconds_timestamp():
+    payload = {
+        "symbol": "SPY",
+        "t": 1698400800,
+        "o": 410.5,
+        "h": 411.0,
+        "l": 410.0,
+        "c": 410.8,
+        "v": 1000,
+    }
+
+    normalized = NormalizationEngine.normalize_event("ALPACA", "ALPACA_BAR_1M", payload)
+
+    assert normalized["bar_start_ts_utc"] == "2023-10-27T10:00:00+00:00"
+
+
+@pytest.mark.parametrize("timestamp", [None, "not-a-timestamp", ""])
+def test_normalize_alpaca_bar_rejects_invalid_timestamp(timestamp):
+    payload = {
+        "symbol": "SPY",
+        "t": timestamp,
+        "o": 410.5,
+        "h": 411.0,
+        "l": 410.0,
+        "c": 410.8,
+        "v": 1000,
+    }
+
+    with pytest.raises(ValueError):
+        NormalizationEngine.normalize_event("ALPACA", "ALPACA_BAR_1M", payload)

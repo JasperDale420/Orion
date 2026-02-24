@@ -1,6 +1,5 @@
 import hashlib
 import json
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from orion.shared.utils import parse_timestamptz
@@ -187,12 +186,7 @@ class NormalizationEngine:
         PRD 6.2 Silver Schema: Alpaca Bars 1m
         """
         ts_val = payload.get("t")
-        bar_ts = None
-        if isinstance(ts_val, str):
-            try:
-                bar_ts = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
-            except Exception:
-                pass
+        bar_ts = parse_timestamptz(ts_val, strict=True)
 
         return {
             "ticker": payload.get("symbol") or payload.get("ticker"),
