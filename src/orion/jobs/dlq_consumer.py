@@ -163,10 +163,7 @@ class DLQConsumer:
         await session.commit()
 
         # Re-run downstream feature + rule pipeline for supported event types.
-        try:
-            self.feature_engine.process_uw_flow(unique_events)
-        except Exception:
-            pass
+        self.feature_engine.process_uw_flow(unique_events)
 
         uw_flow_events = [e for e in unique_events if e.event_type == "UW_FLOW"]
         if uw_flow_events:
