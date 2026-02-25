@@ -139,7 +139,7 @@ class UWMaxPainConnector:
             )
         except Exception as exc:
             logger.error("max_pain_heber_price_lookup_failed ticker=%s error=%s", ticker, exc, exc_info=True)
-            raise
+            return None
 
         if bars_df is None or bars_df.empty:
             return None
