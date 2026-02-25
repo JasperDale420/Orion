@@ -46,3 +46,10 @@ build/
 
 # Artifacts (generated reports)
 artifacts/
+
+# SonarQube
+.scannerwork/
+sonar_scan.log
+
+# Aider
+.aider*
