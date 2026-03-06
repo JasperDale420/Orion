@@ -6,14 +6,15 @@ Provides helpers to reduce boilerplate for database operations.
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orion.config import system_settings
 from orion.storage import db
-from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY
+from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY  # noqa: N812
 
 logger = logging.getLogger(__name__)
 

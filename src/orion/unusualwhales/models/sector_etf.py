@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -53,32 +53,32 @@ class SectorETF:
         week_52_low (Union[Unset, str]): The 52 week low stock price of the ticker. Example: 124.17.
     """
 
-    avg30_stock_volume: Union[Unset, str] = UNSET
-    avg_30_day_call_volume: Union[Unset, str] = UNSET
-    avg_30_day_put_volume: Union[Unset, str] = UNSET
-    avg_7_day_call_volume: Union[Unset, str] = UNSET
-    avg_7_day_put_volume: Union[Unset, str] = UNSET
-    bearish_premium: Union[Unset, str] = UNSET
-    bullish_premium: Union[Unset, str] = UNSET
-    call_premium: Union[Unset, str] = UNSET
-    call_volume: Union[Unset, int] = UNSET
-    close: Union[Unset, str] = UNSET
-    full_name: Union[Unset, str] = UNSET
-    high: Union[Unset, str] = UNSET
-    low: Union[Unset, str] = UNSET
-    marketcap: Union[Unset, str] = UNSET
-    open_: Union[Unset, str] = UNSET
-    prev_close: Union[Unset, str] = UNSET
-    prev_date: Union[Unset, str] = UNSET
-    put_premium: Union[Unset, str] = UNSET
-    put_volume: Union[Unset, int] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    volume: Union[Unset, int] = UNSET
-    week_52_high: Union[Unset, str] = UNSET
-    week_52_low: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    avg30_stock_volume: Unset | str = UNSET
+    avg_30_day_call_volume: Unset | str = UNSET
+    avg_30_day_put_volume: Unset | str = UNSET
+    avg_7_day_call_volume: Unset | str = UNSET
+    avg_7_day_put_volume: Unset | str = UNSET
+    bearish_premium: Unset | str = UNSET
+    bullish_premium: Unset | str = UNSET
+    call_premium: Unset | str = UNSET
+    call_volume: Unset | int = UNSET
+    close: Unset | str = UNSET
+    full_name: Unset | str = UNSET
+    high: Unset | str = UNSET
+    low: Unset | str = UNSET
+    marketcap: Unset | str = UNSET
+    open_: Unset | str = UNSET
+    prev_close: Unset | str = UNSET
+    prev_date: Unset | str = UNSET
+    put_premium: Unset | str = UNSET
+    put_volume: Unset | int = UNSET
+    ticker: Unset | str = UNSET
+    volume: Unset | int = UNSET
+    week_52_high: Unset | str = UNSET
+    week_52_low: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         avg30_stock_volume = self.avg30_stock_volume
 
         avg_30_day_call_volume = self.avg_30_day_call_volume
@@ -125,7 +125,7 @@ class SectorETF:
 
         week_52_low = self.week_52_low
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if avg30_stock_volume is not UNSET:
@@ -178,7 +178,7 @@ class SectorETF:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         avg30_stock_volume = d.pop("avg30_stock_volume", UNSET)
 
@@ -256,7 +256,7 @@ class SectorETF:
         return sector_etf
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

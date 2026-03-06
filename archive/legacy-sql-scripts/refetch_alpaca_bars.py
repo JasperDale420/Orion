@@ -11,30 +11,29 @@ Usage:
 
 import asyncio
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
-
-from sqlalchemy import text
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from orion.shared.db_utils import db_query, db_write
 from orion.storage.db import init_db
+from sqlalchemy import text
 
 # Alpaca credentials
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 
 
-async def get_tickers_needing_fix() -> List[str]:
+async def get_tickers_needing_fix() -> list[str]:
     """Get unique tickers with 0-valued bars."""
 
-    async def query(session: Any) -> List[str]:
+    async def query(session: Any) -> list[str]:
         stmt = text(
             """
             SELECT DISTINCT ticker
@@ -49,10 +48,10 @@ async def get_tickers_needing_fix() -> List[str]:
     return await db_query(query)
 
 
-async def get_dates_needing_fix() -> List[datetime]:
+async def get_dates_needing_fix() -> list[datetime]:
     """Get dates with 0-valued bars."""
 
-    async def query(session: Any) -> List[datetime]:
+    async def query(session: Any) -> list[datetime]:
         stmt = text(
             """
             SELECT DISTINCT DATE(bar_start_ts_utc) as bar_date
@@ -68,8 +67,8 @@ async def get_dates_needing_fix() -> List[datetime]:
 
 
 def fetch_bars_from_alpaca(
-    client: StockHistoricalDataClient, tickers: List[str], start: datetime, end: datetime
-) -> Dict[str, List[Dict]]:
+    client: StockHistoricalDataClient, tickers: list[str], start: datetime, end: datetime
+) -> dict[str, list[dict]]:
     """Fetch bars from Alpaca API."""
     req = StockBarsRequest(
         symbol_or_symbols=tickers,
@@ -112,7 +111,7 @@ def fetch_bars_from_alpaca(
         return {}
 
 
-async def update_bar(ticker: str, bar_ts: datetime, ohlcv: Dict) -> bool:
+async def update_bar(ticker: str, bar_ts: datetime, ohlcv: dict) -> bool:
     """Update a single bar with new OHLCV values."""
 
     async def do_update(session: Any) -> None:
@@ -179,7 +178,7 @@ async def main():
 
     # Process each date
     for bar_date in dates:
-        start = datetime.combine(bar_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        start = datetime.combine(bar_date, datetime.min.time()).replace(tzinfo=UTC)
         end = start + timedelta(days=1)
 
         print(f"\nProcessing {bar_date}...")

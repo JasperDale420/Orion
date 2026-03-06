@@ -12,6 +12,8 @@ packages = [{include = "orion", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.12"
+empire-core = {path = "../empire-core", develop = true}
+empire-schemas = {path = "../empire-schemas", develop = true}
 requests = "^2.31.0"
 pydantic = "^2.5.0"
 pydantic-settings = "^2.13.0"

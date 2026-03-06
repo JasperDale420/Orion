@@ -4,7 +4,6 @@ load_dotenv()  # Load .env file if present
 
 import uuid
 from pathlib import Path
-from typing import List, Optional
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,15 +14,15 @@ class RiskSettings(BaseSettings):
     max_drawdown_pct: float = 0.05
     max_order_size_pct: float = 0.05  # 5% of account equity
     # Legacy compatibility field used by older tests/callers.
-    max_order_size_usd: Optional[float] = None
+    max_order_size_usd: float | None = None
     max_positions: int = 5
     max_ticker_exposure_pct: float = 0.10  # 10% of account equity
     # Legacy compatibility field used by older tests/callers.
-    max_ticker_exposure_usd: Optional[float] = None
+    max_ticker_exposure_usd: float | None = None
     risk_per_trade_pct: float = 0.01
     enable_shorting: bool = False
     default_stop_loss_pct: float = 0.02
-    time_of_day_bans: Optional[List[str]] = None
+    time_of_day_bans: list[str] | None = None
 
     max_system_bps: int = 500
 
@@ -62,46 +61,46 @@ class RiskSettings(BaseSettings):
 
 class SystemSettings(BaseSettings):
     # API Keys
-    uw_api_key: Optional[str] = Field(default=None, validation_alias="UW_API_KEY")
-    alpaca_api_key: Optional[str] = Field(default=None, validation_alias="ALPACA_API_KEY")
-    alpaca_secret_key: Optional[str] = Field(default=None, validation_alias="ALPACA_SECRET_KEY")
+    uw_api_key: str | None = Field(default=None, validation_alias="UW_API_KEY")
+    alpaca_api_key: str | None = Field(default=None, validation_alias="ALPACA_API_KEY")
+    alpaca_secret_key: str | None = Field(default=None, validation_alias="ALPACA_SECRET_KEY")
     alpaca_paper: bool = Field(default=True, validation_alias="ALPACA_PAPER")
 
     # Environment
     orion_stage: str = Field(default="paper", validation_alias="ORION_STAGE")
     artifacts_dir: str = Field(default="artifacts", validation_alias="ORION_ARTIFACTS_DIR")
-    baseline_solver_id: Optional[str] = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
+    baseline_solver_id: str | None = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
     orion_use_gateway: bool = Field(default=True, validation_alias="ORION_USE_GATEWAY")
     legacy_label_pipelines_enabled: bool = Field(
         default=True,
         validation_alias="ORION_ENABLE_LEGACY_LABEL_PIPELINES",
     )
-    legacy_option_quote_tracker_enabled: Optional[bool] = Field(
+    legacy_option_quote_tracker_enabled: bool | None = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER",
     )
-    legacy_price_target_labeler_enabled: Optional[bool] = Field(
+    legacy_price_target_labeler_enabled: bool | None = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER",
     )
-    legacy_pattern_miner_enabled: Optional[bool] = Field(
+    legacy_pattern_miner_enabled: bool | None = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER",
     )
-    legacy_nightly_backfill_enabled: Optional[bool] = Field(
+    legacy_nightly_backfill_enabled: bool | None = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL",
     )
-    legacy_quality_guardrails_enabled: Optional[bool] = Field(
+    legacy_quality_guardrails_enabled: bool | None = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS",
     )
-    legacy_exit_classifier_training_enabled: Optional[bool] = Field(
+    legacy_exit_classifier_training_enabled: bool | None = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING",
     )
-    legacy_pattern_miner_training_enabled: Optional[bool] = Field(
+    legacy_pattern_miner_training_enabled: bool | None = Field(
         default=None,
         validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING",
     )
@@ -131,7 +130,7 @@ class SystemSettings(BaseSettings):
         default="http://localhost:8080",
         validation_alias=AliasChoices("DATA_GATEWAY_URL", "GATEWAY_URL"),
     )
-    data_gateway_api_key: Optional[str] = Field(
+    data_gateway_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("DATA_GATEWAY_API_KEY", "GATEWAY_API_KEY"),
     )
@@ -151,13 +150,13 @@ class SystemSettings(BaseSettings):
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
     uw_base_url: str = Field(default="https://api.unusualwhales.com", validation_alias="UW_BASE_URL")
-    static_watchlist: List[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL", "VIXY"]
+    static_watchlist: list[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL", "VIXY"]
     require_rollups_for_signals_live: bool = True
 
     # Runtime / Observability
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()), validation_alias="ORION_RUN_ID")
     log_format: str = Field(default="json", validation_alias="ORION_LOG_FORMAT")
-    api_key: Optional[str] = Field(default=None, validation_alias="ORION_API_KEY")
+    api_key: str | None = Field(default=None, validation_alias="ORION_API_KEY")
     metrics_enabled: bool = Field(default=False, validation_alias="ORION_METRICS_ENABLED")
     metrics_port: int = Field(default=8000, validation_alias="ORION_METRICS_PORT")
 
@@ -198,11 +197,12 @@ class MetaSearchSettings(BaseSettings):
 
 
 class AgentSettings(BaseSettings):
-    model_name: str = "gpt-5.2"
-    reasoning_level: str = Field(default="extra_high", validation_alias="ORION_REASONING_LEVEL")
-    openai_api_key: Optional[str] = Field(default=None, validation_alias="OPENAI_API_KEY")
-    deepseek_api_key: Optional[str] = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
+    model_name: str = "glm-5"
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
     deepseek_model: str = Field(default="deepseek-reasoner", validation_alias="DEEPSEEK_MODEL")
+    ai_gateway_url: str = Field(default="http://localhost:8002/v1", validation_alias="ORION_AI_GATEWAY_URL")
+    ai_gateway_key: str = Field(default="empire-ai-gateway-key", validation_alias="ORION_AI_GATEWAY_KEY")
     model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")
 
 

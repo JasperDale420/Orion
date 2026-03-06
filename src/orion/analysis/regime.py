@@ -155,7 +155,6 @@ class RegimeDetector:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -172,13 +171,13 @@ class MarketRegimeSnapshot:
     vix_regime: VIXRegime
 
     # Continuous features
-    vix_level: Optional[float] = None
-    realized_vol: Optional[float] = None
-    trend_strength: Optional[float] = None
-    risk_score: Optional[float] = None
+    vix_level: float | None = None
+    realized_vol: float | None = None
+    trend_strength: float | None = None
+    risk_score: float | None = None
 
     # Confidence per axis (0-1)
-    confidence: Dict[str, float] = field(default_factory=dict)
+    confidence: dict[str, float] = field(default_factory=dict)
 
 
 class MultiAxisRegimeDetector:
@@ -227,7 +226,7 @@ class MultiAxisRegimeDetector:
         else:
             return SessionRegime.MIDDAY
 
-    def classify_vix_regime(self, vix: Optional[float]) -> VIXRegime:
+    def classify_vix_regime(self, vix: float | None) -> VIXRegime:
         """Classify VIX level into regime."""
         if vix is None:
             return VIXRegime.NORMAL
@@ -240,7 +239,7 @@ class MultiAxisRegimeDetector:
         else:
             return VIXRegime.EXTREME
 
-    def classify_vol_regime(self, realized_vol: float, vix: Optional[float]) -> VolRegime:
+    def classify_vol_regime(self, realized_vol: float, vix: float | None) -> VolRegime:
         """Classify volatility regime from realized vol and VIX."""
         # Use VIX as primary if available
         if vix is not None:
@@ -272,7 +271,7 @@ class MultiAxisRegimeDetector:
         else:
             return TrendRegime.DOWN
 
-    def classify_risk_regime(self, vix_1d_change: Optional[float], market_tide_net: Optional[float]) -> RiskRegime:
+    def classify_risk_regime(self, vix_1d_change: float | None, market_tide_net: float | None) -> RiskRegime:
         """Classify risk sentiment from VIX direction + market tide."""
         risk_score = 0.0
 
@@ -302,9 +301,9 @@ class MultiAxisRegimeDetector:
         ts: datetime,
         cum_ret: float = 0.0,
         realized_vol: float = 0.015,
-        vix: Optional[float] = None,
-        vix_1d_change: Optional[float] = None,
-        market_tide_net: Optional[float] = None,
+        vix: float | None = None,
+        vix_1d_change: float | None = None,
+        market_tide_net: float | None = None,
     ) -> MarketRegimeSnapshot:
         """Detect full multi-axis regime snapshot."""
         trend_strength = abs(cum_ret) / (realized_vol + 1e-9)

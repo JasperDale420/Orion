@@ -3,13 +3,14 @@ Tests for the Orion Admin API endpoints.
 Uses httpx.AsyncClient with FastAPI dependency overrides.
 """
 
-from datetime import datetime, timezone
-from typing import Generator
+from collections.abc import Generator
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
 from httpx import ASGITransport, AsyncClient
+
 from orion.api.main import app
 
 
@@ -308,6 +309,7 @@ class TestFlowsEndpoint:
             response = await client.get("/flows", params={"ticker": "TSLA", "min_premium_usd": 10000})
 
         assert response.status_code == 200
+
     @pytest.mark.asyncio
     async def test_list_solvers_returns_mapping_rows(
         self,
@@ -322,7 +324,7 @@ class TestFlowsEndpoint:
                 "stage": "research",
                 "is_active": False,
                 "config": {"param": 1},
-                "created_at_utc": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                "created_at_utc": datetime(2025, 1, 1, tzinfo=UTC),
                 "total_pnl": 0.0,
                 "sharpe_ratio": 0.0,
                 "win_rate": 0.0,

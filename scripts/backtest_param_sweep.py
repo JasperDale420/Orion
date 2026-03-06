@@ -12,17 +12,18 @@ Tests different configurations to find optimal exit parameters:
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from sqlalchemy import select
+
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models_silver import SilverOptionFlow
-from sqlalchemy import select
 
 logger = setup_struct_logger("param_sweep")
 
@@ -33,11 +34,11 @@ class SimulatedPosition:
     direction: str
     entry_ts: datetime
     entry_price: float
-    option_chain: Optional[str] = None
-    entry_iv: Optional[float] = None
+    option_chain: str | None = None
+    entry_iv: float | None = None
     entry_premium_window: float = 0.0
     entry_sweep_count: int = 0
-    entry_oi: Optional[float] = None
+    entry_oi: float | None = None
 
 
 @dataclass
@@ -48,12 +49,12 @@ class SweepResult:
     total_pnl_pct: float
     avg_pnl_pct: float
     avg_hold_minutes: float
-    exits_by_rule: Dict[str, int] = field(default_factory=dict)
+    exits_by_rule: dict[str, int] = field(default_factory=dict)
 
 
-async def fetch_flow_data(days: int = 7) -> List[Any]:
-    async def query(session: Any) -> List[Any]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+async def fetch_flow_data(days: int = 7) -> list[Any]:
+    async def query(session: Any) -> list[Any]:
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         stmt = (
             select(SilverOptionFlow)
             .where(SilverOptionFlow.flow_ts_utc >= cutoff)
@@ -65,10 +66,10 @@ async def fetch_flow_data(days: int = 7) -> List[Any]:
     return await db_query(query)
 
 
-def identify_entries(flow_data: List[Any]) -> List[SimulatedPosition]:
+def identify_entries(flow_data: list[Any]) -> list[SimulatedPosition]:
     positions = []
     seen = set()
-    flow_by_ticker: Dict[str, List[Any]] = defaultdict(list)
+    flow_by_ticker: dict[str, list[Any]] = defaultdict(list)
 
     for flow in flow_data:
         flow_by_ticker[flow.ticker].append(flow)
@@ -103,10 +104,10 @@ def identify_entries(flow_data: List[Any]) -> List[SimulatedPosition]:
 
 def evaluate_with_config(
     position: SimulatedPosition,
-    flow_data: List[Any],
-    config: Dict[str, Any],
+    flow_data: list[Any],
+    config: dict[str, Any],
     max_hold_minutes: int = 120,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Evaluate trade with configurable exit parameters."""
     min_hold_minutes = config.get("min_hold_minutes", 0)
     min_premium = config.get("min_premium", 100000)
@@ -195,11 +196,11 @@ def evaluate_with_config(
 
 
 def run_sweep(
-    positions: List[SimulatedPosition], flow_data: List[Any], config: Dict[str, Any], name: str
+    positions: list[SimulatedPosition], flow_data: list[Any], config: dict[str, Any], name: str
 ) -> SweepResult:
     """Run backtest with specific config."""
     trades = []
-    exits_by_rule: Dict[str, int] = defaultdict(int)
+    exits_by_rule: dict[str, int] = defaultdict(int)
 
     for pos in positions[:100]:
         result = evaluate_with_config(pos, flow_data, config)

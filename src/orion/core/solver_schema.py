@@ -1,6 +1,6 @@
 import enum
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -16,14 +16,14 @@ class SolverRiskConfig(BaseModel):
     risk_per_trade_bps: int = Field(default=100, ge=1)  # Validated dynamically
     max_open_positions: int = Field(default=5, ge=1)
     max_ticker_exposure_pct: float = 5.0
-    time_of_day_bans: Optional[List[str]] = None
-    session_filter: Optional[List[str]] = Field(default_factory=list)
+    time_of_day_bans: list[str] | None = None
+    session_filter: list[str] | None = Field(default_factory=list)
 
     @model_validator(mode="after")
     def check_global_limits(self) -> "SolverRiskConfig":
         # Global Hard Limits
-        MAX_SYSTEM_BPS = risk_settings.max_system_bps
-        MAX_GLOBAL_POSITIONS = risk_settings.max_positions
+        MAX_SYSTEM_BPS = risk_settings.max_system_bps  # noqa: N806
+        MAX_GLOBAL_POSITIONS = risk_settings.max_positions  # noqa: N806
 
         if self.risk_per_trade_bps > MAX_SYSTEM_BPS:
             raise ValueError(f"Risk per trade {self.risk_per_trade_bps}bps exceeds system limit {MAX_SYSTEM_BPS}bps")
@@ -40,8 +40,8 @@ class SolverRiskConfig(BaseModel):
 
 class SolverFeatures(BaseModel):
     feature_set_id: str = Field(default="v1_legacy")
-    event_features: List[str] = Field(default_factory=list)
-    window_features: List[str] = Field(default_factory=list)
+    event_features: list[str] = Field(default_factory=list)
+    window_features: list[str] = Field(default_factory=list)
     feature_engine_version: str = "v1"
 
     @field_validator("feature_set_id")
@@ -54,31 +54,31 @@ class SolverFeatures(BaseModel):
 
 class SolverModel(BaseModel):
     type: str = "meta_classifier"  # meta_classifier, none
-    model_version: Optional[str] = None  # e.g. "lgbm_v1"
-    model_uri: Optional[str] = None
-    thresholds: Dict[str, float] = Field(default_factory=dict)
+    model_version: str | None = None  # e.g. "lgbm_v1"
+    model_uri: str | None = None
+    thresholds: dict[str, float] = Field(default_factory=dict)
 
 
 class SolverUniverse(BaseModel):
-    ticker_allowlist: Optional[List[str]] = None
-    ticker_blocklist: Optional[List[str]] = None
-    required_regime: Optional[str] = None
+    ticker_allowlist: list[str] | None = None
+    ticker_blocklist: list[str] | None = None
+    required_regime: str | None = None
 
 
 class ExitLogic(BaseModel):
-    take_profit_atr_multiple: Optional[float] = None
-    stop_loss_atr_multiple: Optional[float] = None
-    fixed_tp_pct: Optional[float] = None
-    fixed_sl_pct: Optional[float] = None
-    time_exit_bars: Optional[int] = None
+    take_profit_atr_multiple: float | None = None
+    stop_loss_atr_multiple: float | None = None
+    fixed_tp_pct: float | None = None
+    fixed_sl_pct: float | None = None
+    time_exit_bars: int | None = None
 
     # Optional dynamic exit support
-    model_uri: Optional[str] = None
+    model_uri: str | None = None
 
 
 class RuleConfig(BaseModel):
     id: str
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
 
 class SolverConfig(BaseModel):
@@ -91,21 +91,21 @@ class SolverConfig(BaseModel):
     version_id: str = Field(..., description="Unique Version ID (hash)")
 
     # Logic
-    rules: List[Union[str, RuleConfig]] = Field(default_factory=list)  # Rule IDs or Configs
+    rules: list[str | RuleConfig] = Field(default_factory=list)  # Rule IDs or Configs
     features: SolverFeatures = Field(default_factory=SolverFeatures)
-    model: Optional[SolverModel] = None
+    model: SolverModel | None = None
 
     # Execution & Risk
-    risk: Optional[SolverRiskConfig] = Field(default_factory=SolverRiskConfig)
-    universe: Optional[SolverUniverse] = Field(default_factory=SolverUniverse)
+    risk: SolverRiskConfig | None = Field(default_factory=SolverRiskConfig)
+    universe: SolverUniverse | None = Field(default_factory=SolverUniverse)
     exit_logic: ExitLogic = Field(default_factory=ExitLogic)
 
     # Extra params
-    volatility_penalty_threshold: Optional[float] = 0.02
-    entry_logic: Optional[Dict[str, Any]] = None
+    volatility_penalty_threshold: float | None = 0.02
+    entry_logic: dict[str, Any] | None = None
 
     # Rule Parameter Overrides (Map[RuleID -> Map[Param -> Value]])
-    rule_overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    rule_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     class Config:
         validate_assignment = True
@@ -133,12 +133,12 @@ class EditOp(BaseModel):
     op: EditOpType = Field(..., description="Type of operation")
 
     # Target context
-    rule_id: Optional[str] = Field(None, description="Target rule (if applicable)")
-    param_name: Optional[str] = Field(None, description="Target parameter name")
-    feature_name: Optional[str] = Field(None, description="Target feature name")
+    rule_id: str | None = Field(None, description="Target rule (if applicable)")
+    param_name: str | None = Field(None, description="Target parameter name")
+    feature_name: str | None = Field(None, description="Target feature name")
 
     # Value change
-    old_value: Optional[Any] = None
+    old_value: Any | None = None
     new_value: Any = Field(..., description="New value to apply")
 
     reasoning: str = Field(..., description="Why this edit was made (LLM provided)")
@@ -153,9 +153,9 @@ class SolverEdit(BaseModel):
     new_solver_id: str = Field(..., description="Resulting solver ID")
 
     generated_by: str = Field(..., description="'meta_agent' or 'llm_eod_agent'")
-    ops: List[EditOp] = Field(..., description="List of operations applied")
+    ops: list[EditOp] = Field(..., description="List of operations applied")
 
-    created_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at_utc: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class EvaluationTask(BaseModel):
@@ -169,7 +169,7 @@ class EvaluationTask(BaseModel):
     start_time_utc: datetime = Field(..., description="Start of evaluation window")
     end_time_utc: datetime = Field(..., description="End of evaluation window")
 
-    ticker_filter: Optional[List[str]] = None
+    ticker_filter: list[str] | None = None
 
 
 class LiveContext(BaseModel):

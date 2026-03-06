@@ -1,4 +1,3 @@
-from typing import Optional, Union
 
 from alpaca.common.enums import BaseURL
 from alpaca.common.rest import RESTClient
@@ -15,12 +14,12 @@ class NewsClient(RESTClient):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        oauth_token: Optional[str] = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        oauth_token: str | None = None,
         use_basic_auth: bool = False,
         raw_data: bool = False,
-        url_override: Optional[str] = None,
+        url_override: str | None = None,
     ) -> None:
         """
         Instantiates a Historical Data Client.
@@ -46,7 +45,7 @@ class NewsClient(RESTClient):
             raw_data=raw_data,
         )
 
-    def get_news(self, request_params: NewsRequest) -> Union[RawData, NewsSet]:
+    def get_news(self, request_params: NewsRequest) -> RawData | NewsSet:
         """Returns news data
 
         Args:

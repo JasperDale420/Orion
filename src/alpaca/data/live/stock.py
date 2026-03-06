@@ -1,5 +1,4 @@
-import asyncio
-from typing import Awaitable, Callable, Dict, Optional, Union
+from collections.abc import Awaitable, Callable
 
 from alpaca.common.enums import BaseURL
 from alpaca.data.enums import DataFeed
@@ -20,8 +19,8 @@ class StockDataStream(DataStream):
         secret_key: str,
         raw_data: bool = False,
         feed: DataFeed = DataFeed.IEX,
-        websocket_params: Optional[Dict] = None,
-        url_override: Optional[str] = None,
+        websocket_params: dict | None = None,
+        url_override: str | None = None,
     ) -> None:
         """
         Instantiates a WebSocket client for accessing live stock data.
@@ -55,7 +54,7 @@ class StockDataStream(DataStream):
         )
 
     def subscribe_trades(
-        self, handler: Callable[[Union[Trade, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Trade | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to trades.
 
@@ -67,7 +66,7 @@ class StockDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["trades"])
 
     def subscribe_quotes(
-        self, handler: Callable[[Union[Quote, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Quote | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to quotes
 
@@ -79,7 +78,7 @@ class StockDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["quotes"])
 
     def subscribe_bars(
-        self, handler: Callable[[Union[Bar, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Bar | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to minute bars
 
@@ -91,7 +90,7 @@ class StockDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["bars"])
 
     def subscribe_updated_bars(
-        self, handler: Callable[[Union[Bar, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Bar | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to updated minute bars
 
@@ -103,7 +102,7 @@ class StockDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["updatedBars"])
 
     def subscribe_daily_bars(
-        self, handler: Callable[[Union[Bar, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Bar | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to daily bars
 
@@ -115,7 +114,7 @@ class StockDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["dailyBars"])
 
     def subscribe_trading_statuses(
-        self, handler: Callable[[Union[TradingStatus, Dict]], Awaitable[None]], *symbols
+        self, handler: Callable[[TradingStatus | dict], Awaitable[None]], *symbols
     ) -> None:
         """Subscribe to trading statuses (halts, resumes)
 
@@ -127,7 +126,7 @@ class StockDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["statuses"])
 
     def register_trade_corrections(
-        self, handler: Callable[[Union[TradeCorrection, Dict]], Awaitable[None]]
+        self, handler: Callable[[TradeCorrection | dict], Awaitable[None]]
     ) -> None:
         """Register a trade correction handler. You can only subscribe to trade corrections by
         subscribing to the underlying trades.
@@ -139,7 +138,7 @@ class StockDataStream(DataStream):
         self._handlers["corrections"] = {"*": handler}
 
     def register_trade_cancels(
-        self, handler: Callable[[Union[TradeCancel, Dict]], Awaitable[None]]
+        self, handler: Callable[[TradeCancel | dict], Awaitable[None]]
     ) -> None:
         """Register a trade cancel handler. You can only subscribe to trade cancels by
         subscribing to the underlying trades.

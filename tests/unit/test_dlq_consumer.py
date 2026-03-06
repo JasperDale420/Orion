@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.jobs.dlq_consumer import DLQConsumer
 from orion.storage.models_dlq import DeadLetterQueue
 
@@ -53,7 +54,7 @@ async def test_dlq_replay_success(consumer):
     mock_item.retry_count = 0
     mock_item.event_type = "ALPACA_BAR_1M"
     mock_item.payload = {"ticker": "AAPL", "c": 150.0}
-    mock_item.timestamp_utc = datetime.now(timezone.utc)
+    mock_item.timestamp_utc = datetime.now(UTC)
 
     mock_session = MockAsyncSession(result_scalars=[mock_item])
 
@@ -61,13 +62,15 @@ async def test_dlq_replay_success(consumer):
         mock_factory.return_value = mock_session
 
         # Mock FeatureEngine processing
-        with patch.object(consumer.feature_engine, "process_alpaca_bars", return_value=[True]):
-            with patch.object(consumer.feature_engine, "persist_signal_batch", new_callable=AsyncMock) as mock_persist:
-                await consumer.run_once()
+        with (
+            patch.object(consumer.feature_engine, "process_alpaca_bars", return_value=[True]),
+            patch.object(consumer.feature_engine, "persist_signal_batch", new_callable=AsyncMock) as mock_persist,
+        ):
+            await consumer.run_once()
 
-                assert mock_item.status == "REPLAYED"
-                assert mock_persist.called
-                assert mock_session.committed
+            assert mock_item.status == "REPLAYED"
+            assert mock_persist.called
+            assert mock_session.committed
 
 
 @pytest.mark.asyncio

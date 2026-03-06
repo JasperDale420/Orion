@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, Integer, String
@@ -13,9 +13,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    created_at_utc: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     # Request identity / correlation
     run_id: Mapped[str | None] = mapped_column(String, nullable=True)

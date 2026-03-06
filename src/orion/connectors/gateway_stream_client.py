@@ -6,11 +6,13 @@ leveraging the Gateway's multiplexer to avoid connection limit issues.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import websockets
@@ -43,7 +45,7 @@ class GatewayStreamClient:
         self,
         gateway_url: str,
         api_key: str,
-        on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
+        on_bar_callback: Callable[[BronzeEvent], None] | None = None,
     ):
         self.ws_url = self._normalize_ws_url(gateway_url)
 
@@ -51,8 +53,8 @@ class GatewayStreamClient:
         self.on_bar_callback = on_bar_callback
 
         # Connection state
-        self._websocket: Optional[websockets.WebSocketClientProtocol] = None
-        self._subscribed_symbols: Set[str] = set()
+        self._websocket: websockets.WebSocketClientProtocol | None = None
+        self._subscribed_symbols: set[str] = set()
         self._running = False
         self._authenticated = False
 
@@ -60,8 +62,8 @@ class GatewayStreamClient:
         self._event_queue: asyncio.Queue[BronzeEvent] = asyncio.Queue()
 
         # Background tasks
-        self._receive_task: Optional[asyncio.Task] = None
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._receive_task: asyncio.Task | None = None
+        self._heartbeat_task: asyncio.Task | None = None
 
     @staticmethod
     def _normalize_ws_url(gateway_url: str) -> str:
@@ -109,7 +111,7 @@ class GatewayStreamClient:
         self._websocket = None
         self._authenticated = False
 
-    def _generate_event_id(self, symbol: str, payload: Dict[str, Any]) -> str:
+    def _generate_event_id(self, symbol: str, payload: dict[str, Any]) -> str:
         """Generate deterministic event ID for deduplication."""
         raw_str = (
             f"ALPACA_BAR_1M_{symbol}_"
@@ -180,7 +182,7 @@ class GatewayStreamClient:
         logger.error("Max reconnection attempts reached")
         return False
 
-    async def _send_subscribe(self, symbols: List[str]) -> bool:
+    async def _send_subscribe(self, symbols: list[str]) -> bool:
         """Send subscribe message to Gateway."""
         if not self._websocket or not self._authenticated:
             logger.warning("Cannot subscribe: not connected or authenticated")
@@ -207,7 +209,7 @@ class GatewayStreamClient:
             logger.error(f"Subscribe failed: {e}", exc_info=True)
             return False
 
-    async def _send_unsubscribe(self, symbols: List[str]) -> bool:
+    async def _send_unsubscribe(self, symbols: list[str]) -> bool:
         """Send unsubscribe message to Gateway."""
         if not self._websocket or not self._authenticated:
             return False
@@ -233,7 +235,7 @@ class GatewayStreamClient:
             logger.error(f"Unsubscribe failed: {e}", exc_info=True)
             return False
 
-    async def subscribe(self, symbols: List[str]) -> None:
+    async def subscribe(self, symbols: list[str]) -> None:
         """Subscribe to bar updates for the given symbols."""
         if not symbols:
             return
@@ -250,7 +252,7 @@ class GatewayStreamClient:
         else:
             logger.debug(f"Queued {len(new_symbols)} subscriptions until Gateway connection is ready")
 
-    async def unsubscribe(self, symbols: List[str]) -> None:
+    async def unsubscribe(self, symbols: list[str]) -> None:
         """Unsubscribe from bar updates for the given symbols."""
         if not symbols:
             return
@@ -268,7 +270,7 @@ class GatewayStreamClient:
             logger.debug(f"Removed {len(to_remove)} queued subscriptions before Gateway connection")
 
     @staticmethod
-    def _loads_message(message: Any) -> Dict[str, Any]:
+    def _loads_message(message: Any) -> dict[str, Any]:
         """Decode a websocket frame into a JSON object."""
         if isinstance(message, bytes):
             return json.loads(message.decode("utf-8"))
@@ -279,7 +281,7 @@ class GatewayStreamClient:
         raise ValueError(f"Unsupported websocket frame type: {type(message)}")
 
     @staticmethod
-    def _is_bar_message(data: Dict[str, Any]) -> bool:
+    def _is_bar_message(data: dict[str, Any]) -> bool:
         """Return True when message contains bar data in any supported Gateway shape."""
         msg_type = str(data.get("type") or data.get("event_type") or "").lower()
         feed = str(data.get("feed") or "").lower()
@@ -287,22 +289,19 @@ class GatewayStreamClient:
         if msg_type in ("alpaca_bar_1m", "bar"):
             return True
 
-        if msg_type == "data" and feed in ("bars", "stock_bars", "bar", "alpaca_bar_1m"):
-            return True
-
-        return False
+        return bool(msg_type == "data" and feed in ("bars", "stock_bars", "bar", "alpaca_bar_1m"))
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
         """Parse provider timestamp values to UTC datetime."""
         if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
         if isinstance(value, str):
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     @staticmethod
-    def _to_float(value: Any) -> Optional[float]:
+    def _to_float(value: Any) -> float | None:
         """Best-effort numeric parsing."""
         if value is None:
             return None
@@ -352,7 +351,7 @@ class GatewayStreamClient:
                 logger.error(f"Receive loop error: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
 
-    async def _process_bar_message(self, data: Dict[str, Any]) -> None:
+    async def _process_bar_message(self, data: dict[str, Any]) -> None:
         """Process incoming bar data and convert to BronzeEvent."""
         try:
             envelope = data.get("envelope", {})
@@ -369,10 +368,7 @@ class GatewayStreamClient:
                 payload = data
 
             instrument_key = (
-                data.get("instrument_key")
-                or envelope.get("instrument_key")
-                or payload.get("instrument_key")
-                or ""
+                data.get("instrument_key") or envelope.get("instrument_key") or payload.get("instrument_key") or ""
             )
             top_symbol = data.get("symbol") or envelope.get("symbol")
             payload_symbol = payload.get("symbol") or payload.get("S")
@@ -389,10 +385,7 @@ class GatewayStreamClient:
 
             # Parse timestamp
             timestamp_value = (
-                payload.get("t")
-                or payload.get("timestamp")
-                or envelope.get("ts_event")
-                or data.get("ts_event")
+                payload.get("t") or payload.get("timestamp") or envelope.get("ts_event") or data.get("ts_event")
             )
             event_ts = self._parse_timestamp(timestamp_value)
 
@@ -411,7 +404,7 @@ class GatewayStreamClient:
                 source="ALPACA",
                 event_type="ALPACA_BAR_1M",
                 event_ts_utc=event_ts,
-                received_ts_utc=datetime.now(timezone.utc),
+                received_ts_utc=datetime.now(UTC),
                 payload=normalized_payload,
             )
 
@@ -453,16 +446,14 @@ class GatewayStreamClient:
 
         if self._receive_task:
             self._receive_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._receive_task
-            except asyncio.CancelledError:
-                pass  # Expected when stopping - no need to re-raise here as this is the stop() method
 
         if self._websocket:
             await self._websocket.close()
             self._websocket = None
 
-    def drain_events(self, max_events: int = 1000) -> List[BronzeEvent]:
+    def drain_events(self, max_events: int = 1000) -> list[BronzeEvent]:
         """Drain buffered events from the queue."""
         events = []
         while len(events) < max_events:
@@ -478,12 +469,12 @@ class GatewayStreamClient:
         return self._running
 
     @property
-    def subscribed_symbols(self) -> Set[str]:
+    def subscribed_symbols(self) -> set[str]:
         return self._subscribed_symbols.copy()
 
 
 def create_gateway_stream_client(
-    on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
+    on_bar_callback: Callable[[BronzeEvent], None] | None = None,
 ) -> GatewayStreamClient:
     """Create GatewayStreamClient from centralized system settings."""
     gateway_url = system_settings.data_gateway_url

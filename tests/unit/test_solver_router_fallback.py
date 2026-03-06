@@ -2,12 +2,13 @@ import datetime
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+
 from orion.core.solver_router import SolverRouter
 from orion.core.solver_schema import LiveContext
 from orion.storage.db import Base
 from orion.storage.models_solvers import Solver, SolverMetrics
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 
 @pytest.mark.asyncio
@@ -84,7 +85,7 @@ async def test_select_solvers_fallback():
         context = LiveContext(
             ticker="SPY",
             regime="crash_mode",
-            time_of_day_utc=datetime.datetime.now(datetime.timezone.utc),
+            time_of_day_utc=datetime.datetime.now(datetime.UTC),
             current_stage="live",
         )
 

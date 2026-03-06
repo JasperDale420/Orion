@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import List
 
 from pydantic import Field, TypeAdapter
 
@@ -31,8 +30,8 @@ class Orderbook(BaseModel):
 
     symbol: str
     timestamp: datetime
-    bids: List[OrderbookQuote]
-    asks: List[OrderbookQuote]
+    bids: list[OrderbookQuote]
+    asks: list[OrderbookQuote]
     reset: bool = False
 
     def __init__(self, symbol: str, raw_data: RawData) -> None:
@@ -49,10 +48,10 @@ class Orderbook(BaseModel):
             if key in ORDERBOOK_MAPPING
         }
 
-        mapped_book["bids"] = TypeAdapter(List[OrderbookQuote]).validate_python(
+        mapped_book["bids"] = TypeAdapter(list[OrderbookQuote]).validate_python(
             mapped_book["bids"]
         )
-        mapped_book["asks"] = TypeAdapter(List[OrderbookQuote]).validate_python(
+        mapped_book["asks"] = TypeAdapter(list[OrderbookQuote]).validate_python(
             mapped_book["asks"]
         )
 

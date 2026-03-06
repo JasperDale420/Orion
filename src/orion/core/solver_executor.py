@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from orion.core.solver_schema import SolverConfig
 from orion.storage.models_gold import CandidateTrade
@@ -18,8 +18,8 @@ class SolverPipeline:
         pass
 
     async def execute(
-        self, solver: SolverConfig, candidate: CandidateTrade, feature_engine: Optional[Any] = None
-    ) -> Tuple[float, float, Dict[str, Any]]:
+        self, solver: SolverConfig, candidate: CandidateTrade, feature_engine: Any | None = None
+    ) -> tuple[float, float, dict[str, Any]]:
         """
         Runs the solver pipeline.
 

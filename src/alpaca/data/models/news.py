@@ -1,9 +1,8 @@
 from datetime import datetime
-from typing import List, Optional
 
 from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.common.types import RawData
-from alpaca.data import NewsImageSize
+from alpaca.data.enums import NewsImageSize
 from alpaca.data.models.base import BaseDataSet, TimeSeriesMixin
 
 
@@ -41,14 +40,14 @@ class News(BaseModel):
     id: int
     headline: str
     source: str
-    url: Optional[str]
+    url: str | None
     summary: str
     created_at: datetime
     updated_at: datetime
-    symbols: List[str]
+    symbols: list[str]
     author: str
     content: str
-    images: Optional[List[NewsImage]] = None  # only in historical
+    images: list[NewsImage] | None = None  # only in historical
 
     def __init__(self, raw_data: RawData) -> None:
         """Instantiates a news article
@@ -69,7 +68,7 @@ class NewsSet(BaseDataSet, TimeSeriesMixin):
         next_page_token (Optional[str]): The token to get the next page of data.
     """
 
-    next_page_token: Optional[str]
+    next_page_token: str | None
 
     def __init__(self, raw_data: RawData) -> None:
         """A collection of News articles.

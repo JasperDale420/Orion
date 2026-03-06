@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -31,23 +31,23 @@ class EtfInfoData:
         stock_vol (Union[Unset, int]): The volume of the ticker for the Trading Day. Example: 23132119.
     """
 
-    aum: Union[Unset, str] = UNSET
-    avg30_volume: Union[Unset, str] = UNSET
-    call_vol: Union[Unset, int] = UNSET
-    description: Union[Unset, str] = UNSET
-    domicile: Union[Unset, str] = UNSET
-    etf_company: Union[Unset, str] = UNSET
-    expense_ratio: Union[Unset, str] = UNSET
-    has_options: Union[Unset, bool] = UNSET
-    holdings_count: Union[Unset, int] = UNSET
-    inception_date: Union[Unset, str] = UNSET
-    name: Union[Unset, str] = UNSET
-    opt_vol: Union[Unset, int] = UNSET
-    put_vol: Union[Unset, int] = UNSET
-    stock_vol: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    aum: Unset | str = UNSET
+    avg30_volume: Unset | str = UNSET
+    call_vol: Unset | int = UNSET
+    description: Unset | str = UNSET
+    domicile: Unset | str = UNSET
+    etf_company: Unset | str = UNSET
+    expense_ratio: Unset | str = UNSET
+    has_options: Unset | bool = UNSET
+    holdings_count: Unset | int = UNSET
+    inception_date: Unset | str = UNSET
+    name: Unset | str = UNSET
+    opt_vol: Unset | int = UNSET
+    put_vol: Unset | int = UNSET
+    stock_vol: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         aum = self.aum
 
         avg30_volume = self.avg30_volume
@@ -76,7 +76,7 @@ class EtfInfoData:
 
         stock_vol = self.stock_vol
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if aum is not UNSET:
@@ -111,7 +111,7 @@ class EtfInfoData:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         aum = d.pop("aum", UNSET)
 
@@ -162,7 +162,7 @@ class EtfInfoData:
         return etf_info_data
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

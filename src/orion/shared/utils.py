@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import dateutil.parser
 
@@ -12,7 +12,7 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
     Supports ISO strings, int/float timestamps (seconds or ms).
     Defaults to current UTC time if input is None or parsing fails.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if ts_input is None:
         return now
@@ -23,21 +23,21 @@ def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = Fals
             # Heuristic: if > 3bb, it's probably milliseconds
             if ts_input > 3000000000:
                 ts_input = ts_input / 1000.0
-            return datetime.fromtimestamp(ts_input, tz=timezone.utc)
+            return datetime.fromtimestamp(ts_input, tz=UTC)
 
         # If string, try ISO parsing
         if isinstance(ts_input, str):
             try:
                 # Optimized path for ISO format
-                dt = datetime.fromisoformat(ts_input.replace('Z', '+00:00'))
+                dt = datetime.fromisoformat(ts_input.replace("Z", "+00:00"))
             except ValueError:
                 # Fallback to slower, more flexible parser
                 dt = dateutil.parser.parse(ts_input)
 
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             else:
-                dt = dt.astimezone(timezone.utc)
+                dt = dt.astimezone(UTC)
             return dt
 
     except Exception as e:
@@ -61,8 +61,8 @@ def ensure_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def parse_occ_symbol(symbol: str | None) -> dict[str, str | float | None]:

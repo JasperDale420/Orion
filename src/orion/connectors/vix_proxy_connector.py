@@ -7,8 +7,8 @@ VIXY closely tracks short-term VIX futures, allowing us to derive a VIX proxy.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -38,7 +38,7 @@ class VIXProxyConnector:
     """Computes VIX proxy from VIXY bars sourced from Heber."""
 
     def __init__(self) -> None:
-        self._latest_vix_snapshot: Optional[Dict[str, Any]] = None
+        self._latest_vix_snapshot: dict[str, Any] | None = None
 
     async def fetch_and_store(self) -> int:
         """Fetch recent VIXY bars and compute VIX proxy metrics."""
@@ -86,9 +86,9 @@ class VIXProxyConnector:
 
         return stored
 
-    async def _get_vixy_bars(self) -> list[Dict[str, Any]]:
+    async def _get_vixy_bars(self) -> list[dict[str, Any]]:
         """Get recent VIXY daily closes from Heber minute bars."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         start = now - timedelta(days=60)
         try:
             bars_df = await asyncio.to_thread(
@@ -132,11 +132,11 @@ class VIXProxyConnector:
             for _, row in temp.iterrows()
         ]
 
-    async def _persist(self, record: Dict[str, Any]) -> None:
+    async def _persist(self, record: dict[str, Any]) -> None:
         """Persist the latest computed VIX proxy snapshot in process memory."""
         self._latest_vix_snapshot = dict(record)
 
-    async def get_current_vix(self) -> Optional[Dict[str, Any]]:
+    async def get_current_vix(self) -> dict[str, Any] | None:
         """Get the most recent VIX proxy value."""
         if self._latest_vix_snapshot is None:
             return None

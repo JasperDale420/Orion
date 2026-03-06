@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -51,29 +51,29 @@ class Greeks:
         ticker (Union[Unset, str]): The stock ticker. Example: AAPL.
     """
 
-    call_charm: Union[Unset, str] = UNSET
-    call_delta: Union[Unset, str] = UNSET
-    call_gamma: Union[Unset, str] = UNSET
-    call_iv: Union[Unset, str] = UNSET
-    call_rho: Union[Unset, str] = UNSET
-    call_theta: Union[Unset, str] = UNSET
-    call_vanna: Union[Unset, str] = UNSET
-    call_vega: Union[Unset, str] = UNSET
-    date: Union[Unset, str] = UNSET
-    expiry: Union[Unset, str] = UNSET
-    put_charm: Union[Unset, str] = UNSET
-    put_delta: Union[Unset, str] = UNSET
-    put_gamma: Union[Unset, str] = UNSET
-    put_iv: Union[Unset, str] = UNSET
-    put_rho: Union[Unset, str] = UNSET
-    put_theta: Union[Unset, str] = UNSET
-    put_vanna: Union[Unset, str] = UNSET
-    put_vega: Union[Unset, str] = UNSET
-    strike: Union[Unset, str] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    call_charm: Unset | str = UNSET
+    call_delta: Unset | str = UNSET
+    call_gamma: Unset | str = UNSET
+    call_iv: Unset | str = UNSET
+    call_rho: Unset | str = UNSET
+    call_theta: Unset | str = UNSET
+    call_vanna: Unset | str = UNSET
+    call_vega: Unset | str = UNSET
+    date: Unset | str = UNSET
+    expiry: Unset | str = UNSET
+    put_charm: Unset | str = UNSET
+    put_delta: Unset | str = UNSET
+    put_gamma: Unset | str = UNSET
+    put_iv: Unset | str = UNSET
+    put_rho: Unset | str = UNSET
+    put_theta: Unset | str = UNSET
+    put_vanna: Unset | str = UNSET
+    put_vega: Unset | str = UNSET
+    strike: Unset | str = UNSET
+    ticker: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         call_charm = self.call_charm
 
         call_delta = self.call_delta
@@ -114,7 +114,7 @@ class Greeks:
 
         ticker = self.ticker
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if call_charm is not UNSET:
@@ -161,7 +161,7 @@ class Greeks:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         call_charm = d.pop("call_charm", UNSET)
 
@@ -230,7 +230,7 @@ class Greeks:
         return greeks
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

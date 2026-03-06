@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -49,7 +49,7 @@ class IndexerService:
             if isinstance(ts, datetime):
                 ts = ensure_utc(ts)
             else:
-                ts = datetime.now(timezone.utc)
+                ts = datetime.now(UTC)
             td, sess = derive_trading_date_and_session(ts)
             text_rep = (
                 f"Candidate Trade: {c.direction} on {c.ticker} at {c.timestamp_utc}.\n"
@@ -133,7 +133,7 @@ class IndexerService:
             if isinstance(ts, datetime):
                 ts = ensure_utc(ts)
             else:
-                ts = datetime.now(timezone.utc)
+                ts = datetime.now(UTC)
             td, sess = derive_trading_date_and_session(ts)
             text_rep = (
                 f"Trade Decision: {d.decision} on {d.ticker} by Solver {d.strategy_version_id}.\n"

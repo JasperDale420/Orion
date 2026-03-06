@@ -1,7 +1,7 @@
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import yaml
 
@@ -19,7 +19,7 @@ class ProposalBuilder:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
-    def _validate_proposal(self, proposal: Dict[str, Any]) -> tuple[bool, list[str]]:
+    def _validate_proposal(self, proposal: dict[str, Any]) -> tuple[bool, list[str]]:
         """
         PRD §13.4: proposals must be auditable and include evidence pointers + test plan.
         We fail-closed: invalid proposals are not saved.
@@ -51,13 +51,13 @@ class ProposalBuilder:
 
     def save_proposal(
         self,
-        proposal: Dict[str, Any],
+        proposal: dict[str, Any],
         date_str: str,
         run_id: str,
         *,
-        input_snapshot_path: Optional[str] = None,
-        report_path: Optional[str] = None,
-    ) -> Optional[str]:
+        input_snapshot_path: str | None = None,
+        report_path: str | None = None,
+    ) -> str | None:
         """
         Saves a single proposal to disk.
         Returns the file path.
@@ -79,7 +79,7 @@ class ProposalBuilder:
             target = proposal.get("target") or proposal.get("target_solver_id") or "general"
 
             # Construct filename: YYYY-MM-DD_type_target_hash.yaml
-            timestamp = datetime.now(timezone.utc).strftime("%H%M%S")
+            timestamp = datetime.now(UTC).strftime("%H%M%S")
             filename = f"{date_str}_{timestamp}_{p_type}_{target}.yaml"
             # Sanitize filename
             filename = "".join(c for c in filename if c.isalnum() or c in ("_", "-", ".")).strip()
@@ -90,7 +90,7 @@ class ProposalBuilder:
             artifact = {
                 "meta": {
                     "run_id": run_id,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.now(UTC).isoformat(),
                     "agent": "EODReviewAgent",
                     "status": "PROPOSED",  # Needs human/gate approval
                     "input_snapshot_path": input_snapshot_path,

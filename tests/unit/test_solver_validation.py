@@ -1,6 +1,7 @@
 import pytest
-from orion.core.solver_schema import SolverFeatures, SolverRiskConfig
 from pydantic import ValidationError
+
+from orion.core.solver_schema import SolverFeatures, SolverRiskConfig
 
 
 def test_risk_validation_limits():

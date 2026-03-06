@@ -1,5 +1,6 @@
 """Earnings calendar table model."""
-from datetime import datetime, timezone
+
+from datetime import UTC, datetime
 
 from sqlalchemy import BigInteger, Column, Date, DateTime, Float, Index, String
 
@@ -28,8 +29,10 @@ class SilverEarningsCalendar(Base):
     revenue_actual = Column(BigInteger, nullable=True)
 
     # Metadata
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at_utc = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
 
     __table_args__ = (
         Index("idx_earnings_date", "report_date"),

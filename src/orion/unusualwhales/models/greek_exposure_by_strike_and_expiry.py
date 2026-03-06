@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -49,19 +49,19 @@ class GreekExposureByStrikeAndExpiry:
         strike (Union[Unset, str]): The strike price of an option contract. Example: 150.0.
     """
 
-    call_charm: Union[Unset, str] = UNSET
-    call_delta: Union[Unset, str] = UNSET
-    call_gamma: Union[Unset, str] = UNSET
-    call_vanna: Union[Unset, str] = UNSET
-    expiry: Union[Unset, str] = UNSET
-    put_charm: Union[Unset, str] = UNSET
-    put_delta: Union[Unset, str] = UNSET
-    put_gamma: Union[Unset, str] = UNSET
-    put_vanna: Union[Unset, str] = UNSET
-    strike: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    call_charm: Unset | str = UNSET
+    call_delta: Unset | str = UNSET
+    call_gamma: Unset | str = UNSET
+    call_vanna: Unset | str = UNSET
+    expiry: Unset | str = UNSET
+    put_charm: Unset | str = UNSET
+    put_delta: Unset | str = UNSET
+    put_gamma: Unset | str = UNSET
+    put_vanna: Unset | str = UNSET
+    strike: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         call_charm = self.call_charm
 
         call_delta = self.call_delta
@@ -82,7 +82,7 @@ class GreekExposureByStrikeAndExpiry:
 
         strike = self.strike
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if call_charm is not UNSET:
@@ -109,7 +109,7 @@ class GreekExposureByStrikeAndExpiry:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         call_charm = d.pop("call_charm", UNSET)
 
@@ -148,7 +148,7 @@ class GreekExposureByStrikeAndExpiry:
         return greek_exposure_by_strike_and_expiry
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

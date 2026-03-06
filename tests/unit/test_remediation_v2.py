@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import joblib
 import pandas as pd
 import pytest
+
 from orion.config import system_settings
 from orion.core.model_registry import ModelRegistry
 from orion.core.solver_executor import SolverPipeline
@@ -17,7 +18,7 @@ DUMMY_MODEL_PATH = "/tmp/dummy_model.joblib"
 
 
 class DummyModel:
-    def predict_proba(self, X):
+    def predict_proba(self, X):  # noqa: N803
         # Return [ [0.4, 0.6] ] -> 0.6 prob trade
         return [[0.4, 0.6]]
 

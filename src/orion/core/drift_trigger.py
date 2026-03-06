@@ -7,8 +7,8 @@ to the pattern miner, triggering immediate model retraining.
 
 import json
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from orion.shared.logger import setup_struct_logger
 
@@ -21,7 +21,7 @@ DRIFT_THRESHOLD = 0.25
 DRIFT_FLAG_PATH = os.path.join(os.environ.get("ORION_ARTIFACTS_DIR", "artifacts"), ".drift_trigger")
 
 
-def set_drift_flag(psi_values: Dict[str, float], source: str = "eod_agent") -> bool:
+def set_drift_flag(psi_values: dict[str, float], source: str = "eod_agent") -> bool:
     """
     Write drift trigger flag when high drift is detected.
 
@@ -41,7 +41,7 @@ def set_drift_flag(psi_values: Dict[str, float], source: str = "eod_agent") -> b
     max_psi = max(high_drift_features.values())
 
     flag_data = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "source": source,
         "max_psi": max_psi,
         "high_drift_features": high_drift_features,
@@ -70,7 +70,7 @@ def set_drift_flag(psi_values: Dict[str, float], source: str = "eod_agent") -> b
         return False
 
 
-def check_drift_flag() -> Optional[Dict[str, Any]]:
+def check_drift_flag() -> dict[str, Any] | None:
     """
     Check if drift trigger flag exists.
 
@@ -81,7 +81,7 @@ def check_drift_flag() -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        with open(DRIFT_FLAG_PATH, "r") as f:
+        with open(DRIFT_FLAG_PATH) as f:
             return json.load(f)
     except Exception as e:
         logger.warning(f"Failed to read drift flag: {e}")
@@ -107,7 +107,7 @@ def clear_drift_flag() -> bool:
         return False
 
 
-def check_and_clear_drift_flag() -> Optional[Dict[str, Any]]:
+def check_and_clear_drift_flag() -> dict[str, Any] | None:
     """
     Check for drift flag and clear it if found.
 

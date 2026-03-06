@@ -5,6 +5,7 @@ Tests the flow event scoring logic including heuristic baseline.
 """
 
 import pytest
+
 from orion.ml.scorer import MLScorer, get_scorer
 
 

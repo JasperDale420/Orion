@@ -1,7 +1,7 @@
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -11,6 +11,7 @@ except ImportError:
     ta = None
 
 import dateutil.parser
+
 from orion.clients.heber_reader import get_heber_reader
 from orion.shared.db_utils import db_write
 from orion.shared.utils import parse_timestamptz
@@ -36,10 +37,10 @@ class FeatureEngine:
         # For this V1 Slice, we will implement the mechanism to 'append' new bars
         # to a small in-memory history buffer per ticker to allow computing rolling metrics.
 
-        self.history: Dict[str, pd.DataFrame] = {}  # ticker -> DataFrame(OHLCV)
+        self.history: dict[str, pd.DataFrame] = {}  # ticker -> DataFrame(OHLCV)
         self.max_history_len = 100  # Keep last 100 bars for calculation context
 
-        self.flow_history: Dict[str, List[Dict[str, Any]]] = {}
+        self.flow_history: dict[str, list[dict[str, Any]]] = {}
         self.flow_max_age_seconds = 900  # 15 minutes window
         self.flow_max_size_per_ticker = 500  # Max entries per ticker to prevent memory growth
         self._hydrated = False  # Track initialization state for cold-start detection
@@ -69,7 +70,7 @@ class FeatureEngine:
     async def _hydrate_single_ticker(self, ticker: str) -> None:
         try:
             reader = get_heber_reader()
-            asof_time = datetime.now(timezone.utc)
+            asof_time = datetime.now(UTC)
             start_time = asof_time - timedelta(days=5)
             frame = reader.read_bars(
                 symbols=[ticker],
@@ -146,14 +147,15 @@ class FeatureEngine:
         return ticker or None
 
     async def persist_features(
-        self, ticker: str, ts: datetime, features: Dict[str, float], feature_set_id: str = "v1_legacy"
+        self, ticker: str, ts: datetime, features: dict[str, float], feature_set_id: str = "v1_legacy"
     ) -> None:
         """
         Writes computed features to the GoldFeatureEvent table.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from orion.storage.models_gold import GoldFeatureEvent
         from sqlalchemy.dialects.postgresql import insert
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         # Ensure ID/PK uniqueness
         if not ticker or not ts:
@@ -176,13 +178,14 @@ class FeatureEngine:
         except Exception as e:
             logger.error(f"Failed to persist features for {ticker} at {ts}: {e}")
 
-    async def persist_signal_batch(self, signals: List[SilverSignal], feature_set_id: str = "v1_legacy") -> None:
+    async def persist_signal_batch(self, signals: list[SilverSignal], feature_set_id: str = "v1_legacy") -> None:
         """
         Batch write features to Gold store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from orion.storage.models_gold import GoldFeatureEvent
         from sqlalchemy.dialects.postgresql import insert
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         if not signals:
             return
@@ -225,13 +228,14 @@ class FeatureEngine:
 
     async def fetch_signal_batch(
         self, ticker: str, start_ts: datetime, end_ts: datetime, feature_set_id: str = "v1_legacy"
-    ) -> List[SilverSignal]:
+    ) -> list[SilverSignal]:
         """
         Hydrates SilverSignals from Gold Feature store.
         """
         # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-        from orion.storage.models_gold import GoldFeatureEvent
         from sqlalchemy import and_, select
+
+        from orion.storage.models_gold import GoldFeatureEvent
 
         signals = []
         try:
@@ -273,7 +277,7 @@ class FeatureEngine:
 
         return signals
 
-    def process_uw_flow(self, events: List[BronzeEvent]) -> None:
+    def process_uw_flow(self, events: list[BronzeEvent]) -> None:
         """
         Updates in-memory flow state from UW events.
         """
@@ -302,7 +306,7 @@ class FeatureEngine:
             if len(self.flow_history[ticker]) > self.flow_max_size_per_ticker:
                 self.flow_history[ticker] = self.flow_history[ticker][-self.flow_max_size_per_ticker :]
 
-    def process_uw_flow_events(self, events: List[BronzeEvent]) -> List[SilverSignal]:
+    def process_uw_flow_events(self, events: list[BronzeEvent]) -> list[SilverSignal]:
         """
         Pass-through wrapper to treat significant Flow events as Signals themselves.
         """
@@ -327,7 +331,7 @@ class FeatureEngine:
             signals.append(sig)
         return signals
 
-    def _extract_flow_features(self, event: BronzeEvent) -> Optional[Dict[str, Any]]:
+    def _extract_flow_features(self, event: BronzeEvent) -> dict[str, Any] | None:
         p = event.payload
         features = p.copy()
         features["event_id"] = event.event_id
@@ -368,19 +372,19 @@ class FeatureEngine:
 
         return features
 
-    def _calc_dte(self, features: Dict[str, Any], current_ts: datetime) -> None:
+    def _calc_dte(self, features: dict[str, Any], current_ts: datetime) -> None:
         expiry_raw = features.get("expiry")
         if not expiry_raw:
             return
         try:
             exp_dt = dateutil.parser.parse(str(expiry_raw))
             exp_date = exp_dt.date()
-            flow_dt = current_ts.astimezone(timezone.utc)
+            flow_dt = current_ts.astimezone(UTC)
             features["dte"] = max(0, (exp_date - flow_dt.date()).days)
         except Exception:
             pass
 
-    def _compute_flow_features(self, ticker: str, ref_ts: datetime) -> Dict[str, float]:
+    def _compute_flow_features(self, ticker: str, ref_ts: datetime) -> dict[str, float]:
         """
         Computes rolling flow metrics for a ticker relative to ref_ts.
         """
@@ -403,7 +407,7 @@ class FeatureEngine:
             "flow_count_15m": len(valid_events),
         }
 
-    def process_alpaca_bars(self, events: List[BronzeEvent]) -> List[SilverSignal]:
+    def process_alpaca_bars(self, events: list[BronzeEvent]) -> list[SilverSignal]:
         """
         Takes ALPACA_BAR_1M events, updates history, calcs features, returns SilverSignals at 1m resolution.
         """
@@ -432,7 +436,7 @@ class FeatureEngine:
 
         return signals
 
-    def _group_events_by_ticker(self, events: List[BronzeEvent]) -> Dict[str, List[BronzeEvent]]:
+    def _group_events_by_ticker(self, events: list[BronzeEvent]) -> dict[str, list[BronzeEvent]]:
         events_by_ticker = {}
         for e in events:
             if e.event_type != "ALPACA_BAR_1M":
@@ -449,7 +453,7 @@ class FeatureEngine:
             events_by_ticker[ticker].append(e)
         return events_by_ticker
 
-    def _convert_events_to_df(self, events: List[BronzeEvent]) -> pd.DataFrame:
+    def _convert_events_to_df(self, events: list[BronzeEvent]) -> pd.DataFrame:
         data = []
         for e in events:
             row = self._parse_event_to_row(e)
@@ -463,7 +467,7 @@ class FeatureEngine:
         df.set_index("ts", inplace=True)
         return df
 
-    def _parse_event_to_row(self, e: BronzeEvent) -> Optional[Dict[str, Any]]:
+    def _parse_event_to_row(self, e: BronzeEvent) -> dict[str, Any] | None:
         p = e.payload or {}
         raw_ts = p.get("bar_start_ts_utc") or p.get("t") or p.get("timestamp") or e.event_ts_utc
 
@@ -510,7 +514,7 @@ class FeatureEngine:
         except Exception as e:
             logger.error(f"Indicator calculation failed for {ticker}: {e}")
 
-    def _generate_signals_for_new_data(self, ticker: str, new_timestamps: Any) -> List[SilverSignal]:
+    def _generate_signals_for_new_data(self, ticker: str, new_timestamps: Any) -> list[SilverSignal]:
         signals = []
         df = self.history[ticker]
         new_ts_set = set(new_timestamps)
@@ -542,7 +546,7 @@ class FeatureEngine:
         try:
             ts_pydt = ts.to_pydatetime()
             if ts_pydt.tzinfo is None:
-                ts_pydt = ts_pydt.replace(tzinfo=timezone.utc)
+                ts_pydt = ts_pydt.replace(tzinfo=UTC)
             return ts_pydt
         except Exception:
             return ts
@@ -551,7 +555,7 @@ class FeatureEngine:
         raw = f"{ticker}_{ts.isoformat()}_{sig_type}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    async def compute(self, candidate: Any, context: Any = None, feature_set_id: str = "v1_legacy") -> Dict[str, float]:
+    async def compute(self, candidate: Any, context: Any = None, feature_set_id: str = "v1_legacy") -> dict[str, float]:
         """
         Computes features for a single candidate event on demand.
         Required by SolverPipeline (VS3).
@@ -605,7 +609,7 @@ class FeatureEngine:
 
         return features
 
-    def _extract_price_features(self, ticker: str, ts: datetime) -> Dict[str, float]:
+    def _extract_price_features(self, ticker: str, ts: datetime) -> dict[str, float]:
         features = {}
         if ticker in self.history:
             df = self.history[ticker]

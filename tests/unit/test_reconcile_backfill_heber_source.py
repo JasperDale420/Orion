@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -22,7 +22,7 @@ async def test_run_reconciliation_prefers_heber_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("ORION_RECONCILE_BACKFILL_PREFER_HEBER", raising=False)
-    current_date = datetime.now(timezone.utc).date().isoformat()
+    current_date = datetime.now(UTC).date().isoformat()
 
     mock_session = AsyncMock()
     mock_session_factory.return_value.__aenter__.return_value = mock_session
@@ -34,7 +34,7 @@ async def test_run_reconciliation_prefers_heber_counts(
         bronze_results.append(res)
     mock_session.execute.side_effect = bronze_results
 
-    ts_values = [datetime.now(timezone.utc), datetime.now(timezone.utc)]
+    ts_values = [datetime.now(UTC), datetime.now(UTC)]
     fake_reader = MagicMock()
     fake_reader.read_bars.return_value = pd.DataFrame({"symbol": ["AAPL", "AAPL"], "bar_start_ts": ts_values})
     fake_reader.read_flow.return_value = pd.DataFrame({"ticker": ["AAPL", "AAPL"], "ts_event": ts_values})
@@ -55,7 +55,7 @@ async def test_run_reconciliation_does_not_fall_back_to_local_sql(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("ORION_RECONCILE_BACKFILL_PREFER_HEBER", raising=False)
-    current_date = datetime.now(timezone.utc).date().isoformat()
+    current_date = datetime.now(UTC).date().isoformat()
 
     mock_session = AsyncMock()
     mock_session_factory.return_value.__aenter__.return_value = mock_session

@@ -7,14 +7,14 @@ Caches results in silver_ticker_info to avoid repeated API calls.
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
+from orion.shared.db_utils import db_query, db_write
 from sqlalchemy import text
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.config import system_settings
-from orion.shared.db_utils import db_query, db_write
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +22,14 @@ logger = logging.getLogger(__name__)
 class UWTickerInfoConnector:
     """Fetches and caches ticker info via Data Gateway."""
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         self.gateway_url = gateway_url or system_settings.data_gateway_url
         self.gateway_key = gateway_key or system_settings.data_gateway_api_key
         self.headers = {"X-Gateway-Key": self.gateway_key} if self.gateway_key else {}
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _fetch_ticker_info(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def _fetch_ticker_info(self, ticker: str) -> dict[str, Any] | None:
         """Fetch ticker info via Data Gateway."""
         url = f"{self.gateway_url}/api/v1/uw/stock/{ticker}/info"
         try:
@@ -40,7 +40,7 @@ class UWTickerInfoConnector:
             logger.warning(f"Failed to fetch ticker info for {ticker}: {e}")
             return None
 
-    async def get_ticker_info(self, ticker: str) -> Optional[Dict[str, Any]]:
+    async def get_ticker_info(self, ticker: str) -> dict[str, Any] | None:
         """Get ticker info from cache, database, or API (in that order)."""
         if ticker in self._cache:
             return self._cache[ticker]
@@ -57,10 +57,10 @@ class UWTickerInfoConnector:
 
         return None
 
-    async def _get_from_db(self, ticker: str) -> Optional[Dict[str, Any]]:
+    async def _get_from_db(self, ticker: str) -> dict[str, Any] | None:
         """Check if ticker info exists in database."""
 
-        async def query(session: Any) -> Optional[Dict[str, Any]]:
+        async def query(session: Any) -> dict[str, Any] | None:
             stmt = text(
                 """
                 SELECT ticker, company_name, sector, industry, market_cap, exchange
@@ -82,7 +82,7 @@ class UWTickerInfoConnector:
 
         return await db_query(query)
 
-    async def _fetch_and_store(self, ticker: str) -> Optional[Dict[str, Any]]:
+    async def _fetch_and_store(self, ticker: str) -> dict[str, Any] | None:
         """Fetch from API and store in database."""
         data = await asyncio.to_thread(self._fetch_ticker_info, ticker)
         if not data or "data" not in data:
@@ -101,7 +101,7 @@ class UWTickerInfoConnector:
         await self._persist(record)
         return record
 
-    async def _persist(self, record: Dict[str, Any]) -> None:
+    async def _persist(self, record: dict[str, Any]) -> None:
         """Persist ticker info to database."""
 
         async def write(session: Any) -> None:

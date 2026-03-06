@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from typing import Optional
 
 from orion.shared.patterns import AsyncSingleton
 
@@ -32,11 +31,11 @@ class CandidateQueue(AsyncSingleton):
                     extra={"event_type": "QUEUE_FULL", "dropped_total": self.dropped_count},
                 )
 
-    async def pop(self, timeout: float = 0.1) -> Optional[str]:
+    async def pop(self, timeout: float = 0.1) -> str | None:
         """Pop a candidate ID from the queue. Returns None if timeout."""
         try:
             return await asyncio.wait_for(self.queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     def qsize(self) -> int:

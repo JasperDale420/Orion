@@ -79,7 +79,7 @@ async def test_build_bucket_training_data_unknown_bucket_short_circuits_without_
 
     monkeypatch.setattr(exit_classifier, "db_query", _fail_db_query, raising=False)
 
-    X, y, feature_names = await exit_classifier.build_bucket_training_data("NOT_A_BUCKET")
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("NOT_A_BUCKET")  # noqa: N806
 
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
@@ -104,7 +104,7 @@ async def test_build_bucket_training_data_returns_empty_when_legacy_training_dis
 
     monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
 
-    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")  # noqa: N806
 
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
@@ -160,7 +160,7 @@ async def test_build_bucket_training_data_heber_source_uses_gold_datasets_withou
     monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
     monkeypatch.setattr(exit_classifier, "get_heber_reader", lambda: _FakeReader(), raising=False)
 
-    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")  # noqa: N806
 
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
@@ -218,7 +218,7 @@ async def test_build_bucket_training_data_legacy_source_still_uses_heber_without
     monkeypatch.setattr(exit_classifier, "db_query", _db_query, raising=False)
     monkeypatch.setattr(exit_classifier, "get_heber_reader", lambda: _FakeReader(), raising=False)
 
-    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")  # noqa: N806
 
     assert isinstance(X, np.ndarray)
     assert isinstance(y, np.ndarray)
@@ -309,7 +309,7 @@ async def test_build_bucket_training_data_ignores_no_snapshot_outcomes(
 
     monkeypatch.setattr(exit_classifier, "get_heber_reader", lambda: _FakeReader(), raising=False)
 
-    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")
+    X, y, feature_names = await exit_classifier.build_bucket_training_data("0DTE")  # noqa: N806
 
     assert X.shape == (2, len(feature_names))
     assert y.shape == (2,)

@@ -5,6 +5,7 @@ Tests exit prediction logic and training data builder.
 """
 
 import pytest
+
 from orion.ml.exit_classifier import (
     ExitClassifier,
     ExitFeatures,

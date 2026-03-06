@@ -1,24 +1,24 @@
-import time
 import base64
+import time
 from abc import ABC
-from typing import Any, List, Optional, Type, Union, Tuple, Iterator
+from collections.abc import Iterator
+from itertools import chain
 
 from pydantic import BaseModel
 from requests import Session
 from requests.exceptions import HTTPError
-from itertools import chain
-
-from alpaca.common.constants import (
-    DEFAULT_RETRY_ATTEMPTS,
-    DEFAULT_RETRY_WAIT_SECONDS,
-    DEFAULT_RETRY_EXCEPTION_CODES,
-)
 
 from alpaca import __version__
+from alpaca.common.constants import (
+    DEFAULT_RETRY_ATTEMPTS,
+    DEFAULT_RETRY_EXCEPTION_CODES,
+    DEFAULT_RETRY_WAIT_SECONDS,
+)
 from alpaca.common.exceptions import APIError, RetryException
-from alpaca.common.types import RawData, HTTPResult, Credentials
+from alpaca.common.types import Credentials, HTTPResult, RawData
+
 from .constants import PageItem
-from .enums import PaginationType, BaseURL
+from .enums import BaseURL, PaginationType
 
 
 class RESTClient(ABC):
@@ -26,17 +26,17 @@ class RESTClient(ABC):
 
     def __init__(
         self,
-        base_url: Union[BaseURL, str],
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        oauth_token: Optional[str] = None,
+        base_url: BaseURL | str,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        oauth_token: str | None = None,
         use_basic_auth: bool = False,
         api_version: str = "v2",
         sandbox: bool = False,
         raw_data: bool = False,
-        retry_attempts: Optional[int] = None,
-        retry_wait_seconds: Optional[int] = None,
-        retry_exception_codes: Optional[List[int]] = None,
+        retry_attempts: int | None = None,
+        retry_wait_seconds: int | None = None,
+        retry_exception_codes: list[int] | None = None,
     ) -> None:
         """Abstract base class for REST clients. Handles submitting HTTP requests to
         Alpaca API endpoints.
@@ -60,7 +60,7 @@ class RESTClient(ABC):
             api_key=api_key, secret_key=secret_key, oauth_token=oauth_token
         )
         self._api_version: str = api_version
-        self._base_url: Union[BaseURL, str] = base_url
+        self._base_url: BaseURL | str = base_url
         self._sandbox: bool = sandbox
         self._use_basic_auth: bool = use_basic_auth
         self._use_raw_data: bool = raw_data
@@ -69,7 +69,7 @@ class RESTClient(ABC):
         # setting up request retry configurations
         self._retry: int = DEFAULT_RETRY_ATTEMPTS
         self._retry_wait: int = DEFAULT_RETRY_WAIT_SECONDS
-        self._retry_codes: List[int] = DEFAULT_RETRY_EXCEPTION_CODES
+        self._retry_codes: list[int] = DEFAULT_RETRY_EXCEPTION_CODES
 
         if retry_attempts and retry_attempts > 0:
             self._retry = retry_attempts
@@ -84,9 +84,9 @@ class RESTClient(ABC):
         self,
         method: str,
         path: str,
-        data: Optional[Union[dict, str]] = None,
-        base_url: Optional[Union[BaseURL, str]] = None,
-        api_version: Optional[str] = None,
+        data: dict | str | None = None,
+        base_url: BaseURL | str | None = None,
+        api_version: str | None = None,
     ) -> HTTPResult:
         """Prepares and submits HTTP requests to given API endpoint and returns response.
         Handles retrying if 429 (Rate Limit) error arises.
@@ -160,9 +160,7 @@ class RESTClient(ABC):
         if self._oauth_token:
             headers["Authorization"] = "Bearer " + self._oauth_token
         elif self._use_basic_auth:
-            api_key_secret = "{key}:{secret}".format(
-                key=self._api_key, secret=self._secret_key
-            ).encode("utf-8")
+            api_key_secret = f"{self._api_key}:{self._secret_key}".encode()
             encoded_api_key_secret = base64.b64encode(api_key_secret).decode("utf-8")
             headers["Authorization"] = "Basic " + encoded_api_key_secret
         else:
@@ -208,7 +206,7 @@ class RESTClient(ABC):
             return response.json()
 
     def get(
-        self, path: str, data: Optional[Union[dict, str]] = None, **kwargs
+        self, path: str, data: dict | str | None = None, **kwargs
     ) -> HTTPResult:
         """Performs a single GET request
 
@@ -223,7 +221,7 @@ class RESTClient(ABC):
         return self._request("GET", path, data, **kwargs)
 
     def post(
-        self, path: str, data: Optional[Union[dict, List[dict]]] = None
+        self, path: str, data: dict | list[dict] | None = None
     ) -> HTTPResult:
         """Performs a single POST request
 
@@ -237,7 +235,7 @@ class RESTClient(ABC):
         """
         return self._request("POST", path, data)
 
-    def put(self, path: str, data: Optional[dict] = None) -> dict:
+    def put(self, path: str, data: dict | None = None) -> dict:
         """Performs a single PUT request
 
         Args:
@@ -250,7 +248,7 @@ class RESTClient(ABC):
         """
         return self._request("PUT", path, data)
 
-    def patch(self, path: str, data: Optional[dict] = None) -> dict:
+    def patch(self, path: str, data: dict | None = None) -> dict:
         """Performs a single PATCH request
 
         Args:
@@ -263,7 +261,7 @@ class RESTClient(ABC):
         """
         return self._request("PATCH", path, data)
 
-    def delete(self, path, data: Optional[Union[dict, str]] = None) -> dict:
+    def delete(self, path, data: dict | str | None = None) -> dict:
         """Performs a single DELETE request
 
         Args:
@@ -277,8 +275,8 @@ class RESTClient(ABC):
 
     # TODO: Refactor to be able to handle both parsing to types and parsing to collections of types (parse_as_obj)
     def response_wrapper(
-        self, model: Type[BaseModel], raw_data: RawData, **kwargs
-    ) -> Union[BaseModel, RawData]:
+        self, model: type[BaseModel], raw_data: RawData, **kwargs
+    ) -> BaseModel | RawData:
         """To allow the user to get raw response from the api, we wrap all
         functions with this method, checking if the user has set raw_data
         bool. if they didn't, we wrap the response with a BaseModel object.
@@ -298,7 +296,7 @@ class RESTClient(ABC):
 
     @staticmethod
     def _validate_pagination(
-        max_items_limit: Optional[int], handle_pagination: Optional[PaginationType]
+        max_items_limit: int | None, handle_pagination: PaginationType | None
     ) -> PaginationType:
         """
         Private method for validating the max_items_limit and handle_pagination arguments, returning the resolved
@@ -316,7 +314,7 @@ class RESTClient(ABC):
     @staticmethod
     def _return_paginated_result(
         iterator: Iterator[PageItem], handle_pagination: PaginationType
-    ) -> Union[List[PageItem], Iterator[List[PageItem]]]:
+    ) -> list[PageItem] | Iterator[list[PageItem]]:
         """
         Private method for converting an iterator that yields results to the proper pagination type result.
         """
@@ -333,9 +331,9 @@ class RESTClient(ABC):
 
     @staticmethod
     def _validate_credentials(
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        oauth_token: Optional[str] = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        oauth_token: str | None = None,
     ) -> Credentials:
         """Gathers API credentials from parameters and environment variables, and validates them.
         Args:

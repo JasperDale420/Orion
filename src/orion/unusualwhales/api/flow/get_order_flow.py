@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -14,13 +14,13 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     ticker: str,
     *,
-    side: Union[Unset, Side] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-) -> Dict[str, Any]:
+    side: Unset | Side = UNSET,
+    min_premium: Unset | int = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
-    json_side: Union[Unset, str] = UNSET
+    json_side: Unset | str = UNSET
     if not isinstance(side, Unset):
         json_side = side.value
 
@@ -30,7 +30,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/flow-recent",
         "params": params,
@@ -41,7 +41,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, FlowPerExpiryResults, str]]:
+) -> ErrorMessage | FlowPerExpiryResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -64,7 +64,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, FlowPerExpiryResults, str]]:
+) -> Response[ErrorMessage | FlowPerExpiryResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -77,9 +77,9 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    side: Union[Unset, Side] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, FlowPerExpiryResults, str]]:
+    side: Unset | Side = UNSET,
+    min_premium: Unset | int = UNSET,
+) -> Response[ErrorMessage | FlowPerExpiryResults | str]:
     """Option Order Flow By Date
 
      Returns the latest flows for the given ticker. Optionally a min premium and a side can be supplied
@@ -117,9 +117,9 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    side: Union[Unset, Side] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, FlowPerExpiryResults, str]]:
+    side: Unset | Side = UNSET,
+    min_premium: Unset | int = UNSET,
+) -> ErrorMessage | FlowPerExpiryResults | str | None:
     """Option Order Flow By Date
 
      Returns the latest flows for the given ticker. Optionally a min premium and a side can be supplied
@@ -152,9 +152,9 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    side: Union[Unset, Side] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, FlowPerExpiryResults, str]]:
+    side: Unset | Side = UNSET,
+    min_premium: Unset | int = UNSET,
+) -> Response[ErrorMessage | FlowPerExpiryResults | str]:
     """Option Order Flow By Date
 
      Returns the latest flows for the given ticker. Optionally a min premium and a side can be supplied
@@ -190,9 +190,9 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    side: Union[Unset, Side] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, FlowPerExpiryResults, str]]:
+    side: Unset | Side = UNSET,
+    min_premium: Unset | int = UNSET,
+) -> ErrorMessage | FlowPerExpiryResults | str | None:
     """Option Order Flow By Date
 
      Returns the latest flows for the given ticker. Optionally a min premium and a side can be supplied

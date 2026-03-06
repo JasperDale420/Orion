@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, Float, Index, Integer, String
 
@@ -25,7 +25,7 @@ class SilverSignal(Base):
     # Store all calculated features here (open, close, rsi, vwap, etc.)
     features = Column(JSON, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("ix_silver_ticker_time", "ticker", "signal_ts_utc"),)
 
@@ -57,6 +57,6 @@ class SilverUWAlert(Base):
     alert_tags = Column(JSON, nullable=True)
     ingest = Column(JSON, nullable=False, default=dict)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("ix_silver_alerts_ticker_time", "ticker", "alert_ts_utc"),)

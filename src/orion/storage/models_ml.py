@@ -4,7 +4,7 @@ ML Pattern Insights Database Models.
 Stores weekly ML insights for pattern mining.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String
 
@@ -19,7 +19,7 @@ class MLPatternInsight(Base):
     __tablename__ = "ml_pattern_insights"
 
     insight_id = Column(String, primary_key=True)
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     # Model identification
     model_type = Column(String, nullable=False, index=True)  # hit_target_50, avoid_stop
@@ -55,7 +55,7 @@ class MLFeatureImportanceHistory(Base):
     __tablename__ = "ml_feature_importance_history"
 
     id = Column(String, primary_key=True)
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     model_type = Column(String, nullable=False, index=True)
     feature_name = Column(String, nullable=False, index=True)
@@ -71,9 +71,7 @@ class MLPrediction(Base):
     __tablename__ = "ml_predictions"
 
     id = Column(String, primary_key=True)
-    prediction_ts = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
-    )
+    prediction_ts = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False, index=True)
 
     symbol = Column(String, nullable=False, index=True)
     option_chain = Column(String, nullable=True)

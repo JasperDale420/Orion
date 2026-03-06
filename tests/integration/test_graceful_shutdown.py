@@ -17,8 +17,8 @@ async def test_execution_shutdown():
     We mock the engines to avoid real startup.
     """
     with (
-        patch("orion.main_execution.SignalEngine") as MockSigEngine,
-        patch("orion.main_execution.ExecutionEngine") as MockExecEngine,
+        patch("orion.main_execution.SignalEngine") as MockSigEngine,  # noqa: N806
+        patch("orion.main_execution.ExecutionEngine") as MockExecEngine,  # noqa: N806
         patch("orion.main_execution.init_db", new_callable=MagicMock),
         patch("orion.main_execution.setup_struct_logger"),
     ):
@@ -90,7 +90,7 @@ async def test_execution_shutdown():
         try:
             await asyncio.wait_for(task, timeout=2.0)
             print("Execution main exited gracefully.")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail("Execution main did not exit on SIGTERM within timeout.")
         except Exception as e:
             # It might raise CancelledError or something?

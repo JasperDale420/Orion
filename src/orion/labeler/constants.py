@@ -5,7 +5,6 @@ Extracted from main_price_target_labeler.py for better modularity.
 """
 
 from datetime import timedelta
-from typing import Dict
 
 # -----------------------------------------------------------------------------
 # Labeling Configuration
@@ -18,7 +17,7 @@ RISK_FREE_RATE = 0.05  # Risk-free rate for Black-Scholes
 # Checkpoint definitions for price tracking
 # Maps checkpoint name to timedelta offset from entry
 # -----------------------------------------------------------------------------
-CHECKPOINT_OFFSETS: Dict[str, timedelta] = {
+CHECKPOINT_OFFSETS: dict[str, timedelta] = {
     "5m": timedelta(minutes=5),
     "10m": timedelta(minutes=10),
     "15m": timedelta(minutes=15),
@@ -40,7 +39,7 @@ CHECKPOINT_OFFSETS: Dict[str, timedelta] = {
 # Static sector mapping for reliable feature calculation
 # Avoids unreliable API calls for common tickers
 # -----------------------------------------------------------------------------
-SECTOR_MAPPING: Dict[str, str] = {
+SECTOR_MAPPING: dict[str, str] = {
     # Technology
     "AAPL": "Technology",
     "MSFT": "Technology",

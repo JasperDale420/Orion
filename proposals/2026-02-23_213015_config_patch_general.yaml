@@ -1,0 +1,25 @@
+meta:
+  run_id: 682e314f-3d4c-438c-8a02-3a0fad99c1e7
+  created_at: '2026-02-23T21:30:15.796620+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-23_682e314f-3d4c-438c-8a02-3a0fad99c1e7.json
+  report_path: artifacts/reports/eod_report_2026-02-23.md
+proposal:
+  type: config_patch
+  priority: 3
+  rationale: No trading activity occurred. While this could be due to market conditions,
+    we should ensure the signal generation pipeline is active and filters are not
+    overly restrictive. A minor adjustment to increase sensitivity for testing purposes
+    is low-risk.
+  evidence_pointers:
+    decisions_total: 0
+    signals_live_total: 0
+    trade_journal_total: 0
+    dlq_events_count: 0
+  test_plan:
+  - Monitor signal count for next 2 trading days
+  - Check logs for any silent filtering in decision layer
+  changes:
+    signal_generation.min_confidence_score: 0.45
+    monitoring.alert_on_zero_signals: true

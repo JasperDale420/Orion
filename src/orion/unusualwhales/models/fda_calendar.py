@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -36,17 +36,17 @@ class FdaCalendar:
         ticker (Union[Unset, str]): The ticker of the company applying for drug admission. Example: IOVA.
     """
 
-    catalyst: Union[Unset, str] = UNSET
-    description: Union[Unset, str] = UNSET
-    drug: Union[Unset, str] = UNSET
-    end_date: Union[Unset, str] = UNSET
-    indication: Union[Unset, str] = UNSET
-    start_date: Union[Unset, str] = UNSET
-    status: Union[Unset, str] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    catalyst: Unset | str = UNSET
+    description: Unset | str = UNSET
+    drug: Unset | str = UNSET
+    end_date: Unset | str = UNSET
+    indication: Unset | str = UNSET
+    start_date: Unset | str = UNSET
+    status: Unset | str = UNSET
+    ticker: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         catalyst = self.catalyst
 
         description = self.description
@@ -63,7 +63,7 @@ class FdaCalendar:
 
         ticker = self.ticker
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if catalyst is not UNSET:
@@ -86,7 +86,7 @@ class FdaCalendar:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         catalyst = d.pop("catalyst", UNSET)
 
@@ -119,7 +119,7 @@ class FdaCalendar:
         return fda_calendar
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

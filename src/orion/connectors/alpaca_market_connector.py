@@ -1,13 +1,13 @@
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
@@ -19,7 +19,7 @@ class AlpacaMarketConnector:
     Connects to Alpaca Market Data API to poll for 1-minute bars.
     """
 
-    def __init__(self, api_key: str, secret_key: str, base_url: Optional[str] = None, paper: bool = True):
+    def __init__(self, api_key: str, secret_key: str, base_url: str | None = None, paper: bool = True):
         self.api_key = api_key
         self.secret_key = secret_key
         self.paper = paper
@@ -38,8 +38,8 @@ class AlpacaMarketConnector:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def fetch_bars(
-        self, tickers: List[str], start_time: datetime, end_time: Optional[datetime] = None
-    ) -> List[BronzeEvent]:
+        self, tickers: list[str], start_time: datetime, end_time: datetime | None = None
+    ) -> list[BronzeEvent]:
         """
         Fetches bars for the given tickers and time range.
         Converts them to BronzeEvent objects.
@@ -79,7 +79,7 @@ class AlpacaMarketConnector:
             logger.error(f"Error fetching Alpaca bars: {e}")
             raise e
 
-    def _process_bar(self, ticker: str, bar: object) -> Optional[BronzeEvent]:
+    def _process_bar(self, ticker: str, bar: object) -> BronzeEvent | None:
         """Helper to process a single bar into a BronzeEvent."""
         try:
             # Inspecting client code: Bar is a pydantic model.
@@ -149,19 +149,19 @@ class AlpacaMarketConnector:
                 source="ALPACA",
                 event_type="ALPACA_BAR_1M",
                 event_ts_utc=event_ts,
-                received_ts_utc=datetime.now(timezone.utc),
+                received_ts_utc=datetime.now(UTC),
                 payload=payload,
             )
         except Exception as e:
             logger.warning(f"Failed to process bar for {ticker}: {e}")
             return None
 
-    def poll(self, tickers: List[str], default_lookback_minutes: int = 15) -> List[BronzeEvent]:
+    def poll(self, tickers: list[str], default_lookback_minutes: int = 15) -> list[BronzeEvent]:
         """
         Polls for new bars for the given tickers.
         Uses watermark to fetch only new data.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Determine start time: oldest watermark or default lookback
         # If we have multiple tickers, we might ideally fetch per ticker or

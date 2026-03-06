@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -12,16 +12,16 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    date: Union[Unset, str] = UNSET,
-) -> Dict[str, Any]:
+    date: Unset | str = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["date"] = date
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/earnings/premarket",
         "params": params,
@@ -32,7 +32,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[EarningsResults, ErrorMessage, str]]:
+) -> EarningsResults | ErrorMessage | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -55,7 +55,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[EarningsResults, ErrorMessage, str]]:
+) -> Response[EarningsResults | ErrorMessage | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -67,8 +67,8 @@ def _build_response(
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Response[Union[EarningsResults, ErrorMessage, str]]:
+    date: Unset | str = UNSET,
+) -> Response[EarningsResults | ErrorMessage | str]:
     """Next Premarket Earnings by Date
 
      Returns the next upcoming premarket earnings for the given date.
@@ -102,8 +102,8 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Optional[Union[EarningsResults, ErrorMessage, str]]:
+    date: Unset | str = UNSET,
+) -> EarningsResults | ErrorMessage | str | None:
     """Next Premarket Earnings by Date
 
      Returns the next upcoming premarket earnings for the given date.
@@ -132,8 +132,8 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Response[Union[EarningsResults, ErrorMessage, str]]:
+    date: Unset | str = UNSET,
+) -> Response[EarningsResults | ErrorMessage | str]:
     """Next Premarket Earnings by Date
 
      Returns the next upcoming premarket earnings for the given date.
@@ -165,8 +165,8 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Optional[Union[EarningsResults, ErrorMessage, str]]:
+    date: Unset | str = UNSET,
+) -> EarningsResults | ErrorMessage | str | None:
     """Next Premarket Earnings by Date
 
      Returns the next upcoming premarket earnings for the given date.

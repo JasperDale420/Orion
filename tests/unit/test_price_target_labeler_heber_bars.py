@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -9,7 +8,7 @@ import orion.main_price_target_labeler as labeler
 
 @pytest.mark.asyncio
 async def test_get_underlying_price_at_entry_prefers_heber_bar(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs):
@@ -35,7 +34,7 @@ async def test_get_underlying_price_at_entry_prefers_heber_bar(monkeypatch: pyte
 async def test_get_underlying_price_at_entry_returns_none_when_heber_has_no_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs):
@@ -54,7 +53,7 @@ async def test_get_underlying_price_at_entry_returns_none_when_heber_has_no_bar(
 
 @pytest.mark.asyncio
 async def test_get_underlying_price_at_offset_uses_heber_before_sql(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     target_ts = entry_ts + timedelta(hours=2)
 
     class _FakeHeberReader:
@@ -80,7 +79,7 @@ async def test_get_underlying_price_at_offset_uses_heber_before_sql(monkeypatch:
 async def test_get_underlying_price_at_offset_returns_none_when_heber_has_no_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs):

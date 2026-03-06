@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -39,7 +39,7 @@ async def test_silver_persistence_flow():
         ticker="AAPL",
         trading_date=datetime.now(),
         session="REG",
-        event_ts_utc=datetime.now(timezone.utc),
+        event_ts_utc=datetime.now(UTC),
         payload=norm_payload,
     )
 
@@ -98,7 +98,7 @@ async def test_silver_persistence_bar():
         ticker="TSLA",
         trading_date=datetime.now(),
         session="REG",
-        event_ts_utc=datetime.now(timezone.utc),
+        event_ts_utc=datetime.now(UTC),
         payload=norm_payload,
     )
 

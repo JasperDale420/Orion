@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -88,37 +88,37 @@ class OptionContractScreenerItem:
         volume (Union[Unset, int]): The contract volume. Example: 264899.
     """
 
-    ask_side_volume: Union[Unset, int] = UNSET
-    avg_price: Union[Unset, str] = UNSET
-    bid_side_volume: Union[Unset, int] = UNSET
-    chain_prev_close: Union[Unset, str] = UNSET
-    close: Union[Unset, str] = UNSET
-    cross_volume: Union[Unset, int] = UNSET
-    er_time: Union[Unset, StockEarningsTime] = UNSET
-    floor_volume: Union[Unset, int] = UNSET
-    high: Union[Unset, str] = UNSET
-    last_fill: Union[Unset, str] = UNSET
-    low: Union[Unset, str] = UNSET
-    mid_volume: Union[Unset, int] = UNSET
-    multileg_volume: Union[Unset, int] = UNSET
-    next_earnings_date: Union[Unset, datetime.date] = UNSET
-    no_side_volume: Union[Unset, int] = UNSET
-    open_: Union[Unset, str] = UNSET
-    open_interest: Union[Unset, int] = UNSET
-    option_symbol: Union[Unset, str] = UNSET
-    premium: Union[Unset, str] = UNSET
-    sector: Union[Unset, MarketGeneralSector] = UNSET
-    stock_multi_leg_volume: Union[Unset, int] = UNSET
-    stock_price: Union[Unset, str] = UNSET
-    sweep_volume: Union[Unset, int] = UNSET
-    ticker_vol: Union[Unset, int] = UNSET
-    total_ask_changes: Union[Unset, int] = UNSET
-    total_bid_changes: Union[Unset, int] = UNSET
-    trades: Union[Unset, int] = UNSET
-    volume: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    ask_side_volume: Unset | int = UNSET
+    avg_price: Unset | str = UNSET
+    bid_side_volume: Unset | int = UNSET
+    chain_prev_close: Unset | str = UNSET
+    close: Unset | str = UNSET
+    cross_volume: Unset | int = UNSET
+    er_time: Unset | StockEarningsTime = UNSET
+    floor_volume: Unset | int = UNSET
+    high: Unset | str = UNSET
+    last_fill: Unset | str = UNSET
+    low: Unset | str = UNSET
+    mid_volume: Unset | int = UNSET
+    multileg_volume: Unset | int = UNSET
+    next_earnings_date: Unset | datetime.date = UNSET
+    no_side_volume: Unset | int = UNSET
+    open_: Unset | str = UNSET
+    open_interest: Unset | int = UNSET
+    option_symbol: Unset | str = UNSET
+    premium: Unset | str = UNSET
+    sector: Unset | MarketGeneralSector = UNSET
+    stock_multi_leg_volume: Unset | int = UNSET
+    stock_price: Unset | str = UNSET
+    sweep_volume: Unset | int = UNSET
+    ticker_vol: Unset | int = UNSET
+    total_ask_changes: Unset | int = UNSET
+    total_bid_changes: Unset | int = UNSET
+    trades: Unset | int = UNSET
+    volume: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         ask_side_volume = self.ask_side_volume
 
         avg_price = self.avg_price
@@ -131,7 +131,7 @@ class OptionContractScreenerItem:
 
         cross_volume = self.cross_volume
 
-        er_time: Union[Unset, str] = UNSET
+        er_time: Unset | str = UNSET
         if not isinstance(self.er_time, Unset):
             er_time = self.er_time.value
 
@@ -147,7 +147,7 @@ class OptionContractScreenerItem:
 
         multileg_volume = self.multileg_volume
 
-        next_earnings_date: Union[Unset, str] = UNSET
+        next_earnings_date: Unset | str = UNSET
         if not isinstance(self.next_earnings_date, Unset):
             next_earnings_date = self.next_earnings_date.isoformat()
 
@@ -161,7 +161,7 @@ class OptionContractScreenerItem:
 
         premium = self.premium
 
-        sector: Union[Unset, str] = UNSET
+        sector: Unset | str = UNSET
         if not isinstance(self.sector, Unset):
             sector = self.sector.value
 
@@ -181,7 +181,7 @@ class OptionContractScreenerItem:
 
         volume = self.volume
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if ask_side_volume is not UNSET:
@@ -244,7 +244,7 @@ class OptionContractScreenerItem:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         ask_side_volume = d.pop("ask_side_volume", UNSET)
 
@@ -259,7 +259,7 @@ class OptionContractScreenerItem:
         cross_volume = d.pop("cross_volume", UNSET)
 
         _er_time = d.pop("er_time", UNSET)
-        er_time: Union[Unset, StockEarningsTime]
+        er_time: Unset | StockEarningsTime
         if isinstance(_er_time, Unset):
             er_time = UNSET
         else:
@@ -278,7 +278,7 @@ class OptionContractScreenerItem:
         multileg_volume = d.pop("multileg_volume", UNSET)
 
         _next_earnings_date = d.pop("next_earnings_date", UNSET)
-        next_earnings_date: Union[Unset, datetime.date]
+        next_earnings_date: Unset | datetime.date
         if isinstance(_next_earnings_date, Unset):
             next_earnings_date = UNSET
         else:
@@ -295,7 +295,7 @@ class OptionContractScreenerItem:
         premium = d.pop("premium", UNSET)
 
         _sector = d.pop("sector", UNSET)
-        sector: Union[Unset, MarketGeneralSector]
+        sector: Unset | MarketGeneralSector
         if isinstance(_sector, Unset):
             sector = UNSET
         else:
@@ -352,7 +352,7 @@ class OptionContractScreenerItem:
         return option_contract_screener_item
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

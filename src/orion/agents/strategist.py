@@ -1,10 +1,9 @@
 import json
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from orion.agents.base import BaseAgent
 from orion.agents.codex_client import (
-    build_chat_prompt,
     extract_json_from_response,
     run_codex_completion,
 )
@@ -26,7 +25,7 @@ class StrategistAgent(BaseAgent):
         super().__init__(name="Strategist", model=agent_settings.model_name)
         self.vector_store = VectorStore()
 
-    async def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(self, context: dict[str, Any]) -> dict[str, Any]:
         candidate: CandidateTrade = context.get("candidate")
         if not candidate:
             return {"error": "No candidate provided"}
@@ -58,16 +57,18 @@ class StrategistAgent(BaseAgent):
             f"Make your decision."
         )
 
-        # 3. Call Codex CLI
+        # 3. Call AI Gateway via codex_client
         try:
             from orion.config import agent_settings
 
-            full_prompt = build_chat_prompt(system_prompt, user_prompt)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
 
             response = await run_codex_completion(
-                prompt=full_prompt,
+                messages=messages,
                 model=agent_settings.model_name,
-                reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
             )
 
             return extract_json_from_response(response)

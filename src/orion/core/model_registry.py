@@ -1,7 +1,7 @@
 import logging
 import os
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
 
 import joblib
 
@@ -16,14 +16,14 @@ class ModelRegistry(AsyncSingleton):
     Supports local file paths (joblib/pickle).
     """
 
-    _cache: Dict[str, Any] = {}
+    _cache: dict[str, Any] = {}
     _cache_lock = threading.Lock()
 
     def __init__(self) -> None:
         super().__init__()
 
     @classmethod
-    def get(cls, model_uri: str) -> Optional[Any]:
+    def get(cls, model_uri: str) -> Any | None:
         """
         Retrieves a model from the registry. Uses LRU-like caching.
 

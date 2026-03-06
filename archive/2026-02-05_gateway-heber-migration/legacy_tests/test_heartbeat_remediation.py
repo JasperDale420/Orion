@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +10,7 @@ MOCK_FLOW_RESPONSE = [
     {
         "id": "123",
         "ticker": "AAPL",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "premium": 50000,
         "put_call": "C",
     }

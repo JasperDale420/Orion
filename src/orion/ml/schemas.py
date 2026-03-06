@@ -5,7 +5,7 @@ Pydantic models for pattern insights and feature importance tracking.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -25,7 +25,7 @@ class FeatureImportance(BaseModel):
     feature: str
     importance: float
     rank: int
-    delta_vs_last_week: Optional[float] = None
+    delta_vs_last_week: float | None = None
 
 
 class PatternInsight(BaseModel):
@@ -47,20 +47,20 @@ class PatternInsight(BaseModel):
     # Model performance
     train_auc: float
     holdout_auc: float
-    precision_at_50: Optional[float] = None  # Precision at 50% recall
+    precision_at_50: float | None = None  # Precision at 50% recall
 
     # Top patterns (human-readable rules)
-    top_rules: List[TreeRule] = Field(default_factory=list)
+    top_rules: list[TreeRule] = Field(default_factory=list)
 
     # Feature importance
-    top_features: List[FeatureImportance] = Field(default_factory=list)
+    top_features: list[FeatureImportance] = Field(default_factory=list)
 
     # Drift detection
-    degraded_features: List[str] = Field(default_factory=list, description="Features with significant importance drop")
-    emerging_patterns: List[str] = Field(default_factory=list, description="New patterns relative to last week")
+    degraded_features: list[str] = Field(default_factory=list, description="Features with significant importance drop")
+    emerging_patterns: list[str] = Field(default_factory=list, description="New patterns relative to last week")
 
     # Raw for debugging
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class MLInsightsSummary(BaseModel):
@@ -71,13 +71,13 @@ class MLInsightsSummary(BaseModel):
     """
 
     generated_at_utc: datetime
-    insights: Dict[str, PatternInsight] = Field(default_factory=dict)
+    insights: dict[str, PatternInsight] = Field(default_factory=dict)
 
     # Week-over-week performance delta
-    overall_auc_delta: Optional[float] = None
+    overall_auc_delta: float | None = None
 
     # Key alerts for LLM attention
-    alerts: List[str] = Field(default_factory=list)
+    alerts: list[str] = Field(default_factory=list)
 
     def to_llm_prompt(self) -> str:
         """Format insights for LLM consumption."""

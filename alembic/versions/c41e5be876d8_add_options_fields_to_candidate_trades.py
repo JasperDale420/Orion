@@ -5,16 +5,18 @@ Revises: 0022_p1_ml_features
 Create Date: 2026-01-06 14:21:52.811127
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 
+from alembic import op
+
 # revision identifiers, used by Alembic.
-revision: str = 'c41e5be876d8'
-down_revision: Union[str, Sequence[str], None] = '0022_p1_ml_features'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "c41e5be876d8"
+down_revision: str | Sequence[str] | None = "0022_p1_ml_features"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -26,7 +28,7 @@ def upgrade() -> None:
     op.add_column("candidate_trades", sa.Column("option_type", sa.String(), nullable=True))
     op.add_column("candidate_trades", sa.Column("underlying_price", sa.Float(), nullable=True))
     op.add_column("candidate_trades", sa.Column("premium", sa.Float(), nullable=True))
-    
+
     # Add index on option_symbol
     op.create_index("ix_candidate_option_symbol", "candidate_trades", ["option_symbol"])
 

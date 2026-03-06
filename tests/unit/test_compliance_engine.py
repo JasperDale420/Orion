@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.core.solver_schema import LiveContext
 from orion.processing.signal_engine import SignalEngine
 from orion.storage.models_gold import CandidateTrade
@@ -15,10 +16,10 @@ async def test_signal_engine_no_v1_fallback():
     """
     # Patch dependencies to avoid DB init
     with (
-        patch("orion.processing.signal_engine.SolverRouter") as MockRouter,
-        patch("orion.processing.signal_engine.RegimeDetector") as MockRegime,
+        patch("orion.processing.signal_engine.SolverRouter") as MockRouter,  # noqa: N806
+        patch("orion.processing.signal_engine.RegimeDetector") as MockRegime,  # noqa: N806
         patch("orion.processing.signal_engine.SolverPipeline"),
-        patch("orion.processing.signal_engine.FeatureEngine") as MockFeatureEngine,
+        patch("orion.processing.signal_engine.FeatureEngine") as MockFeatureEngine,  # noqa: N806
     ):
         engine = SignalEngine()
 
@@ -35,7 +36,7 @@ async def test_signal_engine_no_v1_fallback():
         candidate = CandidateTrade(
             candidate_id="test_cand_1",
             ticker="AAPL",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             confidence=0.95,  # High confidence, would trigger V1 fallback previously
             direction="LONG",
             rule_id="test_rule",
@@ -67,7 +68,7 @@ async def test_solver_router_strict_regime_filtering():
     context = LiveContext(
         ticker="AAPL",
         regime="UNKNOWN",  # Current regime is unknown
-        time_of_day_utc=datetime.now(timezone.utc),
+        time_of_day_utc=datetime.now(UTC),
         current_stage="research",
     )
 

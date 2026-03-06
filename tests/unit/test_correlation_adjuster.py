@@ -1,8 +1,9 @@
 """Unit tests for correlation-aware position sizing."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import numpy as np
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from orion.config import RiskSettings
 from orion.execution.correlation_adjuster import CorrelationAdjuster, clear_correlation_cache

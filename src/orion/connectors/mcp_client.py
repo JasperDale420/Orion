@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -16,8 +16,8 @@ class MCPClient:
         self.base_url = base_url.rstrip("/")
         self.sse_url = f"{self.base_url}/sse"
         self.messages_url = f"{self.base_url}/messages"  # Per session, usually
-        self.session_id: Optional[str] = None
-        self.tools: List[Dict[str, Any]] = []
+        self.session_id: str | None = None
+        self.tools: list[dict[str, Any]] = []
 
     async def connect(self) -> None:
         """
@@ -43,24 +43,26 @@ class MCPClient:
             # or if we strictly follow the SSE handshake.
 
             # Strategy: Start an SSE stream, wait for the 'endpoint' event, then use that to list tools.
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                async with client.stream("GET", self.sse_url) as response:
-                    async for line in response.aiter_lines():
-                        if line.startswith("event: endpoint"):
-                            # Next line is data: ...
-                            continue
-                        if line.startswith("data:"):
-                            # This is the endpoint path (e.g. /messages/?session_id=...)
-                            path = line[5:].strip()
-                            self.messages_url = f"{self.base_url}{path}"
-                            logger.info(f"MCP Connected. Session URL: {self.messages_url}")
-                            return
+            async with (
+                httpx.AsyncClient(timeout=5.0) as client,
+                client.stream("GET", self.sse_url) as response,
+            ):
+                async for line in response.aiter_lines():
+                    if line.startswith("event: endpoint"):
+                        # Next line is data: ...
+                        continue
+                    if line.startswith("data:"):
+                        # This is the endpoint path (e.g. /messages/?session_id=...)
+                        path = line[5:].strip()
+                        self.messages_url = f"{self.base_url}{path}"
+                        logger.info(f"MCP Connected. Session URL: {self.messages_url}")
+                        return
 
         except Exception as e:
             logger.error(f"Failed to connect to MCP Server: {e}")
             # Fallback (maybe server isn't ready)
 
-    async def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         """
         Sends a 'tools/list' JSON-RPC request.
         """
@@ -88,7 +90,7 @@ class MCPClient:
 
         return []
 
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         """
         Executes a tool call via 'tools/call'.
         """

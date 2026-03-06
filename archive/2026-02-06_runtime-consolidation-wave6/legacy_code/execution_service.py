@@ -1,6 +1,9 @@
 import asyncio
+import contextlib
 import signal
-from typing import Any, List, Sequence
+from collections.abc import Sequence
+from datetime import UTC
+from typing import Any
 
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
@@ -64,10 +67,8 @@ class ExecutionService:
             elapsed = loop.time() - start_time
             sleep_time = max(0.1, 1.0 - elapsed)
 
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
-            except asyncio.TimeoutError:
-                pass
 
         logger.info("Execution Service Stopped.")
 
@@ -191,7 +192,7 @@ class ExecutionService:
         if not candidate_ids:
             return []
 
-        async def fetch_by_ids(session: Any) -> List[Any]:
+        async def fetch_by_ids(session: Any) -> list[Any]:
             stmt = select(CandidateTrade).where(CandidateTrade.candidate_id.in_(candidate_ids))
             result = await session.execute(stmt)
             return result.scalars().all()
@@ -203,7 +204,7 @@ class ExecutionService:
 
         try:
 
-            async def fetch_unprocessed(session: Any) -> List[Any]:
+            async def fetch_unprocessed(session: Any) -> list[Any]:
                 # Find candidates without decisions
                 stmt = (
                     select(CandidateTrade)
@@ -274,7 +275,7 @@ class ExecutionService:
             decision.reason = "Missing required signal fields"
 
             # Log rejection to TradeJournal
-            from datetime import datetime, timezone
+            from datetime import datetime
 
             async def log_rejection(session: Any) -> None:
                 session.add(
@@ -284,7 +285,7 @@ class ExecutionService:
                         candidate_id=candidate.candidate_id,
                         ticker=candidate.ticker,
                         direction=candidate.direction,
-                        entry_time=datetime.now(timezone.utc),
+                        entry_time=datetime.now(UTC),
                         entry_price=None,
                         position_size=None,
                         exit_time=None,
@@ -309,7 +310,7 @@ class ExecutionService:
                         candidate_id=candidate.candidate_id,
                         ticker=candidate.ticker,
                         direction=candidate.direction,
-                        entry_time=datetime.now(timezone.utc),
+                        entry_time=datetime.now(UTC),
                         entry_price=None,
                         position_size=None,
                         exit_time=None,

@@ -1,8 +1,9 @@
 from enum import Enum
-from typing import Any, Dict, Optional
+
+from empire_core.errors import EmpireError
 
 
-class ErrorCode(Enum):
+class ErrorCode(str, Enum):
     # Provider/Ingestion Errors
     PROVIDER_AUTH_FAILED = "PROVIDER_AUTH_FAILED"
     PROVIDER_RATE_LIMIT = "PROVIDER_RATE_LIMIT"
@@ -36,55 +37,25 @@ class ErrorCode(Enum):
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
 
-class OrionError(Exception):
+class OrionError(EmpireError):
     """Base exception for all Orion errors."""
-
-    def __init__(
-        self, message: str, code: ErrorCode = ErrorCode.UNKNOWN_ERROR, context: Optional[Dict[str, Any]] = None
-    ):
-        super().__init__(message)
-        self.message = message
-        # Preserve ErrorCode enum compatibility used across runtime and tests.
-        self.code = code if isinstance(code, ErrorCode) else ErrorCode(str(code))
-        self.context = context or {}
-        # Alias for newer envelope helpers.
-        self.details = self.context
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to standard Empire error envelope."""
-        return {
-            "error": True,
-            "code": self.code.value,
-            "message": self.message,
-            "details": self.details,
-        }
 
 
 class ProviderError(OrionError):
     """Errors related to external data providers (UW, Alpaca)."""
 
-    pass
-
 
 class StorageError(OrionError):
     """Errors related to database or lakehouse operations."""
-
-    pass
 
 
 class ExecutionError(OrionError):
     """Errors related to trade execution."""
 
-    pass
-
 
 class ModelInferenceError(OrionError):
     """Errors during model prediction."""
 
-    pass
-
 
 class FeatureComputationError(OrionError):
     """Errors during feature generation."""
-
-    pass

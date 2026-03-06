@@ -4,13 +4,11 @@ Integration tests for order rate limiter.
 Tests token bucket algorithm and rate limiting behavior.
 """
 
-import asyncio
 import pytest
-import time
 
 from orion.execution.rate_limiter import (
     OrderRateLimiter,
-    RateLimitExceeded,
+    RateLimitExceededError,
     get_order_rate_limiter,
     reset_order_rate_limiter,
 )
@@ -90,13 +88,13 @@ class TestOrderRateLimiterAsync:
 
     @pytest.mark.asyncio
     async def test_acquire_or_raise(self):
-        """Should raise RateLimitExceeded when limit hit."""
+        """Should raise RateLimitExceededError when limit hit."""
         limiter = OrderRateLimiter(max_per_minute=2)
 
         await limiter.acquire_or_raise(timeout=1.0)
         await limiter.acquire_or_raise(timeout=1.0)
 
-        with pytest.raises(RateLimitExceeded):
+        with pytest.raises(RateLimitExceededError):
             await limiter.acquire_or_raise(timeout=0.1)
 
 

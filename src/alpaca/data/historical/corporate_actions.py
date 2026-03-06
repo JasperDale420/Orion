@@ -1,5 +1,4 @@
 from collections import defaultdict
-from typing import Callable, Optional, Union
 
 from alpaca.common.enums import BaseURL
 from alpaca.common.rest import RESTClient
@@ -16,12 +15,12 @@ class CorporateActionsClient(RESTClient):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        oauth_token: Optional[str] = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        oauth_token: str | None = None,
         use_basic_auth: bool = False,
         raw_data: bool = False,
-        url_override: Optional[str] = None,
+        url_override: str | None = None,
     ) -> None:
         """
         Instantiates a Corporate Actions Client.
@@ -49,7 +48,7 @@ class CorporateActionsClient(RESTClient):
 
     def get_corporate_actions(
         self, request_params: CorporateActionsRequest
-    ) -> Union[RawData, CorporateActionsSet]:
+    ) -> RawData | CorporateActionsSet:
         """Returns corporate actions data
 
         Args:
@@ -74,7 +73,7 @@ class CorporateActionsClient(RESTClient):
     def _data_get(
         self,
         path: str,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         page_limit: int = 1000,
         api_version: str = "v1",
         **kwargs,

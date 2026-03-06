@@ -1,12 +1,12 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 # We need to import the class to test
 # CORRECT IMPORT: LiveContext is in solver_schema
 from orion.core.solver_schema import LiveContext, SolverConfig
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 
 @pytest.mark.asyncio
@@ -147,7 +147,7 @@ async def test_solver_router_integration():
 
     # 3. Test Routing
     router = SolverRouter()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Case 1: Ticker = AAPL, Stage = Paper
     # Expect: A (Specific, Sharpe 2.5) > B (Global, Sharpe 1.0). D (Live) -> Excluded. C (TSLA) -> Excluded.

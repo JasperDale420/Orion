@@ -1,8 +1,9 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from orion.agents.eod_review_agent import EODReviewAgent
 from orion.agents.proposal_builder import ProposalBuilder
 
@@ -54,12 +55,12 @@ async def test_eod_review_writes_report_input_and_proposal(tmp_path, monkeypatch
         proposal_builder=ProposalBuilder(output_dir=str(tmp_path / "proposals")),
     )
 
-    result = await agent.run_review(datetime.now(timezone.utc).date())
+    result = await agent.run_review(datetime.now(UTC).date())
     assert result["report_path"].endswith(".md")
     assert result["input_snapshot_path"].endswith(".json")
     assert len(result["proposal_paths"]) == 1
 
-    with open(result["input_snapshot_path"], "r") as f:
+    with open(result["input_snapshot_path"]) as f:
         payload = json.load(f)
     assert "fills" in payload
     assert "orders" in payload
@@ -73,7 +74,7 @@ async def test_eod_review_writes_report_input_and_proposal(tmp_path, monkeypatch
     # Proposal artifact must be auditable and reference the input snapshot.
     import yaml
 
-    with open(result["proposal_paths"][0], "r") as f:
+    with open(result["proposal_paths"][0]) as f:
         artifact = yaml.safe_load(f)
     assert artifact["meta"]["run_id"] == result["run_id"]
     assert artifact["meta"]["input_snapshot_path"] == result["input_snapshot_path"]

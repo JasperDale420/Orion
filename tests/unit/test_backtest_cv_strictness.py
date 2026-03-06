@@ -1,8 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+
 from orion.processing.backtest_engine import BacktestEngine
 from orion.storage.models_gold import CandidateTrade
 
@@ -16,7 +17,7 @@ def test_run_cv_raises_without_t1():
         CandidateTrade(
             candidate_id=f"c{i}",
             ticker="AAPL",
-            timestamp_utc=datetime(2023, 1, 1, tzinfo=timezone.utc) + timedelta(days=i),
+            timestamp_utc=datetime(2023, 1, 1, tzinfo=UTC) + timedelta(days=i),
             evidence={},
         )
         for i in range(5)
@@ -34,7 +35,7 @@ def test_run_cv_passes_with_t1():
         CandidateTrade(
             candidate_id=f"c{i}",
             ticker="AAPL",
-            timestamp_utc=datetime(2023, 1, 1, tzinfo=timezone.utc) + timedelta(days=i),
+            timestamp_utc=datetime(2023, 1, 1, tzinfo=UTC) + timedelta(days=i),
             evidence={},
         )
         for i in range(10)

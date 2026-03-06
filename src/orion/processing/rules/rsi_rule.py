@@ -1,5 +1,3 @@
-from typing import Optional
-
 from orion.processing.rules.base import TradingRule
 from orion.storage.models_gold import CandidateTrade, TradeDirection
 from orion.storage.models_silver import SilverSignal
@@ -15,7 +13,7 @@ class RSIOversoldRule(TradingRule):
         super().__init__(rule_id="rsi_oversold_v1")
         self.rsi_threshold = 30.0
 
-    def evaluate(self, signal: SilverSignal) -> Optional[CandidateTrade]:
+    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         # Only evaluate OHLCV signals
         if signal.signal_type != "OHLCV_1M":
             return None

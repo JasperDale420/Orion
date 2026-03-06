@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -12,7 +12,7 @@ from orion.connectors import uw_max_pain_connector as max_pain
 async def test_get_current_price_prefers_heber_without_local_db_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL", "equity:MSFT", "equity:AAPL"],

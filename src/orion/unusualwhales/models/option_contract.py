@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -76,30 +76,30 @@ class OptionContract:
         volume (Union[Unset, int]): The contract volume. Example: 264899.
     """
 
-    ask_volume: Union[Unset, int] = UNSET
-    avg_price: Union[Unset, str] = UNSET
-    bid_volume: Union[Unset, int] = UNSET
-    cross_volume: Union[Unset, int] = UNSET
-    floor_volume: Union[Unset, int] = UNSET
-    high_price: Union[Unset, str] = UNSET
-    implied_volatility: Union[Unset, str] = UNSET
-    last_price: Union[Unset, str] = UNSET
-    low_price: Union[Unset, str] = UNSET
-    mid_volume: Union[Unset, int] = UNSET
-    multi_leg_volume: Union[Unset, int] = UNSET
-    nbbo_ask: Union[Unset, str] = UNSET
-    nbbo_bid: Union[Unset, str] = UNSET
-    no_side_volume: Union[Unset, int] = UNSET
-    open_interest: Union[Unset, int] = UNSET
-    option_symbol: Union[Unset, str] = UNSET
-    prev_oi: Union[Unset, int] = UNSET
-    stock_multi_leg_volume: Union[Unset, int] = UNSET
-    sweep_volume: Union[Unset, int] = UNSET
-    total_premium: Union[Unset, str] = UNSET
-    volume: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    ask_volume: Unset | int = UNSET
+    avg_price: Unset | str = UNSET
+    bid_volume: Unset | int = UNSET
+    cross_volume: Unset | int = UNSET
+    floor_volume: Unset | int = UNSET
+    high_price: Unset | str = UNSET
+    implied_volatility: Unset | str = UNSET
+    last_price: Unset | str = UNSET
+    low_price: Unset | str = UNSET
+    mid_volume: Unset | int = UNSET
+    multi_leg_volume: Unset | int = UNSET
+    nbbo_ask: Unset | str = UNSET
+    nbbo_bid: Unset | str = UNSET
+    no_side_volume: Unset | int = UNSET
+    open_interest: Unset | int = UNSET
+    option_symbol: Unset | str = UNSET
+    prev_oi: Unset | int = UNSET
+    stock_multi_leg_volume: Unset | int = UNSET
+    sweep_volume: Unset | int = UNSET
+    total_premium: Unset | str = UNSET
+    volume: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         ask_volume = self.ask_volume
 
         avg_price = self.avg_price
@@ -142,7 +142,7 @@ class OptionContract:
 
         volume = self.volume
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if ask_volume is not UNSET:
@@ -191,7 +191,7 @@ class OptionContract:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         ask_volume = d.pop("ask_volume", UNSET)
 
@@ -263,7 +263,7 @@ class OptionContract:
         return option_contract
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

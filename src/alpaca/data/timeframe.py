@@ -103,7 +103,7 @@ class TimeFrame:
         return self.value
 
     @classproperty
-    def Minute(cls):
+    def Minute(self):
         """Helper method to quickly access a 1 minute timeframe
 
         Returns:
@@ -112,7 +112,7 @@ class TimeFrame:
         return TimeFrame(amount=1, unit=TimeFrameUnit.Minute)
 
     @classproperty
-    def Hour(cls):
+    def Hour(self):
         """Helper method to quickly access a 1 hour timeframe
 
         Returns:
@@ -121,7 +121,7 @@ class TimeFrame:
         return TimeFrame(amount=1, unit=TimeFrameUnit.Hour)
 
     @classproperty
-    def Day(cls):
+    def Day(self):
         """Helper method to quickly access a  1 day timeframe
 
         Returns:
@@ -130,7 +130,7 @@ class TimeFrame:
         return TimeFrame(amount=1, unit=TimeFrameUnit.Day)
 
     @classproperty
-    def Week(cls):
+    def Week(self):
         """Helper method to quickly access a 1 week timeframe
 
         Returns:
@@ -139,7 +139,7 @@ class TimeFrame:
         return TimeFrame(amount=1, unit=TimeFrameUnit.Week)
 
     @classproperty
-    def Month(cls):
+    def Month(self):
         """Helper method to quickly access a 1 month timeframe
 
         Returns:

@@ -11,9 +11,9 @@ import os
 import pickle
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 from sqlalchemy import text
@@ -38,75 +38,43 @@ MODEL_DIR = system_settings.model_dir
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
 # These features are known at trade entry and don't reveal the outcome
 FEATURE_COLUMNS = [
-    # Entry context (from legacy local label table)
-    "iv_rank_at_entry",
-    "gex_at_entry",
-    "vex_at_entry",
-    "market_tide_30m",
-    "max_pain_distance_pct",
-    "premium_usd",
-    "dte",
-    "vix_at_entry",
-    # Darkpool features (at entry time)
-    "darkpool_volume_1h",
-    "darkpool_30m",
-    "darkpool_4h",
-    "darkpool_1d",
-    # Options Greeks at entry (critical for options trading)
-    "delta_at_entry",
-    "gamma_at_entry",
-    "theta_at_entry",
-    "vega_at_entry",
-    "iv_at_entry",
-    "iv_vs_hv_ratio",
-    # Volume and OI
-    "volume_at_entry",
-    "open_interest_at_entry",
-    "rvol_1h",
-    "rvol_daily",
-    "oi_change_1d",
-    "oi_change_pct",
-    # Flow signals
-    "ask_side_ratio",
-    "sweep_ratio_1h",
-    "same_ticker_premium_1h",
-    "sector_net_premium_1h",
-    # Market context
-    "spy_correlation_5d",
-    "spy_return_1h",
-    "vwap_distance_pct",
-    "high_52w_distance_pct",
-    "overnight_gap_pct",
-    # Timing
-    "entry_hour",
+    "strike",
+    "days_to_expiry",
+    "premium",
+    "volume",
+    "open_interest",
+    "volume_oi_ratio",
+    "spot_price",
+    "contract_price",
+    "moneyness",
+    "log_moneyness",
+    "delta",
+    "gamma",
+    "theta",
+    "vega",
+    "iv",
+    "underlying_30d_return",
+    "underlying_5d_return",
+    "underlying_1d_return",
+    "realized_vol_20d",
+    "iv_rank",
+    "hour_of_day",
+    "minute_of_hour",
+    "day_of_week",
+    "minutes_since_open",
     "minutes_to_close",
-    # Earnings/Events
-    "days_to_earnings",
-    # NOTE: Removed outcome features that cause data leakage:
-    # - max_return_pct, max_drawdown_pct, time_to_max_seconds
-    # - holding_period_seconds, return_at_1h/2h/4h, first_exit_type
-    # - opposing_flow_count (during holding period, not at entry)
 ]
 
 CATEGORICAL_COLUMNS = [
     "put_call",
+    "alert_type",
+    "side",
     "aggressor",
+    "is_bullish",
+    "is_bearish",
     "is_sweep",
-    "is_spread_leg",
-    "is_post_earnings",
-    "earnings_in_dte_window",
-    "entry_session",
-    "entry_day_of_week",
-    "sector",
-    "industry",
-    # Regimes
-    "vol_regime_at_entry",
-    "risk_regime_at_entry",
-    "session_regime_at_entry",
-    "trend_regime_at_entry",
-    "vix_regime_at_entry",
-    "market_tide_direction",
-    "sector_flow_direction",
+    "is_block",
+    "is_unusual",
 ]
 
 # Target definitions - 4 targets for diverse signal dimensions
@@ -270,7 +238,7 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
     hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
     trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
     bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit"])
-    snapshot_count_column = _first_existing_column(frame, ["snapshot_count"])
+    _snapshot_count_column = _first_existing_column(frame, ["snapshot_count"])
 
     event_series = frame[event_column].astype(str) if event_column else pd.Series(index=frame.index, dtype=object)
     ts_series = (
@@ -296,17 +264,8 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
         if bars_to_hit_column
         else pd.Series(index=frame.index, dtype="float64")
     )
-    snapshot_count_series = (
-        pd.to_numeric(frame[snapshot_count_column], errors="coerce")
-        if snapshot_count_column
-        else pd.Series(index=frame.index, dtype="float64")
-    )
-    no_snapshot_series = (
-        outcome_series.astype(str)
-        .str.strip()
-        .str.lower()
-        .str.contains(r"no[_\s-]*snapshot|missing[_\s-]*snapshot|insufficient[_\s-]*snapshot|no[_\s-]*data")
-    )
+    hitting_status_series = hit_tp_series.copy()
+    hitting_status_series[outcome_series.isin({"hit_sl", "stop_loss", "stop", "expired", "expire"})] = 0
 
     normalized = pd.DataFrame(
         {
@@ -316,8 +275,6 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
             "hit_tp_first": hit_tp_series,
             "trading_minutes_to_hit": trading_minutes_series,
             "bars_to_hit": bars_to_hit_series,
-            "snapshot_count": snapshot_count_series,
-            "no_snapshot": no_snapshot_series,
         }
     )
     normalized = normalized.dropna(subset=["event_id", "entry_ts"])
@@ -333,13 +290,9 @@ def _drop_no_snapshot_outcomes(dataframe: Any) -> tuple[Any, int]:
 
     drop_mask = pd.Series(False, index=dataframe.index)
 
-    if "no_snapshot" in dataframe.columns:
-        drop_mask = drop_mask | dataframe["no_snapshot"].eq(True)
-
-    if "snapshot_count" in dataframe.columns:
-        snapshots = pd.to_numeric(dataframe["snapshot_count"], errors="coerce")
-        if snapshots.notna().any():
-            drop_mask = drop_mask | (snapshots.fillna(0) <= 0)
+    # The new Heber pipelines cleanly filter out invalid alerts
+    # and "no snapshot" is no longer a concept passed down to gold barriers.
+    # Therefore, no rows need dropping at this step anymore.
 
     filtered = dataframe[~drop_mask].copy()
     dropped = len(dataframe) - len(filtered)
@@ -359,25 +312,45 @@ def _normalize_heber_features(frame: Any) -> Any:
     normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
 
     mapped_columns: dict[str, list[str]] = {
+        # Core
         "put_call": ["put_call"],
-        "aggressor": ["aggressor"],
-        "is_sweep": ["is_sweep"],
-        "is_spread_leg": ["is_spread_leg", "is_block"],
-        "premium_usd": ["premium_usd", "premium"],
-        "dte": ["dte", "days_to_expiry"],
+        "strike": ["strike"],
+        "days_to_expiry": ["days_to_expiry", "dte"],
+        "premium": ["premium"],
+        "volume": ["volume"],
+        "open_interest": ["open_interest"],
+        "volume_oi_ratio": ["volume_oi_ratio"],
+        "spot_price": ["spot_price", "underlying_price"],
+        "contract_price": ["contract_price"],
+        "moneyness": ["moneyness"],
+        "log_moneyness": ["log_moneyness"],
+        # Greeks
+        "delta": ["delta"],
+        "gamma": ["gamma"],
+        "theta": ["theta"],
+        "vega": ["vega"],
+        "iv": ["iv"],
+        # Returns and Volatility
+        "underlying_30d_return": ["underlying_30d_return"],
+        "underlying_5d_return": ["underlying_5d_return"],
+        "underlying_1d_return": ["underlying_1d_return"],
+        "realized_vol_20d": ["realized_vol_20d"],
+        "iv_rank": ["iv_rank"],
+        # Timing
+        "hour_of_day": ["hour_of_day"],
+        "minute_of_hour": ["minute_of_hour"],
+        "day_of_week": ["day_of_week"],
+        "minutes_since_open": ["minutes_since_open"],
         "minutes_to_close": ["minutes_to_close"],
-        "iv_rank_at_entry": ["iv_rank_at_entry", "iv_rank"],
-        "iv_at_entry": ["iv_at_entry", "iv"],
-        "delta_at_entry": ["delta_at_entry", "delta"],
-        "gamma_at_entry": ["gamma_at_entry", "gamma"],
-        "theta_at_entry": ["theta_at_entry", "theta"],
-        "vega_at_entry": ["vega_at_entry", "vega"],
-        "volume_at_entry": ["volume_at_entry", "volume"],
-        "open_interest_at_entry": ["open_interest_at_entry", "open_interest"],
-        "rvol_daily": ["rvol_daily", "realized_vol_20d"],
-        "ask_side_ratio": ["ask_side_ratio"],
-        "entry_hour": ["entry_hour", "hour_of_day"],
-        "entry_day_of_week": ["entry_day_of_week", "day_of_week"],
+        # Tags
+        "alert_type": ["alert_type"],
+        "side": ["side"],
+        "aggressor": ["aggressor"],
+        "is_bullish": ["is_bullish"],
+        "is_bearish": ["is_bearish"],
+        "is_sweep": ["is_sweep"],
+        "is_block": ["is_block"],
+        "is_unusual": ["is_unusual"],
     }
 
     for target, candidates in mapped_columns.items():
@@ -387,59 +360,17 @@ def _normalize_heber_features(frame: Any) -> Any:
             continue
         normalized[target] = frame[source]
 
-    normalized["is_sweep"] = normalized["is_sweep"].fillna(0)
-    normalized["is_sweep"] = normalized["is_sweep"].map(
-        lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
-    )
-    normalized["is_spread_leg"] = (
-        normalized["is_spread_leg"]
-        .fillna(0)
-        .map(lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"})
-    )
+    # Clean boolean flags
+    for bool_col in ["is_bullish", "is_bearish", "is_sweep", "is_block", "is_unusual"]:
+        normalized[bool_col] = normalized[bool_col].fillna(0)
+        normalized[bool_col] = normalized[bool_col].map(
+            lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+        )
 
-    # Fall back to side/aggressor text when a numeric ask-side ratio is not supplied.
-    ask_ratio = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
-    side_source = _first_existing_column(frame, ["side", "aggressor"])
-    if side_source is not None:
-        side_tokens = frame[side_source].astype(str).str.strip().str.lower()
-
-        def _token_to_ask_ratio(token: str) -> float:
-            if token in {"ask", "buy", "buyer", "bullish"}:
-                return 1.0
-            if token in {"bid", "sell", "seller", "bearish"}:
-                return 0.0
-            if token in {"mid", "midpoint", "neutral"}:
-                return 0.5
-            return np.nan
-
-        side_ratio = side_tokens.map(_token_to_ask_ratio)
-        ask_ratio = ask_ratio.where(ask_ratio.notna(), side_ratio)
-    normalized["ask_side_ratio"] = ask_ratio
-
-    iv_entry = pd.to_numeric(normalized["iv_at_entry"], errors="coerce")
-    realized_vol = pd.to_numeric(normalized["rvol_daily"], errors="coerce")
-    iv_vs_hv = iv_entry / realized_vol
-    iv_vs_hv = iv_vs_hv.where(realized_vol > 0)
-    normalized["iv_vs_hv_ratio"] = iv_vs_hv.replace([np.inf, -np.inf], np.nan)
-
-    normalized["entry_session"] = pd.NA
-    entry_hour_numeric = pd.to_numeric(normalized["entry_hour"], errors="coerce")
-    normalized.loc[entry_hour_numeric < 11, "entry_session"] = "open"
-    normalized.loc[(entry_hour_numeric >= 11) & (entry_hour_numeric < 14), "entry_session"] = "midday"
-    normalized.loc[entry_hour_numeric >= 14, "entry_session"] = "close"
-
-    normalized["market_tide_direction"] = pd.NA
-    ask_ratio_numeric = pd.to_numeric(normalized["ask_side_ratio"], errors="coerce")
-    normalized.loc[ask_ratio_numeric >= 0.55, "market_tide_direction"] = "bullish"
-    normalized.loc[ask_ratio_numeric <= 0.45, "market_tide_direction"] = "bearish"
-    normalized.loc[
-        (ask_ratio_numeric > 0.45) & (ask_ratio_numeric < 0.55),
-        "market_tide_direction",
-    ] = "neutral"
     return normalized
 
 
-def _apply_trade_type_filter(dataframe: Any, trade_type_filter: Optional[str]) -> Any:
+def _apply_trade_type_filter(dataframe: Any, trade_type_filter: str | None) -> Any:
     import pandas as pd
 
     if not trade_type_filter:
@@ -450,15 +381,15 @@ def _apply_trade_type_filter(dataframe: Any, trade_type_filter: Optional[str]) -
         return dataframe
 
     bucket = match.group(1).upper()
-    dte = pd.to_numeric(dataframe["dte"], errors="coerce")
+    days_to_expiry = pd.to_numeric(dataframe["days_to_expiry"], errors="coerce")
     if bucket == "0DTE":
-        mask = dte == 0
+        mask = days_to_expiry == 0
     elif bucket == "SHORT_SWING":
-        mask = (dte >= 1) & (dte <= 2)
+        mask = (days_to_expiry >= 1) & (days_to_expiry <= 2)
     elif bucket == "SWING":
-        mask = (dte >= 3) & (dte <= 14)
+        mask = (days_to_expiry >= 3) & (days_to_expiry <= 14)
     elif bucket == "POSITION":
-        mask = dte >= 15
+        mask = days_to_expiry >= 15
     else:
         return dataframe
 
@@ -469,13 +400,13 @@ async def _fetch_training_data_from_heber(
     *,
     cutoff: datetime,
     min_samples: int,
-    trade_type_filter: Optional[str],
+    trade_type_filter: str | None,
     quick_winner_seconds: int,
-) -> Tuple[Any, List[str]]:
+) -> tuple[Any, list[str]]:
     import pandas as pd
 
     reader = get_heber_reader()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     try:
         outcomes_payload = await asyncio.to_thread(
@@ -500,9 +431,15 @@ async def _fetch_training_data_from_heber(
 
     outcomes_raw = _coerce_dataframe(outcomes_payload)
     features_raw = _coerce_dataframe(features_payload)
+    logger.info(f"Raw outcomes size: {len(outcomes_raw)}")
+    logger.info(f"Raw features size: {len(features_raw)}")
+
     _validate_heber_training_contract(outcomes_raw, features_raw)
     outcomes = _normalize_heber_outcomes(outcomes_raw)
     features = _normalize_heber_features(features_raw)
+
+    logger.info(f"Normalized outcomes size: {len(outcomes)}")
+    logger.info(f"Normalized features size: {len(features)}")
     outcomes, dropped_no_snapshot = _drop_no_snapshot_outcomes(outcomes)
     if dropped_no_snapshot:
         logger.warning(
@@ -670,9 +607,9 @@ TRADE_BUCKET_CONFIGS = {
 async def fetch_training_data(
     window_days: int = 30,
     min_samples: int = 100,
-    trade_type_filter: Optional[str] = None,
+    trade_type_filter: str | None = None,
     quick_winner_seconds: int = 3600,
-) -> Tuple[Any, List[str]]:
+) -> tuple[Any, list[str]]:
     """
     Fetch training data for pattern miner.
 
@@ -698,7 +635,7 @@ async def fetch_training_data(
         )
         return None, []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    cutoff = datetime.now(UTC) - timedelta(days=window_days)
     _ = _pattern_miner_training_source()
     return await _fetch_training_data_from_heber(
         cutoff=cutoff,
@@ -708,7 +645,7 @@ async def fetch_training_data(
     )
 
 
-def prepare_features(df: Any, feature_names: List[str]) -> Tuple[Any, Any]:
+def prepare_features(df: Any, feature_names: list[str]) -> tuple[Any, Any]:
     """
     Prepare feature matrix X from dataframe.
 
@@ -717,27 +654,32 @@ def prepare_features(df: Any, feature_names: List[str]) -> Tuple[Any, Any]:
     """
     import pandas as pd
 
-    X = df[feature_names].copy()
+    X = df[feature_names].copy()  # noqa: N806
+
+    # Cast numeric feature columns
+    for col in feature_names:
+        if col not in CATEGORICAL_COLUMNS:
+            X[col] = pd.to_numeric(X[col], errors="coerce")
 
     # Encode categoricals
     for col in CATEGORICAL_COLUMNS:
         if col in X.columns:
-            X[col] = pd.Categorical(X[col]).codes
+            X[col] = pd.Categorical(X[col]).codes  # noqa: N806
 
     # Fill missing with -999 (LightGBM handles this)
-    X = X.fillna(-999)
+    X = X.fillna(-999)  # noqa: N806
 
     return X, feature_names
 
 
 def train_model(
-    X: Any,
+    X: Any,  # noqa: N803
     y: Any,
     test_size: float = 0.2,
     use_walk_forward: bool = True,
     n_splits: int = 5,
     dates: Any = None,
-) -> Tuple[Any, float, float]:
+) -> tuple[Any, float, float]:
     """
     Train LightGBM classifier using walk-forward or random validation.
 
@@ -774,13 +716,13 @@ def train_model(
         return _train_random_split(X, y, params, test_size)
 
 
-def _train_random_split(X: Any, y: Any, params: dict, test_size: float) -> Tuple[Any, float, float]:
+def _train_random_split(X: Any, y: Any, params: dict, test_size: float) -> tuple[Any, float, float]:  # noqa: N803
     """Train with random train/test split (legacy behavior)."""
     import lightgbm as lgb
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import train_test_split
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)  # noqa: N806
 
     model = lgb.LGBMClassifier(**params)
     model.fit(X_train, y_train)
@@ -799,7 +741,7 @@ def _train_random_split(X: Any, y: Any, params: dict, test_size: float) -> Tuple
     return model, train_auc, holdout_auc
 
 
-def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int = 5) -> Tuple[Any, float, float]:
+def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int = 5) -> tuple[Any, float, float]:  # noqa: N803
     """
     Train with walk-forward (expanding window) validation.
 
@@ -869,7 +811,7 @@ def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int 
     return final_model, train_auc, avg_auc
 
 
-def save_model(model: Any, model_type: str, feature_names: List[str]) -> Optional[Path]:
+def save_model(model: Any, model_type: str, feature_names: list[str]) -> Path | None:
     """
     Save trained model to disk for MLScorer to load.
 
@@ -891,7 +833,7 @@ def save_model(model: Any, model_type: str, feature_names: List[str]) -> Optiona
             "model": model,
             "feature_names": feature_names,
             "model_type": model_type,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         with open(model_path, "wb") as f:
             pickle.dump(model_data, f)
@@ -908,9 +850,9 @@ def save_model(model: Any, model_type: str, feature_names: List[str]) -> Optiona
 
 def extract_feature_importance(
     model: Any,
-    feature_names: List[str],
+    feature_names: list[str],
     top_k: int = 10,
-) -> List[FeatureImportance]:
+) -> list[FeatureImportance]:
     """
     Extract top feature importances from trained model.
     """
@@ -932,11 +874,11 @@ def extract_feature_importance(
 
 def extract_tree_rules(
     model: Any,
-    feature_names: List[str],
-    X: Any,
+    feature_names: list[str],
+    X: Any,  # noqa: N803
     y: Any,
     top_k: int = 5,
-) -> List[TreeRule]:
+) -> list[TreeRule]:
     """
     Extract human-readable rules from decision tree splits.
 
@@ -976,7 +918,7 @@ def extract_tree_rules(
     for _, row in leaf_stats.iterrows():
         # Get samples in this leaf
         mask = leaf_indices == row["leaf"]
-        leaf_X = X[mask]
+        leaf_X = X[mask]  # noqa: N806
 
         # Find distinguishing features (simplified heuristic)
         conditions = []
@@ -1003,14 +945,14 @@ def extract_tree_rules(
     return rules
 
 
-async def get_last_week_importance(model_type: str) -> Dict[str, float]:
+async def get_last_week_importance(model_type: str) -> dict[str, float]:
     """
     Fetch last week's feature importance for drift detection.
     """
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    cutoff = datetime.now(UTC) - timedelta(days=7)
 
-    async def query(session: Any) -> Dict[str, float]:
+    async def query(session: Any) -> dict[str, float]:
         stmt = text(
             """
             SELECT feature_name, importance
@@ -1069,9 +1011,9 @@ async def persist_insight(insight: PatternInsight) -> None:
 
 async def run_pattern_mining(
     target_name: str = "hit_target_50",
-    bucket_name: Optional[str] = None,
-    bucket_config: Optional[Dict[str, Any]] = None,
-) -> Optional[PatternInsight]:
+    bucket_name: str | None = None,
+    bucket_config: dict[str, Any] | None = None,
+) -> PatternInsight | None:
     """
     Run full pattern mining pipeline for a single target and optional bucket.
 
@@ -1109,7 +1051,7 @@ async def run_pattern_mining(
         return None
 
     # 2. Prepare features
-    X, feature_names = prepare_features(df, feature_names)
+    X, feature_names = prepare_features(df, feature_names)  # noqa: N806
     y = df[f"target_{target_name}"]
 
     # Check for valid target distribution
@@ -1151,8 +1093,8 @@ async def run_pattern_mining(
 
     # 6. Build insight
     insight = PatternInsight(
-        insight_id=hashlib.sha256(f"{model_type}_{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:16],
-        created_at_utc=datetime.now(timezone.utc),
+        insight_id=hashlib.sha256(f"{model_type}_{datetime.now(UTC).isoformat()}".encode()).hexdigest()[:16],
+        created_at_utc=datetime.now(UTC),
         model_type=model_type,
         training_window_days=window_days,
         sample_size=len(df),
@@ -1188,8 +1130,8 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
 
     Produces 4 buckets x 4 targets = 16 entry models + 4 exit models.
     """
-    insights: Dict[str, PatternInsight] = {}
-    alerts: List[str] = []
+    insights: dict[str, PatternInsight] = {}
+    alerts: list[str] = []
 
     # Train entry models: Iterate over each bucket x target
     # Include quick_winner which is dynamically generated per bucket
@@ -1256,7 +1198,7 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
         alerts.append(f"exit_classifiers: Training failed - {str(e)[:50]}")
 
     summary = MLInsightsSummary(
-        generated_at_utc=datetime.now(timezone.utc),
+        generated_at_utc=datetime.now(UTC),
         insights=insights,
         alerts=alerts,
     )

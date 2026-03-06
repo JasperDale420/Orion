@@ -7,8 +7,8 @@ and rule-based exit signals.
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from orion.config import system_settings
 from orion.ml.exit_classifier import (
@@ -40,17 +40,17 @@ class TrackedPosition:
     max_drawdown_pct: float = 0.0
 
     # Entry context (from original trade)
-    premium_usd: Optional[float] = None
-    dte_at_entry: Optional[int] = None
+    premium_usd: float | None = None
+    dte_at_entry: int | None = None
     is_sweep: bool = False
-    iv_rank_at_entry: Optional[float] = None
-    vix_at_entry: Optional[float] = None
-    gex_at_entry: Optional[float] = None
-    market_tide_30m: Optional[float] = None
+    iv_rank_at_entry: float | None = None
+    vix_at_entry: float | None = None
+    gex_at_entry: float | None = None
+    market_tide_30m: float | None = None
 
     # Additional
-    decision_id: Optional[str] = None
-    option_symbol: Optional[str] = None  # For options positions
+    decision_id: str | None = None
+    option_symbol: str | None = None  # For options positions
 
 
 class PositionMonitor:
@@ -65,10 +65,10 @@ class PositionMonitor:
 
     def __init__(self) -> None:
         self.exit_classifier: BucketExitClassifier = get_exit_classifier()
-        self.tracked_positions: Dict[str, TrackedPosition] = {}
-        self._last_check_time: Optional[datetime] = None
+        self.tracked_positions: dict[str, TrackedPosition] = {}
+        self._last_check_time: datetime | None = None
 
-    async def sync_positions(self, connector: Any) -> List[TrackedPosition]:
+    async def sync_positions(self, connector: Any) -> list[TrackedPosition]:
         """
         Sync tracked positions with broker positions.
 
@@ -121,7 +121,7 @@ class PositionMonitor:
                     entry_price=entry_price,
                     current_price=current_price,
                     unrealized_pnl_pct=unrealized_pnl_pct,
-                    entry_time=datetime.now(timezone.utc),  # Approximate
+                    entry_time=datetime.now(UTC),  # Approximate
                     bucket=entry_context.get("bucket", "SWING"),
                     max_return_pct=max(0, unrealized_pnl_pct),
                     max_drawdown_pct=min(0, unrealized_pnl_pct),
@@ -148,7 +148,7 @@ class PositionMonitor:
 
         return list(self.tracked_positions.values())
 
-    async def _fetch_entry_context(self, symbol: str) -> Dict[str, Any]:
+    async def _fetch_entry_context(self, symbol: str) -> dict[str, Any]:
         """
         Fetch entry context from recent strategy decisions.
         """
@@ -173,11 +173,11 @@ class PositionMonitor:
         """
 
         try:
-            async def run_query(session: Any) -> Optional[Dict]:
+
+            async def run_query(session: Any) -> dict | None:
                 from sqlalchemy import text
-                result = await session.execute(
-                    text(query), {"symbol": symbol}
-                )
+
+                result = await session.execute(text(query), {"symbol": symbol})
                 row = result.mappings().first()
                 return dict(row) if row else None
 
@@ -208,7 +208,7 @@ class PositionMonitor:
         # Default to SWING bucket if we can't determine
         return {"bucket": "SWING"}
 
-    def evaluate_exits(self) -> List[tuple[TrackedPosition, ExitPrediction]]:
+    def evaluate_exits(self) -> list[tuple[TrackedPosition, ExitPrediction]]:
         """
         Evaluate exit signals for all tracked positions.
 
@@ -219,7 +219,7 @@ class PositionMonitor:
 
         for symbol, pos in self.tracked_positions.items():
             # Calculate time held
-            time_held = datetime.now(timezone.utc) - pos.entry_time
+            time_held = datetime.now(UTC) - pos.entry_time
             time_held_hours = time_held.total_seconds() / 3600
 
             # Build features for exit classifier
@@ -259,9 +259,9 @@ class PositionMonitor:
     async def execute_exits(
         self,
         connector: Any,
-        exit_signals: List[tuple[TrackedPosition, ExitPrediction]],
+        exit_signals: list[tuple[TrackedPosition, ExitPrediction]],
         dry_run: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Execute exit orders for positions with exit signals.
 
@@ -352,7 +352,7 @@ class PositionMonitor:
         self,
         connector: Any,
         dry_run: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run a full position check cycle.
 
@@ -362,7 +362,7 @@ class PositionMonitor:
 
         Returns summary of the check.
         """
-        self._last_check_time = datetime.now(timezone.utc)
+        self._last_check_time = datetime.now(UTC)
 
         # Sync positions
         positions = await self.sync_positions(connector)
@@ -432,7 +432,7 @@ async def run_position_monitor_loop(
 
 
 # Singleton
-_position_monitor: Optional[PositionMonitor] = None
+_position_monitor: PositionMonitor | None = None
 
 
 def get_position_monitor() -> PositionMonitor:

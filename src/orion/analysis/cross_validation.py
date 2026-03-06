@@ -1,4 +1,4 @@
-from typing import Generator, Optional, Tuple
+from collections.abc import Generator
 
 import numpy as np
 import pandas as pd
@@ -26,8 +26,8 @@ class PurgedKFold:
         self.embargo_pct = embargo_pct
 
     def split(
-        self, events_times: pd.Series, test_times: Optional[pd.Series] = None
-    ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
+        self, events_times: pd.Series, test_times: pd.Series | None = None
+    ) -> Generator[tuple[np.ndarray, np.ndarray], None, None]:
         """
         Generate indices for train/test splits.
 

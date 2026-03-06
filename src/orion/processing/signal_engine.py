@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from orion.analysis.regime import MultiAxisRegimeDetector, RegimeDetector
@@ -57,7 +57,7 @@ class SignalEngine:
                 legacy_candidates.append(
                     CandidateTrade(
                         candidate_id=hashlib.sha256(
-                            f"{signal.ticker}_{ts.isoformat()}_bullish_sweep_v1".encode("utf-8")
+                            f"{signal.ticker}_{ts.isoformat()}_bullish_sweep_v1".encode()
                         ).hexdigest(),
                         ticker=signal.ticker,
                         timestamp_utc=ts,
@@ -281,7 +281,7 @@ class SignalEngine:
         decision_record = StrategyDecision(
             decision_id=f"dec_{candidate.candidate_id}",
             candidate_id=candidate.candidate_id,
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             ticker=candidate.ticker,
             strategy_version_id="V1_LEGACY",  # Default placeholder
             model_version=None,
@@ -312,12 +312,18 @@ class SignalEngine:
                         ss.config, candidate, feature_engine=self.feature_engine
                     )
                 except (ModelInferenceError, FeatureComputationError) as e:
+                    error_code = getattr(e, "code", ErrorCode.EXECUTION_FAILED)
+                    if hasattr(error_code, "value"):
+                        error_code_value = error_code.value
+                    else:
+                        error_code_value = str(error_code)
+
                     logger.error(
                         f"Solver {ss.solver_id} FAILED FAST: {e}",
                         extra={
                             "event_type": "SOLVER_EXEC_CRASH",
                             "solver_id": ss.solver_id,
-                            "error_code": e.code.value if hasattr(e, "code") else ErrorCode.EXECUTION_FAILED.value,
+                            "error_code": error_code_value,
                         },
                     )
                     continue
@@ -452,7 +458,7 @@ class SignalEngine:
         return StrategyDecision(
             decision_id=f"fallback_{candidate.candidate_id}",
             candidate_id=candidate.candidate_id,
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             ticker=candidate.ticker,
             strategy_version_id=system_settings.baseline_solver_id or "FALLBACK_V1",
             model_version=None,

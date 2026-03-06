@@ -257,6 +257,29 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  dashboard-reset:
+    build: .
+    container_name: orion_dashboard_reset
+    profiles: [ "scheduled" ]
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    environment:
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_PAPER=${ALPACA_PAPER}
+      - ORION_API_KEY=${ORION_API_KEY}
+      - ORION_API_URL=http://mcp-server:8001
+    command: [ "python", "-m", "orion.jobs.daily_dashboard_reset", "--scheduled" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
   pattern-miner:
     build: .
     container_name: orion_pattern_miner
@@ -267,6 +290,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - /Volumes/heber/data:/Volumes/heber/data:ro
     environment:
       - DB_URL=postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       - ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}

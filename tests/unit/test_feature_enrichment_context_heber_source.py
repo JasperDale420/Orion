@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -10,7 +10,7 @@ from orion import main_feature_enrichment as feature_enrichment
 
 @pytest.mark.asyncio
 async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tide_df = pd.DataFrame(
         {
             "ts_event": [now - timedelta(minutes=3), now - timedelta(minutes=1)],
@@ -34,7 +34,7 @@ async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "bar_start_ts": [
@@ -100,7 +100,7 @@ async def test_get_latest_vix_data_returns_empty_when_heber_unavailable(monkeypa
 
 @pytest.mark.asyncio
 async def test_get_spy_cumulative_return_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "bar_start_ts": [now - timedelta(minutes=3), now - timedelta(minutes=2), now - timedelta(minutes=1)],

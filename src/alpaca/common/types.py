@@ -1,7 +1,7 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Union
 
-RawData = Dict[str, Any]
+RawData = dict[str, Any]
 
 # TODO: Refine this type
-HTTPResult = Union[dict, List[dict], Any]
-Credentials = Tuple[Optional[str], Optional[str], Optional[str]]
+HTTPResult = Union[dict, list[dict], Any]
+Credentials = tuple[str | None, str | None, str | None]

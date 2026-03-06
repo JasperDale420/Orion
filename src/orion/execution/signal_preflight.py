@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,7 +41,7 @@ async def preflight_live_signal(
     candidate: CandidateTrade,
     decision: StrategyDecision,
     risk_manager: Any,
-    now_utc: Optional[datetime] = None,
+    now_utc: datetime | None = None,
 ) -> PreflightResult:
     """
     PRD §11.2/§11.3: apply portfolio/risk/data checks *before* emitting signals_live.
@@ -54,7 +54,7 @@ async def preflight_live_signal(
     if decision.decision != "EXECUTE":
         return PreflightResult(ok=False, reason="Decision is not EXECUTE", extra={})
 
-    now = _ensure_utc(now_utc or datetime.now(timezone.utc))
+    now = _ensure_utc(now_utc or datetime.now(UTC))
     cand_ts = _ensure_utc(candidate.timestamp_utc)
 
     lag_seconds = (now - cand_ts).total_seconds()

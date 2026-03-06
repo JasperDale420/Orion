@@ -8,8 +8,8 @@ Implements 6 flow-based exit signals for 0-16 DTE options positions.
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class ExitSignal:
     reason: str
     urgency: str  # IMMEDIATE, SOON, CONSIDER
     confidence: float = 0.8
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 class ExitRule(ABC):
@@ -35,9 +35,9 @@ class ExitRule(ABC):
     def should_exit(
         self,
         position: Any,  # OpenPosition
-        recent_flow: List[Any],  # List of normalized flow records
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],  # List of normalized flow records
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         """
         Evaluate if position should be exited.
 
@@ -52,18 +52,18 @@ class ExitRule(ABC):
         pass
 
 
-def parse_expiry_from_flow(flow: Any) -> Optional[datetime]:
+def parse_expiry_from_flow(flow: Any) -> datetime | None:
     """Parse expiry from flow record."""
     expiry_str = getattr(flow, "expiry", None)
     if not expiry_str:
         return None
     try:
-        return datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=UTC)
     except (ValueError, AttributeError):
         return None
 
 
-def get_flow_dte(flow: Any) -> Optional[int]:
+def get_flow_dte(flow: Any) -> int | None:
     """Calculate DTE for a flow record."""
     flow_ts = getattr(flow, "flow_ts_utc", None)
     expiry = parse_expiry_from_flow(flow)
@@ -73,7 +73,7 @@ def get_flow_dte(flow: Any) -> Optional[int]:
     return max(0, dte)
 
 
-def classify_dte_bucket(dte: Optional[int]) -> str:
+def classify_dte_bucket(dte: int | None) -> str:
     """Classify DTE into trade type bucket."""
     if dte is None:
         return "UNKNOWN"
@@ -102,7 +102,7 @@ def get_position_dte_bucket(position: Any) -> str:
         match = re.search(r"(\d{6})[PC]", option_chain)
         if match:
             date_str = match.group(1)
-            expiry = datetime.strptime(f"20{date_str}", "%Y%m%d").replace(tzinfo=timezone.utc)
+            expiry = datetime.strptime(f"20{date_str}", "%Y%m%d").replace(tzinfo=UTC)
             entry_ts = position.entry_ts
             dte = (expiry.date() - entry_ts.date()).days
             return classify_dte_bucket(max(0, dte))
@@ -142,9 +142,9 @@ class SentimentReversalExitRule(ExitRule):
     def should_exit(
         self,
         position: Any,
-        recent_flow: List[Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         if not recent_flow:
             return None
 
@@ -206,9 +206,9 @@ class NetPremiumDeclineExitRule(ExitRule):
     def should_exit(
         self,
         position: Any,
-        recent_flow: List[Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         if not recent_flow or position.entry_premium_window <= 0:
             return None
 
@@ -264,9 +264,9 @@ class VolumeOIDivergenceExitRule(ExitRule):
     def should_exit(
         self,
         position: Any,
-        recent_flow: List[Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         ctx = context or {}
         current_oi = ctx.get("current_oi")
         entry_oi = position.entry_oi
@@ -305,9 +305,9 @@ class WaningMomentumExitRule(ExitRule):
     def should_exit(
         self,
         position: Any,
-        recent_flow: List[Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         if not recent_flow:
             return None
 
@@ -316,7 +316,7 @@ class WaningMomentumExitRule(ExitRule):
             return None
 
         # Count sweeps in recent window
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         window_start = now - timedelta(minutes=self.window_minutes)
 
         recent_sweep_count = 0
@@ -364,9 +364,9 @@ class IVContractionExitRule(ExitRule):
     def should_exit(
         self,
         position: Any,
-        recent_flow: List[Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         ctx = context or {}
 
         # Check IV drop
@@ -387,7 +387,7 @@ class IVContractionExitRule(ExitRule):
         # Check earnings proximity
         next_earnings = ctx.get("next_earnings_date")
         if next_earnings:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if isinstance(next_earnings, str):
                 try:
                     next_earnings = datetime.fromisoformat(next_earnings.replace("Z", "+00:00"))
@@ -423,9 +423,9 @@ class OpposingClusterExitRule(ExitRule):
     def should_exit(
         self,
         position: Any,
-        recent_flow: List[Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         if not recent_flow:
             return None
 
@@ -490,9 +490,9 @@ class PriceTargetExitRule(ExitRule):
     def should_exit(
         self,
         position: Any,
-        recent_flow: List[Any],
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[ExitSignal]:
+        recent_flow: list[Any],
+        context: dict[str, Any] | None = None,
+    ) -> ExitSignal | None:
         ctx = context or {}
 
         # Get current option price from context
@@ -539,9 +539,9 @@ class PriceTargetExitRule(ExitRule):
 
 
 # Factory function to get all exit rules with default config
-def get_default_exit_rules(include_price_target: bool = False) -> List[ExitRule]:
+def get_default_exit_rules(include_price_target: bool = False) -> list[ExitRule]:
     """Return default exit rules (legacy default excludes price-target rule)."""
-    rules: List[ExitRule] = [
+    rules: list[ExitRule] = [
         SentimentReversalExitRule(min_opposing_premium=100000.0),
         NetPremiumDeclineExitRule(decline_threshold_pct=50.0),
         VolumeOIDivergenceExitRule(oi_increase_threshold_pct=20.0),

@@ -1,8 +1,8 @@
 import asyncio
 import os
 import signal
-from datetime import datetime, timedelta, timezone
-from typing import Any, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import exchange_calendars as xcals
 from dotenv import load_dotenv
@@ -13,7 +13,6 @@ load_dotenv()
 import traceback
 import uuid
 
-from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
 from orion.connectors.uw_alerts_connector import UWAlertsConnector
@@ -40,6 +39,8 @@ from orion.storage.models_dlq import DeadLetterQueue
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
 
+from orion.config import system_settings
+
 # Configure logging
 # logging.basicConfig(...) # Removed in favor of struct logger
 RUN_ID = os.getenv("ORION_RUN_ID") or str(uuid.uuid4())
@@ -62,12 +63,14 @@ EOD_TRIGGER_LAST_RUN = None
 QUALITY_CHECK_LOOP_COUNT = 0  # Track loop iterations for hourly quality check
 
 
+import contextlib
+
 from orion.connectors.redpanda_producer import RedpandaProducer
 from orion.shared.decorators import db_retry
 
 
 @db_retry
-async def save_events_to_db(events: List[BronzeEvent]) -> None:
+async def save_events_to_db(events: list[BronzeEvent]) -> None:
     if not events:
         return
 
@@ -134,7 +137,7 @@ async def save_events_to_db(events: List[BronzeEvent]) -> None:
 
 
 @db_retry
-async def save_signals_to_db(signals: List[SilverSignal]) -> None:
+async def save_signals_to_db(signals: list[SilverSignal]) -> None:
     if not signals:
         return
 
@@ -149,7 +152,7 @@ async def save_signals_to_db(signals: List[SilverSignal]) -> None:
 
 
 @db_retry
-async def save_silver_data(events: List[BronzeEvent]) -> None:
+async def save_silver_data(events: list[BronzeEvent]) -> None:
     """
     Persists normalized events to their respective Silver SQL tables.
     PRD 6.2 requirement.
@@ -171,7 +174,7 @@ async def save_silver_data(events: List[BronzeEvent]) -> None:
 
 
 @db_retry
-async def save_candidates_to_db(candidates: List[CandidateTrade]) -> None:
+async def save_candidates_to_db(candidates: list[CandidateTrade]) -> None:
     if not candidates:
         return
 
@@ -393,11 +396,11 @@ async def _poll_uw_connectors(
     health_monitor: "HealthMonitor",
     universe: UniverseManager,
     trace_id: str,
-) -> List[BronzeEvent]:
+) -> list[BronzeEvent]:
     """Poll all UW connectors and return combined events."""
     from orion.core.health_monitor import CriticalHealthException
 
-    events: List[BronzeEvent] = []
+    events: list[BronzeEvent] = []
 
     try:
         flow_events = await uw_flow.poll(lookback_seconds=300)
@@ -443,11 +446,11 @@ async def _poll_alpaca(
     universe: UniverseManager,
     health_monitor: "HealthMonitor",
     trace_id: str,
-) -> List[BronzeEvent]:
+) -> list[BronzeEvent]:
     """Poll Alpaca for market data events."""
     from orion.core.health_monitor import CriticalHealthException
 
-    events: List[BronzeEvent] = []
+    events: list[BronzeEvent] = []
     active_tickers = universe.get_active_universe()
 
     if not active_tickers:
@@ -493,8 +496,8 @@ async def _poll_alpaca(
 
 
 async def _process_and_persist_events(
-    all_events: List[BronzeEvent], trace_id: str, metrics: "Metrics | None"
-) -> List[BronzeEvent]:
+    all_events: list[BronzeEvent], trace_id: str, metrics: "Metrics | None"
+) -> list[BronzeEvent]:
     """Deduplicate, enrich, and persist events to storage."""
     from orion.core.timekeeping import derive_trading_date_and_session
 
@@ -529,7 +532,7 @@ async def _process_and_persist_events(
                 evt.ingest = {"connector": "unknown", "run_id": RUN_ID, "trace_id": trace_id, "attempt": 1}
 
             if evt.received_ts_utc is None:
-                evt.received_ts_utc = datetime.now(timezone.utc)
+                evt.received_ts_utc = datetime.now(UTC)
 
             evt.payload = raw_payload
             processed_events.append(evt)
@@ -548,7 +551,7 @@ async def _process_and_persist_events(
 
 
 async def _run_feature_and_rule_pipelines(
-    all_events: List[BronzeEvent],
+    all_events: list[BronzeEvent],
     feature_engine: FeatureEngine,
     rule_engine: RuleEngine,
     metrics: "Metrics | None",
@@ -571,7 +574,7 @@ async def _run_feature_and_rule_pipelines(
 
 
 async def _process_uw_flow_pipeline(
-    events: List[BronzeEvent],
+    events: list[BronzeEvent],
     feature_engine: FeatureEngine,
     rule_engine: RuleEngine,
     metrics: "Metrics | None",
@@ -620,7 +623,7 @@ async def _process_uw_flow_pipeline(
 
 
 async def _process_alpaca_pipeline(
-    events: List[BronzeEvent],
+    events: list[BronzeEvent],
     feature_engine: FeatureEngine,
     rule_engine: RuleEngine,
     metrics: "Metrics | None",
@@ -644,7 +647,7 @@ async def _process_alpaca_pipeline(
         logger.error(f"Feature Engine Error: {e}")
 
 
-async def _write_lakehouse(all_events: List[BronzeEvent], lakehouse: LakehouseWriter, trace_id: str) -> None:
+async def _write_lakehouse(all_events: list[BronzeEvent], lakehouse: LakehouseWriter, trace_id: str) -> None:
     """Write events to lakehouse."""
     try:
         lakehouse.write_events(all_events)
@@ -673,10 +676,10 @@ def _check_eod_trigger() -> None:
     """Check if EOD agent should be triggered."""
     global EOD_TRIGGER_LAST_RUN
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     if now_utc.hour == 1 and now_utc.minute >= 5:
         today_str = now_utc.date().isoformat()
-        if EOD_TRIGGER_LAST_RUN != today_str:
+        if today_str != EOD_TRIGGER_LAST_RUN:
             logger.info("Triggering EOD Review Agent...")
             try:
                 _eod_task = asyncio.create_task(run_eod_task())  # noqa: F841
@@ -733,7 +736,7 @@ async def _wait_for_next_cycle(shutdown_event: asyncio.Event, sleep_time: float)
     try:
         await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
         return True
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return False
 
 
@@ -825,7 +828,7 @@ async def main() -> None:
             trace_id = str(uuid.uuid4())
 
             # Check overnight sleep
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             now_et = now_utc.astimezone(eastern)
             loop_interval = _get_polling_interval(now_et)
 
@@ -900,7 +903,5 @@ async def run_eod_task() -> None:
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

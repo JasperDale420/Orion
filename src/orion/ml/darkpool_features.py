@@ -5,8 +5,8 @@ Aggregates darkpool data into ML features for scoring.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -16,7 +16,7 @@ from orion.shared.logger import setup_struct_logger
 logger = setup_struct_logger("orion.ml.darkpool_features")
 
 
-def _zero_darkpool_features() -> Dict[str, Any]:
+def _zero_darkpool_features() -> dict[str, Any]:
     return {
         "darkpool_volume_24h": 0.0,
         "darkpool_trade_count": 0,
@@ -48,7 +48,7 @@ async def get_darkpool_features(
     ticker: str,
     as_of: datetime,
     lookback_hours: int = 24,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Aggregate darkpool features for a ticker as of a given timestamp.
 
@@ -67,7 +67,7 @@ async def get_darkpool_features(
         Dict of darkpool features
     """
     if as_of.tzinfo is None:
-        as_of = as_of.replace(tzinfo=timezone.utc)
+        as_of = as_of.replace(tzinfo=UTC)
 
     cutoff = as_of - timedelta(hours=lookback_hours)
     try:
@@ -119,7 +119,7 @@ async def get_darkpool_features(
         return _zero_darkpool_features()
 
 
-def get_darkpool_score_boost(features: Dict[str, Any], underlying_price: float) -> float:
+def get_darkpool_score_boost(features: dict[str, Any], underlying_price: float) -> float:
     """
     Calculate a score boost based on darkpool activity.
 

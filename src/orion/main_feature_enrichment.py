@@ -8,9 +8,9 @@ Runs as a background service to populate feature tables for ML.
 import asyncio
 import os
 import signal
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import partial
-from typing import Any, List
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -65,7 +65,7 @@ def _gateway_runtime_contract() -> tuple[str, str]:
     return gateway_url.rstrip("/"), gateway_api_key
 
 
-def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> List[str]:
+def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> list[str]:
     if flow_df.empty:
         return []
 
@@ -102,7 +102,7 @@ def _prefer_heber_context_reads() -> bool:
     return raw not in _PREFER_HEBER_FALSE_VALUES
 
 
-def _first_existing_column(df: pd.DataFrame, candidates: List[str]) -> str | None:
+def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for candidate in candidates:
         if candidate in df.columns:
             return candidate
@@ -118,7 +118,7 @@ def _coerce_time_series(df: pd.DataFrame) -> pd.Series:
 
 def _get_latest_market_tide_from_heber() -> float | None:
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         tide_df = _heber_reader.read_market_tide(
             asof_time=now,
             start_time=now - pd.Timedelta(days=2),
@@ -168,7 +168,7 @@ def _map_vix_proxy_to_regime(vix_proxy: float) -> str:
 
 def _get_latest_vix_data_from_heber() -> dict[str, float | str | None] | None:
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         bars_df = _heber_reader.read_bars(
             symbols=["VIXY"],
             asof_time=now,
@@ -219,7 +219,7 @@ def _get_latest_vix_data_from_heber() -> dict[str, float | str | None] | None:
 
 def _get_spy_cumulative_return_from_heber() -> float | None:
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         bars_df = _heber_reader.read_bars(
             symbols=["SPY"],
             asof_time=now,
@@ -437,10 +437,10 @@ def _log_ticker_source_transition(source: str, previous_source: str | None, tick
     return source
 
 
-async def get_active_tickers_with_source(limit: int = 20) -> tuple[List[str], str]:
+async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], str]:
     """Get tickers with recent flow activity and the source used."""
     try:
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         flow_df = _heber_reader.read_flow(
             asof_time=now_utc,
             start_time=now_utc - pd.Timedelta(days=2),
@@ -454,7 +454,7 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[List[str], st
     return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
 
 
-async def get_active_tickers(limit: int = 20) -> List[str]:
+async def get_active_tickers(limit: int = 20) -> list[str]:
     """Get tickers with recent flow activity (Heber first, DB fallback)."""
     tickers, _source = await get_active_tickers_with_source(limit=limit)
     return tickers
@@ -545,12 +545,12 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     regime_detector = MultiAxisRegimeDetector()
     vix_connector = VIXProxyConnector()  # Uses VIXY bars from Heber bars feed
 
-    last_tide = datetime.min.replace(tzinfo=timezone.utc)
-    last_greek = datetime.min.replace(tzinfo=timezone.utc)
-    last_max_pain = datetime.min.replace(tzinfo=timezone.utc)
-    last_iv = datetime.min.replace(tzinfo=timezone.utc)
-    last_regime = datetime.min.replace(tzinfo=timezone.utc)
-    last_vix = datetime.min.replace(tzinfo=timezone.utc)
+    last_tide = datetime.min.replace(tzinfo=UTC)
+    last_greek = datetime.min.replace(tzinfo=UTC)
+    last_max_pain = datetime.min.replace(tzinfo=UTC)
+    last_iv = datetime.min.replace(tzinfo=UTC)
+    last_regime = datetime.min.replace(tzinfo=UTC)
+    last_vix = datetime.min.replace(tzinfo=UTC)
     last_ticker_source: str | None = None
     zero_write_streaks: dict[str, int] = {}
     loop_error_streak = 0
@@ -560,7 +560,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
 
     while not shutdown_event.is_set():
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             tickers, ticker_source = await get_active_tickers_with_source()
             last_ticker_source = _log_ticker_source_transition(
                 source=ticker_source,
@@ -685,7 +685,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
         try:
             await asyncio.wait_for(shutdown_event.wait(), timeout=loop_sleep_seconds)
             break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     logger.info("Feature Enrichment Service stopped")

@@ -1,8 +1,8 @@
 import logging
 import traceback
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Union
+from datetime import UTC, datetime
+from typing import Any
 
 from orion.config import system_settings
 from orion.storage import db  # Import module for dynamic access
@@ -21,15 +21,15 @@ class DLQWriter:
         error: Exception,
         event_type: str,
         source: str,
-        payload: Optional[Union[Dict[str, Any], str]] = None,
-        context: Optional[str] = None,
+        payload: dict[str, Any] | str | None = None,
+        context: str | None = None,
         *,
-        event_id: Optional[str] = None,
-        source_event_id: Optional[str] = None,
-        ticker: Optional[str] = None,
-        event_ts_utc: Optional[datetime] = None,
-        run_id: Optional[str] = None,
-        trace_id: Optional[str] = None,
+        event_id: str | None = None,
+        source_event_id: str | None = None,
+        ticker: str | None = None,
+        event_ts_utc: datetime | None = None,
+        run_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         """
         Asynchronously writes an error entry to the DLQ table.
@@ -73,7 +73,7 @@ class DLQWriter:
                     error_message=error_msg,
                     stack_trace=stack,
                     payload=safe_payload,
-                    timestamp_utc=datetime.now(timezone.utc),
+                    timestamp_utc=datetime.now(UTC),
                     status="FAILED",
                 )
                 session.add(dlq_entry)

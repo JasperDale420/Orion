@@ -500,6 +500,7 @@ class HeberReader:
             "parquet magic bytes not found in footer" in message
             or "could not read schema from" in message
             or "is this a 'parquet' file?" in message
+            or "couldn't deserialize thrift" in message
             or ("error creating dataset" in message and "could not open parquet input source" in message)
         )
 

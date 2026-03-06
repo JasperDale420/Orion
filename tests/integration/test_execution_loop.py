@@ -1,17 +1,18 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # We need to import module to patch it properly
 import orion.execution.execution_engine
 import orion.main_execution
 import orion.storage.db
-import pytest
 from orion.storage.db import Base
 from orion.storage.models import SystemStatus
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 @pytest.mark.asyncio
@@ -48,7 +49,7 @@ async def test_execution_loop_flow():
     candidate = CandidateTrade(
         candidate_id=candidate_id,
         ticker="SPY",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         rule_id="test_rule",
         direction="LONG",
         confidence=0.9,
@@ -58,9 +59,7 @@ async def test_execution_loop_flow():
     )
 
     # SYSTEM STATUS
-    status = SystemStatus(
-        key="global_health", status="HEALTHY", last_updated_utc=datetime.now(timezone.utc), details="Test"
-    )
+    status = SystemStatus(key="global_health", status="HEALTHY", last_updated_utc=datetime.now(UTC), details="Test")
 
     async with test_session_factory() as session:
         session.add(candidate)
@@ -121,7 +120,7 @@ async def test_execution_loop_flow():
                     stability_score=0.9,
                     max_dd_pct=10.0,
                     oos_expect_bp=10.0,
-                    evaluated_at_utc=datetime.now(timezone.utc),
+                    evaluated_at_utc=datetime.now(UTC),
                 )
                 session.add(metrics)
                 await session.commit()
@@ -181,8 +180,8 @@ async def test_execution_loop_flow():
     # Note: ExecutionEngine class typically imports connectors at top level.
     # We need to patch them.
     with (
-        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConnector,
-        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,
+        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConnector,  # noqa: N806
+        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,  # noqa: N806
     ):
         mock_conn = MockConnector.return_value
         mock_market = MockMarket.return_value

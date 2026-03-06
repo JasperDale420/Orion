@@ -9,12 +9,13 @@ Per Dynamic Exit Strategies PDF:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
 
 from orion.shared.db_utils import db_query
 from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
-from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -31,21 +32,21 @@ class OpenPosition:
     # Entry timing
     entry_ts: datetime
     entry_price: float
-    entry_option_price: Optional[float] = None
+    entry_option_price: float | None = None
 
     # Entry context for exit rules
-    option_chain: Optional[str] = None  # Full OCC symbol
-    entry_iv: Optional[float] = None
+    option_chain: str | None = None  # Full OCC symbol
+    entry_iv: float | None = None
     entry_premium_window: float = 0.0  # Sum of aligned premium at entry
     entry_sweep_count: int = 0  # Sweeps in first 5 min window
-    entry_oi: Optional[float] = None  # Open interest at entry
+    entry_oi: float | None = None  # Open interest at entry
 
     # Position size
     qty: float = 0.0
 
     # Metadata
     rule_id: str = ""
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class PositionManager:
@@ -61,14 +62,14 @@ class PositionManager:
 
     def __init__(self) -> None:
         # Key positions by candidate_id to avoid collapsing same-underlying contracts.
-        self._positions: Dict[str, OpenPosition] = {}
+        self._positions: dict[str, OpenPosition] = {}
         self._initialized = False
 
     async def initialize(self) -> None:
         """Load open positions from database on startup."""
         try:
             # Fetch executed decisions without exit
-            async def fetch_open_positions(session: Any) -> List[Any]:
+            async def fetch_open_positions(session: Any) -> list[Any]:
                 stmt = (
                     select(StrategyDecision, CandidateTrade)
                     .join(CandidateTrade, StrategyDecision.candidate_id == CandidateTrade.candidate_id)
@@ -100,7 +101,7 @@ class PositionManager:
 
     def _create_position_from_decision(
         self, decision: StrategyDecision, candidate: CandidateTrade
-    ) -> Optional[OpenPosition]:
+    ) -> OpenPosition | None:
         """Create OpenPosition from database records."""
         try:
             ep = decision.execution_params or {}
@@ -130,7 +131,7 @@ class PositionManager:
         self,
         candidate: CandidateTrade,
         decision: StrategyDecision,
-        entry_context: Optional[Dict[str, Any]] = None,
+        entry_context: dict[str, Any] | None = None,
     ) -> OpenPosition:
         """
         Add a new position after successful execution.
@@ -153,7 +154,7 @@ class PositionManager:
             direction=candidate.direction,
             candidate_id=candidate.candidate_id,
             decision_id=decision.decision_id,
-            entry_ts=decision.timestamp_utc or datetime.now(timezone.utc),
+            entry_ts=decision.timestamp_utc or datetime.now(UTC),
             entry_price=entry_price,
             entry_option_price=float(entry_option_price) if entry_option_price is not None else None,
             option_chain=option_chain,
@@ -177,18 +178,18 @@ class PositionManager:
         )
         return pos
 
-    def get_position(self, ticker: str) -> Optional[OpenPosition]:
+    def get_position(self, ticker: str) -> OpenPosition | None:
         """Get the most recent tracked position for a ticker if exists."""
         matches = [p for p in self._positions.values() if p.ticker == ticker]
         if not matches:
             return None
         return max(matches, key=lambda p: p.entry_ts)
 
-    def get_open_positions(self) -> List[OpenPosition]:
+    def get_open_positions(self) -> list[OpenPosition]:
         """Return all open positions."""
         return list(self._positions.values())
 
-    def remove_position(self, identifier: str) -> Optional[OpenPosition]:
+    def remove_position(self, identifier: str) -> OpenPosition | None:
         """
         Remove position after exit.
 
@@ -244,7 +245,7 @@ class PositionManager:
             logger.error(f"Failed to sync with broker: {e}")
 
     @staticmethod
-    def _resolve_option_chain(candidate: CandidateTrade, entry_context: Dict[str, Any]) -> Optional[str]:
+    def _resolve_option_chain(candidate: CandidateTrade, entry_context: dict[str, Any]) -> str | None:
         """
         Resolve canonical option contract for tracked positions.
 

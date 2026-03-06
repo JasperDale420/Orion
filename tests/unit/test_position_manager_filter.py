@@ -1,9 +1,12 @@
-import pytest
 import datetime
 import uuid
-from orion.storage.models_gold import CandidateTrade, StrategyDecision, ExitDecision
-from orion.storage.db import async_session_factory
+
+import pytest
+
 from orion.execution.position_manager import PositionManager
+from orion.storage.db import async_session_factory
+from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
+
 
 @pytest.mark.asyncio
 async def test_fetch_open_positions_filters_exited(setup_test_db):
@@ -15,7 +18,7 @@ async def test_fetch_open_positions_filters_exited(setup_test_db):
     open_candidate_id = str(uuid.uuid4())
     closed_candidate_id = str(uuid.uuid4())
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
 
     async with async_session_factory() as session:
         # --- Open Position ---
@@ -26,7 +29,7 @@ async def test_fetch_open_positions_filters_exited(setup_test_db):
             rule_id="rule1",
             direction="LONG",
             confidence=0.9,
-            evidence={}
+            evidence={},
         )
         d1 = StrategyDecision(
             decision_id=str(uuid.uuid4()),
@@ -36,7 +39,7 @@ async def test_fetch_open_positions_filters_exited(setup_test_db):
             strategy_version_id="v1",
             decision="EXECUTE",
             executed_successfully="TRUE",
-            execution_params={"limit_price": 100}
+            execution_params={"limit_price": 100},
         )
 
         # --- Closed Position ---
@@ -47,7 +50,7 @@ async def test_fetch_open_positions_filters_exited(setup_test_db):
             rule_id="rule1",
             direction="LONG",
             confidence=0.9,
-            evidence={}
+            evidence={},
         )
         d2 = StrategyDecision(
             decision_id=str(uuid.uuid4()),
@@ -57,7 +60,7 @@ async def test_fetch_open_positions_filters_exited(setup_test_db):
             strategy_version_id="v1",
             decision="EXECUTE",
             executed_successfully="TRUE",
-            execution_params={"limit_price": 100}
+            execution_params={"limit_price": 100},
         )
         e2 = ExitDecision(
             exit_id=str(uuid.uuid4()),
@@ -65,7 +68,7 @@ async def test_fetch_open_positions_filters_exited(setup_test_db):
             candidate_id=closed_candidate_id,
             rule_id="exit_rule",
             exit_reason="TP",
-            exit_ts_utc=now
+            exit_ts_utc=now,
         )
 
         session.add_all([c1, d1, c2, d2, e2])
@@ -97,7 +100,7 @@ async def test_initialize_does_not_rehydrate_closed_position_after_restart(setup
     3) Fresh PositionManager initialize() must not rehydrate it as open.
     """
     candidate_id = str(uuid.uuid4())
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
 
     async with async_session_factory() as session:
         open_candidate = CandidateTrade(

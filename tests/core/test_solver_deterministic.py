@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_schema import ExitLogic, SolverConfig
 from orion.storage.models_gold import CandidateTrade as DBCandidateTrade
@@ -33,7 +34,7 @@ async def test_solver_deterministic_execution():
     # Setup Candidate
     candidate = DBCandidateTrade(
         candidate_id="c1",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         ticker="SPY_TEST",
         direction="LONG",
         rule_id="rule_1",

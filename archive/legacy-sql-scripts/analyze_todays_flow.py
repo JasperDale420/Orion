@@ -5,20 +5,19 @@ See what trades would have been taken and their P&L.
 """
 
 import asyncio
-from datetime import datetime, timezone
-
-from sqlalchemy import text
+from datetime import UTC, datetime
 
 from orion.ml.flow_enricher import enrich_flow_for_scoring
 from orion.ml.scorer import MLScorer, get_trade_bucket
 from orion.shared.db_utils import db_query
+from sqlalchemy import text
 
 
 async def analyze_todays_flow():
     # Get today's or most recent trading day's high-conviction flow
     from datetime import timedelta
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     # Use yesterday if checking after hours or if today has no flow
     check_date = today - timedelta(days=1)  # Jan 9
 

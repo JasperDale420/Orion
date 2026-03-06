@@ -2,7 +2,7 @@ import asyncio
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Path hack to ensure we can import orion
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -10,6 +10,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 from dotenv import load_dotenv
 
 load_dotenv()
+
+import contextlib
 
 from orion.config import system_settings
 from orion.storage.db import async_session_factory, init_db
@@ -65,7 +67,7 @@ async def bootstrap():
         key="global_health",
         status="HEALTHY",
         details="Bootstrapped for Paper Trading",
-        last_updated_utc=datetime.now(timezone.utc),
+        last_updated_utc=datetime.now(UTC),
     )
 
     async with async_session_factory() as session:
@@ -76,7 +78,7 @@ async def bootstrap():
             session.add(sys_status)
         else:
             print("SystemStatus already exists (updating timestamp).")
-            existing_status.last_updated_utc = datetime.now(timezone.utc)
+            existing_status.last_updated_utc = datetime.now(UTC)
             existing_status.status = "HEALTHY"
 
         print(f"Checking for Solver: {solver_id}")
@@ -94,7 +96,5 @@ async def bootstrap():
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(bootstrap())
-    except KeyboardInterrupt:
-        pass

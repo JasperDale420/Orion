@@ -1,10 +1,10 @@
-import json
-import queue
-from typing import Optional, Dict, Callable, Union
 import asyncio
-import websockets
+import json
 import logging
+import queue
+from collections.abc import Callable
 
+import websockets
 from pydantic import BaseModel
 
 from alpaca.common import RawData
@@ -30,7 +30,7 @@ class TradingStream:
         paper: bool = True,
         raw_data: bool = False,
         url_override: str = None,
-        websocket_params: Optional[Dict] = None,
+        websocket_params: dict | None = None,
     ):
         self._api_key = api_key
         self._secret_key = secret_key
@@ -78,7 +78,7 @@ class TradingStream:
                 f"failed to authenticate with trading stream: {data.get('status', 'no status in response')}"
             )
 
-    async def _dispatch(self, msg: Dict) -> None:
+    async def _dispatch(self, msg: dict) -> None:
         """Distributes message from websocket connection to appropriate handler
 
         Args:
@@ -89,7 +89,7 @@ class TradingStream:
             if self._trade_updates_handler:
                 await self._trade_updates_handler(self._cast(msg))
 
-    def _cast(self, msg: Dict) -> Union[BaseModel, RawData]:
+    def _cast(self, msg: dict) -> BaseModel | RawData:
         """Parses data from websocket message if raw_data is False, otherwise
         returns raw websocket message
 
@@ -145,7 +145,7 @@ class TradingStream:
                     r = await asyncio.wait_for(self._ws.recv(), 5)
                     msg = json.loads(r)
                     await self._dispatch(msg)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # ws.recv is hanging when no data is received. by using
                     # wait_for we break when no data is received, allowing us
                     # to break the loop when needed
@@ -182,7 +182,7 @@ class TradingStream:
                 )
             except Exception as e:
                 log.exception(
-                    "error during websocket " "communication: {}".format(str(e))
+                    "error during websocket " f"communication: {str(e)}"
                 )
             finally:
                 await asyncio.sleep(0.01)

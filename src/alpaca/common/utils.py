@@ -1,11 +1,10 @@
-from typing import Union, Optional
-from uuid import UUID
 from datetime import datetime
+from uuid import UUID
 
 
 def validate_uuid_id_param(
-    id: Union[UUID, str],
-    var_name: Optional[str] = None,
+    id: UUID | str,
+    var_name: str | None = None,
 ) -> UUID:
     """
     A small helper function to eliminate duplicate checks of various id parameters to ensure they are
@@ -33,8 +32,8 @@ def validate_uuid_id_param(
 
 
 def validate_symbol_or_asset_id(
-    symbol_or_asset_id: Union[UUID, str]
-) -> Union[UUID, str]:
+    symbol_or_asset_id: UUID | str
+) -> UUID | str:
     """
     A helper function to eliminate duplicate checks of symbols or asset ids.
 
@@ -55,8 +54,8 @@ def validate_symbol_or_asset_id(
 
 
 def validate_symbol_or_contract_id(
-    symbol_or_contract_id: Union[UUID, str]
-) -> Union[UUID, str]:
+    symbol_or_contract_id: UUID | str
+) -> UUID | str:
     """
     A helper function to eliminate duplicate checks of symbols or contract id.
 

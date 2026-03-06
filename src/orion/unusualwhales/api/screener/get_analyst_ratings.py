@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -15,32 +15,32 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    ticker: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    action: Union[Unset, AnalystAction] = UNSET,
-    recommendation: Union[Unset, AnalystRecommendation] = UNSET,
-    sector: Union[Unset, AnalystSector] = UNSET,
-) -> Dict[str, Any]:
+    ticker: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    action: Unset | AnalystAction = UNSET,
+    recommendation: Unset | AnalystRecommendation = UNSET,
+    sector: Unset | AnalystSector = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["ticker"] = ticker
 
     params["limit"] = limit
 
-    json_action: Union[Unset, str] = UNSET
+    json_action: Unset | str = UNSET
     if not isinstance(action, Unset):
         json_action = action.value
 
     params["action"] = json_action
 
-    json_recommendation: Union[Unset, str] = UNSET
+    json_recommendation: Unset | str = UNSET
     if not isinstance(recommendation, Unset):
         json_recommendation = recommendation.value
 
     params["recommendation"] = json_recommendation
 
-    json_sector: Union[Unset, str] = UNSET
+    json_sector: Unset | str = UNSET
     if not isinstance(sector, Unset):
         json_sector = sector.value
 
@@ -48,7 +48,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/screener/analysts",
         "params": params,
@@ -59,7 +59,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[AnalalystRatingResults, ErrorMessage, str]]:
+) -> AnalalystRatingResults | ErrorMessage | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -82,7 +82,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[AnalalystRatingResults, ErrorMessage, str]]:
+) -> Response[AnalalystRatingResults | ErrorMessage | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -94,12 +94,12 @@ def _build_response(
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-    ticker: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    action: Union[Unset, AnalystAction] = UNSET,
-    recommendation: Union[Unset, AnalystRecommendation] = UNSET,
-    sector: Union[Unset, AnalystSector] = UNSET,
-) -> Response[Union[AnalalystRatingResults, ErrorMessage, str]]:
+    ticker: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    action: Unset | AnalystAction = UNSET,
+    recommendation: Unset | AnalystRecommendation = UNSET,
+    sector: Unset | AnalystSector = UNSET,
+) -> Response[AnalalystRatingResults | ErrorMessage | str]:
     """Analyst Ratings for a Ticker
 
      Returns the latest analyst rating for the given ticker.
@@ -140,12 +140,12 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-    ticker: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    action: Union[Unset, AnalystAction] = UNSET,
-    recommendation: Union[Unset, AnalystRecommendation] = UNSET,
-    sector: Union[Unset, AnalystSector] = UNSET,
-) -> Optional[Union[AnalalystRatingResults, ErrorMessage, str]]:
+    ticker: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    action: Unset | AnalystAction = UNSET,
+    recommendation: Unset | AnalystRecommendation = UNSET,
+    sector: Unset | AnalystSector = UNSET,
+) -> AnalalystRatingResults | ErrorMessage | str | None:
     """Analyst Ratings for a Ticker
 
      Returns the latest analyst rating for the given ticker.
@@ -181,12 +181,12 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-    ticker: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    action: Union[Unset, AnalystAction] = UNSET,
-    recommendation: Union[Unset, AnalystRecommendation] = UNSET,
-    sector: Union[Unset, AnalystSector] = UNSET,
-) -> Response[Union[AnalalystRatingResults, ErrorMessage, str]]:
+    ticker: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    action: Unset | AnalystAction = UNSET,
+    recommendation: Unset | AnalystRecommendation = UNSET,
+    sector: Unset | AnalystSector = UNSET,
+) -> Response[AnalalystRatingResults | ErrorMessage | str]:
     """Analyst Ratings for a Ticker
 
      Returns the latest analyst rating for the given ticker.
@@ -225,12 +225,12 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-    ticker: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    action: Union[Unset, AnalystAction] = UNSET,
-    recommendation: Union[Unset, AnalystRecommendation] = UNSET,
-    sector: Union[Unset, AnalystSector] = UNSET,
-) -> Optional[Union[AnalalystRatingResults, ErrorMessage, str]]:
+    ticker: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    action: Unset | AnalystAction = UNSET,
+    recommendation: Unset | AnalystRecommendation = UNSET,
+    sector: Unset | AnalystSector = UNSET,
+) -> AnalalystRatingResults | ErrorMessage | str | None:
     """Analyst Ratings for a Ticker
 
      Returns the latest analyst rating for the given ticker.

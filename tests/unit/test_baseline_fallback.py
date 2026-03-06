@@ -1,7 +1,8 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+
 from orion.config import system_settings
 from orion.processing.signal_engine import SignalEngine
 from orion.storage.db import async_session_factory
@@ -54,7 +55,7 @@ async def test_baseline_solver_executes_when_selected(monkeypatch):
     candidate = CandidateTrade(
         candidate_id="cand_1",
         ticker="SPY",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         rule_id="rule_bullish_sweep_v1",
         direction="LONG",
         confidence=0.7,

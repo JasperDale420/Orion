@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Any, List, Optional, Union
+from typing import Any
 
 import pytz
 from pydantic import ConfigDict
@@ -32,12 +32,12 @@ class BaseTimeseriesDataRequest(NonEmptyRequest):
         sort: (Optional[Sort]): The chronological order of response based on the timestamp. Defaults to ASC.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
-    start: Optional[datetime] = None
-    end: Optional[datetime] = None
-    limit: Optional[int] = None
-    currency: Optional[SupportedCurrencies] = None  # None = USD
-    sort: Optional[Sort] = None  # None = asc
+    symbol_or_symbols: str | list[str]
+    start: datetime | None = None
+    end: datetime | None = None
+    limit: int | None = None
+    currency: SupportedCurrencies | None = None  # None = USD
+    sort: Sort | None = None  # None = asc
 
     def __init__(self, **data: Any) -> None:
         # convert timezone aware datetime to timezone naive UTC datetime
@@ -102,9 +102,9 @@ class StockBarsRequest(BaseBarsRequest):
         currency (Optional[SupportedCurrencies]): The currency of all prices in ISO 4217 format. Default is USD.
     """
 
-    adjustment: Optional[Adjustment] = None
-    feed: Optional[DataFeed] = None
-    asof: Optional[str] = None
+    adjustment: Adjustment | None = None
+    feed: DataFeed | None = None
+    asof: str | None = None
 
 
 class CryptoBarsRequest(BaseBarsRequest):
@@ -161,8 +161,8 @@ class StockQuotesRequest(BaseTimeseriesDataRequest):
         currency (Optional[SupportedCurrencies]): The currency of all prices in ISO 4217 format. Default is USD.
     """
 
-    feed: Optional[DataFeed] = None
-    asof: Optional[str] = None
+    feed: DataFeed | None = None
+    asof: str | None = None
 
 
 class CryptoQuoteRequest(BaseTimeseriesDataRequest):
@@ -203,8 +203,8 @@ class StockTradesRequest(BaseTimeseriesDataRequest):
         currency (Optional[SupportedCurrencies]): The currency of all prices in ISO 4217 format. Default is USD.
     """
 
-    feed: Optional[DataFeed] = None
-    asof: Optional[str] = None
+    feed: DataFeed | None = None
+    asof: str | None = None
 
 
 class CryptoTradesRequest(BaseTimeseriesDataRequest):
@@ -255,9 +255,9 @@ class BaseStockLatestDataRequest(NonEmptyRequest):
         currency (Optional[SupportedCurrencies]): The currency the data should be returned in. Default to USD.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
-    feed: Optional[DataFeed] = None
-    currency: Optional[SupportedCurrencies] = None  # None = USD
+    symbol_or_symbols: str | list[str]
+    feed: DataFeed | None = None
+    currency: SupportedCurrencies | None = None  # None = USD
 
 
 class StockLatestTradeRequest(BaseStockLatestDataRequest):
@@ -314,7 +314,7 @@ class BaseCryptoLatestDataRequest(NonEmptyRequest):
         symbol_or_symbols (Union[str, List[str]]): The ticker identifier or list of ticker identifiers.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
+    symbol_or_symbols: str | list[str]
 
 
 class CryptoLatestTradeRequest(BaseCryptoLatestDataRequest):
@@ -366,8 +366,8 @@ class BaseOptionLatestDataRequest(NonEmptyRequest):
         feed (Optional[OptionsFeed]): The source feed of the data. `opra` or `indicative`. Default: `opra` if the user has the options subscription, `indicative` otherwise.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
-    feed: Optional[OptionsFeed] = None
+    symbol_or_symbols: str | list[str]
+    feed: OptionsFeed | None = None
 
 
 class OptionLatestQuoteRequest(BaseOptionLatestDataRequest):
@@ -411,9 +411,9 @@ class StockSnapshotRequest(NonEmptyRequest):
         currency (Optional[SupportedCurrencies]): The currency the data should be returned in. Default to USD.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
-    feed: Optional[DataFeed] = None
-    currency: Optional[SupportedCurrencies] = None  # None = USD
+    symbol_or_symbols: str | list[str]
+    feed: DataFeed | None = None
+    currency: SupportedCurrencies | None = None  # None = USD
 
 
 class CryptoSnapshotRequest(NonEmptyRequest):
@@ -424,7 +424,7 @@ class CryptoSnapshotRequest(NonEmptyRequest):
         symbol_or_symbols (Union[str, List[str]]): The ticker identifier or list of ticker identifiers.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
+    symbol_or_symbols: str | list[str]
 
 
 class OptionSnapshotRequest(NonEmptyRequest):
@@ -436,8 +436,8 @@ class OptionSnapshotRequest(NonEmptyRequest):
         feed (Optional[OptionsFeed]): The source feed of the data. `opra` or `indicative`. Default: `opra` if the user has the options subscription, `indicative` otherwise.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
-    feed: Optional[OptionsFeed] = None
+    symbol_or_symbols: str | list[str]
+    feed: OptionsFeed | None = None
 
 
 class OptionChainRequest(NonEmptyRequest):
@@ -458,15 +458,15 @@ class OptionChainRequest(NonEmptyRequest):
     """
 
     underlying_symbol: str
-    feed: Optional[OptionsFeed] = None
-    type: Optional[ContractType] = None
-    strike_price_gte: Optional[float] = None
-    strike_price_lte: Optional[float] = None
-    expiration_date: Optional[Union[date, str]] = None
-    expiration_date_gte: Optional[Union[date, str]] = None
-    expiration_date_lte: Optional[Union[date, str]] = None
-    root_symbol: Optional[str] = None
-    updated_since: Optional[datetime] = None
+    feed: OptionsFeed | None = None
+    type: ContractType | None = None
+    strike_price_gte: float | None = None
+    strike_price_lte: float | None = None
+    expiration_date: date | str | None = None
+    expiration_date_gte: date | str | None = None
+    expiration_date_lte: date | str | None = None
+    root_symbol: str | None = None
+    updated_since: datetime | None = None
 
 
 # ############################## Orderbooks ################################# #
@@ -480,7 +480,7 @@ class CryptoLatestOrderbookRequest(NonEmptyRequest):
         symbol_or_symbols (Union[str, List[str]]): The ticker identifier or list of ticker identifiers.
     """
 
-    symbol_or_symbols: Union[str, List[str]]
+    symbol_or_symbols: str | list[str]
 
 
 # ############################## Screener #################################### #
@@ -542,14 +542,14 @@ class NewsRequest(NonEmptyRequest):
         when more data is available than the request limit allows.
     """
 
-    start: Optional[datetime] = None
-    end: Optional[datetime] = None
-    sort: Optional[str] = None
-    symbols: Optional[str] = None
-    limit: Optional[int] = None
-    include_content: Optional[bool] = None
-    exclude_contentless: Optional[bool] = None
-    page_token: Optional[str] = None
+    start: datetime | None = None
+    end: datetime | None = None
+    sort: str | None = None
+    symbols: str | None = None
+    limit: int | None = None
+    include_content: bool | None = None
+    exclude_contentless: bool | None = None
+    page_token: str | None = None
 
 
 # ############################## CorporateActions #################################### #
@@ -569,9 +569,9 @@ class CorporateActionsRequest(NonEmptyRequest):
         sort (Optional[Sort]): The chronological order of response based on the timestamp. Defaults to ASC.
     """
 
-    symbols: Optional[List[str]] = None
-    types: Optional[List[CorporateActionsType]] = None
-    start: Optional[date] = None
-    end: Optional[date] = None
-    limit: Optional[int] = 1000
-    sort: Optional[Sort] = Sort.ASC
+    symbols: list[str] | None = None
+    types: list[CorporateActionsType] | None = None
+    start: date | None = None
+    end: date | None = None
+    limit: int | None = 1000
+    sort: Sort | None = Sort.ASC

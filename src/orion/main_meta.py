@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import contextlib
 import sys
 
 from orion.agents.meta_search_agent import MetaSearchAgent
@@ -28,7 +29,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

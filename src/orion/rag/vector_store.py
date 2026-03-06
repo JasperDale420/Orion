@@ -1,14 +1,16 @@
 import inspect
 import logging
 import math
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Iterable, List
+from typing import Any
+
+from sqlalchemy import Float, cast, select
 
 from orion.rag.embeddings import EmbeddingClient
 from orion.shared.utils import parse_timestamptz
 from orion.storage.db import async_session_factory
 from orion.storage.models_rag import RagDocument
-from sqlalchemy import Float, cast, select
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +99,7 @@ class VectorStore:
         if end:
             end_dt = parse_timestamptz(end, strict=True)
 
-        async def execute_search(db: Any) -> List[RagDocument]:
+        async def execute_search(db: Any) -> list[RagDocument]:
             stmt_base = select(RagDocument)
             if tickers:
                 normalized = [t.strip() for t in tickers if t and t.strip()]

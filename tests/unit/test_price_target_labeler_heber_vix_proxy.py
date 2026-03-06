@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,7 +11,7 @@ import orion.main_price_target_labeler as labeler
 
 
 def test_get_heber_vix_proxy_snapshot_uses_latest_and_prior_close(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
@@ -36,7 +36,7 @@ def test_get_heber_vix_proxy_snapshot_uses_latest_and_prior_close(monkeypatch: p
 async def test_get_regime_at_entry_prefers_heber_vix_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     import orion.analysis.regime as regime_module
 
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     class _FakeDetector:
@@ -78,7 +78,7 @@ async def test_get_regime_at_entry_leaves_vix_none_when_heber_vix_unavailable(
 ) -> None:
     import orion.analysis.regime as regime_module
 
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     class _FakeDetector:
@@ -116,7 +116,7 @@ async def test_get_regime_at_entry_leaves_market_tide_none_when_heber_unavailabl
 ) -> None:
     import orion.analysis.regime as regime_module
 
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     class _FakeDetector:

@@ -5,7 +5,7 @@ Logs ML predictions and outcomes for performance evaluation.
 """
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 from sqlalchemy import text
 
@@ -20,9 +20,9 @@ async def log_entry_prediction(
     option_chain: str,
     bucket: str,
     prediction_score: float,
-    confidence: Optional[float] = None,
-    position_id: Optional[str] = None,
-) -> Optional[str]:
+    confidence: float | None = None,
+    position_id: str | None = None,
+) -> str | None:
     """Log an entry prediction for performance tracking.
 
     Args:
@@ -74,8 +74,8 @@ async def log_exit_prediction(
     option_chain: str,
     bucket: str,
     prediction_score: float,
-    position_id: Optional[str] = None,
-) -> Optional[str]:
+    position_id: str | None = None,
+) -> str | None:
     """Log an exit prediction for performance tracking."""
     prediction_id = str(uuid.uuid4())
     prediction_class = 1 if prediction_score >= 0.5 else 0
@@ -165,7 +165,7 @@ async def log_outcome(
         return False
 
 
-async def get_daily_accuracy(bucket: Optional[str] = None) -> Dict[str, Any]:
+async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
     """Get prediction accuracy for today.
 
     Returns:
@@ -212,7 +212,7 @@ async def get_daily_accuracy(bucket: Optional[str] = None) -> Dict[str, Any]:
     return {"total": 0, "correct": 0, "incorrect": 0, "accuracy_pct": None}
 
 
-async def get_weekly_performance() -> Dict[str, Any]:
+async def get_weekly_performance() -> dict[str, Any]:
     """Get weekly prediction performance by bucket.
 
     Returns:

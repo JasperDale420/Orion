@@ -2,7 +2,7 @@
 Integration test for queue optimization and metrics integration (Refactor Slices 2 & 3).
 Tests candidate queue flow from ingestion to execution.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from orion.main_ingest import save_candidates_to_db
@@ -21,7 +21,7 @@ async def test_candidate_queue_and_metrics():
     3. Verify queue contains candidate IDs
     4. Verify metrics are tracked (if enabled)
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Create test candidates
     candidates = [
@@ -88,7 +88,7 @@ async def test_queue_backfill():
     from orion.execution.service import ExecutionService
     from sqlalchemy import delete
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     test_candidate_id = "backfill_test_cand"
 
     # Create unprocessed candidate (no decision)

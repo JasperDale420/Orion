@@ -3,8 +3,8 @@ import hashlib
 import logging
 import os
 import time
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import requests
 from orion.core.errors import ErrorCode, ProviderError
@@ -22,7 +22,7 @@ class UWFlowConnector:
     Implements watermark polling and deduplication.
     """
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         self.gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
         self.gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
 
@@ -30,11 +30,11 @@ class UWFlowConnector:
         self.session.headers.update({"X-Gateway-Key": self.gateway_key, "User-Agent": "Orion/0.1.0"})
 
         # State tracking
-        self.last_poll_ts: Optional[datetime] = None
+        self.last_poll_ts: datetime | None = None
         self._watermark_loaded: bool = False
         self._watermark_key: str = "uw_flow"
 
-    def _generate_event_id(self, event_data: Dict[str, Any]) -> str:
+    def _generate_event_id(self, event_data: dict[str, Any]) -> str:
         """
         Generates a deterministic event ID based on the event content.
         PRD Rule 6.1: if provider gives unique ID use it, else hash(source + type + ticker + ts + payload).
@@ -54,12 +54,7 @@ class UWFlowConnector:
     def _is_retryable_fetch_error(exc: BaseException) -> bool:
         if isinstance(exc, requests.RequestException):
             return True
-        if isinstance(exc, ProviderError) and exc.code in {
-            ErrorCode.PROVIDER_RATE_LIMIT,
-            ErrorCode.PROVIDER_TIMEOUT,
-        }:
-            return True
-        return False
+        return bool(isinstance(exc, ProviderError) and exc.code in {ErrorCode.PROVIDER_RATE_LIMIT, ErrorCode.PROVIDER_TIMEOUT})
 
     async def _check_circuit_breaker(self) -> bool:
         """Check if circuit breaker is open. Returns True if should skip fetch."""
@@ -74,7 +69,7 @@ class UWFlowConnector:
         return False
 
     @staticmethod
-    def _normalize_put_call(raw: Dict[str, Any]) -> None:
+    def _normalize_put_call(raw: dict[str, Any]) -> None:
         """Normalize put_call field to C/P format in-place."""
         if "put_call" not in raw and "type" in raw:
             t = raw["type"].upper()
@@ -86,13 +81,13 @@ class UWFlowConnector:
                 raw["put_call"] = t[:1] if t else None
 
     @staticmethod
-    def _normalize_premium(raw: Dict[str, Any]) -> None:
+    def _normalize_premium(raw: dict[str, Any]) -> None:
         """Normalize premium field from total_premium if needed."""
         if "premium" not in raw and "total_premium" in raw:
             raw["premium"] = raw["total_premium"]
 
     def _parse_single_event(
-        self, raw: Dict[str, Any], fetch_start: datetime, now: datetime, seen_ids: set[str]
+        self, raw: dict[str, Any], fetch_start: datetime, now: datetime, seen_ids: set[str]
     ) -> BronzeEvent | None:
         """Parse a single raw event into a BronzeEvent, or return None if invalid."""
         ts_str = raw.get("timestamp") or raw.get("created_at")
@@ -122,7 +117,7 @@ class UWFlowConnector:
             session="REG",
         )
 
-    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
+    async def _update_watermark(self, events: list[BronzeEvent], now: datetime) -> None:
         """Update watermark based on processed events."""
         if events:
             candidate = max(e.event_ts_utc for e in events)
@@ -138,7 +133,7 @@ class UWFlowConnector:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception(_is_retryable_fetch_error),
     )
-    def fetch_flow_for_date(self, trading_date: date) -> List[Dict[str, Any]]:
+    def fetch_flow_for_date(self, trading_date: date) -> list[dict[str, Any]]:
         """
         Fetches flow events for a given trading date (UTC).
         """
@@ -258,20 +253,20 @@ class UWFlowConnector:
 
         await db_write(update_watermark)
 
-    def _fetch_raw_events_sync(self, start_ts: datetime, end_ts: datetime) -> List[Dict[str, Any]]:
+    def _fetch_raw_events_sync(self, start_ts: datetime, end_ts: datetime) -> list[dict[str, Any]]:
         """
         Fetch raw events for a [start_ts, end_ts] window.
         The UW flow endpoint used here is date-based; we fetch by UTC dates and filter client-side.
         """
         if start_ts.tzinfo is None:
-            start_ts = start_ts.replace(tzinfo=timezone.utc)
+            start_ts = start_ts.replace(tzinfo=UTC)
         if end_ts.tzinfo is None:
-            end_ts = end_ts.replace(tzinfo=timezone.utc)
+            end_ts = end_ts.replace(tzinfo=UTC)
 
-        start_date = start_ts.astimezone(timezone.utc).date()
-        end_date = end_ts.astimezone(timezone.utc).date()
+        start_date = start_ts.astimezone(UTC).date()
+        end_date = end_ts.astimezone(UTC).date()
 
-        all_raw: List[Dict[str, Any]] = []
+        all_raw: list[dict[str, Any]] = []
         cursor = start_date
         while cursor <= end_date:
             all_raw.extend(self.fetch_flow_for_date(cursor))
@@ -279,7 +274,7 @@ class UWFlowConnector:
 
         return all_raw
 
-    async def fetch_raw_events(self, start_ts: datetime, end_ts: datetime) -> List[Dict[str, Any]]:
+    async def fetch_raw_events(self, start_ts: datetime, end_ts: datetime) -> list[dict[str, Any]]:
         return await asyncio.to_thread(self._fetch_raw_events_sync, start_ts, end_ts)
 
     async def send_heartbeat_async(self) -> None:
@@ -298,7 +293,7 @@ class UWFlowConnector:
                 extra={
                     "event_type": "HEARTBEAT",
                     "component": "UW_FLOW",
-                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    "timestamp_utc": datetime.now(UTC).isoformat(),
                 },
             )
 
@@ -312,7 +307,7 @@ class UWFlowConnector:
                     session.add(record)
 
                 record.status = "HEALTHY"
-                record.last_updated_utc = datetime.now(timezone.utc)
+                record.last_updated_utc = datetime.now(UTC)
                 record.details = "UW Flow Connector Active"
 
                 await session.commit()
@@ -322,7 +317,7 @@ class UWFlowConnector:
                 f"Failed to update DB Heartbeat: {e}", extra={"event_type": "HEARTBEAT_DB_ERROR", "error": str(e)}
             )
 
-    async def poll(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
+    async def poll(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> list[BronzeEvent]:
         """
         Polls for new events (Async).
         PRD 7.1: request events after (last_seen_ts - overlap_margin).
@@ -333,7 +328,7 @@ class UWFlowConnector:
         await self._ensure_watermark_loaded()
         await self.send_heartbeat_async()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
         fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
@@ -381,12 +376,12 @@ class UWFlowConnector:
         await self._update_watermark(bronze_events, now)
         return bronze_events
 
-    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
+    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> list[BronzeEvent]:
         """
         PRDv2 7.2: Polling interface shim (fetch_since) so downstream code can stay stable
         when swapping transport (polling vs websocket).
         """
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         self.last_poll_ts = ts
         return await self.poll(lookback_seconds=0, overlap_seconds=overlap_seconds)

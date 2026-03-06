@@ -54,3 +54,9 @@ sonar_scan.log
 # Aider
 .aider*
 .env
+
+# Axon knowledge graph cache
+.axon/
+
+# qlib third-party library
+qlib-main/

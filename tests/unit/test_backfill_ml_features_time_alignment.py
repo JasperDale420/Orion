@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -11,9 +11,9 @@ import orion.main_price_target_labeler as labeler
 @pytest.mark.parametrize(
     "entry_ts,expected_session",
     [
-        (datetime(2026, 2, 9, 14, 30, tzinfo=timezone.utc), "OPEN"),
-        (datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc), "MID"),
-        (datetime(2026, 2, 9, 19, 0, tzinfo=timezone.utc), "CLOSE"),
+        (datetime(2026, 2, 9, 14, 30, tzinfo=UTC), "OPEN"),
+        (datetime(2026, 2, 9, 16, 0, tzinfo=UTC), "MID"),
+        (datetime(2026, 2, 9, 19, 0, tzinfo=UTC), "CLOSE"),
     ],
 )
 def test_backfill_entry_session_matches_live_labeler_contract(

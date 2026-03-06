@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -101,8 +101,8 @@ async def test_main_ingest_dlq_fallback():
         source="TEST",
         event_type="TEST_TYPE",
         payload={"data": 123},
-        event_ts_utc=datetime.now(timezone.utc),
-        received_ts_utc=datetime.now(timezone.utc),
+        event_ts_utc=datetime.now(UTC),
+        received_ts_utc=datetime.now(UTC),
         trading_date="2025-01-01",
         session="REG",
         schema_version="v1",

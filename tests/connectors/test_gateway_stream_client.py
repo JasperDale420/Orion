@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -55,7 +55,7 @@ async def test_processes_gateway_data_envelope_bar_message() -> None:
     assert event.payload["symbol"] == "AAPL"
     assert event.payload["ticker"] == "AAPL"
     assert event.payload["instrument_key"] == "equity:AAPL"
-    assert event.event_ts_utc == datetime(2026, 2, 5, 14, 31, tzinfo=timezone.utc)
+    assert event.event_ts_utc == datetime(2026, 2, 5, 14, 31, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

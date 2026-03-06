@@ -1,9 +1,8 @@
 from datetime import datetime
-from typing import List, Optional
 from uuid import UUID
 
 from alpaca.broker.enums import PortfolioStatus, RunInitiatedFrom, RunStatus, RunType
-from alpaca.broker.models import Order
+from alpaca.broker.models.trading import Order
 from alpaca.broker.requests import RebalancingConditions, Weight
 from alpaca.common.models import ValidateBaseModel as BaseModel
 
@@ -22,8 +21,8 @@ class Portfolio(BaseModel):
     cooldown_days: int
     created_at: datetime
     updated_at: datetime
-    weights: List[Weight]
-    rebalance_conditions: Optional[List[RebalancingConditions]] = None
+    weights: list[Weight]
+    rebalance_conditions: list[RebalancingConditions] | None = None
 
 
 class Subscription(BaseModel):
@@ -37,7 +36,7 @@ class Subscription(BaseModel):
     account_id: UUID
     portfolio_id: UUID
     created_at: datetime
-    last_rebalanced_at: Optional[datetime] = None
+    last_rebalanced_at: datetime | None = None
 
 
 class SkippedOrder(BaseModel):
@@ -48,9 +47,9 @@ class SkippedOrder(BaseModel):
     """
 
     symbol: str
-    side: Optional[str] = None
-    notional: Optional[str] = None
-    currency: Optional[str] = None
+    side: str | None = None
+    notional: str | None = None
+    currency: str | None = None
     reason: str
     reason_details: str
 
@@ -65,16 +64,16 @@ class RebalancingRun(BaseModel):
     id: UUID
     account_id: UUID
     type: RunType
-    amount: Optional[str] = None
+    amount: str | None = None
     portfolio_id: UUID
-    weights: List[Weight]
-    initiated_from: Optional[RunInitiatedFrom] = None
+    weights: list[Weight]
+    initiated_from: RunInitiatedFrom | None = None
     created_at: datetime
     updated_at: datetime
-    completed_at: Optional[datetime] = None
-    canceled_at: Optional[datetime] = None
+    completed_at: datetime | None = None
+    canceled_at: datetime | None = None
     status: RunStatus
-    reason: Optional[str] = None
-    orders: Optional[List[Order]] = None
-    failed_orders: Optional[List[Order]] = None
-    skipped_orders: Optional[List[SkippedOrder]] = None
+    reason: str | None = None
+    orders: list[Order] | None = None
+    failed_orders: list[Order] | None = None
+    skipped_orders: list[SkippedOrder] | None = None

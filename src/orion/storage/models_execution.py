@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, Index, String
@@ -13,9 +13,7 @@ class OrderRecord(Base):
     __tablename__ = "orders"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    created_at_utc: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     decision_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     candidate_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
@@ -38,9 +36,7 @@ class FillRecord(Base):
     __tablename__ = "fills"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    created_at_utc: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)
     broker_order_id: Mapped[str] = mapped_column(String, nullable=False, index=True)

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
-
 from orion.main_labeler import FlowRecord, _normalize_flow_df
 
 
 def test_normalize_flow_df_builds_records_from_heber_shape() -> None:
-    cutoff = datetime(2026, 2, 6, 15, 0, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 2, 6, 15, 0, tzinfo=UTC)
     df = pd.DataFrame(
         {
             "event_id": ["evt-1", "evt-2"],
@@ -32,13 +31,13 @@ def test_normalize_flow_df_builds_records_from_heber_shape() -> None:
     assert isinstance(rec, FlowRecord)
     assert rec.event_id == "evt-1"
     assert rec.ticker == "AAPL"
-    assert rec.flow_ts_utc == datetime(2026, 2, 6, 12, 0, tzinfo=timezone.utc)
+    assert rec.flow_ts_utc == datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
     assert rec.underlying_price == 100.5
     assert rec.option_price == 1.2
 
 
 def test_normalize_flow_df_supports_alias_columns() -> None:
-    cutoff = datetime(2026, 2, 6, 15, 0, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 2, 6, 15, 0, tzinfo=UTC)
     df = pd.DataFrame(
         {
             "source_event_id": ["src-1"],

@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -9,8 +9,8 @@ from ...models.market_holidays import MarketHolidays
 from ...types import Response
 
 
-def _get_kwargs() -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+def _get_kwargs() -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/market/holidays",
     }
@@ -18,7 +18,7 @@ def _get_kwargs() -> Dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Optional[Union[MarketHolidays, str]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> MarketHolidays | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -35,7 +35,7 @@ def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
         return None
 
 
-def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[Union[MarketHolidays, str]]:
+def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[MarketHolidays | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -47,7 +47,7 @@ def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[MarketHolidays, str]]:
+) -> Response[MarketHolidays | str]:
     """Market Holidays
 
      Returns the market holidays.
@@ -72,7 +72,7 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[MarketHolidays, str]]:
+) -> MarketHolidays | str | None:
     """Market Holidays
 
      Returns the market holidays.
@@ -93,7 +93,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[MarketHolidays, str]]:
+) -> Response[MarketHolidays | str]:
     """Market Holidays
 
      Returns the market holidays.
@@ -116,7 +116,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[MarketHolidays, str]]:
+) -> MarketHolidays | str | None:
     """Market Holidays
 
      Returns the market holidays.

@@ -1,5 +1,4 @@
-from datetime import datetime, timezone
-from typing import Optional, Tuple, Union
+from datetime import UTC, datetime
 
 import exchange_calendars as xcals
 
@@ -13,14 +12,14 @@ class MarketSchedule:
 
     def __new__(cls) -> "MarketSchedule":
         if cls._instance is None:
-            cls._instance = super(MarketSchedule, cls).__new__(cls)
+            cls._instance = super().__new__(cls)
             cls._instance._initialize()
         return cls._instance
 
     def _initialize(self) -> None:
         # Initialize attributes with types
-        self.open_col: Optional[str] = None
-        self.close_col: Optional[str] = None
+        self.open_col: str | None = None
+        self.close_col: str | None = None
 
         try:
             self.calendar = xcals.get_calendar("XNYS")
@@ -57,7 +56,7 @@ class MarketSchedule:
             self.open_col = None
             self.close_col = None
 
-    def is_market_open(self, timestamp: Optional[datetime] = None) -> bool:
+    def is_market_open(self, timestamp: datetime | None = None) -> bool:
         """
         Checks if the market is currently open.
 
@@ -70,12 +69,10 @@ class MarketSchedule:
             )
             raise RuntimeError("Cannot verify market hours without calendar")
 
-        ts = timestamp or datetime.now(timezone.utc)
+        ts = timestamp or datetime.now(UTC)
         return bool(self.calendar.is_open_on_minute(ts))
 
-    def get_open_close(
-        self, timestamp: Optional[datetime] = None
-    ) -> Union[Tuple[datetime, datetime], Tuple[None, None]]:
+    def get_open_close(self, timestamp: datetime | None = None) -> tuple[datetime, datetime] | tuple[None, None]:
         """
         Returns (market_open, market_close) for the given day.
 
@@ -88,7 +85,7 @@ class MarketSchedule:
             )
             raise RuntimeError("Cannot get market hours without calendar")
 
-        ts = timestamp or datetime.now(timezone.utc)
+        ts = timestamp or datetime.now(UTC)
         date_val = ts.date()
 
         try:
@@ -116,7 +113,7 @@ class MarketSchedule:
             )
             raise RuntimeError(f"Failed to get market hours for {date_val}") from e
 
-    def get_next_market_open(self, timestamp: Optional[datetime] = None) -> datetime:
+    def get_next_market_open(self, timestamp: datetime | None = None) -> datetime:
         """
         Returns the next market open time.
 
@@ -129,15 +126,15 @@ class MarketSchedule:
             )
             raise RuntimeError("Cannot determine next market open without calendar")
 
-        ts = timestamp or datetime.now(timezone.utc)
+        ts = timestamp or datetime.now(UTC)
         # exchange_calendars typing is loose, cast result
         return self.calendar.next_open(ts).to_pydatetime()  # type: ignore
 
-    def seconds_until_open(self, timestamp: Optional[datetime] = None) -> float:
+    def seconds_until_open(self, timestamp: datetime | None = None) -> float:
         """
         Returns seconds until next market open. Returns 0 if currently open.
         """
-        ts = timestamp or datetime.now(timezone.utc)
+        ts = timestamp or datetime.now(UTC)
         if self.is_market_open(ts):
             return 0.0
 
@@ -145,7 +142,7 @@ class MarketSchedule:
         diff = (next_open - ts).total_seconds()
         return max(0.0, diff)
 
-    def get_todays_close(self, timestamp: Optional[datetime] = None) -> Optional[datetime]:
+    def get_todays_close(self, timestamp: datetime | None = None) -> datetime | None:
         """
         Returns market close time for the session containing timestamp.
 
@@ -158,7 +155,7 @@ class MarketSchedule:
             )
             raise RuntimeError("Cannot determine today's close without calendar")
 
-        ts = timestamp or datetime.now(timezone.utc)
+        ts = timestamp or datetime.now(UTC)
         if self.is_market_open(ts):
             return self.calendar.next_close(ts).to_pydatetime()  # type: ignore
         return None

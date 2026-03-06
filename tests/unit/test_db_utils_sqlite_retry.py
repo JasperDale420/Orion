@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any
 
-import orion.shared.db_utils as db_utils
 import pytest
 from sqlalchemy.exc import OperationalError
+
+import orion.shared.db_utils as db_utils
 
 
 class _FakeSession:

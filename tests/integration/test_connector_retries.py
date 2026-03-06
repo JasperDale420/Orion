@@ -1,9 +1,10 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from requests.exceptions import ConnectionError
+
 from orion.config import SystemSettings
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
-from requests.exceptions import ConnectionError
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def test_connector_submit_order_retry_success(mock_settings):
     Verify that submit_limit_order retries on ConnectionError and eventually succeeds.
     """
     # 1. Setup Mock Client
-    with patch("orion.connectors.alpaca_trading_connector.TradingClient") as MockClient:
+    with patch("orion.connectors.alpaca_trading_connector.TradingClient") as MockClient:  # noqa: N806
         client_instance = MockClient.return_value
         # Mock get_account (called in init)
         client_instance.get_account.return_value.buying_power = "100000"
@@ -49,7 +50,7 @@ def test_connector_submit_order_retry_giveup(mock_settings):
     """
     Verify that submit_limit_order raises after max retries.
     """
-    with patch("orion.connectors.alpaca_trading_connector.TradingClient") as MockClient:
+    with patch("orion.connectors.alpaca_trading_connector.TradingClient") as MockClient:  # noqa: N806
         client_instance = MockClient.return_value
         client_instance.get_account.return_value.buying_power = "100000"
 

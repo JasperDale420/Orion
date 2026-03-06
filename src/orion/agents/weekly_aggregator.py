@@ -9,9 +9,9 @@ Collects and summarizes weekly data for meta-agent analysis:
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from sqlalchemy import and_, func, select
 
@@ -28,7 +28,7 @@ class WeeklyDataAggregator:
     def __init__(self, artifacts_dir: str = "artifacts/reports") -> None:
         self.artifacts_dir = Path(artifacts_dir)
 
-    async def aggregate_week(self, week_end: Optional[datetime] = None) -> Dict[str, Any]:
+    async def aggregate_week(self, week_end: datetime | None = None) -> dict[str, Any]:
         """
         Aggregate all data for the week ending on the specified date.
 
@@ -39,7 +39,7 @@ class WeeklyDataAggregator:
             Combined weekly data for meta-agent analysis.
         """
         if week_end is None:
-            week_end = datetime.now(timezone.utc)
+            week_end = datetime.now(UTC)
 
         week_start = week_end - timedelta(days=7)
 
@@ -59,7 +59,7 @@ class WeeklyDataAggregator:
             "ml_insights": ml_data,
         }
 
-    async def aggregate_eod_reports(self, week_start: datetime, week_end: datetime) -> Dict[str, Any]:
+    async def aggregate_eod_reports(self, week_start: datetime, week_end: datetime) -> dict[str, Any]:
         """
         Collect and summarize EOD reports from the week.
         """
@@ -88,12 +88,12 @@ class WeeklyDataAggregator:
                 try:
                     # Parse date from filename: eod_input_2026-01-06_uuid.json
                     date_str = f.name.split("_")[2]
-                    file_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    file_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=UTC)
 
                     if not (week_start <= file_date <= week_end):
                         continue
 
-                    with open(f, "r") as fp:
+                    with open(f) as fp:
                         data = json.load(fp)
 
                     reports.append(
@@ -161,14 +161,14 @@ class WeeklyDataAggregator:
 
         return summary
 
-    async def aggregate_trade_data(self, week_start: datetime, week_end: datetime) -> Dict[str, Any]:
+    async def aggregate_trade_data(self, week_start: datetime, week_end: datetime) -> dict[str, Any]:
         """
         Aggregate trade execution data from the database.
         """
         from orion.storage.models_gold import StrategyDecision
         from orion.storage.models_trade_journal import TradeJournalEntry
 
-        async def fetch_trade_stats(session: Any) -> Dict[str, Any]:
+        async def fetch_trade_stats(session: Any) -> dict[str, Any]:
             # Count decisions
             stmt_decisions = select(
                 func.count(StrategyDecision.decision_id).label("total"),
@@ -242,7 +242,7 @@ class WeeklyDataAggregator:
             logger.error(f"Failed to aggregate trade data: {e}")
             return {"decisions": {}, "trades": {}, "error": str(e)}
 
-    async def aggregate_ml_insights(self, week_start: datetime, week_end: datetime) -> Dict[str, Any]:
+    async def aggregate_ml_insights(self, week_start: datetime, week_end: datetime) -> dict[str, Any]:
         """
         Aggregate ML model insights from EOD reports (no separate MLInsight table).
         """
@@ -255,7 +255,7 @@ class WeeklyDataAggregator:
         }
 
 
-async def run_weekly_aggregation() -> Dict[str, Any]:
+async def run_weekly_aggregation() -> dict[str, Any]:
     """
     Convenience function to run weekly aggregation.
     """

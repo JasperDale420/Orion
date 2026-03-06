@@ -1,4 +1,4 @@
-from typing import Awaitable, Callable, Dict, Optional, Union
+from collections.abc import Awaitable, Callable
 
 from alpaca.common.enums import BaseURL
 from alpaca.data.live.websocket import DataStream
@@ -15,8 +15,8 @@ class NewsDataStream(DataStream):
         api_key: str,
         secret_key: str,
         raw_data: bool = False,
-        websocket_params: Optional[Dict] = None,
-        url_override: Optional[str] = None,
+        websocket_params: dict | None = None,
+        url_override: str | None = None,
     ) -> None:
         """
         Instantiates a WebSocket client for accessing live news.
@@ -42,7 +42,7 @@ class NewsDataStream(DataStream):
         )
 
     def subscribe_news(
-        self, handler: Callable[[Union[News, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[News | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to news
 

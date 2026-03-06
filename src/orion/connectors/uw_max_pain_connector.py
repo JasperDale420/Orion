@@ -6,8 +6,8 @@ Fetches max pain strike levels by expiry via Data Gateway.
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def _is_retryable_gateway_status(status_code: Optional[int]) -> bool:
+def _is_retryable_gateway_status(status_code: int | None) -> bool:
     return status_code in RETRYABLE_GATEWAY_STATUS_CODES
 
 
 class UWMaxPainConnector:
     """Fetches max pain strikes via Data Gateway."""
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         self.gateway_url = (gateway_url or system_settings.data_gateway_url or "").strip().rstrip("/")
         if not self.gateway_url:
             raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
@@ -36,7 +36,7 @@ class UWMaxPainConnector:
         if not self.gateway_key:
             raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
         self.headers = {"X-Gateway-Key": self.gateway_key}
-        self._latest_max_pain_rows: list[Dict[str, Any]] = []
+        self._latest_max_pain_rows: list[dict[str, Any]] = []
         self._client = create_http_client(
             base_url=self.gateway_url,
             timeout=30.0,
@@ -44,7 +44,7 @@ class UWMaxPainConnector:
         )
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _fetch_max_pain(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def _fetch_max_pain(self, ticker: str) -> dict[str, Any] | None:
         """Fetch max pain for a ticker via Data Gateway."""
         try:
             resp = self._client.get(f"/api/v1/uw/{ticker}/max-pain")
@@ -71,7 +71,7 @@ class UWMaxPainConnector:
             logger.error("Unexpected error fetching max pain for %s: %s", ticker, e, exc_info=True)
             raise
 
-    async def fetch_and_store(self, tickers: List[str]) -> int:
+    async def fetch_and_store(self, tickers: list[str]) -> int:
         """Fetch max pain for multiple tickers and store."""
         stored = 0
         today = date.today()
@@ -125,9 +125,9 @@ class UWMaxPainConnector:
 
         return stored
 
-    async def _get_current_price(self, ticker: str) -> Optional[float]:
+    async def _get_current_price(self, ticker: str) -> float | None:
         """Get latest price from Heber bars."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         start = now - timedelta(days=7)
 
         try:
@@ -164,14 +164,14 @@ class UWMaxPainConnector:
         latest = temp.sort_values("ts").iloc[-1]
         return float(latest["close"])
 
-    async def _persist_max_pain(self, record: Dict[str, Any]) -> None:
+    async def _persist_max_pain(self, record: dict[str, Any]) -> None:
         """Persist latest max pain rows in memory."""
         self._latest_max_pain_rows.append(dict(record))
         if len(self._latest_max_pain_rows) > 2000:
             self._latest_max_pain_rows = self._latest_max_pain_rows[-1000:]
 
 
-def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
+def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
     for name in names:
         if name in df.columns:
             return name

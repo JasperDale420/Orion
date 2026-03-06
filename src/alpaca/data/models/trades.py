@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Dict, List, Optional, Union
 
 from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.common.types import RawData
@@ -29,12 +28,12 @@ class Trade(BaseModel):
 
     symbol: str
     timestamp: datetime
-    exchange: Optional[Union[Exchange, str]] = None
+    exchange: Exchange | str | None = None
     price: float
     size: float
-    id: Optional[int] = None
-    conditions: Optional[Union[List[str], str]] = None
-    tape: Optional[str] = None
+    id: int | None = None
+    conditions: list[str] | str | None = None
+    tape: str | None = None
 
     def __init__(self, symbol: str, raw_data: RawData) -> None:
         """Instantiates a Trade object
@@ -60,7 +59,7 @@ class TradeSet(BaseDataSet, TimeSeriesMixin):
         data (Dict[str, List[Trade]]]): The collection of Trades keyed by symbol.
     """
 
-    data: Dict[str, List[Trade]] = {}
+    data: dict[str, list[Trade]] = {}
 
     def __init__(self, raw_data: RawData) -> None:
         """Instantiates a TradeSet - a collection of Trades.
@@ -136,8 +135,8 @@ class TradeCancel(BaseModel):
     exchange: Exchange
     price: float
     size: float
-    id: Optional[int] = None
-    action: Optional[str] = None
+    id: int | None = None
+    action: str | None = None
     tape: str
 
     def __init__(self, symbol: str, raw_data: RawData) -> None:
@@ -178,14 +177,14 @@ class TradeCorrection(BaseModel):
     symbol: str
     timestamp: datetime
     exchange: Exchange
-    original_id: Optional[int] = None
+    original_id: int | None = None
     original_price: float
     original_size: float
-    original_conditions: List[str]
-    corrected_id: Optional[int] = None
+    original_conditions: list[str]
+    corrected_id: int | None = None
     corrected_price: float
     corrected_size: float
-    corrected_conditions: List[str]
+    corrected_conditions: list[str]
     tape: str
 
     def __init__(self, symbol: str, raw_data: RawData) -> None:

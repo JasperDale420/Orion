@@ -2,6 +2,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.processing.feature_engine import FeatureEngine
 from orion.storage.models_silver import SilverSignal
 

@@ -1,7 +1,7 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 
 from orion.config import system_settings
 from orion.core.logging_config import setup_logging
@@ -35,7 +35,7 @@ class RollupJob:
         return f"rollups:{ticker}"
 
     async def run_once(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # The RollupBuilder needs a session to read data, but upsert_watermark can use db_write
         async with async_session_factory() as session:
             builder = RollupBuilder(session)
@@ -68,7 +68,9 @@ class RollupJob:
             try:
                 await self.run_once()
             except Exception as e:
-                logger.error(f"Rollup job iteration failed: {e}", extra={"event_type": "ROLLUP_JOB_ERROR"})
+                logger.error(
+                    f"Rollup job iteration failed: {e}", exc_info=True, extra={"event_type": "ROLLUP_JOB_ERROR"}
+                )
 
             elapsed = asyncio.get_running_loop().time() - t0
             await asyncio.sleep(max(1.0, self.loop_interval_seconds - elapsed))

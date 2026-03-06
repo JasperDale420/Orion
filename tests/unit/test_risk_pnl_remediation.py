@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.config import RiskSettings
 from orion.execution.risk_manager import RiskManager
 
@@ -133,45 +134,42 @@ async def test_execution_engine_polling_integration():
 
     mock_connector.get_recent_fills.return_value = [mock_fill]
 
-    with patch("orion.execution.execution_engine.AlpacaTradingConnector"):
+    with (
+        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.system_settings") as mock_settings,
+        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
+        patch("orion.execution.execution_engine.logger") as mock_logger,
+    ):
         # We need to bypass __init__ connecting?
         # Or just assign connector after init.
         # ExecutionEngine tries to init connector if keys exist.
+        mock_settings.alpaca_api_key = "test"
+        mock_settings.alpaca_secret_key = "test"
+        mock_settings.alpaca_paper = True
 
-        with patch("orion.execution.execution_engine.system_settings") as mock_settings:
-            mock_settings.alpaca_api_key = "test"
-            mock_settings.alpaca_secret_key = "test"
-            mock_settings.alpaca_paper = True
+        engine = ExecutionEngine()
+        engine.connector = mock_connector
+        engine._persist_fill_record = AsyncMock()
+        engine._is_fill_processed = AsyncMock(side_effect=[False, True])
+        engine._mark_fill_processed = AsyncMock()
 
-            with (
-                patch("orion.execution.execution_engine.AlpacaMarketConnector"),
-                patch("orion.execution.execution_engine.logger") as mock_logger,
-            ):
-                engine = ExecutionEngine()
-                engine.connector = mock_connector
-                engine._persist_fill_record = AsyncMock()
-                engine._is_fill_processed = AsyncMock(side_effect=[False, True])
-                engine._mark_fill_processed = AsyncMock()
+        # Setup RiskManager mock to verify call
+        engine.risk_manager = AsyncMock()
 
-                # Setup RiskManager mock to verify call
-                engine.risk_manager = AsyncMock()
+        # Execute Poll
+        await engine.poll_fills()
 
-                # Execute Poll
-                await engine.poll_fills()
+        # Check for errors in log
+        if mock_logger.error.called:
+            # call_args -> (args, kwargs). args[0] is the message.
+            msg = mock_logger.error.call_args[0][0]
+            pytest.fail(f"Logger Error: {msg}")
 
-                # Check for errors in log
-                if mock_logger.error.called:
-                    # call_args -> (args, kwargs). args[0] is the message.
-                    msg = mock_logger.error.call_args[0][0]
-                    pytest.fail(f"Logger Error: {msg}")
+        # Use call_args explicitly to verify types
+        # process_fill(ticker, qty, price, side)
+        engine.risk_manager.process_fill.assert_awaited_once_with("AAPL", 10.0, 150.0, "buy", fill_id="order_123")
 
-                # Use call_args explicitly to verify types
-                # process_fill(ticker, qty, price, side)
-                engine.risk_manager.process_fill.assert_awaited_once_with(
-                    "AAPL", 10.0, 150.0, "buy", fill_id="order_123"
-                )
-
-                # Verify deduplication
-                await engine.poll_fills()
-                # Should not call again
-                assert engine.risk_manager.process_fill.call_count == 1
+        # Verify deduplication
+        await engine.poll_fills()
+        # Should not call again
+        assert engine.risk_manager.process_fill.call_count == 1

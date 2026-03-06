@@ -5,14 +5,18 @@ Extracted from main_price_target_labeler.py for reuse across the codebase.
 """
 
 import math
-from typing import List, Optional
 
 from scipy.stats import norm
 
 
 def calculate_black_scholes_delta(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str
-) -> Optional[float]:
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    option_type: str,  # noqa: N803
+) -> float | None:
     """Calculate option delta using Black-Scholes model.
 
     Args:
@@ -40,7 +44,7 @@ def calculate_black_scholes_delta(
         ) from e
 
 
-def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> Optional[float]:
+def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> float | None:  # noqa: N803
     """Calculate option gamma using Black-Scholes model.
 
     Args:
@@ -65,8 +69,13 @@ def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma:
 
 
 def calculate_black_scholes_theta(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str
-) -> Optional[float]:
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    option_type: str,  # noqa: N803
+) -> float | None:
     """Calculate option theta using Black-Scholes model.
 
     Args:
@@ -99,7 +108,7 @@ def calculate_black_scholes_theta(
         ) from e
 
 
-def calculate_black_scholes_vega(S: float, K: float, T: float, r: float, sigma: float) -> Optional[float]:
+def calculate_black_scholes_vega(S: float, K: float, T: float, r: float, sigma: float) -> float | None:  # noqa: N803
     """Calculate option vega using Black-Scholes model.
 
     Args:
@@ -124,7 +133,7 @@ def calculate_black_scholes_vega(S: float, K: float, T: float, r: float, sigma: 
         ) from e
 
 
-def calculate_iv_rank_from_history(current_iv: float, iv_history: List[float]) -> Optional[float]:
+def calculate_iv_rank_from_history(current_iv: float, iv_history: list[float]) -> float | None:
     """Calculate IV rank as percentile within historical IV range.
 
     Args:

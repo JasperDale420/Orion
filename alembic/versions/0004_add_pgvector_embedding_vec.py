@@ -6,7 +6,7 @@ Create Date: 2025-12-18
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
@@ -14,9 +14,9 @@ from pgvector.sqlalchemy import Vector
 from alembic import op
 
 revision: str = "0004_add_pgvector_embedding_vec"
-down_revision: Union[str, None] = "0003_add_silver_uw_alerts"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0003_add_silver_uw_alerts"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Dict, List, Optional, Union
+from typing import Union
 
 from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.common.types import RawData
@@ -13,9 +13,9 @@ class ForwardSplit(BaseModel):
     old_rate: float
     process_date: date
     ex_date: date
-    record_date: Optional[date] = None
-    payable_date: Optional[date] = None
-    due_bill_redemption_date: Optional[date] = None
+    record_date: date | None = None
+    payable_date: date | None = None
+    due_bill_redemption_date: date | None = None
 
 
 class ReverseSplit(BaseModel):
@@ -25,8 +25,8 @@ class ReverseSplit(BaseModel):
     old_rate: float
     process_date: date
     ex_date: date
-    record_date: Optional[date] = None
-    payable_date: Optional[date] = None
+    record_date: date | None = None
+    payable_date: date | None = None
 
 
 class UnitSplit(BaseModel):
@@ -39,7 +39,7 @@ class UnitSplit(BaseModel):
     alternate_rate: float
     process_date: date
     effective_date: date
-    payable_date: Optional[date] = None
+    payable_date: date | None = None
 
 
 class StockDividend(BaseModel):
@@ -48,8 +48,8 @@ class StockDividend(BaseModel):
     rate: float
     process_date: date
     ex_date: date
-    record_date: Optional[date] = None
-    payable_date: Optional[date] = None
+    record_date: date | None = None
+    payable_date: date | None = None
 
 
 class CashDividend(BaseModel):
@@ -60,10 +60,10 @@ class CashDividend(BaseModel):
     foreign: bool
     process_date: date
     ex_date: date
-    record_date: Optional[date] = None
-    payable_date: Optional[date] = None
-    due_bill_on_date: Optional[date] = None
-    due_bill_off_date: Optional[date] = None
+    record_date: date | None = None
+    payable_date: date | None = None
+    due_bill_on_date: date | None = None
+    due_bill_off_date: date | None = None
 
 
 class SpinOff(BaseModel):
@@ -74,20 +74,20 @@ class SpinOff(BaseModel):
     new_rate: float
     process_date: date
     ex_date: date
-    payable_date: Optional[date] = None
-    record_date: Optional[date] = None
-    payable_date: Optional[date] = None
-    due_bill_redemption_date: Optional[date] = None
+    payable_date: date | None = None
+    record_date: date | None = None
+    payable_date: date | None = None
+    due_bill_redemption_date: date | None = None
 
 
 class CashMerger(BaseModel):
     corporate_action_type: str
-    acquirer_symbol: Optional[str] = None
+    acquirer_symbol: str | None = None
     acquiree_symbol: str
     rate: float
     process_date: date
     effective_date: date
-    payable_date: Optional[date] = None
+    payable_date: date | None = None
 
 
 class StockMerger(BaseModel):
@@ -98,7 +98,7 @@ class StockMerger(BaseModel):
     acquiree_rate: float
     process_date: date
     effective_date: date
-    payable_date: Optional[date] = None
+    payable_date: date | None = None
 
 
 class StockAndCashMerger(BaseModel):
@@ -110,7 +110,7 @@ class StockAndCashMerger(BaseModel):
     cash_rate: float
     process_date: date
     effective_date: date
-    payable_date: Optional[date] = None
+    payable_date: date | None = None
 
 
 class Redemption(BaseModel):
@@ -118,7 +118,7 @@ class Redemption(BaseModel):
     symbol: str
     rate: float
     process_date: date
-    payable_date: Optional[date] = None
+    payable_date: date | None = None
 
 
 class NameChange(BaseModel):
@@ -142,8 +142,8 @@ class RightsDistribution(BaseModel):
     process_date: date
     ex_date: date
     payable_date: date = None
-    record_date: Optional[date] = None
-    expiration_date: Optional[date] = None
+    record_date: date | None = None
+    expiration_date: date | None = None
 
 
 CorporateAction = Union[
@@ -172,9 +172,9 @@ class CorporateActionsSet(BaseDataSet, TimeSeriesMixin):
         data (Dict[str, List[CorporateAction]]): The collection of corporate actions.
     """
 
-    data: Dict[
+    data: dict[
         str,
-        List[CorporateAction],
+        list[CorporateAction],
     ] = {}
 
     def __init__(self, raw_data: RawData) -> None:
@@ -184,9 +184,9 @@ class CorporateActionsSet(BaseDataSet, TimeSeriesMixin):
         Args:
             raw_data (RawData): The raw corporate_actions data received from API
         """
-        parsed_corporate_actions: Dict[
+        parsed_corporate_actions: dict[
             str,
-            List[CorporateAction],
+            list[CorporateAction],
         ] = {}
 
         if raw_data is None:

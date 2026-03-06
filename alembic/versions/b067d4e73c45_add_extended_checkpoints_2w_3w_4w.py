@@ -7,7 +7,8 @@ Create Date: 2026-01-06 15:27:00.000000
 Adds 2-week, 3-week, and 4-week checkpoint columns to price_target_labels
 for POSITION bucket trades that have longer holding periods.
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 
@@ -15,9 +16,9 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b067d4e73c45"
-down_revision: Union[str, None] = "c41e5be876d8"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c41e5be876d8"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

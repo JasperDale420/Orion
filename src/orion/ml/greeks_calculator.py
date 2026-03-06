@@ -6,7 +6,6 @@ Used when Greeks are not available from external APIs.
 """
 
 import math
-from typing import Dict, Optional
 
 import structlog
 from scipy.stats import norm
@@ -21,7 +20,7 @@ def calculate_greeks(
     iv: float,
     risk_free_rate: float = 0.05,
     option_type: str = "CALL",
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """Calculate option Greeks using Black-Scholes model.
 
     Args:
@@ -98,7 +97,7 @@ def calculate_delta_gamma(
     iv: float,
     option_type: str = "CALL",
     risk_free_rate: float = 0.05,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """Convenience function to get delta and gamma from DTE.
 
     Args:

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+
 from orion.agents.eod_review_agent import EODReviewAgent
 
 
 @pytest.mark.asyncio
 async def test_load_regime_bars_from_heber_returns_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "symbol": ["SPY", "SPY", "QQQ"],
@@ -42,7 +43,7 @@ async def test_load_regime_bars_from_heber_returns_empty_on_error(monkeypatch: p
     fake_reader.read_bars.side_effect = RuntimeError("heber unavailable")
     monkeypatch.setattr("orion.agents.eod_review_agent.get_heber_reader", lambda: fake_reader)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     agent = EODReviewAgent(vector_store=MagicMock(), proposal_builder=MagicMock())
     rows = await agent._load_regime_bars_from_heber(
         tickers=["SPY"],

@@ -5,8 +5,7 @@ Tests each of the 6 exit rules with mock flow data and positions.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from orion.processing.rules.exit_rules import (
     IVContractionExitRule,
@@ -29,16 +28,16 @@ class MockPosition:
     decision_id: str = "test_decision_1"
     entry_ts: datetime = None
     entry_price: float = 100.0
-    option_chain: Optional[str] = "SPY250117C00500000"
-    entry_iv: Optional[float] = 0.25
+    option_chain: str | None = "SPY250117C00500000"
+    entry_iv: float | None = 0.25
     entry_premium_window: float = 500000.0
     entry_sweep_count: int = 10
-    entry_oi: Optional[float] = 5000.0
+    entry_oi: float | None = 5000.0
     qty: float = 10.0
 
     def __post_init__(self):
         if self.entry_ts is None:
-            self.entry_ts = datetime.now(timezone.utc) - timedelta(minutes=15)
+            self.entry_ts = datetime.now(UTC) - timedelta(minutes=15)
 
 
 @dataclass
@@ -57,7 +56,7 @@ class MockFlow:
 
     def __post_init__(self):
         if self.flow_ts_utc is None:
-            self.flow_ts_utc = datetime.now(timezone.utc)
+            self.flow_ts_utc = datetime.now(UTC)
 
 
 class TestSentimentReversalExitRule:
@@ -165,7 +164,7 @@ class TestWaningMomentumExitRule:
         position = MockPosition(entry_sweep_count=10)
 
         # Only 2 recent sweeps (80% drop)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         flow = [
             MockFlow(flow_ts_utc=now - timedelta(minutes=5), is_sweep="true"),
             MockFlow(flow_ts_utc=now - timedelta(minutes=10), is_sweep="true"),
@@ -181,7 +180,7 @@ class TestWaningMomentumExitRule:
         position = MockPosition(entry_sweep_count=5)
 
         # 4 recent sweeps (only 20% drop)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         flow = [MockFlow(flow_ts_utc=now - timedelta(minutes=i), is_sweep="true") for i in range(4)]
 
         signal = rule.should_exit(position, flow)
@@ -210,7 +209,7 @@ class TestIVContractionExitRule:
         position = MockPosition(entry_iv=0.25)
 
         # Earnings in 12 hours
-        earnings = datetime.now(timezone.utc) + timedelta(hours=12)
+        earnings = datetime.now(UTC) + timedelta(hours=12)
         context = {"next_earnings_date": earnings.isoformat()}
 
         signal = rule.should_exit(position, [], context)
@@ -238,7 +237,7 @@ class TestOpposingClusterExitRule:
         position = MockPosition(direction="LONG")
 
         # 6 opposing trades
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         flow = [
             MockFlow(
                 flow_ts_utc=now - timedelta(minutes=i),
@@ -259,7 +258,7 @@ class TestOpposingClusterExitRule:
         position = MockPosition(direction="LONG")
 
         # Only 3 opposing trades
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         flow = [
             MockFlow(
                 flow_ts_utc=now - timedelta(minutes=i),

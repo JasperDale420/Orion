@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -37,10 +37,10 @@ class CircuitBreaker:
                     return  # Already open
                 status_record.status = "OPEN"
                 status_record.details = reason
-                status_record.last_updated_utc = datetime.now(timezone.utc)
+                status_record.last_updated_utc = datetime.now(UTC)
             else:
                 status_record = SystemStatus(
-                    key=self.KEY, status="OPEN", details=reason, last_updated_utc=datetime.now(timezone.utc)
+                    key=self.KEY, status="OPEN", details=reason, last_updated_utc=datetime.now(UTC)
                 )
                 session.add(status_record)
 
@@ -60,7 +60,7 @@ class CircuitBreaker:
             if status_record:
                 status_record.status = "CLOSED"
                 status_record.details = "Reset by system/operator"
-                status_record.last_updated_utc = datetime.now(timezone.utc)
+                status_record.last_updated_utc = datetime.now(UTC)
 
         await db_write(reset_breaker)
         logger.info("Circuit Breaker CLOSED (Reset). System Nominal.")

@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+
 from orion.processing.feature_engine import FeatureEngine
 from orion.storage.models import BronzeEvent
 
@@ -37,10 +38,10 @@ def create_mock_bar_event(ticker, ts):
 
 def test_feature_engine_integrates_flow_simple():
     fe = FeatureEngine()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # 1. Ingest Flow (60s ago)
-    flow_event = create_mock_flow_event("AAPL", 50000.0, datetime.fromtimestamp(now.timestamp() - 60, timezone.utc))
+    flow_event = create_mock_flow_event("AAPL", 50000.0, datetime.fromtimestamp(now.timestamp() - 60, UTC))
     fe.process_uw_flow([flow_event])
 
     # 2. Ingest Bar (trigger signal)
@@ -57,10 +58,10 @@ def test_feature_engine_integrates_flow_simple():
 
 def test_feature_engine_expires_old_flow_simple():
     fe = FeatureEngine()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Old flow (20 mins = 1200s ago)
-    old_flow = create_mock_flow_event("AAPL", 100000.0, datetime.fromtimestamp(now.timestamp() - 1200, timezone.utc))
+    old_flow = create_mock_flow_event("AAPL", 100000.0, datetime.fromtimestamp(now.timestamp() - 1200, UTC))
     fe.process_uw_flow([old_flow])
 
     # Bar now

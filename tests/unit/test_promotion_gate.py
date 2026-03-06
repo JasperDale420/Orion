@@ -1,4 +1,5 @@
 import pytest
+
 from orion.core.promotion_rules import evaluate_stage_transition
 from orion.storage.models_solvers import SolverMetrics
 

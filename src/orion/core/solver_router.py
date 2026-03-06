@@ -1,13 +1,12 @@
 import logging
 from dataclasses import dataclass
-from typing import List
 
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from orion.core.solver_schema import LiveContext, SolverConfig
 from orion.storage import db
-from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY
+from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY  # noqa: N812
 from orion.storage.models_solvers import Solver, SolverMetrics
 
 logger = logging.getLogger(__name__)
@@ -43,7 +42,7 @@ class SolverRouter:
         """Normalize stage name using defined aliases for consistent comparison."""
         return cls.STAGE_ALIASES.get(stage, stage)
 
-    async def select_solvers(self, context: "LiveContext", top_k: int = 3) -> List[SelectedSolver]:
+    async def select_solvers(self, context: "LiveContext", top_k: int = 3) -> list[SelectedSolver]:
         """
         Determines which solvers to use (Async).
         Returns a list of eligible solvers for Ensemble Logic (FR 5.6.2).
@@ -235,10 +234,10 @@ class SolverRouter:
                         fallback_solver = next((s for s in active_solvers if s.solver_id == fallback_id), None)
 
                         # In live stage, only allow fallback when baseline is already among active solver set.
-                        if (
-                            not fallback_solver
-                            and str(getattr(context, "current_stage", "")).lower() in {"live", "limited_live"}
-                        ):
+                        if not fallback_solver and str(getattr(context, "current_stage", "")).lower() in {
+                            "live",
+                            "limited_live",
+                        }:
                             return []
 
                         if not fallback_solver:

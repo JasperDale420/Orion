@@ -1,19 +1,19 @@
 import asyncio
+import contextlib
 import os
 import signal
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
-from zoneinfo import ZoneInfo
 
 from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
-
-from orion.core.health_monitor import CriticalHealthException, HealthMonitor
+from orion.core.health_monitor import CriticalHealthError, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.core.universe_manager import UniverseManager
 from orion.processing.deduper import DeduplicationEngine
@@ -79,9 +79,9 @@ class IngestionService:
         xcals.get_calendar("XNYS")
 
         # State
-        self.eod_trigger_last_run: Optional[str] = None
-        self._eod_task: Optional[asyncio.Task[None]] = None
-        self._rollup_task: Optional[asyncio.Task[None]] = None
+        self.eod_trigger_last_run: str | None = None
+        self._eod_task: asyncio.Task[None] | None = None
+        self._rollup_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
         """Initialize resources that require async execution."""
@@ -97,6 +97,7 @@ class IngestionService:
 
         await init_db()
         await self.universe.hydrate_from_db()
+        await self.feature_engine.hydrate_history()
 
         logger.info("Skipping startup earnings sync; earnings data is sourced from Data-Gateway/Heber on demand")
 
@@ -157,10 +158,8 @@ class IngestionService:
 
             await self._update_health_status()
 
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
-            except asyncio.TimeoutError:
-                pass
 
         await self.stop()
 
@@ -174,7 +173,7 @@ class IngestionService:
         self.health_monitor.update_heartbeat()
 
         trace_id = str(uuid.uuid4())
-        all_events: List[BronzeEvent] = []
+        all_events: list[BronzeEvent] = []
 
         # UW flow/darkpool ingestion is externalized to Gateway/Heber pipelines.
         # This service currently emits Alpaca market bars only.
@@ -198,7 +197,7 @@ class IngestionService:
             "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
         )
 
-    async def _poll_alpaca_events(self, trace_id: str) -> List[BronzeEvent]:
+    async def _poll_alpaca_events(self, trace_id: str) -> list[BronzeEvent]:
         """Poll Alpaca for market data events via streaming or REST fallback."""
         active_tickers = self.universe.get_active_universe()
         if not active_tickers:
@@ -211,7 +210,7 @@ class IngestionService:
         # Fallback to polling (higher latency)
         return await self._poll_alpaca(active_tickers, trace_id)
 
-    async def _drain_alpaca_stream(self, active_tickers: List[str], trace_id: str) -> List[BronzeEvent]:
+    async def _drain_alpaca_stream(self, active_tickers: list[str], trace_id: str) -> list[BronzeEvent]:
         """Drain events from Alpaca WebSocket stream."""
         # Ensure newly added tickers are subscribed
         new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
@@ -240,7 +239,7 @@ class IngestionService:
         sleep_seconds = schedule.seconds_until_open()
 
         if sleep_seconds > 0:
-            next_wake = datetime.now(timezone.utc) + timedelta(seconds=sleep_seconds)
+            next_wake = datetime.now(UTC) + timedelta(seconds=sleep_seconds)
             logger.info(f"Market closed. Sleeping until {next_wake} UTC.", extra={"sleep_seconds": sleep_seconds})
 
             chunk = 60.0
@@ -250,7 +249,7 @@ class IngestionService:
                 sleep_seconds -= wait
                 self.health_monitor.update_heartbeat()
 
-    def _active_event_source_profile(self) -> Dict[str, Union[str, bool, List[str]]]:
+    def _active_event_source_profile(self) -> dict[str, str | bool | list[str]]:
         return {
             "alpaca_streaming_enabled": self._use_streaming,
             "alpaca_mode": "streaming" if self.alpaca_stream is not None else "polling",
@@ -258,7 +257,7 @@ class IngestionService:
             "uw_flow_darkpool_ingestion": "external_gateway_heber_pipeline",
         }
 
-    async def _poll_alpaca(self, tickers: List[str], trace_id: str) -> List[BronzeEvent]:
+    async def _poll_alpaca(self, tickers: list[str], trace_id: str) -> list[BronzeEvent]:
         try:
             events = self.alpaca.poll(tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes)
             if events:
@@ -273,7 +272,7 @@ class IngestionService:
             logger.error(f"Error polling Alpaca: {e}", extra={"trace_id": trace_id})
             return []
 
-    async def _normalize_and_dedupe(self, events: List[BronzeEvent], trace_id: str) -> List[BronzeEvent]:
+    async def _normalize_and_dedupe(self, events: list[BronzeEvent], trace_id: str) -> list[BronzeEvent]:
         normalized = []
         for e in events:
             try:
@@ -292,11 +291,11 @@ class IngestionService:
             deduper = DeduplicationEngine(session)
             return await deduper.dedupe_batch(normalized)
 
-    async def _persist_events(self, events: List[BronzeEvent]) -> None:
+    async def _persist_events(self, events: list[BronzeEvent]) -> None:
         await self._save_events_to_db(events)
         await self._save_silver_data(events)
 
-    async def _process_features_and_rules(self, events: List[BronzeEvent]) -> None:
+    async def _process_features_and_rules(self, events: list[BronzeEvent]) -> None:
         try:
             self.feature_engine.process_uw_flow(events)
         except Exception as e:
@@ -312,7 +311,7 @@ class IngestionService:
         if alpaca_bars:
             await self._run_pipeline(alpaca_bars, self.feature_engine.process_alpaca_bars, "Alpaca")
 
-    async def _run_pipeline(self, events: List[BronzeEvent], feature_fn: Any, label: str) -> None:
+    async def _run_pipeline(self, events: list[BronzeEvent], feature_fn: Any, label: str) -> None:
         try:
             signals = feature_fn(events)
             if signals:
@@ -323,7 +322,7 @@ class IngestionService:
         except Exception as e:
             logger.error(f"{label} Pipeline Error: {e}")
 
-    async def _write_to_lakehouse(self, events: List[BronzeEvent], trace_id: str) -> None:
+    async def _write_to_lakehouse(self, events: list[BronzeEvent], trace_id: str) -> None:
         try:
             self.lakehouse.write_events(events)
         except Exception as e:
@@ -331,7 +330,7 @@ class IngestionService:
             await self._send_to_dlq(e, "LAKE_WRITE_FAILED", payload={"count": len(events)}, trace_id=trace_id)
 
     def _check_eod_trigger(self) -> None:
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         if now_utc.hour == 1 and now_utc.minute >= 5:
             today_str = now_utc.date().isoformat()
             if self.eod_trigger_last_run != today_str:
@@ -355,7 +354,7 @@ class IngestionService:
     def _enrich_temporal_data(self, e: BronzeEvent) -> None:
         if e.event_ts_utc and e.session is None:
             if e.event_ts_utc.tzinfo is None:
-                e.event_ts_utc = e.event_ts_utc.replace(tzinfo=timezone.utc)
+                e.event_ts_utc = e.event_ts_utc.replace(tzinfo=UTC)
             td, sess = derive_trading_date_and_session(e.event_ts_utc)
             e.trading_date = td
             e.session = sess
@@ -368,7 +367,7 @@ class IngestionService:
             e.session = "CLOSED"
 
         if e.received_ts_utc is None:
-            e.received_ts_utc = datetime.now(timezone.utc)
+            e.received_ts_utc = datetime.now(UTC)
 
     def _tag_ingest_metadata(self, e: BronzeEvent, trace_id: str, connector: str, force_defaults: bool = False) -> None:
         if not getattr(e, "ingest", None):
@@ -387,22 +386,20 @@ class IngestionService:
 
     async def _check_lag(self, e: BronzeEvent) -> None:
         if e.event_ts_utc:
-            try:
+            with contextlib.suppress(CriticalHealthError):
                 await self.health_monitor.check_lag(e.event_ts_utc)
-            except CriticalHealthException:
-                pass  # Logged by monitor or ignored as per policy
 
     async def _update_health_status(self) -> None:
         try:
             await self.health_monitor.check_health()
             await self.health_monitor.update_db_status(True, "Nominal")
-        except CriticalHealthException as che:
+        except CriticalHealthError as che:
             logger.critical(f"HEALTH MONITOR FAILURE: {che}")
             await self.health_monitor.update_db_status(False, str(che))
 
     # --- Persistence Wrappers ---
 
-    async def _save_events_to_db(self, events: List[BronzeEvent]) -> None:
+    async def _save_events_to_db(self, events: list[BronzeEvent]) -> None:
         async def persist_bronze(session: Any) -> None:
             try:
                 await persist_bronze_events(session, events)
@@ -413,7 +410,7 @@ class IngestionService:
 
         await db_write(persist_bronze)
 
-    async def _save_silver_data(self, events: List[BronzeEvent]) -> None:
+    async def _save_silver_data(self, events: list[BronzeEvent]) -> None:
         async def persist_silver(session: Any) -> None:
             try:
                 await persist_silver_from_bronze(session, events)
@@ -423,7 +420,7 @@ class IngestionService:
 
         await db_write(persist_silver)
 
-    async def _save_signals(self, signals: List[SilverSignal]) -> None:
+    async def _save_signals(self, signals: list[SilverSignal]) -> None:
         async def persist_signals_op(session: Any) -> None:
             try:
                 await persist_silver_signals(session, signals)
@@ -434,7 +431,7 @@ class IngestionService:
 
         await db_write(persist_signals_op)
 
-    async def _save_candidates(self, candidates: List[CandidateTrade]) -> None:
+    async def _save_candidates(self, candidates: list[CandidateTrade]) -> None:
         async def persist_candidates_op(session: Any) -> None:
             try:
                 await persist_candidates(session, candidates)
@@ -450,14 +447,14 @@ class IngestionService:
         error: Exception,
         event_type: str,
         payload: Any = None,
-        trace_id: Optional[str] = None,
+        trace_id: str | None = None,
         source: str = "IngestionService",
     ) -> None:
         try:
             from orion.shared.dlq_utils import DLQWriter
 
             # Simplify payload for DLQ if it's an object
-            pl: Optional[Union[Dict[str, Any], str]] = None
+            pl: dict[str, Any] | str | None = None
 
             if isinstance(payload, dict):
                 # safely cast assume keys are strings or convert

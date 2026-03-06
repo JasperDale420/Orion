@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -11,8 +11,8 @@ import orion.main_price_target_labeler as labeler
 
 @pytest.mark.asyncio
 async def test_get_max_pain_distance_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
-    expiry_dt = datetime(2026, 2, 20, 0, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
+    expiry_dt = datetime(2026, 2, 20, 0, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_max_pain(self, **_kwargs: Any) -> pd.DataFrame:
@@ -45,8 +45,8 @@ async def test_get_max_pain_distance_prefers_heber_when_available(monkeypatch: p
 async def test_get_max_pain_distance_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
-    expiry_dt = datetime(2026, 2, 20, 0, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
+    expiry_dt = datetime(2026, 2, 20, 0, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_max_pain(self, **_kwargs: Any) -> pd.DataFrame:
@@ -64,7 +64,7 @@ async def test_get_max_pain_distance_returns_none_when_heber_empty(
 
 @pytest.mark.asyncio
 async def test_get_iv_at_offset_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     target_ts = entry_ts + timedelta(hours=2)
 
     class _FakeHeberReader:
@@ -90,7 +90,7 @@ async def test_get_iv_at_offset_prefers_heber_when_available(monkeypatch: pytest
 async def test_get_iv_at_offset_falls_back_to_heber_flow_estimate_when_iv_rank_unusable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_iv_rank(self, **_kwargs: Any) -> pd.DataFrame:
@@ -118,7 +118,7 @@ async def test_get_iv_at_offset_falls_back_to_heber_flow_estimate_when_iv_rank_u
 
 @pytest.mark.asyncio
 async def test_get_iv_rank_at_entry_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_iv_rank(self, **_kwargs: Any) -> pd.DataFrame:
@@ -143,7 +143,7 @@ async def test_get_iv_rank_at_entry_prefers_heber_when_available(monkeypatch: py
 async def test_get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_iv_rank(self, **_kwargs: Any) -> pd.DataFrame:
@@ -166,7 +166,7 @@ async def test_get_iv_rank_at_entry_returns_none_when_heber_iv_rank_and_flow_una
 async def test_get_iv_rank_at_entry_estimates_from_heber_flow_when_iv_rank_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_iv_rank(self, **_kwargs: Any) -> pd.DataFrame:

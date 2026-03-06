@@ -7,7 +7,7 @@ Uses HTTP to call MCP tools for trading, market data, and flow analysis.
 
 import os
 from inspect import isawaitable
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -33,7 +33,7 @@ class MCPServerClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -47,7 +47,7 @@ class MCPServerClient:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    async def _call_tool(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """
         Call an MCP tool via HTTP.
 
@@ -73,16 +73,16 @@ class MCPServerClient:
 
     # =========== Alpaca Trading ===========
 
-    async def get_account(self) -> Dict[str, Any]:
+    async def get_account(self) -> dict[str, Any]:
         """Get Alpaca account details."""
         return await self._call_tool("get_account", {})
 
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> list[dict[str, Any]]:
         """Get all open positions."""
         result = await self._call_tool("get_all_positions", {})
         return result.get("positions", []) if "error" not in result else []
 
-    async def get_position(self, symbol: str) -> Dict[str, Any]:
+    async def get_position(self, symbol: str) -> dict[str, Any]:
         """Get position for a specific symbol."""
         return await self._call_tool("get_open_position", {"symbol": symbol})
 
@@ -92,7 +92,7 @@ class MCPServerClient:
         qty: float,
         side: str,  # "buy" or "sell"
         time_in_force: str = "day",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Place a market order."""
         return await self._call_tool(
             "place_order",
@@ -111,7 +111,7 @@ class MCPServerClient:
         qty: float,
         side: str,
         stop_price: float,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Place a stop order."""
         return await self._call_tool(
             "place_stop_order",
@@ -123,20 +123,20 @@ class MCPServerClient:
             },
         )
 
-    async def close_position(self, symbol: str, qty: Optional[float] = None) -> Dict[str, Any]:
+    async def close_position(self, symbol: str, qty: float | None = None) -> dict[str, Any]:
         """Close a position (full or partial)."""
-        args: Dict[str, Any] = {"symbol": symbol}
+        args: dict[str, Any] = {"symbol": symbol}
         if qty is not None:
             args["qty"] = qty
         return await self._call_tool("close_position", args)
 
-    async def get_portfolio_history(self, period: str = "1M") -> Dict[str, Any]:
+    async def get_portfolio_history(self, period: str = "1M") -> dict[str, Any]:
         """Get portfolio equity history."""
         return await self._call_tool("get_portfolio_history", {"period": period})
 
     # =========== Alpaca Market Data ===========
 
-    async def get_stock_snapshot(self, symbol: str) -> Dict[str, Any]:
+    async def get_stock_snapshot(self, symbol: str) -> dict[str, Any]:
         """Get latest quote, trade, and bar for a stock."""
         return await self._call_tool("get_stock_snapshot", {"symbol": symbol})
 
@@ -144,10 +144,10 @@ class MCPServerClient:
         self,
         symbol: str,
         timeframe: str = "1Day",
-        start: Optional[str] = None,
-        end: Optional[str] = None,
+        start: str | None = None,
+        end: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get historical bars."""
         args = {"symbol": symbol, "timeframe": timeframe, "limit": limit}
         if start:
@@ -157,22 +157,22 @@ class MCPServerClient:
         result = await self._call_tool("get_stock_bars", args)
         return result.get("bars", []) if "error" not in result else []
 
-    async def get_market_clock(self) -> Dict[str, Any]:
+    async def get_market_clock(self) -> dict[str, Any]:
         """Get market clock status."""
         return await self._call_tool("get_clock", {})
 
-    async def get_news(self, symbols: List[str], limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_news(self, symbols: list[str], limit: int = 10) -> list[dict[str, Any]]:
         """Get recent news for symbols."""
         result = await self._call_tool("get_news", {"symbols": symbols, "limit": limit})
         return result.get("news", []) if "error" not in result else []
 
-    async def get_option_chain(self, underlying: str) -> Dict[str, Any]:
+    async def get_option_chain(self, underlying: str) -> dict[str, Any]:
         """Get option chain for underlying."""
         return await self._call_tool("get_option_chain", {"underlying_symbol": underlying})
 
     # =========== Unusual Whales ===========
 
-    async def get_flow_alerts(self, ticker: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_flow_alerts(self, ticker: str | None = None) -> list[dict[str, Any]]:
         """Get unusual options flow alerts."""
         args = {}
         if ticker:
@@ -180,29 +180,29 @@ class MCPServerClient:
         result = await self._call_tool("get_flow_alerts", args)
         return result.get("alerts", []) if "error" not in result else []
 
-    async def get_market_tide(self) -> Dict[str, Any]:
+    async def get_market_tide(self) -> dict[str, Any]:
         """Get market-wide buying/selling pressure."""
         return await self._call_tool("get_market_tide", {})
 
-    async def get_greek_flow(self, ticker: str) -> Dict[str, Any]:
+    async def get_greek_flow(self, ticker: str) -> dict[str, Any]:
         """Get greek exposure for a ticker."""
         return await self._call_tool("get_greek_flow", {"ticker": ticker})
 
-    async def get_sector_flow(self) -> Dict[str, Any]:
+    async def get_sector_flow(self) -> dict[str, Any]:
         """Get flow aggregated by sector."""
         return await self._call_tool("get_sector_flow", {})
 
-    async def get_seasonality(self, ticker: str) -> Dict[str, Any]:
+    async def get_seasonality(self, ticker: str) -> dict[str, Any]:
         """Get monthly seasonality trends."""
         return await self._call_tool("get_seasonality", {"ticker": ticker})
 
-    async def get_analyst_ratings(self, ticker: str) -> Dict[str, Any]:
+    async def get_analyst_ratings(self, ticker: str) -> dict[str, Any]:
         """Get analyst ratings and upgrades/downgrades."""
         return await self._call_tool("get_analyst_ratings", {"ticker": ticker})
 
 
 # Singleton instance
-_mcp_client: Optional[MCPServerClient] = None
+_mcp_client: MCPServerClient | None = None
 
 
 def get_mcp_client() -> MCPServerClient:

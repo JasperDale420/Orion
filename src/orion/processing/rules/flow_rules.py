@@ -1,5 +1,3 @@
-from typing import Optional
-
 from orion.processing.rules.base import TradingRule
 from orion.storage.models_gold import CandidateTrade, TradeDirection
 from orion.storage.models_silver import SilverSignal
@@ -19,7 +17,7 @@ class BullishSweepRule(TradingRule):
         super().__init__(rule_id="rule_bullish_sweep_v1")
         self.min_premium = min_premium
 
-    def evaluate(self, signal: SilverSignal) -> Optional[CandidateTrade]:
+    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         if signal.signal_type != "UW_FLOW":
             return None
 
@@ -98,7 +96,7 @@ class BearishPutPressureRule(TradingRule):
         super().__init__(rule_id="rule_bearish_put_pressure_v1")
         self.min_premium = min_premium
 
-    def evaluate(self, signal: SilverSignal) -> Optional[CandidateTrade]:
+    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         if signal.signal_type != "UW_FLOW":
             return None
 
@@ -170,7 +168,7 @@ class ZeroDTESweepRule(TradingRule):
         self.market_open_hour_utc = market_open_hour_utc
         self.prefer_puts = prefer_puts
 
-    def evaluate(self, signal: SilverSignal) -> Optional[CandidateTrade]:
+    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         if signal.signal_type != "UW_FLOW":
             return None
 
@@ -269,7 +267,7 @@ class SwingEntryRule(TradingRule):
         self.max_premium = max_premium
         self.optimal_hours_utc = optimal_hours_utc
 
-    def evaluate(self, signal: SilverSignal) -> Optional[CandidateTrade]:
+    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         if signal.signal_type != "UW_FLOW":
             return None
 
@@ -324,7 +322,7 @@ class SwingEntryRule(TradingRule):
                 "dte": dte,
                 "put_call": put_call,
                 "hour_utc": signal_hour,
-                "reason": f"SWING put sweep ${premium/1000:.0f}K DTE={dte}",
+                "reason": f"SWING put sweep ${premium / 1000:.0f}K DTE={dte}",
             },
         )
         candidate.source = "UW"
@@ -362,7 +360,7 @@ class ShortSwingEntryRule(TradingRule):
         self.max_premium = max_premium
         self.optimal_hours_utc = optimal_hours_utc
 
-    def evaluate(self, signal: SilverSignal) -> Optional[CandidateTrade]:
+    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         if signal.signal_type != "UW_FLOW":
             return None
 
@@ -406,7 +404,7 @@ class ShortSwingEntryRule(TradingRule):
                 "dte": dte,
                 "put_call": put_call,
                 "hour_utc": signal_hour,
-                "reason": f"SHORT_SWING call sweep ${premium/1000:.0f}K DTE={dte}",
+                "reason": f"SHORT_SWING call sweep ${premium / 1000:.0f}K DTE={dte}",
             },
         )
         candidate.source = "UW"

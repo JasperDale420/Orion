@@ -2,8 +2,8 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
-from typing import Any, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Configure Env BEFORE imports
@@ -17,16 +17,16 @@ GLOBAL_DB_STATE = []
 
 
 class MockResult:
-    def __init__(self, data: List[Any]) -> None:
+    def __init__(self, data: list[Any]) -> None:
         self._data = data
 
     def scalars(self) -> "MockResult":
         return self
 
-    def all(self) -> List[Any]:
+    def all(self) -> list[Any]:
         return self._data
 
-    def scalar_one_or_none(self) -> Optional[Any]:
+    def scalar_one_or_none(self) -> Any | None:
         return self._data[0] if self._data else None
 
 
@@ -89,7 +89,7 @@ async def seed_candidate() -> str:
     candidate = CandidateTrade(
         candidate_id=test_id,
         ticker="SPY",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         rule_id="smoke_test_rule",
         direction="LONG",
         confidence=0.99,

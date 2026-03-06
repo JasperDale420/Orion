@@ -2,14 +2,16 @@ import asyncio
 import os
 import re
 import signal
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
+
+import contextlib
 
 from sqlalchemy import select
 
@@ -36,7 +38,7 @@ def _should_apply_options_exit_rules(position: Any) -> bool:
     return bool(option_chain)
 
 
-def _scope_recent_flow_for_position(position: Any, recent_flow: List[Any]) -> List[Any]:
+def _scope_recent_flow_for_position(position: Any, recent_flow: list[Any]) -> list[Any]:
     """
     Scope ticker-level recent flow to the tracked option contract when possible.
 
@@ -65,7 +67,7 @@ def _scope_recent_flow_for_position(position: Any, recent_flow: List[Any]) -> Li
     return scoped
 
 
-def _parse_option_chain_contract(option_chain: str) -> Optional[Tuple[str, str, float]]:
+def _parse_option_chain_contract(option_chain: str) -> tuple[str, str, float] | None:
     """
     Parse OCC option chain to comparable contract components.
 
@@ -80,7 +82,7 @@ def _parse_option_chain_contract(option_chain: str) -> Optional[Tuple[str, str, 
     return (expiry, put_call, strike)
 
 
-def _flow_matches_contract_components(flow: Any, contract: Tuple[str, str, float]) -> bool:
+def _flow_matches_contract_components(flow: Any, contract: tuple[str, str, float]) -> bool:
     expiry, put_call, strike = contract
     flow_expiry = str(getattr(flow, "expiry", "") or "").strip()
     flow_put_call = str(getattr(flow, "put_call", "") or "").strip().upper()
@@ -140,9 +142,9 @@ def _coerce_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] | None:
+async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> list[Any] | None:
     reader = get_heber_reader()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(minutes=minutes)
     try:
         frame = await asyncio.to_thread(
@@ -178,7 +180,7 @@ async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] 
     work = work.dropna(subset=["_event_ts"]).sort_values("_event_ts", ascending=False).head(100)
 
     ticker_upper = ticker.upper()
-    rows: List[Any] = []
+    rows: list[Any] = []
     for idx, row in work.iterrows():
         flow_ticker = _normalize_flow_ticker(row.get(ticker_col))
         if flow_ticker != ticker_upper:
@@ -223,7 +225,7 @@ async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] 
     return rows
 
 
-async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[Any]:
+async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> list[Any]:
     """Fetch recent flow data for a ticker for exit rule evaluation."""
     if _prefer_heber_recent_flow_source():
         heber_rows = await _fetch_recent_flow_from_heber(ticker=ticker, minutes=minutes)
@@ -238,7 +240,7 @@ async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[A
     return []
 
 
-async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
+async def fetch_pending_candidates(limit: int = 100) -> list[CandidateTrade]:
     """
     Fetches CandidateTrades that have NOT been processed (no matching StrategyDecision).
     """
@@ -527,14 +529,12 @@ async def main() -> None:
         try:
             await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
             break  # Shutdown set
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # Sleep done, continue loop
 
     logger.info("Execution Service Stopped.")
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

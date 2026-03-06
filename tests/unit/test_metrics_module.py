@@ -1,7 +1,9 @@
 """
 Unit tests for Metrics module (Refactor Slice 3).
 """
+
 import pytest
+
 from orion.shared.metrics import Metrics, init_metrics
 
 

@@ -1,7 +1,6 @@
 import asyncio
 import os
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from dotenv import load_dotenv
@@ -19,7 +18,7 @@ from orion.storage.db import async_session_factory, init_db
 
 async def verify():
     logger.info("Starting Activity Verification Checks")
-    check_date = datetime(2025, 12, 23, tzinfo=timezone.utc)
+    check_date = datetime(2025, 12, 23, tzinfo=UTC)
     logger.info(f"Checking activity since: {check_date.isoformat()}")
 
     await init_db()

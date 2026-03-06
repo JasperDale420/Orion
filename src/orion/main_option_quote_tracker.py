@@ -9,8 +9,8 @@ import asyncio
 import os
 import re
 import signal
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -44,7 +44,7 @@ POLL_INTERVAL_SECONDS = 60
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 shutdown_event = asyncio.Event()
-_quote_checkpoint_cache: Dict[str, set[str]] = {}
+_quote_checkpoint_cache: dict[str, set[str]] = {}
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
@@ -82,7 +82,7 @@ def extract_underlying_ticker(option_symbol: str) -> str:
     return match.group(1) if match else option_symbol
 
 
-async def get_pending_checkpoints() -> List[Dict[str, Any]]:
+async def get_pending_checkpoints() -> list[dict[str, Any]]:
     """Get flow events that need checkpoint quotes fetched."""
     if not _prefer_heber_flow_source():
         return []
@@ -96,7 +96,7 @@ def _prefer_heber_flow_source() -> bool:
     return raw not in _PREFER_HEBER_FALSE_VALUES
 
 
-def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
+def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
     for name in names:
         if name in df.columns:
             return name
@@ -151,8 +151,8 @@ def _build_option_symbol(ticker: str, expiry: datetime, put_call: str, strike: f
     return f"{ticker}{expiry.strftime('%y%m%d')}{put_call}{strike_thousandths:08d}"
 
 
-async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> List[Dict[str, Any]] | None:
-    now_utc = datetime.now(timezone.utc)
+async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> list[dict[str, Any]] | None:
+    now_utc = datetime.now(UTC)
     start = now_utc - timedelta(hours=24)
     reader = get_heber_reader()
     try:
@@ -177,7 +177,7 @@ async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> List[Dict[st
     if ts_col is None or event_col is None or expiry_col is None or put_call_col is None or strike_col is None:
         return []
 
-    pending: List[Dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
     for _, row in flow_df.iterrows():
         event_id = row.get(event_col)
         ticker = row.get("ticker")
@@ -210,12 +210,12 @@ async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> List[Dict[st
     return pending[:limit]
 
 
-async def get_existing_quotes(event_ids: List[str]) -> Dict[str, set]:
+async def get_existing_quotes(event_ids: list[str]) -> dict[str, set]:
     """Get checkpoints already fetched for given events (in-process cache)."""
     if not event_ids:
         return {}
 
-    existing: Dict[str, set] = {}
+    existing: dict[str, set] = {}
     for event_id in event_ids:
         checkpoints = _quote_checkpoint_cache.get(event_id)
         if checkpoints:
@@ -229,7 +229,7 @@ async def store_quote(
     underlying_ticker: str,
     checkpoint: str,
     ts_utc: datetime,
-    quote_data: Dict[str, Any],
+    quote_data: dict[str, Any],
 ) -> None:
     """Record fetched checkpoints in memory while legacy tracker is active."""
     _ = (option_symbol, underlying_ticker, ts_utc, quote_data)
@@ -279,7 +279,7 @@ async def run_quote_tracker() -> None:
             existing = await get_existing_quotes(event_ids)
 
             # Determine which checkpoints need fetching
-            symbols_to_fetch: Dict[str, List[Dict[str, Any]]] = {}  # symbol -> list of (event, checkpoint)
+            symbols_to_fetch: dict[str, list[dict[str, Any]]] = {}  # symbol -> list of (event, checkpoint)
 
             for event in flow_events:
                 event_id = event["event_id"]
@@ -351,7 +351,7 @@ async def run_quote_tracker() -> None:
         try:
             await asyncio.wait_for(shutdown_event.wait(), timeout=POLL_INTERVAL_SECONDS)
             break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     logger.info("Option Quote Tracker stopped")

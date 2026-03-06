@@ -6,7 +6,8 @@ Supports bucket-specific models (0DTE, SHORT_SWING, SWING, POSITION).
 """
 
 import pickle
-from typing import Any, Dict, List, Optional
+from datetime import UTC
+from typing import Any
 
 import numpy as np
 
@@ -36,7 +37,7 @@ DEFAULT_TARGET = "hit_target_50"
 ALL_TARGETS = ["hit_target_50", "avoid_stop", "hit_target_100", "quick_winner"]
 
 
-def get_trade_bucket(dte: Optional[int]) -> str:
+def get_trade_bucket(dte: int | None) -> str:
     """Classify a flow into trade bucket based on DTE."""
     if dte is None:
         return "SWING"  # Default bucket
@@ -60,8 +61,8 @@ class MLScorer:
 
     def __init__(self, target: str = DEFAULT_TARGET) -> None:
         self.target = target
-        self.models: Dict[str, Any] = {}  # bucket -> model_data
-        self.feature_names: Dict[str, List[str]] = {}  # bucket -> feature names
+        self.models: dict[str, Any] = {}  # bucket -> model_data
+        self.feature_names: dict[str, list[str]] = {}  # bucket -> feature names
         # Backward compatibility fields expected by older tests/callers.
         self.model: Any | None = None
         self.use_heuristic: bool = True
@@ -90,10 +91,10 @@ class MLScorer:
 
             if model_path.exists():
                 # Check model freshness before loading
-                from datetime import datetime, timezone
+                from datetime import datetime
 
-                model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime, tz=timezone.utc)
-                model_age_days = (datetime.now(timezone.utc) - model_mtime).days
+                model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime, tz=UTC)
+                model_age_days = (datetime.now(UTC) - model_mtime).days
 
                 if model_age_days > max_age_days:
                     logger.warning(
@@ -145,12 +146,12 @@ class MLScorer:
         return numerator / denominator if denominator > 0 else default
 
     @staticmethod
-    def _flow_float(flow: Dict[str, Any], key: str) -> float:
+    def _flow_float(flow: dict[str, Any], key: str) -> float:
         """Extract a float value from flow data, defaulting to 0."""
         return float(flow.get(key) or 0)
 
     @staticmethod
-    def _build_feature_map(flow: Dict[str, Any]) -> Dict[str, float]:
+    def _build_feature_map(flow: dict[str, Any]) -> dict[str, float]:
         """Build the full mapping from flow fields to ML feature names."""
         get = lambda k: float(flow.get(k) or 0)  # noqa: E731
         premium = get("premium_usd")
@@ -190,7 +191,7 @@ class MLScorer:
             "market_tide_direction": 0,
         }
 
-    def extract_features(self, flow: Dict[str, Any], bucket: Optional[str] = None) -> Dict[str, float]:
+    def extract_features(self, flow: dict[str, Any], bucket: str | None = None) -> dict[str, float]:
         """Extract features from a flow event for scoring.
 
         Uses feature names from the model if available.
@@ -212,7 +213,7 @@ class MLScorer:
 
         return {feat: feature_map.get(feat, 0) for feat in feature_names}
 
-    def score(self, flow: Dict[str, Any]) -> float:
+    def score(self, flow: dict[str, Any]) -> float:
         """
         Score a flow event. Returns probability [0, 1].
 
@@ -254,7 +255,7 @@ class MLScorer:
             logger.warning(f"Model scoring failed for bucket {bucket}: {e}")
             return self._heuristic_score(flow)
 
-    def _heuristic_score(self, flow: Dict[str, Any]) -> float:
+    def _heuristic_score(self, flow: dict[str, Any]) -> float:
         """
         Heuristic baseline scorer when no trained model is available.
 
@@ -313,7 +314,7 @@ class MLScorer:
 
         return capped_score
 
-    def _apply_confidence_rules(self, base_score: float, flow: Dict[str, Any], bucket: str) -> float:
+    def _apply_confidence_rules(self, base_score: float, flow: dict[str, Any], bucket: str) -> float:
         """
         Apply post-model confidence rules.
 
@@ -359,11 +360,11 @@ class MLScorer:
 
         return adjusted_score
 
-    def should_trade(self, flow: Dict[str, Any], threshold: float = DEFAULT_SCORE_THRESHOLD) -> bool:
+    def should_trade(self, flow: dict[str, Any], threshold: float = DEFAULT_SCORE_THRESHOLD) -> bool:
         """Check if flow score exceeds threshold."""
         return self.score(flow) >= threshold
 
-    async def score_enriched(self, flow: Dict[str, Any]) -> float:
+    async def score_enriched(self, flow: dict[str, Any]) -> float:
         """
         Score a flow with full feature enrichment.
 
@@ -373,13 +374,13 @@ class MLScorer:
 
         Use this for real-time scoring where flow data is incomplete.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from orion.ml.flow_enricher import enrich_flow_for_scoring
 
         # Extract basic flow info
         ticker = flow.get("ticker", "")
-        entry_ts = flow.get("timestamp_utc") or flow.get("flow_ts_utc") or datetime.now(timezone.utc)
+        entry_ts = flow.get("timestamp_utc") or flow.get("flow_ts_utc") or datetime.now(UTC)
         if isinstance(entry_ts, str):
             from dateutil.parser import parse
 
@@ -424,11 +425,11 @@ class MLScorer:
             logger.warning(f"Flow enrichment failed for {ticker}: {e}, using raw features")
             return self.score(flow)
 
-    def score_batch(self, flows: List[Dict[str, Any]]) -> List[float]:
+    def score_batch(self, flows: list[dict[str, Any]]) -> list[float]:
         """Score multiple flows."""
         return [self.score(f) for f in flows]
 
-    def get_loaded_models(self) -> List[str]:
+    def get_loaded_models(self) -> list[str]:
         """Return list of loaded model types."""
         return list(self.models.keys())
 
@@ -445,7 +446,7 @@ class MultiTargetScorer:
     """
 
     def __init__(self) -> None:
-        self.scorers: Dict[str, MLScorer] = {}
+        self.scorers: dict[str, MLScorer] = {}
         for target in ALL_TARGETS:
             self.scorers[target] = MLScorer(target=target)
 
@@ -454,7 +455,7 @@ class MultiTargetScorer:
             extra={"event": "multi_scorer_init", "targets": ALL_TARGETS},
         )
 
-    def score_all(self, flow: Dict[str, Any]) -> Dict[str, float]:
+    def score_all(self, flow: dict[str, Any]) -> dict[str, float]:
         """
         Score a flow event across all targets.
 
@@ -467,7 +468,7 @@ class MultiTargetScorer:
             scores[target] = scorer.score(flow)
         return scores
 
-    def get_composite_score(self, flow: Dict[str, Any], weights: Optional[Dict[str, float]] = None) -> float:
+    def get_composite_score(self, flow: dict[str, Any], weights: dict[str, float] | None = None) -> float:
         """
         Calculate a weighted composite score across all targets.
 
@@ -485,7 +486,7 @@ class MultiTargetScorer:
         composite = sum(scores.get(t, 0) * w.get(t, 0) for t in ALL_TARGETS)
         return composite
 
-    def get_trade_signal(self, flow: Dict[str, Any], thresholds: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    def get_trade_signal(self, flow: dict[str, Any], thresholds: dict[str, float] | None = None) -> dict[str, Any]:
         """
         Generate a comprehensive trade signal with all target scores.
 
@@ -524,7 +525,7 @@ class MultiTargetScorer:
 
 
 # Singleton instance
-_scorer: Optional[MLScorer] = None
+_scorer: MLScorer | None = None
 
 
 def get_scorer() -> MLScorer:

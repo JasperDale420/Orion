@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -39,30 +39,30 @@ class CandleData:
         volume (Union[Unset, int]): The volume of the candle. Example: 10699.
     """
 
-    close: Union[Unset, str] = UNSET
-    end_time: Union[Unset, str] = UNSET
-    high: Union[Unset, str] = UNSET
-    low: Union[Unset, str] = UNSET
-    market_time: Union[Unset, MarketGeneralMarketTime] = UNSET
-    open_: Union[Unset, str] = UNSET
-    start_time: Union[Unset, str] = UNSET
-    total_volume: Union[Unset, int] = UNSET
-    volume: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    close: Unset | str = UNSET
+    end_time: Unset | str = UNSET
+    high: Unset | str = UNSET
+    low: Unset | str = UNSET
+    market_time: Unset | MarketGeneralMarketTime = UNSET
+    open_: Unset | str = UNSET
+    start_time: Unset | str = UNSET
+    total_volume: Unset | int = UNSET
+    volume: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         close = self.close
         end_time = self.end_time
         high = self.high
         low = self.low
-        market_time: Union[Unset, str] = UNSET
+        market_time: Unset | str = UNSET
         if not isinstance(self.market_time, Unset):
             market_time = self.market_time.value
         open_ = self.open_
         start_time = self.start_time
         total_volume = self.total_volume
         volume = self.volume
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if close is not UNSET:
@@ -86,7 +86,7 @@ class CandleData:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         close = d.pop("close", UNSET)
 
@@ -97,7 +97,7 @@ class CandleData:
         low = d.pop("low", UNSET)
 
         _market_time = d.pop("market_time", UNSET)
-        market_time: Union[Unset, MarketGeneralMarketTime]
+        market_time: Unset | MarketGeneralMarketTime
         if isinstance(_market_time, Unset):
             market_time = UNSET
         else:
@@ -127,7 +127,7 @@ class CandleData:
         return candle_data
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

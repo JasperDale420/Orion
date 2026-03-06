@@ -1,7 +1,7 @@
 import asyncio
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -116,7 +116,7 @@ async def audit_middleware(request: Request, call_next: Any) -> Response:
 
 
 @app.get("/", tags=["System"])
-async def root() -> Dict[str, Any]:
+async def root() -> dict[str, Any]:
     """
     Root endpoint providing API information and status.
     """
@@ -125,7 +125,7 @@ async def root() -> Dict[str, Any]:
         "app": "Orion Admin API",
         "version": "1.0.0",
         "status": "operational",
-        "timestamp_utc": datetime.now(timezone.utc),
+        "timestamp_utc": datetime.now(UTC),
         "links": {
             "docs": "/docs",
             "health": "/health",
@@ -134,21 +134,21 @@ async def root() -> Dict[str, Any]:
 
 
 @app.get("/health", tags=["System"])
-async def health_check() -> Dict[str, str]:
+async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
 # --- Solvers ---
 
 
-@app.get("/solvers", response_model=List[SolverResponse])
+@app.get("/solvers", response_model=list[SolverResponse])
 async def list_solvers(
     skip: int = 0,
     limit: int = 100,
     active_only: bool = False,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> List[Solver]:
+) -> list[Solver]:
     """
     List registered solvers with pagination.
     """
@@ -196,14 +196,14 @@ async def get_solver(solver_id: str, db: AsyncSession = Depends(get_db), _: None
 # --- Metrics ---
 
 
-@app.get("/metrics", response_model=List[SolverMetricsResponse])
+@app.get("/metrics", response_model=list[SolverMetricsResponse])
 async def list_metrics(
-    solver_id: Optional[str] = None,
-    dataset_tag: Optional[str] = Query(None, description="e.g. train, val, test"),
+    solver_id: str | None = None,
+    dataset_tag: str | None = Query(None, description="e.g. train, val, test"),
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> List[SolverMetrics]:
+) -> list[SolverMetrics]:
     """
     Get performance metrics, optionally filtered by solver.
     """
@@ -221,12 +221,12 @@ async def list_metrics(
 # --- Experiments ---
 
 
-@app.get("/experiments", response_model=List[ExperimentResponse])
+@app.get("/experiments", response_model=list[ExperimentResponse])
 async def list_experiments(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> List[MetaExperiment]:
+) -> list[MetaExperiment]:
     """
     List meta-search experiments.
     """
@@ -235,14 +235,14 @@ async def list_experiments(
     return result.scalars().all()
 
 
-@app.get("/promotions", response_model=List[PromotionRecommendationResponse])
+@app.get("/promotions", response_model=list[PromotionRecommendationResponse])
 async def list_promotion_recommendations(
-    status: Optional[str] = Query(None, description="PENDING|APPROVED|REJECTED"),
-    solver_id: Optional[str] = Query(None),
+    status: str | None = Query(None, description="PENDING|APPROVED|REJECTED"),
+    solver_id: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> List[PromotionRecommendation]:
+) -> list[PromotionRecommendation]:
     stmt = select(PromotionRecommendation).order_by(desc(PromotionRecommendation.created_at_utc)).limit(limit)
     if status:
         stmt = stmt.where(PromotionRecommendation.status == status)
@@ -283,7 +283,7 @@ async def approve_promotion_recommendation(
         solver.status = "candidate"
 
     rec.status = "APPROVED"
-    rec.reviewed_at_utc = datetime.now(timezone.utc)
+    rec.reviewed_at_utc = datetime.now(UTC)
     rec.reviewed_by = reviewed_by
 
     await db.commit()
@@ -306,7 +306,7 @@ async def reject_promotion_recommendation(
         raise HTTPException(status_code=409, detail=f"Recommendation is {rec.status}, not PENDING")
 
     rec.status = "REJECTED"
-    rec.reviewed_at_utc = datetime.now(timezone.utc)
+    rec.reviewed_at_utc = datetime.now(UTC)
     rec.reviewed_by = reviewed_by
 
     await db.commit()
@@ -317,22 +317,22 @@ async def reject_promotion_recommendation(
 async def search(
     q: str = Query(..., min_length=1),
     k: int = Query(10, ge=1, le=50),
-    ticker: Optional[str] = Query(None),
-    tickers: Optional[str] = Query(None, description="Comma-separated tickers (overrides ticker)"),
-    doc_type: Optional[str] = Query(None),
-    rule_id: Optional[str] = Query(None),
-    model_version: Optional[str] = Query(None),
-    session: Optional[str] = Query(None),
-    start: Optional[str] = Query(None, description="ISO-8601 start (inclusive)"),
-    end: Optional[str] = Query(None, description="ISO-8601 end (exclusive)"),
-    min_premium_usd: Optional[float] = Query(
+    ticker: str | None = Query(None),
+    tickers: str | None = Query(None, description="Comma-separated tickers (overrides ticker)"),
+    doc_type: str | None = Query(None),
+    rule_id: str | None = Query(None),
+    model_version: str | None = Query(None),
+    session: str | None = Query(None),
+    start: str | None = Query(None, description="ISO-8601 start (inclusive)"),
+    end: str | None = Query(None, description="ISO-8601 end (exclusive)"),
+    min_premium_usd: float | None = Query(
         None, ge=0, description="Filter docs with metadata.premium_usd >= this (where supported)"
     ),
-    max_premium_usd: Optional[float] = Query(
+    max_premium_usd: float | None = Query(
         None, ge=0, description="Filter docs with metadata.premium_usd <= this (where supported)"
     ),
     _: None = Depends(require_api_key),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     trace_id = str(uuid.uuid4())
     logger.info("RAG search request", extra={"event_type": "RAG_SEARCH", "trace_id": trace_id, "ticker": ticker})
 
@@ -355,7 +355,7 @@ async def search(
             min_premium_usd=min_premium_usd,
             max_premium_usd=max_premium_usd,
         )
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for d in docs:
             meta = getattr(d, "metadata_json", None) or {}
             source_type = getattr(d, "source_type", None)
@@ -461,7 +461,7 @@ async def get_event(
     event_id: str,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     stmt = select(BronzeEvent).where(BronzeEvent.event_id == event_id)
     res = await db.execute(stmt)
     ev = res.scalars().first()
@@ -488,7 +488,7 @@ async def get_candidate(
     candidate_id: str,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     stmt = select(CandidateTrade).where(CandidateTrade.candidate_id == candidate_id)
     res = await db.execute(stmt)
     cand = res.scalars().first()
@@ -512,12 +512,12 @@ async def get_candidate(
 async def get_rollups(
     ticker: str = Query(..., min_length=1),
     period: str = Query("5m", description="1m|5m|1h|1d"),
-    start: Optional[str] = Query(None, description="ISO-8601 start (inclusive)"),
-    end: Optional[str] = Query(None, description="ISO-8601 end (exclusive)"),
+    start: str | None = Query(None, description="ISO-8601 start (inclusive)"),
+    end: str | None = Query(None, description="ISO-8601 end (exclusive)"),
     limit: int = Query(500, ge=1, le=5000),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     from orion.shared.utils import parse_timestamptz
 
     start_dt = parse_timestamptz(start, strict=False) if start else None
@@ -568,7 +568,7 @@ async def get_rollup(
     timestamp_utc: str,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     from orion.shared.utils import parse_timestamptz
 
     ts = parse_timestamptz(timestamp_utc, strict=True)
@@ -597,20 +597,20 @@ async def get_rollup(
 
 @app.get("/flows")
 async def get_flows(
-    ticker: Optional[str] = Query(None),
-    min_premium_usd: Optional[float] = Query(None, ge=0),
-    start: Optional[str] = Query(None, description="ISO-8601 start (inclusive)"),
-    end: Optional[str] = Query(None, description="ISO-8601 end (exclusive)"),
+    ticker: str | None = Query(None),
+    min_premium_usd: float | None = Query(None, ge=0),
+    start: str | None = Query(None, description="ISO-8601 start (inclusive)"),
+    end: str | None = Query(None, description="ISO-8601 end (exclusive)"),
     limit: int = Query(200, ge=1, le=5000),
     _: None = Depends(require_api_key),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     from orion.shared.utils import parse_timestamptz
 
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
     reader = get_heber_reader()
-    asof_time = datetime.now(timezone.utc)
+    asof_time = datetime.now(UTC)
     symbols = [ticker] if ticker else None
     try:
         frame = await asyncio.to_thread(
@@ -741,7 +741,7 @@ async def get_flows(
 @app.get("/dashboard/summary", tags=["Dashboard"])
 async def get_dashboard_summary(
     _: None = Depends(require_api_key),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get real-time portfolio P&L summary.
 
@@ -757,7 +757,7 @@ async def get_dashboard_summary(
 @app.get("/dashboard/positions", tags=["Dashboard"])
 async def get_dashboard_positions(
     _: None = Depends(require_api_key),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Get all open positions with P&L details.
 
@@ -772,7 +772,7 @@ async def get_dashboard_positions(
 @app.get("/dashboard/sectors", tags=["Dashboard"])
 async def get_dashboard_sectors(
     _: None = Depends(require_api_key),
-) -> Dict[str, Dict[str, float]]:
+) -> dict[str, dict[str, float]]:
     """
     Get sector-level P&L breakdown.
 
@@ -787,7 +787,7 @@ async def get_dashboard_sectors(
 @app.get("/dashboard/alerts", tags=["Dashboard"])
 async def get_dashboard_alerts(
     _: None = Depends(require_api_key),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Get active risk alerts.
 
@@ -814,7 +814,7 @@ async def get_dashboard_alerts(
 async def set_dashboard_equity(
     equity: float = Query(..., gt=0, description="Starting equity for the day"),
     _: None = Depends(require_api_key),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Set starting equity for P&L calculations.
 
@@ -827,14 +827,14 @@ async def set_dashboard_equity(
     return {
         "status": "ok",
         "starting_equity": equity,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 
 @app.post("/dashboard/reset", tags=["Dashboard"])
 async def reset_dashboard_daily(
     _: None = Depends(require_api_key),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Reset daily P&L counters.
 

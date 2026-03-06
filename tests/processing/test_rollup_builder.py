@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock  # AsyncMock needs explicit import or patch magic
 
 import pytest
+
 from orion.processing.rollup_builder import RollupBuilder
 from orion.storage.models_silver import SignalType, SilverSignal
 
@@ -32,7 +33,7 @@ class MockAsyncSession:
 async def test_rollup_builder_logic():
     # 1. Setup Mock Data (10 minutes of 1m bars)
     # Price rises 100 -> 109
-    base_ts = datetime(2023, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    base_ts = datetime(2023, 1, 1, 10, 0, 0, tzinfo=UTC)
     signals = []
 
     for i in range(10):

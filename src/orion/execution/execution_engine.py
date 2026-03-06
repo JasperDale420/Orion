@@ -1,8 +1,9 @@
 import asyncio
-import logging
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Tuple
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select
 
 from alpaca.trading.enums import OrderSide, TimeInForce
 from orion.config import risk_settings, system_settings
@@ -13,12 +14,12 @@ from orion.core.errors import ErrorCode
 from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
 from orion.storage.db import async_session_factory  # legacy patch target for tests
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class ExecutionEngine:
@@ -87,7 +88,7 @@ class ExecutionEngine:
 
         try:
 
-            async def fetch_recent_decisions(session: Any) -> List[Any]:
+            async def fetch_recent_decisions(session: Any) -> list[Any]:
                 stmt = (
                     select(StrategyDecision)
                     .where(StrategyDecision.decision == "EXECUTE")
@@ -127,7 +128,7 @@ class ExecutionEngine:
 
         action = decision.decision.upper()
         if action != "EXECUTE":
-            logger.info(f"Decision for {candidate.ticker} was {action}")
+            logger.info("decision_skipped", ticker=candidate.ticker, action=action)
             return
 
         # Check if this is an options trade
@@ -166,7 +167,9 @@ class ExecutionEngine:
 
         # 4. Check Risk Manager
         if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side.value):
-            logger.error(f"Execution BLOCKED by RiskManager for {candidate.ticker}")
+            logger.error(
+                "execution_blocked_by_risk", ticker=candidate.ticker, qty=qty, price=current_price, side=side.value
+            )
             decision.executed_successfully = "FALSE"
             decision.reason = "Risk Rejection"
             return
@@ -194,12 +197,12 @@ class ExecutionEngine:
 
         # 2. DTE Check
         if candidate.expiration_date:
-            from datetime import timezone
-
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             dte = (candidate.expiration_date - now).days
             if dte < risk_settings.min_dte:
-                logger.warning(f"OPTIONS BLOCKED: DTE {dte} < min {risk_settings.min_dte}")
+                logger.warning(
+                    "options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker
+                )
                 decision.executed_successfully = "FALSE"
                 decision.reason = f"DTE Too Low ({dte} days)"
                 return
@@ -209,7 +212,7 @@ class ExecutionEngine:
         option_price = quote.get("mid") or quote.get("ask") or candidate.premium
 
         if not option_price or option_price <= 0:
-            logger.error(f"Cannot get option price for {candidate.option_symbol}")
+            logger.error("options_price_fetch_failed", option_symbol=candidate.option_symbol, ticker=candidate.ticker)
             decision.executed_successfully = "FALSE"
             decision.reason = "Option Price Fetch Failed"
             return
@@ -219,7 +222,12 @@ class ExecutionEngine:
         num_contracts = self.options_connector.calculate_option_contracts(max_premium, option_price)
 
         if num_contracts <= 0:
-            logger.warning(f"OPTIONS: Calculated 0 contracts for {candidate.option_symbol}")
+            logger.warning(
+                "options_calculated_0_contracts",
+                option_symbol=candidate.option_symbol,
+                ticker=candidate.ticker,
+                option_price=option_price,
+            )
             decision.executed_successfully = "SKIPPED"
             decision.reason = "Size 0 Contracts"
             return
@@ -255,16 +263,21 @@ class ExecutionEngine:
             return False
 
         # Data Lag
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         cand_ts = (
-            candidate.timestamp_utc.replace(tzinfo=timezone.utc)
+            candidate.timestamp_utc.replace(tzinfo=UTC)
             if candidate.timestamp_utc.tzinfo is None
             else candidate.timestamp_utc
         )
         lag = (now_utc - cand_ts).total_seconds()
 
         if lag > system_settings.max_data_lag_seconds:
-            logger.critical(f"EXECUTION BLOCKED: Data Lag {lag:.1f}s")
+            logger.critical(
+                "execution_blocked_data_lag",
+                lag_seconds=lag,
+                max_lag=system_settings.max_data_lag_seconds,
+                ticker=candidate.ticker,
+            )
             decision.executed_successfully = "FALSE"
             decision.reason = "Data Lag"
             return False
@@ -285,12 +298,12 @@ class ExecutionEngine:
 
     def _calculate_order_params(
         self, decision: StrategyDecision, candidate: CandidateTrade, current_price: float
-    ) -> Tuple[Any, float, float]:
+    ) -> tuple[Any, float, float]:
         side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
         qty = self.risk_manager.calculate_size(entry_price=current_price)
 
         if qty <= 0:
-            logger.warning(f"Calculated quantity is 0 for {candidate.ticker}")
+            logger.warning("calculated_qty_0", ticker=candidate.ticker, current_price=current_price)
             decision.executed_successfully = "SKIPPED"
             decision.reason = "Size 0"
             return side, 0.0, 0.0
@@ -308,18 +321,21 @@ class ExecutionEngine:
             failures = self.order_history.count(False)
             rate = failures / len(self.order_history)
             if rate > 0.03:
-                logger.critical(f"EXECUTION BLOCKED: Error Rate {rate:.1%} > 3%")
+                logger.critical("execution_blocked_error_rate", error_rate=rate, limit=0.03)
                 return True
         return False
 
     async def _submit_order(self, decision: Any, candidate: Any, side: Any, qty: float, limit_price: float) -> None:
-        logger.info(f"EXECUTION TRIGGERED: {side} {qty} {candidate.ticker} @ {limit_price}")
+        logger.info("execution_triggered", side=str(side), qty=qty, ticker=candidate.ticker, limit_price=limit_price)
 
         # Rate limit check before order submission
         rate_limiter = get_order_rate_limiter()
         if not await rate_limiter.acquire(timeout=10.0):
             logger.warning(
-                f"Rate limit reached for order {candidate.ticker}, capacity={rate_limiter.available_capacity}/{rate_limiter.max_per_minute}"
+                "rate_limit_reached",
+                ticker=candidate.ticker,
+                capacity=rate_limiter.available_capacity,
+                max_capacity=rate_limiter.max_per_minute,
             )
             decision.executed_successfully = "FALSE"
             decision.reason = "Rate limit exceeded"
@@ -354,7 +370,7 @@ class ExecutionEngine:
                 broker_order=order,
                 error_message=None,
             )
-            logger.info(f"Execution Successful {client_order_id}")
+            logger.info("execution_successful", client_order_id=client_order_id, ticker=candidate.ticker)
             decision.executed_successfully = "TRUE"
             self._record_result(True)
         except Exception as e:
@@ -370,7 +386,7 @@ class ExecutionEngine:
                 broker_order=None,
                 error_message=str(e),
             )
-            logger.error(f"Execution Failed: {e}")
+            logger.error("execution_failed", error=str(e), client_order_id=client_order_id, ticker=candidate.ticker)
             decision.executed_successfully = "FALSE"
             decision.reason = f"Broker Error: {e}"
             self._record_result(False)
@@ -379,7 +395,13 @@ class ExecutionEngine:
         self, decision: Any, candidate: Any, num_contracts: int, option_price: float
     ) -> None:
         """Submit an options order."""
-        logger.info(f"OPTIONS EXECUTION TRIGGERED: BUY {num_contracts} {candidate.option_symbol} @ {option_price}")
+        logger.info(
+            "options_execution_triggered",
+            num_contracts=num_contracts,
+            option_symbol=candidate.option_symbol,
+            option_price=option_price,
+            ticker=candidate.ticker,
+        )
 
         client_order_id = str(uuid.uuid4())
         decision.execution_params = decision.execution_params or {}
@@ -412,7 +434,12 @@ class ExecutionEngine:
             )
 
             premium_paid = num_contracts * option_price * 100
-            logger.info(f"OPTIONS Execution Successful {client_order_id} | " f"Premium: ${premium_paid:.2f}")
+            logger.info(
+                "options_execution_successful",
+                client_order_id=client_order_id,
+                premium_paid=premium_paid,
+                option_symbol=candidate.option_symbol,
+            )
             decision.executed_successfully = "TRUE"
             self._record_result(True)
 
@@ -427,7 +454,12 @@ class ExecutionEngine:
                 broker_order=None,
                 error_message=str(e),
             )
-            logger.error(f"OPTIONS Execution Failed: {e}")
+            logger.error(
+                "options_execution_failed",
+                error=str(e),
+                client_order_id=client_order_id,
+                option_symbol=candidate.option_symbol,
+            )
             decision.executed_successfully = "FALSE"
             decision.reason = f"Options Broker Error: {e}"
             self._record_result(False)
@@ -546,7 +578,7 @@ class ExecutionEngine:
                         confidence=exit_signal.confidence,
                         details=exit_signal.details or {},
                         broker_order_id=broker_order_id,
-                        exit_ts_utc=datetime.now(timezone.utc),
+                        exit_ts_utc=datetime.now(UTC),
                     )
                 )
 
@@ -593,7 +625,7 @@ class ExecutionEngine:
             # If ingestion died hard, it might check 'Healthy' but be 1 hour old.
             # PRD 9.1 says "UW ingestion heartbeat missing > 60s".
             # If record is > 60s old, Ingestion is dead.
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if status_record.last_updated_utc:
                 last_updated = ensure_utc(status_record.last_updated_utc)
 
@@ -624,7 +656,7 @@ class ExecutionEngine:
         try:
             # Poll for fills in the last X minutes (e.g. 5 mins) to catch anything missed
             # Use last_poll_ts or default to 5 min ago
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             lookback = getattr(self, "last_fill_poll_ts", now - timedelta(minutes=5))
             # Safety buffer: overlap by 10s
             fetch_start = lookback - timedelta(seconds=10)
@@ -720,7 +752,7 @@ class ExecutionEngine:
         if not self.connector:
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if self.last_positions_snapshot_ts and (now - self.last_positions_snapshot_ts) < timedelta(
             seconds=min_interval_seconds
         ):
@@ -767,7 +799,7 @@ class ExecutionEngine:
         if not symbol:
             return None
 
-        def _maybe_float(v: Any) -> Optional[float]:
+        def _maybe_float(v: Any) -> float | None:
             try:
                 return float(v) if v is not None else None
             except Exception:
@@ -819,7 +851,7 @@ class ExecutionEngine:
         """
 
         async def save_order(session: Any) -> None:
-            from datetime import datetime, timezone
+            from datetime import datetime
 
             from orion.storage.models_execution import OrderSubmission
 
@@ -832,7 +864,7 @@ class ExecutionEngine:
                 limit_price=order_payload.get("limit_price"),
                 stop_price=order_payload.get("stop_price"),
                 time_in_force=order_payload.get("time_in_force"),
-                submitted_at_utc=datetime.now(timezone.utc),
+                submitted_at_utc=datetime.now(UTC),
                 broker_response=order_payload,
             )
             session.add(order_record)
@@ -841,7 +873,7 @@ class ExecutionEngine:
 
     @db_retry
     async def _mark_fill_processed(
-        self, order_id: str, client_oid: Optional[str] = None, ticker: Optional[str] = None, qty: Optional[float] = None
+        self, order_id: str, client_oid: str | None = None, ticker: str | None = None, qty: float | None = None
     ) -> None:
         async def mark_fill(session: Any) -> None:
             from orion.storage.models_risk import ProcessedFill
@@ -851,7 +883,7 @@ class ExecutionEngine:
                 client_order_id=client_oid,
                 ticker=ticker,
                 qty=qty,
-                processed_at_utc=datetime.now(timezone.utc),
+                processed_at_utc=datetime.now(UTC),
             )
             session.add(pf)
 
@@ -936,8 +968,9 @@ class ExecutionEngine:
     @db_retry
     async def _persist_fill_record(self, fill: Any) -> None:
         async def save_fill_and_update_journal(session: Any) -> None:
-            from orion.storage.models_execution import FillRecord
             from sqlalchemy.dialects.postgresql import insert
+
+            from orion.storage.models_execution import FillRecord
 
             broker_order_id = str(getattr(fill, "id", ""))
             ticker = getattr(fill, "symbol", None) or ""

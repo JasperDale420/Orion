@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -11,8 +11,8 @@ from ...types import Response
 
 def _get_kwargs(
     ticker: str,
-) -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+) -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/flow-per-expiry",
     }
@@ -20,7 +20,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Optional[FlowPerExpiryResults]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> FlowPerExpiryResults | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -78,7 +78,7 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[FlowPerExpiryResults]:
+) -> FlowPerExpiryResults | None:
     """Option Order Flow for a Ticker Grouped by Expiry
 
      Returns all option orders grouped by expiry for a given ticker for the last Trading Day
@@ -133,7 +133,7 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[FlowPerExpiryResults]:
+) -> FlowPerExpiryResults | None:
     """Option Order Flow for a Ticker Grouped by Expiry
 
      Returns all option orders grouped by expiry for a given ticker for the last Trading Day

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from orion.connectors.uw_alerts_connector import UWAlertsConnector
@@ -11,7 +11,7 @@ from orion.storage.watermarks import get_watermark
 @pytest.mark.asyncio
 async def test_darkpool_fetch():
     connector = UWDarkPoolConnector(api_key="test_key", base_url="http://test.url")
-    base_now = datetime.now(timezone.utc)
+    base_now = datetime.now(UTC)
     prior_wm = base_now - timedelta(seconds=10)
 
     async with async_session_factory() as session:
@@ -53,7 +53,7 @@ async def test_darkpool_fetch():
 @pytest.mark.asyncio
 async def test_alerts_fetch():
     connector = UWAlertsConnector(api_key="test_key", base_url="http://test.url")
-    base_now = datetime.now(timezone.utc)
+    base_now = datetime.now(UTC)
     prior_wm = base_now - timedelta(seconds=10)
 
     async with async_session_factory() as session:

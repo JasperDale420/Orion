@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -13,16 +13,16 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     ticker: str,
     *,
-    date: Union[Unset, str] = UNSET,
-) -> Dict[str, Any]:
+    date: Unset | str = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["date"] = date
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/greek-exposure/expiry",
         "params": params,
@@ -33,7 +33,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, GreekExposureByStrikeResults, str]]:
+) -> ErrorMessage | GreekExposureByStrikeResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -56,7 +56,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, GreekExposureByStrikeResults, str]]:
+) -> Response[ErrorMessage | GreekExposureByStrikeResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -69,8 +69,8 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Response[Union[ErrorMessage, GreekExposureByStrikeResults, str]]:
+    date: Unset | str = UNSET,
+) -> Response[ErrorMessage | GreekExposureByStrikeResults | str]:
     """Greek Exposure Grouped By Expiry All Strikes
 
      The greek exposure of a ticker grouped by expiry dates across all contracts on a given market date.
@@ -105,8 +105,8 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Optional[Union[ErrorMessage, GreekExposureByStrikeResults, str]]:
+    date: Unset | str = UNSET,
+) -> ErrorMessage | GreekExposureByStrikeResults | str | None:
     """Greek Exposure Grouped By Expiry All Strikes
 
      The greek exposure of a ticker grouped by expiry dates across all contracts on a given market date.
@@ -136,8 +136,8 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Response[Union[ErrorMessage, GreekExposureByStrikeResults, str]]:
+    date: Unset | str = UNSET,
+) -> Response[ErrorMessage | GreekExposureByStrikeResults | str]:
     """Greek Exposure Grouped By Expiry All Strikes
 
      The greek exposure of a ticker grouped by expiry dates across all contracts on a given market date.
@@ -170,8 +170,8 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Optional[Union[ErrorMessage, GreekExposureByStrikeResults, str]]:
+    date: Unset | str = UNSET,
+) -> ErrorMessage | GreekExposureByStrikeResults | str | None:
     """Greek Exposure Grouped By Expiry All Strikes
 
      The greek exposure of a ticker grouped by expiry dates across all contracts on a given market date.

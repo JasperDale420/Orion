@@ -1,7 +1,7 @@
 import argparse
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,7 @@ class FlowAlert:
 def _parse_iso_to_ms(ts: str) -> int:
     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return int(dt.timestamp() * 1000)
 
 
@@ -75,7 +75,7 @@ def fetch_flow_alerts_for_day(day: str) -> list[FlowAlert]:
     when the oldest record crosses into the previous day.
     """
     target = datetime.fromisoformat(day).date()
-    cursor = datetime.combine(target + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    cursor = datetime.combine(target + timedelta(days=1), datetime.min.time(), tzinfo=UTC).isoformat()
     limit = 500
 
     alerts: list[FlowAlert] = []

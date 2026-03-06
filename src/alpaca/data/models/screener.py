@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import List
 
 from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.data.enums import MarketType
@@ -30,7 +29,7 @@ class MostActives(BaseModel):
             Formatted as a RFC 3339 formatted datetime with nanosecond precision.
     """
 
-    most_actives: List[ActiveStock]
+    most_actives: list[ActiveStock]
     last_updated: datetime
 
 
@@ -62,7 +61,7 @@ class Movers(BaseModel):
             Formatted as a RFC 3339 formatted datetime with nanosecond precision.
     """
 
-    gainers: List[Mover]
-    losers: List[Mover]
+    gainers: list[Mover]
+    losers: list[Mover]
     market_type: MarketType
     last_updated: datetime

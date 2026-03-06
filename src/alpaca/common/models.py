@@ -1,6 +1,7 @@
-from uuid import UUID
-from pydantic import BaseModel
 import pprint
+from uuid import UUID
+
+from pydantic import BaseModel
 
 
 class ValidateBaseModel(BaseModel, validate_assignment=True):

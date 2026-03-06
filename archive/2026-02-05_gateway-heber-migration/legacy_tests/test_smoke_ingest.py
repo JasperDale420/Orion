@@ -1,5 +1,5 @@
 import asyncio
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from unittest.mock import AsyncMock, patch
 
 import orion.main_ingest as main_app
@@ -86,12 +86,10 @@ async def test_ingest_service_smoke_run():
 
         try:
             await asyncio.wait_for(task, timeout=2.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             pytest.fail("Ingest Service did not shut down in time")
 
         if task.done() and not task.cancelled():

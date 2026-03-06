@@ -6,8 +6,8 @@ Fetches IV rank and percentile via Data Gateway.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def _is_retryable_gateway_status(status_code: Optional[int]) -> bool:
+def _is_retryable_gateway_status(status_code: int | None) -> bool:
     return status_code in RETRYABLE_GATEWAY_STATUS_CODES
 
 
 class UWIVRankConnector:
     """Fetches IV rank/percentile via Data Gateway."""
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         self.gateway_url = (gateway_url or system_settings.data_gateway_url or "").strip().rstrip("/")
         if not self.gateway_url:
             raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
@@ -33,10 +33,10 @@ class UWIVRankConnector:
         if not self.gateway_key:
             raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
         self.headers = {"X-Gateway-Key": self.gateway_key}
-        self._latest_iv_rank_rows: list[Dict[str, Any]] = []
+        self._latest_iv_rank_rows: list[dict[str, Any]] = []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _fetch_iv_rank(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def _fetch_iv_rank(self, ticker: str) -> dict[str, Any] | None:
         """Fetch IV rank for a ticker via Data Gateway."""
         url = f"{self.gateway_url}/api/v1/uw/{ticker}/iv-rank"
         try:
@@ -64,10 +64,10 @@ class UWIVRankConnector:
             logger.error("Unexpected error fetching IV rank for %s: %s", ticker, e, exc_info=True)
             raise
 
-    async def fetch_and_store(self, tickers: List[str]) -> int:
+    async def fetch_and_store(self, tickers: list[str]) -> int:
         """Fetch IV rank for multiple tickers and store."""
         stored = 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for ticker in tickers:
             try:
@@ -107,7 +107,7 @@ class UWIVRankConnector:
 
         return stored
 
-    async def _persist_iv_rank(self, record: Dict[str, Any]) -> None:
+    async def _persist_iv_rank(self, record: dict[str, Any]) -> None:
         """Persist latest IV rank rows in memory."""
         self._latest_iv_rank_rows.append(dict(record))
         if len(self._latest_iv_rank_rows) > 2000:
