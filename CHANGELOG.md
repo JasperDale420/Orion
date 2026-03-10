@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Ignore agent temporary database artifacts** (2026-03-10):
+  - Added `.agents/tmp/**/*.db`, `.agents/tmp/**/*.db-journal`, and `.agents/tmp/**/*.db-wal` to `.gitignore` to keep `.agents/tmp` runtime databases out of git history.
+
 - **Test Stability Fixes** (2026-02-25):
   - Fixed `test_feature_flags.py` by ensuring `FeatureFlags._load_from_env()` is explicitly called during tests to load mocked environment variables correctly.
   - Fixed `test_uw_max_pain_heber_source.py` by modifying `UWMaxPainConnector._get_current_price()` to return `None` instead of raising a generic `Exception` when the Heber read fails, preventing the process from crashing and tests from failing when Heber is unavailable.
