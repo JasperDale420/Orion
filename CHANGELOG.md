@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Pre-commit detect-secrets false positives** (2026-03-10):
   - Updated `.pre-commit-config.yaml` to ignore `logs/` files in detect-secrets scanning so generated log output is not flagged during commit/push checks.
 
+- Removed generated `logs/orion.log.*` files from version control and normalized log handling in local `.gitignore` coverage.
+
 - **Test Stability Fixes** (2026-02-25):
   - Fixed `test_feature_flags.py` by ensuring `FeatureFlags._load_from_env()` is explicitly called during tests to load mocked environment variables correctly.
   - Fixed `test_uw_max_pain_heber_source.py` by modifying `UWMaxPainConnector._get_current_price()` to return `None` instead of raising a generic `Exception` when the Heber read fails, preventing the process from crashing and tests from failing when Heber is unavailable.
