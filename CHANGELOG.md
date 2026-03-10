@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Ignore agent temporary database artifacts** (2026-03-10):
   - Added `.agents/tmp/**/*.db`, `.agents/tmp/**/*.db-journal`, and `.agents/tmp/**/*.db-wal` to `.gitignore` to keep `.agents/tmp` runtime databases out of git history.
+- **Pre-commit detect-secrets false positives** (2026-03-10):
+  - Updated `.pre-commit-config.yaml` to ignore `logs/` files in detect-secrets scanning so generated log output is not flagged during commit/push checks.
 
 - **Test Stability Fixes** (2026-02-25):
   - Fixed `test_feature_flags.py` by ensuring `FeatureFlags._load_from_env()` is explicitly called during tests to load mocked environment variables correctly.
