@@ -167,7 +167,8 @@ async def test_build_bucket_training_data_heber_source_uses_gold_datasets_withou
     assert X.shape == (1, len(feature_names))
     assert y.shape == (1,)
     assert y[0] == 1
-    assert X[0][0] == pytest.approx(0.65)
+    # X[0][0] is current_return placeholder (0.0 at training time, populated at inference)
+    assert X[0][0] == pytest.approx(0.0)
     assert X[0][19] == pytest.approx(1.0)
     assert db_calls["count"] == 0
 
@@ -314,8 +315,9 @@ async def test_build_bucket_training_data_ignores_no_snapshot_outcomes(
     assert X.shape == (2, len(feature_names))
     assert y.shape == (2,)
     assert y.tolist() == [0, 1]
-    assert X[0][0] == pytest.approx(-0.20)
-    assert X[1][0] == pytest.approx(0.30)
+    # X[*][0] is current_return placeholder (0.0 at training time, populated at inference)
+    assert X[0][0] == pytest.approx(0.0)
+    assert X[1][0] == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio

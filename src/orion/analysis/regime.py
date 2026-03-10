@@ -154,7 +154,7 @@ class RegimeDetector:
 # ============================================================================
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 @dataclass(frozen=True)
@@ -202,7 +202,7 @@ class MultiAxisRegimeDetector:
             try:
                 ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except Exception:
-                ts = datetime.utcnow()
+                ts = datetime.now(UTC)
 
         # Convert to ET (UTC-5 during EST, UTC-4 during EDT)
         # Approximate: use UTC and offset by 5 hours

@@ -1,4 +1,3 @@
-import logging
 from datetime import datetime
 from typing import Any
 
@@ -10,8 +9,9 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
 from orion.config import SystemSettings
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 # Define retry strategy for network operations
 network_retry = retry(

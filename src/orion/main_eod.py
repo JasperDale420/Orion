@@ -140,9 +140,8 @@ class EODService:
                 },
             )
 
-            # Process solver mutations if any
-            proposals = result.get("proposals", [])
-            mutation_proposals = [p for p in proposals if p.get("type") == "solver_mutation"]
+            # Process solver mutations if any (pre-filtered by EODReviewAgent)
+            mutation_proposals = result.get("solver_edit_proposals", [])
 
             if mutation_proposals:
                 await self._process_solver_mutations(mutation_proposals)

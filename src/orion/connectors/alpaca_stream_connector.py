@@ -9,17 +9,17 @@ connection if Gateway is unavailable.
 import asyncio
 import contextlib
 import hashlib
-import logging
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from orion.config import system_settings
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class AlpacaStreamConnector:

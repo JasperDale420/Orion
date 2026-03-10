@@ -47,7 +47,7 @@ class WeeklyDataAggregator:
 
         eod_data = await self.aggregate_eod_reports(week_start, week_end)
         trade_data = await self.aggregate_trade_data(week_start, week_end)
-        ml_data = await self.aggregate_ml_insights(week_start, week_end)
+        ml_data = await self.aggregate_ml_insights(week_start, week_end, eod_data=eod_data)
 
         return {
             "period": {
@@ -242,16 +242,70 @@ class WeeklyDataAggregator:
             logger.error(f"Failed to aggregate trade data: {e}")
             return {"decisions": {}, "trades": {}, "error": str(e)}
 
-    async def aggregate_ml_insights(self, week_start: datetime, week_end: datetime) -> dict[str, Any]:
+    async def aggregate_ml_insights(
+        self,
+        week_start: datetime,
+        week_end: datetime,
+        eod_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
-        Aggregate ML model insights from EOD reports (no separate MLInsight table).
+        Aggregate ML model insights and compute per-bucket drift from AUC scores
+        already collected in aggregate_eod_reports.
         """
-        # ML insights are embedded in EOD reports, already aggregated in aggregate_eod_reports
-        # Return empty structure - will be populated from EOD data
+        ml_auc_scores: dict[str, list[dict[str, Any]]] = (eod_data or {}).get("ml_auc_scores", {})
+
+        drift_analysis: dict[str, Any] = {}
+        buckets: list[str] = []
+        total_insights = 0
+
+        for bucket, scores in ml_auc_scores.items():
+            if not scores:
+                continue
+            buckets.append(bucket)
+            total_insights += len(scores)
+
+            # Sort by date to compute trend
+            sorted_scores = sorted(scores, key=lambda s: s["date"])
+            auc_values = [s["auc"] for s in sorted_scores]
+
+            if len(auc_values) < 2:
+                # Not enough data points to compute drift for this bucket
+                drift_analysis[bucket] = {
+                    "trend": "insufficient",
+                    "data_points": len(auc_values),
+                    "current_auc": auc_values[-1] if auc_values else None,
+                    "drift": 0.0,
+                }
+                continue
+
+            # Compare first half vs second half averages to detect trend
+            mid = len(auc_values) // 2
+            first_half_mean = sum(auc_values[:mid]) / mid
+            second_half_mean = sum(auc_values[mid:]) / len(auc_values[mid:])
+            drift_delta = second_half_mean - first_half_mean
+            current_auc = auc_values[-1]
+
+            # Classify trend: degrading if AUC dropped by >0.02, improving if rose >0.02
+            if drift_delta < -0.02:
+                trend = "degrading"
+            elif drift_delta > 0.02:
+                trend = "improving"
+            else:
+                trend = "stable"
+
+            drift_analysis[bucket] = {
+                "trend": trend,
+                "drift": drift_delta,
+                "current_auc": current_auc,
+                "data_points": len(auc_values),
+                "first_half_mean_auc": round(first_half_mean, 4),
+                "second_half_mean_auc": round(second_half_mean, 4),
+            }
+
         return {
-            "buckets": [],
-            "total_insights": 0,
-            "drift_analysis": {},
+            "buckets": buckets,
+            "total_insights": total_insights,
+            "drift_analysis": drift_analysis,
         }
 
 

@@ -34,6 +34,7 @@ class TrackedPosition:
     unrealized_pnl_pct: float
     entry_time: datetime
     bucket: str  # 0DTE, SHORT_SWING, SWING, POSITION
+    direction: str = "LONG"  # "LONG" or "SHORT"
 
     # Tracking state
     max_return_pct: float = 0.0
@@ -63,10 +64,16 @@ class PositionMonitor:
     - Position tracking (max return, max drawdown)
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        execution_engine: Any | None = None,
+        position_manager: Any | None = None,
+    ) -> None:
         self.exit_classifier: BucketExitClassifier = get_exit_classifier()
         self.tracked_positions: dict[str, TrackedPosition] = {}
         self._last_check_time: datetime | None = None
+        self._execution_engine = execution_engine
+        self._position_manager = position_manager
 
     async def sync_positions(self, connector: Any) -> list[TrackedPosition]:
         """
@@ -123,6 +130,7 @@ class PositionMonitor:
                     unrealized_pnl_pct=unrealized_pnl_pct,
                     entry_time=datetime.now(UTC),  # Approximate
                     bucket=entry_context.get("bucket", "SWING"),
+                    direction=entry_context.get("direction", "LONG"),
                     max_return_pct=max(0, unrealized_pnl_pct),
                     max_drawdown_pct=min(0, unrealized_pnl_pct),
                     premium_usd=entry_context.get("premium_usd"),
@@ -158,6 +166,7 @@ class PositionMonitor:
                 ct.option_symbol,
                 ct.premium,
                 ct.option_type,
+                ct.direction,
                 CASE
                     WHEN ct.expiration_date IS NOT NULL THEN
                         EXTRACT(DAY FROM ct.expiration_date - NOW())::int
@@ -201,6 +210,7 @@ class PositionMonitor:
                     "premium_usd": row.get("premium"),
                     "dte": dte,
                     "bucket": bucket,
+                    "direction": row.get("direction", "LONG"),
                 }
         except Exception as e:
             logger.warning(f"Failed to fetch entry context for {symbol}: {e}")
@@ -265,6 +275,13 @@ class PositionMonitor:
         """
         Execute exit orders for positions with exit signals.
 
+        Routes through ExecutionEngine.close_position() when available to ensure
+        circuit breaker, rate limiter, risk manager, and order persistence are applied.
+        Falls back to direct connector call only when no engine is configured.
+
+        Uses PositionManager._closing_symbols guard to prevent duplicate close orders
+        from both the ML exit classifier and rule-based exit logic.
+
         Args:
             connector: AlpacaTradingConnector
             exit_signals: List of (position, prediction) tuples
@@ -309,25 +326,64 @@ class PositionMonitor:
                 result["executed"] = False
                 result["error"] = "dry_run"
             else:
-                try:
-                    # For options, use option_symbol; for equity, use symbol
-                    close_symbol = pos.option_symbol or pos.symbol
-                    order = connector.close_position(close_symbol)
+                # Check closing guard — prevent duplicate close orders
+                if self._position_manager and self._position_manager.is_closing(pos.symbol):
+                    logger.warning(
+                        f"ML exit skipped: {pos.symbol} already has a close in progress",
+                        extra={"event": "ml_exit_duplicate_blocked", "symbol": pos.symbol},
+                    )
+                    result["error"] = "close_already_in_progress"
+                    results.append(result)
+                    continue
 
-                    if order:
+                # Mark symbol as closing before submitting order
+                if self._position_manager:
+                    if not self._position_manager.mark_closing(pos.symbol):
+                        result["error"] = "close_already_in_progress"
+                        results.append(result)
+                        continue
+
+                try:
+                    closed = False
+
+                    if self._execution_engine is not None:
+                        # Route through ExecutionEngine for circuit breaker, rate limiter,
+                        # risk manager, and order persistence
+                        from types import SimpleNamespace
+
+                        exit_signal = SimpleNamespace(
+                            rule_id=f"ml_exit_{pos.bucket}",
+                            reason=prediction.reasoning,
+                            urgency="IMMEDIATE",
+                            confidence=prediction.confidence,
+                            details={"bucket": pos.bucket, "pnl_pct": pos.unrealized_pnl_pct},
+                        )
+
+                        closed = await self._execution_engine.close_position(
+                            ticker=pos.symbol,
+                            qty=pos.qty,
+                            exit_signal=exit_signal,
+                            direction=pos.direction,
+                            use_market_order=True,
+                        )
+                    else:
+                        # Fallback: direct connector call (legacy path, no safety guards)
+                        logger.warning(
+                            f"No ExecutionEngine configured — closing {pos.symbol} directly via connector",
+                            extra={"event": "direct_close_fallback", "symbol": pos.symbol},
+                        )
+                        close_symbol = pos.option_symbol or pos.symbol
+                        order = connector.close_position(close_symbol)
+                        closed = order is not None
+
+                    if closed:
                         result["executed"] = True
-                        result["order_id"] = str(order.id)
                         logger.info(
-                            f"Exit executed: {pos.symbol} | Order: {order.id}",
-                            extra={
-                                "event": "exit_executed",
-                                "symbol": pos.symbol,
-                                "order_id": str(order.id),
-                            },
+                            f"Exit executed via engine: {pos.symbol}",
+                            extra={"event": "exit_executed", "symbol": pos.symbol},
                         )
 
                         # Log outcome for performance tracking
-                        # hit_target = True if we exited with profit
                         hit_target = pos.unrealized_pnl_pct >= 50
                         hit_stop = pos.unrealized_pnl_pct <= -20
                         try:
@@ -343,6 +399,10 @@ class PositionMonitor:
                 except Exception as e:
                     logger.error(f"Exit execution failed for {pos.symbol}: {e}")
                     result["error"] = str(e)
+                finally:
+                    # Always release the closing guard
+                    if self._position_manager:
+                        self._position_manager.unmark_closing(pos.symbol)
 
             results.append(result)
 
@@ -404,6 +464,8 @@ class PositionMonitor:
 async def run_position_monitor_loop(
     check_interval_seconds: int = 60,
     dry_run: bool = False,
+    execution_engine: Any | None = None,
+    position_manager: Any | None = None,
 ) -> None:
     """
     Run continuous position monitoring loop.
@@ -411,6 +473,8 @@ async def run_position_monitor_loop(
     Args:
         check_interval_seconds: Seconds between position checks
         dry_run: If True, log but don't execute exits
+        execution_engine: ExecutionEngine instance for safe order routing
+        position_manager: PositionManager instance for closing-guard coordination
     """
     from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
 
@@ -420,7 +484,10 @@ async def run_position_monitor_loop(
     )
 
     connector = AlpacaTradingConnector(settings=system_settings)
-    monitor = PositionMonitor()
+    monitor = PositionMonitor(
+        execution_engine=execution_engine,
+        position_manager=position_manager,
+    )
 
     while True:
         try:
@@ -435,9 +502,15 @@ async def run_position_monitor_loop(
 _position_monitor: PositionMonitor | None = None
 
 
-def get_position_monitor() -> PositionMonitor:
+def get_position_monitor(
+    execution_engine: Any | None = None,
+    position_manager: Any | None = None,
+) -> PositionMonitor:
     """Get or create position monitor singleton."""
     global _position_monitor
     if _position_monitor is None:
-        _position_monitor = PositionMonitor()
+        _position_monitor = PositionMonitor(
+            execution_engine=execution_engine,
+            position_manager=position_manager,
+        )
     return _position_monitor

@@ -5,13 +5,14 @@ Provides versioning, registration, and rollback capabilities for ML models.
 """
 
 import json
-import logging
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 # Default model directory
 DEFAULT_MODEL_DIR = Path("artifacts/models")

@@ -5,15 +5,15 @@ Scales down position size when new asset is highly correlated
 with existing portfolio holdings to reduce concentration risk.
 """
 
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
 
 from orion.config import RiskSettings, risk_settings
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 # In-memory cache for daily returns (ticker -> (timestamp, returns_array))
 _returns_cache: dict[str, tuple[datetime, np.ndarray]] = {}

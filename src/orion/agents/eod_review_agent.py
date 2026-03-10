@@ -134,6 +134,7 @@ class EODReviewAgent(BaseAgent):
             "input_snapshot_path": input_snapshot_path,
             "proposal_paths": saved_paths,
             "proposals_count": len(proposals),
+            "solver_edit_proposals": [p for p in proposals if p.get("type") == "solver_edit"],
         }
 
     async def _persist_solver_edits(self, proposals: list[dict[str, Any]], run_id: str) -> None:

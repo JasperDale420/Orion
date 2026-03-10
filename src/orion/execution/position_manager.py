@@ -7,17 +7,18 @@ Per Dynamic Exit Strategies PDF:
 - Integrates with broker for actual position tracking
 """
 
-import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 
+from orion.core.enums import DecisionStatus
 from orion.shared.db_utils import db_query
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 @dataclass
@@ -64,6 +65,9 @@ class PositionManager:
         # Key positions by candidate_id to avoid collapsing same-underlying contracts.
         self._positions: dict[str, OpenPosition] = {}
         self._initialized = False
+        # Guard against duplicate close orders from parallel exit systems
+        # (PositionMonitor ML exits + rule-based exits in main_execution.py).
+        self._closing_symbols: set[str] = set()
 
     async def initialize(self) -> None:
         """Load open positions from database on startup."""
@@ -75,7 +79,7 @@ class PositionManager:
                     .join(CandidateTrade, StrategyDecision.candidate_id == CandidateTrade.candidate_id)
                     .outerjoin(ExitDecision, StrategyDecision.candidate_id == ExitDecision.candidate_id)
                     .where(
-                        StrategyDecision.executed_successfully == "TRUE",
+                        StrategyDecision.executed_successfully == DecisionStatus.TRUE,
                         ExitDecision.exit_id.is_(None),
                     )
                     .order_by(StrategyDecision.timestamp_utc.desc())
@@ -177,6 +181,34 @@ class PositionManager:
             },
         )
         return pos
+
+    def is_closing(self, symbol: str) -> bool:
+        """Check if a close order is already in progress for this symbol."""
+        return symbol in self._closing_symbols
+
+    def mark_closing(self, symbol: str) -> bool:
+        """
+        Mark a symbol as having a close order in progress.
+
+        Returns True if the symbol was successfully marked (was not already closing).
+        Returns False if a close is already in progress (duplicate close blocked).
+        """
+        if symbol in self._closing_symbols:
+            logger.warning(
+                f"Duplicate close blocked: {symbol} already has a close in progress",
+                extra={"event_type": "DUPLICATE_CLOSE_BLOCKED", "ticker": symbol},
+            )
+            return False
+        self._closing_symbols.add(symbol)
+        logger.info(
+            f"Symbol marked as closing: {symbol}",
+            extra={"event_type": "CLOSE_IN_PROGRESS", "ticker": symbol},
+        )
+        return True
+
+    def unmark_closing(self, symbol: str) -> None:
+        """Remove the closing-in-progress guard for a symbol."""
+        self._closing_symbols.discard(symbol)
 
     def get_position(self, ticker: str) -> OpenPosition | None:
         """Get the most recent tracked position for a ticker if exists."""

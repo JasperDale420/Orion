@@ -17,6 +17,7 @@ from orion.api.schemas import ExperimentResponse, PromotionRecommendationRespons
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
 from orion.rag.vector_store import VectorStore
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.db_utils import db_write
 
 # Setup logger (FastAPI usually handles its own, but we can hook in ours)
@@ -388,13 +389,6 @@ def _dt_iso(dt: datetime | None) -> str | None:
     if dt is None:
         return None
     return dt.isoformat()
-
-
-def _first_existing_column(frame: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
-    for column in candidates:
-        if column in frame.columns:
-            return column
-    return None
 
 
 def _normalize_flow_ticker(value: Any) -> str | None:

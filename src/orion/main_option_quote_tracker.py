@@ -17,6 +17,7 @@ import pandas as pd
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import SystemSettings
 from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.option_quote_tracker")
@@ -94,13 +95,6 @@ async def get_pending_checkpoints() -> list[dict[str, Any]]:
 def _prefer_heber_flow_source() -> bool:
     raw = os.getenv("ORION_OPTION_QUOTE_TRACKER_PREFER_HEBER", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:

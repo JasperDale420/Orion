@@ -79,6 +79,7 @@ from orion.main_price_target_labeler import (
 from orion.main_price_target_labeler import (
     get_underlying_price_at_offset as get_labeler_underlying_price_at_offset,
 )
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -284,13 +285,6 @@ async def get_records_to_backfill(
 
     records = candidates[columns].to_dict("records")
     return [dict(record) for record in records]
-
-
-def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _coerce_dataframe(payload: Any) -> pd.DataFrame:

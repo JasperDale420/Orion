@@ -259,7 +259,9 @@ class IngestionService:
 
     async def _poll_alpaca(self, tickers: list[str], trace_id: str) -> list[BronzeEvent]:
         try:
-            events = self.alpaca.poll(tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes)
+            events = await asyncio.to_thread(
+                self.alpaca.poll, tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
+            )
             if events:
                 newest = max((e.event_ts_utc for e in events if e.event_ts_utc), default=None)
                 if newest:
@@ -293,7 +295,8 @@ class IngestionService:
 
     async def _persist_events(self, events: list[BronzeEvent]) -> None:
         await self._save_events_to_db(events)
-        await self._save_silver_data(events)
+        # Silver materialization is a no-op (Heber is canonical Silver source);
+        # skip to avoid wasting a DB session each cycle.
 
     async def _process_features_and_rules(self, events: list[BronzeEvent]) -> None:
         try:

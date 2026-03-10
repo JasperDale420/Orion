@@ -1,4 +1,3 @@
-import logging
 import math
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -6,12 +5,13 @@ from typing import TYPE_CHECKING, Any
 from orion.config import RiskSettings, risk_settings
 from orion.shared.db_utils import db_write
 from orion.shared.decorators import db_retry
+from orion.shared.logger import setup_struct_logger
 
 if TYPE_CHECKING:
     from orion.execution.correlation_adjuster import CorrelationAdjuster
     from orion.storage.models_execution import Position
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 # Initialize metrics
 _metrics: "Metrics | None" = None
@@ -840,9 +840,8 @@ class RiskManager:
             self.current_equity += realized_pnl
 
             # Update Daily Loss (Profit reduces daily loss, Loss increases it)
+            # Allow negative values (net profit) so losses accumulate correctly after profits
             self.current_daily_loss -= realized_pnl
-            if self.current_daily_loss < 0:
-                self.current_daily_loss = 0.0
 
             logger.info(
                 f"Fill Processed for {ticker}: Realized PnL=${realized_pnl:.2f}. New DailyLoss=${self.current_daily_loss:.2f}",

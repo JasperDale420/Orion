@@ -25,6 +25,7 @@ from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
 from orion.connectors.uw_max_pain_connector import UWMaxPainConnector
 from orion.connectors.vix_proxy_connector import VIXProxyConnector
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -100,13 +101,6 @@ def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> list
 def _prefer_heber_context_reads() -> bool:
     raw = os.getenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for candidate in candidates:
-        if candidate in df.columns:
-            return candidate
-    return None
 
 
 def _coerce_time_series(df: pd.DataFrame) -> pd.Series:

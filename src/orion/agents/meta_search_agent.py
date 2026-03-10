@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import os
 import uuid
 from datetime import UTC, datetime
@@ -18,7 +17,9 @@ from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
 from orion.core.solver_schema import EditOp, EditOpType, EvaluationTask, SolverConfig, SolverEdit
 from orion.core.solver_validation import ensure_solver_definition_json, solver_dsl_error_extra
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column_func
 from orion.shared.db_utils import db_query, db_write
+from orion.shared.logger import setup_struct_logger
 from orion.storage import db
 from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY  # noqa: N812
 from orion.storage.models_solvers import (
@@ -30,7 +31,7 @@ from orion.storage.models_solvers import (
     SolverRun,
 )
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY  # legacy patch target
 
 # Refinement loop configuration
@@ -460,11 +461,11 @@ class MetaSearchAgent:
         Returns a dict with 'docs' and 'recent_metrics'.
         """
         # Vector search
-        docs = await self.store.search(query, top_k=top_k)
+        docs = await self.vector_store.search(query, top_k=top_k)
 
         # Fetch recent solver metrics
         async def fetch_recent_metrics(session: Any) -> list[Any]:
-            from orion.storage.models import SolverMetrics
+            from orion.storage.models_solvers import SolverMetrics
 
             stmt = select(SolverMetrics).order_by(SolverMetrics.evaluated_at_utc.desc()).limit(10)
             result = await session.execute(stmt)
@@ -489,7 +490,7 @@ class MetaSearchAgent:
 
     async def _fetch_pending_edits(self) -> list[Any]:
         async def fetch_pending(session: Any) -> list[Any]:
-            stmt = select(SolverEdits).where(SolverEdits.reward is None)
+            stmt = select(SolverEdits).where(SolverEdits.reward.is_(None))
             result = await session.execute(stmt)
             return result.scalars().all()
 
@@ -675,7 +676,7 @@ class MetaSearchAgent:
                     f"- Sharpe: {metrics.sharpe_ratio:.3f}\n"
                     f"- Profit Factor: {metrics.profit_factor:.3f}\n"
                     f"- Max Drawdown: {metrics.max_dd_pct:.1f}%\n"
-                    f"- Win Rate: {(metrics.win_rate or 0) * 100:.1f}%\n"
+                    f"- Win Rate: {(getattr(metrics, 'win_rate', 0) or 0) * 100:.1f}%\n"
                     f"\nPlease propose refinements to improve performance."
                 )
 
@@ -859,7 +860,10 @@ class MetaSearchAgent:
             self._apply_modify_param(new_config, op)
             return
         if op.op == EditOpType.MODIFY_RISK:
-            self._apply_modify_risk_op(new_config, op)
+            # Route through the generic param path with "risk." prefix for consistency
+            if op.param_name and not op.param_name.startswith("risk."):
+                op.param_name = f"risk.{op.param_name}"
+            self._apply_modify_param(new_config, op)
             return
         if op.op == EditOpType.TOGGLE_FEATURE:
             self._apply_toggle_feature(new_config, op)
@@ -870,15 +874,36 @@ class MetaSearchAgent:
         if op.op == EditOpType.REMOVE_RULE:
             self._apply_remove_rule(new_config, op)
 
-    def _apply_modify_param(self, new_config: SolverConfig, op: EditOp) -> None:
-        if op.param_name == "exit_logic.take_profit_atr_multiple":
-            new_config.exit_logic.take_profit_atr_multiple = float(op.new_value)
-        elif op.param_name == "risk_per_trade_bps":
-            new_config.risk_per_trade_bps = int(op.new_value)
+    # Fields that should be cast to int; everything else is cast to float.
+    _INT_SUFFIXES = ("_bps", "_positions", "_bars")
 
-    def _apply_modify_risk_op(self, new_config: SolverConfig, op: EditOp) -> None:
-        if op.param_name == "risk_per_trade_bps" and new_config.risk:
-            new_config.risk.risk_per_trade_bps = int(op.new_value)
+    def _apply_modify_param(self, new_config: SolverConfig, op: EditOp) -> None:
+        param = op.param_name or ""
+
+        # Backward-compat: bare "risk_per_trade_bps" → "risk.risk_per_trade_bps"
+        if param == "risk_per_trade_bps":
+            param = "risk.risk_per_trade_bps"
+
+        parts = param.split(".")
+        obj: Any = new_config
+        for part in parts[:-1]:
+            obj = getattr(obj, part, None)
+            if obj is None:
+                logger.warning("modify_param: cannot resolve path %r on SolverConfig (missing %r)", param, part)
+                return
+
+        attr = parts[-1]
+        if not hasattr(obj, attr):
+            logger.warning("modify_param: attribute %r not found on %s", attr, type(obj).__name__)
+            return
+
+        # Type coercion: int for *_bps / *_positions / *_bars, else float
+        if any(attr.endswith(suffix) for suffix in self._INT_SUFFIXES):
+            value = int(op.new_value)
+        else:
+            value = float(op.new_value)
+
+        setattr(obj, attr, value)
 
     def _apply_toggle_feature(self, new_config: SolverConfig, op: EditOp) -> None:
         feat = op.feature_name
@@ -1089,12 +1114,7 @@ class MetaSearchAgent:
 
         return solver_run, metrics
 
-    @staticmethod
-    def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-        for name in names:
-            if name in df.columns:
-                return name
-        return None
+    _first_existing_column = staticmethod(_first_existing_column_func)
 
     @staticmethod
     def _normalize_ticker(value: Any) -> str | None:
@@ -1648,15 +1668,22 @@ class MetaSearchAgent:
     def _analyze_ml_drift(self, week_data: dict[str, Any]) -> dict[str, Any]:
         """
         Analyze ML model drift from pattern miner insights.
+
+        Uses drift_analysis computed by WeeklyDataAggregator from per-bucket AUC
+        scores collected in EOD reports.  Falls back gracefully when data is sparse:
+        - No AUC data at all -> "no_data"
+        - Some buckets exist but all have < 2 data-points -> "insufficient_data"
+        - Otherwise compute health from degrading / total ratio
         """
         eod_data = week_data.get("eod_reports", {})
         ml_insights = week_data.get("ml_insights", {})
 
-        drift_analysis = {
+        drift_analysis: dict[str, Any] = {
             "buckets_analyzed": [],
             "degrading_buckets": [],
             "improving_buckets": [],
             "stable_buckets": [],
+            "insufficient_buckets": [],
             "top_features": eod_data.get("top_features", {}),
             "overall_health": "unknown",
         }
@@ -1677,18 +1704,30 @@ class MetaSearchAgent:
                 )
             elif trend == "improving":
                 drift_analysis["improving_buckets"].append(bucket)
+            elif trend == "insufficient":
+                drift_analysis["insufficient_buckets"].append(bucket)
             else:
                 drift_analysis["stable_buckets"].append(bucket)
 
         # Overall health
-        n_degrading = len(drift_analysis["degrading_buckets"])
         n_total = len(drift_analysis["buckets_analyzed"])
+        n_degrading = len(drift_analysis["degrading_buckets"])
+        n_insufficient = len(drift_analysis["insufficient_buckets"])
 
         if n_total == 0:
+            # No ML AUC scores found in any EOD report this week
             drift_analysis["overall_health"] = "no_data"
+            drift_analysis["message"] = "No ML AUC scores found in this week's EOD reports."
+        elif n_insufficient == n_total:
+            # All buckets have < 2 data points -- not enough to compare
+            drift_analysis["overall_health"] = "insufficient_data"
+            drift_analysis["message"] = (
+                f"{n_total} bucket(s) found but each has fewer than 2 data points. "
+                f"Need at least 2 trading days with ML scores to compute drift."
+            )
         elif n_degrading == 0:
             drift_analysis["overall_health"] = "healthy"
-        elif n_degrading / n_total < 0.3:
+        elif n_degrading / max(n_total - n_insufficient, 1) < 0.3:
             drift_analysis["overall_health"] = "minor_drift"
         else:
             drift_analysis["overall_health"] = "significant_drift"

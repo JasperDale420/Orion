@@ -103,7 +103,7 @@ class RollupBuilder:
                         "dollar_vol": "sum",
                     }
                 )
-                .dropna()
+                .dropna(subset=["open", "high", "low", "close", "volume"])
             )
 
             if resampled.empty:

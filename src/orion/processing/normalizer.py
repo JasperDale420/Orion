@@ -1,10 +1,12 @@
-import contextlib
 import hashlib
 import json
 from datetime import datetime
 from typing import Any
 
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import parse_timestamptz
+
+logger = setup_struct_logger(__name__)
 
 
 class NormalizationEngine:
@@ -69,7 +71,13 @@ class NormalizationEngine:
         elif raw_put_call_upper in ("P", "PUT"):
             put_call = "P"
         else:
-            put_call = raw_put_call_upper[:1] if raw_put_call_upper else "C"  # Default to C
+            first_char = raw_put_call_upper[:1] if raw_put_call_upper else ""
+            if first_char in ("P", "C"):
+                put_call = first_char
+                logger.warning("put_call field had unexpected value %r, inferred %r", raw_put_call, put_call)
+            else:
+                put_call = "UNKNOWN"
+                logger.warning("put_call field had unrecognizable value %r, setting UNKNOWN", raw_put_call)
 
         normalized = {
             "ticker": payload.get("ticker"),
@@ -190,8 +198,10 @@ class NormalizationEngine:
         ts_val = payload.get("t")
         bar_ts = None
         if isinstance(ts_val, str):
-            with contextlib.suppress(Exception):
+            try:
                 bar_ts = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
+            except Exception:
+                logger.warning("Failed to parse bar timestamp: %r", ts_val)
 
         return {
             "ticker": payload.get("symbol") or payload.get("ticker"),

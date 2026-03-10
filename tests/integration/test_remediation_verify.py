@@ -37,12 +37,15 @@ async def test_fail_fast_solver_pipeline():
         candidate_id="c1", ticker="AAPL", direction="LONG", timestamp_utc="2024-01-01T12:00:00Z", confidence=0.9
     )
 
-    # Mock ModelRegistry to return a broken model
+    # Mock get_model_registry to return a broken model via get_active_model
     mock_model = MagicMock()
     mock_model.predict_proba.side_effect = Exception("Inference Crashed")
 
+    mock_registry_instance = MagicMock()
+    mock_registry_instance.get_active_model.return_value = mock_model
+
     with (
-        patch("orion.core.model_registry.ModelRegistry.get", return_value=mock_model),
+        patch("orion.ml.model_registry.get_model_registry", return_value=mock_registry_instance),
         patch("orion.processing.feature_engine.FeatureEngine") as MockFeat,  # noqa: N806
     ):
         # Mock feature engine to work

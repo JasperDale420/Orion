@@ -62,7 +62,8 @@ async def test_risk_manager_process_fill_closes_position_profit():
     assert rm.positions["AAPL"]["qty"] == 5.0
     assert rm.positions["AAPL"]["avg_entry"] == pytest.approx(100.0)  # Unchanged
     assert rm.current_equity == pytest.approx(10100.0)  # +100 Profit
-    assert rm.current_daily_loss == pytest.approx(0.0)
+    # Daily loss tracks net: profit of 100 means daily_loss goes to -100
+    assert rm.current_daily_loss == pytest.approx(-100.0)
 
 
 @pytest.mark.asyncio

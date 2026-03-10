@@ -13,6 +13,7 @@ from typing import Any
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +146,6 @@ class VIXProxyConnector:
             "vix_1d_change": self._latest_vix_snapshot.get("vix_1d_change"),
             "vix_regime": self._latest_vix_snapshot.get("vix_regime"),
         }
-
-
-def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:

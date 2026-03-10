@@ -16,6 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
 from orion.core.http_client import create_http_client
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 
 logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -169,13 +170,6 @@ class UWMaxPainConnector:
         self._latest_max_pain_rows.append(dict(record))
         if len(self._latest_max_pain_rows) > 2000:
             self._latest_max_pain_rows = self._latest_max_pain_rows[-1000:]
-
-
-def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:

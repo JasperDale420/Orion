@@ -13,6 +13,7 @@ except ImportError:
 import dateutil.parser
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column_func
 from orion.shared.db_utils import db_write
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
@@ -128,12 +129,7 @@ class FeatureEngine:
         except Exception as e:
             logger.warning(f"Indicator hydration failed for {ticker}: {e}")
 
-    @staticmethod
-    def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-        for name in names:
-            if name in df.columns:
-                return name
-        return None
+    _first_existing_column = staticmethod(_first_existing_column_func)
 
     @staticmethod
     def _normalize_ticker(value: Any) -> str | None:
@@ -292,7 +288,7 @@ class FeatureEngine:
             # Extract relevant fields for aggregation
             # We normalize crudely here for the V1 slice
             is_put = e.payload.get("put_call") == "P"
-            premium = float(e.payload.get("premium") or 0.0)
+            premium = float(e.payload.get("premium_usd") or 0.0)
 
             # Append
             if ticker not in self.flow_history:

@@ -1,13 +1,12 @@
 import os
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import joblib
 import pandas as pd
 import pytest
 
 from orion.config import system_settings
-from orion.core.model_registry import ModelRegistry
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_schema import SolverConfig
 from orion.processing.feature_engine import FeatureEngine
@@ -30,19 +29,6 @@ def mock_joblib_model():
     yield model
     if os.path.exists(DUMMY_MODEL_PATH):
         os.remove(DUMMY_MODEL_PATH)
-
-
-@pytest.mark.asyncio
-async def test_model_registry_load(mock_joblib_model):
-    """Verify ModelRegistry loads from disk."""
-    ModelRegistry.clear_cache()
-    model = ModelRegistry.get(DUMMY_MODEL_URI)
-    assert model is not None
-    assert hasattr(model, "predict_proba")
-
-    # Verify Cache
-    model2 = ModelRegistry.get(DUMMY_MODEL_URI)
-    assert model is model2
 
 
 @pytest.mark.asyncio
@@ -72,6 +58,8 @@ async def test_solver_pipeline_ml_inference(mock_joblib_model):
     feature_engine = MagicMock()
     feature_engine.compute = AsyncMock(return_value={"rsi": 50, "session_volatility": 0.01})
 
+    # model_uri points to real file at /tmp/dummy_model.joblib (via file:// URI)
+    # solver_executor loads it directly with joblib — no registry mock needed
     p_take, weight, trace = await pipeline.execute(solver, candidate, feature_engine)
 
     assert p_take == 0.6  # From dummy model

@@ -174,10 +174,9 @@ class AlpacaMarketConnector:
             # First run
             start_time = now - timedelta(minutes=default_lookback_minutes)
         else:
-            # Use the oldest watermark to ensure we don't miss data for any ticker
-            # But add a small buffer/overlap or just use strict > last_seen
-            # Alpaca 'start' is inclusive.
-            start_time = min(watermarks)
+            # Cap lookback to 10 minutes to prevent one stale ticker from
+            # over-fetching hours of data for all tickers; dedup handles overlap.
+            start_time = max(min(watermarks), now - timedelta(minutes=10))
 
         return self.fetch_bars(tickers, start_time=start_time, end_time=now)
 

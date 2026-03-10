@@ -15,7 +15,7 @@ def create_mock_flow_event(ticker, premium, ts):
         received_ts_utc=ts,
         payload={
             "ticker": ticker,
-            "premium": premium,
+            "premium_usd": premium,
             "aggressor_ind": "ASK",
             "spot_price": 100.0,
             "expiry": "2023-12-01",

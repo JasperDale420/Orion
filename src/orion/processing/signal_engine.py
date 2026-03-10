@@ -1,18 +1,19 @@
 import hashlib
-import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from orion.analysis.regime import MultiAxisRegimeDetector, RegimeDetector
 from orion.config import risk_settings, system_settings
+from orion.core.enums import DecisionStatus
 from orion.core.errors import ErrorCode, FeatureComputationError, ModelInferenceError
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_router import SolverRouter
 from orion.core.solver_schema import LiveContext
 from orion.processing.feature_engine import FeatureEngine
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class SignalEngine:
@@ -187,7 +188,7 @@ class SignalEngine:
                 model_version=None,
                 decision="SKIP",
                 reason=f"Regime SHOCK/blocked: vol={regime_snapshot.vol.value}, vix={regime_snapshot.vix_regime.value}",
-                executed_successfully="SKIPPED",
+                executed_successfully=DecisionStatus.SKIPPED,
                 execution_params={},
                 decision_trace_json={
                     "regime_blocked": True,
@@ -233,7 +234,7 @@ class SignalEngine:
                         model_version=None,
                         decision="SKIP",
                         reason=f"ML pre-filter: score {ml_score:.2f} below threshold ({ml_threshold})",
-                        executed_successfully="SKIPPED",
+                        executed_successfully=DecisionStatus.SKIPPED,
                         execution_params={},
                         decision_trace_json={
                             "ml_prefilter": True,
@@ -287,7 +288,7 @@ class SignalEngine:
             model_version=None,
             decision="SKIP",
             reason="Default: No decision made",
-            executed_successfully="PENDING",
+            executed_successfully=DecisionStatus.PENDING,
             execution_params={},
             decision_trace_json={},
         )
@@ -464,7 +465,7 @@ class SignalEngine:
             model_version=None,
             decision="SKIP",
             reason="Fallback: Router empty and no baseline solver applied; defaulting to safety SKIP",
-            executed_successfully="SKIPPED",
+            executed_successfully=DecisionStatus.SKIPPED,
             execution_params={},
             decision_trace_json={
                 "fallback_triggered": True,

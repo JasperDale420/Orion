@@ -147,26 +147,9 @@ def _pattern_miner_training_source() -> str:
     return "heber_gold"
 
 
-def _first_existing_column(frame: Any, candidates: list[str]) -> str | None:
-    for column in candidates:
-        if column in frame.columns:
-            return column
-    return None
-
-
-def _coerce_dataframe(payload: Any) -> Any:
-    import pandas as pd
-
-    if payload is None:
-        return pd.DataFrame()
-    if isinstance(payload, pd.DataFrame):
-        return payload
-    if isinstance(payload, list):
-        rows = [row for row in payload if isinstance(row, dict)]
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    if isinstance(payload, dict):
-        return pd.DataFrame([payload])
-    return pd.DataFrame()
+from orion.ml.heber_utils import coerce_dataframe as _coerce_dataframe
+from orion.ml.heber_utils import first_existing_column as _first_existing_column
+from orion.ml.heber_utils import generate_deterministic_event_ids as _generate_deterministic_event_ids
 
 
 def _validate_heber_training_contract(outcomes_raw: Any, features_raw: Any) -> None:
@@ -179,7 +162,7 @@ def _validate_heber_training_contract(outcomes_raw: Any, features_raw: Any) -> N
         "outcome_or_hit_tp": ["outcome", "outcome_reason", "status", "hit_tp_first", "contract_hit_tp_first"],
         "trading_minutes_to_hit": ["trading_minutes_to_hit", "bars_to_hit"],
     }
-    required_feature_families: dict[str, list[str]] = {
+    soft_feature_families: dict[str, list[str]] = {
         "event_id": ["alert_id", "event_id", "watch_id", "instrument_key"],
     }
 
@@ -190,29 +173,34 @@ def _validate_heber_training_contract(outcomes_raw: Any, features_raw: Any) -> N
     ]
     missing_feature_families = [
         family
-        for family, candidates in required_feature_families.items()
+        for family, candidates in soft_feature_families.items()
         if _first_existing_column(features_raw, candidates) is None
     ]
 
     if not missing_outcome_families and not missing_feature_families:
         return
 
-    message = (
-        "Heber training contract mismatch: "
-        f"labels_alert_barriers missing {missing_outcome_families or 'none'}, "
-        f"meta_label_features missing {missing_feature_families or 'none'}"
-    )
-    logger.error(
-        message,
-        extra={
-            "event": "pattern_miner_heber_training_contract_mismatch",
-            "missing_outcome_families": missing_outcome_families,
-            "missing_feature_families": missing_feature_families,
-            "outcomes_columns": sorted(str(col) for col in outcomes_raw.columns),
-            "features_columns": sorted(str(col) for col in features_raw.columns),
-        },
-    )
-    raise RuntimeError(message)
+    if missing_outcome_families:
+        message = f"Heber training contract mismatch: labels_alert_barriers missing {missing_outcome_families}"
+        logger.error(
+            message,
+            extra={
+                "event": "pattern_miner_heber_training_contract_mismatch",
+                "missing_outcome_families": missing_outcome_families,
+                "outcomes_columns": sorted(str(col) for col in outcomes_raw.columns),
+            },
+        )
+        raise RuntimeError(message)
+
+    if missing_feature_families:
+        logger.warning(
+            "Heber feature dataset missing event_id family; will generate deterministic IDs",
+            extra={
+                "event": "pattern_miner_heber_features_missing_event_id",
+                "missing_feature_families": missing_feature_families,
+                "features_columns": sorted(str(col) for col in features_raw.columns),
+            },
+        )
 
 
 def _normalize_heber_outcomes(frame: Any) -> Any:
@@ -306,10 +294,14 @@ def _normalize_heber_features(frame: Any) -> Any:
         return pd.DataFrame(columns=["event_id"])
 
     event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
-    if event_column is None:
-        return pd.DataFrame(columns=["event_id"])
-
-    normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+    if event_column is not None:
+        normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+    else:
+        logger.warning(
+            "No event_id column in features; generating deterministic IDs",
+            extra={"event": "pattern_miner_features_synthetic_event_id"},
+        )
+        normalized = pd.DataFrame({"event_id": _generate_deterministic_event_ids(frame)})
 
     mapped_columns: dict[str, list[str]] = {
         # Core
@@ -645,12 +637,12 @@ async def fetch_training_data(
     )
 
 
-def prepare_features(df: Any, feature_names: list[str]) -> tuple[Any, Any]:
+def prepare_features(df: Any, feature_names: list[str]) -> tuple[Any, Any, dict[str, list[str]]]:
     """
     Prepare feature matrix X from dataframe.
 
     Returns:
-        Tuple of (X feature matrix, feature_names used)
+        Tuple of (X feature matrix, feature_names used, categorical_mappings)
     """
     import pandas as pd
 
@@ -661,15 +653,18 @@ def prepare_features(df: Any, feature_names: list[str]) -> tuple[Any, Any]:
         if col not in CATEGORICAL_COLUMNS:
             X[col] = pd.to_numeric(X[col], errors="coerce")
 
-    # Encode categoricals
+    # Encode categoricals and persist the category-to-code mapping
+    categorical_mappings: dict[str, list[str]] = {}
     for col in CATEGORICAL_COLUMNS:
         if col in X.columns:
-            X[col] = pd.Categorical(X[col]).codes  # noqa: N806
+            cat = pd.Categorical(X[col])
+            categorical_mappings[col] = list(cat.categories.astype(str))
+            X[col] = cat.codes  # noqa: N806
 
     # Fill missing with -999 (LightGBM handles this)
     X = X.fillna(-999)  # noqa: N806
 
-    return X, feature_names
+    return X, feature_names, categorical_mappings
 
 
 def train_model(
@@ -811,7 +806,12 @@ def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int 
     return final_model, train_auc, avg_auc
 
 
-def save_model(model: Any, model_type: str, feature_names: list[str]) -> Path | None:
+def save_model(
+    model: Any,
+    model_type: str,
+    feature_names: list[str],
+    categorical_mappings: dict[str, list[str]] | None = None,
+) -> Path | None:
     """
     Save trained model to disk for MLScorer to load.
 
@@ -819,6 +819,7 @@ def save_model(model: Any, model_type: str, feature_names: list[str]) -> Path | 
         model: Trained LightGBM model
         model_type: Model identifier (e.g., "SWING_hit_target_50")
         feature_names: List of feature names used for training
+        categorical_mappings: Column name to ordered category list used during encoding
 
     Returns:
         Path to saved model, or None if save failed
@@ -828,12 +829,12 @@ def save_model(model: Any, model_type: str, feature_names: list[str]) -> Path | 
     model_path = MODEL_DIR / f"{model_type}.pkl"
 
     try:
-        # Save model with metadata
         model_data = {
             "model": model,
             "feature_names": feature_names,
             "model_type": model_type,
             "created_at": datetime.now(UTC).isoformat(),
+            "categorical_mappings": categorical_mappings or {},
         }
         with open(model_path, "wb") as f:
             pickle.dump(model_data, f)
@@ -1051,7 +1052,7 @@ async def run_pattern_mining(
         return None
 
     # 2. Prepare features
-    X, feature_names = prepare_features(df, feature_names)  # noqa: N806
+    X, feature_names, categorical_mappings = prepare_features(df, feature_names)  # noqa: N806
     y = df[f"target_{target_name}"]
 
     # Check for valid target distribution
@@ -1069,7 +1070,7 @@ async def run_pattern_mining(
 
     # 4. Save model to disk for MLScorer (only save if AUC is acceptable)
     if holdout_auc >= 0.55:
-        save_model(model, model_type, feature_names)
+        save_model(model, model_type, feature_names, categorical_mappings)
     else:
         logger.warning(
             f"Skipping model save for {model_type}: AUC {holdout_auc:.3f} below threshold",

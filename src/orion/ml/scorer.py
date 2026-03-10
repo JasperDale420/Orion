@@ -153,6 +153,9 @@ class MLScorer:
     @staticmethod
     def _build_feature_map(flow: dict[str, Any]) -> dict[str, float]:
         """Build the full mapping from flow fields to ML feature names."""
+        import math
+        from datetime import datetime, timezone
+
         get = lambda k: float(flow.get(k) or 0)  # noqa: E731
         premium = get("premium_usd")
         underlying = get("underlying_price")
@@ -160,22 +163,60 @@ class MLScorer:
         size = int(flow.get("size_contracts") or 0)
         volume = get("volume_contract")
         oi = get("open_interest")
+        dte_val = int(flow.get("dte") or 0)
+        iv_val = get("iv")
+        moneyness_val = strike / underlying if underlying > 0 else 1.0
+        log_moneyness_val = math.log(moneyness_val) if moneyness_val > 0 else 0.0
+        delta_val = get("delta")
+        gamma_val = get("gamma")
+        theta_val = get("theta")
+        vega_val = get("vega")
+        iv_rank_val = get("iv_rank") or iv_val
+
+        now = datetime.now(timezone.utc)
+        hour_of_day = now.hour
+        minute_of_hour = now.minute
+        day_of_week = now.weekday()
+        market_open_minutes = 9 * 60 + 30
+        current_minutes = hour_of_day * 60 + minute_of_hour
+        minutes_since_open = max(current_minutes - market_open_minutes, 0)
+        minutes_to_close = max(16 * 60 - current_minutes, 0)
 
         safe = lambda n, d, fallback=0: n / d if d > 0 else fallback  # noqa: E731
 
         return {
             "premium_usd": premium,
-            "dte": int(flow.get("dte") or 0),
-            "iv": get("iv"),
-            "iv_rank_at_entry": get("iv"),
+            "premium": premium,  # training alias
+            "dte": dte_val,
+            "days_to_expiry": dte_val,  # training alias
+            "iv": iv_val,
+            "iv_rank_at_entry": iv_rank_val,
+            "iv_rank": iv_rank_val,  # training alias
             "volume_contract": volume,
+            "volume": volume,  # training alias
             "open_interest": oi,
             "underlying_price": underlying,
+            "spot_price": underlying,  # training alias
+            "contract_price": safe(premium, size),  # training alias (best estimate)
             "strike": strike,
             "size_contracts": size,
-            "moneyness": safe(strike, underlying, 1.0),
+            "moneyness": moneyness_val,
+            "log_moneyness": log_moneyness_val,  # training alias
             "volume_oi_ratio": safe(volume, oi),
             "premium_per_contract": safe(premium, size),
+            "delta": delta_val,  # training alias
+            "gamma": gamma_val,  # training alias
+            "theta": theta_val,  # training alias
+            "vega": vega_val,  # training alias
+            "underlying_30d_return": get("underlying_30d_return"),
+            "underlying_5d_return": get("underlying_5d_return"),
+            "underlying_1d_return": get("underlying_1d_return"),
+            "realized_vol_20d": get("realized_vol_20d"),
+            "hour_of_day": hour_of_day,
+            "minute_of_hour": minute_of_hour,
+            "day_of_week": day_of_week,
+            "minutes_since_open": minutes_since_open,
+            "minutes_to_close": minutes_to_close,
             "gex_at_entry": get("gex"),
             "vex_at_entry": get("vex"),
             "market_tide_30m": get("market_tide"),
@@ -183,6 +224,14 @@ class MLScorer:
             "vix_at_entry": get("vix"),
             "darkpool_volume_1h": get("darkpool_volume"),
             "put_call": 1 if flow.get("put_call") == "C" else 0,
+            "alert_type": get("alert_type"),
+            "side": get("side"),
+            "aggressor": get("aggressor"),
+            "is_bullish": get("is_bullish"),
+            "is_bearish": get("is_bearish"),
+            "is_sweep": get("is_sweep"),
+            "is_block": get("is_block"),
+            "is_unusual": get("is_unusual"),
             "vol_regime_at_entry": 0,
             "risk_regime_at_entry": 0,
             "session_regime_at_entry": 0,

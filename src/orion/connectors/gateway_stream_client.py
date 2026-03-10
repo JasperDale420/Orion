@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 import hashlib
 import json
-import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -19,9 +18,10 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from orion.config import system_settings
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 # Reconnection settings
 MAX_RECONNECT_ATTEMPTS = 10

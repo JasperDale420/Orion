@@ -23,6 +23,7 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import init_db
 
 logger = logging.getLogger(__name__)
@@ -358,13 +359,6 @@ async def run_quality_checks():
 def _prefer_heber_source() -> bool:
     raw = os.getenv("ORION_DATA_QUALITY_CHECKER_PREFER_HEBER", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _first_existing_column(df: pd.DataFrame, names: list[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:

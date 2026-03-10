@@ -30,8 +30,8 @@ docker compose restart orion_execution
 ```bash
 # Verify positions match broker
 docker compose exec orion_db psql -c "
-SELECT ticker, qty, avg_entry_price FROM gold_positions
-WHERE status = 'OPEN' ORDER BY created_at DESC;"
+SELECT ticker, qty, avg_entry_price FROM positions_snapshots
+ORDER BY snapshot_ts_utc DESC;"
 
 # Compare with Alpaca positions
 curl -H "APCA-API-KEY-ID: $ALPACA_API_KEY" \
@@ -43,9 +43,9 @@ curl -H "APCA-API-KEY-ID: $ALPACA_API_KEY" \
 ```bash
 # Find pending/stuck orders
 docker compose exec orion_db psql -c "
-SELECT id, ticker, status, created_at FROM gold_orders
-WHERE status NOT IN ('FILLED', 'CANCELLED')
-ORDER BY created_at DESC LIMIT 20;"
+SELECT id, ticker, status, created_at_utc FROM orders
+WHERE status NOT IN ('filled', 'cancelled')
+ORDER BY created_at_utc DESC LIMIT 20;"
 ```
 
 ---
@@ -71,7 +71,7 @@ ORDER BY created_at DESC LIMIT 20;"
 4. Switch to paper mode temporarily: `ORION_STAGE=paper`
 
 ### C. Data Feed Interruption
-**Symptoms**: No new signals in `silver_uw_flow`
+**Symptoms**: No new signals in `silver_signals`
 
 **Resolution**:
 1. Check UW API status
@@ -84,7 +84,7 @@ ORDER BY created_at DESC LIMIT 20;"
 
 **Resolution**:
 1. Halt trading immediately
-2. Run position sync: 
+2. Run position sync:
    ```python
    from orion.execution.risk_manager import RiskManager
    rm = RiskManager()
@@ -93,7 +93,7 @@ ORDER BY created_at DESC LIMIT 20;"
 3. Manually reconcile any differences
 4. Resume only after verification
 
-### E. Greeks Calculation Failure  
+### E. Greeks Calculation Failure
 **Symptoms**: `None` delta/gamma values
 
 **Resolution**:
@@ -134,10 +134,9 @@ python -m orion.jobs.backfill_ml_features --days 1
 
 # Verify feature coverage
 docker compose exec orion_db psql -c "
-SELECT COUNT(*), 
-       COUNT(delta_at_entry) as with_greeks
-FROM price_target_labels
-WHERE created_at > NOW() - INTERVAL '24 hours';"
+SELECT COUNT(*)
+FROM candidate_labels
+WHERE timestamp_utc > NOW() - INTERVAL '24 hours';"
 ```
 
 ---

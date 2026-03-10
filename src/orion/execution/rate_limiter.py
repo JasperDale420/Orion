@@ -5,11 +5,12 @@ Implements token bucket algorithm to respect Alpaca's 200 requests/minute limit.
 """
 
 import asyncio
-import logging
 import time
 from collections import deque
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 
 class OrderRateLimiter:

@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.darkpool_features")
@@ -24,13 +25,6 @@ def _zero_darkpool_features() -> dict[str, Any]:
         "darkpool_max_block": 0.0,
         "darkpool_dollar_volume": 0.0,
     }
-
-
-def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _normalize_ticker(value: Any) -> str | None:

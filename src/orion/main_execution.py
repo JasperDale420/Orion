@@ -16,8 +16,10 @@ import contextlib
 from sqlalchemy import select
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.core.enums import DecisionStatus
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -101,13 +103,6 @@ def _flow_matches_contract_components(flow: Any, contract: tuple[str, str, float
 def _prefer_heber_recent_flow_source() -> bool:
     raw = os.getenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _normalize_flow_ticker(value: Any) -> str | None:
@@ -449,7 +444,7 @@ async def main() -> None:
                     pre = await db_query(run_preflight)
                     if not pre.ok:
                         decision.decision = "SKIP"
-                        decision.executed_successfully = "SKIPPED"
+                        decision.executed_successfully = DecisionStatus.SKIPPED
                         decision.reason = f"Preflight reject: {pre.reason}"
                         decision.decision_trace_json = decision.decision_trace_json or {}
                         decision.decision_trace_json["preflight_reject"] = {"reason": pre.reason, **(pre.extra or {})}
@@ -464,21 +459,21 @@ async def main() -> None:
                 await save_decision(decision, candidate)
 
                 # 5. Execute (if EXECUTE)
-                exec_status = "SKIPPED"
+                exec_status = DecisionStatus.SKIPPED
                 if decision.decision == "EXECUTE":
                     try:
                         # Fix: Call execute_order with decision object
                         await execution_engine.execute_order(decision, candidate)
 
                         # Check result in decision object itself (updated by engine)
-                        if decision.executed_successfully == "TRUE":
-                            exec_status = "TRUE"
+                        if decision.executed_successfully == DecisionStatus.TRUE:
+                            exec_status = DecisionStatus.TRUE
                         else:
-                            exec_status = "FALSE"
+                            exec_status = DecisionStatus.FALSE
 
                     except Exception as exe:
                         logger.error(f"Execution Exception: {exe}")
-                        exec_status = "FALSE"
+                        exec_status = DecisionStatus.FALSE
 
                 # 6. Update Decision Status
                 await update_decision_status(decision.decision_id, exec_status)
@@ -497,6 +492,15 @@ async def main() -> None:
                     )
                     continue
 
+                # Guard: skip if a close order is already in progress for this symbol
+                # (e.g. the ML exit classifier in PositionMonitor already submitted one)
+                if position_manager.is_closing(position.ticker):
+                    logger.info(
+                        f"Rule-based exit skipped: {position.ticker} already has a close in progress",
+                        extra={"event_type": "EXIT_RULE_DUPLICATE_BLOCKED", "ticker": position.ticker},
+                    )
+                    continue
+
                 # Fetch recent flow for this ticker (last 30 min)
                 recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
                 scoped_flow = _scope_recent_flow_for_position(position, recent_flow)
@@ -509,14 +513,21 @@ async def main() -> None:
                             extra={"event_type": "EXIT_SIGNAL", "ticker": position.ticker, "rule_id": exit_sig.rule_id},
                         )
                         if exit_sig.urgency == "IMMEDIATE":
-                            closed = await execution_engine.close_position(
-                                ticker=position.ticker,
-                                qty=position.qty,
-                                exit_signal=exit_sig,
-                                direction=position.direction,
-                            )
-                            if closed:
-                                position_manager.remove_position(position.candidate_id)
+                            # Mark symbol as closing to prevent duplicate close from PositionMonitor
+                            if not position_manager.mark_closing(position.ticker):
+                                break  # Another close already in progress
+
+                            try:
+                                closed = await execution_engine.close_position(
+                                    ticker=position.ticker,
+                                    qty=position.qty,
+                                    exit_signal=exit_sig,
+                                    direction=position.direction,
+                                )
+                                if closed:
+                                    position_manager.remove_position(position.candidate_id)
+                            finally:
+                                position_manager.unmark_closing(position.ticker)
                             break  # Exit on first immediate signal
         except Exception as exit_err:
             logger.error(f"Exit rule evaluation error: {exit_err}")

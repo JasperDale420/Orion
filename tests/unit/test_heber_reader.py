@@ -412,6 +412,33 @@ def test_is_corrupt_parquet_error_detects_dataset_open_variant() -> None:
     assert HeberReader._is_corrupt_parquet_error(exc) is True
 
 
+def test_is_schema_merge_error_detects_incompatible_types_variant() -> None:
+    exc = TypeError(
+        "Unable to merge: Field feed has incompatible types: "
+        "string vs dictionary<values=string, indices=int32, ordered=0>"
+    )
+
+    assert HeberReader._is_schema_merge_parquet_error(exc) is True
+
+
+def test_read_parquet_falls_back_to_filewise_on_incompatible_types_error(tmp_path: Path) -> None:
+    reader = HeberReader(data_root=tmp_path)
+    expected = pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [150.0]})
+
+    def _raise_incompatible_types_error(**_kwargs):  # noqa: ANN003
+        raise TypeError(
+            "Unable to merge: Field feed has incompatible types: "
+            "string vs dictionary<values=string, indices=int32, ordered=0>"
+        )
+
+    reader._read_table = _raise_incompatible_types_error  # type: ignore[method-assign]
+    reader._read_parquet_filewise = lambda **_kwargs: expected  # type: ignore[method-assign]
+
+    result = reader._read_parquet(path=tmp_path / "silver" / "feed=bars", columns=None, filters=None)
+
+    assert result.equals(expected)
+
+
 def test_read_parquet_falls_back_to_filewise_on_schema_merge_error(tmp_path: Path) -> None:
     reader = HeberReader(data_root=tmp_path)
     expected = pd.DataFrame({"alert_id": ["evt-1"], "premium": [125000.0]})

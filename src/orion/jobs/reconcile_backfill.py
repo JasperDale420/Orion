@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 
@@ -43,13 +44,6 @@ DATASET_SPECS: tuple[ReconciliationDataset, ...] = (
 def _prefer_heber_source() -> bool:
     raw = os.getenv("ORION_RECONCILE_BACKFILL_PREFER_HEBER", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _normalize_ticker(value: Any) -> str | None:

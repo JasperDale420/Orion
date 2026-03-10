@@ -5,14 +5,15 @@ Fetches option Greeks (delta, gamma, theta, vega, rho) and implied volatility
 from Alpaca's Market Data API.
 """
 
-import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 # Cache for Greeks data to avoid redundant API calls
 _greeks_cache: dict[str, dict[str, Any]] = {}
@@ -75,7 +76,7 @@ class AlpacaOptionGreeksConnector:
         cached = _greeks_cache.get(cache_key)
         if cached:
             cache_time = cached.get("_cached_at")
-            if cache_time and (datetime.utcnow() - cache_time).seconds < _cache_ttl_seconds:
+            if cache_time and (datetime.now(UTC) - cache_time).seconds < _cache_ttl_seconds:
                 return {k: v for k, v in cached.items() if not k.startswith("_")}
 
         try:
@@ -118,7 +119,7 @@ class AlpacaOptionGreeksConnector:
                         result["last_trade_price"] = latest_trade.get("p")  # price
 
                     # Cache the result
-                    _greeks_cache[cache_key] = {**result, "_cached_at": datetime.utcnow()}
+                    _greeks_cache[cache_key] = {**result, "_cached_at": datetime.now(UTC)}
 
                     logger.debug(
                         f"Fetched Greeks for {option_symbol}: delta={result['delta']}, "

@@ -78,6 +78,8 @@ class ExitDecision(Base):
     pnl_usd = Column(Float, nullable=True)
     pnl_pct = Column(Float, nullable=True)
 
+    __table_args__ = (Index("ix_exit_decision_exit_ts", "exit_ts_utc"),)
+
 
 class StrategyDecision(Base):
     __tablename__ = "strategy_decisions"
@@ -102,6 +104,8 @@ class StrategyDecision(Base):
 
     # PRD 11.2 Trace
     decision_trace_json = Column(JSON, nullable=True)
+
+    __table_args__ = (Index("ix_strategy_decision_ticker_ts", "ticker", "timestamp_utc"),)
 
 
 class GoldTickerRollup(Base):

@@ -70,6 +70,10 @@ class SystemSettings(BaseSettings):
     orion_stage: str = Field(default="paper", validation_alias="ORION_STAGE")
     artifacts_dir: str = Field(default="artifacts", validation_alias="ORION_ARTIFACTS_DIR")
     baseline_solver_id: str | None = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
+    db_url: str = Field(
+        default="postgresql+asyncpg://orion:orion_password@localhost:5432/orion_db",
+        validation_alias=AliasChoices("DB_URL", "ORION_DB_URL"),
+    )
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
     orion_use_gateway: bool = Field(default=True, validation_alias="ORION_USE_GATEWAY")
     legacy_label_pipelines_enabled: bool = Field(
@@ -146,7 +150,7 @@ class SystemSettings(BaseSettings):
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
     ingestion_heartbeat_max_age: int = 70
-    max_data_lag_seconds: int = 90  # Alpaca 1m bars are naturally 60-80s behind
+    max_data_lag_seconds: int = 600  # Pre-market/post-market data can lag 300s+
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
     uw_base_url: str = Field(default="https://api.unusualwhales.com", validation_alias="UW_BASE_URL")

@@ -293,26 +293,9 @@ def _window_feature_select_expressions(available_columns: set[str]) -> str:
     return ",\n            ".join(expressions)
 
 
-def _first_existing_column(frame: Any, candidates: list[str]) -> str | None:
-    for column in candidates:
-        if column in frame.columns:
-            return column
-    return None
-
-
-def _coerce_dataframe(payload: Any) -> Any:
-    import pandas as pd
-
-    if payload is None:
-        return pd.DataFrame()
-    if isinstance(payload, pd.DataFrame):
-        return payload
-    if isinstance(payload, list):
-        rows = [row for row in payload if isinstance(row, dict)]
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    if isinstance(payload, dict):
-        return pd.DataFrame([payload])
-    return pd.DataFrame()
+from orion.ml.heber_utils import coerce_dataframe as _coerce_dataframe
+from orion.ml.heber_utils import first_existing_column as _first_existing_column
+from orion.ml.heber_utils import generate_deterministic_event_ids as _generate_deterministic_event_ids_for_exit
 
 
 def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
@@ -421,10 +404,14 @@ def _normalize_heber_features_for_exit(frame: Any) -> Any:
         return pd.DataFrame(columns=["event_id"])
 
     event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
-    if event_column is None:
-        return pd.DataFrame(columns=["event_id"])
-
-    normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+    if event_column is not None:
+        normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+    else:
+        logger.warning(
+            "No event_id column in exit features; generating deterministic IDs",
+            extra={"event": "exit_classifier_features_synthetic_event_id"},
+        )
+        normalized = pd.DataFrame({"event_id": _generate_deterministic_event_ids_for_exit(frame)})
 
     mapped_columns: dict[str, list[str]] = {
         "premium_usd": ["premium_usd", "premium"],
@@ -484,6 +471,13 @@ def _normalize_heber_features_for_exit(frame: Any) -> Any:
 
 def _apply_bucket_filter_for_exit(dataframe: Any, bucket: str) -> Any:
     import pandas as pd
+
+    if "dte_at_entry" not in dataframe.columns:
+        logger.warning(
+            "dte_at_entry column missing from merged exit training data; skipping bucket filter",
+            extra={"event": "exit_classifier_missing_dte_at_entry", "bucket": bucket},
+        )
+        return dataframe
 
     dte = pd.to_numeric(dataframe["dte_at_entry"], errors="coerce")
     upper_bucket = bucket.upper()
@@ -557,9 +551,6 @@ async def _build_bucket_training_data_from_heber(
         if isnan(outcome_return):
             continue
 
-        trading_minutes = max(_safe_float(row.get("trading_minutes_to_hit")), 0.0)
-        time_held_hours = trading_minutes / 60.0
-
         delta_entry = _safe_float(row.get("delta_at_entry"))
         gamma_entry = _safe_float(row.get("gamma_at_entry"))
         theta_entry = _safe_float(row.get("theta_at_entry"))
@@ -567,8 +558,8 @@ async def _build_bucket_training_data_from_heber(
         dte_entry = int(_safe_float(row.get("dte_at_entry")))
 
         features_vector = [
-            outcome_return,
-            time_held_hours,
+            0.0,  # Placeholder: actual current_return populated at inference time
+            0.0,  # Placeholder: actual time_held populated at inference time
             delta_entry,
             gamma_entry,
             theta_entry,
