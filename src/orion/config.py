@@ -71,7 +71,7 @@ class SystemSettings(BaseSettings):
     artifacts_dir: str = Field(default="artifacts", validation_alias="ORION_ARTIFACTS_DIR")
     baseline_solver_id: str | None = Field(default=None, validation_alias="ORION_BASELINE_SOLVER_ID")
     db_url: str = Field(
-        default="postgresql+asyncpg://orion:orion_password@localhost:5432/orion_db",
+        default="postgresql+asyncpg://orion@localhost:5432/orion_db",
         validation_alias=AliasChoices("DB_URL", "ORION_DB_URL"),
     )
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
@@ -203,8 +203,6 @@ class MetaSearchSettings(BaseSettings):
 class AgentSettings(BaseSettings):
     model_name: str = "glm-5"
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
-    deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
-    deepseek_model: str = Field(default="deepseek-reasoner", validation_alias="DEEPSEEK_MODEL")
     ai_gateway_url: str = Field(default="http://localhost:8002/v1", validation_alias="ORION_AI_GATEWAY_URL")
     ai_gateway_key: str = Field(default="empire-ai-gateway-key", validation_alias="ORION_AI_GATEWAY_KEY")
     model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")

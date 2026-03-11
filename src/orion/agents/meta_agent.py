@@ -20,7 +20,7 @@ class MetaAgent(BaseAgent):
     """
     PRD Addendum 5.3: MetaAgent (Poetiq-style).
     Uses LLM to propose evolutionary mutations (Edits) to Solvers.
-    Integrated with any-llm for Deepseek support.
+    Routes through Empire AI Gateway for LLM access.
     """
 
     def __init__(self) -> None:
@@ -117,20 +117,6 @@ class MetaAgent(BaseAgent):
         except Exception as e:
             logger.warning(f"MetaAgent failed to list MCP tools: {e}")
 
-        # 2. Convert MCP tools to OpenAI Tool Schemas
-        openai_tools = []
-        for t in available_tools:
-            openai_tools.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parameters": t.get("inputSchema", {}),
-                    },
-                }
-            )
-
         system_prompt = (
             "You are an expert Quant Researcher AI (Poetiq-style).\n"
             "Your goal is to evolve trading strategies (Solvers) to maximize Sharpe Ratio and minimize Drawdown.\n"
@@ -168,8 +154,6 @@ class MetaAgent(BaseAgent):
         )
 
         # 3. Execute via AI Gateway with native messages
-        final_json_response = None
-
         try:
             from orion.config import agent_settings
 

@@ -1,8 +1,8 @@
 """
 Codex CLI Client - Async wrapper for headless LLM execution.
 
-Now routes through AI Gateway using Claude 4.6 Opus with built-in
-tool execution for self-editing capabilities.
+Routes through Empire AI Gateway (localhost:8002/v1) with glm-5 as the
+default model. Supports tool execution for self-editing capabilities.
 """
 
 import asyncio
@@ -11,6 +11,8 @@ import logging
 import os
 from typing import Any
 
+import aiohttp
+
 from orion.config import agent_settings
 
 logger = logging.getLogger(__name__)
@@ -18,8 +20,6 @@ logger = logging.getLogger(__name__)
 
 class CodexClientError(Exception):
     """Raised when LLM execution fails."""
-
-    pass
 
 
 # Basic tools the agent can use to solve its own problems
@@ -80,7 +80,7 @@ async def execute_tool(name: str, args: dict) -> str:
 
             return await asyncio.to_thread(_read_file)
 
-        elif name == "write_file":
+        if name == "write_file":
             path = args.get("path", "")
             content = args.get("content", "")
 
@@ -91,7 +91,7 @@ async def execute_tool(name: str, args: dict) -> str:
             await asyncio.to_thread(_write_file)
             return f"Successfully wrote {len(content)} bytes to {path}."
 
-        elif name == "run_command":
+        if name == "run_command":
             cmd = args.get("command", "")
             proc = await asyncio.create_subprocess_shell(
                 cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -106,11 +106,10 @@ async def execute_tool(name: str, args: dict) -> str:
 
             return output if output else f"Command completed with exit code {proc.returncode} and no output."
 
-        else:
-            return f"Error: Tool '{name}' not recognized."
+        return f"Error: Tool '{name}' not recognized."
 
     except Exception as e:
-        return f"Tool execution failed: {str(e)}"
+        return f"Tool execution failed: {e}"
 
 
 async def run_codex_completion(
@@ -127,17 +126,14 @@ async def run_codex_completion(
         prompt: Legacy full prompt string.
         messages: List of chat messages (preferred).
         model: Model to use (defaults to agent_settings.model_name).
-        reasoning_level: Unused for Claude, kept for backwards compatibility.
         timeout_seconds: Max time to wait for completion.
     """
-    model = model or getattr(agent_settings, "model_name", "claude-4.6-opus")
+    model = model or getattr(agent_settings, "model_name", "glm-5")
     api_key = getattr(agent_settings, "ai_gateway_key", "empire-ai-gateway-key")
     base_url = getattr(agent_settings, "ai_gateway_url", "http://localhost:8002/v1")
 
     if not messages:
         messages = [{"role": "user", "content": prompt}]
-
-    import aiohttp
 
     logger.info(
         "Starting LLM execution via AI Gateway",
@@ -229,8 +225,7 @@ def build_chat_prompt(
     Backwards compatibility function to build a single prompt string.
     New callers should pass native `messages` lists to run_codex_completion.
     """
-    parts = []
-    parts.append(f"<system>\\n{system_prompt}\\n</system>")
+    parts = [f"<system>\\n{system_prompt}\\n</system>"]
 
     if conversation_history:
         for msg in conversation_history:

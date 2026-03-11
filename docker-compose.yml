@@ -216,10 +216,7 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       ORION_RUN_ID: docker_persistent_eod
-      ORION_REASONING_LEVEL: extra_high
       ORION_AI_GATEWAY_URL: http://host.docker.internal:8002/v1
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-reasoner}
     command: [ "python", "-m", "orion.main_eod" ]
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
@@ -264,7 +261,6 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
     command: [ "python", "-m", "orion.main_meta_weekly", "--scheduled" ]
     logging:
       driver: json-file
