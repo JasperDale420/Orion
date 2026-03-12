@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pandas as pd
 import pytest
 
 import orion.ml.pattern_miner as pattern_miner
+
+# Timestamps used by _FakeReader fixtures. They must always fall within the
+# 30-day training window so tests are not sensitive to the wall-clock date.
+# Using "5 days ago" gives a large safety margin.
+_TS_BASE = (datetime.now(UTC) - timedelta(days=5)).strftime("%Y-%m-%dT15:00:00Z")
+_TS_BASE_30M = (datetime.now(UTC) - timedelta(days=5)).strftime("%Y-%m-%dT15:30:00Z")
+_TS_BASE_1H = (datetime.now(UTC) - timedelta(days=5)).strftime("%Y-%m-%dT16:00:00Z")
 
 
 def test_exit_classifier_schema_refresh_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,7 +187,7 @@ async def test_fetch_training_data_uses_heber_source_without_local_db(
                     [
                         {
                             "alert_id": "evt-1",
-                            "ts_event": "2026-02-10T15:00:00Z",
+                            "ts_event": _TS_BASE,
                             "outcome": "hit_tp",
                             "hit_tp_first": 1,
                             "trading_minutes_to_hit": 20,
@@ -254,7 +263,7 @@ async def test_fetch_training_data_legacy_source_still_uses_heber_without_local_
                     [
                         {
                             "alert_id": "evt-1",
-                            "ts_event": "2026-02-10T15:00:00Z",
+                            "ts_event": _TS_BASE,
                             "outcome": "hit_tp",
                             "hit_tp_first": 1,
                             "trading_minutes_to_hit": 20,
@@ -315,7 +324,7 @@ async def test_fetch_training_data_raises_when_heber_training_contract_missing(
                     [
                         {
                             "alert_id": "evt-1",
-                            "alert_time": "2026-02-10T15:00:00Z",
+                            "alert_time": _TS_BASE,
                             # Missing required outcome columns like outcome/hit_tp_first
                         }
                     ]
@@ -345,7 +354,7 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
                     [
                         {
                             "alert_id": "evt-no-snap",
-                            "ts_event": "2026-02-10T15:00:00Z",
+                            "ts_event": _TS_BASE,
                             "outcome": "no_snapshot",
                             "hit_tp_first": 0,
                             "trading_minutes_to_hit": 60,
@@ -354,7 +363,7 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
                         },
                         {
                             "alert_id": "evt-expired",
-                            "ts_event": "2026-02-10T15:30:00Z",
+                            "ts_event": _TS_BASE_30M,
                             "outcome": "expired",
                             "hit_tp_first": 0,
                             "trading_minutes_to_hit": 60,
@@ -363,7 +372,7 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
                         },
                         {
                             "alert_id": "evt-valid",
-                            "ts_event": "2026-02-10T16:00:00Z",
+                            "ts_event": _TS_BASE_1H,
                             "outcome": "hit_tp",
                             "hit_tp_first": 1,
                             "trading_minutes_to_hit": 20,
@@ -435,7 +444,7 @@ async def test_fetch_training_data_keeps_expired_rows_when_snapshot_metadata_abs
                     [
                         {
                             "alert_id": "evt-expired",
-                            "ts_event": "2026-02-10T15:30:00Z",
+                            "ts_event": _TS_BASE_30M,
                             "outcome": "expired",
                             "hit_tp_first": 0,
                             "trading_minutes_to_hit": 60,
@@ -443,7 +452,7 @@ async def test_fetch_training_data_keeps_expired_rows_when_snapshot_metadata_abs
                         },
                         {
                             "alert_id": "evt-valid",
-                            "ts_event": "2026-02-10T16:00:00Z",
+                            "ts_event": _TS_BASE_1H,
                             "outcome": "hit_tp",
                             "hit_tp_first": 1,
                             "trading_minutes_to_hit": 20,
