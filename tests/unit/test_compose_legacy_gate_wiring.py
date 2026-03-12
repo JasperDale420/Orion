@@ -2,17 +2,6 @@ import re
 from pathlib import Path
 
 
-def test_compose_wires_per_service_legacy_gate_env_vars() -> None:
-    compose_text = Path("docker-compose.yml").read_text()
-
-    assert (
-        "- ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}" in compose_text
-    )
-    assert (
-        "- ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}" in compose_text
-    )
-
-
 def _service_block(compose_text: str, service_name: str) -> str:
     match = re.search(
         rf"(?ms)^  {service_name}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)",
@@ -20,6 +9,30 @@ def _service_block(compose_text: str, service_name: str) -> str:
     )
     assert match is not None
     return match.group(1)
+
+
+def _assert_env(block: str, key: str, value: str) -> None:
+    """Assert env var present in either list (- K=V) or map (K: V) YAML syntax."""
+    list_form = f"- {key}={value}"
+    map_form = f"{key}: {value}"
+    assert list_form in block or map_form in block, (
+        f"Expected env var {key}={value} in block (neither list nor map syntax found)"
+    )
+
+
+def test_compose_wires_per_service_legacy_gate_env_vars() -> None:
+    compose_text = Path("docker-compose.yml").read_text()
+
+    _assert_env(
+        compose_text,
+        "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER",
+        "${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}",
+    )
+    _assert_env(
+        compose_text,
+        "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER",
+        "${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}",
+    )
 
 
 def test_legacy_label_services_use_on_failure_restart_policy() -> None:
@@ -46,41 +59,48 @@ def test_legacy_label_stack_services_are_profiled_for_opt_in() -> None:
 def test_feature_enrichment_wires_gateway_api_key_env() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "feature_enrichment")
-    assert "- GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}" in block
-    assert (
-        "- ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}"
-        in block
+    _assert_env(block, "GATEWAY_API_KEY", "${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}")
+    _assert_env(
+        block,
+        "ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH",
+        "${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}",
     )
 
 
 def test_ingestion_wires_gateway_api_key_env() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "ingestion")
-    assert "- GATEWAY_API_KEY=${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}" in block
+    _assert_env(block, "GATEWAY_API_KEY", "${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}")
 
 
 def test_pattern_miner_is_profiled_with_legacy_label_stack() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "pattern-miner")
     assert 'profiles: [ "legacy-labels" ]' in block
-    assert "- ORION_ENABLE_LEGACY_PATTERN_MINER=${ORION_ENABLE_LEGACY_PATTERN_MINER:-true}" in block
-    assert "- ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=${ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING:-true}" in block
-    assert (
-        "- ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}" in block
+    _assert_env(block, "ORION_ENABLE_LEGACY_PATTERN_MINER", "${ORION_ENABLE_LEGACY_PATTERN_MINER:-true}")
+    _assert_env(
+        block, "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING", "${ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING:-true}"
     )
-    assert "- ORION_PATTERN_MINER_TRAINING_SOURCE=${ORION_PATTERN_MINER_TRAINING_SOURCE:-heber_gold}" in block
-    assert "- ORION_EXIT_CLASSIFIER_TRAINING_SOURCE=${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-heber_gold}" in block
+    _assert_env(
+        block,
+        "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING",
+        "${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}",
+    )
+    _assert_env(block, "ORION_PATTERN_MINER_TRAINING_SOURCE", "${ORION_PATTERN_MINER_TRAINING_SOURCE:-heber_gold}")
+    _assert_env(block, "ORION_EXIT_CLASSIFIER_TRAINING_SOURCE", "${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-heber_gold}")
 
 
 def test_nightly_backfill_and_quality_guardrails_wire_specific_legacy_gates() -> None:
     compose_text = Path("docker-compose.yml").read_text()
 
     nightly_block = _service_block(compose_text, "nightly-backfill")
-    assert "- ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL=${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}" in nightly_block
+    _assert_env(nightly_block, "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL", "${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}")
 
     guardrails_block = _service_block(compose_text, "quality-guardrails")
-    assert (
-        "- ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS=${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}" in guardrails_block
+    _assert_env(
+        guardrails_block,
+        "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS",
+        "${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}",
     )
 
 
@@ -95,37 +115,43 @@ def test_compose_default_legacy_profile_preserves_model_storage_paths() -> None:
         "quality-guardrails",
     ):
         block = _service_block(compose_text, service_name)
-        assert "- ORION_ENABLE_LEGACY_LABEL_PIPELINES=${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}" in block
+        _assert_env(block, "ORION_ENABLE_LEGACY_LABEL_PIPELINES", "${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}")
 
     price_target_block = _service_block(compose_text, "price_target_labeler")
-    assert (
-        "- ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER=${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}"
-        in price_target_block
+    _assert_env(
+        price_target_block,
+        "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER",
+        "${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}",
     )
 
     option_quote_block = _service_block(compose_text, "option_quote_tracker")
-    assert (
-        "- ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER=${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}"
-        in option_quote_block
+    _assert_env(
+        option_quote_block,
+        "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER",
+        "${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}",
     )
 
     pattern_miner_block = _service_block(compose_text, "pattern-miner")
-    assert "- ORION_ENABLE_LEGACY_PATTERN_MINER=${ORION_ENABLE_LEGACY_PATTERN_MINER:-true}" in pattern_miner_block
-    assert (
-        "- ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING=${ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING:-true}"
-        in pattern_miner_block
+    _assert_env(pattern_miner_block, "ORION_ENABLE_LEGACY_PATTERN_MINER", "${ORION_ENABLE_LEGACY_PATTERN_MINER:-true}")
+    _assert_env(
+        pattern_miner_block,
+        "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING",
+        "${ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING:-true}",
     )
-    assert (
-        "- ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING=${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}"
-        in pattern_miner_block
+    _assert_env(
+        pattern_miner_block,
+        "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING",
+        "${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}",
     )
 
     nightly_block = _service_block(compose_text, "nightly-backfill")
-    assert "- ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL=${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}" in nightly_block
+    _assert_env(nightly_block, "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL", "${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}")
 
     guardrails_block = _service_block(compose_text, "quality-guardrails")
-    assert (
-        "- ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS=${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}" in guardrails_block
+    _assert_env(
+        guardrails_block,
+        "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS",
+        "${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}",
     )
 
 
@@ -146,15 +172,15 @@ def test_heber_data_root_is_mounted_for_heber_consumers() -> None:
 def test_mcp_server_wires_sec_contact_email() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "mcp-server")
-    assert "- SEC_CONTACT_EMAIL=${SEC_CONTACT_EMAIL:-alerts@empire.local}" in block
+    _assert_env(block, "SEC_CONTACT_EMAIL", "${SEC_CONTACT_EMAIL:-alerts@empire.local}")
 
 
 def test_mcp_server_wires_explicit_auth_env_contract() -> None:
     compose_text = Path("docker-compose.yml").read_text()
     block = _service_block(compose_text, "mcp-server")
-    assert "- MCP_API_KEY=${MCP_API_KEY:-}" in block
-    assert "- MCP_API_KEY_HEADER=${MCP_API_KEY_HEADER:-X-MCP-API-Key}" in block
-    assert "- MCP_AUTH_REQUIRED=${MCP_AUTH_REQUIRED:-false}" in block
+    _assert_env(block, "MCP_API_KEY", "${MCP_API_KEY:-}")
+    _assert_env(block, "MCP_API_KEY_HEADER", "${MCP_API_KEY_HEADER:-X-MCP-API-Key}")
+    _assert_env(block, "MCP_AUTH_REQUIRED", "${MCP_AUTH_REQUIRED:-false}")
 
 
 def test_compose_drops_obsolete_top_level_version_key() -> None:

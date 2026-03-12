@@ -38,6 +38,7 @@ MODEL_DIR = system_settings.model_dir
 # Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
 # These features are known at trade entry and don't reveal the outcome
 FEATURE_COLUMNS = [
+    # Alert-level features (25 original)
     "strike",
     "days_to_expiry",
     "premium",
@@ -63,7 +64,173 @@ FEATURE_COLUMNS = [
     "day_of_week",
     "minutes_since_open",
     "minutes_to_close",
+    # Equity-level Gold features (18 new — asof-joined from Heber Gold)
+    # Momentum (from momentum_features Gold dataset)
+    "momentum_1d",
+    "momentum_5d",
+    "momentum_10d",
+    "momentum_20d",
+    "rsi_14",
+    "rsi_28",
+    "macd",
+    "macd_signal",
+    # Volatility (from volatility_features Gold dataset)
+    "vol_5d",
+    "vol_20d",
+    "vol_ratio_5_20",
+    "atr_14",
+    "bb_width_20",
+    "price_zscore_20d",
+    # Flow (from flow_features Gold dataset)
+    "total_premium_24h",
+    "call_put_premium_ratio",
+    "net_premium_24h",
+    "sweep_count_24h",
+    "net_bull_premium_lr",
+    "sweep_volume_share",
+    # Market regime (from market_regime_features Gold dataset — market-level, broadcast to all tickers)
+    "dispersion",
+    "vol_of_vol",
+    "breadth_proxy",
+    "yield_curve_slope",
+    # Derived features (computed at runtime from existing features)
+    "iv_vs_realized",
+    "vega_theta_ratio",
+    "gamma_delta_ratio",
+    "dollar_gamma",
+    "theta_premium_ratio",
+    # Flow normalization (from flow_normalization_features Gold dataset)
+    "adv_premium_20d",
+    "adv_volume_20d",
+    "adv_oi_20d",
+    # Runtime-derived from flow normalization
+    "premium_vs_adv",
+    "volume_vs_adoi",
+    "relative_oi_buildup",
+    # IV surface (from iv_surface_features Gold dataset)
+    "put_call_iv_skew",
+    "term_structure_slope",
+    "iv_change_1d",
+    # Ticker base rates (from ticker_base_rates Gold dataset)
+    "ticker_win_rate_90d",
+    "ticker_alert_frequency",
+    "ticker_flow_predictability",
+    # Flow context (from flow_context_features Gold dataset — per-alert)
+    "same_ticker_alerts_1h",
+    "directional_agreement_4h",
+    "repeat_ticker_days_5d",
+    # GEX regime (from gex_regime_features Gold dataset — market-level)
+    "net_gex",
+    "gex_regime",
+    "gex_flip_distance",
+    # Flow toxicity (from flow_toxicity_features Gold dataset)
+    "flow_toxicity_1d",
+    "toxicity_acceleration",
+    # OI momentum (from oi_momentum_features Gold dataset)
+    "oi_buildup_ratio",
+    "new_position_signal",
+    "oi_change_momentum_5d",
+    # Market tide context (from market_tide_context_features Gold dataset — market-level)
+    "market_sentiment_score",
+    "market_premium_momentum",
+    # Darkpool confirmation (from darkpool_features Gold dataset)
+    "darkpool_notional_1d",
+    "darkpool_premium_ratio",
+    "darkpool_activity_zscore",
+    # Straddle momentum (from straddle_momentum_features Gold dataset)
+    "straddle_return_1m",
+    "straddle_return_3m",
+    # Trend scanning labels/features (from trend_scan_features Gold dataset)
+    "trend_scan_horizon",
+    "trend_scan_t_value",
+    # Sector flow context (from sector_flow_features Gold dataset — per-alert)
+    "sector_flow_alignment",
+    "sector_call_put_ratio",
+    # New runtime derived features
+    "ask_side_dominance",
+    "aggressor_conviction",
+    "max_pain_distance",
+    "days_to_nearest_opex",
 ]
+
+# Equity-level feature names grouped by source Gold dataset
+EQUITY_MOMENTUM_FEATURES = [
+    "momentum_1d",
+    "momentum_5d",
+    "momentum_10d",
+    "momentum_20d",
+    "rsi_14",
+    "rsi_28",
+    "macd",
+    "macd_signal",
+]
+EQUITY_VOLATILITY_FEATURES = [
+    "vol_5d",
+    "vol_20d",
+    "vol_ratio_5_20",
+    "atr_14",
+    "bb_width_20",
+    "price_zscore_20d",
+]
+EQUITY_FLOW_FEATURES = [
+    "total_premium_24h",
+    "call_put_premium_ratio",
+    "net_premium_24h",
+    "sweep_count_24h",
+    "net_bull_premium_lr",
+    "sweep_volume_share",
+]
+EQUITY_REGIME_FEATURES: list[str] = [
+    "dispersion",
+    "vol_of_vol",
+    "breadth_proxy",
+    "yield_curve_slope",
+]
+EQUITY_FLOW_NORM_FEATURES = ["adv_premium_20d", "adv_volume_20d", "adv_oi_20d"]
+EQUITY_IV_SURFACE_FEATURES = ["put_call_iv_skew", "term_structure_slope", "iv_change_1d"]
+EQUITY_TICKER_RATES_FEATURES = ["ticker_win_rate_90d", "ticker_alert_frequency", "ticker_flow_predictability"]
+ALERT_FLOW_CONTEXT_FEATURES = ["same_ticker_alerts_1h", "directional_agreement_4h", "repeat_ticker_days_5d"]
+EQUITY_GEX_REGIME_FEATURES = ["net_gex", "gex_regime", "gex_flip_distance"]
+EQUITY_FLOW_TOXICITY_FEATURES = ["flow_toxicity_1d", "toxicity_acceleration"]
+EQUITY_OI_MOMENTUM_FEATURES = ["oi_buildup_ratio", "new_position_signal", "oi_change_momentum_5d"]
+EQUITY_MARKET_TIDE_FEATURES = ["market_sentiment_score", "market_premium_momentum"]
+EQUITY_DARKPOOL_FEATURES = ["darkpool_notional_1d", "darkpool_premium_ratio", "darkpool_activity_zscore"]
+EQUITY_STRADDLE_FEATURES = ["straddle_return_1m", "straddle_return_3m"]
+EQUITY_TREND_SCAN_FEATURES = ["trend_scan_horizon", "trend_scan_t_value"]
+ALERT_SECTOR_FLOW_FEATURES = ["sector_flow_alignment", "sector_call_put_ratio"]
+
+EQUITY_GOLD_DATASETS: dict[str, list[str]] = {
+    "momentum_features": EQUITY_MOMENTUM_FEATURES,
+    "volatility_features": EQUITY_VOLATILITY_FEATURES,
+    "flow_features": EQUITY_FLOW_FEATURES,
+    "market_regime_features": EQUITY_REGIME_FEATURES,
+    "flow_normalization_features": EQUITY_FLOW_NORM_FEATURES,
+    "iv_surface_features": EQUITY_IV_SURFACE_FEATURES,
+    "ticker_base_rates": EQUITY_TICKER_RATES_FEATURES,
+    "gex_regime_features": EQUITY_GEX_REGIME_FEATURES,
+    "flow_toxicity_features": EQUITY_FLOW_TOXICITY_FEATURES,
+    "oi_momentum_features": EQUITY_OI_MOMENTUM_FEATURES,
+    "market_tide_context_features": EQUITY_MARKET_TIDE_FEATURES,
+    "darkpool_features": EQUITY_DARKPOOL_FEATURES,
+    "straddle_momentum_features": EQUITY_STRADDLE_FEATURES,
+    "trend_scan_features": EQUITY_TREND_SCAN_FEATURES,
+}
+ALL_EQUITY_FEATURE_COLUMNS = (
+    EQUITY_MOMENTUM_FEATURES
+    + EQUITY_VOLATILITY_FEATURES
+    + EQUITY_FLOW_FEATURES
+    + EQUITY_REGIME_FEATURES
+    + EQUITY_FLOW_NORM_FEATURES
+    + EQUITY_IV_SURFACE_FEATURES
+    + EQUITY_TICKER_RATES_FEATURES
+    + EQUITY_GEX_REGIME_FEATURES
+    + EQUITY_FLOW_TOXICITY_FEATURES
+    + EQUITY_OI_MOMENTUM_FEATURES
+    + EQUITY_MARKET_TIDE_FEATURES
+    + EQUITY_DARKPOOL_FEATURES
+    + EQUITY_STRADDLE_FEATURES
+    + EQUITY_TREND_SCAN_FEATURES
+)
 
 CATEGORICAL_COLUMNS = [
     "put_call",
@@ -112,11 +279,6 @@ def _legacy_pattern_training_control() -> tuple[bool, str, str]:
     enabled = settings.legacy_label_pipelines_enabled
     raw = "true" if enabled else "false"
     return enabled, global_key, raw
-
-
-def _legacy_pattern_training_enabled() -> bool:
-    enabled, _, _ = _legacy_pattern_training_control()
-    return enabled
 
 
 def _pattern_miner_training_source() -> str:
@@ -226,8 +388,6 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
     hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
     trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
     bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit"])
-    _snapshot_count_column = _first_existing_column(frame, ["snapshot_count"])
-
     event_series = frame[event_column].astype(str) if event_column else pd.Series(index=frame.index, dtype=object)
     ts_series = (
         pd.to_datetime(frame[ts_column], utc=True, errors="coerce")
@@ -252,9 +412,6 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
         if bars_to_hit_column
         else pd.Series(index=frame.index, dtype="float64")
     )
-    hitting_status_series = hit_tp_series.copy()
-    hitting_status_series[outcome_series.isin({"hit_sl", "stop_loss", "stop", "expired", "expire"})] = 0
-
     normalized = pd.DataFrame(
         {
             "event_id": event_series,
@@ -271,20 +428,10 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
 
 
 def _drop_no_snapshot_outcomes(dataframe: Any) -> tuple[Any, int]:
-    import pandas as pd
-
-    if dataframe.empty:
-        return dataframe, 0
-
-    drop_mask = pd.Series(False, index=dataframe.index)
-
     # The new Heber pipelines cleanly filter out invalid alerts
     # and "no snapshot" is no longer a concept passed down to gold barriers.
     # Therefore, no rows need dropping at this step anymore.
-
-    filtered = dataframe[~drop_mask].copy()
-    dropped = len(dataframe) - len(filtered)
-    return filtered, dropped
+    return dataframe, 0
 
 
 def _normalize_heber_features(frame: Any) -> Any:
@@ -388,6 +535,140 @@ def _apply_trade_type_filter(dataframe: Any, trade_type_filter: str | None) -> A
     return dataframe[mask]
 
 
+def _extract_symbol_from_instrument_key(instrument_key_series: Any) -> Any:
+    """Extract bare ticker symbol from instrument_key (e.g. 'equity:AAPL' -> 'AAPL')."""
+    return instrument_key_series.astype(str).str.split(":").str[-1].str.upper()
+
+
+def _join_equity_features(
+    alert_df: Any,
+    equity_df: Any,
+    feature_cols: list[str],
+    alert_symbol_col: str = "symbol",
+    alert_ts_col: str = "entry_ts",
+) -> Any:
+    """Asof-join equity-level features to alert-level data.
+
+    Matches on (underlying symbol, timestamp) with 1-day backward tolerance.
+    Both DataFrames must have their timestamp columns as timezone-aware UTC.
+    """
+    import pandas as pd
+
+    if equity_df.empty or alert_df.empty:
+        return alert_df
+
+    # Normalize equity instrument_key to bare symbol for join
+    equity_df = equity_df.copy()
+    if "instrument_key" in equity_df.columns:
+        equity_df["_join_symbol"] = _extract_symbol_from_instrument_key(equity_df["instrument_key"])
+    elif "symbol" in equity_df.columns:
+        equity_df["_join_symbol"] = equity_df["symbol"].astype(str).str.upper()
+    else:
+        logger.warning("Equity features missing instrument_key and symbol columns, skipping join")
+        return alert_df
+
+    # Determine the equity timestamp column
+    equity_ts_col = "ts_event" if "ts_event" in equity_df.columns else None
+    if equity_ts_col is None:
+        for candidate in ["ts_available", "timestamp", "date"]:
+            if candidate in equity_df.columns:
+                equity_ts_col = candidate
+                break
+    if equity_ts_col is None:
+        logger.warning("Equity features missing timestamp column, skipping join")
+        return alert_df
+
+    # Only keep columns we need
+    available_feature_cols = [c for c in feature_cols if c in equity_df.columns]
+    if not available_feature_cols:
+        return alert_df
+
+    equity_subset = equity_df[["_join_symbol", equity_ts_col] + available_feature_cols].copy()
+    equity_subset[equity_ts_col] = pd.to_datetime(equity_subset[equity_ts_col], utc=True, errors="coerce")
+    equity_subset = equity_subset.dropna(subset=[equity_ts_col])
+    equity_subset = equity_subset.sort_values(equity_ts_col)
+
+    # Prepare alert side
+    alert_df = alert_df.copy()
+
+    # Derive join symbol from alert data — try ticker, symbol, or instrument_key
+    if alert_symbol_col in alert_df.columns:
+        alert_df["_join_symbol"] = alert_df[alert_symbol_col].astype(str).str.upper()
+    elif "ticker" in alert_df.columns:
+        alert_df["_join_symbol"] = alert_df["ticker"].astype(str).str.upper()
+    elif "instrument_key" in alert_df.columns:
+        alert_df["_join_symbol"] = _extract_symbol_from_instrument_key(alert_df["instrument_key"])
+    else:
+        logger.warning("Alert data missing symbol/ticker/instrument_key, skipping equity join")
+        return alert_df
+
+    alert_df["_join_ts"] = pd.to_datetime(alert_df[alert_ts_col], utc=True, errors="coerce")
+    alert_df = alert_df.sort_values("_join_ts")
+
+    # Rename equity timestamp to match for merge_asof
+    equity_subset = equity_subset.rename(columns={equity_ts_col: "_join_ts"})
+
+    merged = pd.merge_asof(
+        alert_df,
+        equity_subset,
+        on="_join_ts",
+        by="_join_symbol",
+        tolerance=pd.Timedelta("1D"),
+        direction="backward",
+    )
+
+    # Clean up temporary join columns
+    merged = merged.drop(columns=["_join_symbol", "_join_ts"], errors="ignore")
+
+    return merged
+
+
+async def _load_equity_gold_features(reader: Any, now: Any) -> dict[str, Any]:
+    """Load equity-level Gold datasets with graceful degradation.
+
+    Returns a dict mapping dataset name to DataFrame (or empty DataFrame on failure).
+    """
+    import pandas as pd
+
+    equity_datasets: dict[str, Any] = {}
+
+    for dataset_name in EQUITY_GOLD_DATASETS:
+        try:
+            payload = await asyncio.to_thread(
+                reader.read_gold_features,
+                dataset=dataset_name,
+                asof_time=now,
+            )
+            df = _coerce_dataframe(payload)
+            equity_datasets[dataset_name] = df
+            if not df.empty:
+                logger.info(
+                    f"Loaded equity Gold dataset {dataset_name}: {len(df)} rows",
+                    extra={
+                        "event": "equity_gold_loaded",
+                        "dataset": dataset_name,
+                        "row_count": len(df),
+                    },
+                )
+            else:
+                logger.info(
+                    f"Equity Gold dataset {dataset_name} is empty",
+                    extra={"event": "equity_gold_empty", "dataset": dataset_name},
+                )
+        except Exception as exc:
+            logger.warning(
+                f"Equity Gold dataset {dataset_name} unavailable: {exc}",
+                extra={
+                    "event": "equity_gold_unavailable",
+                    "dataset": dataset_name,
+                    "error": str(exc),
+                },
+            )
+            equity_datasets[dataset_name] = pd.DataFrame()
+
+    return equity_datasets
+
+
 async def _fetch_training_data_from_heber(
     *,
     cutoff: datetime,
@@ -421,6 +702,9 @@ async def _fetch_training_data_from_heber(
         )
         return None, []
 
+    # Load equity-level Gold datasets (momentum, volatility, flow)
+    equity_gold = await _load_equity_gold_features(reader, now)
+
     outcomes_raw = _coerce_dataframe(outcomes_payload)
     features_raw = _coerce_dataframe(features_payload)
     logger.info(f"Raw outcomes size: {len(outcomes_raw)}")
@@ -453,6 +737,63 @@ async def _fetch_training_data_from_heber(
     if len(merged) < min_samples:
         logger.warning(f"Insufficient Heber samples: {len(merged)} < {min_samples}")
         return None, []
+
+    # Asof-join equity-level Gold features to alert-level training data
+    equity_joined_count = 0
+    for dataset_name, feature_cols in EQUITY_GOLD_DATASETS.items():
+        equity_df = equity_gold.get(dataset_name, pd.DataFrame())
+        if not equity_df.empty:
+            pre_cols = set(merged.columns)
+            merged = _join_equity_features(
+                alert_df=merged,
+                equity_df=equity_df,
+                feature_cols=feature_cols,
+                alert_symbol_col="symbol" if "symbol" in merged.columns else "ticker",
+                alert_ts_col="entry_ts",
+            )
+            new_cols = set(merged.columns) - pre_cols
+            if new_cols:
+                equity_joined_count += len(new_cols)
+                logger.info(
+                    f"Joined {len(new_cols)} features from {dataset_name}",
+                    extra={
+                        "event": "equity_features_joined",
+                        "dataset": dataset_name,
+                        "new_columns": sorted(new_cols),
+                    },
+                )
+
+    if equity_joined_count > 0:
+        logger.info(
+            f"Total equity features joined: {equity_joined_count}",
+            extra={"event": "equity_features_join_summary", "total_joined": equity_joined_count},
+        )
+    else:
+        logger.warning(
+            "No equity Gold features available; training with alert-level features only",
+            extra={"event": "equity_features_unavailable_training"},
+        )
+
+    # Compute derived features (iv_vs_realized, vega_theta_ratio, etc.)
+    from orion.ml.derived_features import compute_derived_features_batch
+
+    merged = compute_derived_features_batch(merged)
+
+    # Compute runtime-derived flow normalization ratios
+    for num_col, denom_col, out_col in [
+        ("premium", "adv_premium_20d", "premium_vs_adv"),
+        ("volume", "adv_volume_20d", "volume_vs_adoi"),
+        ("open_interest", "adv_oi_20d", "relative_oi_buildup"),
+    ]:
+        if num_col in merged.columns and denom_col in merged.columns:
+            num = pd.to_numeric(merged[num_col], errors="coerce")
+            denom = pd.to_numeric(merged[denom_col], errors="coerce")
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratio = num / denom
+            ratio[~np.isfinite(ratio)] = np.nan
+            merged[out_col] = ratio
+        else:
+            merged[out_col] = pd.NA
 
     feature_names = FEATURE_COLUMNS + CATEGORICAL_COLUMNS
     for feature_name in feature_names:
@@ -704,11 +1045,9 @@ def train_model(
     }
 
     if use_walk_forward and dates is not None:
-        # Walk-forward (expanding window) validation
         return _train_walk_forward(X, y, dates, params, n_splits)
-    else:
-        # Fallback to random split (legacy behavior)
-        return _train_random_split(X, y, params, test_size)
+
+    return _train_random_split(X, y, params, test_size)
 
 
 def _train_random_split(X: Any, y: Any, params: dict, test_size: float) -> tuple[Any, float, float]:  # noqa: N803

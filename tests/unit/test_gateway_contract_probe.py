@@ -39,14 +39,8 @@ class _FakeWebSocket:
 
 def test_normalize_http_gateway_base_url() -> None:
     assert probe._normalize_http_gateway_base_url("http://localhost:8080") == "http://localhost:8080"
-    assert (
-        probe._normalize_http_gateway_base_url("http://localhost:8080/api/v1")
-        == "http://localhost:8080"
-    )
-    assert (
-        probe._normalize_http_gateway_base_url("ws://localhost:8080/api/v1")
-        == "http://localhost:8080"
-    )
+    assert probe._normalize_http_gateway_base_url("http://localhost:8080/api/v1") == "http://localhost:8080"
+    assert probe._normalize_http_gateway_base_url("ws://localhost:8080/api/v1") == "http://localhost:8080"
     assert probe._normalize_http_gateway_base_url("wss://gw.example.com") == "https://gw.example.com"
 
 

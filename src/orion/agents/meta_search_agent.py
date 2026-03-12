@@ -4,12 +4,12 @@ import asyncio
 import inspect
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
 import yaml
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import meta_settings
@@ -18,10 +18,11 @@ from orion.core.meta_logging import log_meta_event
 from orion.core.solver_schema import EditOp, EditOpType, EvaluationTask, SolverConfig, SolverEdit
 from orion.core.solver_validation import ensure_solver_definition_json, solver_dsl_error_extra
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column_func
-from orion.shared.db_utils import db_query, db_write
+from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage import db
 from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY  # noqa: N812
+from orion.storage.models import BronzeEvent
 from orion.storage.models_solvers import (
     MetaExperiment,
     PromotionRecommendation,
@@ -260,8 +261,6 @@ class MetaSearchAgent:
     async def _run_evolution_generation(
         self, session: Any, base_solver: Any, base_score: float, experiment: Any
     ) -> None:
-        from sqlalchemy import update
-
         base_config = SolverConfig(**base_solver.config)
         perf_ctx = await self._build_performance_context(base_solver, base_score)
         edits_list = await self._generate_edit_candidates(base_config, base_solver, perf_ctx)
@@ -454,26 +453,6 @@ class MetaSearchAgent:
                 os.rename(prop["path"], os.path.join(processed_dir, prop["filename"]))
             except Exception as e:
                 logger.error(f"Failed to move {prop['filename']}: {e}")
-
-    async def _load_context(self, query: str, top_k: int = 5) -> dict[str, Any]:
-        """
-        Searches the RAG index and DB for relevant context.
-        Returns a dict with 'docs' and 'recent_metrics'.
-        """
-        # Vector search
-        docs = await self.vector_store.search(query, top_k=top_k)
-
-        # Fetch recent solver metrics
-        async def fetch_recent_metrics(session: Any) -> list[Any]:
-            from orion.storage.models_solvers import SolverMetrics
-
-            stmt = select(SolverMetrics).order_by(SolverMetrics.evaluated_at_utc.desc()).limit(10)
-            result = await session.execute(stmt)
-            return result.scalars().all()
-
-        metrics = await db_query(fetch_recent_metrics)
-
-        return {"docs": docs, "recent_metrics": metrics}
 
     async def process_pending_edits(self) -> None:
         """
@@ -842,17 +821,6 @@ class MetaSearchAgent:
         for op in edit.ops:
             self._apply_edit_op(new_config, op)
 
-        # VALIDATION
-        # Pydantic will auto-validate assignments if Config.validate_assignment is True.
-        # However, deep modifications might bypass it if not careful?
-        # Actually SolverConfig has validate_assignment=True.
-        # But let's trigger a full validation just in case by re-instantiating if needed,
-        # or relying on the fact that we assigned fields above.
-
-        # If we just return new_config, it's already a Pydantic model.
-        # Let's wrap in a try-except block at the CALLER site (run_evolution_cycle) to catch ValidationError.
-        # Here we just return. Implicitly validity is checked on assignment.
-
         return new_config
 
     def _apply_edit_op(self, new_config: SolverConfig, op: EditOp) -> None:
@@ -937,10 +905,6 @@ class MetaSearchAgent:
         new_config.rules = [rule for rule in new_config.rules if not self._rule_matches(rule, rule_id)]
 
     def _create_default_task(self) -> EvaluationTask:
-        from datetime import datetime, timedelta
-
-        from orion.core.solver_schema import EvaluationTask
-
         end = datetime.now(UTC)
         start = end - timedelta(days=30)
         return EvaluationTask(
@@ -993,37 +957,21 @@ class MetaSearchAgent:
         feature_engine = FeatureEngine()
         rule_engine = RuleEngine(config=rules_cfg)
 
-        # 1. OPTIMIZATION: Try to fetch pre-computed features from Gold Store
-        # For simplicity in V1, we check if we can fetch *all* required signals.
-        # But signals are by ticker. We need to iterate tickers in the task.
-        # Or just fetch all for the time range and see what we get.
-        # If we get nothing, we compute.
-
         bar_signals = []
-        # Get unique tickers from events or task
         tickers = list(price_data.keys())
 
-        # Try fetch first
-        fetches = []
-        for t in tickers:
-            fetches.append(
-                feature_engine.fetch_signal_batch(
-                    t, task.start_time_utc, task.end_time_utc, config.features.feature_set_id
-                )
-            )
+        fetches = [
+            feature_engine.fetch_signal_batch(t, task.start_time_utc, task.end_time_utc, config.features.feature_set_id)
+            for t in tickers
+        ]
 
         fetched_lists = await asyncio.gather(*fetches)
         for lst in fetched_lists:
             bar_signals.extend(lst)
 
         if not bar_signals:
-            # Compute from Bronze
             bar_signals = feature_engine.process_alpaca_bars(alpaca_events)
-
-            # Persist for next time
             if bar_signals:
-                # Fire and forget or await?
-                # Let's await to ensure data integrity for tests
                 await feature_engine.persist_signal_batch(bar_signals, config.features.feature_set_id)
 
         flow_signals = feature_engine.process_uw_flow_events(flow_events)
@@ -1168,8 +1116,6 @@ class MetaSearchAgent:
             return None
 
     def _map_heber_bar_events(self, task: EvaluationTask, bars_frame: pd.DataFrame) -> tuple[list[Any], dict[str, Any]]:
-        from orion.storage.models import BronzeEvent
-
         if bars_frame.empty:
             return [], {}
 
@@ -1276,8 +1222,6 @@ class MetaSearchAgent:
         return price_data
 
     def _map_heber_flow_events(self, task: EvaluationTask, flow_frame: pd.DataFrame) -> list[Any]:
-        from orion.storage.models import BronzeEvent
-
         if flow_frame.empty:
             return []
 

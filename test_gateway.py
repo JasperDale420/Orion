@@ -9,7 +9,7 @@ from orion.agents.codex_client import run_codex_completion
 from orion.config import agent_settings
 
 
-async def main():
+async def main() -> None:
     print("Testing AI Gateway code editing tools via run_codex_completion...")
 
     # Create a dummy file to read and write

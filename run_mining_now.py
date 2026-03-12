@@ -5,7 +5,7 @@ from orion.ml.pattern_miner import run_all_pattern_mining
 from orion.storage.db import init_db
 
 
-async def main():
+async def main() -> None:
     setup_logging()
     await init_db()
     print("Starting ML mining job manually...")
