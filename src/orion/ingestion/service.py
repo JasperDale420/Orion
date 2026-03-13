@@ -10,9 +10,7 @@ from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
 
-from orion.config import system_settings
-from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
+# Alpaca connectors archived (Phase 3) — all market data now sourced via Data-Gateway/Heber
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.core.universe_manager import UniverseManager
@@ -50,29 +48,11 @@ class IngestionService:
         self.rule_engine = RuleEngine()
         self.lakehouse = LakehouseWriter()
 
-        # Alpaca connectors (still used for market data until fully migrated)
-        alpaca_key = system_settings.alpaca_api_key or ""
-        alpaca_secret = system_settings.alpaca_secret_key or ""
-
-        self.alpaca = AlpacaMarketConnector(
-            api_key=alpaca_key,
-            secret_key=alpaca_secret,
-            paper=system_settings.alpaca_paper,
-        )
-
-        # Real-time streaming connector (preferred over polling for lower latency)
-        self.alpaca_stream: AlpacaStreamConnector | None = None
-        self._use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
-        if self._use_streaming:
-            try:
-                self.alpaca_stream = AlpacaStreamConnector(
-                    api_key=alpaca_key,
-                    secret_key=alpaca_secret,
-                    feed="sip",
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create streaming connector, falling back to polling: {e}")
-                self.alpaca_stream = None
+        # Alpaca connectors archived — market data routed through Data-Gateway/Heber
+        self.alpaca = None
+        self.alpaca_stream = None
+        self._use_streaming = False
+        logger.info("Alpaca connectors disabled; market data sourced from Data-Gateway/Heber")
 
         # Timezone settings
         self.eastern = ZoneInfo("America/New_York")
@@ -111,17 +91,7 @@ class IngestionService:
         except Exception as e:
             logger.warning(f"Failed to start rollup job: {e}")
 
-        # Start Alpaca WebSocket streaming (preferred for low-latency bars)
-        if self.alpaca_stream:
-            try:
-                active_tickers = self.universe.get_active_universe()
-                if active_tickers:
-                    await self.alpaca_stream.subscribe(active_tickers)
-                await self.alpaca_stream.start()
-                logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
-            except Exception as e:
-                logger.warning(f"Failed to start Alpaca streaming, falling back to polling: {e}")
-                self.alpaca_stream = None
+        # Alpaca streaming is disabled (connectors archived)
 
         logger.info("Ingestion source profile", extra={"context": self._active_event_source_profile()})
         logger.info("Ingestion Service Initialized.")
@@ -198,17 +168,8 @@ class IngestionService:
         )
 
     async def _poll_alpaca_events(self, trace_id: str) -> list[BronzeEvent]:
-        """Poll Alpaca for market data events via streaming or REST fallback."""
-        active_tickers = self.universe.get_active_universe()
-        if not active_tickers:
-            return []
-
-        # Use streaming if available (real-time, sub-second latency)
-        if self.alpaca_stream and self.alpaca_stream.is_running:
-            return await self._drain_alpaca_stream(active_tickers, trace_id)
-
-        # Fallback to polling (higher latency)
-        return await self._poll_alpaca(active_tickers, trace_id)
+        """Alpaca polling disabled — connectors archived in favor of Data-Gateway."""
+        return []
 
     async def _drain_alpaca_stream(self, active_tickers: list[str], trace_id: str) -> list[BronzeEvent]:
         """Drain events from Alpaca WebSocket stream."""
@@ -258,21 +219,8 @@ class IngestionService:
         }
 
     async def _poll_alpaca(self, tickers: list[str], trace_id: str) -> list[BronzeEvent]:
-        try:
-            events = await asyncio.to_thread(
-                self.alpaca.poll, tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
-            )
-            if events:
-                newest = max((e.event_ts_utc for e in events if e.event_ts_utc), default=None)
-                if newest:
-                    await self.health_monitor.check_lag(newest)
-
-            for e in events:
-                self._tag_ingest_metadata(e, trace_id, "alpaca_market")
-            return events
-        except Exception as e:
-            logger.error(f"Error polling Alpaca: {e}", extra={"trace_id": trace_id})
-            return []
+        """Alpaca REST polling disabled — connectors archived."""
+        return []
 
     async def _normalize_and_dedupe(self, events: list[BronzeEvent], trace_id: str) -> list[BronzeEvent]:
         normalized = []
