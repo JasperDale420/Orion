@@ -25,6 +25,7 @@ from orion.clients.heber_reader import get_heber_reader
 from orion.ml.derived_features import compute_derived_features
 from orion.ml.pattern_miner import (
     ALERT_FLOW_CONTEXT_FEATURES,
+    ALERT_SECTOR_FLOW_FEATURES,
     CATEGORICAL_COLUMNS,
     EQUITY_GOLD_DATASETS,
     FEATURE_COLUMNS,
@@ -99,16 +100,43 @@ _GOLD_TO_FEATURE: dict[str, str] = {
     "same_ticker_alerts_1h": "same_ticker_alerts_1h",
     "directional_agreement_4h": "directional_agreement_4h",
     "repeat_ticker_days_5d": "repeat_ticker_days_5d",
+    # GEX regime features (market-level)
+    "net_gex": "net_gex",
+    "gex_regime": "gex_regime",
+    "gex_flip_distance": "gex_flip_distance",
+    # Flow toxicity features
+    "flow_toxicity_1d": "flow_toxicity_1d",
+    "toxicity_acceleration": "toxicity_acceleration",
+    # OI momentum features
+    "oi_buildup_ratio": "oi_buildup_ratio",
+    "new_position_signal": "new_position_signal",
+    "oi_change_momentum_5d": "oi_change_momentum_5d",
+    # Market tide context features (market-level)
+    "market_sentiment_score": "market_sentiment_score",
+    "market_premium_momentum": "market_premium_momentum",
+    # Darkpool features
+    "darkpool_notional_1d": "darkpool_notional_1d",
+    "darkpool_premium_ratio": "darkpool_premium_ratio",
+    "darkpool_activity_zscore": "darkpool_activity_zscore",
+    # Straddle momentum features
+    "straddle_return_1m": "straddle_return_1m",
+    "straddle_return_3m": "straddle_return_3m",
+    # Trend scanning features
+    "trend_scan_horizon": "trend_scan_horizon",
+    "trend_scan_t_value": "trend_scan_t_value",
+    # Sector flow features (alert-level)
+    "sector_flow_alignment": "sector_flow_alignment",
+    "sector_call_put_ratio": "sector_call_put_ratio",
 }
 
 # Boolean flag columns that need coercion
 _BOOL_COLUMNS = frozenset({"is_bullish", "is_bearish", "is_sweep", "is_block", "is_unusual"})
 
 # Datasets that are market-level (not per-ticker) — read without symbol filter
-_MARKET_LEVEL_DATASETS = frozenset({"market_regime_features"})
+_MARKET_LEVEL_DATASETS = frozenset({"market_regime_features", "gex_regime_features", "market_tide_context_features"})
 
 # Datasets that are per-alert (not per-ticker daily) — need event_id-based lookup
-_ALERT_LEVEL_DATASETS = frozenset({"flow_context_features"})
+_ALERT_LEVEL_DATASETS = frozenset({"flow_context_features", "sector_flow_features"})
 
 
 async def get_scoring_features(
@@ -193,6 +221,13 @@ async def get_scoring_features(
         for col in ALERT_FLOW_CONTEXT_FEATURES:
             if col in flow_ctx:
                 result[col] = _coerce_float(flow_ctx[col])
+
+    # --- Sector flow features (per-alert, from sector_flow_features Gold dataset) ---
+    sector_ctx = await _load_alert_level_gold(reader, event_id, ticker, entry_ts, "sector_flow_features")
+    if isinstance(sector_ctx, dict):
+        for col in ALERT_SECTOR_FLOW_FEATURES:
+            if col in sector_ctx:
+                result[col] = _coerce_float(sector_ctx[col])
 
     # --- Derived features (computed from existing alert-level features) ---
     derived = compute_derived_features(result)

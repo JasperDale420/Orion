@@ -49,7 +49,7 @@ def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
 
 
 def _legacy_label_pipelines_enabled() -> bool:
-    enabled, _, _ = _legacy_label_pipeline_control()
+    enabled, _key, _raw = _legacy_label_pipeline_control()
     return enabled
 
 

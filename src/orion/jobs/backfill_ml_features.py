@@ -377,34 +377,22 @@ def _normalize_features_for_backfill(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     normalized = pd.DataFrame({"event_id": df[event_col].astype(str)})
-    normalized["entry_hour"] = pd.to_numeric(
-        df[_first_existing_column(df, ["entry_hour", "hour_of_day"])]
-        if _first_existing_column(df, ["entry_hour", "hour_of_day"])
-        else None,
-        errors="coerce",
-    )
-    normalized["minutes_to_close"] = pd.to_numeric(
-        df[_first_existing_column(df, ["minutes_to_close"])]
-        if _first_existing_column(df, ["minutes_to_close"])
-        else None,
-        errors="coerce",
-    )
-    normalized["overnight_gap_pct"] = pd.to_numeric(
-        df[_first_existing_column(df, ["overnight_gap_pct"])]
-        if _first_existing_column(df, ["overnight_gap_pct"])
-        else None,
-        errors="coerce",
-    )
-    normalized["gex_at_entry"] = pd.to_numeric(
-        df[_first_existing_column(df, ["gex_at_entry", "gex"])]
-        if _first_existing_column(df, ["gex_at_entry", "gex"])
-        else None,
-        errors="coerce",
-    )
-    normalized["oi_change_1d"] = pd.to_numeric(
-        df[_first_existing_column(df, ["oi_change_1d"])] if _first_existing_column(df, ["oi_change_1d"]) else None,
-        errors="coerce",
-    )
+
+    col = _first_existing_column(df, ["entry_hour", "hour_of_day"])
+    normalized["entry_hour"] = pd.to_numeric(df[col] if col else None, errors="coerce")
+
+    col = _first_existing_column(df, ["minutes_to_close"])
+    normalized["minutes_to_close"] = pd.to_numeric(df[col] if col else None, errors="coerce")
+
+    col = _first_existing_column(df, ["overnight_gap_pct"])
+    normalized["overnight_gap_pct"] = pd.to_numeric(df[col] if col else None, errors="coerce")
+
+    col = _first_existing_column(df, ["gex_at_entry", "gex"])
+    normalized["gex_at_entry"] = pd.to_numeric(df[col] if col else None, errors="coerce")
+
+    col = _first_existing_column(df, ["oi_change_1d"])
+    normalized["oi_change_1d"] = pd.to_numeric(df[col] if col else None, errors="coerce")
+
     return normalized
 
 
@@ -597,9 +585,6 @@ async def update_ml_features(record: dict[str, Any]) -> bool:
         updates["spy_return_1h"] = sector_corr.get("spy_return_1h")
 
     updates["iv_rank_at_entry"] = await get_iv_rank_at_entry(ticker, entry_ts)
-
-    if not updates:
-        return False
 
     logger.warning(
         "Skipping legacy local ML feature backfill write; label storage is centralized",

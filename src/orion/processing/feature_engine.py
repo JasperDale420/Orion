@@ -53,8 +53,6 @@ class FeatureEngine:
 
         from orion.config import system_settings
 
-        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
-
         tickers = system_settings.static_watchlist
         logger.info(f"Hydrating FeatureEngine history for {len(tickers)} tickers...")
 
@@ -148,12 +146,10 @@ class FeatureEngine:
         """
         Writes computed features to the GoldFeatureEvent table.
         """
-        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
         from sqlalchemy.dialects.postgresql import insert
 
         from orion.storage.models_gold import GoldFeatureEvent
 
-        # Ensure ID/PK uniqueness
         if not ticker or not ts:
             return
 
@@ -178,7 +174,6 @@ class FeatureEngine:
         """
         Batch write features to Gold store.
         """
-        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
         from sqlalchemy.dialects.postgresql import insert
 
         from orion.storage.models_gold import GoldFeatureEvent
@@ -228,7 +223,6 @@ class FeatureEngine:
         """
         Hydrates SilverSignals from Gold Feature store.
         """
-        # from orion.storage.db import async_session_factory # Removed as db_query/db_write are used directly
         from sqlalchemy import and_, select
 
         from orion.storage.models_gold import GoldFeatureEvent
@@ -290,11 +284,7 @@ class FeatureEngine:
             is_put = e.payload.get("put_call") == "P"
             premium = float(e.payload.get("premium_usd") or 0.0)
 
-            # Append
-            if ticker not in self.flow_history:
-                self.flow_history[ticker] = []
-
-            self.flow_history[ticker].append(
+            self.flow_history.setdefault(ticker, []).append(
                 {"ts": e.event_ts_utc, "premium": premium, "is_put": is_put, "type": e.event_type}
             )
 
@@ -433,20 +423,17 @@ class FeatureEngine:
         return signals
 
     def _group_events_by_ticker(self, events: list[BronzeEvent]) -> dict[str, list[BronzeEvent]]:
-        events_by_ticker = {}
+        events_by_ticker: dict[str, list[BronzeEvent]] = {}
         for e in events:
             if e.event_type != "ALPACA_BAR_1M":
                 continue
 
             p = e.payload or {}
-            # Support both raw Alpaca payloads and normalized payloads.
             ticker = p.get("symbol") or p.get("S") or p.get("ticker") or e.ticker
             if not ticker:
                 continue
 
-            if ticker not in events_by_ticker:
-                events_by_ticker[ticker] = []
-            events_by_ticker[ticker].append(e)
+            events_by_ticker.setdefault(ticker, []).append(e)
         return events_by_ticker
 
     def _convert_events_to_df(self, events: list[BronzeEvent]) -> pd.DataFrame:
@@ -575,17 +562,12 @@ class FeatureEngine:
 
         # 1. Price Features
         price_feats = self._extract_price_features(ticker, ts)
-        for k, v in price_feats.items():
-            if return_all or k in required_keys:
-                features[k] = v
+        self._merge_filtered(features, price_feats, required_keys, return_all)
 
         # 2. Flow Features
         ts_py = self._to_pydatetime(ts)
         flow_feats = self._compute_flow_features(ticker, ts_py)
-
-        for k, v in flow_feats.items():
-            if return_all or k in required_keys:
-                features[k] = v
+        self._merge_filtered(features, flow_feats, required_keys, return_all)
 
         # 3. Validation
         if not return_all:
@@ -605,23 +587,31 @@ class FeatureEngine:
 
         return features
 
+    @staticmethod
+    def _merge_filtered(
+        target: dict[str, float], source: dict[str, float], required_keys: set[str], return_all: bool
+    ) -> None:
+        for k, v in source.items():
+            if return_all or k in required_keys:
+                target[k] = v
+
     def _extract_price_features(self, ticker: str, ts: datetime) -> dict[str, float]:
-        features = {}
-        if ticker in self.history:
-            df = self.history[ticker]
-            # Get row nearest to ts
-            try:
-                # Ensure ts is compatible with index (pandas Timestamp vs datetime)
-                idx = df.index.get_indexer([ts], method="pad")[0]
-                if idx >= 0:
-                    row = df.iloc[idx]
-                    features = {
-                        "close": float(row["close"]),
-                        "volume": float(row["volume"]),
-                        "vwap": float(row["vwap"]) if "vwap" in row else 0.0,
-                        "rsi_14": float(row["RSI_14"]) if "RSI_14" in row else 0.0,
-                        "sma_20": float(row["SMA_20"]) if "SMA_20" in row else 0.0,
-                    }
-            except Exception as e:
-                logger.warning(f"Feature fetch failed for {ticker}: {e}")
-        return features
+        if ticker not in self.history:
+            return {}
+
+        df = self.history[ticker]
+        try:
+            idx = df.index.get_indexer([ts], method="pad")[0]
+            if idx < 0:
+                return {}
+            row = df.iloc[idx]
+            return {
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+                "vwap": float(row["vwap"]) if "vwap" in row else 0.0,
+                "rsi_14": float(row["RSI_14"]) if "RSI_14" in row else 0.0,
+                "sma_20": float(row["SMA_20"]) if "SMA_20" in row else 0.0,
+            }
+        except Exception as e:
+            logger.warning(f"Feature fetch failed for {ticker}: {e}")
+            return {}

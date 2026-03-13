@@ -21,6 +21,7 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
+logs/
 .hypothesis/
 .pytest_cache/
 .ruff_cache/

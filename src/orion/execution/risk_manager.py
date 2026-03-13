@@ -30,10 +30,7 @@ class RiskManager:
     """
 
     def __init__(self, config: RiskSettings | None = None):
-        if config is None:
-            self.config = risk_settings
-        else:
-            self.config = config
+        self.config = config if config is not None else risk_settings
 
         self.current_daily_loss = 0.0
         self.open_positions = 0
@@ -57,6 +54,9 @@ class RiskManager:
 
         # Sector exposure tracking
         self.sector_exposures: dict[str, float] = {}  # sector -> total USD exposure
+
+    def _resolve_config(self, risk_override: RiskSettings | None) -> RiskSettings:
+        return risk_override if risk_override else self.config
 
     def _current_drawdown_pct(self) -> float:
         if self.peak_equity <= 0:
@@ -82,7 +82,7 @@ class RiskManager:
         """
         Returns True if the order is safe to execute, False otherwise.
         """
-        cfg = risk_override if risk_override else self.config
+        cfg = self._resolve_config(risk_override)
         estimated_cost = quantity * price
 
         # 0. Global Time Checks
@@ -144,7 +144,7 @@ class RiskManager:
             timestamp: Order timestamp
             risk_override: Optional override settings
         """
-        cfg = risk_override if risk_override else self.config
+        cfg = self._resolve_config(risk_override)
 
         # Run standard order checks first
         if not self.check_order(ticker, quantity, price, side, timestamp, risk_override):
@@ -216,20 +216,8 @@ class RiskManager:
 
     def _calculate_projected_exposure(
         self, ticker: str, estimated_cost: float, side: str, price: float
-    ) -> tuple[float, float, float]:
-        pending_exposure = 0.0
-        for _, p_val in self.pending_orders.items():
-            # Check p_val tuple (ticker, cost)
-            # wait, pending_orders values are (ticker, signed_cost)
-            # self.pending_orders: Dict[str, float] defined in init, but usage implies (ticker, cost) tuple?
-            # Init says: self.pending_orders: Dict[str, float] = {}  # order_id -> estimated cost (signed)
-            # But line 126 loop was: for oid, (p_ticker, p_cost) in self.pending_orders.items():
-            # So the type hint in init might be wrong or the usage.
-            # Looking at update_post_trade (line 416): self.pending_orders[order_id] = (ticker, signed_cost)
-            # So it IS a tuple.
-            p_ticker, p_cost = p_val
-            if p_ticker == ticker:
-                pending_exposure += p_cost
+    ) -> tuple[float, float]:
+        pending_exposure = sum(p_cost for p_ticker, p_cost in self.pending_orders.values() if p_ticker == ticker)
 
         signed_current_exposure = 0.0
         if ticker in self.positions:
@@ -336,22 +324,22 @@ class RiskManager:
 
         return True
 
+    def _recalculate_portfolio_greeks(self) -> None:
+        self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
+        self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
+        self.portfolio_vega = sum(g["vega"] for g in self.position_greeks.values())
+
     def update_position_greeks(
         self, ticker: str, delta: float, gamma: float, theta: float = 0.0, vega: float = 0.0
     ) -> None:
         """Update Greeks for a position and recalculate portfolio totals."""
-        # Update position Greeks
         self.position_greeks[ticker] = {
             "delta": delta,
             "gamma": gamma,
             "theta": theta,
             "vega": vega,
         }
-
-        # Recalculate portfolio totals
-        self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
-        self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
-        self.portfolio_vega = sum(g["vega"] for g in self.position_greeks.values())
+        self._recalculate_portfolio_greeks()
 
         logger.info(
             f"Greeks Updated for {ticker}: delta={delta:.2f}, gamma={gamma:.4f}, vega={vega:.4f} | "
@@ -362,10 +350,7 @@ class RiskManager:
         """Clear Greeks for a closed position."""
         if ticker in self.position_greeks:
             del self.position_greeks[ticker]
-            # Recalculate portfolio totals
-            self.portfolio_delta = sum(g["delta"] for g in self.position_greeks.values())
-            self.portfolio_gamma = sum(g["gamma"] for g in self.position_greeks.values())
-            self.portfolio_vega = sum(g["vega"] for g in self.position_greeks.values())
+            self._recalculate_portfolio_greeks()
 
     def check_sector_exposure(
         self, sector: str, additional_exposure: float = 0.0, risk_override: RiskSettings | None = None
@@ -381,7 +366,7 @@ class RiskManager:
         Returns:
             True if sector exposure is within limits, False if it would breach
         """
-        cfg = risk_override if risk_override else self.config
+        cfg = self._resolve_config(risk_override)
 
         if not cfg.enable_sector_checks:
             return True
@@ -431,6 +416,17 @@ class RiskManager:
             return 0.0
         return self.sector_exposures.get(sector, 0.0) / self.current_equity
 
+    @staticmethod
+    def _minutes_to_market_close(timestamp: datetime | None) -> float:
+        from zoneinfo import ZoneInfo
+
+        if timestamp is None:
+            timestamp = datetime.now(ZoneInfo("America/New_York"))
+        elif timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
+        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+        return (market_close - timestamp).total_seconds() / 60
+
     def check_zero_dte_winddown(
         self, dte: int, timestamp: datetime | None = None, risk_override: RiskSettings | None = None
     ) -> tuple[bool, str]:
@@ -445,30 +441,16 @@ class RiskManager:
         Returns:
             Tuple of (allowed, reason)
         """
-        cfg = risk_override if risk_override else self.config
+        cfg = self._resolve_config(risk_override)
 
-        # Only applies to 0DTE trades
         if dte != 0:
             return (True, "Not 0DTE")
 
         if not cfg.enable_zero_dte_winddown:
             return (True, "Wind-down disabled")
 
-        # Get current time in ET
-        if timestamp is None:
-            from zoneinfo import ZoneInfo
+        minutes_to_close = self._minutes_to_market_close(timestamp)
 
-            timestamp = datetime.now(ZoneInfo("America/New_York"))
-        elif timestamp.tzinfo is None:
-            from zoneinfo import ZoneInfo
-
-            timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
-
-        # Market close is 4:00 PM ET
-        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
-        minutes_to_close = (market_close - timestamp).total_seconds() / 60
-
-        # Check hard cutoff
         if minutes_to_close <= cfg.zero_dte_cutoff_minutes:
             logger.warning(
                 f"RISK REJECT: 0DTE blocked - only {minutes_to_close:.0f} min to close "
@@ -476,7 +458,6 @@ class RiskManager:
             )
             return (False, f"0DTE cutoff: {minutes_to_close:.0f} min to close")
 
-        # Check if in reduced size window
         if minutes_to_close <= cfg.zero_dte_reduce_size_after_minutes:
             logger.info(
                 f"0DTE size reduction active: {minutes_to_close:.0f} min to close "
@@ -500,26 +481,15 @@ class RiskManager:
         Returns:
             Multiplier (1.0 for full size, <1.0 for reduced)
         """
-        cfg = risk_override if risk_override else self.config
+        cfg = self._resolve_config(risk_override)
 
         if dte != 0 or not cfg.enable_zero_dte_winddown:
             return 1.0
 
-        # Get current time in ET
-        if timestamp is None:
-            from zoneinfo import ZoneInfo
-
-            timestamp = datetime.now(ZoneInfo("America/New_York"))
-        elif timestamp.tzinfo is None:
-            from zoneinfo import ZoneInfo
-
-            timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
-
-        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
-        minutes_to_close = (market_close - timestamp).total_seconds() / 60
+        minutes_to_close = self._minutes_to_market_close(timestamp)
 
         if minutes_to_close <= cfg.zero_dte_cutoff_minutes:
-            return 0.0  # Blocked entirely
+            return 0.0
 
         if minutes_to_close <= cfg.zero_dte_reduce_size_after_minutes:
             return cfg.zero_dte_reduced_size_pct
@@ -638,8 +608,6 @@ class RiskManager:
         """
 
         async def save_position(session: Any) -> None:
-            from datetime import datetime
-
             from sqlalchemy import select
 
             from orion.storage.models_execution import Position as PositionModel
@@ -725,8 +693,8 @@ class RiskManager:
             state.updated_at_utc = datetime.now(UTC)
             state.current_daily_loss = self.current_daily_loss
             state.current_equity = self.current_equity
-            state.starting_equity = getattr(self, "starting_equity", self.current_equity)
-            state.peak_equity = getattr(self, "peak_equity", self.current_equity)
+            state.starting_equity = self.starting_equity
+            state.peak_equity = self.peak_equity
             state.open_positions_count = self.open_positions
 
         await db_write(save_risk_state)
@@ -804,10 +772,6 @@ class RiskManager:
         sign = 1 if side.lower() == "buy" else -1
         signed_fill_qty = abs(qty) * sign
 
-        # Initialize trackers if missing
-        if not hasattr(self, "positions"):
-            self.positions = {}  # ticker -> {'qty': float, 'avg_entry': float}
-
         current_pos = self.positions.get(ticker, {"qty": 0.0, "avg_entry": 0.0})
         old_qty = current_pos["qty"]
         old_entry = current_pos["avg_entry"]
@@ -875,20 +839,12 @@ class RiskManager:
             else:
                 self.positions[ticker] = {"qty": new_qty, "avg_entry": old_entry}
 
-        # Cleanup zero positions
-        if math.isclose(new_qty, 0, abs_tol=1e-9):
-            self.positions[ticker] = {"qty": 0.0, "avg_entry": 0.0}
-
         # Update Ticker Exposure (Authoritative USD Value)
         # We track exposure as Market Value (Qty * Price) - Absolute for sizing consistency
         self.ticker_exposures[ticker] = abs(new_qty * price)
 
         # Update Open Positions Count
-        count = 0
-        for _t, p in self.positions.items():
-            if not math.isclose(p["qty"], 0, abs_tol=1e-9):
-                count += 1
-        self.open_positions = count
+        self.open_positions = sum(1 for p in self.positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
 
         await self._save_state()
 
@@ -1002,10 +958,7 @@ class RiskManager:
                         continue
 
                     cost = qty * limit_price
-
-                    # Robust side check
-                    is_buy = side_str.lower() == "buy"
-                    signed_cost = cost if is_buy else -cost
+                    signed_cost = cost if side_str.lower() == "buy" else -cost
                     self.pending_orders[order_id] = (symbol, signed_cost)
 
             except Exception as e:
@@ -1019,12 +972,7 @@ class RiskManager:
             self.current_equity = equity
             self.starting_equity = last_equity
 
-            pnl = equity - last_equity
-
-            if pnl < 0:
-                self.current_daily_loss = abs(pnl)
-            else:
-                self.current_daily_loss = 0.0
+            self.current_daily_loss = max(0.0, last_equity - equity)
 
             logger.info(
                 f"Risk Synced: OpenPositions={self.open_positions}, PendingOrders={len(self.pending_orders)}, DailyLoss={self.current_daily_loss}"

@@ -42,31 +42,11 @@ async def main() -> None:
     )
 
     if args.once:
-        # Single check mode
-        from orion.config import system_settings
-        from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
-        from orion.execution.position_monitor import PositionMonitor
-
-        connector = AlpacaTradingConnector(settings=system_settings)
-        monitor = PositionMonitor()
-
-        result = await monitor.run_check(connector, dry_run=args.dry_run)
-
-        logger.info(
-            "position_check_result",
-            positions_checked=result["positions_checked"],
-            exit_signals=result["exit_signals"],
-            exits_executed=result["exits_executed"],
+        # Single check mode — trading connectors archived, Data Gateway pending
+        logger.warning(
+            "Single-check mode skipped: trading connectors archived, awaiting Data Gateway trading proxy integration",
+            extra={"event": "monitor_single_check_noop"},
         )
-
-        if result.get("exits"):
-            for exit_info in result["exits"]:
-                logger.info(
-                    "exit_detail",
-                    symbol=exit_info["symbol"],
-                    pnl_pct=f"{exit_info['pnl_pct']:.1f}%",
-                    reasoning=exit_info["reasoning"],
-                )
     else:
         # Continuous monitoring mode
         await run_position_monitor_loop(

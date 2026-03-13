@@ -6,6 +6,7 @@ Implements 6 flow-based exit signals for 0-16 DTE options positions.
 """
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -79,9 +80,9 @@ def classify_dte_bucket(dte: int | None) -> str:
         return "UNKNOWN"
     if dte == 0:
         return "0DTE"
-    elif dte <= 3:
+    if dte <= 3:
         return "SHORT_SWING"
-    elif dte <= 14:
+    if dte <= 14:
         return "SWING"
     return "POSITION"
 
@@ -95,10 +96,6 @@ def get_position_dte_bucket(position: Any) -> str:
 
     # Parse expiry from option chain (e.g., SPY251224C00500000 -> 2025-12-24)
     try:
-        # Format: TICKER + YYMMDD + P/C + STRIKE
-        # Find the date portion (6 digits after ticker)
-        import re
-
         match = re.search(r"(\d{6})[PC]", option_chain)
         if match:
             date_str = match.group(1)
@@ -327,11 +324,7 @@ class WaningMomentumExitRule(ExitRule):
             if flow_ts and flow_ts >= window_start and is_sweep:
                 recent_sweep_count += 1
 
-        # Calculate momentum drop
-        if entry_sweep_count > 0:
-            drop_pct = ((entry_sweep_count - recent_sweep_count) / entry_sweep_count) * 100
-        else:
-            drop_pct = 0
+        drop_pct = ((entry_sweep_count - recent_sweep_count) / entry_sweep_count) * 100
 
         if drop_pct >= self.momentum_drop_threshold_pct:
             return ExitSignal(
@@ -445,9 +438,6 @@ class OpposingClusterExitRule(ExitRule):
 
             aggressor = getattr(flow, "aggressor", "") or ""
             put_call = getattr(flow, "put_call", "") or ""
-            getattr(flow, "option_chain", "") or ""
-
-            # Note: Could filter by same strike/expiry using option_chain prefix
 
             # Classify as opposing
             is_opposing = False

@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from orion.config import system_settings
 from orion.ml.exit_classifier import (
     BucketExitClassifier,
     ExitFeatures,
@@ -476,22 +475,21 @@ async def run_position_monitor_loop(
         execution_engine: ExecutionEngine instance for safe order routing
         position_manager: PositionManager instance for closing-guard coordination
     """
-    from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
-
-    logger.info(
-        f"Starting position monitor loop (interval: {check_interval_seconds}s, dry_run: {dry_run})",
-        extra={"event": "monitor_start"},
+    # Position monitoring requires a trading connector.
+    # Direct Alpaca connectors archived — Data Gateway integration pending.
+    logger.warning(
+        "Position monitor started in no-op mode: trading connectors archived, "
+        "awaiting Data Gateway trading proxy integration",
+        extra={"event": "monitor_noop"},
     )
 
-    connector = AlpacaTradingConnector(settings=system_settings)
-    monitor = PositionMonitor(
-        execution_engine=execution_engine,
-        position_manager=position_manager,
-    )
+    # Without a connector, we cannot sync with broker or evaluate positions.
+    # The monitor will be instantiated when Data Gateway trading proxy is ready.
 
     while True:
         try:
-            await monitor.run_check(connector, dry_run=dry_run)
+            # Skip broker sync since no connector is available
+            logger.debug("Position monitor cycle skipped — no trading connector available")
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)
 

@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from math import isnan
 from typing import Any
 
+import aiofiles
 import numpy as np
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -77,11 +78,6 @@ def _legacy_exit_training_control() -> tuple[bool, str, str]:
     enabled = settings.legacy_label_pipelines_enabled
     raw = "true" if enabled else "false"
     return enabled, global_key, raw
-
-
-def _legacy_exit_training_enabled() -> bool:
-    enabled, _, _ = _legacy_exit_training_control()
-    return enabled
 
 
 def _exit_classifier_training_source() -> str:
@@ -157,140 +153,10 @@ def _empty_training_arrays(feature_count: int) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-def _clear_price_target_label_schema_cache() -> None:
-    """Compatibility no-op: legacy local schema cache is decommissioned."""
-    return None
-
-
-def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float, str]]) -> set[str]:
-    """Build the required column set for a bucket training query."""
-    required = {
-        "ticker",
-        "entry_ts",
-        "premium_usd",
-        "dte",
-        "is_sweep",
-        "iv_rank_at_entry",
-        "vix_at_entry",
-        "trend_regime_at_entry",
-        "vol_regime_at_entry",
-        "gex_at_entry",
-        "market_tide_30m",
-        "delta_at_entry",
-        "gamma_at_entry",
-        "theta_at_entry",
-        "iv_at_entry",
-        "ask_side_ratio",
-        "max_return_pct",
-        "max_drawdown_pct",
-        "trade_type",
-    }
-    for suffix, _hours, _desc in checkpoints:
-        required.add(f"return_at_{suffix}")
-        required.add(f"delta_at_{suffix}")
-        required.add(f"gamma_at_{suffix}")
-        required.add(f"theta_at_{suffix}")
-        required.add(f"iv_at_{suffix}")
-        required.add(f"dte_at_{suffix}")
-        required.add(f"time_value_pct_at_{suffix}")
-        required.add(f"theta_decay_pct_at_{suffix}")
-    return required
-
-
 async def _load_price_target_label_columns(force_refresh: bool = False) -> set[str]:
     """Compatibility no-op: local label-table schema preflight is decommissioned."""
     _ = force_refresh
     return set()
-
-
-def _group_missing_columns_by_family(
-    missing_columns: set[str], checkpoints: list[tuple[str, float, str]]
-) -> dict[str, list[str]]:
-    """Group missing columns into actionable diagnostics families."""
-    grouped: dict[str, set[str]] = {
-        "entry_context": set(),
-        "outcome": set(),
-        "checkpoint_returns": set(),
-        "checkpoint_greeks": set(),
-        "checkpoint_time_decay": set(),
-        "other": set(),
-    }
-    checkpoint_suffixes = {suffix for suffix, _hours, _desc in checkpoints}
-
-    for column in missing_columns:
-        if column in {"max_return_pct", "max_drawdown_pct"}:
-            grouped["outcome"].add(column)
-            continue
-        if column in {
-            "ticker",
-            "entry_ts",
-            "premium_usd",
-            "dte",
-            "is_sweep",
-            "iv_rank_at_entry",
-            "vix_at_entry",
-            "trend_regime_at_entry",
-            "vol_regime_at_entry",
-            "gex_at_entry",
-            "market_tide_30m",
-            "delta_at_entry",
-            "gamma_at_entry",
-            "theta_at_entry",
-            "iv_at_entry",
-            "ask_side_ratio",
-            "trade_type",
-        }:
-            grouped["entry_context"].add(column)
-            continue
-        if any(column == f"return_at_{suffix}" for suffix in checkpoint_suffixes):
-            grouped["checkpoint_returns"].add(column)
-            continue
-        if any(
-            column == f"{prefix}_at_{suffix}"
-            for suffix in checkpoint_suffixes
-            for prefix in ("delta", "gamma", "theta", "iv", "dte")
-        ):
-            grouped["checkpoint_greeks"].add(column)
-            continue
-        if any(
-            column == f"{prefix}_at_{suffix}"
-            for suffix in checkpoint_suffixes
-            for prefix in ("time_value_pct", "theta_decay_pct")
-        ):
-            grouped["checkpoint_time_decay"].add(column)
-            continue
-        grouped["other"].add(column)
-
-    return {key: sorted(values) for key, values in grouped.items() if values}
-
-
-def _group_count_map(grouped_columns: dict[str, list[str]]) -> dict[str, int]:
-    """Return grouped missing-column counts for lightweight metrics/alerts."""
-    return {group: len(columns) for group, columns in grouped_columns.items()}
-
-
-_WINDOW_FEATURE_COLUMNS: tuple[str, ...] = (
-    "window_call_put_imbalance_1h",
-    "window_sweep_ratio_1h",
-    "window_flow_count_1h",
-    "window_call_put_imbalance_1d",
-    "window_sweep_ratio_1d",
-    "window_dp_volume_1d",
-    "window_call_put_ratio_1d",
-    "window_call_put_imbalance_1w",
-    "window_sweep_ratio_1w",
-    "window_call_put_ratio_1w",
-)
-
-
-def _window_feature_select_expressions(available_columns: set[str]) -> str:
-    expressions: list[str] = []
-    for column in _WINDOW_FEATURE_COLUMNS:
-        if column in available_columns:
-            expressions.append(f"COALESCE(p.{column}, 0.0) as {column}")
-        else:
-            expressions.append(f"0.0 as {column}")
-    return ",\n            ".join(expressions)
 
 
 from orion.ml.heber_utils import coerce_dataframe as _coerce_dataframe
@@ -782,8 +648,7 @@ class BucketExitClassifier:
 
         if bucket in self.models:
             return self._ml_predict(features, bucket)
-        else:
-            return self._heuristic_predict(features)
+        return self._heuristic_predict(features)
 
     def _ml_predict(self, features: ExitFeatures, bucket: str) -> ExitPrediction:
         """ML-based prediction."""
@@ -936,13 +801,13 @@ class BucketExitClassifier:
         if features.bucket == "0DTE":
             if time_pct >= 0.8:  # Last 20% of allowed hold time
                 return 0.5
-            elif time_pct >= 0.6:
+            if time_pct >= 0.6:
                 return 0.3
         else:
             # Other buckets: gentle time pressure
             if time_pct >= 0.9:
                 return 0.3
-            elif time_pct >= 0.75:
+            if time_pct >= 0.75:
                 return 0.1
 
         return 0.0
@@ -1057,8 +922,8 @@ async def train_bucket_exit_classifier(
     if auc >= 0.55:  # Only save if better than random
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         model_path = MODEL_DIR / f"{bucket}_exit.pkl"
-        with open(model_path, "wb") as f:
-            pickle.dump(model_data, f)
+        async with aiofiles.open(model_path, "wb") as f:
+            await f.write(pickle.dumps(model_data))
         logger.info(f"Saved exit model to {model_path}")
     else:
         logger.warning(f"Exit model AUC too low ({auc:.3f}), not saving {bucket}")

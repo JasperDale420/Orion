@@ -1,15 +1,14 @@
 import asyncio
 import uuid
+from collections import deque
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 
 from alpaca.trading.enums import OrderSide, TimeInForce
+
 from orion.config import risk_settings, system_settings
-from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-from orion.connectors.alpaca_options_connector import AlpacaOptionsConnector
-from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
 from orion.core.enums import DecisionStatus
 from orion.core.errors import ErrorCode
 from orion.execution.rate_limiter import get_order_rate_limiter
@@ -27,47 +26,28 @@ logger = setup_struct_logger(__name__)
 class ExecutionEngine:
     """
     Translates Agent decisions into broker orders.
+
+    Trading is routed through Data Gateway. Direct Alpaca connectors
+    have been archived. The engine operates in no-op mode until
+    Data Gateway trading proxy is integrated.
     """
 
     def __init__(self) -> None:
-        # Load keys from SystemSettings
-        api_key = system_settings.alpaca_api_key
-        secret_key = system_settings.alpaca_secret_key
-
         # Initialize Risk Manager (autoloads RiskConfig from env)
         from orion.execution.risk_manager import RiskManager
 
         self.risk_manager = RiskManager()
 
-        if not api_key or not secret_key:
-            logger.warning(
-                "Alpaca Credentials missing. ExecutionEngine disabled.",
-                extra={"event_type": "EXECUTION_INIT_WARNING", "error_code": ErrorCode.PROVIDER_AUTH_FAILED.value},
-            )
-            self.connector = None
-            self.options_connector = None
-            self.market_connector = None
-        else:
-            self.connector = AlpacaTradingConnector(settings=system_settings)
-            self.options_connector = AlpacaOptionsConnector(settings=system_settings)
-            # Use same keys for market data
-            self.market_connector = AlpacaMarketConnector(api_key=api_key, secret_key=secret_key)
-
-            # Wire up correlation-aware sizing if enabled
-            if risk_settings.correlation_size_scaling:
-                from orion.execution.correlation_adjuster import CorrelationAdjuster
-
-                adjuster = CorrelationAdjuster(market_connector=self.market_connector)
-                self.risk_manager.set_correlation_adjuster(adjuster)
-                logger.info(
-                    "Correlation-aware sizing enabled",
-                    extra={"event": "correlation_sizing_enabled", "threshold": risk_settings.correlation_threshold},
-                )
-
-            # Sync Risk State
-            # self.risk_manager.sync_with_broker(self.connector)
-
-        from collections import deque
+        # Trading connectors are pending Data Gateway integration.
+        # The engine operates in safe no-op mode: decisions are evaluated
+        # and logged but no orders are submitted.
+        logger.info(
+            "ExecutionEngine initialized in no-op mode pending Data Gateway trading integration",
+            extra={"event_type": "EXECUTION_INIT_NOOP"},
+        )
+        self.connector = None
+        self.options_connector = None
+        self.market_connector = None
 
         self.order_history = deque(maxlen=20)
         self.last_positions_snapshot_ts: datetime | None = None
@@ -329,12 +309,7 @@ class ExecutionEngine:
 
         # Data Lag
         now_utc = datetime.now(UTC)
-        cand_ts = (
-            candidate.timestamp_utc.replace(tzinfo=UTC)
-            if candidate.timestamp_utc.tzinfo is None
-            else candidate.timestamp_utc
-        )
-        lag = (now_utc - cand_ts).total_seconds()
+        lag = (now_utc - ensure_utc(candidate.timestamp_utc)).total_seconds()
 
         if lag > system_settings.max_data_lag_seconds:
             logger.critical(
@@ -382,12 +357,13 @@ class ExecutionEngine:
         return side, float(qty), round(limit_price, 2)
 
     def _check_circuit_breaker(self) -> bool:
-        if len(self.order_history) > 0:
-            failures = self.order_history.count(False)
-            rate = failures / len(self.order_history)
-            if rate > 0.03:
-                logger.critical("execution_blocked_error_rate", error_rate=rate, limit=0.03)
-                return True
+        if not self.order_history:
+            return False
+        failures = self.order_history.count(False)
+        rate = failures / len(self.order_history)
+        if rate > 0.03:
+            logger.critical("execution_blocked_error_rate", error_rate=rate, limit=0.03)
+            return True
         return False
 
     async def _submit_order(self, decision: Any, candidate: Any, side: Any, qty: float, limit_price: float) -> None:
@@ -818,11 +794,8 @@ class ExecutionEngine:
 
             # Only remove from pending orders when fully filled
             if not is_partial:
-                if client_oid:
-                    await self._remove_pending_order_compat(client_oid)
-                # Clean up tracker
-                if order_id in self._partial_fill_tracker:
-                    del self._partial_fill_tracker[order_id]
+                await self._remove_pending_order_compat(client_oid)
+                self._partial_fill_tracker.pop(order_id, None)
 
             await self._persist_fill_record(fill)
             await self._mark_fill_processed(order_id, client_oid=client_oid, ticker=ticker, qty=incremental_qty)
@@ -929,33 +902,6 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Failed to check processed fills for {order_id}: {e}")
             return False  # Fail Safe - assume not processed to avoid skipping fills
-
-    @db_retry
-    async def _persist_order(self, order_payload: dict) -> None:
-        """
-        Save order submission details to DB.
-        """
-
-        async def save_order(session: Any) -> None:
-            from datetime import datetime
-
-            from orion.storage.models_execution import OrderSubmission
-
-            order_record = OrderSubmission(
-                order_id=order_payload.get("order_id"),
-                ticker=order_payload.get("ticker"),
-                qty=order_payload.get("qty"),
-                side=order_payload.get("side"),
-                order_type=order_payload.get("order_type"),
-                limit_price=order_payload.get("limit_price"),
-                stop_price=order_payload.get("stop_price"),
-                time_in_force=order_payload.get("time_in_force"),
-                submitted_at_utc=datetime.now(UTC),
-                broker_response=order_payload,
-            )
-            session.add(order_record)
-
-        await db_write(save_order)
 
     @db_retry
     async def _mark_fill_processed(

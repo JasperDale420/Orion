@@ -1690,7 +1690,7 @@ def _get_darkpool_volume_from_heber(ticker: str, entry_ts: datetime, window_minu
         return None
 
     total = pd.to_numeric(in_window[size_col], errors="coerce").sum()
-    if pd.isna(total) or float(total) == 0.0:
+    if pd.isna(total) or math.isclose(float(total), 0.0, abs_tol=1e-9):
         return None
 
     return float(total)

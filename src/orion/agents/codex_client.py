@@ -176,7 +176,7 @@ async def run_codex_completion(
                             tool_name = tc["function"]["name"]
                             tool_args = json.loads(tc["function"]["arguments"])
 
-                            logger.info(f"LLM executing tool: {tool_name}", extra={"args": tool_args})
+                            logger.info(f"LLM executing tool: {tool_name}", extra={"tool_args": tool_args})
 
                             result_str = await execute_tool(tool_name, tool_args)
 

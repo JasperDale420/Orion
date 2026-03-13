@@ -153,13 +153,15 @@ class HeberReader:
         if df.empty:
             return df
 
-        if "bar_start_ts" in df.columns and "ts_event" not in df.columns:
-            df = df.copy()
-            df["ts_event"] = pd.to_datetime(df["bar_start_ts"], utc=True, errors="coerce")
+        needs_ts_event = "bar_start_ts" in df.columns and "ts_event" not in df.columns
+        needs_symbol = "instrument_key" in df.columns and "symbol" not in df.columns
 
-        if "instrument_key" in df.columns and "symbol" not in df.columns:
+        if needs_ts_event or needs_symbol:
             df = df.copy()
-            df["symbol"] = df["instrument_key"].astype(str).str.split(":").str[-1]
+            if needs_ts_event:
+                df["ts_event"] = pd.to_datetime(df["bar_start_ts"], utc=True, errors="coerce")
+            if needs_symbol:
+                df["symbol"] = df["instrument_key"].astype(str).str.split(":").str[-1]
 
         return df
 

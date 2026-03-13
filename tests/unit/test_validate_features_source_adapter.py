@@ -22,13 +22,6 @@ def test_prefer_heber_source_from_env_false_values(
     assert validate_features._prefer_heber_source_from_env() is False
 
 
-def test_normalize_source_id_no_longer_maps_legacy_aliases() -> None:
-    assert validate_features._normalize_source_id("silver_uw_flow") == "silver_uw_flow"
-    assert validate_features._normalize_source_id("silver_uw_darkpool") == "silver_uw_darkpool"
-    assert validate_features._normalize_source_id("silver_alpaca_bars") == "silver_alpaca_bars"
-    assert validate_features._normalize_source_id("flow_alerts") == "flow_alerts"
-
-
 @pytest.mark.asyncio
 async def test_fetch_source_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_heber(*, source: str, label_start_ts: datetime | None, label_end_ts: datetime | None):

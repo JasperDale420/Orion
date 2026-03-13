@@ -16,8 +16,7 @@ class ProposalBuilder:
 
     def __init__(self, output_dir: str = "proposals"):
         self.output_dir = output_dir
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+        os.makedirs(self.output_dir, exist_ok=True)
 
     def _validate_proposal(self, proposal: dict[str, Any]) -> tuple[bool, list[str]]:
         """
@@ -47,7 +46,7 @@ class ProposalBuilder:
             if "recommendation" not in proposal:
                 missing.append("recommendation")
 
-        return (len(missing) == 0), missing
+        return (not missing), missing
 
     def save_proposal(
         self,

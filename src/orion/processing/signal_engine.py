@@ -83,19 +83,12 @@ class SignalEngine:
         logger.info("Initializing SignalEngine...")
         await self.feature_engine.hydrate_history()
 
-        # Initialize market connector for price discovery
-        try:
-            from orion.config import system_settings
-            from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-
-            if system_settings.alpaca_api_key and system_settings.alpaca_secret_key:
-                self._market_connector = AlpacaMarketConnector(
-                    api_key=system_settings.alpaca_api_key,
-                    secret_key=system_settings.alpaca_secret_key,
-                )
-                logger.info("SignalEngine market connector initialized")
-        except Exception as e:
-            logger.warning(f"Failed to initialize market connector: {e}")
+        # Market connector for price discovery — Alpaca connectors archived,
+        # Data Gateway integration pending. Price discovery falls back to
+        # candidate execution_params when _market_connector is None.
+        logger.info(
+            "SignalEngine: market connector unavailable (Alpaca archived), price discovery will use candidate params",
+        )
 
     @staticmethod
     def _normalize_put_call(option_type: Any) -> str | None:

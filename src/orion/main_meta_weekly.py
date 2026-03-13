@@ -16,6 +16,8 @@ import json
 import sys
 from datetime import datetime
 
+import aiofiles
+
 from orion.agents.meta_search_agent import MetaSearchAgent
 from orion.shared.logger import setup_struct_logger
 
@@ -84,8 +86,8 @@ async def run_once(dry_run: bool, output_path: str | None) -> None:
 
         # Save to file if requested
         if output_path:
-            with open(output_path, "w") as f:
-                json.dump(summary, f, indent=2, default=str)
+            async with aiofiles.open(output_path, "w") as f:
+                await f.write(json.dumps(summary, indent=2, default=str))
             logger.info(f"Summary saved to {output_path}")
 
     except Exception as e:
@@ -119,8 +121,8 @@ async def run_scheduled() -> None:
 
                 # Save summary
                 output_path = f"artifacts/reports/weekly_evolution_{now.strftime('%Y-%m-%d')}.json"
-                with open(output_path, "w") as f:
-                    json.dump(summary, f, indent=2, default=str)
+                async with aiofiles.open(output_path, "w") as f:
+                    await f.write(json.dumps(summary, indent=2, default=str))
 
                 logger.info(f"Weekly evolution completed. Summary saved to {output_path}")
 

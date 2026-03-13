@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import re
 import signal
@@ -10,8 +11,6 @@ import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
-
-import contextlib
 
 from sqlalchemy import select
 

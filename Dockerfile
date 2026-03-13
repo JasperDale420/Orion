@@ -32,7 +32,7 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy dependency manifest
-COPY pyproject.toml ./
+COPY pyproject.toml poetry.lock ./
 
 # Install dependencies (no devdeps)
 RUN poetry config virtualenvs.create false \

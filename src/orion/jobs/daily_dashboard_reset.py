@@ -19,7 +19,6 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.config import system_settings
-from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,42 +46,14 @@ async def call_api(url: str, method: str = "POST", params: dict = None) -> None:
 async def run_once() -> None:
     logger.info("Starting Daily Dashboard Reset Job")
 
-    # 1. Fetch equity from Alpaca
-    logger.info("Initializing AlpacaTradingConnector to fetch equity...")
-    try:
-        alpaca = AlpacaTradingConnector(settings=system_settings)
-        account = alpaca.client.get_account()
-        equity_str = getattr(account, "equity", "0")
-        equity = float(equity_str)
-        logger.info(f"Fetched account equity: ${equity:.2f}")
-    except Exception as e:
-        logger.error(f"Failed to fetch account equity from Alpaca: {e}")
-        sys.exit(1)
-
-    # 2. Reset Daily P&L and Trade Counts
-    reset_url = f"{ORION_API_URL.rstrip('/')}/dashboard/reset"
-    try:
-        logger.info("Calling dashboard reset endpoint...")
-        await call_api(reset_url)
-    except Exception as e:
-        logger.error(f"Failed to reset dashboard: {e}")
-        sys.exit(1)
-
-    # 3. Set Starting Equity
-    equity_url = f"{ORION_API_URL.rstrip('/')}/dashboard/equity"
-    try:
-        logger.info(f"Setting dashboard equity to ${equity:.2f}...")
-        await call_api(equity_url, params={"equity": equity})
-    except Exception as e:
-        logger.error(f"Failed to set dashboard equity: {e}")
-        sys.exit(1)
-
-    logger.info("Daily Dashboard Reset Job completed successfully.")
+    # Fetch equity — direct Alpaca connector archived, Data Gateway pending
+    # TODO: Fetch equity via Data Gateway when trading proxy is integrated
+    logger.error("Cannot fetch account equity: trading connectors archived, Data Gateway trading proxy pending")
+    sys.exit(1)
 
 
 async def run_scheduled() -> None:
     """Run in scheduled mode - execute every weekday at 9:00 AM EST."""
-    import asyncio
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -102,18 +73,11 @@ async def run_scheduled() -> None:
                 logger.info("Weekday 9:00 AM EST - Starting daily dashboard reset")
                 # Don't sys.exit on failure in scheduled mode
                 try:
-                    # Abstracted the logic from run_once into a safe call
-                    alpaca = AlpacaTradingConnector(settings=system_settings)
-                    account = alpaca.client.get_account()
-                    equity = float(getattr(account, "equity", "0"))
-
-                    reset_url = f"{ORION_API_URL.rstrip('/')}/dashboard/reset"
-                    await call_api(reset_url)
-
-                    equity_url = f"{ORION_API_URL.rstrip('/')}/dashboard/equity"
-                    await call_api(equity_url, params={"equity": equity})
-
-                    logger.info("Scheduled dashboard reset completed successfully.")
+                    # Equity fetching via Alpaca archived — Data Gateway pending
+                    # TODO: Fetch equity via Data Gateway when trading proxy is integrated
+                    logger.error(
+                        "Scheduled reset skipped: trading connectors archived, Data Gateway trading proxy pending"
+                    )
                 except Exception as e:
                     logger.error(f"Scheduled dashboard reset failed: {e}", exc_info=True)
 

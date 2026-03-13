@@ -1,20 +1,15 @@
 """Orion Connectors.
 
 Connectors for external data sources:
-- Alpaca: Market data and trading
-- Gateway: Centralized data via Data-Gateway
+- Gateway: Centralized data via Data-Gateway (market data + trading)
 
-DEPRECATED: legacy UW connectors archived under archive/2026-02-05_gateway-heber-migration/.
-Data-Gateway now handles flow/darkpool ingestion -> Heber.
+All Alpaca API interactions are routed through Data Gateway.
+Direct Alpaca connectors archived to archive/connectors/.
 """
 
-from .alpaca_market_connector import AlpacaMarketConnector
-from .alpaca_stream_connector import AlpacaStreamConnector
 from .gateway_stream_client import GatewayStreamClient, create_gateway_stream_client
 
 __all__ = [
-    "AlpacaMarketConnector",
-    "AlpacaStreamConnector",
     "GatewayStreamClient",
     "create_gateway_stream_client",
 ]

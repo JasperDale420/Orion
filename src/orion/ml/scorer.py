@@ -40,15 +40,24 @@ ALL_TARGETS = ["hit_target_50", "avoid_stop", "hit_target_100", "quick_winner"]
 def get_trade_bucket(dte: int | None) -> str:
     """Classify a flow into trade bucket based on DTE."""
     if dte is None:
-        return "SWING"  # Default bucket
+        return "SWING"
     if dte <= 0:
         return "0DTE"
-    elif dte <= 3:
+    if dte <= 3:
         return "SHORT_SWING"
-    elif dte <= 14:
+    if dte <= 14:
         return "SWING"
-    else:
-        return "POSITION"
+    return "POSITION"
+
+
+def _parse_dte_and_bucket(flow: dict[str, Any]) -> tuple[int | None, str]:
+    dte = flow.get("dte")
+    if isinstance(dte, str):
+        try:
+            dte = int(dte)
+        except ValueError:
+            dte = None
+    return dte, get_trade_bucket(dte)
 
 
 class MLScorer:
@@ -141,16 +150,6 @@ class MLScorer:
             )
 
     @staticmethod
-    def _safe_div(numerator: float, denominator: float, default: float = 0) -> float:
-        """Safe division that returns default when denominator is zero."""
-        return numerator / denominator if denominator > 0 else default
-
-    @staticmethod
-    def _flow_float(flow: dict[str, Any], key: str) -> float:
-        """Extract a float value from flow data, defaulting to 0."""
-        return float(flow.get(key) or 0)
-
-    @staticmethod
     def _build_feature_map(flow: dict[str, Any]) -> dict[str, float]:
         """Build the full mapping from flow fields to ML feature names."""
         import math
@@ -238,6 +237,30 @@ class MLScorer:
             "trend_regime_at_entry": 0,
             "vix_regime_at_entry": 0,
             "market_tide_direction": 0,
+            # Equity-level Gold features (populated by feature_store)
+            # Momentum features
+            "momentum_1d": get("momentum_1d"),
+            "momentum_5d": get("momentum_5d"),
+            "momentum_10d": get("momentum_10d"),
+            "momentum_20d": get("momentum_20d"),
+            "rsi_14": get("rsi_14"),
+            "rsi_28": get("rsi_28"),
+            "macd": get("macd"),
+            "macd_signal": get("macd_signal"),
+            # Volatility features
+            "vol_5d": get("vol_5d"),
+            "vol_20d": get("vol_20d"),
+            "vol_ratio_5_20": get("vol_ratio_5_20"),
+            "atr_14": get("atr_14"),
+            "bb_width_20": get("bb_width_20"),
+            "price_zscore_20d": get("price_zscore_20d"),
+            # Flow features
+            "total_premium_24h": get("total_premium_24h"),
+            "call_put_premium_ratio": get("call_put_premium_ratio"),
+            "net_premium_24h": get("net_premium_24h"),
+            "sweep_count_24h": get("sweep_count_24h"),
+            "net_bull_premium_lr": get("net_bull_premium_lr"),
+            "sweep_volume_share": get("sweep_volume_share"),
         }
 
     def extract_features(self, flow: dict[str, Any], bucket: str | None = None) -> dict[str, float]:
@@ -246,13 +269,7 @@ class MLScorer:
         Uses feature names from the model if available.
         """
         if bucket is None:
-            dte = flow.get("dte")
-            if isinstance(dte, str):
-                try:
-                    dte = int(dte)
-                except ValueError:
-                    dte = None
-            bucket = get_trade_bucket(dte)
+            _, bucket = _parse_dte_and_bucket(flow)
 
         feature_names = self.feature_names.get(bucket, [])
         feature_map = self._build_feature_map(flow)
@@ -269,13 +286,7 @@ class MLScorer:
         Higher score = more likely to be a profitable trade.
         """
         # Determine trade bucket
-        dte = flow.get("dte")
-        if isinstance(dte, str):
-            try:
-                dte = int(dte)
-            except ValueError:
-                dte = None
-        bucket = get_trade_bucket(dte)
+        _, bucket = _parse_dte_and_bucket(flow)
 
         # Check if we have a model for this bucket
         if bucket not in self.models:
@@ -414,20 +425,17 @@ class MLScorer:
         return self.score(flow) >= threshold
 
     async def score_enriched(self, flow: dict[str, Any]) -> float:
-        """
-        Score a flow with full feature enrichment.
+        """Score a flow using pre-computed features from Heber Gold.
 
-        This method enriches the flow with all features from the database
-        (GEX, market tide, regimes, Greeks, etc.) before scoring.
-        This ensures feature parity between training and inference.
+        Reads the same Gold datasets used for training (meta_label_features +
+        equity Gold), ensuring zero train/inference skew by construction.
 
-        Use this for real-time scoring where flow data is incomplete.
+        Falls back to raw flow fields if Gold lookup fails.
         """
         from datetime import datetime
 
-        from orion.ml.flow_enricher import enrich_flow_for_scoring
+        from orion.ml.feature_store import get_scoring_features
 
-        # Extract basic flow info
         ticker = flow.get("ticker", "")
         entry_ts = flow.get("timestamp_utc") or flow.get("flow_ts_utc") or datetime.now(UTC)
         if isinstance(entry_ts, str):
@@ -435,43 +443,30 @@ class MLScorer:
 
             entry_ts = parse(entry_ts)
 
-        put_call = flow.get("put_call", "C")
-        strike = flow.get("strike") or flow.get("strike_price")
-        underlying = flow.get("underlying_price")
-        dte = flow.get("dte")
-        premium = flow.get("premium_usd")
-        event_id = flow.get("event_id")
-        option_chain = flow.get("option_chain") or flow.get("option_symbol")
-        aggressor = flow.get("aggressor")
-        is_sweep = flow.get("is_sweep") or flow.get("is_sweep") == "true"
-        expiry = flow.get("expiry")  # Pass expiry for DTE calculation
+        event_id = flow.get("event_id") or ""
 
         try:
-            # Enrich with all database features
-            enriched = await enrich_flow_for_scoring(
+            gold_features = await get_scoring_features(
+                event_id=event_id,
                 ticker=ticker,
                 entry_ts=entry_ts,
-                put_call=put_call,
-                strike=strike,
-                underlying_price=underlying,
-                dte=dte,
-                premium_usd=premium,
-                event_id=event_id,
-                option_chain=option_chain,
-                aggressor=aggressor,
-                is_sweep=is_sweep,
-                expiry=expiry,  # Pass expiry for DTE calculation
             )
 
+            # Merge: flow's own fields as base, Gold features overlay
+            merged = dict(flow)
+            for key, val in gold_features.items():
+                if val is not None:
+                    merged[key] = val
+
+            non_null = sum(1 for v in gold_features.values() if v is not None)
             logger.debug(
-                f"Enriched flow for {ticker}: {sum(1 for v in enriched.values() if v is not None)} non-null features",
-                extra={"event": "flow_enriched", "ticker": ticker},
+                f"Loaded {non_null} Gold features for {ticker}",
+                extra={"event": "feature_store_loaded", "ticker": ticker, "feature_count": non_null},
             )
 
-            # Score with enriched features
-            return self.score(enriched)
+            return self.score(merged)
         except Exception as e:
-            logger.warning(f"Flow enrichment failed for {ticker}: {e}, using raw features")
+            logger.warning(f"Feature store lookup failed for {ticker}: {e}, using raw features")
             return self.score(flow)
 
     def score_batch(self, flows: list[dict[str, Any]]) -> list[float]:

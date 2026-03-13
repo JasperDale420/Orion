@@ -50,13 +50,11 @@ def _parse_gateway_date(raw: Any) -> date | None:
     if isinstance(raw, date):
         return raw
     if isinstance(raw, str):
-        from datetime import datetime as dt
-
         value = raw.strip()
         if not value:
             return None
         try:
-            return dt.strptime(value[:10], "%Y-%m-%d").date()
+            return datetime.strptime(value[:10], "%Y-%m-%d").date()
         except ValueError:
             return None
     return None
@@ -155,37 +153,6 @@ async def _process_single_earnings_record(ticker: str, row: dict[str, Any]) -> i
         return 0
 
 
-def _parse_report_date(report_date_raw: Any) -> date:
-    """Parse report date from string or date object."""
-    from datetime import datetime as dt
-
-    if isinstance(report_date_raw, str):
-        return dt.strptime(report_date_raw, "%Y-%m-%d").date()
-    return report_date_raw
-
-
-def _extract_announce_time(e: Any, UNSET: Any) -> str | None:  # noqa: N803
-    """Extract announce time from earnings record."""
-    if hasattr(e, "additional_properties") and e.additional_properties:
-        return e.additional_properties.get("report_time")
-
-    if hasattr(e, "report_time") and e.report_time and not isinstance(e.report_time, type(UNSET)):
-        return str(e.report_time.value) if hasattr(e.report_time, "value") else str(e.report_time)
-
-    return None
-
-
-def _extract_eps_estimate(e: Any, UNSET: Any) -> float | None:  # noqa: N803
-    """Extract EPS estimate from earnings record."""
-    if not hasattr(e, "street_mean_est") or not e.street_mean_est:
-        return None
-
-    try:
-        return float(e.street_mean_est) if not isinstance(e.street_mean_est, type(UNSET)) else None
-    except (ValueError, TypeError):
-        return None
-
-
 async def backfill_all_earnings() -> dict[str, int]:
     """Backfill earnings for all unique tickers via Data Gateway."""
     results = {"tickers": 0, "earnings": 0, "errors": 0}
@@ -199,7 +166,6 @@ async def backfill_all_earnings() -> dict[str, int]:
             results["tickers"] += 1
             if (i + 1) % 50 == 0:
                 logger.info(f"Progress: {i + 1}/{len(tickers)} tickers, {results['earnings']} earnings")
-            # Rate limit: 1 request per 100ms
             await asyncio.sleep(0.5)  # Rate limit: 2 requests per second
         except Exception as e:
             logger.debug(f"Failed to backfill {ticker}: {e}")
@@ -258,25 +224,6 @@ async def _get_backfill_tickers_from_heber_gold() -> list[str]:
     return sorted(tickers)
 
 
-async def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: str) -> None:
-    """Upsert a single earnings record from API response object."""
-    from orion.unusualwhales.types import UNSET
-
-    ticker = getattr(earnings_obj, "ticker", None) or getattr(earnings_obj, "symbol", None)
-    if not ticker or isinstance(ticker, type(UNSET)):
-        return
-
-    await _upsert_earnings_direct(
-        ticker=str(ticker),
-        report_date=report_date,
-        announce_time=announce_time,
-        eps_estimate=getattr(earnings_obj, "eps_estimate", None),
-        eps_actual=getattr(earnings_obj, "eps_actual", None),
-        revenue_estimate=getattr(earnings_obj, "revenue_estimate", None),
-        revenue_actual=getattr(earnings_obj, "revenue_actual", None),
-    )
-
-
 async def _upsert_earnings_row(row: dict[str, Any], fallback_announce_time: str) -> None:
     ticker = (row.get("symbol") or row.get("ticker") or "").strip().upper()
     if not ticker:
@@ -315,8 +262,6 @@ async def _upsert_earnings_direct(
     revenue_actual: int | None = None,
 ) -> None:
     """Compatibility shim while earnings storage is centralized in Gateway/Heber."""
-    _ = (ticker, report_date, announce_time, eps_estimate, eps_actual, revenue_estimate, revenue_actual)
-    return None
 
 
 async def get_earnings_for_ticker(ticker: str, as_of_date: date) -> dict[str, Any]:

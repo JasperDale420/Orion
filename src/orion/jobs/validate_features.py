@@ -639,10 +639,6 @@ def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | N
     return None
 
 
-def _normalize_source_id(source: str) -> str:
-    return source
-
-
 def _label_date_bounds(
     min_date: date | None,
     max_date: date | None,
@@ -688,20 +684,14 @@ def _heber_read_kwargs(
     label_start_ts: datetime | None,
     label_end_ts: datetime | None,
 ) -> dict[str, Any]:
-    source_id = _normalize_source_id(source)
     asof_time = datetime.now(UTC)
-    if source_id == SOURCE_BARS:
+    if source == SOURCE_BARS:
         return {
             "symbols": [],
             "asof_time": asof_time,
             "start_time": label_start_ts,
             "end_time": label_end_ts,
             "timeframe": "1m",
-        }
-    if source_id == SOURCE_MARKET_TIDE:
-        return {
-            "asof_time": asof_time,
-            "start_time": label_start_ts,
         }
     return {
         "asof_time": asof_time,
@@ -715,8 +705,7 @@ async def _fetch_source_summary_from_heber(
     label_start_ts: datetime | None,
     label_end_ts: datetime | None,
 ) -> dict[str, Any] | None:
-    source_id = _normalize_source_id(source)
-    spec = _AUDIT_SOURCE_SPECS[source_id]
+    spec = _AUDIT_SOURCE_SPECS[source]
     method_name = spec.get("heber_method")
     if not method_name:
         return None
@@ -726,13 +715,13 @@ async def _fetch_source_summary_from_heber(
     if method is None:
         return None
 
-    kwargs = _heber_read_kwargs(source_id, label_start_ts, label_end_ts)
+    kwargs = _heber_read_kwargs(source, label_start_ts, label_end_ts)
     try:
         df = await asyncio.to_thread(method, **kwargs)
     except Exception as exc:
         logger.warning(
             "audit_source_heber_read_failed",
-            source=source_id,
+            source=source,
             method=method_name,
             error=str(exc),
         )
@@ -747,7 +736,6 @@ async def _fetch_source_summary_from_heber(
 
 
 async def _fetch_source_summary_from_local_db(*, source: str) -> dict[str, Any]:
-    _ = _normalize_source_id(source)
     return {"min_date": None, "max_date": None, "tickers": 0, "backend": "local_db_disabled"}
 
 
@@ -758,14 +746,13 @@ async def _fetch_source_summary(
     label_end_ts: datetime | None,
     prefer_heber: bool,
 ) -> dict[str, Any]:
-    source_id = _normalize_source_id(source)
-    if source_id not in _AUDIT_SOURCE_SPECS:
-        logger.warning("audit_source_unknown_source_id", source=source_id)
+    if source not in _AUDIT_SOURCE_SPECS:
+        logger.warning("audit_source_unknown_source_id", source=source)
         return {"min_date": None, "max_date": None, "tickers": 0, "backend": "source_unavailable"}
 
     if prefer_heber:
         heber_summary = await _fetch_source_summary_from_heber(
-            source=source_id,
+            source=source,
             label_start_ts=label_start_ts,
             label_end_ts=label_end_ts,
         )

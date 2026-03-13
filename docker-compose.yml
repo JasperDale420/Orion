@@ -154,9 +154,6 @@ services:
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      ALPACA_API_KEY: ${ALPACA_API_KEY}
-      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY}
-      ALPACA_PAPER: ${ALPACA_PAPER}
       ORION_RUN_ID: docker_persistent_exec
       ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE: "false"
     command: [ "python", "-m", "orion.main_execution" ]
@@ -183,9 +180,6 @@ services:
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      ALPACA_API_KEY: ${ALPACA_API_KEY}
-      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY}
-      ALPACA_PAPER: ${ALPACA_PAPER}
       ORION_RUN_ID: docker_position_monitor
       ORION_MODEL_DIR: /app/models
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
@@ -278,9 +272,6 @@ services:
         condition: service_healthy
     environment:
       <<: *orion-env
-      ALPACA_API_KEY: ${ALPACA_API_KEY}
-      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY}
-      ALPACA_PAPER: ${ALPACA_PAPER}
       ORION_API_KEY: ${ORION_API_KEY}
       ORION_API_URL: http://mcp-server:8001
     command: [ "python", "-m", "orion.jobs.daily_dashboard_reset", "--scheduled" ]
