@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Logging test stability** (2026-03-13):
+  - Fixed `tests/unit/test_logging.py` — both tests failed when run after the full test suite due to pytest log-capture routing being non-deterministic (structlog output lands in `caplog` or `capsys` depending on which other tests ran first). Tests now check both capture channels to find the JSON log line.
+  - Fixed `src/orion/shared/logger.py` — removed four unused imports (`clear_context`, `log_error`, `log_retry`, `unbind_context`) and corrected the `structlog` forward reference in the return type annotation (now properly guarded under `TYPE_CHECKING`). Resolves 5 ruff F401/F821 lint violations.
+
 - **Ignore agent temporary database artifacts** (2026-03-10):
   - Added `.agents/tmp/**/*.db`, `.agents/tmp/**/*.db-journal`, and `.agents/tmp/**/*.db-wal` to `.gitignore` to keep `.agents/tmp` runtime databases out of git history.
 - **Pre-commit detect-secrets false positives** (2026-03-10):
