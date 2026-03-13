@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -57,30 +57,30 @@ class TickerOptionsVolume:
             bid side. Example: 314160.
     """
 
-    avg_30_day_call_volume: Union[Unset, str] = UNSET
-    avg_30_day_put_volume: Union[Unset, str] = UNSET
-    avg_3_day_call_volume: Union[Unset, str] = UNSET
-    avg_3_day_put_volume: Union[Unset, str] = UNSET
-    avg_7_day_call_volume: Union[Unset, str] = UNSET
-    avg_7_day_put_volume: Union[Unset, str] = UNSET
-    bearish_premium: Union[Unset, str] = UNSET
-    bullish_premium: Union[Unset, str] = UNSET
-    call_open_interest: Union[Unset, int] = UNSET
-    call_premium: Union[Unset, str] = UNSET
-    call_volume: Union[Unset, int] = UNSET
-    call_volume_ask_side: Union[Unset, int] = UNSET
-    call_volume_bid_side: Union[Unset, int] = UNSET
-    date: Union[Unset, str] = UNSET
-    net_call_premium: Union[Unset, str] = UNSET
-    net_put_premium: Union[Unset, str] = UNSET
-    put_open_interest: Union[Unset, int] = UNSET
-    put_premium: Union[Unset, str] = UNSET
-    put_volume: Union[Unset, int] = UNSET
-    put_volume_ask_side: Union[Unset, int] = UNSET
-    put_volume_bid_side: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    avg_30_day_call_volume: Unset | str = UNSET
+    avg_30_day_put_volume: Unset | str = UNSET
+    avg_3_day_call_volume: Unset | str = UNSET
+    avg_3_day_put_volume: Unset | str = UNSET
+    avg_7_day_call_volume: Unset | str = UNSET
+    avg_7_day_put_volume: Unset | str = UNSET
+    bearish_premium: Unset | str = UNSET
+    bullish_premium: Unset | str = UNSET
+    call_open_interest: Unset | int = UNSET
+    call_premium: Unset | str = UNSET
+    call_volume: Unset | int = UNSET
+    call_volume_ask_side: Unset | int = UNSET
+    call_volume_bid_side: Unset | int = UNSET
+    date: Unset | str = UNSET
+    net_call_premium: Unset | str = UNSET
+    net_put_premium: Unset | str = UNSET
+    put_open_interest: Unset | int = UNSET
+    put_premium: Unset | str = UNSET
+    put_volume: Unset | int = UNSET
+    put_volume_ask_side: Unset | int = UNSET
+    put_volume_bid_side: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         avg_30_day_call_volume = self.avg_30_day_call_volume
 
         avg_30_day_put_volume = self.avg_30_day_put_volume
@@ -123,7 +123,7 @@ class TickerOptionsVolume:
 
         put_volume_bid_side = self.put_volume_bid_side
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if avg_30_day_call_volume is not UNSET:
@@ -172,7 +172,7 @@ class TickerOptionsVolume:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         avg_30_day_call_volume = d.pop("avg_30_day_call_volume", UNSET)
 
@@ -244,7 +244,7 @@ class TickerOptionsVolume:
         return ticker_options_volume
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

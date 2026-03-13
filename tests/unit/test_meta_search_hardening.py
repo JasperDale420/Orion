@@ -1,8 +1,9 @@
 import pytest
+from pydantic import ValidationError
+
 from orion.agents.meta_search_agent import MetaSearchAgent
 from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdit, SolverRiskConfig
 from orion.storage.models_solvers import SolverMetrics
-from pydantic import ValidationError
 
 
 @pytest.fixture

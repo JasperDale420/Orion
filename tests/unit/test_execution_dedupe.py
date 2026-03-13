@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.execution.execution_engine import ExecutionEngine
 
 

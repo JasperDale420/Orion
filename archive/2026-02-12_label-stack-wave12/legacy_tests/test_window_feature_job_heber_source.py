@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
-
 from orion.jobs.window_feature_job import WindowFeatureJob
 
 
 @pytest.mark.asyncio
 async def test_build_features_prefers_heber_without_local_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 2, 10, 15, 0, tzinfo=UTC)
     window_start = now - timedelta(minutes=5)
 
     flow_df = pd.DataFrame(
@@ -66,7 +65,7 @@ async def test_build_features_prefers_heber_without_local_fallback(monkeypatch: 
 async def test_build_features_returns_none_when_heber_empty_without_local_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 2, 10, 15, 0, tzinfo=UTC)
     window_start = now - timedelta(minutes=5)
 
     class _FakeReader:

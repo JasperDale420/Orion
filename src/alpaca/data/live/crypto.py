@@ -1,4 +1,4 @@
-from typing import Awaitable, Callable, Dict, Optional, Union
+from collections.abc import Awaitable, Callable
 
 from alpaca.common.enums import BaseURL
 from alpaca.data.enums import CryptoFeed
@@ -20,8 +20,8 @@ class CryptoDataStream(DataStream):
         secret_key: str,
         raw_data: bool = False,
         feed: CryptoFeed = CryptoFeed.US,
-        url_override: Optional[str] = None,
-        websocket_params: Optional[Dict] = None,
+        url_override: str | None = None,
+        websocket_params: dict | None = None,
     ) -> None:
         """
         Instantiates a WebSocket client for accessing live cryptocurrency data.
@@ -48,7 +48,7 @@ class CryptoDataStream(DataStream):
         )
 
     def subscribe_trades(
-        self, handler: Callable[[Union[Trade, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Trade | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to trades.
 
@@ -60,7 +60,7 @@ class CryptoDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["trades"])
 
     def subscribe_quotes(
-        self, handler: Callable[[Union[Quote, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Quote | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to quotes
 
@@ -72,7 +72,7 @@ class CryptoDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["quotes"])
 
     def subscribe_bars(
-        self, handler: Callable[[Union[Bar, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Bar | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to minute bars
 
@@ -84,7 +84,7 @@ class CryptoDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["bars"])
 
     def subscribe_updated_bars(
-        self, handler: Callable[[Union[Bar, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Bar | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to updated minute bars
 
@@ -96,7 +96,7 @@ class CryptoDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["updatedBars"])
 
     def subscribe_daily_bars(
-        self, handler: Callable[[Union[Bar, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Bar | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to daily bars
 
@@ -108,7 +108,7 @@ class CryptoDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["dailyBars"])
 
     def subscribe_orderbooks(
-        self, handler: Callable[[Union[Orderbook, Dict]], Awaitable[None]], *symbols
+        self, handler: Callable[[Orderbook | dict], Awaitable[None]], *symbols
     ) -> None:
         """Subscribe to orderbooks
 

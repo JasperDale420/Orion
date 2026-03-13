@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.rag.indexer import IndexerService
 from orion.storage.models_solvers import MetaExperiment, Solver
 
@@ -25,7 +26,7 @@ async def test_index_meta_experiments():
             experiment_id="exp_123",
             description="Test Evolution",
             status="completed",
-            start_time_utc=datetime.now(timezone.utc),
+            start_time_utc=datetime.now(UTC),
             best_solver_id="sol_999",
         )
 

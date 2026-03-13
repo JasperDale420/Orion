@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+
 from orion.execution.position_manager import PositionManager
 from orion.storage.db import async_session_factory
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
@@ -44,7 +45,7 @@ def _decision(*, candidate_id: str, ticker: str, ts: datetime, limit_price: floa
 
 def test_add_position_uses_candidate_option_symbol_and_sets_entry_option_price() -> None:
     pm = PositionManager()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     candidate = _candidate(
         candidate_id="c-add",
         ticker="AAPL",
@@ -63,7 +64,7 @@ def test_add_position_uses_candidate_option_symbol_and_sets_entry_option_price()
 
 def test_create_position_prefers_candidate_option_symbol_over_evidence() -> None:
     pm = PositionManager()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     candidate = _candidate(
         candidate_id="c-create",
         ticker="MSFT",
@@ -82,7 +83,7 @@ def test_create_position_prefers_candidate_option_symbol_over_evidence() -> None
 
 def test_add_position_keeps_multiple_contracts_for_same_ticker() -> None:
     pm = PositionManager()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     candidate_one = _candidate(
         candidate_id="c-1",
         ticker="AAPL",
@@ -108,7 +109,7 @@ def test_add_position_keeps_multiple_contracts_for_same_ticker() -> None:
 
 @pytest.mark.asyncio
 async def test_initialize_loads_more_than_fifty_open_positions(setup_test_db) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = []
     for idx in range(55):
         cid = f"cid-{idx:03d}"

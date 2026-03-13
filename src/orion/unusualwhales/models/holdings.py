@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -48,28 +48,28 @@ class Holdings:
         week_52_low (Union[Unset, str]): The 52 week low stock price of the ticker. Example: 124.17.
     """
 
-    avg30_volume: Union[Unset, str] = UNSET
-    bearish_premium: Union[Unset, str] = UNSET
-    bullish_premium: Union[Unset, str] = UNSET
-    call_premium: Union[Unset, str] = UNSET
-    call_volume: Union[Unset, int] = UNSET
-    close: Union[Unset, str] = UNSET
-    has_options: Union[Unset, bool] = UNSET
-    high: Union[Unset, str] = UNSET
-    low: Union[Unset, str] = UNSET
-    name: Union[Unset, str] = UNSET
-    open_: Union[Unset, str] = UNSET
-    prev_price: Union[Unset, str] = UNSET
-    put_premium: Union[Unset, str] = UNSET
-    put_volume: Union[Unset, int] = UNSET
-    sector: Union[Unset, MarketGeneralSector] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    volume: Union[Unset, int] = UNSET
-    week_52_high: Union[Unset, str] = UNSET
-    week_52_low: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    avg30_volume: Unset | str = UNSET
+    bearish_premium: Unset | str = UNSET
+    bullish_premium: Unset | str = UNSET
+    call_premium: Unset | str = UNSET
+    call_volume: Unset | int = UNSET
+    close: Unset | str = UNSET
+    has_options: Unset | bool = UNSET
+    high: Unset | str = UNSET
+    low: Unset | str = UNSET
+    name: Unset | str = UNSET
+    open_: Unset | str = UNSET
+    prev_price: Unset | str = UNSET
+    put_premium: Unset | str = UNSET
+    put_volume: Unset | int = UNSET
+    sector: Unset | MarketGeneralSector = UNSET
+    ticker: Unset | str = UNSET
+    volume: Unset | int = UNSET
+    week_52_high: Unset | str = UNSET
+    week_52_low: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         avg30_volume = self.avg30_volume
 
         bearish_premium = self.bearish_premium
@@ -98,7 +98,7 @@ class Holdings:
 
         put_volume = self.put_volume
 
-        sector: Union[Unset, str] = UNSET
+        sector: Unset | str = UNSET
         if not isinstance(self.sector, Unset):
             sector = self.sector.value
 
@@ -110,7 +110,7 @@ class Holdings:
 
         week_52_low = self.week_52_low
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if avg30_volume is not UNSET:
@@ -155,7 +155,7 @@ class Holdings:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         avg30_volume = d.pop("avg30_volume", UNSET)
 
@@ -186,7 +186,7 @@ class Holdings:
         put_volume = d.pop("put_volume", UNSET)
 
         _sector = d.pop("sector", UNSET)
-        sector: Union[Unset, MarketGeneralSector]
+        sector: Unset | MarketGeneralSector
         if isinstance(_sector, Unset):
             sector = UNSET
         else:
@@ -226,7 +226,7 @@ class Holdings:
         return holdings
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

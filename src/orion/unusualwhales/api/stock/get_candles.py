@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -15,12 +15,12 @@ def _get_kwargs(
     ticker: str,
     candle_size: CandleSize,
     *,
-    timeframe: Union[Unset, str] = UNSET,
-    trading_day: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Dict[str, Any]:
+    timeframe: Unset | str = UNSET,
+    trading_day: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["timeframe"] = timeframe
 
@@ -30,7 +30,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/ohlc/{candle_size}",
         "params": params,
@@ -41,7 +41,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[CandleDataResults, ErrorMessage, str]]:
+) -> CandleDataResults | ErrorMessage | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -64,7 +64,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[CandleDataResults, ErrorMessage, str]]:
+) -> Response[CandleDataResults | ErrorMessage | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -78,10 +78,10 @@ def sync_detailed(
     candle_size: CandleSize,
     *,
     client: UnusualWhalesClient,
-    timeframe: Union[Unset, str] = UNSET,
-    trading_day: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[CandleDataResults, ErrorMessage, str]]:
+    timeframe: Unset | str = UNSET,
+    trading_day: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+) -> Response[CandleDataResults | ErrorMessage | str]:
     """OHLC
 
      Returns the Open High Low Close (OHLC) candle data for a given ticker.
@@ -132,10 +132,10 @@ def sync(
     candle_size: CandleSize,
     *,
     client: UnusualWhalesClient,
-    timeframe: Union[Unset, str] = UNSET,
-    trading_day: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[CandleDataResults, ErrorMessage, str]]:
+    timeframe: Unset | str = UNSET,
+    trading_day: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+) -> CandleDataResults | ErrorMessage | str | None:
     """OHLC
 
      Returns the Open High Low Close (OHLC) candle data for a given ticker.
@@ -181,10 +181,10 @@ async def asyncio_detailed(
     candle_size: CandleSize,
     *,
     client: UnusualWhalesClient,
-    timeframe: Union[Unset, str] = UNSET,
-    trading_day: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[CandleDataResults, ErrorMessage, str]]:
+    timeframe: Unset | str = UNSET,
+    trading_day: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+) -> Response[CandleDataResults | ErrorMessage | str]:
     """OHLC
 
      Returns the Open High Low Close (OHLC) candle data for a given ticker.
@@ -233,10 +233,10 @@ async def asyncio(
     candle_size: CandleSize,
     *,
     client: UnusualWhalesClient,
-    timeframe: Union[Unset, str] = UNSET,
-    trading_day: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[CandleDataResults, ErrorMessage, str]]:
+    timeframe: Unset | str = UNSET,
+    trading_day: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+) -> CandleDataResults | ErrorMessage | str | None:
     """OHLC
 
      Returns the Open High Low Close (OHLC) candle data for a given ticker.

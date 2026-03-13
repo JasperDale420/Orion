@@ -1,31 +1,34 @@
-from alpaca.common.models import ModelWithID, ValidateBaseModel as BaseModel
+from datetime import date, datetime
+from typing import Any
 from uuid import UUID
-from datetime import datetime, date
-from typing import Any, Optional, List, Union, Dict
+
+from pydantic import Field
+
+from alpaca.common.models import ModelWithID
+from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.trading.enums import (
+    AccountStatus,
+    ActivityType,
     AssetClass,
-    AssetStatus,
     AssetExchange,
+    AssetStatus,
     ContractType,
+    CorporateActionSubType,
+    CorporateActionType,
     DTBPCheck,
     ExerciseStyle,
+    NonTradeActivityStatus,
+    OrderClass,
+    OrderSide,
     OrderStatus,
     OrderType,
-    OrderClass,
     PDTCheck,
-    TimeInForce,
-    OrderSide,
     PositionSide,
-    AccountStatus,
+    TimeInForce,
     TradeActivityType,
-    NonTradeActivityStatus,
-    ActivityType,
-    CorporateActionType,
-    CorporateActionSubType,
     TradeConfirmationEmail,
     TradeEvent,
 )
-from pydantic import Field
 
 
 class Asset(ModelWithID):
@@ -55,18 +58,18 @@ class Asset(ModelWithID):
     )  # using a pydantic alias to allow parsing data with the `class` keyword field
     exchange: AssetExchange
     symbol: str
-    name: Optional[str] = None
+    name: str | None = None
     status: AssetStatus
     tradable: bool
     marginable: bool
     shortable: bool
     easy_to_borrow: bool
     fractionable: bool
-    min_order_size: Optional[float] = None
-    min_trade_increment: Optional[float] = None
-    price_increment: Optional[float] = None
-    maintenance_margin_requirement: Optional[float] = None
-    attributes: Optional[List[str]] = None
+    min_order_size: float | None = None
+    min_trade_increment: float | None = None
+    price_increment: float | None = None
+    maintenance_margin_requirement: float | None = None
+    attributes: list[str] | None = None
 
 
 class USDPositionValues(BaseModel):
@@ -132,23 +135,23 @@ class Position(BaseModel):
     symbol: str
     exchange: AssetExchange
     asset_class: AssetClass
-    asset_marginable: Optional[bool] = None
+    asset_marginable: bool | None = None
     avg_entry_price: str
     qty: str
     side: PositionSide
-    market_value: Optional[str] = None
+    market_value: str | None = None
     cost_basis: str
-    unrealized_pl: Optional[str] = None
-    unrealized_plpc: Optional[str] = None
-    unrealized_intraday_pl: Optional[str] = None
-    unrealized_intraday_plpc: Optional[str] = None
-    current_price: Optional[str] = None
-    lastday_price: Optional[str] = None
-    change_today: Optional[str] = None
-    swap_rate: Optional[str] = None
-    avg_entry_swap_rate: Optional[str] = None
-    usd: Optional[USDPositionValues] = None
-    qty_available: Optional[str] = None
+    unrealized_pl: str | None = None
+    unrealized_plpc: str | None = None
+    unrealized_intraday_pl: str | None = None
+    unrealized_intraday_plpc: str | None = None
+    current_price: str | None = None
+    lastday_price: str | None = None
+    change_today: str | None = None
+    swap_rate: str | None = None
+    avg_entry_swap_rate: str | None = None
+    usd: USDPositionValues | None = None
+    qty_available: str | None = None
 
 
 class AllAccountsPositions(BaseModel):
@@ -161,7 +164,7 @@ class AllAccountsPositions(BaseModel):
     """
 
     as_of: datetime
-    positions: Dict[str, List[Position]]
+    positions: dict[str, list[Position]]
 
 
 class Order(ModelWithID):
@@ -210,33 +213,33 @@ class Order(ModelWithID):
     created_at: datetime
     updated_at: datetime
     submitted_at: datetime
-    filled_at: Optional[datetime] = None
-    expired_at: Optional[datetime] = None
-    canceled_at: Optional[datetime] = None
-    failed_at: Optional[datetime] = None
-    replaced_at: Optional[datetime] = None
-    replaced_by: Optional[UUID] = None
-    replaces: Optional[UUID] = None
+    filled_at: datetime | None = None
+    expired_at: datetime | None = None
+    canceled_at: datetime | None = None
+    failed_at: datetime | None = None
+    replaced_at: datetime | None = None
+    replaced_by: UUID | None = None
+    replaces: UUID | None = None
     asset_id: UUID
     symbol: str
     asset_class: AssetClass
-    notional: Optional[str] = None
-    qty: Optional[Union[str, float]] = None
-    filled_qty: Optional[Union[str, float]] = None
-    filled_avg_price: Optional[Union[str, float]] = None
+    notional: str | None = None
+    qty: str | float | None = None
+    filled_qty: str | float | None = None
+    filled_avg_price: str | float | None = None
     order_class: OrderClass
     order_type: OrderType
     type: OrderType
     side: OrderSide
     time_in_force: TimeInForce
-    limit_price: Optional[Union[str, float]] = None
-    stop_price: Optional[Union[str, float]] = None
+    limit_price: str | float | None = None
+    stop_price: str | float | None = None
     status: OrderStatus
     extended_hours: bool
-    legs: Optional[List["Order"]] = None
-    trail_percent: Optional[str] = None
-    trail_price: Optional[str] = None
-    hwm: Optional[str] = None
+    legs: list["Order"] | None = None
+    trail_percent: str | None = None
+    trail_price: str | None = None
+    hwm: str | None = None
 
     def __init__(self, **data: Any) -> None:
         if "order_class" not in data or data["order_class"] == "":
@@ -259,10 +262,10 @@ class FailedClosePositionDetails(BaseModel):
 
     code: int
     message: str
-    available: Optional[float] = None
-    existing_qty: Optional[float] = None
-    held_for_orders: Optional[float] = None
-    symbol: Optional[str] = None
+    available: float | None = None
+    existing_qty: float | None = None
+    held_for_orders: float | None = None
+    symbol: str | None = None
 
 
 class ClosePositionResponse(BaseModel):
@@ -274,10 +277,10 @@ class ClosePositionResponse(BaseModel):
         body (Optional[dict]): Information relating to the successful or unsuccessful closing of the position.
     """
 
-    order_id: Optional[UUID] = None
-    status: Optional[int] = None
-    symbol: Optional[str] = None
-    body: Union[FailedClosePositionDetails, Order]
+    order_id: UUID | None = None
+    status: int | None = None
+    symbol: str | None = None
+    body: FailedClosePositionDetails | Order
 
 
 class PortfolioHistory(BaseModel):
@@ -293,10 +296,10 @@ class PortfolioHistory(BaseModel):
         timeframe (str): Time window size of each data element.
     """
 
-    timestamp: List[int]
-    equity: List[float]
-    profit_loss: List[float]
-    profit_loss_pct: List[Optional[float]]
+    timestamp: list[int]
+    equity: list[float]
+    profit_loss: list[float]
+    profit_loss_pct: list[float | None]
     base_value: float
     timeframe: str
 
@@ -319,7 +322,7 @@ class Watchlist(ModelWithID):
     name: str
     created_at: datetime
     updated_at: datetime
-    assets: Optional[List[Asset]] = None
+    assets: list[Asset] | None = None
 
 
 class Clock(BaseModel):
@@ -412,11 +415,11 @@ class NonTradeActivity(BaseActivity):
     date: date
     net_amount: float
     description: str
-    status: Optional[NonTradeActivityStatus] = None
-    symbol: Optional[str] = None
-    qty: Optional[float] = None
-    price: Optional[float] = None
-    per_share_amount: Optional[float] = None
+    status: NonTradeActivityStatus | None = None
+    symbol: str | None = None
+    qty: float | None = None
+    price: float | None = None
+    per_share_amount: float | None = None
 
 
 class TradeActivity(BaseActivity):
@@ -502,37 +505,37 @@ class TradeAccount(ModelWithID):
 
     account_number: str
     status: AccountStatus
-    crypto_status: Optional[AccountStatus] = None
-    currency: Optional[str] = None
-    buying_power: Optional[str] = None
-    regt_buying_power: Optional[str] = None
-    daytrading_buying_power: Optional[str] = None
-    non_marginable_buying_power: Optional[str] = None
-    cash: Optional[str] = None
-    accrued_fees: Optional[str] = None
-    pending_transfer_out: Optional[str] = None
-    pending_transfer_in: Optional[str] = None
-    portfolio_value: Optional[str] = None
-    pattern_day_trader: Optional[bool] = None
-    trading_blocked: Optional[bool] = None
-    transfers_blocked: Optional[bool] = None
-    account_blocked: Optional[bool] = None
-    created_at: Optional[datetime] = None
-    trade_suspended_by_user: Optional[bool] = None
-    multiplier: Optional[str] = None
-    shorting_enabled: Optional[bool] = None
-    equity: Optional[str] = None
-    last_equity: Optional[str] = None
-    long_market_value: Optional[str] = None
-    short_market_value: Optional[str] = None
-    initial_margin: Optional[str] = None
-    maintenance_margin: Optional[str] = None
-    last_maintenance_margin: Optional[str] = None
-    sma: Optional[str] = None
-    daytrade_count: Optional[int] = None
-    options_buying_power: Optional[str] = None
-    options_approved_level: Optional[int] = None
-    options_trading_level: Optional[int] = None
+    crypto_status: AccountStatus | None = None
+    currency: str | None = None
+    buying_power: str | None = None
+    regt_buying_power: str | None = None
+    daytrading_buying_power: str | None = None
+    non_marginable_buying_power: str | None = None
+    cash: str | None = None
+    accrued_fees: str | None = None
+    pending_transfer_out: str | None = None
+    pending_transfer_in: str | None = None
+    portfolio_value: str | None = None
+    pattern_day_trader: bool | None = None
+    trading_blocked: bool | None = None
+    transfers_blocked: bool | None = None
+    account_blocked: bool | None = None
+    created_at: datetime | None = None
+    trade_suspended_by_user: bool | None = None
+    multiplier: str | None = None
+    shorting_enabled: bool | None = None
+    equity: str | None = None
+    last_equity: str | None = None
+    long_market_value: str | None = None
+    short_market_value: str | None = None
+    initial_margin: str | None = None
+    maintenance_margin: str | None = None
+    last_maintenance_margin: str | None = None
+    sma: str | None = None
+    daytrade_count: int | None = None
+    options_buying_power: str | None = None
+    options_approved_level: int | None = None
+    options_trading_level: int | None = None
 
 
 class AccountConfiguration(BaseModel):
@@ -559,7 +562,7 @@ class AccountConfiguration(BaseModel):
     suspend_trade: bool
     trade_confirm_email: TradeConfirmationEmail
     ptp_no_exception_entry: bool
-    max_options_trading_level: Optional[int] = None
+    max_options_trading_level: int | None = None
 
 
 class CorporateActionAnnouncement(ModelWithID):
@@ -591,12 +594,12 @@ class CorporateActionAnnouncement(ModelWithID):
     ca_sub_type: CorporateActionSubType
     initiating_symbol: str
     initiating_original_cusip: str
-    target_symbol: Optional[str] = None
-    target_original_cusip: Optional[str] = None
-    declaration_date: Optional[date] = None
-    ex_date: Optional[date] = None
-    record_date: Optional[date] = None
-    payable_date: Optional[date] = None
+    target_symbol: str | None = None
+    target_original_cusip: str | None = None
+    declaration_date: date | None = None
+    ex_date: date | None = None
+    record_date: date | None = None
+    payable_date: date | None = None
     cash: float
     old_rate: float
     new_rate: float
@@ -609,13 +612,13 @@ class TradeUpdate(BaseModel):
     ref. https://docs.alpaca.markets/docs/websocket-streaming#example
     """
 
-    event: Union[TradeEvent, str]
-    execution_id: Optional[UUID] = None
+    event: TradeEvent | str
+    execution_id: UUID | None = None
     order: Order
     timestamp: datetime
-    position_qty: Optional[float] = None
-    price: Optional[float] = None
-    qty: Optional[float] = None
+    position_qty: float | None = None
+    price: float | None = None
+    qty: float | None = None
 
 
 class OptionContract(BaseModel):
@@ -655,10 +658,10 @@ class OptionContract(BaseModel):
     style: ExerciseStyle
     strike_price: float
     size: str
-    open_interest: Optional[str] = None
-    open_interest_date: Optional[date] = None
-    close_price: Optional[str] = None
-    close_price_date: Optional[date] = None
+    open_interest: str | None = None
+    open_interest_date: date | None = None
+    close_price: str | None = None
+    close_price_date: date | None = None
 
 
 class OptionContractsResponse(BaseModel):
@@ -670,5 +673,5 @@ class OptionContractsResponse(BaseModel):
         next_page_token (Optional[str]): Pagination token for next page.
     """
 
-    option_contracts: Optional[List[OptionContract]] = None
-    next_page_token: Optional[str] = None
+    option_contracts: list[OptionContract] | None = None
+    next_page_token: str | None = None

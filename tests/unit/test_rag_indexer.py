@@ -16,7 +16,7 @@ from orion.storage.models_solvers import MetaExperiment, Solver, SolverMetrics
 @pytest.mark.asyncio
 async def test_indexer_service_methods():
     # Mock VectorStore
-    with patch("orion.rag.indexer.VectorStore") as MockStoreClass:
+    with patch("orion.rag.indexer.VectorStore") as MockStoreClass:  # noqa: N806
         mock_store = AsyncMock()
         MockStoreClass.return_value = mock_store
 

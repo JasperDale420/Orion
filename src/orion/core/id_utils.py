@@ -1,6 +1,7 @@
 import hashlib
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 
 def sha256_hex(value: str) -> str:

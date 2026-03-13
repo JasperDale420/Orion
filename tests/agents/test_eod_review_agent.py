@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.agents.eod_review_agent import EODReviewAgent
 
 
@@ -19,12 +20,12 @@ async def test_eod_agent_run_review_smoke():
     agent = EODReviewAgent(llm_client=mock_llm)
 
     # Mock dependencies
-    with patch.object(agent, "_gather_data", return_value=({"mock": "data"}, "mock_snapshot.json")), patch.object(
-        agent, "_fetch_rag_context", return_value="Mock Context"
-    ), patch.object(agent, "_persist_solver_edits", new_callable=AsyncMock), patch(
-        "builtins.open", new_callable=MagicMock
-    ), patch(
-        "os.makedirs"
+    with (
+        patch.object(agent, "_gather_data", return_value=({"mock": "data"}, "mock_snapshot.json")),
+        patch.object(agent, "_fetch_rag_context", return_value="Mock Context"),
+        patch.object(agent, "_persist_solver_edits", new_callable=AsyncMock),
+        patch("builtins.open", new_callable=MagicMock),
+        patch("os.makedirs"),
     ):
         # Execute
         result = await agent.run_review()

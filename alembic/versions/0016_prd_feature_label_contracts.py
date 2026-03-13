@@ -5,16 +5,17 @@ Revises: 0015_extend_solvers_prdv2_fields
 Create Date: 2025-12-18
 """
 
-from typing import Sequence, Union
+import contextlib
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "0016_prd_feature_label_contracts"
-down_revision: Union[str, None] = "0015_extend_solvers_prdv2_fields"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0015_extend_solvers_prdv2_fields"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -71,14 +72,10 @@ def downgrade() -> None:
     insp = sa.inspect(bind)
 
     # Drop views first (if present)
-    try:
+    with contextlib.suppress(Exception):
         op.execute(sa.text("DROP VIEW IF EXISTS features_event"))
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         op.execute(sa.text("DROP VIEW IF EXISTS features_window"))
-    except Exception:
-        pass
 
     if insp.has_table("labels_window"):
         op.drop_index("ix_labels_window_ticker_period_ts", table_name="labels_window")

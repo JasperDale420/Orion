@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from orion.core.solver_executor import SolverPipeline
 from orion.processing.feature_engine import FeatureEngine
 from orion.processing.signal_engine import SignalEngine
@@ -38,7 +39,7 @@ async def test_solver_pipeline_uses_injected_engine():
         rule_id="Rule_A",  # Required
         ticker="AAPL",
         direction="LONG",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         confidence=0.8,
         evidence={},
     )
@@ -83,7 +84,7 @@ async def test_signal_engine_persistence():
         rule_id="strat",  # Matches logic if needed, or arbitrary
         ticker="AAPL",
         direction="LONG",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         confidence=0.8,
         evidence={},
     )

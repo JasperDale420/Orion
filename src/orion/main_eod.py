@@ -7,8 +7,9 @@ Uses MarketSchedule to detect trading sessions and runs EODReviewAgent
 """
 
 import asyncio
+import contextlib
 import signal
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from orion.agents.eod_review_agent import EODReviewAgent
 from orion.core.logging_config import setup_logging
@@ -63,7 +64,7 @@ class EODService:
         Wait until the EOD window (30 min after market close).
         On non-trading days, waits until next market open then close.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         try:
             _, close_time = self.schedule.get_open_close(now)
@@ -118,7 +119,7 @@ class EODService:
         """
         Execute the EOD review for today.
         """
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
 
         logger.info(
             f"Starting EOD review for {today}",
@@ -139,9 +140,8 @@ class EODService:
                 },
             )
 
-            # Process solver mutations if any
-            proposals = result.get("proposals", [])
-            mutation_proposals = [p for p in proposals if p.get("type") == "solver_mutation"]
+            # Process solver mutations if any (pre-filtered by EODReviewAgent)
+            mutation_proposals = result.get("solver_edit_proposals", [])
 
             if mutation_proposals:
                 await self._process_solver_mutations(mutation_proposals)
@@ -302,14 +302,11 @@ class EODService:
         """
         Sleep that can be interrupted by shutdown signal.
         """
-        try:
+        with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(
                 self._shutdown_event.wait(),
                 timeout=max(0, seconds),
             )
-        except asyncio.TimeoutError:
-            # Normal timeout - not a shutdown
-            pass
 
     def shutdown(self) -> None:
         """

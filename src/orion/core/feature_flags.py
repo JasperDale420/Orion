@@ -7,7 +7,8 @@ Flags can be configured via environment variables or database.
 
 import logging
 import os
-from typing import Dict, Optional
+import threading
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class FeatureFlags:
     """
 
     # Default flag values
-    DEFAULTS: Dict[str, bool] = {
+    DEFAULTS: dict[str, bool] = {
         "ENABLE_PAPER_TRADING": True,
         "ENABLE_LIVE_TRADING": False,
         "ENABLE_DARKPOOL_CONNECTOR": True,
@@ -37,13 +38,18 @@ class FeatureFlags:
     }
 
     _instance: Optional["FeatureFlags"] = None
-    _cache: Dict[str, bool] = {}
+    _lock = threading.Lock()
+
+    def __init__(self) -> None:
+        # Instance-level cache instead of class-level mutable dict
+        if not hasattr(self, "_cache"):
+            self._cache: dict[str, bool] = {}
 
     def __new__(cls) -> "FeatureFlags":
-        """Singleton pattern."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._load_from_env()
+        """Thread-safe singleton pattern."""
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
         return cls._instance
 
     def _load_from_env(self) -> None:
@@ -52,10 +58,11 @@ class FeatureFlags:
             env_key = f"ORION_FF_{flag}"
             env_val = os.getenv(env_key)
             if env_val is not None:
-                self._cache[flag] = env_val.lower() in ("true", "1", "yes")
+                with self._lock:
+                    self._cache[flag] = env_val.lower() in ("true", "1", "yes")
                 logger.info(f"Feature flag {flag} = {self._cache[flag]} (from env)")
 
-    def is_enabled(self, flag: str, default: Optional[bool] = None) -> bool:
+    def is_enabled(self, flag: str, default: bool | None = None) -> bool:
         """
         Check if a feature flag is enabled.
 
@@ -66,11 +73,11 @@ class FeatureFlags:
         Returns:
             True if enabled, False otherwise
         """
-        # Check cache first
-        if flag in self._cache:
-            return self._cache[flag]
+        with self._lock:
+            if flag in self._cache:
+                return self._cache[flag]
 
-        # Check defaults
+        # Check defaults (immutable, no lock needed)
         if default is not None:
             return default
         return self.DEFAULTS.get(flag, False)
@@ -83,21 +90,24 @@ class FeatureFlags:
             flag: Flag name
             value: True to enable, False to disable
         """
-        self._cache[flag] = value
+        with self._lock:
+            self._cache[flag] = value
         logger.info(f"Feature flag {flag} set to {value}")
 
-    def get_all(self) -> Dict[str, bool]:
+    def get_all(self) -> dict[str, bool]:
         """Get all flag values including defaults."""
         result = dict(self.DEFAULTS)
-        result.update(self._cache)
+        with self._lock:
+            result.update(self._cache)
         return result
 
 
 # Global instance for convenience
 _flags = FeatureFlags()
+_flags._load_from_env()
 
 
-def is_enabled(flag: str, default: Optional[bool] = None) -> bool:
+def is_enabled(flag: str, default: bool | None = None) -> bool:
     """Check if a feature flag is enabled."""
     return _flags.is_enabled(flag, default)
 
@@ -107,6 +117,6 @@ def set_flag(flag: str, value: bool) -> None:
     _flags.set(flag, value)
 
 
-def get_all_flags() -> Dict[str, bool]:
+def get_all_flags() -> dict[str, bool]:
     """Get all feature flags."""
     return _flags.get_all()

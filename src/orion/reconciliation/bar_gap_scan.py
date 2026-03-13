@@ -1,18 +1,17 @@
 import asyncio
-import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dotenv import load_dotenv
-from orion.storage.db import async_session_factory, init_db
-from orion.storage.models import BronzeEvent
 from sqlalchemy import select
 
-load_dotenv()
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_struct_logger
+from orion.storage.db import async_session_factory, init_db
+from orion.storage.models import BronzeEvent
 
-setup_logging()
-logger = logging.getLogger("orion.recon.bar_scan")
+load_dotenv()
+
+logger = setup_struct_logger("orion.recon.bar_scan")
 
 
 async def scan_ticker_gaps(session: Any, ticker: str, start_ts: datetime, end_ts: datetime) -> None:
@@ -71,7 +70,7 @@ async def main() -> None:
 
     # Scan last 24h? Or just 'Today'?
     # Let's scan 'Today' from 09:30 to now (if active) or 16:00.
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     # Simple hardcoded window for demo
     start_window = now - timedelta(hours=1)
     end_window = now

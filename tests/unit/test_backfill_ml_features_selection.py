@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -26,8 +26,8 @@ async def test_get_records_to_backfill_uses_deterministic_ordering(
                         "alert_id": ["evt-2", "evt-1"],
                         "underlying": ["MSFT", "AAPL"],
                         "ts_event": [
-                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
-                            datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 15, 0, tzinfo=UTC),
+                            datetime(2026, 2, 9, 14, 0, tzinfo=UTC),
                         ],
                         "expiry": ["2026-02-21", "2026-02-21"],
                         "dte": [12, 12],
@@ -52,7 +52,7 @@ async def test_get_records_to_backfill_uses_deterministic_ordering(
 
 @pytest.mark.asyncio
 async def test_get_option_chain_for_event_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     flow_df = pd.DataFrame(
         {
             "event_id": ["evt-1", "evt-2"],
@@ -85,9 +85,9 @@ async def test_get_records_to_backfill_supports_cursor_filter(
                         "alert_id": ["evt-100", "evt-101", "evt-102"],
                         "underlying": ["AAPL", "MSFT", "TSLA"],
                         "ts_event": [
-                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
-                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
-                            datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 15, 0, tzinfo=UTC),
+                            datetime(2026, 2, 9, 15, 0, tzinfo=UTC),
+                            datetime(2026, 2, 9, 16, 0, tzinfo=UTC),
                         ],
                     }
                 )
@@ -97,7 +97,7 @@ async def test_get_records_to_backfill_supports_cursor_filter(
 
     monkeypatch.setattr(backfill_ml_features, "get_heber_reader", lambda: _FakeReader())
 
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     records = await backfill_ml_features.get_records_to_backfill(
         limit=10,
         after_entry_ts=cursor_ts,
@@ -120,9 +120,9 @@ async def test_get_records_to_backfill_supports_timestamp_only_cursor_filter(
                         "alert_id": ["evt-099", "evt-100", "evt-101"],
                         "underlying": ["AAPL", "MSFT", "TSLA"],
                         "ts_event": [
-                            datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc),
-                            datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
-                            datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc),
+                            datetime(2026, 2, 9, 14, 0, tzinfo=UTC),
+                            datetime(2026, 2, 9, 15, 0, tzinfo=UTC),
+                            datetime(2026, 2, 9, 16, 0, tzinfo=UTC),
                         ],
                     }
                 )
@@ -132,7 +132,7 @@ async def test_get_records_to_backfill_supports_timestamp_only_cursor_filter(
 
     monkeypatch.setattr(backfill_ml_features, "get_heber_reader", lambda: _FakeReader())
 
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     records = await backfill_ml_features.get_records_to_backfill(
         limit=10,
         after_entry_ts=cursor_ts,
@@ -148,8 +148,8 @@ async def test_run_backfill_uses_cursor_to_paginate_batches(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    second_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    second_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -200,8 +200,8 @@ async def test_run_backfill_requests_only_remaining_budget(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    second_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    second_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -252,9 +252,9 @@ async def test_run_backfill_resumes_from_watermark_and_persists_progress(
 ) -> None:
     calls: list[dict[str, Any]] = []
     saved_watermarks: list[datetime] = []
-    resumed_ts = datetime(2026, 2, 9, 13, 0, tzinfo=timezone.utc)
-    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    second_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    resumed_ts = datetime(2026, 2, 9, 13, 0, tzinfo=UTC)
+    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    second_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -311,8 +311,8 @@ async def test_run_backfill_resumes_with_keyset_cursor_when_available(
     calls: list[dict[str, Any]] = []
     saved_cursors: list[tuple[datetime, str]] = []
 
-    resumed_ts = datetime(2026, 2, 9, 13, 0, tzinfo=timezone.utc)
-    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    resumed_ts = datetime(2026, 2, 9, 13, 0, tzinfo=UTC)
+    first_ts = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -433,7 +433,7 @@ async def test_save_backfill_cursor_does_not_write_legacy_watermark(
     async def _fake_db_write(fn):
         return await fn(_FakeSession())
 
-    ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     monkeypatch.setattr(backfill_ml_features, "upsert_cursor_state", _fake_upsert_cursor_state)
     monkeypatch.setattr(backfill_ml_features, "upsert_watermark", _fake_upsert_watermark, raising=False)
     monkeypatch.setattr(backfill_ml_features, "db_write", _fake_db_write)

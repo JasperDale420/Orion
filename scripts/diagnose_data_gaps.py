@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
-from orion.core.logging_config import setup_logging
 from sqlalchemy import text
+
+from orion.core.logging_config import setup_logging
 
 # Load env for host access to DB
 load_dotenv()
@@ -69,7 +70,7 @@ async def diagnose():
 
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    end_date = datetime.now(timezone.utc).date()
+    end_date = datetime.now(UTC).date()
     start_date = end_date - timedelta(days=7)
 
     logger.info(f"Diagnosing data gaps from {start_date} to {end_date}...\n")

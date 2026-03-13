@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 import logging
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +84,7 @@ def _row_to_bronze(row: dict[str, Any]) -> BronzeEvent | None:
         event_type="UW_DARKPOOL",
         ticker=ticker,
         event_ts_utc=ts,
-        received_ts_utc=datetime.now(timezone.utc),
+        received_ts_utc=datetime.now(UTC),
         payload=payload,
         session="REG",
     )

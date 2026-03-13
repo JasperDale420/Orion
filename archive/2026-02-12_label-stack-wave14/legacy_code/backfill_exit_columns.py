@@ -17,9 +17,10 @@ import json
 import os
 import shutil
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any
 
 from orion.main_price_target_labeler import (
     get_checkpoint_backfill_candidates as get_labeler_checkpoint_backfill_candidates,
@@ -111,7 +112,7 @@ async def _save_checkpoint_backfill_cursor(entry_ts: datetime, event_id: str | N
     await db_write(write)
 
 
-def get_price_at_offset_minutes(prices: List[Dict[str, Any]], entry_ts: datetime, minutes: int) -> Optional[float]:
+def get_price_at_offset_minutes(prices: list[dict[str, Any]], entry_ts: datetime, minutes: int) -> float | None:
     """Get price at a specific minutes offset from entry."""
     target_ts = entry_ts + timedelta(minutes=minutes)
     closest = None
@@ -125,7 +126,7 @@ def get_price_at_offset_minutes(prices: List[Dict[str, Any]], entry_ts: datetime
     return closest
 
 
-def get_price_at_offset_hours(prices: List[Dict[str, Any]], entry_ts: datetime, hours: int) -> Optional[float]:
+def get_price_at_offset_hours(prices: list[dict[str, Any]], entry_ts: datetime, hours: int) -> float | None:
     """Get price at a specific hours offset from entry."""
     target_ts = entry_ts + timedelta(hours=hours)
     closest = None
@@ -139,7 +140,7 @@ def get_price_at_offset_hours(prices: List[Dict[str, Any]], entry_ts: datetime, 
     return closest
 
 
-def get_price_at_offset_days(prices: List[Dict[str, Any]], entry_ts: datetime, days: int) -> Optional[float]:
+def get_price_at_offset_days(prices: list[dict[str, Any]], entry_ts: datetime, days: int) -> float | None:
     """Get price at a specific days offset from entry."""
     target_ts = entry_ts + timedelta(days=days)
     closest = None
@@ -157,7 +158,7 @@ async def get_records_to_backfill(
     limit: int = 1000,
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Get records missing new velocity columns via shared labeler helper."""
     return await get_labeler_velocity_backfill_candidates(
         limit=limit,
@@ -170,7 +171,7 @@ async def get_all_records_for_checkpoints(
     limit: int = 1000,
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Get records missing checkpoint columns via shared labeler helper."""
     return await get_labeler_checkpoint_backfill_candidates(
         limit=limit,
@@ -179,12 +180,12 @@ async def get_all_records_for_checkpoints(
     )
 
 
-async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
+async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> list[dict[str, Any]]:
     """Get subsequent prices via shared labeler helper."""
     return await get_labeler_subsequent_prices(option_chain, entry_ts)
 
 
-async def update_velocity_columns(record: Dict[str, Any]) -> bool:
+async def update_velocity_columns(record: dict[str, Any]) -> bool:
     """Update time-to-target velocity columns for a record."""
     event_id = record["event_id"]
     entry_ts = record["entry_ts"]
@@ -210,7 +211,7 @@ async def update_velocity_columns(record: Dict[str, Any]) -> bool:
     return False
 
 
-async def update_checkpoint_columns(record: Dict[str, Any]) -> bool:
+async def update_checkpoint_columns(record: dict[str, Any]) -> bool:
     """Update bucket-specific checkpoint columns for a record."""
     event_id = record["event_id"]
     option_chain = record["option_chain"]
@@ -224,7 +225,7 @@ async def update_checkpoint_columns(record: Dict[str, Any]) -> bool:
     if not prices:
         return False
 
-    updates: Dict[str, Any] = {}
+    updates: dict[str, Any] = {}
 
     # 0DTE checkpoints (15m, 30m)
     price_15m = get_price_at_offset_minutes(prices, entry_ts, 15)
@@ -262,8 +263,8 @@ async def update_checkpoint_columns(record: Dict[str, Any]) -> bool:
 
 
 async def _update_record_with_retry(
-    record: Dict[str, Any],
-    update_fn: Callable[[Dict[str, Any]], Awaitable[bool]],
+    record: dict[str, Any],
+    update_fn: Callable[[dict[str, Any]], Awaitable[bool]],
     phase_name: str,
     max_retries: int = MAX_RECORD_RETRIES,
     retry_sleep_seconds: float = RETRY_SLEEP_SECONDS,
@@ -313,7 +314,7 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _apply_dead_letter_redaction(payload: Dict[str, Any], redact_fields: set[str]) -> Dict[str, Any]:
+def _apply_dead_letter_redaction(payload: dict[str, Any], redact_fields: set[str]) -> dict[str, Any]:
     """Redact configured payload fields in dead-letter records."""
     if not redact_fields:
         return payload
@@ -395,7 +396,7 @@ def _rotate_dead_letter_file_if_needed(
 
 def _write_dead_letter_record(
     dead_letter_path: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     max_bytes: int = DEFAULT_DEAD_LETTER_MAX_BYTES,
     redact_fields: set[str] | None = None,
     max_rotated_files: int = DEFAULT_DEAD_LETTER_MAX_ROTATED_FILES,
@@ -429,7 +430,7 @@ async def run_backfill(
     max_failed_records: int = DEFAULT_MAX_FAILED_RECORDS,
     max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS,
     max_batches: int = DEFAULT_MAX_BATCHES,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run the backfill job."""
     run_started_at = time.perf_counter()
     await init_db()

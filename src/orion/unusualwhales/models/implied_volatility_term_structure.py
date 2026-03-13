@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -30,15 +30,15 @@ class ImpliedVolatilityTermStructure:
             nearest monthly expiration if there are no weekly contracts). Example: 0.18338055163621902.
     """
 
-    date: Union[Unset, str] = UNSET
-    dte: Union[Unset, int] = UNSET
-    expiry: Union[Unset, str] = UNSET
-    implied_move: Union[Unset, str] = UNSET
-    implied_move_perc: Union[Unset, str] = UNSET
-    volatility: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    date: Unset | str = UNSET
+    dte: Unset | int = UNSET
+    expiry: Unset | str = UNSET
+    implied_move: Unset | str = UNSET
+    implied_move_perc: Unset | str = UNSET
+    volatility: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         date = self.date
 
         dte = self.dte
@@ -51,7 +51,7 @@ class ImpliedVolatilityTermStructure:
 
         volatility = self.volatility
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if date is not UNSET:
@@ -70,7 +70,7 @@ class ImpliedVolatilityTermStructure:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         date = d.pop("date", UNSET)
 
@@ -97,7 +97,7 @@ class ImpliedVolatilityTermStructure:
         return implied_volatility_term_structure
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

@@ -1,9 +1,10 @@
-from typing import Dict, Optional
 
 from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.common.types import RawData
 from alpaca.data.mappings import SNAPSHOT_MAPPING
-from alpaca.data.models import Bar, Quote, Trade
+from alpaca.data.models.bars import Bar
+from alpaca.data.models.quotes import Quote
+from alpaca.data.models.trades import Trade
 
 
 class Snapshot(BaseModel):
@@ -20,13 +21,13 @@ class Snapshot(BaseModel):
     """
 
     symbol: str
-    latest_trade: Optional[Trade] = None
-    latest_quote: Optional[Quote] = None
-    minute_bar: Optional[Bar] = None
-    daily_bar: Optional[Bar] = None
-    previous_daily_bar: Optional[Bar] = None
+    latest_trade: Trade | None = None
+    latest_quote: Quote | None = None
+    minute_bar: Bar | None = None
+    daily_bar: Bar | None = None
+    previous_daily_bar: Bar | None = None
 
-    def __init__(self, symbol: str, raw_data: Dict[str, RawData]) -> None:
+    def __init__(self, symbol: str, raw_data: dict[str, RawData]) -> None:
         """Instantiates a Snapshot.
 
         Args:
@@ -40,19 +41,19 @@ class Snapshot(BaseModel):
         }
 
         # Parse each data type
-        if mapped_snapshot.get("latest_trade", None) is not None:
+        if mapped_snapshot.get("latest_trade") is not None:
             mapped_snapshot["latest_trade"] = Trade(
                 symbol, mapped_snapshot["latest_trade"]
             )
-        if mapped_snapshot.get("latest_quote", None) is not None:
+        if mapped_snapshot.get("latest_quote") is not None:
             mapped_snapshot["latest_quote"] = Quote(
                 symbol, mapped_snapshot["latest_quote"]
             )
-        if mapped_snapshot.get("minute_bar", None) is not None:
+        if mapped_snapshot.get("minute_bar") is not None:
             mapped_snapshot["minute_bar"] = Bar(symbol, mapped_snapshot["minute_bar"])
-        if mapped_snapshot.get("daily_bar", None) is not None:
+        if mapped_snapshot.get("daily_bar") is not None:
             mapped_snapshot["daily_bar"] = Bar(symbol, mapped_snapshot["daily_bar"])
-        if mapped_snapshot.get("previous_daily_bar", None) is not None:
+        if mapped_snapshot.get("previous_daily_bar") is not None:
             mapped_snapshot["previous_daily_bar"] = Bar(
                 symbol, mapped_snapshot["previous_daily_bar"]
             )
@@ -99,12 +100,12 @@ class OptionsSnapshot(BaseModel):
     """
 
     symbol: str
-    latest_trade: Optional[Trade] = None
-    latest_quote: Optional[Quote] = None
-    implied_volatility: Optional[float] = None
-    greeks: Optional[OptionsGreeks] = None
+    latest_trade: Trade | None = None
+    latest_quote: Quote | None = None
+    implied_volatility: float | None = None
+    greeks: OptionsGreeks | None = None
 
-    def __init__(self, symbol: str, raw_data: Dict[str, RawData]) -> None:
+    def __init__(self, symbol: str, raw_data: dict[str, RawData]) -> None:
         """Instantiates a Snapshot.
 
         Args:
@@ -118,15 +119,15 @@ class OptionsSnapshot(BaseModel):
         }
 
         # Parse each data type
-        if mapped_snapshot.get("latest_trade", None) is not None:
+        if mapped_snapshot.get("latest_trade") is not None:
             mapped_snapshot["latest_trade"] = Trade(
                 symbol, mapped_snapshot["latest_trade"]
             )
-        if mapped_snapshot.get("latest_quote", None) is not None:
+        if mapped_snapshot.get("latest_quote") is not None:
             mapped_snapshot["latest_quote"] = Quote(
                 symbol, mapped_snapshot["latest_quote"]
             )
-        if mapped_snapshot.get("greeks", None) is not None:
+        if mapped_snapshot.get("greeks") is not None:
             mapped_snapshot["greeks"] = OptionsGreeks(mapped_snapshot["greeks"])
 
         super().__init__(symbol=symbol, **mapped_snapshot)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,7 +11,7 @@ import orion.main_price_target_labeler as labeler
 
 
 def test_heber_market_tide_net_prefers_pre_aggregated_columns(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -37,7 +37,7 @@ def test_heber_market_tide_net_prefers_pre_aggregated_columns(monkeypatch: pytes
 
 
 def test_heber_market_tide_net_derives_from_put_call_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -56,7 +56,7 @@ def test_heber_market_tide_net_derives_from_put_call_when_needed(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_get_market_tide_before_entry_prefers_heber_net(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     def _fake_heber_net(_entry_ts: datetime, minutes: int = 30) -> float:
         assert minutes == 45
@@ -76,7 +76,7 @@ async def test_get_market_tide_before_entry_prefers_heber_net(monkeypatch: pytes
 async def test_get_regime_at_entry_uses_heber_tide_without_sql_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     import orion.analysis.regime as regime_module
 
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     class _FakeDetector:

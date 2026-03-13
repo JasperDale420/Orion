@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, Float, Index, String
 
@@ -43,7 +43,7 @@ class CandidateTrade(Base):
     # Pointers to evidence (signal_ids, event_ids)
     evidence = Column(JSON, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("ix_candidate_ticker_time", "ticker", "timestamp_utc"),
@@ -70,7 +70,7 @@ class ExitDecision(Base):
 
     # Execution
     broker_order_id = Column(String, nullable=True)
-    exit_ts_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    exit_ts_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     exit_price = Column(Float, nullable=True)
 
     # P&L tracking
@@ -78,13 +78,15 @@ class ExitDecision(Base):
     pnl_usd = Column(Float, nullable=True)
     pnl_pct = Column(Float, nullable=True)
 
+    __table_args__ = (Index("ix_exit_decision_exit_ts", "exit_ts_utc"),)
+
 
 class StrategyDecision(Base):
     __tablename__ = "strategy_decisions"
 
     decision_id = Column(String, primary_key=True)
     candidate_id = Column(String, index=True, nullable=False)
-    timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     # Context
     ticker = Column(String, nullable=False)
@@ -102,6 +104,8 @@ class StrategyDecision(Base):
 
     # PRD 11.2 Trace
     decision_trace_json = Column(JSON, nullable=True)
+
+    __table_args__ = (Index("ix_strategy_decision_ticker_ts", "ticker", "timestamp_utc"),)
 
 
 class GoldTickerRollup(Base):
@@ -123,7 +127,7 @@ class GoldTickerRollup(Base):
     volume = Column(Float, nullable=False)
     vwap = Column(Float, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("ix_gold_rollup_ticker_period_ts", "ticker", "period", "timestamp_utc"),)
 
@@ -136,7 +140,7 @@ class CandidateLabel(Base):
     __tablename__ = "candidate_labels"
 
     candidate_id = Column(String, primary_key=True)  # FK to candidate_trades
-    timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     label = Column(Float, nullable=False)  # 1 (PT), -1 (SL), 0 (Time)
     ret = Column(Float, nullable=False)  # Return at barrier
@@ -157,7 +161,7 @@ class LabelEvent(Base):
     __tablename__ = "labels_event"
 
     candidate_id = Column(String, primary_key=True)
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     ticker = Column(String, nullable=False, index=True)
     event_ts_utc = Column(DateTime(timezone=True), nullable=False, index=True)
@@ -191,7 +195,7 @@ class LabelWindow(Base):
     period = Column(String, primary_key=True)  # e.g. "5m", "1h", "1d"
     window_end_ts_utc = Column(DateTime(timezone=True), primary_key=True)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     forward_returns = Column(JSON, nullable=False, default=dict)
     label_config = Column(JSON, nullable=False, default=dict)
@@ -215,6 +219,6 @@ class GoldFeatureEvent(Base):
     # The actual feature vector
     features = Column(JSON, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("ix_gold_feat_event_ticker_ts", "ticker", "event_ts_utc"),)

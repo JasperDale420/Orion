@@ -1,0 +1,23 @@
+meta:
+  run_id: f35a3dc1-e79b-4f06-9d2c-86129c23bab4
+  created_at: '2026-02-24T21:30:14.577316+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-24_f35a3dc1-e79b-4f06-9d2c-86129c23bab4.json
+  report_path: artifacts/reports/eod_report_2026-02-24.md
+proposal:
+  type: config_patch
+  priority: 2
+  rationale: Investigate why zero signals were generated. While possibly a quiet market
+    day, we should verify signal generation thresholds aren't overly restrictive.
+  evidence_pointers:
+    decisions: 'total: 0, executed_count: 0, skipped_count: 0'
+    signals_live: 'total: 0'
+    trade_journal: 'total: 0'
+  test_plan:
+  - Review signal logs for the date to confirm no eligible setups
+  - Compare against recent days with similar regime to see if signal count dropped
+    abnormally
+  - If quiet day is confirmed, no action needed
+  changes:
+    monitoring.alert_on_zero_signals_days: 1

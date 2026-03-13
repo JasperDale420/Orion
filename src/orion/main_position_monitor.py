@@ -52,15 +52,21 @@ async def main() -> None:
 
         result = await monitor.run_check(connector, dry_run=args.dry_run)
 
-        print("\n=== Position Check Result ===")
-        print(f"Positions checked: {result['positions_checked']}")
-        print(f"Exit signals: {result['exit_signals']}")
-        print(f"Exits executed: {result['exits_executed']}")
+        logger.info(
+            "position_check_result",
+            positions_checked=result["positions_checked"],
+            exit_signals=result["exit_signals"],
+            exits_executed=result["exits_executed"],
+        )
 
         if result.get("exits"):
-            print("\nExits:")
             for exit_info in result["exits"]:
-                print(f"  {exit_info['symbol']}: {exit_info['pnl_pct']:.1f}% - {exit_info['reasoning']}")
+                logger.info(
+                    "exit_detail",
+                    symbol=exit_info["symbol"],
+                    pnl_pct=f"{exit_info['pnl_pct']:.1f}%",
+                    reasoning=exit_info["reasoning"],
+                )
     else:
         # Continuous monitoring mode
         await run_position_monitor_loop(

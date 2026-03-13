@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+
 from orion.api.main import app
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
@@ -12,7 +13,7 @@ from orion.storage.models_gold import CandidateTrade, GoldTickerRollup
 async def test_pointer_endpoints_return_raw_entities(monkeypatch):
     monkeypatch.setenv("ORION_API_KEY", "testkey")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async with async_session_factory() as session:
         session.add(

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Float, Integer, String
 
@@ -14,7 +14,7 @@ class RiskState(Base):
     __tablename__ = "risk_state"
 
     id = Column(String, primary_key=True)  # e.g. "global_risk_v1"
-    updated_at_utc = Column(DateTime, default=datetime.utcnow)
+    updated_at_utc = Column(DateTime, default=lambda: datetime.now(UTC))
 
     current_daily_loss = Column(Float, default=0.0)
     current_equity = Column(Float, default=0.0)
@@ -33,7 +33,7 @@ class ProcessedFill(Base):
 
     fill_id = Column(String, primary_key=True)  # Unique ID from broker (or deduped ID)
     client_order_id = Column(String, index=True, nullable=True)
-    processed_at_utc = Column(DateTime, default=datetime.utcnow)
+    processed_at_utc = Column(DateTime, default=lambda: datetime.now(UTC))
 
     ticker = Column(String, nullable=True)
     qty = Column(Float, nullable=True)

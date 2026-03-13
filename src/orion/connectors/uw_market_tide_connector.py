@@ -7,7 +7,7 @@ Fetches market-wide options flow sentiment (net call/put premium) via Data Gatew
 import asyncio
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def _is_retryable_gateway_status(status_code: Optional[int]) -> bool:
+def _is_retryable_gateway_status(status_code: int | None) -> bool:
     return status_code in RETRYABLE_GATEWAY_STATUS_CODES
 
 
 class UWMarketTideConnector:
     """Fetches market tide (net premium intraday) via Data Gateway."""
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         self.gateway_url = (gateway_url or system_settings.data_gateway_url or "").strip().rstrip("/")
         if not self.gateway_url:
             raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
@@ -33,10 +33,10 @@ class UWMarketTideConnector:
         if not self.gateway_key:
             raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
         self.headers = {"X-Gateway-Key": self.gateway_key}
-        self._latest_ticks: list[Dict[str, Any]] = []
+        self._latest_ticks: list[dict[str, Any]] = []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _fetch_market_tide(self, market_date: Optional[date] = None) -> Optional[Dict[str, Any]]:
+    def _fetch_market_tide(self, market_date: date | None = None) -> dict[str, Any] | None:
         """Fetch market tide for a date via Data Gateway."""
         url = f"{self.gateway_url}/api/v1/uw/market/tide"
         params = {}
@@ -62,13 +62,13 @@ class UWMarketTideConnector:
             logger.warning(f"Transient network error fetching market tide: {e}")
             raise
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to fetch market tide: {e}")
-            return None
+            logger.error("Failed to fetch market tide: %s", e, exc_info=True)
+            raise
         except Exception as e:
-            logger.warning(f"Failed to fetch market tide: {e}")
-            return None
+            logger.error("Unexpected error fetching market tide: %s", e, exc_info=True)
+            raise
 
-    async def fetch_and_store(self, market_date: Optional[date] = None) -> int:
+    async def fetch_and_store(self, market_date: date | None = None) -> int:
         """Fetch market tide and store all ticks."""
         try:
             data = await asyncio.to_thread(self._fetch_market_tide, market_date)
@@ -106,7 +106,7 @@ class UWMarketTideConnector:
 
         return stored
 
-    async def _persist_tick(self, record: Dict[str, Any]) -> None:
+    async def _persist_tick(self, record: dict[str, Any]) -> None:
         """Persist market tide tick in memory while centralized sinks are externalized."""
         self._latest_ticks.append(dict(record))
         if len(self._latest_ticks) > 2000:

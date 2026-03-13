@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 from alpaca.data.models import Bar, BarSet
@@ -29,7 +29,7 @@ class TestAlpacaMarketConnector(unittest.TestCase):
         """Test successful bar fetching"""
         # Mock response
         mock_bar = MagicMock(spec=Bar)
-        mock_bar.t = datetime(2023, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        mock_bar.t = datetime(2023, 1, 1, 10, 0, 0, tzinfo=UTC)
         mock_bar.model_dump.return_value = {
             "t": "2023-01-01T10:00:00Z",
             "o": 100.0,
@@ -44,7 +44,7 @@ class TestAlpacaMarketConnector(unittest.TestCase):
         mock_bar_set.data = {"SPY": [mock_bar]}
         self.connector.client.get_stock_bars.return_value = mock_bar_set
 
-        events = self.connector.fetch_bars(["SPY"], datetime.now(timezone.utc))
+        events = self.connector.fetch_bars(["SPY"], datetime.now(UTC))
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].source, "ALPACA")
@@ -56,7 +56,7 @@ class TestAlpacaMarketConnector(unittest.TestCase):
         """Test poll method updates watermark"""
         # 1. First poll
         mock_bar1 = MagicMock(spec=Bar)
-        ts1 = datetime(2023, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        ts1 = datetime(2023, 1, 1, 10, 0, 0, tzinfo=UTC)
         mock_bar1.t = ts1
         mock_bar1.model_dump.return_value = {"t": ts1.isoformat(), "c": 100}
 
@@ -69,7 +69,7 @@ class TestAlpacaMarketConnector(unittest.TestCase):
 
         # 2. Second poll should use watermark
         mock_bar2 = MagicMock(spec=Bar)
-        ts2 = datetime(2023, 1, 1, 10, 1, 0, tzinfo=timezone.utc)
+        ts2 = datetime(2023, 1, 1, 10, 1, 0, tzinfo=UTC)
         mock_bar2.t = ts2
         mock_bar2.model_dump.return_value = {"t": ts2.isoformat(), "c": 101}
 

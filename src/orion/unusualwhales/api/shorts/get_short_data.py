@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -10,8 +10,8 @@ from ...types import Response
 
 def _get_kwargs(
     ticker: str,
-) -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+) -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/shorts/{ticker}/data",
     }
@@ -19,7 +19,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Optional[Dict[str, Any]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> dict[str, Any] | None:
     if response.status_code == HTTPStatus.OK:
         response_200 = response.json()
         return response_200
@@ -29,7 +29,7 @@ def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
         return None
 
 
-def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[Dict[str, Any]]:
+def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[dict[str, Any]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -42,7 +42,7 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Response[Dict[str, Any]]:
+) -> Response[dict[str, Any]]:
     """Short Data
 
     Returns short data including rebate rate and short shares available for a ticker.
@@ -63,7 +63,7 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Short Data
 
     Returns short data including rebate rate and short shares available for a ticker.
@@ -79,7 +79,7 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Response[Dict[str, Any]]:
+) -> Response[dict[str, Any]]:
     """Short Data
 
     Returns short data including rebate rate and short shares available for a ticker.
@@ -98,7 +98,7 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Short Data
 
     Returns short data including rebate rate and short shares available for a ticker.

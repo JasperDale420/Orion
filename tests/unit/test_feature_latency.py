@@ -1,9 +1,10 @@
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from orion.processing.feature_engine import FeatureEngine
 from orion.storage.models_gold import CandidateTrade
 
@@ -36,7 +37,7 @@ async def test_compute_does_not_block_on_persistence():
     candidate = CandidateTrade(
         candidate_id="c1",
         ticker="AAPL",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         rule_id="r1",
         direction="LONG",
         confidence=1.0,

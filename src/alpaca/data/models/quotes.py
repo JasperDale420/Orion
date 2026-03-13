@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Dict, List, Optional, Union
 
 from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.common.types import RawData
@@ -28,12 +27,12 @@ class Quote(BaseModel):
     timestamp: datetime
     bid_price: float
     bid_size: float
-    bid_exchange: Optional[Union[str, Exchange]] = None
+    bid_exchange: str | Exchange | None = None
     ask_price: float
     ask_size: float
-    ask_exchange: Optional[Union[str, Exchange]] = None
-    conditions: Optional[Union[List[str], str]] = None
-    tape: Optional[str] = None
+    ask_exchange: str | Exchange | None = None
+    conditions: list[str] | str | None = None
+    tape: str | None = None
 
     def __init__(self, symbol: str, raw_data: RawData) -> None:
         """Instantiates a Quote
@@ -59,7 +58,7 @@ class QuoteSet(BaseDataSet, TimeSeriesMixin):
         data (Dict[str, List[Quote]]): The collection of Quotes keyed by symbol.
     """
 
-    data: Dict[str, List[Quote]] = {}
+    data: dict[str, list[Quote]] = {}
 
     def __init__(self, raw_data: RawData) -> None:
         """Instantiates a QuoteSet.

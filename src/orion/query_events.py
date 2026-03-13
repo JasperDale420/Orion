@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Any, List
+from typing import Any
 
 from dotenv import load_dotenv
 from sqlalchemy import desc, select
@@ -17,7 +17,7 @@ logger = logging.getLogger("orion.query")
 
 
 async def query_latest_events(limit: int = 10) -> None:
-    async def fetch_events(session: Any) -> List[Any]:
+    async def fetch_events(session: Any) -> list[Any]:
         stmt = select(BronzeEvent).order_by(desc(BronzeEvent.event_ts_utc)).limit(limit)
         result = await session.execute(stmt)
         return result.scalars().all()

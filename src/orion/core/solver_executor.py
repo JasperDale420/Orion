@@ -1,10 +1,13 @@
-import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from orion.core.solver_schema import SolverConfig
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
+
+# Module-level cache for models loaded via file URI to avoid repeated disk I/O
+_uri_model_cache: dict[str, Any] = {}
 
 
 class SolverPipeline:
@@ -18,8 +21,8 @@ class SolverPipeline:
         pass
 
     async def execute(
-        self, solver: SolverConfig, candidate: CandidateTrade, feature_engine: Optional[Any] = None
-    ) -> Tuple[float, float, Dict[str, Any]]:
+        self, solver: SolverConfig, candidate: CandidateTrade, feature_engine: Any | None = None
+    ) -> tuple[float, float, dict[str, Any]]:
         """
         Runs the solver pipeline.
 
@@ -69,11 +72,31 @@ class SolverPipeline:
         if solver.model and (solver.model.model_uri or solver.model.model_version):
             import pandas as pd
 
-            from orion.core.model_registry import ModelRegistry
+            from orion.ml.model_registry import get_model_registry
 
-            # Prefer URI if available, else construct/lookup by version
-            uri = solver.model.model_uri or f"models/{solver.model.model_version}.joblib"
-            model = ModelRegistry.get(uri)
+            registry = get_model_registry()
+            model = None
+
+            if solver.model.model_uri:
+                # Direct file path — load with joblib (handle file:// URIs)
+                import joblib
+
+                raw_uri = solver.model.model_uri
+                path_str = raw_uri.removeprefix("file://") if raw_uri.startswith("file://") else raw_uri
+                if path_str in _uri_model_cache:
+                    model = _uri_model_cache[path_str]
+                else:
+                    try:
+                        model = joblib.load(path_str)
+                        _uri_model_cache[path_str] = model
+                    except FileNotFoundError:
+                        model = None
+
+            # Fall through to registry lookup if URI load failed or no URI
+            if model is None and solver.model.model_version:
+                model = registry.get_active_model(solver.model.model_version)
+
+            uri = solver.model.model_uri or solver.model.model_version or "unknown"
 
             if model:
                 try:

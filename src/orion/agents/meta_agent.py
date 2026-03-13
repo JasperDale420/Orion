@@ -1,11 +1,10 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from dotenv import load_dotenv
 
 from orion.agents.base import BaseAgent
 from orion.agents.codex_client import (
-    build_chat_prompt,
     extract_json_from_response,
     run_codex_completion,
 )
@@ -21,7 +20,7 @@ class MetaAgent(BaseAgent):
     """
     PRD Addendum 5.3: MetaAgent (Poetiq-style).
     Uses LLM to propose evolutionary mutations (Edits) to Solvers.
-    Integrated with any-llm for Deepseek support.
+    Routes through Empire AI Gateway for LLM access.
     """
 
     def __init__(self) -> None:
@@ -29,7 +28,7 @@ class MetaAgent(BaseAgent):
 
         super().__init__(name="MetaAgent", model=agent_settings.model_name)
 
-    async def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(self, context: dict[str, Any]) -> dict[str, Any]:
         """
         BaseAgent run method support (optional generic entry point).
         """
@@ -74,7 +73,7 @@ class MetaAgent(BaseAgent):
             logger.warning(f"TradingRAG research failed (non-fatal): {e}")
             return ""
 
-    async def propose_edits(self, base_config: SolverConfig, performance_context: str = "") -> List[SolverEdit]:
+    async def propose_edits(self, base_config: SolverConfig, performance_context: str = "") -> list[SolverEdit]:
         """
         Generates a list of valid SolverEdit objects to mutate the base_config.
         Uses a ReAct loop to query MCP tools for market context before deciding.
@@ -118,24 +117,13 @@ class MetaAgent(BaseAgent):
         except Exception as e:
             logger.warning(f"MetaAgent failed to list MCP tools: {e}")
 
-        # 2. Convert MCP tools to OpenAI Tool Schemas
-        openai_tools = []
-        for t in available_tools:
-            openai_tools.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parameters": t.get("inputSchema", {}),
-                    },
-                }
-            )
-
         system_prompt = (
             "You are an expert Quant Researcher AI (Poetiq-style).\n"
             "Your goal is to evolve trading strategies (Solvers) to maximize Sharpe Ratio and minimize Drawdown.\n"
             "You have access to live market data tools. USE THEM. Verify current market regime (volatility, sector rotation, flow) before proposing changes.\n"
+            "You also have access to codebase tools: read_file, write_file, and run_command.\n"
+            "If you run into errors or missing information, USE YOUR TOOLS to search the codebase, read files, edit your own code, and fix bugs directly.\n"
+            "You are fully capable of solving your own problems and editing your own code.\n\n"
             "You will be given a Base Solver Configuration (JSON) and its Performance Context.\n"
             "You must propose 3 distinct variations (mutations) to improve the strategy.\n"
             "Mutations can include:\n"
@@ -165,24 +153,20 @@ class MetaAgent(BaseAgent):
             "Step 2: Propose 3 variants based on your findings."
         )
 
-        # 3. Execute via Codex CLI
-        # Codex handles tool calling internally, so we just send the prompt
-        final_json_response = None
-
+        # 3. Execute via AI Gateway with native messages
         try:
             from orion.config import agent_settings
 
-            full_prompt = build_chat_prompt(system_prompt, user_prompt)
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
             final_json_response = await run_codex_completion(
-                prompt=full_prompt,
+                messages=messages,
                 model=agent_settings.model_name,
-                reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
                 timeout_seconds=600,  # Longer timeout for complex strategy analysis
             )
 
             if not final_json_response:
-                logger.warning("MetaAgent received empty response from codex.")
+                logger.warning("MetaAgent received empty response from LLM.")
                 return []
 
             # 4. Parse Final JSON

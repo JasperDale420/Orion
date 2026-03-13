@@ -6,15 +6,15 @@ Provides options order submission and quote retrieval via Alpaca Trading API.
 
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import urllib3.exceptions
-from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from requests.exceptions import ConnectionError, Timeout
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from orion.config import SystemSettings
 
 logger = logging.getLogger(__name__)
@@ -96,8 +96,8 @@ class AlpacaOptionsConnector:
         qty: int,
         side: OrderSide,
         order_type: str = "limit",
-        limit_price: Optional[float] = None,
-        client_order_id: Optional[str] = None,
+        limit_price: float | None = None,
+        client_order_id: str | None = None,
     ) -> Any:
         """
         Submit an options order.
@@ -166,7 +166,7 @@ class AlpacaOptionsConnector:
             logger.error(f"Failed to submit OPTIONS order for {option_symbol}: {e}")
             raise
 
-    async def get_option_quote(self, option_symbol: str) -> dict[str, Optional[float]]:
+    async def get_option_quote(self, option_symbol: str) -> dict[str, float | None]:
         """
         Get current bid/ask quote for an option.
 
@@ -191,32 +191,34 @@ class AlpacaOptionsConnector:
                 "APCA-API-SECRET-KEY": api_secret,
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        snapshot = data.get("snapshots", {}).get(option_symbol, {})
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(url, params=params, headers=headers, timeout=10) as resp,
+            ):
+                if resp.status == 200:
+                    data = await resp.json()
+                    snapshot = data.get("snapshots", {}).get(option_symbol, {})
 
-                        latest_quote = snapshot.get("latestQuote", {})
-                        latest_trade = snapshot.get("latestTrade", {})
+                    latest_quote = snapshot.get("latestQuote", {})
+                    latest_trade = snapshot.get("latestTrade", {})
 
-                        bid = latest_quote.get("bp")
-                        ask = latest_quote.get("ap")
-                        last = latest_trade.get("p")
+                    bid = latest_quote.get("bp")
+                    ask = latest_quote.get("ap")
+                    last = latest_trade.get("p")
 
-                        mid = None
-                        if bid and ask:
-                            mid = (bid + ask) / 2
+                    mid = None
+                    if bid and ask:
+                        mid = (bid + ask) / 2
 
-                        return {
-                            "bid": bid,
-                            "ask": ask,
-                            "last": last,
-                            "mid": mid,
-                        }
-                    else:
-                        logger.warning(f"Failed to fetch option quote: HTTP {resp.status}")
-                        return {"bid": None, "ask": None, "last": None, "mid": None}
+                    return {
+                        "bid": bid,
+                        "ask": ask,
+                        "last": last,
+                        "mid": mid,
+                    }
+                else:
+                    logger.warning(f"Failed to fetch option quote: HTTP {resp.status}")
+                    return {"bid": None, "ask": None, "last": None, "mid": None}
 
         except Exception as e:
             logger.error(f"Error fetching option quote for {option_symbol}: {e}")

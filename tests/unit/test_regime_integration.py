@@ -2,6 +2,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.processing.signal_engine import SignalEngine
 
 # Mock modules
@@ -15,8 +16,8 @@ from orion.storage.models_gold import CandidateTrade
 async def test_signal_engine_regime_integration():
     # Real import of SignalEngine but mocking its dependencies through patch
     with (
-        patch("orion.processing.signal_engine.SolverRouter") as MockRouter,
-        patch("orion.processing.signal_engine.RegimeDetector") as MockDetector,
+        patch("orion.processing.signal_engine.SolverRouter") as MockRouter,  # noqa: N806
+        patch("orion.processing.signal_engine.RegimeDetector") as MockDetector,  # noqa: N806
     ):
         mock_router = AsyncMock()
         MockRouter.return_value = mock_router

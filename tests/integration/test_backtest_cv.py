@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import pytest
+
 from orion.processing.backtest_engine import BacktestEngine
 from orion.storage.models_gold import CandidateTrade
 

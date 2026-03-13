@@ -2,7 +2,7 @@ import asyncio
 import logging
 import queue
 from collections import defaultdict
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from collections.abc import Callable
 
 import msgpack
 import websockets
@@ -35,7 +35,7 @@ class DataStream:
         api_key: str,
         secret_key: str,
         raw_data: bool = False,
-        websocket_params: Optional[Dict] = None,
+        websocket_params: dict | None = None,
     ) -> None:
         """Creates a new DataStream instance.
 
@@ -161,13 +161,13 @@ class DataStream:
                     msgs = msgpack.unpackb(r)
                     for msg in msgs:
                         await self._dispatch(msg)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # ws.recv is hanging when no data is received. by using
                     # wait_for we break when no data is received, allowing us
                     # to break the loop when needed
                     pass
 
-    def _cast(self, msg: Dict) -> Union[BaseModel, RawData]:
+    def _cast(self, msg: dict) -> BaseModel | RawData:
         """Parses data from websocket message if raw_data is False, otherwise
         returns the raw websocket message.
 
@@ -204,7 +204,7 @@ class DataStream:
             return TradeCancel(msg["S"], msg)
         return msg
 
-    async def _dispatch(self, msg: Dict) -> None:
+    async def _dispatch(self, msg: dict) -> None:
         """Distributes the message from websocket connection to the appropriate handler.
 
         Args:
@@ -261,7 +261,7 @@ class DataStream:
             await handler(self._cast(msg))
 
     def _subscribe(
-        self, handler: Callable, symbols: Tuple[str], handlers: Dict
+        self, handler: Callable, symbols: tuple[str], handlers: dict
     ) -> None:
         """Subscribes a coroutine callback function to receive data for a tuple of symbols
 
@@ -282,7 +282,7 @@ class DataStream:
         msg = defaultdict(list)
         for k, v in self._handlers.items():
             if k not in ("cancelErrors", "corrections") and v:
-                for s in v.keys():
+                for s in v:
                     msg[k].append(s)
         msg["action"] = "subscribe"
         bs = msgpack.packb(msg)
@@ -292,7 +292,7 @@ class DataStream:
         )
         await self._ws.send(frames)
 
-    def _unsubscribe(self, channel: str, symbols: List[str]) -> None:
+    def _unsubscribe(self, channel: str, symbols: list[str]) -> None:
         if self._running:
             asyncio.run_coroutine_threadsafe(
                 self._send_unsubscribe_msg(channel, symbols), self._loop
@@ -300,7 +300,7 @@ class DataStream:
         for symbol in symbols:
             del self._handlers[channel][symbol]
 
-    async def _send_unsubscribe_msg(self, channel: str, symbols: List[str]) -> None:
+    async def _send_unsubscribe_msg(self, channel: str, symbols: list[str]) -> None:
         if symbols:
             await self._ws.send(
                 msgpack.packb(
@@ -335,10 +335,10 @@ class DataStream:
             try:
                 if not self._should_run:
                     # when signaling to stop, this is how we break run_forever
-                    log.info("{} stream stopped".format(self._name))
+                    log.info(f"{self._name} stream stopped")
                     return
                 if not self._running:
-                    log.info("starting {} websocket connection".format(self._name))
+                    log.info(f"starting {self._name} websocket connection")
                     await self._start_ws()
                     await self._send_subscribe_msg()
                     self._running = True

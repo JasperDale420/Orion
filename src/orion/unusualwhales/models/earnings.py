@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -48,28 +48,28 @@ class Earnings:
         symbol (Union[Unset, float]): The price of the tick Example: 19.32.
     """
 
-    close: Union[Unset, float] = UNSET
-    close_date: Union[Unset, str] = UNSET
-    continent: Union[Unset, float] = UNSET
-    country_code: Union[Unset, float] = UNSET
-    country_name: Union[Unset, float] = UNSET
-    ending_fiscal_quarter: Union[Unset, str] = UNSET
-    eps_mean_est: Union[Unset, float] = UNSET
-    full_name: Union[Unset, float] = UNSET
-    has_options: Union[Unset, float] = UNSET
-    implied_move: Union[Unset, float] = UNSET
-    is_s_p_500: Union[Unset, float] = UNSET
-    marketcap: Union[Unset, float] = UNSET
-    prev: Union[Unset, float] = UNSET
-    prev_date: Union[Unset, str] = UNSET
-    report_date: Union[Unset, str] = UNSET
-    sector: Union[Unset, float] = UNSET
-    source: Union[Unset, float] = UNSET
-    street_mean_est: Union[Unset, float] = UNSET
-    symbol: Union[Unset, float] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    close: Unset | float = UNSET
+    close_date: Unset | str = UNSET
+    continent: Unset | float = UNSET
+    country_code: Unset | float = UNSET
+    country_name: Unset | float = UNSET
+    ending_fiscal_quarter: Unset | str = UNSET
+    eps_mean_est: Unset | float = UNSET
+    full_name: Unset | float = UNSET
+    has_options: Unset | float = UNSET
+    implied_move: Unset | float = UNSET
+    is_s_p_500: Unset | float = UNSET
+    marketcap: Unset | float = UNSET
+    prev: Unset | float = UNSET
+    prev_date: Unset | str = UNSET
+    report_date: Unset | str = UNSET
+    sector: Unset | float = UNSET
+    source: Unset | float = UNSET
+    street_mean_est: Unset | float = UNSET
+    symbol: Unset | float = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         close = self.close
 
         close_date = self.close_date
@@ -108,7 +108,7 @@ class Earnings:
 
         symbol = self.symbol
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if close is not UNSET:
@@ -153,7 +153,7 @@ class Earnings:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         close = d.pop("close", UNSET)
 
@@ -219,7 +219,7 @@ class Earnings:
         return earnings
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

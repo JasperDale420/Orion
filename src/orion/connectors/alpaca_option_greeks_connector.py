@@ -5,17 +5,18 @@ Fetches option Greeks (delta, gamma, theta, vega, rho) and implied volatility
 from Alpaca's Market Data API.
 """
 
-import logging
 import os
-from datetime import datetime
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 # Cache for Greeks data to avoid redundant API calls
-_greeks_cache: Dict[str, Dict[str, Any]] = {}
+_greeks_cache: dict[str, dict[str, Any]] = {}
 _cache_ttl_seconds: int = 60  # Cache for 60 seconds
 
 
@@ -24,14 +25,14 @@ class AlpacaOptionGreeksConnector:
 
     BASE_URL = "https://data.alpaca.markets"
 
-    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, api_secret: str | None = None):
         self.api_key = api_key or os.getenv("ALPACA_API_KEY")
         self.api_secret = api_secret or os.getenv("ALPACA_SECRET_KEY")
 
         if not self.api_key or not self.api_secret:
             logger.warning("Alpaca API credentials not configured")
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Get authentication headers for Alpaca API."""
         return {
             "APCA-API-KEY-ID": self.api_key or "",
@@ -39,7 +40,7 @@ class AlpacaOptionGreeksConnector:
             "Accept": "application/json",
         }
 
-    async def get_greeks(self, option_symbol: str) -> Dict[str, Optional[float]]:
+    async def get_greeks(self, option_symbol: str) -> dict[str, float | None]:
         """Fetch Greeks for a specific option symbol.
 
         Args:
@@ -75,7 +76,7 @@ class AlpacaOptionGreeksConnector:
         cached = _greeks_cache.get(cache_key)
         if cached:
             cache_time = cached.get("_cached_at")
-            if cache_time and (datetime.utcnow() - cache_time).seconds < _cache_ttl_seconds:
+            if cache_time and (datetime.now(UTC) - cache_time).seconds < _cache_ttl_seconds:
                 return {k: v for k, v in cached.items() if not k.startswith("_")}
 
         try:
@@ -118,7 +119,7 @@ class AlpacaOptionGreeksConnector:
                         result["last_trade_price"] = latest_trade.get("p")  # price
 
                     # Cache the result
-                    _greeks_cache[cache_key] = {**result, "_cached_at": datetime.utcnow()}
+                    _greeks_cache[cache_key] = {**result, "_cached_at": datetime.now(UTC)}
 
                     logger.debug(
                         f"Fetched Greeks for {option_symbol}: delta={result['delta']}, "
@@ -140,7 +141,7 @@ class AlpacaOptionGreeksConnector:
 
         return result
 
-    async def get_greeks_batch(self, option_symbols: list[str]) -> Dict[str, Dict[str, Optional[float]]]:
+    async def get_greeks_batch(self, option_symbols: list[str]) -> dict[str, dict[str, float | None]]:
         """Fetch Greeks for multiple option symbols in one request.
 
         Args:
@@ -209,7 +210,7 @@ class AlpacaOptionGreeksConnector:
 
         return results
 
-    def _empty_greeks(self) -> Dict[str, Optional[float]]:
+    def _empty_greeks(self) -> dict[str, float | None]:
         """Return empty Greeks and price dict."""
         return {
             "delta": None,
@@ -226,7 +227,7 @@ class AlpacaOptionGreeksConnector:
 
 
 # Singleton instance
-_connector: Optional[AlpacaOptionGreeksConnector] = None
+_connector: AlpacaOptionGreeksConnector | None = None
 
 
 def get_connector() -> AlpacaOptionGreeksConnector:
@@ -237,7 +238,7 @@ def get_connector() -> AlpacaOptionGreeksConnector:
     return _connector
 
 
-async def get_option_greeks(option_symbol: str) -> Dict[str, Optional[float]]:
+async def get_option_greeks(option_symbol: str) -> dict[str, float | None]:
     """Convenience function to fetch Greeks for a single option.
 
     Args:

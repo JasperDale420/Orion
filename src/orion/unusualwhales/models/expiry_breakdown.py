@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -24,13 +24,13 @@ class ExpiryBreakdown:
         volume (Union[Unset, int]): The total volume for that expiry Example: 12223.
     """
 
-    chains: Union[Unset, int] = UNSET
-    expiry: Union[Unset, str] = UNSET
-    open_interest: Union[Unset, int] = UNSET
-    volume: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    chains: Unset | int = UNSET
+    expiry: Unset | str = UNSET
+    open_interest: Unset | int = UNSET
+    volume: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         chains = self.chains
 
         expiry = self.expiry
@@ -39,7 +39,7 @@ class ExpiryBreakdown:
 
         volume = self.volume
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if chains is not UNSET:
@@ -54,7 +54,7 @@ class ExpiryBreakdown:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         chains = d.pop("chains", UNSET)
 
@@ -75,7 +75,7 @@ class ExpiryBreakdown:
         return expiry_breakdown
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

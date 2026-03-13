@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+
 from orion.api.main import app
 from orion.storage.db import async_session_factory
 from orion.storage.models_rag import VectorDocument
@@ -19,7 +20,7 @@ async def test_search_supports_tickers_premium_filters_and_pointers(monkeypatch)
 
     monkeypatch.setattr(vs.EmbeddingClient, "get_embedding", fake_get_embedding, raising=True)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     docs = [
         VectorDocument(

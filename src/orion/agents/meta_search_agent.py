@@ -1,22 +1,27 @@
+from __future__ import annotations
+
 import asyncio
 import inspect
-import logging
 import os
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 import yaml
+from sqlalchemy import select
+
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
 from orion.core.solver_schema import EditOp, EditOpType, EvaluationTask, SolverConfig, SolverEdit
 from orion.core.solver_validation import ensure_solver_definition_json, solver_dsl_error_extra
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column_func
 from orion.shared.db_utils import db_query, db_write
+from orion.shared.logger import setup_struct_logger
 from orion.storage import db
-from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY
+from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY  # noqa: N812
 from orion.storage.models_solvers import (
     MetaExperiment,
     PromotionRecommendation,
@@ -25,9 +30,8 @@ from orion.storage.models_solvers import (
     SolverMetrics,
     SolverRun,
 )
-from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 async_session_factory = _ORIGINAL_ASYNC_SESSION_FACTORY  # legacy patch target
 
 # Refinement loop configuration
@@ -46,7 +50,7 @@ class MetaSearchAgent:
 
         self.meta_agent = MetaAgent()
 
-        self.vector_store: "VectorStore | None" = None
+        self.vector_store: VectorStore | None = None
         try:
             from orion.rag.vector_store import VectorStore
 
@@ -81,7 +85,7 @@ class MetaSearchAgent:
             await session.commit()
             return result
 
-    def _calculate_composite_score(self, metrics: SolverMetrics, weights: Optional[dict[str, float]] = None) -> float:
+    def _calculate_composite_score(self, metrics: SolverMetrics, weights: dict[str, float] | None = None) -> float:
         """
         Computes a weighted score based on PRD requirements:
         (Sharpe, Profit Factor, Info Ratio, Stability)
@@ -173,7 +177,7 @@ class MetaSearchAgent:
     ) -> Any:
         objective = "maximize composite_score(sharpe,profit_factor,info_ratio,stability) with drawdown penalty"
         if session is not None:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             experiment = MetaExperiment(
                 experiment_id=str(uuid.uuid4()),
                 description=experiment_name,
@@ -205,11 +209,11 @@ class MetaSearchAgent:
         status: str,
         name: str,
         objective: str,
-        base_solver_ids: List[str],
-        config_json: Dict[str, Any],
+        base_solver_ids: list[str],
+        config_json: dict[str, Any],
     ) -> MetaExperiment:
         async def create_experiment(session: Any) -> MetaExperiment:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             experiment = MetaExperiment(
                 experiment_id=str(uuid.uuid4()),
                 description=description,
@@ -246,7 +250,7 @@ class MetaSearchAgent:
 
     async def _generate_edit_candidates(
         self, base_config: SolverConfig, base_solver: Any, perf_ctx: str
-    ) -> List[SolverEdit]:
+    ) -> list[SolverEdit]:
         edits_list = await self.meta_agent.propose_edits(base_config, perf_ctx)
         if edits_list:
             return edits_list
@@ -282,7 +286,7 @@ class MetaSearchAgent:
             if variant and variant[1] > best_score:
                 best_variant, best_score = variant
 
-        end_ts = datetime.now(timezone.utc)
+        end_ts = datetime.now(UTC)
         best_solver_id = best_variant.solver_id if best_variant else None
         summary = f"best_score={best_score:.4f}"
         if "unittest.mock" in getattr(type(session), "__module__", ""):
@@ -403,15 +407,15 @@ class MetaSearchAgent:
 
         self._move_processed_proposals(proposals_dir, proposals_to_ingest)
 
-    async def _collect_yaml_proposals(self, proposals_dir: str) -> List[Dict[str, Any]]:
-        proposals_to_ingest: List[Dict[str, Any]] = []
+    async def _collect_yaml_proposals(self, proposals_dir: str) -> list[dict[str, Any]]:
+        proposals_to_ingest: list[dict[str, Any]] = []
         for filename in os.listdir(proposals_dir):
             proposal = await self._parse_yaml_proposal(proposals_dir, filename)
             if proposal:
                 proposals_to_ingest.append(proposal)
         return proposals_to_ingest
 
-    async def _parse_yaml_proposal(self, proposals_dir: str, filename: str) -> Dict[str, Any] | None:
+    async def _parse_yaml_proposal(self, proposals_dir: str, filename: str) -> dict[str, Any] | None:
         if not filename.endswith(".yaml"):
             return None
 
@@ -442,7 +446,7 @@ class MetaSearchAgent:
             logger.error(f"Failed to parse {filename}: {e}")
             return None
 
-    def _move_processed_proposals(self, proposals_dir: str, proposals_to_ingest: List[Dict[str, Any]]) -> None:
+    def _move_processed_proposals(self, proposals_dir: str, proposals_to_ingest: list[dict[str, Any]]) -> None:
         processed_dir = os.path.join(proposals_dir, "processed")
         os.makedirs(processed_dir, exist_ok=True)
         for prop in proposals_to_ingest:
@@ -457,11 +461,11 @@ class MetaSearchAgent:
         Returns a dict with 'docs' and 'recent_metrics'.
         """
         # Vector search
-        docs = await self.store.search(query, top_k=top_k)
+        docs = await self.vector_store.search(query, top_k=top_k)
 
         # Fetch recent solver metrics
-        async def fetch_recent_metrics(session: Any) -> List[Any]:
-            from orion.storage.models import SolverMetrics
+        async def fetch_recent_metrics(session: Any) -> list[Any]:
+            from orion.storage.models_solvers import SolverMetrics
 
             stmt = select(SolverMetrics).order_by(SolverMetrics.evaluated_at_utc.desc()).limit(10)
             result = await session.execute(stmt)
@@ -484,9 +488,9 @@ class MetaSearchAgent:
         for edit in pending_edits:
             await self._process_pending_edit(edit)
 
-    async def _fetch_pending_edits(self) -> List[Any]:
-        async def fetch_pending(session: Any) -> List[Any]:
-            stmt = select(SolverEdits).where(SolverEdits.reward is None)
+    async def _fetch_pending_edits(self) -> list[Any]:
+        async def fetch_pending(session: Any) -> list[Any]:
+            stmt = select(SolverEdits).where(SolverEdits.reward.is_(None))
             result = await session.execute(stmt)
             return result.scalars().all()
 
@@ -539,7 +543,7 @@ class MetaSearchAgent:
 
     async def _validated_edit_config(
         self, edit: Any, base_config: SolverConfig, solver_edit_obj: SolverEdit
-    ) -> Optional[SolverConfig]:
+    ) -> SolverConfig | None:
         try:
             new_config = self.apply_edit(base_config, solver_edit_obj)
             ensure_solver_definition_json(new_config.model_dump(mode="json"), None)
@@ -590,7 +594,7 @@ class MetaSearchAgent:
         reward_value = new_score - base_score
         # Keep caller-observable object state in sync for tests/in-memory flows.
         edit.reward = reward_value
-        edit.evaluated_at_utc = datetime.now(timezone.utc)
+        edit.evaluated_at_utc = datetime.now(UTC)
 
         async def save_results(session: Any) -> None:
             new_solver = Solver(
@@ -622,7 +626,7 @@ class MetaSearchAgent:
         config: SolverConfig,
         _base_solver_id: str,
         max_iterations: int = MAX_REFINEMENT_ITERATIONS,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Iteratively refine a solver until it meets the promotion threshold.
 
@@ -672,7 +676,7 @@ class MetaSearchAgent:
                     f"- Sharpe: {metrics.sharpe_ratio:.3f}\n"
                     f"- Profit Factor: {metrics.profit_factor:.3f}\n"
                     f"- Max Drawdown: {metrics.max_dd_pct:.1f}%\n"
-                    f"- Win Rate: {(metrics.win_rate or 0) * 100:.1f}%\n"
+                    f"- Win Rate: {(getattr(metrics, 'win_rate', 0) or 0) * 100:.1f}%\n"
                     f"\nPlease propose refinements to improve performance."
                 )
 
@@ -746,7 +750,7 @@ class MetaSearchAgent:
 
     def _generate_heuristic_variants(
         self, base: SolverConfig, base_metrics: Solver, count: int = 3, generated_by: str = "heuristic_fallback"
-    ) -> List[SolverEdit]:
+    ) -> list[SolverEdit]:
         """
         Generates SolverEdit objects using deterministic heuristics.
         """
@@ -794,7 +798,7 @@ class MetaSearchAgent:
 
         return edits
 
-    def _mutate_risk(self, base: SolverConfig, generated_by: str, tighten: bool = False) -> Optional[SolverEdit]:
+    def _mutate_risk(self, base: SolverConfig, generated_by: str, tighten: bool = False) -> SolverEdit | None:
         if not base.risk:
             return None
 
@@ -856,7 +860,10 @@ class MetaSearchAgent:
             self._apply_modify_param(new_config, op)
             return
         if op.op == EditOpType.MODIFY_RISK:
-            self._apply_modify_risk_op(new_config, op)
+            # Route through the generic param path with "risk." prefix for consistency
+            if op.param_name and not op.param_name.startswith("risk."):
+                op.param_name = f"risk.{op.param_name}"
+            self._apply_modify_param(new_config, op)
             return
         if op.op == EditOpType.TOGGLE_FEATURE:
             self._apply_toggle_feature(new_config, op)
@@ -867,15 +874,36 @@ class MetaSearchAgent:
         if op.op == EditOpType.REMOVE_RULE:
             self._apply_remove_rule(new_config, op)
 
-    def _apply_modify_param(self, new_config: SolverConfig, op: EditOp) -> None:
-        if op.param_name == "exit_logic.take_profit_atr_multiple":
-            new_config.exit_logic.take_profit_atr_multiple = float(op.new_value)
-        elif op.param_name == "risk_per_trade_bps":
-            new_config.risk_per_trade_bps = int(op.new_value)
+    # Fields that should be cast to int; everything else is cast to float.
+    _INT_SUFFIXES = ("_bps", "_positions", "_bars")
 
-    def _apply_modify_risk_op(self, new_config: SolverConfig, op: EditOp) -> None:
-        if op.param_name == "risk_per_trade_bps" and new_config.risk:
-            new_config.risk.risk_per_trade_bps = int(op.new_value)
+    def _apply_modify_param(self, new_config: SolverConfig, op: EditOp) -> None:
+        param = op.param_name or ""
+
+        # Backward-compat: bare "risk_per_trade_bps" → "risk.risk_per_trade_bps"
+        if param == "risk_per_trade_bps":
+            param = "risk.risk_per_trade_bps"
+
+        parts = param.split(".")
+        obj: Any = new_config
+        for part in parts[:-1]:
+            obj = getattr(obj, part, None)
+            if obj is None:
+                logger.warning("modify_param: cannot resolve path %r on SolverConfig (missing %r)", param, part)
+                return
+
+        attr = parts[-1]
+        if not hasattr(obj, attr):
+            logger.warning("modify_param: attribute %r not found on %s", attr, type(obj).__name__)
+            return
+
+        # Type coercion: int for *_bps / *_positions / *_bars, else float
+        if any(attr.endswith(suffix) for suffix in self._INT_SUFFIXES):
+            value = int(op.new_value)
+        else:
+            value = float(op.new_value)
+
+        setattr(obj, attr, value)
 
     def _apply_toggle_feature(self, new_config: SolverConfig, op: EditOp) -> None:
         feat = op.feature_name
@@ -909,11 +937,11 @@ class MetaSearchAgent:
         new_config.rules = [rule for rule in new_config.rules if not self._rule_matches(rule, rule_id)]
 
     def _create_default_task(self) -> EvaluationTask:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         from orion.core.solver_schema import EvaluationTask
 
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         start = end - timedelta(days=30)
         return EvaluationTask(
             task_id=f"default_{end.strftime('%Y%m%d')}",
@@ -923,7 +951,7 @@ class MetaSearchAgent:
         )
 
     async def evaluate_variant(
-        self, solver_id: str, config: SolverConfig, task: Optional[EvaluationTask] = None, n_trials: int = 1
+        self, solver_id: str, config: SolverConfig, task: EvaluationTask | None = None, n_trials: int = 1
     ) -> tuple[SolverRun, SolverMetrics]:
         from orion.core.evaluation_harness import DatasetSpec, run_solver_backtest
         from orion.processing.feature_engine import FeatureEngine
@@ -936,7 +964,7 @@ class MetaSearchAgent:
             id=str(uuid.uuid4()),
             solver_id=solver_id,
             dataset_tag=task.dataset_tag,
-            evaluated_at_utc=datetime.now(timezone.utc),
+            evaluated_at_utc=datetime.now(UTC),
             sharpe_ratio=0.0,
         )
 
@@ -1086,12 +1114,7 @@ class MetaSearchAgent:
 
         return solver_run, metrics
 
-    @staticmethod
-    def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-        for name in names:
-            if name in df.columns:
-                return name
-        return None
+    _first_existing_column = staticmethod(_first_existing_column_func)
 
     @staticmethod
     def _normalize_ticker(value: Any) -> str | None:
@@ -1105,13 +1128,13 @@ class MetaSearchAgent:
         return ticker or None
 
     @staticmethod
-    def _load_yaml_artifact(path: str) -> Dict[str, Any]:
-        with open(path, "r") as handle:
+    def _load_yaml_artifact(path: str) -> dict[str, Any]:
+        with open(path) as handle:
             return yaml.safe_load(handle) or {}
 
     async def _fetch_events_from_heber(
         self, task: EvaluationTask
-    ) -> Tuple[List[Any], List[Any], Dict[str, Any]] | None:
+    ) -> tuple[list[Any], list[Any], dict[str, Any]] | None:
         frames = await self._read_heber_frames(task)
         if frames is None:
             return None
@@ -1120,7 +1143,7 @@ class MetaSearchAgent:
         flow_events = self._map_heber_flow_events(task, flow_frame)
         return alpaca_events, flow_events, price_data
 
-    async def _read_heber_frames(self, task: EvaluationTask) -> Optional[tuple[pd.DataFrame, pd.DataFrame]]:
+    async def _read_heber_frames(self, task: EvaluationTask) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         reader = get_heber_reader()
         symbols = task.ticker_filter or []
         asof_time = task.end_time_utc
@@ -1144,14 +1167,14 @@ class MetaSearchAgent:
             logger.warning(f"Heber read failed for meta-search events: {exc}")
             return None
 
-    def _map_heber_bar_events(self, task: EvaluationTask, bars_frame: pd.DataFrame) -> tuple[List[Any], Dict[str, Any]]:
+    def _map_heber_bar_events(self, task: EvaluationTask, bars_frame: pd.DataFrame) -> tuple[list[Any], dict[str, Any]]:
         from orion.storage.models import BronzeEvent
 
         if bars_frame.empty:
             return [], {}
 
-        alpaca_events: List[Any] = []
-        data_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+        alpaca_events: list[Any] = []
+        data_by_ticker: dict[str, list[dict[str, Any]]] = {}
         ticker_col = self._first_existing_column(bars_frame, ("ticker", "symbol", "instrument_key"))
         ts_col = self._first_existing_column(bars_frame, ("bar_start_ts", "bar_start_ts_utc", "ts_event"))
         open_col = self._first_existing_column(bars_frame, ("open", "o"))
@@ -1203,7 +1226,7 @@ class MetaSearchAgent:
         vwap_col: str | None,
         trades_col: str | None,
         event_factory: Any,
-    ) -> Optional[tuple[Any, Dict[str, Any]]]:
+    ) -> tuple[Any, dict[str, Any]] | None:
         ticker = self._normalize_ticker(row.get(ticker_col))
         if ticker is None:
             return None
@@ -1243,8 +1266,8 @@ class MetaSearchAgent:
         }
         return event, series_row
 
-    def _price_data_from_rows(self, data_by_ticker: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
-        price_data: Dict[str, Any] = {}
+    def _price_data_from_rows(self, data_by_ticker: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+        price_data: dict[str, Any] = {}
         for ticker, bar_list in data_by_ticker.items():
             if not bar_list:
                 continue
@@ -1252,7 +1275,7 @@ class MetaSearchAgent:
             price_data[ticker] = df.set_index("timestamp").sort_index()
         return price_data
 
-    def _map_heber_flow_events(self, task: EvaluationTask, flow_frame: pd.DataFrame) -> List[Any]:
+    def _map_heber_flow_events(self, task: EvaluationTask, flow_frame: pd.DataFrame) -> list[Any]:
         from orion.storage.models import BronzeEvent
 
         if flow_frame.empty:
@@ -1270,7 +1293,7 @@ class MetaSearchAgent:
         if not (ticker_col and ts_col and premium_col):
             return []
 
-        flow_events: List[Any] = []
+        flow_events: list[Any] = []
         tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
         for idx, row in flow_frame.iterrows():
             event = self._map_single_heber_flow_row(
@@ -1307,7 +1330,7 @@ class MetaSearchAgent:
         expiry_col: str | None,
         event_id_col: str | None,
         event_factory: Any,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         ticker = self._normalize_ticker(row.get(ticker_col))
         if ticker is None:
             return None
@@ -1320,7 +1343,7 @@ class MetaSearchAgent:
         if pd.isna(premium):
             return None
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "ticker": ticker,
             "premium": float(premium),
             "put_call": str(row.get(put_call_col)).strip().upper() if put_call_col and row.get(put_call_col) else "",
@@ -1341,7 +1364,7 @@ class MetaSearchAgent:
             ticker=ticker,
         )
 
-    def _maybe_add_expiry_dte(self, payload: Dict[str, Any], expiry_value: Any, flow_ts: Any) -> None:
+    def _maybe_add_expiry_dte(self, payload: dict[str, Any], expiry_value: Any, flow_ts: Any) -> None:
         if not expiry_value:
             return
         payload["expiry"] = expiry_value
@@ -1352,7 +1375,7 @@ class MetaSearchAgent:
         except Exception:
             return
 
-    async def _fetch_silver_events(self, task: EvaluationTask) -> Tuple[List[Any], List[Any], Dict[str, Any]]:
+    async def _fetch_silver_events(self, task: EvaluationTask) -> tuple[list[Any], list[Any], dict[str, Any]]:
         heber_data = await self._fetch_events_from_heber(task)
         if heber_data is None:
             return [], [], {}
@@ -1382,7 +1405,7 @@ class MetaSearchAgent:
                     f"Promotion Cycle Complete: +{count_recommendations} Recommendations, +{count_demoted} Demotion Recommendations."
                 )
 
-    async def _fetch_all_solvers(self, session: Any) -> List[Any]:
+    async def _fetch_all_solvers(self, session: Any) -> list[Any]:
         result = await session.execute(select(Solver))
         return result.scalars().all()
 
@@ -1405,7 +1428,7 @@ class MetaSearchAgent:
         existing = (await session.execute(stmt)).scalars().first()
         return bool(existing)
 
-    def _next_stage(self, stage_order: List[str], stage: str) -> Optional[str]:
+    def _next_stage(self, stage_order: list[str], stage: str) -> str | None:
         try:
             idx = stage_order.index(stage)
         except ValueError:
@@ -1414,7 +1437,7 @@ class MetaSearchAgent:
             return None
         return stage_order[idx + 1]
 
-    def _previous_stage(self, stage_order: List[str], stage: str) -> str:
+    def _previous_stage(self, stage_order: list[str], stage: str) -> str:
         try:
             idx = stage_order.index(stage)
         except ValueError:
@@ -1425,7 +1448,7 @@ class MetaSearchAgent:
         self,
         session: Any,
         solver: Any,
-        stage_order: List[str],
+        stage_order: list[str],
         evaluate_stage_transition: Any,
     ) -> tuple[int, int]:
         latest_metrics = await self._fetch_latest_solver_metrics_for_session(session, solver.solver_id)
@@ -1440,7 +1463,7 @@ class MetaSearchAgent:
         return 0, 0
 
     async def _handle_solver_promotion(
-        self, session: Any, solver: Any, latest_metrics: Any, stage_order: List[str]
+        self, session: Any, solver: Any, latest_metrics: Any, stage_order: list[str]
     ) -> int:
         new_stage = self._next_stage(stage_order, solver.stage)
         if not new_stage:
@@ -1462,7 +1485,7 @@ class MetaSearchAgent:
         return 1
 
     async def _handle_solver_demotion(
-        self, session: Any, solver: Any, latest_metrics: Any, stage_order: List[str]
+        self, session: Any, solver: Any, latest_metrics: Any, stage_order: list[str]
     ) -> int:
         logger.info(f"DEMOTION RECOMMENDED for Solver {solver.solver_id} from {solver.stage}")
         solver.is_active = False
@@ -1486,7 +1509,7 @@ class MetaSearchAgent:
     # Weekly Evolution Cycle (Friday EOD)
     # --------------------------------------------------------
 
-    async def run_weekly_evolution(self, dry_run: bool = False) -> Dict[str, Any]:
+    async def run_weekly_evolution(self, dry_run: bool = False) -> dict[str, Any]:
         """
         Friday EOD comprehensive analysis and solver evolution.
 
@@ -1561,21 +1584,21 @@ class MetaSearchAgent:
 
         return summary
 
-    async def _apply_weekly_mutations(self, recommendations: Dict[str, Any], dry_run: bool) -> List[Dict[str, Any]]:
+    async def _apply_weekly_mutations(self, recommendations: dict[str, Any], dry_run: bool) -> list[dict[str, Any]]:
         if dry_run:
             return []
         proposed_edits = recommendations.get("proposed_edits") or []
         if not proposed_edits:
             return []
 
-        mutations_applied: List[Dict[str, Any]] = []
+        mutations_applied: list[dict[str, Any]] = []
         for edit_proposal in proposed_edits[:3]:
             mutation = await self._apply_single_weekly_mutation(edit_proposal)
             if mutation:
                 mutations_applied.append(mutation)
         return mutations_applied
 
-    async def _apply_single_weekly_mutation(self, edit_proposal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _apply_single_weekly_mutation(self, edit_proposal: dict[str, Any]) -> dict[str, Any] | None:
         base_id = edit_proposal.get("base_solver_id")
         if not base_id:
             return None
@@ -1611,7 +1634,7 @@ class MetaSearchAgent:
             logger.error(f"Failed to apply weekly mutation: {e}")
             return None
 
-    def _analyze_execution_quality(self, week_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_execution_quality(self, week_data: dict[str, Any]) -> dict[str, Any]:
         """
         Analyze trade execution quality vs expectations.
         """
@@ -1642,18 +1665,25 @@ class MetaSearchAgent:
 
         return analysis
 
-    def _analyze_ml_drift(self, week_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_ml_drift(self, week_data: dict[str, Any]) -> dict[str, Any]:
         """
         Analyze ML model drift from pattern miner insights.
+
+        Uses drift_analysis computed by WeeklyDataAggregator from per-bucket AUC
+        scores collected in EOD reports.  Falls back gracefully when data is sparse:
+        - No AUC data at all -> "no_data"
+        - Some buckets exist but all have < 2 data-points -> "insufficient_data"
+        - Otherwise compute health from degrading / total ratio
         """
         eod_data = week_data.get("eod_reports", {})
         ml_insights = week_data.get("ml_insights", {})
 
-        drift_analysis = {
+        drift_analysis: dict[str, Any] = {
             "buckets_analyzed": [],
             "degrading_buckets": [],
             "improving_buckets": [],
             "stable_buckets": [],
+            "insufficient_buckets": [],
             "top_features": eod_data.get("top_features", {}),
             "overall_health": "unknown",
         }
@@ -1674,18 +1704,30 @@ class MetaSearchAgent:
                 )
             elif trend == "improving":
                 drift_analysis["improving_buckets"].append(bucket)
+            elif trend == "insufficient":
+                drift_analysis["insufficient_buckets"].append(bucket)
             else:
                 drift_analysis["stable_buckets"].append(bucket)
 
         # Overall health
-        n_degrading = len(drift_analysis["degrading_buckets"])
         n_total = len(drift_analysis["buckets_analyzed"])
+        n_degrading = len(drift_analysis["degrading_buckets"])
+        n_insufficient = len(drift_analysis["insufficient_buckets"])
 
         if n_total == 0:
+            # No ML AUC scores found in any EOD report this week
             drift_analysis["overall_health"] = "no_data"
+            drift_analysis["message"] = "No ML AUC scores found in this week's EOD reports."
+        elif n_insufficient == n_total:
+            # All buckets have < 2 data points -- not enough to compare
+            drift_analysis["overall_health"] = "insufficient_data"
+            drift_analysis["message"] = (
+                f"{n_total} bucket(s) found but each has fewer than 2 data points. "
+                f"Need at least 2 trading days with ML scores to compute drift."
+            )
         elif n_degrading == 0:
             drift_analysis["overall_health"] = "healthy"
-        elif n_degrading / n_total < 0.3:
+        elif n_degrading / max(n_total - n_insufficient, 1) < 0.3:
             drift_analysis["overall_health"] = "minor_drift"
         else:
             drift_analysis["overall_health"] = "significant_drift"
@@ -1694,10 +1736,10 @@ class MetaSearchAgent:
 
     async def _generate_weekly_recommendations(
         self,
-        week_data: Dict[str, Any],
-        execution_analysis: Dict[str, Any],
-        drift_analysis: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        week_data: dict[str, Any],
+        execution_analysis: dict[str, Any],
+        drift_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Generate evolution recommendations based on weekly analysis.
         """

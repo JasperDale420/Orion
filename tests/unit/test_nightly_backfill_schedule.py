@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,17 +7,17 @@ from orion.jobs import nightly_backfill
 
 
 def test_session_run_time_uses_calendar_close_plus_delay(monkeypatch) -> None:
-    close_ts = datetime(2026, 2, 9, 21, 0, tzinfo=timezone.utc)
+    close_ts = datetime(2026, 2, 9, 21, 0, tzinfo=UTC)
     mock_schedule = MagicMock()
     mock_schedule.get_open_close.return_value = (close_ts - timedelta(hours=6), close_ts)
     monkeypatch.setattr(nightly_backfill, "_MARKET_SCHEDULE", mock_schedule)
 
-    run_ts = nightly_backfill._session_run_time_utc(datetime(2026, 2, 9, 12, 0, tzinfo=timezone.utc))
+    run_ts = nightly_backfill._session_run_time_utc(datetime(2026, 2, 9, 12, 0, tzinfo=UTC))
     assert run_ts == close_ts + timedelta(minutes=nightly_backfill.BACKFILL_DELAY_MINUTES)
 
 
 def test_get_next_run_time_uses_next_future_session(monkeypatch) -> None:
-    fixed_now = datetime(2026, 2, 7, 22, 0, tzinfo=timezone.utc)
+    fixed_now = datetime(2026, 2, 7, 22, 0, tzinfo=UTC)
 
     class FixedDateTime(datetime):
         @classmethod

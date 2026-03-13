@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+
 from alpaca.trading.enums import OrderSide
 from orion.execution.execution_engine import ExecutionEngine
 

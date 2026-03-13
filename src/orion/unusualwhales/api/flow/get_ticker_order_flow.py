@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -14,33 +14,33 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_size: Union[Unset, int] = UNSET,
-    max_size: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    all_opening: Union[Unset, bool] = UNSET,
-    is_floor: Union[Unset, bool] = UNSET,
-    is_sweep: Union[Unset, bool] = UNSET,
-    is_call: Union[Unset, bool] = UNSET,
-    is_put: Union[Unset, bool] = UNSET,
-    rule_name: Union[Unset, List[FlowAlertRule]] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Dict[str, Any]:
+    ticker_symbol: Unset | str = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_size: Unset | int = UNSET,
+    max_size: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    all_opening: Unset | bool = UNSET,
+    is_floor: Unset | bool = UNSET,
+    is_sweep: Unset | bool = UNSET,
+    is_call: Unset | bool = UNSET,
+    is_put: Unset | bool = UNSET,
+    rule_name: Unset | list[FlowAlertRule] = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["ticker_symbol"] = ticker_symbol
 
@@ -70,7 +70,7 @@ def _get_kwargs(
 
     params["is_put"] = is_put
 
-    json_rule_name: Union[Unset, List[str]] = UNSET
+    json_rule_name: Unset | list[str] = UNSET
     if not isinstance(rule_name, Unset):
         json_rule_name = []
         for componentsschemas_rule_name_item_data in rule_name:
@@ -89,7 +89,7 @@ def _get_kwargs(
 
     params["is_otm"] = is_otm
 
-    json_issue_types: Union[Unset, List[str]] = UNSET
+    json_issue_types: Unset | list[str] = UNSET
     if not isinstance(issue_types, Unset):
         json_issue_types = []
         for componentsschemas_issue_types_item_data in issue_types:
@@ -106,7 +106,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/option-trades/flow-alerts",
         "params": params,
@@ -115,9 +115,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(
-    *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, FlowAlert, str]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> ErrorMessage | FlowAlert | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -140,7 +138,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, FlowAlert, str]]:
+) -> Response[ErrorMessage | FlowAlert | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -152,31 +150,31 @@ def _build_response(
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_size: Union[Unset, int] = UNSET,
-    max_size: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    all_opening: Union[Unset, bool] = UNSET,
-    is_floor: Union[Unset, bool] = UNSET,
-    is_sweep: Union[Unset, bool] = UNSET,
-    is_call: Union[Unset, bool] = UNSET,
-    is_put: Union[Unset, bool] = UNSET,
-    rule_name: Union[Unset, List[FlowAlertRule]] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, FlowAlert, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_size: Unset | int = UNSET,
+    max_size: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    all_opening: Unset | bool = UNSET,
+    is_floor: Unset | bool = UNSET,
+    is_sweep: Unset | bool = UNSET,
+    is_call: Unset | bool = UNSET,
+    is_put: Unset | bool = UNSET,
+    rule_name: Unset | list[FlowAlertRule] = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | FlowAlert | str]:
     """Search Option Trades With Filters
 
      Search option trades based on a variety of parameters
@@ -283,31 +281,31 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_size: Union[Unset, int] = UNSET,
-    max_size: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    all_opening: Union[Unset, bool] = UNSET,
-    is_floor: Union[Unset, bool] = UNSET,
-    is_sweep: Union[Unset, bool] = UNSET,
-    is_call: Union[Unset, bool] = UNSET,
-    is_put: Union[Unset, bool] = UNSET,
-    rule_name: Union[Unset, List[FlowAlertRule]] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, FlowAlert, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_size: Unset | int = UNSET,
+    max_size: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    all_opening: Unset | bool = UNSET,
+    is_floor: Unset | bool = UNSET,
+    is_sweep: Unset | bool = UNSET,
+    is_call: Unset | bool = UNSET,
+    is_put: Unset | bool = UNSET,
+    rule_name: Unset | list[FlowAlertRule] = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | FlowAlert | str | None:
     """Search Option Trades With Filters
 
      Search option trades based on a variety of parameters
@@ -409,31 +407,31 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_size: Union[Unset, int] = UNSET,
-    max_size: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    all_opening: Union[Unset, bool] = UNSET,
-    is_floor: Union[Unset, bool] = UNSET,
-    is_sweep: Union[Unset, bool] = UNSET,
-    is_call: Union[Unset, bool] = UNSET,
-    is_put: Union[Unset, bool] = UNSET,
-    rule_name: Union[Unset, List[FlowAlertRule]] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, FlowAlert, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_size: Unset | int = UNSET,
+    max_size: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    all_opening: Unset | bool = UNSET,
+    is_floor: Unset | bool = UNSET,
+    is_sweep: Unset | bool = UNSET,
+    is_call: Unset | bool = UNSET,
+    is_put: Unset | bool = UNSET,
+    rule_name: Unset | list[FlowAlertRule] = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | FlowAlert | str]:
     """Search Option Trades With Filters
 
      Search option trades based on a variety of parameters
@@ -538,31 +536,31 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_size: Union[Unset, int] = UNSET,
-    max_size: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    all_opening: Union[Unset, bool] = UNSET,
-    is_floor: Union[Unset, bool] = UNSET,
-    is_sweep: Union[Unset, bool] = UNSET,
-    is_call: Union[Unset, bool] = UNSET,
-    is_put: Union[Unset, bool] = UNSET,
-    rule_name: Union[Unset, List[FlowAlertRule]] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, FlowAlert, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_size: Unset | int = UNSET,
+    max_size: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    all_opening: Unset | bool = UNSET,
+    is_floor: Unset | bool = UNSET,
+    is_sweep: Unset | bool = UNSET,
+    is_call: Unset | bool = UNSET,
+    is_put: Unset | bool = UNSET,
+    rule_name: Unset | list[FlowAlertRule] = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | FlowAlert | str | None:
     """Search Option Trades With Filters
 
      Search option trades based on a variety of parameters

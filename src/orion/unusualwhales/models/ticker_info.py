@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -48,22 +48,22 @@ class TickerInfo:
             technology company by ....
     """
 
-    announce_time: Union[Unset, StockEarningsTime] = UNSET
-    avg30_volume: Union[Unset, str] = UNSET
-    full_name: Union[Unset, str] = UNSET
-    has_dividend: Union[Unset, bool] = UNSET
-    has_earnings_history: Union[Unset, bool] = UNSET
-    has_investment_arm: Union[Unset, bool] = UNSET
-    has_options: Union[Unset, bool] = UNSET
-    issue_type: Union[Unset, StockIssueType] = UNSET
-    marketcap: Union[Unset, str] = UNSET
-    next_earnings_date: Union[Unset, datetime.date] = UNSET
-    sector: Union[Unset, MarketGeneralSector] = UNSET
-    short_description: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    announce_time: Unset | StockEarningsTime = UNSET
+    avg30_volume: Unset | str = UNSET
+    full_name: Unset | str = UNSET
+    has_dividend: Unset | bool = UNSET
+    has_earnings_history: Unset | bool = UNSET
+    has_investment_arm: Unset | bool = UNSET
+    has_options: Unset | bool = UNSET
+    issue_type: Unset | StockIssueType = UNSET
+    marketcap: Unset | str = UNSET
+    next_earnings_date: Unset | datetime.date = UNSET
+    sector: Unset | MarketGeneralSector = UNSET
+    short_description: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
-        announce_time: Union[Unset, str] = UNSET
+    def to_dict(self) -> dict[str, Any]:
+        announce_time: Unset | str = UNSET
         if not isinstance(self.announce_time, Unset):
             announce_time = self.announce_time.value
 
@@ -79,23 +79,23 @@ class TickerInfo:
 
         has_options = self.has_options
 
-        issue_type: Union[Unset, str] = UNSET
+        issue_type: Unset | str = UNSET
         if not isinstance(self.issue_type, Unset):
             issue_type = self.issue_type.value
 
         marketcap = self.marketcap
 
-        next_earnings_date: Union[Unset, str] = UNSET
+        next_earnings_date: Unset | str = UNSET
         if not isinstance(self.next_earnings_date, Unset):
             next_earnings_date = self.next_earnings_date.isoformat()
 
-        sector: Union[Unset, str] = UNSET
+        sector: Unset | str = UNSET
         if not isinstance(self.sector, Unset):
             sector = self.sector.value
 
         short_description = self.short_description
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if announce_time is not UNSET:
@@ -126,10 +126,10 @@ class TickerInfo:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         _announce_time = d.pop("announce_time", UNSET)
-        announce_time: Union[Unset, StockEarningsTime]
+        announce_time: Unset | StockEarningsTime
         if isinstance(_announce_time, Unset):
             announce_time = UNSET
         else:
@@ -148,7 +148,7 @@ class TickerInfo:
         has_options = d.pop("has_options", UNSET)
 
         _issue_type = d.pop("issue_type", UNSET)
-        issue_type: Union[Unset, StockIssueType]
+        issue_type: Unset | StockIssueType
         if isinstance(_issue_type, Unset):
             issue_type = UNSET
         else:
@@ -157,14 +157,14 @@ class TickerInfo:
         marketcap = d.pop("marketcap", UNSET)
 
         _next_earnings_date = d.pop("next_earnings_date", UNSET)
-        next_earnings_date: Union[Unset, datetime.date]
+        next_earnings_date: Unset | datetime.date
         if isinstance(_next_earnings_date, Unset):
             next_earnings_date = UNSET
         else:
             next_earnings_date = isoparse(_next_earnings_date).date()
 
         _sector = d.pop("sector", UNSET)
-        sector: Union[Unset, MarketGeneralSector]
+        sector: Unset | MarketGeneralSector
         if isinstance(_sector, Unset):
             sector = UNSET
         else:
@@ -191,7 +191,7 @@ class TickerInfo:
         return ticker_info
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

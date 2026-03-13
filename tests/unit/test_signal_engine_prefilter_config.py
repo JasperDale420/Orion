@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.analysis.regime import MarketRegime
 from orion.core.solver_schema import SolverConfig
 from orion.processing.signal_engine import SignalEngine
@@ -12,7 +13,7 @@ def test_build_ml_prefilter_payload_normalizes_contract_fields() -> None:
     candidate = CandidateTrade(
         candidate_id="cand_payload",
         ticker="AAPL",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         rule_id="rule_test",
         direction="LONG",
         confidence=1.0,
@@ -43,7 +44,7 @@ async def test_ml_prefilter_threshold_reads_centralized_config(monkeypatch: pyte
     candidate = CandidateTrade(
         candidate_id="cand_prefilter",
         ticker="MSFT",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         rule_id="rule_test",
         direction="LONG",
         confidence=1.0,
@@ -99,7 +100,7 @@ async def test_ensemble_threshold_reads_centralized_config(monkeypatch: pytest.M
         candidate = CandidateTrade(
             candidate_id="cand_consensus",
             ticker="NVDA",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             rule_id="rule_test",
             direction="LONG",
             confidence=1.0,

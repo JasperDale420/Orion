@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -11,7 +11,7 @@ from orion.api.main import app
 async def test_flows_endpoint_supports_min_premium_filter_from_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORION_API_KEY", "testkey")
 
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = datetime.now(UTC).replace(microsecond=0)
     flow_df = pd.DataFrame(
         [
             {

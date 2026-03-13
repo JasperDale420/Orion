@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -12,7 +11,7 @@ from orion.ml.darkpool_features import get_darkpool_features
 
 @pytest.mark.asyncio
 async def test_get_darkpool_features_aggregates_heber_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    as_of = datetime(2026, 2, 12, 15, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     frame = pd.DataFrame(
         {
             "ticker": ["AAPL", "AAPL"],
@@ -41,7 +40,7 @@ async def test_get_darkpool_features_aggregates_heber_rows(monkeypatch: pytest.M
 async def test_get_darkpool_features_returns_zeroes_when_heber_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    as_of = datetime(2026, 2, 12, 15, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     reader = MagicMock()
     reader.read_darkpool.side_effect = RuntimeError("heber unavailable")
     monkeypatch.setattr("orion.ml.darkpool_features.get_heber_reader", lambda: reader)

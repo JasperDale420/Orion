@@ -1,24 +1,27 @@
 import asyncio
-import logging
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Tuple
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select
 
 from alpaca.trading.enums import OrderSide, TimeInForce
 from orion.config import risk_settings, system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_options_connector import AlpacaOptionsConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
+from orion.core.enums import DecisionStatus
 from orion.core.errors import ErrorCode
 from orion.execution.rate_limiter import get_order_rate_limiter
+from orion.labeler.constants import SECTOR_MAPPING
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
 from orion.storage.db import async_session_factory  # legacy patch target for tests
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class ExecutionEngine:
@@ -87,7 +90,7 @@ class ExecutionEngine:
 
         try:
 
-            async def fetch_recent_decisions(session: Any) -> List[Any]:
+            async def fetch_recent_decisions(session: Any) -> list[Any]:
                 stmt = (
                     select(StrategyDecision)
                     .where(StrategyDecision.decision == "EXECUTE")
@@ -101,9 +104,9 @@ class ExecutionEngine:
 
             # We want to append them in chronological order (oldest first)
             for d in reversed(recent_decisions):
-                if d.executed_successfully == "TRUE":
+                if d.executed_successfully == DecisionStatus.TRUE:
                     self.order_history.append(True)
-                elif d.executed_successfully == "FALSE":
+                elif d.executed_successfully == DecisionStatus.FALSE:
                     self.order_history.append(False)
 
             logger.info(
@@ -127,8 +130,12 @@ class ExecutionEngine:
 
         action = decision.decision.upper()
         if action != "EXECUTE":
-            logger.info(f"Decision for {candidate.ticker} was {action}")
+            logger.info("decision_skipped", ticker=candidate.ticker, action=action)
             return
+
+        # Normalize direction once before dispatching to avoid repeated guards
+        if isinstance(candidate.direction, str):
+            candidate.direction = candidate.direction.upper()
 
         # Check if this is an options trade
         is_options_trade = bool(candidate.option_symbol)
@@ -148,6 +155,7 @@ class ExecutionEngine:
 
     async def _execute_equity_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
         """Execute a standard equity order."""
+
         # 1. Pre-Flight Checks (Health, Lag, Shorting)
         if not await self._pre_flight_checks(decision, candidate):
             return
@@ -155,7 +163,7 @@ class ExecutionEngine:
         # 2. Price Discovery
         current_price = self._get_execution_price(decision, candidate)
         if current_price <= 0:
-            decision.executed_successfully = "FALSE"
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Price Fetch Failed"
             return
 
@@ -166,14 +174,30 @@ class ExecutionEngine:
 
         # 4. Check Risk Manager
         if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side.value):
-            logger.error(f"Execution BLOCKED by RiskManager for {candidate.ticker}")
-            decision.executed_successfully = "FALSE"
+            logger.error(
+                "execution_blocked_by_risk", ticker=candidate.ticker, qty=qty, price=current_price, side=side.value
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Risk Rejection"
+            return
+
+        # 4b. Sector Exposure Check
+        estimated_cost = qty * current_price
+        sector = SECTOR_MAPPING.get(candidate.ticker)
+        if sector and not self.risk_manager.check_sector_exposure(sector, estimated_cost):
+            logger.error(
+                "execution_blocked_by_sector_exposure",
+                ticker=candidate.ticker,
+                sector=sector,
+                estimated_cost=estimated_cost,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = f"Sector Exposure Limit ({sector})"
             return
 
         # 5. Circuit Breaker
         if self._check_circuit_breaker():
-            decision.executed_successfully = "FALSE"
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "High Error Rate"
             return
 
@@ -182,9 +206,10 @@ class ExecutionEngine:
 
     async def _execute_options_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
         """Execute an options order."""
+
         if not self.options_connector:
             logger.warning("No options connector available. Skipping options execution.")
-            decision.executed_successfully = "FALSE"
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Options Connector Missing"
             return
 
@@ -193,14 +218,15 @@ class ExecutionEngine:
             return
 
         # 2. DTE Check
+        dte: int | None = None
         if candidate.expiration_date:
-            from datetime import timezone
-
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             dte = (candidate.expiration_date - now).days
             if dte < risk_settings.min_dte:
-                logger.warning(f"OPTIONS BLOCKED: DTE {dte} < min {risk_settings.min_dte}")
-                decision.executed_successfully = "FALSE"
+                logger.warning(
+                    "options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker
+                )
+                decision.executed_successfully = DecisionStatus.FALSE
                 decision.reason = f"DTE Too Low ({dte} days)"
                 return
 
@@ -209,8 +235,8 @@ class ExecutionEngine:
         option_price = quote.get("mid") or quote.get("ask") or candidate.premium
 
         if not option_price or option_price <= 0:
-            logger.error(f"Cannot get option price for {candidate.option_symbol}")
-            decision.executed_successfully = "FALSE"
+            logger.error("options_price_fetch_failed", option_symbol=candidate.option_symbol, ticker=candidate.ticker)
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Option Price Fetch Failed"
             return
 
@@ -219,14 +245,61 @@ class ExecutionEngine:
         num_contracts = self.options_connector.calculate_option_contracts(max_premium, option_price)
 
         if num_contracts <= 0:
-            logger.warning(f"OPTIONS: Calculated 0 contracts for {candidate.option_symbol}")
-            decision.executed_successfully = "SKIPPED"
+            logger.warning(
+                "options_calculated_0_contracts",
+                option_symbol=candidate.option_symbol,
+                ticker=candidate.ticker,
+                option_price=option_price,
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
             decision.reason = "Size 0 Contracts"
             return
 
-        # 5. Circuit Breaker
+        # 4b. 0DTE Wind-Down: reduce size and/or block near close
+        if dte is not None and dte == 0:
+            # Check hard cutoff first
+            allowed, reason = self.risk_manager.check_zero_dte_winddown(dte)
+            if not allowed:
+                logger.warning(
+                    "options_blocked_zero_dte_winddown",
+                    ticker=candidate.ticker,
+                    option_symbol=candidate.option_symbol,
+                    reason=reason,
+                )
+                decision.executed_successfully = DecisionStatus.FALSE
+                decision.reason = f"0DTE Wind-Down: {reason}"
+                return
+
+            # Apply size reduction multiplier
+            multiplier = self.risk_manager.get_zero_dte_size_multiplier(dte)
+            if multiplier < 1.0:
+                original_contracts = num_contracts
+                num_contracts = max(1, int(num_contracts * multiplier))
+                logger.info(
+                    "zero_dte_size_reduced",
+                    ticker=candidate.ticker,
+                    original_contracts=original_contracts,
+                    reduced_contracts=num_contracts,
+                    multiplier=multiplier,
+                )
+
+        # 5. Risk Manager Check (direction already normalized in execute())
+        side_value = "buy" if candidate.direction == "LONG" else "sell"
+        if not self.risk_manager.check_order(candidate.ticker, num_contracts, option_price * 100, side_value):
+            logger.error(
+                "options_execution_blocked_by_risk",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                contracts=num_contracts,
+                option_price=option_price,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Risk Rejection"
+            return
+
+        # 6. Circuit Breaker
         if self._check_circuit_breaker():
-            decision.executed_successfully = "FALSE"
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "High Error Rate"
             return
 
@@ -239,7 +312,7 @@ class ExecutionEngine:
         if not await self._check_system_health():
             msg = "EXECUTION BLOCKED: System Status is UNHEALTHY."
             logger.critical(msg, extra={"event_type": "EXECUTION_BLOCKED", "ticker": candidate.ticker})
-            decision.executed_successfully = "FALSE"
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.execution_log = msg
             return False
 
@@ -250,22 +323,27 @@ class ExecutionEngine:
 
         if is_short_opening and not self.risk_manager.config.enable_shorting:
             logger.warning("Execution BLOCKED: Shorting is disabled")
-            decision.executed_successfully = "FALSE"
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Shorting Disabled"
             return False
 
         # Data Lag
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         cand_ts = (
-            candidate.timestamp_utc.replace(tzinfo=timezone.utc)
+            candidate.timestamp_utc.replace(tzinfo=UTC)
             if candidate.timestamp_utc.tzinfo is None
             else candidate.timestamp_utc
         )
         lag = (now_utc - cand_ts).total_seconds()
 
         if lag > system_settings.max_data_lag_seconds:
-            logger.critical(f"EXECUTION BLOCKED: Data Lag {lag:.1f}s")
-            decision.executed_successfully = "FALSE"
+            logger.critical(
+                "execution_blocked_data_lag",
+                lag_seconds=lag,
+                max_lag=system_settings.max_data_lag_seconds,
+                ticker=candidate.ticker,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Data Lag"
             return False
 
@@ -285,13 +363,13 @@ class ExecutionEngine:
 
     def _calculate_order_params(
         self, decision: StrategyDecision, candidate: CandidateTrade, current_price: float
-    ) -> Tuple[Any, float, float]:
+    ) -> tuple[Any, float, float]:
         side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
         qty = self.risk_manager.calculate_size(entry_price=current_price)
 
         if qty <= 0:
-            logger.warning(f"Calculated quantity is 0 for {candidate.ticker}")
-            decision.executed_successfully = "SKIPPED"
+            logger.warning("calculated_qty_0", ticker=candidate.ticker, current_price=current_price)
+            decision.executed_successfully = DecisionStatus.SKIPPED
             decision.reason = "Size 0"
             return side, 0.0, 0.0
 
@@ -308,20 +386,23 @@ class ExecutionEngine:
             failures = self.order_history.count(False)
             rate = failures / len(self.order_history)
             if rate > 0.03:
-                logger.critical(f"EXECUTION BLOCKED: Error Rate {rate:.1%} > 3%")
+                logger.critical("execution_blocked_error_rate", error_rate=rate, limit=0.03)
                 return True
         return False
 
     async def _submit_order(self, decision: Any, candidate: Any, side: Any, qty: float, limit_price: float) -> None:
-        logger.info(f"EXECUTION TRIGGERED: {side} {qty} {candidate.ticker} @ {limit_price}")
+        logger.info("execution_triggered", side=str(side), qty=qty, ticker=candidate.ticker, limit_price=limit_price)
 
         # Rate limit check before order submission
         rate_limiter = get_order_rate_limiter()
         if not await rate_limiter.acquire(timeout=10.0):
             logger.warning(
-                f"Rate limit reached for order {candidate.ticker}, capacity={rate_limiter.available_capacity}/{rate_limiter.max_per_minute}"
+                "rate_limit_reached",
+                ticker=candidate.ticker,
+                capacity=rate_limiter.available_capacity,
+                max_capacity=rate_limiter.max_per_minute,
             )
-            decision.executed_successfully = "FALSE"
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Rate limit exceeded"
             return
 
@@ -354,8 +435,8 @@ class ExecutionEngine:
                 broker_order=order,
                 error_message=None,
             )
-            logger.info(f"Execution Successful {client_order_id}")
-            decision.executed_successfully = "TRUE"
+            logger.info("execution_successful", client_order_id=client_order_id, ticker=candidate.ticker)
+            decision.executed_successfully = DecisionStatus.TRUE
             self._record_result(True)
         except Exception as e:
             await self._remove_pending_order_compat(client_order_id)
@@ -370,8 +451,8 @@ class ExecutionEngine:
                 broker_order=None,
                 error_message=str(e),
             )
-            logger.error(f"Execution Failed: {e}")
-            decision.executed_successfully = "FALSE"
+            logger.error("execution_failed", error=str(e), client_order_id=client_order_id, ticker=candidate.ticker)
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = f"Broker Error: {e}"
             self._record_result(False)
 
@@ -379,7 +460,13 @@ class ExecutionEngine:
         self, decision: Any, candidate: Any, num_contracts: int, option_price: float
     ) -> None:
         """Submit an options order."""
-        logger.info(f"OPTIONS EXECUTION TRIGGERED: BUY {num_contracts} {candidate.option_symbol} @ {option_price}")
+        logger.info(
+            "options_execution_triggered",
+            num_contracts=num_contracts,
+            option_symbol=candidate.option_symbol,
+            option_price=option_price,
+            ticker=candidate.ticker,
+        )
 
         client_order_id = str(uuid.uuid4())
         decision.execution_params = decision.execution_params or {}
@@ -412,8 +499,13 @@ class ExecutionEngine:
             )
 
             premium_paid = num_contracts * option_price * 100
-            logger.info(f"OPTIONS Execution Successful {client_order_id} | " f"Premium: ${premium_paid:.2f}")
-            decision.executed_successfully = "TRUE"
+            logger.info(
+                "options_execution_successful",
+                client_order_id=client_order_id,
+                premium_paid=premium_paid,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.TRUE
             self._record_result(True)
 
         except Exception as e:
@@ -427,8 +519,13 @@ class ExecutionEngine:
                 broker_order=None,
                 error_message=str(e),
             )
-            logger.error(f"OPTIONS Execution Failed: {e}")
-            decision.executed_successfully = "FALSE"
+            logger.error(
+                "options_execution_failed",
+                error=str(e),
+                client_order_id=client_order_id,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = f"Options Broker Error: {e}"
             self._record_result(False)
 
@@ -546,7 +643,7 @@ class ExecutionEngine:
                         confidence=exit_signal.confidence,
                         details=exit_signal.details or {},
                         broker_order_id=broker_order_id,
-                        exit_ts_utc=datetime.now(timezone.utc),
+                        exit_ts_utc=datetime.now(UTC),
                     )
                 )
 
@@ -556,27 +653,41 @@ class ExecutionEngine:
 
     async def _check_system_health(self) -> bool:
         """
-        Queries SystemStatus table to ensure Global Health is OK.
+        Queries SystemStatus table to ensure Global Health is OK
+        AND checks the circuit breaker is not open.
         """
+        from orion.core.circuit_breaker import CircuitBreaker
         from orion.storage.models import SystemStatus
 
         try:
+            # Fetch circuit breaker state and global health in a single DB round-trip
+            async def fetch_health_and_cb(session: Any) -> tuple[Any, Any]:
+                cb_stmt = select(SystemStatus).where(SystemStatus.key == CircuitBreaker.KEY)
+                health_stmt = select(SystemStatus).where(SystemStatus.key == "global_health")
+                cb_result = await session.execute(cb_stmt)
+                health_result = await session.execute(health_stmt)
+                return cb_result.scalars().first(), health_result.scalars().first()
 
-            async def fetch_health_status(session: Any) -> Any:
-                stmt = select(SystemStatus).where(SystemStatus.key == "global_health")
-                result = await session.execute(stmt)
-                return result.scalars().first()
+            cb_record, status_record = await db_query(fetch_health_and_cb)
 
-            status_record = await db_query(fetch_health_status)
+            # Check circuit breaker
+            if cb_record and cb_record.status == "OPEN":
+                logger.critical(
+                    "EXECUTION BLOCKED: Circuit breaker is OPEN",
+                    extra={
+                        "event_type": "HEALTH_CHECK_FAILED",
+                        "reason": "Circuit Breaker Open",
+                        "details": cb_record.details,
+                    },
+                )
+                return False
 
             if not status_record:
-                # Compatibility default for local/test startup: allow execution when
-                # global health row has not been seeded yet.
-                logger.warning(
-                    "System Health Record missing. Defaulting to HEALTHY in local/test mode.",
-                    extra={"event_type": "HEALTH_CHECK_WARNING", "details": "Record Missing"},
+                logger.error(
+                    "System Health Record missing. Execution BLOCKED until health record is created.",
+                    extra={"event_type": "HEALTH_CHECK_FAILED", "details": "Record Missing"},
                 )
-                return True
+                return False
 
             if status_record.status != "HEALTHY":
                 logger.error(
@@ -593,7 +704,7 @@ class ExecutionEngine:
             # If ingestion died hard, it might check 'Healthy' but be 1 hour old.
             # PRD 9.1 says "UW ingestion heartbeat missing > 60s".
             # If record is > 60s old, Ingestion is dead.
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if status_record.last_updated_utc:
                 last_updated = ensure_utc(status_record.last_updated_utc)
 
@@ -624,7 +735,7 @@ class ExecutionEngine:
         try:
             # Poll for fills in the last X minutes (e.g. 5 mins) to catch anything missed
             # Use last_poll_ts or default to 5 min ago
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             lookback = getattr(self, "last_fill_poll_ts", now - timedelta(minutes=5))
             # Safety buffer: overlap by 10s
             fetch_start = lookback - timedelta(seconds=10)
@@ -698,6 +809,13 @@ class ExecutionEngine:
             fill_id = order_id if last_filled == 0 else f"{order_id}_{filled_qty}"
             await self.risk_manager.process_fill(ticker, incremental_qty, filled_avg_price, side, fill_id=fill_id)
 
+            # Update sector exposure tracking
+            sector = SECTOR_MAPPING.get(ticker)
+            if sector:
+                fill_cost = incremental_qty * filled_avg_price
+                exposure_change = fill_cost if side.lower() == "buy" else -fill_cost
+                self.risk_manager.update_sector_exposure(sector, exposure_change)
+
             # Only remove from pending orders when fully filled
             if not is_partial:
                 if client_oid:
@@ -720,7 +838,7 @@ class ExecutionEngine:
         if not self.connector:
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if self.last_positions_snapshot_ts and (now - self.last_positions_snapshot_ts) < timedelta(
             seconds=min_interval_seconds
         ):
@@ -767,7 +885,7 @@ class ExecutionEngine:
         if not symbol:
             return None
 
-        def _maybe_float(v: Any) -> Optional[float]:
+        def _maybe_float(v: Any) -> float | None:
             try:
                 return float(v) if v is not None else None
             except Exception:
@@ -819,7 +937,7 @@ class ExecutionEngine:
         """
 
         async def save_order(session: Any) -> None:
-            from datetime import datetime, timezone
+            from datetime import datetime
 
             from orion.storage.models_execution import OrderSubmission
 
@@ -832,7 +950,7 @@ class ExecutionEngine:
                 limit_price=order_payload.get("limit_price"),
                 stop_price=order_payload.get("stop_price"),
                 time_in_force=order_payload.get("time_in_force"),
-                submitted_at_utc=datetime.now(timezone.utc),
+                submitted_at_utc=datetime.now(UTC),
                 broker_response=order_payload,
             )
             session.add(order_record)
@@ -841,7 +959,7 @@ class ExecutionEngine:
 
     @db_retry
     async def _mark_fill_processed(
-        self, order_id: str, client_oid: Optional[str] = None, ticker: Optional[str] = None, qty: Optional[float] = None
+        self, order_id: str, client_oid: str | None = None, ticker: str | None = None, qty: float | None = None
     ) -> None:
         async def mark_fill(session: Any) -> None:
             from orion.storage.models_risk import ProcessedFill
@@ -851,7 +969,7 @@ class ExecutionEngine:
                 client_order_id=client_oid,
                 ticker=ticker,
                 qty=qty,
-                processed_at_utc=datetime.now(timezone.utc),
+                processed_at_utc=datetime.now(UTC),
             )
             session.add(pf)
 
@@ -936,8 +1054,9 @@ class ExecutionEngine:
     @db_retry
     async def _persist_fill_record(self, fill: Any) -> None:
         async def save_fill_and_update_journal(session: Any) -> None:
-            from orion.storage.models_execution import FillRecord
             from sqlalchemy.dialects.postgresql import insert
+
+            from orion.storage.models_execution import FillRecord
 
             broker_order_id = str(getattr(fill, "id", ""))
             ticker = getattr(fill, "symbol", None) or ""

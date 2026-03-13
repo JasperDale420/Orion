@@ -7,6 +7,7 @@ Tests the MCP Server client with mocked HTTP responses.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from orion.clients.mcp_server import MCPServerClient, get_mcp_client
 
 
@@ -90,7 +91,7 @@ class TestMCPServerClient:
         with patch.object(client, "_call_tool") as mock_call:
             mock_call.return_value = {"order_id": "123"}
 
-            result = await client.place_market_order(
+            await client.place_market_order(
                 symbol="AAPL",
                 qty=10,
                 side="buy",

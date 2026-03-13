@@ -18,8 +18,9 @@ Usage:
 
 import logging
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +62,14 @@ class NoOpTracer:
     """No-op tracer for when tracing is disabled."""
 
     @contextmanager
-    def start_as_current_span(
-        self, name: str, **kwargs: Any
-    ) -> Generator[NoOpSpan, None, None]:
+    def start_as_current_span(self, name: str, **kwargs: Any) -> Generator[NoOpSpan, None, None]:
         yield NoOpSpan()
 
     def start_span(self, name: str, **kwargs: Any) -> NoOpSpan:
         return NoOpSpan()
 
 
-_tracer_provider: Optional[Any] = None
+_tracer_provider: Any | None = None
 _initialized = False
 
 

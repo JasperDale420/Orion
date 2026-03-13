@@ -6,8 +6,8 @@ Fetches max pain strike levels by expiry via Data Gateway.
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -15,19 +15,21 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.core.http_client import create_http_client
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 
 logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def _is_retryable_gateway_status(status_code: Optional[int]) -> bool:
+def _is_retryable_gateway_status(status_code: int | None) -> bool:
     return status_code in RETRYABLE_GATEWAY_STATUS_CODES
 
 
 class UWMaxPainConnector:
     """Fetches max pain strikes via Data Gateway."""
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         self.gateway_url = (gateway_url or system_settings.data_gateway_url or "").strip().rstrip("/")
         if not self.gateway_url:
             raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
@@ -35,14 +37,18 @@ class UWMaxPainConnector:
         if not self.gateway_key:
             raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
         self.headers = {"X-Gateway-Key": self.gateway_key}
-        self._latest_max_pain_rows: list[Dict[str, Any]] = []
+        self._latest_max_pain_rows: list[dict[str, Any]] = []
+        self._client = create_http_client(
+            base_url=self.gateway_url,
+            timeout=30.0,
+            headers=self.headers,
+        )
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _fetch_max_pain(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def _fetch_max_pain(self, ticker: str) -> dict[str, Any] | None:
         """Fetch max pain for a ticker via Data Gateway."""
-        url = f"{self.gateway_url}/api/v1/uw/{ticker}/max-pain"
         try:
-            resp = httpx.get(url, headers=self.headers, timeout=30)
+            resp = self._client.get(f"/api/v1/uw/{ticker}/max-pain")
             if resp.status_code >= 400:
                 if _is_retryable_gateway_status(resp.status_code):
                     resp.raise_for_status()
@@ -60,13 +66,13 @@ class UWMaxPainConnector:
             logger.warning(f"Transient network error fetching max pain for {ticker}: {e}")
             raise
         except httpx.HTTPError as e:
-            logger.warning(f"Failed to fetch max pain for {ticker}: {e}")
-            return None
+            logger.error("Failed to fetch max pain for %s: %s", ticker, e, exc_info=True)
+            raise
         except Exception as e:
-            logger.warning(f"Failed to fetch max pain for {ticker}: {e}")
-            return None
+            logger.error("Unexpected error fetching max pain for %s: %s", ticker, e, exc_info=True)
+            raise
 
-    async def fetch_and_store(self, tickers: List[str]) -> int:
+    async def fetch_and_store(self, tickers: list[str]) -> int:
         """Fetch max pain for multiple tickers and store."""
         stored = 0
         today = date.today()
@@ -120,9 +126,9 @@ class UWMaxPainConnector:
 
         return stored
 
-    async def _get_current_price(self, ticker: str) -> Optional[float]:
+    async def _get_current_price(self, ticker: str) -> float | None:
         """Get latest price from Heber bars."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         start = now - timedelta(days=7)
 
         try:
@@ -133,7 +139,7 @@ class UWMaxPainConnector:
                 asof_time=now,
             )
         except Exception as exc:
-            logger.warning("max_pain_heber_price_lookup_failed ticker=%s error=%s", ticker, exc)
+            logger.error("max_pain_heber_price_lookup_failed ticker=%s error=%s", ticker, exc, exc_info=True)
             return None
 
         if bars_df is None or bars_df.empty:
@@ -159,18 +165,11 @@ class UWMaxPainConnector:
         latest = temp.sort_values("ts").iloc[-1]
         return float(latest["close"])
 
-    async def _persist_max_pain(self, record: Dict[str, Any]) -> None:
+    async def _persist_max_pain(self, record: dict[str, Any]) -> None:
         """Persist latest max pain rows in memory."""
         self._latest_max_pain_rows.append(dict(record))
         if len(self._latest_max_pain_rows) > 2000:
             self._latest_max_pain_rows = self._latest_max_pain_rows[-1000:]
-
-
-def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:

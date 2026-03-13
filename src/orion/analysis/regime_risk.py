@@ -6,7 +6,7 @@ Applies position sizing multipliers based on multi-axis regime state.
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "regime_risk.yaml"
 
 
-def _load_regime_risk_config() -> Dict[str, Any]:
+def _load_regime_risk_config() -> dict[str, Any]:
     """Load regime risk configuration."""
     try:
         if CONFIG_PATH.exists():

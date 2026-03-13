@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationInfo, field_validator, model_validator
@@ -32,11 +32,11 @@ class KycResults(BaseModel):
         summary (Optional[str]): Either pass or fail. Used to indicate if KYC has completed and passed or not.
     """
 
-    reject: Optional[Dict[str, Any]] = None
-    accept: Optional[Dict[str, Any]] = None
-    indeterminate: Optional[Dict[str, Any]] = None
-    additional_information: Optional[str] = None
-    summary: Optional[str] = None
+    reject: dict[str, Any] | None = None
+    accept: dict[str, Any] | None = None
+    indeterminate: dict[str, Any] | None = None
+    additional_information: str | None = None
+    summary: str | None = None
 
 
 class Contact(BaseModel):
@@ -56,15 +56,17 @@ class Contact(BaseModel):
     """
 
     email_address: str
-    phone_number: Optional[str] = None
-    street_address: List[str]
-    unit: Optional[str] = None
+    phone_number: str | None = None
+    street_address: list[str]
+    unit: str | None = None
     city: str
-    state: Optional[str] = None
-    postal_code: Optional[str] = None
-    country: Optional[str] = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
 
     @field_validator("state")
+
+    @classmethod
     def usa_state_has_value(cls, v: str, validation: ValidationInfo, **kwargs) -> str:
         """Validates that the state has a value if the country is USA
 
@@ -113,25 +115,25 @@ class Identity(BaseModel):
     """
 
     given_name: str
-    middle_name: Optional[str] = None
+    middle_name: str | None = None
     family_name: str
-    date_of_birth: Optional[str] = None
-    tax_id: Optional[str] = None
-    tax_id_type: Optional[TaxIdType] = None
-    country_of_citizenship: Optional[str] = None
-    country_of_birth: Optional[str] = None
+    date_of_birth: str | None = None
+    tax_id: str | None = None
+    tax_id_type: TaxIdType | None = None
+    country_of_citizenship: str | None = None
+    country_of_birth: str | None = None
     country_of_tax_residence: str
-    visa_type: Optional[VisaType] = None
-    visa_expiration_date: Optional[str] = None
-    date_of_departure_from_usa: Optional[str] = None
-    permanent_resident: Optional[bool] = None
-    funding_source: Optional[List[FundingSource]] = None
-    annual_income_min: Optional[float] = None
-    annual_income_max: Optional[float] = None
-    liquid_net_worth_min: Optional[float] = None
-    liquid_net_worth_max: Optional[float] = None
-    total_net_worth_min: Optional[float] = None
-    total_net_worth_max: Optional[float] = None
+    visa_type: VisaType | None = None
+    visa_expiration_date: str | None = None
+    date_of_departure_from_usa: str | None = None
+    permanent_resident: bool | None = None
+    funding_source: list[FundingSource] | None = None
+    annual_income_min: float | None = None
+    annual_income_max: float | None = None
+    liquid_net_worth_min: float | None = None
+    liquid_net_worth_max: float | None = None
+    total_net_worth_min: float | None = None
+    total_net_worth_max: float | None = None
 
 
 class Disclosures(BaseModel):
@@ -150,14 +152,14 @@ class Disclosures(BaseModel):
         employment_position (str): The user's employment position, if any
     """
 
-    is_control_person: Optional[bool] = None
-    is_affiliated_exchange_or_finra: Optional[bool] = None
-    is_politically_exposed: Optional[bool] = None
+    is_control_person: bool | None = None
+    is_affiliated_exchange_or_finra: bool | None = None
+    is_politically_exposed: bool | None = None
     immediate_family_exposed: bool
-    employment_status: Optional[EmploymentStatus] = None
-    employer_name: Optional[str] = None
-    employer_address: Optional[str] = None
-    employment_position: Optional[str] = None
+    employment_status: EmploymentStatus | None = None
+    employer_name: str | None = None
+    employer_address: str | None = None
+    employment_position: str | None = None
 
 
 class Agreement(BaseModel):
@@ -175,7 +177,7 @@ class Agreement(BaseModel):
     agreement: AgreementType
     signed_at: str
     ip_address: str
-    revision: Optional[str] = None
+    revision: str | None = None
 
 
 class TrustedContact(BaseModel):
@@ -196,15 +198,17 @@ class TrustedContact(BaseModel):
 
     given_name: str
     family_name: str
-    email_address: Optional[str] = None
-    phone_number: Optional[str] = None
-    street_address: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    postal_code: Optional[str] = None
-    country: Optional[str] = None
+    email_address: str | None = None
+    phone_number: str | None = None
+    street_address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
         has_phone_number = (
             "phone_number" in values and values["phone_number"] is not None
@@ -250,17 +254,17 @@ class Account(ModelWithID):
 
     account_number: str
     status: AccountStatus
-    crypto_status: Optional[AccountStatus] = None
-    kyc_results: Optional[KycResults] = None
+    crypto_status: AccountStatus | None = None
+    kyc_results: KycResults | None = None
     currency: str
     last_equity: str
     created_at: str
-    contact: Optional[Contact] = None
-    identity: Optional[Identity] = None
-    disclosures: Optional[Disclosures] = None
-    agreements: Optional[List[Agreement]] = None
-    documents: Optional[List[AccountDocument]] = None
-    trusted_contact: Optional[TrustedContact] = None
+    contact: Contact | None = None
+    identity: Identity | None = None
+    disclosures: Disclosures | None = None
+    agreements: list[Agreement] | None = None
+    documents: list[AccountDocument] | None = None
+    trusted_contact: TrustedContact | None = None
 
     def __init__(self, **response):
         super().__init__(
@@ -268,7 +272,7 @@ class Account(ModelWithID):
             account_number=(response["account_number"]),
             status=(response["status"]),
             crypto_status=(
-                response["crypto_status"] if "crypto_status" in response else None
+                response.get("crypto_status")
             ),
             kyc_results=(
                 TypeAdapter(KycResults).validate_python(response["kyc_results"])
@@ -294,12 +298,12 @@ class Account(ModelWithID):
                 else None
             ),
             agreements=(
-                TypeAdapter(List[Agreement]).validate_python(response["agreements"])
+                TypeAdapter(list[Agreement]).validate_python(response["agreements"])
                 if "agreements" in response
                 else None
             ),
             documents=(
-                TypeAdapter(List[AccountDocument]).validate_python(
+                TypeAdapter(list[AccountDocument]).validate_python(
                     response["documents"]
                 )
                 if "documents" in response
@@ -333,15 +337,15 @@ class TradeAccount(BaseTradeAccount):
         clearing_broker (Optional[ClearingBroker]): The Clearing broker for this account
     """
 
-    cash_withdrawable: Optional[str]
-    cash_transferable: Optional[str]
-    previous_close: Optional[datetime]
-    last_long_market_value: Optional[str]
-    last_short_market_value: Optional[str]
-    last_cash: Optional[str]
-    last_initial_margin: Optional[str]
-    last_regt_buying_power: Optional[str]
-    last_daytrading_buying_power: Optional[str]
-    last_daytrade_count: Optional[int]
-    last_buying_power: Optional[str]
-    clearing_broker: Optional[ClearingBroker]
+    cash_withdrawable: str | None
+    cash_transferable: str | None
+    previous_close: datetime | None
+    last_long_market_value: str | None
+    last_short_market_value: str | None
+    last_cash: str | None
+    last_initial_margin: str | None
+    last_regt_buying_power: str | None
+    last_daytrading_buying_power: str | None
+    last_daytrade_count: int | None
+    last_buying_power: str | None
+    clearing_broker: ClearingBroker | None

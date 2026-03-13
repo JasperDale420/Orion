@@ -14,9 +14,9 @@ Buckets and their time horizons:
 import asyncio
 import pickle
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from math import isnan
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -293,26 +293,9 @@ def _window_feature_select_expressions(available_columns: set[str]) -> str:
     return ",\n            ".join(expressions)
 
 
-def _first_existing_column(frame: Any, candidates: list[str]) -> str | None:
-    for column in candidates:
-        if column in frame.columns:
-            return column
-    return None
-
-
-def _coerce_dataframe(payload: Any) -> Any:
-    import pandas as pd
-
-    if payload is None:
-        return pd.DataFrame()
-    if isinstance(payload, pd.DataFrame):
-        return payload
-    if isinstance(payload, list):
-        rows = [row for row in payload if isinstance(row, dict)]
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    if isinstance(payload, dict):
-        return pd.DataFrame([payload])
-    return pd.DataFrame()
+from orion.ml.heber_utils import coerce_dataframe as _coerce_dataframe
+from orion.ml.heber_utils import first_existing_column as _first_existing_column
+from orion.ml.heber_utils import generate_deterministic_event_ids as _generate_deterministic_event_ids_for_exit
 
 
 def _normalize_heber_outcomes_for_exit(frame: Any) -> Any:
@@ -421,10 +404,14 @@ def _normalize_heber_features_for_exit(frame: Any) -> Any:
         return pd.DataFrame(columns=["event_id"])
 
     event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
-    if event_column is None:
-        return pd.DataFrame(columns=["event_id"])
-
-    normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+    if event_column is not None:
+        normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
+    else:
+        logger.warning(
+            "No event_id column in exit features; generating deterministic IDs",
+            extra={"event": "exit_classifier_features_synthetic_event_id"},
+        )
+        normalized = pd.DataFrame({"event_id": _generate_deterministic_event_ids_for_exit(frame)})
 
     mapped_columns: dict[str, list[str]] = {
         "premium_usd": ["premium_usd", "premium"],
@@ -485,6 +472,13 @@ def _normalize_heber_features_for_exit(frame: Any) -> Any:
 def _apply_bucket_filter_for_exit(dataframe: Any, bucket: str) -> Any:
     import pandas as pd
 
+    if "dte_at_entry" not in dataframe.columns:
+        logger.warning(
+            "dte_at_entry column missing from merged exit training data; skipping bucket filter",
+            extra={"event": "exit_classifier_missing_dte_at_entry", "bucket": bucket},
+        )
+        return dataframe
+
     dte = pd.to_numeric(dataframe["dte_at_entry"], errors="coerce")
     upper_bucket = bucket.upper()
 
@@ -504,7 +498,7 @@ async def _build_bucket_training_data_from_heber(
     feature_names: list[str],
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     reader = get_heber_reader()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     try:
         outcomes_payload = await asyncio.to_thread(
@@ -522,7 +516,7 @@ async def _build_bucket_training_data_from_heber(
             f"Failed to read Heber gold datasets for exit training: {exc}",
             extra={"event": "exit_classifier_heber_training_read_failed", "bucket": bucket},
         )
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))  # noqa: N806
         return X_empty, y_empty, feature_names
 
     outcomes = _normalize_heber_outcomes_for_exit(_coerce_dataframe(outcomes_payload))
@@ -543,22 +537,19 @@ async def _build_bucket_training_data_from_heber(
             "No Heber outcomes available for exit-classifier training",
             extra={"event": "exit_classifier_heber_training_empty_outcomes", "bucket": bucket},
         )
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))  # noqa: N806
         return X_empty, y_empty, feature_names
 
     merged = outcomes.merge(features, on="event_id", how="left")
     merged = _apply_bucket_filter_for_exit(merged, bucket)
 
-    X_list: list[list[float]] = []
+    X_list: list[list[float]] = []  # noqa: N806
     y_list: list[int] = []
 
     for row in merged.to_dict("records"):
         outcome_return = _safe_float(row.get("outcome_return"), default=float("nan"))
         if isnan(outcome_return):
             continue
-
-        trading_minutes = max(_safe_float(row.get("trading_minutes_to_hit")), 0.0)
-        time_held_hours = trading_minutes / 60.0
 
         delta_entry = _safe_float(row.get("delta_at_entry"))
         gamma_entry = _safe_float(row.get("gamma_at_entry"))
@@ -567,8 +558,8 @@ async def _build_bucket_training_data_from_heber(
         dte_entry = int(_safe_float(row.get("dte_at_entry")))
 
         features_vector = [
-            outcome_return,
-            time_held_hours,
+            0.0,  # Placeholder: actual current_return populated at inference time
+            0.0,  # Placeholder: actual time_held populated at inference time
             delta_entry,
             gamma_entry,
             theta_entry,
@@ -615,7 +606,7 @@ async def _build_bucket_training_data_from_heber(
         },
     )
     if not X_list:
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))  # noqa: N806
         return X_empty, y_empty, feature_names
 
     return np.array(X_list, dtype=float), np.array(y_list, dtype=int), feature_names
@@ -685,27 +676,27 @@ class ExitFeatures:
     bucket: str = ""
 
     # Market context at entry
-    iv_rank_at_entry: Optional[float] = None
-    vix_at_entry: Optional[float] = None
-    trend_regime: Optional[str] = None
-    vol_regime: Optional[str] = None
-    gex_at_entry: Optional[float] = None
-    market_tide_30m: Optional[float] = None
+    iv_rank_at_entry: float | None = None
+    vix_at_entry: float | None = None
+    trend_regime: str | None = None
+    vol_regime: str | None = None
+    gex_at_entry: float | None = None
+    market_tide_30m: float | None = None
 
     # Entry Greeks
-    delta_at_entry: Optional[float] = None
-    theta_at_entry: Optional[float] = None
-    iv_at_entry: Optional[float] = None
-    ask_side_ratio: Optional[float] = None
+    delta_at_entry: float | None = None
+    theta_at_entry: float | None = None
+    iv_at_entry: float | None = None
+    ask_side_ratio: float | None = None
 
     # Checkpoint-specific (current position state)
-    delta_at_checkpoint: Optional[float] = None
-    gamma_at_checkpoint: Optional[float] = None
-    theta_at_checkpoint: Optional[float] = None
-    iv_at_checkpoint: Optional[float] = None
-    dte_at_checkpoint: Optional[float] = None
-    time_value_pct: Optional[float] = None
-    theta_decay_pct: Optional[float] = None
+    delta_at_checkpoint: float | None = None
+    gamma_at_checkpoint: float | None = None
+    theta_at_checkpoint: float | None = None
+    iv_at_checkpoint: float | None = None
+    dte_at_checkpoint: float | None = None
+    time_value_pct: float | None = None
+    theta_decay_pct: float | None = None
 
 
 @dataclass
@@ -715,7 +706,7 @@ class ExitPrediction:
     should_exit: bool
     confidence: float
     reasoning: str
-    checkpoint: Optional[str] = None
+    checkpoint: str | None = None
 
 
 class BucketExitClassifier:
@@ -727,8 +718,8 @@ class BucketExitClassifier:
     """
 
     def __init__(self) -> None:
-        self.models: Dict[str, Any] = {}  # bucket -> model_data
-        self.feature_names: Dict[str, List[str]] = {}
+        self.models: dict[str, Any] = {}  # bucket -> model_data
+        self.feature_names: dict[str, list[str]] = {}
         self._load_models()
 
     def _infer_bucket(self, features: ExitFeatures) -> str:
@@ -753,7 +744,7 @@ class BucketExitClassifier:
             return
 
         loaded_count = 0
-        for bucket in BUCKET_CHECKPOINTS.keys():
+        for bucket in BUCKET_CHECKPOINTS:
             model_path = MODEL_DIR / f"{bucket}_exit.pkl"
             if model_path.exists():
                 try:
@@ -819,7 +810,7 @@ class BucketExitClassifier:
             logger.warning(f"ML exit prediction failed: {e}")
             return self._heuristic_predict(features)
 
-    def _features_to_dict(self, features: ExitFeatures) -> Dict[str, float]:
+    def _features_to_dict(self, features: ExitFeatures) -> dict[str, float]:
         """Convert ExitFeatures to dict for ML model."""
         return {
             # Position state at checkpoint
@@ -900,7 +891,7 @@ class BucketExitClassifier:
             reasoning="; ".join(reasons) if reasons else "No exit signal",
         )
 
-    def _get_bucket_thresholds(self, bucket: str) -> Dict[str, float]:
+    def _get_bucket_thresholds(self, bucket: str) -> dict[str, float]:
         """Get bucket-specific exit thresholds."""
         # 0DTE: Quick profits, tight stops (high theta)
         # POSITION: Let winners run, wider stops
@@ -936,7 +927,7 @@ class BucketExitClassifier:
         }
         return thresholds.get(bucket, thresholds["SWING"])
 
-    def _calculate_time_urgency(self, features: ExitFeatures, thresholds: Dict) -> float:
+    def _calculate_time_urgency(self, features: ExitFeatures, thresholds: dict) -> float:
         """Calculate time-based exit urgency."""
         max_hold = thresholds["max_hold_hours"]
         time_pct = features.time_held_hours / max_hold
@@ -956,7 +947,7 @@ class BucketExitClassifier:
 
         return 0.0
 
-    def predict_batch(self, features_list: List[ExitFeatures]) -> List[ExitPrediction]:
+    def predict_batch(self, features_list: list[ExitFeatures]) -> list[ExitPrediction]:
         """Predict exit for multiple positions."""
         return [self.predict(f) for f in features_list]
 
@@ -964,7 +955,7 @@ class BucketExitClassifier:
 async def build_bucket_training_data(
     bucket: str,
     force_schema_refresh: bool = False,
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
     Build training dataset for a specific bucket.
 
@@ -982,13 +973,13 @@ async def build_bucket_training_data(
                 "control_raw": control_raw,
             },
         )
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))  # noqa: N806
         return X_empty, y_empty, feature_names
 
     checkpoints = BUCKET_CHECKPOINTS.get(bucket, [])
     if not checkpoints:
         logger.warning(f"No checkpoints defined for bucket {bucket}")
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))
+        X_empty, y_empty = _empty_training_arrays(len(feature_names))  # noqa: N806
         return X_empty, y_empty, feature_names
 
     _ = force_schema_refresh
@@ -999,9 +990,9 @@ async def build_bucket_training_data(
 async def train_bucket_exit_classifier(
     bucket: str,
     force_schema_refresh: bool = False,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Train exit classifier for a specific bucket."""
-    X, y, feature_names = await build_bucket_training_data(
+    X, y, feature_names = await build_bucket_training_data(  # noqa: N806
         bucket,
         force_schema_refresh=force_schema_refresh,
     )
@@ -1029,7 +1020,7 @@ async def train_bucket_exit_classifier(
         )
 
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)  # noqa: N806
 
     # Train model
     model = LGBMClassifier(
@@ -1078,7 +1069,7 @@ async def train_bucket_exit_classifier(
 async def train_all_exit_classifiers(
     force_schema_refresh: bool = False,
     refresh_each_bucket: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Train exit classifiers for all buckets."""
     if force_schema_refresh and not refresh_each_bucket:
         refreshed_columns = await _load_price_target_label_columns(force_refresh=True)
@@ -1092,7 +1083,7 @@ async def train_all_exit_classifiers(
         )
 
     results = {}
-    for bucket in BUCKET_CHECKPOINTS.keys():
+    for bucket in BUCKET_CHECKPOINTS:
         logger.info(f"Training exit classifier for {bucket}...")
         result = await train_bucket_exit_classifier(
             bucket,
@@ -1112,7 +1103,7 @@ async def train_all_exit_classifiers(
 
 
 # Singleton
-_exit_classifier: Optional[BucketExitClassifier] = None
+_exit_classifier: BucketExitClassifier | None = None
 
 
 def get_exit_classifier() -> BucketExitClassifier:

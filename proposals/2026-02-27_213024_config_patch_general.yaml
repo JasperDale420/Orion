@@ -1,0 +1,23 @@
+meta:
+  run_id: b9c2071f-5f08-4c67-8bd4-4f963420389a
+  created_at: '2026-02-27T21:30:24.491109+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-27_b9c2071f-5f08-4c67-8bd4-4f963420389a.json
+  report_path: artifacts/reports/eod_report_2026-02-27.md
+proposal:
+  type: config_patch
+  rationale: System generated zero trades/signals despite presumably normal market
+    hours. Need to ensure signal generation logic is active and data feeds are healthy.
+  evidence_pointers:
+    decisions.total: 0
+    signals_live.total: 0
+    trade_journal.total: 0
+    regime_summary.available: false
+  test_plan:
+  - Verify market hours for 2026-02-27
+  - Check data ingestion pipelines for gaps
+  - Review signal rule thresholds and filters
+  changes:
+    logging.detailed_signal_debug: true
+    monitoring.heartbeat_interval_seconds: 300

@@ -14,8 +14,8 @@ Usage:
 import argparse
 import asyncio
 import os
-from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -57,7 +57,7 @@ async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame | None:
         payload = await asyncio.to_thread(
             reader.read_gold_features,
             dataset=dataset,
-            asof_time=datetime.now(timezone.utc),
+            asof_time=datetime.now(UTC),
         )
     except Exception as exc:
         logger.warning("read_heber_gold_dataset_failed", dataset=dataset, error=str(exc))
@@ -75,7 +75,7 @@ async def _load_heber_label_frames() -> tuple[pd.DataFrame, pd.DataFrame] | None
     return outcomes_df, features_df
 
 
-def _coalesce_columns(df: pd.DataFrame, columns: List[str]) -> pd.Series:
+def _coalesce_columns(df: pd.DataFrame, columns: list[str]) -> pd.Series:
     series = pd.Series(index=df.index, dtype=object)
     for column in columns:
         if column in df.columns:
@@ -84,7 +84,7 @@ def _coalesce_columns(df: pd.DataFrame, columns: List[str]) -> pd.Series:
     return series
 
 
-def _coalesce_numeric(df: pd.DataFrame, columns: List[str]) -> pd.Series:
+def _coalesce_numeric(df: pd.DataFrame, columns: list[str]) -> pd.Series:
     series = pd.Series(index=df.index, dtype="float64")
     for column in columns:
         if column in df.columns:
@@ -154,7 +154,7 @@ def _build_joined_label_frame(outcomes_df: pd.DataFrame, features_df: pd.DataFra
     return merged
 
 
-def _safe_int(value: Any) -> Optional[int]:
+def _safe_int(value: Any) -> int | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
     try:
@@ -163,7 +163,7 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
-def _to_label_record(row: pd.Series) -> Dict[str, Any]:
+def _to_label_record(row: pd.Series) -> dict[str, Any]:
     entry_ts = row.get("entry_ts")
     ticker = row.get("ticker")
     return {
@@ -183,7 +183,7 @@ def _to_label_record(row: pd.Series) -> Dict[str, Any]:
     }
 
 
-async def _load_label_record_from_heber(event_id: str) -> Optional[Dict[str, Any]]:
+async def _load_label_record_from_heber(event_id: str) -> dict[str, Any] | None:
     frames = await _load_heber_label_frames()
     if frames is None:
         return None
@@ -197,13 +197,13 @@ async def _load_label_record_from_heber(event_id: str) -> Optional[Dict[str, Any
     return _to_label_record(row_match.iloc[0])
 
 
-async def spot_check_record(event_id: str) -> Dict[str, Any]:
+async def spot_check_record(event_id: str) -> dict[str, Any]:
     """
     Validate a single record by comparing computed features to raw source data.
 
     Returns dict with validation results for each feature category.
     """
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "event_id": event_id,
         "passed": [],
         "failed": [],
@@ -245,7 +245,7 @@ async def spot_check_record(event_id: str) -> Dict[str, Any]:
     return results
 
 
-def validate_time_features(label: Dict, entry_ts: datetime) -> Dict[str, List[str]]:
+def validate_time_features(label: dict, entry_ts: datetime) -> dict[str, list[str]]:
     """Validate time-derived features match entry_ts."""
     passed, failed = [], []
 
@@ -275,7 +275,7 @@ def validate_time_features(label: Dict, entry_ts: datetime) -> Dict[str, List[st
     return {"passed": passed, "failed": failed}
 
 
-async def validate_overnight_gap(label: Dict, ticker: str, entry_ts: datetime) -> Dict[str, List[str]]:
+async def validate_overnight_gap(label: dict, ticker: str, entry_ts: datetime) -> dict[str, list[str]]:
     """Validate overnight_gap against raw bar data."""
     passed, failed = [], []
 
@@ -307,7 +307,7 @@ def _get_overnight_gap_inputs_from_heber_for_validation(
     *,
     ticker: str,
     entry_ts: datetime,
-) -> Optional[Tuple[Optional[float], Optional[float]]]:
+) -> tuple[float | None, float | None] | None:
     """Return (today_open, prior_close) from Heber bars for validation window."""
     try:
         bars_df = get_heber_reader().read_bars(
@@ -371,11 +371,11 @@ def _get_overnight_gap_inputs_from_heber_for_validation(
     return today_open, prior_close
 
 
-async def validate_darkpool(label: Dict, ticker: str, entry_ts: datetime) -> Dict[str, List[str]]:
+async def validate_darkpool(label: dict, ticker: str, entry_ts: datetime) -> dict[str, list[str]]:
     """Validate darkpool volume against raw darkpool table."""
     passed, failed, warnings = [], [], []
 
-    def _count_darkpool_from_heber(minutes: int) -> Optional[int]:
+    def _count_darkpool_from_heber(minutes: int) -> int | None:
         return _get_darkpool_volume_from_heber_for_validation(ticker, entry_ts, minutes)
 
     # Check darkpool_1h
@@ -398,7 +398,7 @@ def _get_darkpool_volume_from_heber_for_validation(
     ticker: str,
     entry_ts: datetime,
     window_minutes: int,
-) -> Optional[int]:
+) -> int | None:
     """Return summed darkpool volume from Heber for validation window."""
     start_ts = entry_ts - timedelta(minutes=window_minutes)
     try:
@@ -441,7 +441,7 @@ def _get_darkpool_volume_from_heber_for_validation(
     return int(total)
 
 
-def validate_greeks(label: Dict) -> Dict[str, List[str]]:
+def validate_greeks(label: dict) -> dict[str, list[str]]:
     """Validate Greeks are in reasonable ranges."""
     passed, failed = [], []
 
@@ -485,9 +485,9 @@ def validate_greeks(label: Dict) -> Dict[str, List[str]]:
 # ============================================================================
 
 
-async def run_sanity_checks() -> Dict[str, Any]:
+async def run_sanity_checks() -> dict[str, Any]:
     """Run batch sanity checks on all records."""
-    results: Dict[str, Any] = {"passed": 0, "failed": 0, "issues": []}
+    results: dict[str, Any] = {"passed": 0, "failed": 0, "issues": []}
 
     frames = await _load_heber_label_frames()
     if frames is None:
@@ -632,7 +632,7 @@ def _prefer_heber_source_from_env() -> bool:
     return raw not in _PREFER_HEBER_FALSE_VALUES
 
 
-def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
+def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
     for column in columns:
         if column in df.columns:
             return column
@@ -644,21 +644,21 @@ def _normalize_source_id(source: str) -> str:
 
 
 def _label_date_bounds(
-    min_date: Optional[date],
-    max_date: Optional[date],
-) -> Tuple[Optional[datetime], Optional[datetime]]:
+    min_date: date | None,
+    max_date: date | None,
+) -> tuple[datetime | None, datetime | None]:
     if min_date is None or max_date is None:
         return None, None
     return (
-        datetime.combine(min_date, time.min, tzinfo=timezone.utc),
-        datetime.combine(max_date, time.max, tzinfo=timezone.utc),
+        datetime.combine(min_date, time.min, tzinfo=UTC),
+        datetime.combine(max_date, time.max, tzinfo=UTC),
     )
 
 
 def _summarize_heber_source_frame(
     df: pd.DataFrame,
     row_count_as_tickers: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if df.empty:
         return {"min_date": None, "max_date": None, "tickers": 0}
 
@@ -685,11 +685,11 @@ def _summarize_heber_source_frame(
 
 def _heber_read_kwargs(
     source: str,
-    label_start_ts: Optional[datetime],
-    label_end_ts: Optional[datetime],
-) -> Dict[str, Any]:
+    label_start_ts: datetime | None,
+    label_end_ts: datetime | None,
+) -> dict[str, Any]:
     source_id = _normalize_source_id(source)
-    asof_time = datetime.now(timezone.utc)
+    asof_time = datetime.now(UTC)
     if source_id == SOURCE_BARS:
         return {
             "symbols": [],
@@ -712,9 +712,9 @@ def _heber_read_kwargs(
 async def _fetch_source_summary_from_heber(
     *,
     source: str,
-    label_start_ts: Optional[datetime],
-    label_end_ts: Optional[datetime],
-) -> Optional[Dict[str, Any]]:
+    label_start_ts: datetime | None,
+    label_end_ts: datetime | None,
+) -> dict[str, Any] | None:
     source_id = _normalize_source_id(source)
     spec = _AUDIT_SOURCE_SPECS[source_id]
     method_name = spec.get("heber_method")
@@ -746,7 +746,7 @@ async def _fetch_source_summary_from_heber(
     return summary
 
 
-async def _fetch_source_summary_from_local_db(*, source: str) -> Dict[str, Any]:
+async def _fetch_source_summary_from_local_db(*, source: str) -> dict[str, Any]:
     _ = _normalize_source_id(source)
     return {"min_date": None, "max_date": None, "tickers": 0, "backend": "local_db_disabled"}
 
@@ -754,10 +754,10 @@ async def _fetch_source_summary_from_local_db(*, source: str) -> Dict[str, Any]:
 async def _fetch_source_summary(
     *,
     source: str,
-    label_start_ts: Optional[datetime],
-    label_end_ts: Optional[datetime],
+    label_start_ts: datetime | None,
+    label_end_ts: datetime | None,
     prefer_heber: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     source_id = _normalize_source_id(source)
     if source_id not in _AUDIT_SOURCE_SPECS:
         logger.warning("audit_source_unknown_source_id", source=source_id)
@@ -775,9 +775,9 @@ async def _fetch_source_summary(
     return {"min_date": None, "max_date": None, "tickers": 0, "backend": "source_unavailable"}
 
 
-async def _load_label_period() -> Dict[str, Any]:
+async def _load_label_period() -> dict[str, Any]:
     reader = get_heber_reader()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     try:
         df = await asyncio.to_thread(
             reader.read_gold_features,
@@ -807,8 +807,8 @@ async def _load_label_period() -> Dict[str, Any]:
     min_date_str = summary.get("min_date")
     max_date_str = summary.get("max_date")
 
-    min_date_raw: Optional[date] = None
-    max_date_raw: Optional[date] = None
+    min_date_raw: date | None = None
+    max_date_raw: date | None = None
     if isinstance(min_date_str, str):
         try:
             min_date_raw = date.fromisoformat(min_date_str)
@@ -899,7 +899,7 @@ FEATURE_SOURCE_MAPPING = {
 }
 
 
-async def audit_data_sources() -> Dict[str, Any]:
+async def audit_data_sources() -> dict[str, Any]:
     """Audit ALL source tables for the label period."""
     label_period = await _load_label_period()
     label_start_ts, label_end_ts = _label_date_bounds(
@@ -908,7 +908,7 @@ async def audit_data_sources() -> Dict[str, Any]:
     )
     prefer_heber = _prefer_heber_source_from_env()
 
-    sources: Dict[str, Dict[str, Any]] = {}
+    sources: dict[str, dict[str, Any]] = {}
     for source in _AUDIT_SOURCE_ORDER:
         summary = await _fetch_source_summary(
             source=source,

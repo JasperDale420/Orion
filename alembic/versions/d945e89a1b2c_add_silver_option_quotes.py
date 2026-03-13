@@ -8,9 +8,9 @@ Stores real option quotes from Alpaca API at checkpoint intervals
 for more accurate ML training labels.
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers
 revision = "d945e89a1b2c"

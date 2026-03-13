@@ -1,5 +1,4 @@
 import logging
-from typing import List, Set
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +15,7 @@ class DeduplicationEngine:
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
-        self._seen_ids_cache: Set[str] = set()
+        self._seen_ids_cache: set[str] = set()
 
     async def is_duplicate(self, event_id: str) -> bool:
         """
@@ -35,7 +34,7 @@ class DeduplicationEngine:
 
         return False
 
-    async def dedupe_batch(self, events: List[BronzeEvent]) -> List[BronzeEvent]:
+    async def dedupe_batch(self, events: list[BronzeEvent]) -> list[BronzeEvent]:
         """
         Filters a batch of BronzeEvents, returning only new ones.
         Updates cache for accepted events.

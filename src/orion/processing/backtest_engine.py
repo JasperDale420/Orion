@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -26,15 +26,15 @@ class BacktestEngine:
         self.risk_manager = RiskManager()
 
         # State
-        self.trades: List[Dict[str, Any]] = []
-        self.equity_curve: List[Dict[str, Any]] = []
-        self.skipped_trades: List[Dict[str, Any]] = []
+        self.trades: list[dict[str, Any]] = []
+        self.equity_curve: list[dict[str, Any]] = []
+        self.skipped_trades: list[dict[str, Any]] = []
 
     def run(
         self,
-        candidates: List[CandidateTrade],
-        price_data: Dict[str, pd.DataFrame],
-        labeler: Optional[TripleBarrierLabeling] = None,
+        candidates: list[CandidateTrade],
+        price_data: dict[str, pd.DataFrame],
+        labeler: TripleBarrierLabeling | None = None,
     ) -> None:
         """
         Executes a simple sequential backtest (In-Sample or Out-of-Sample).
@@ -45,15 +45,15 @@ class BacktestEngine:
 
     def run_cv(
         self,
-        candidates: List[CandidateTrade],
-        price_data: Dict[str, pd.DataFrame],
+        candidates: list[CandidateTrade],
+        price_data: dict[str, pd.DataFrame],
         solver_config: Any,
         n_splits: int = 5,
         embargo_pct: float = 0.01,
-        t1_times: Optional[pd.Series] = None,
-        labeler: Optional[TripleBarrierLabeling] = None,
+        t1_times: pd.Series | None = None,
+        labeler: TripleBarrierLabeling | None = None,
         n_trials: int = 1,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Runs Purged K-Fold Cross Validation.
 
@@ -188,9 +188,9 @@ class BacktestEngine:
 
     def _simulate(
         self,
-        candidates: List[CandidateTrade],
-        price_data: Dict[str, pd.DataFrame],
-        labeler: Optional[TripleBarrierLabeling],
+        candidates: list[CandidateTrade],
+        price_data: dict[str, pd.DataFrame],
+        labeler: TripleBarrierLabeling | None,
         solver_config: Any = None,
     ) -> None:
         current_equity = self.initial_capital
@@ -278,7 +278,7 @@ class BacktestEngine:
 
             self.equity_curve.append({"ts": row["barrier_hit_ts"], "equity": current_equity})
 
-    def get_metrics(self, n_trials: int = 1) -> Dict[str, Any]:
+    def get_metrics(self, n_trials: int = 1) -> dict[str, Any]:
         """
         Returns performance metrics including robust stats.
         """

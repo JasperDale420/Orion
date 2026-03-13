@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -13,8 +13,8 @@ from ...types import Response
 
 def _get_kwargs(
     sector: Sector,
-) -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+) -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{sector}/tickers",
     }
@@ -24,7 +24,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, MarketSectorTickerResults, str]]:
+) -> ErrorMessage | MarketSectorTickerResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -47,7 +47,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, MarketSectorTickerResults, str]]:
+) -> Response[ErrorMessage | MarketSectorTickerResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -60,7 +60,7 @@ def sync_detailed(
     sector: Sector,
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[ErrorMessage, MarketSectorTickerResults, str]]:
+) -> Response[ErrorMessage | MarketSectorTickerResults | str]:
     """Return Tickers for a Given Sector
 
      Returns a list of tickers which are in the given sector.
@@ -91,7 +91,7 @@ def sync(
     sector: Sector,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[ErrorMessage, MarketSectorTickerResults, str]]:
+) -> ErrorMessage | MarketSectorTickerResults | str | None:
     """Return Tickers for a Given Sector
 
      Returns a list of tickers which are in the given sector.
@@ -117,7 +117,7 @@ async def asyncio_detailed(
     sector: Sector,
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[ErrorMessage, MarketSectorTickerResults, str]]:
+) -> Response[ErrorMessage | MarketSectorTickerResults | str]:
     """Return Tickers for a Given Sector
 
      Returns a list of tickers which are in the given sector.
@@ -146,7 +146,7 @@ async def asyncio(
     sector: Sector,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[ErrorMessage, MarketSectorTickerResults, str]]:
+) -> ErrorMessage | MarketSectorTickerResults | str | None:
     """Return Tickers for a Given Sector
 
      Returns a list of tickers which are in the given sector.

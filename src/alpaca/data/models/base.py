@@ -1,7 +1,6 @@
 import itertools
-from typing import Any, Dict, List
+from typing import Any
 
-import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
@@ -30,7 +29,7 @@ class TimeSeriesMixin:
         elif "corporate_action_type" in columns:
             # level=0 - corporate_action_type
             df = df.set_index(["corporate_action_type"])
-        elif set(["symbol", "timestamp"]).issubset(columns):
+        elif {"symbol", "timestamp"}.issubset(columns):
             # level=0 - symbol
             # level=1 - timestamp
             df = df.set_index(["symbol", "timestamp"])
@@ -46,7 +45,7 @@ class BaseDataSet(BaseModel):
     Base class to process data models for trades, bars quotes, and news.
     """
 
-    data: Dict[str, List[BaseModel]] = {}
+    data: dict[str, list[BaseModel]] = {}
 
     def __getitem__(self, symbol: str) -> Any:
         """Gives dictionary-like access to multi-symbol data
@@ -74,6 +73,6 @@ class BaseDataSet(BaseModel):
         """
         # converts each data (Bar, Quote, etc) in the symbol specific lists to its dictionary format
         return {
-            symbol: list(map(lambda d: d.model_dump(), data_list))
+            symbol: [d.model_dump() for d in data_list]
             for symbol, data_list in self.data.items()
         }

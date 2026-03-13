@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pandas as pd
@@ -347,7 +347,7 @@ async def test_persist_regime_snapshot_avoids_local_db_write(monkeypatch: pytest
     )
 
     await feature_enrichment.persist_regime_snapshot(
-        ts=datetime(2026, 2, 11, 20, 0, tzinfo=timezone.utc),
+        ts=datetime(2026, 2, 11, 20, 0, tzinfo=UTC),
         snapshot=snapshot,
         ticker="SPY",
     )

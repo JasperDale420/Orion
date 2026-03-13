@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from ipaddress import IPv4Address, IPv6Address
 from typing import Any
 from uuid import UUID
@@ -50,7 +50,7 @@ class NonEmptyRequest(BaseModel):
                 # if the datetime is naive, assume it's UTC
                 # https://docs.python.org/3/library/datetime.html#determining-if-an-object-is-aware-or-naive
                 if val.tzinfo is None or val.tzinfo.utcoffset(val) is None:
-                    val = val.replace(tzinfo=timezone.utc)
+                    val = val.replace(tzinfo=UTC)
                 return val.isoformat()
 
             if isinstance(val, date):

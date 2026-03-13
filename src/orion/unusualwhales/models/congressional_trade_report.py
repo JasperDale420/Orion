@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -34,25 +34,25 @@ class CongressionalTradeReport:
         txn_type (Union[Unset, InsiderTradesTransactionType]): The transaction type. Example: Sell.
     """
 
-    amounts: Union[Unset, str] = UNSET
-    filed_at_date: Union[Unset, str] = UNSET
-    issuer: Union[Unset, str] = UNSET
-    member_type: Union[Unset, InsiderTradesMemberType] = UNSET
-    notes: Union[Unset, str] = UNSET
-    reporter: Union[Unset, str] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    transaction_date: Union[Unset, str] = UNSET
-    txn_type: Union[Unset, InsiderTradesTransactionType] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    amounts: Unset | str = UNSET
+    filed_at_date: Unset | str = UNSET
+    issuer: Unset | str = UNSET
+    member_type: Unset | InsiderTradesMemberType = UNSET
+    notes: Unset | str = UNSET
+    reporter: Unset | str = UNSET
+    ticker: Unset | str = UNSET
+    transaction_date: Unset | str = UNSET
+    txn_type: Unset | InsiderTradesTransactionType = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         amounts = self.amounts
 
         filed_at_date = self.filed_at_date
 
         issuer = self.issuer
 
-        member_type: Union[Unset, str] = UNSET
+        member_type: Unset | str = UNSET
         if not isinstance(self.member_type, Unset):
             member_type = self.member_type.value
 
@@ -64,11 +64,11 @@ class CongressionalTradeReport:
 
         transaction_date = self.transaction_date
 
-        txn_type: Union[Unset, str] = UNSET
+        txn_type: Unset | str = UNSET
         if not isinstance(self.txn_type, Unset):
             txn_type = self.txn_type.value
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if amounts is not UNSET:
@@ -93,7 +93,7 @@ class CongressionalTradeReport:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         amounts = d.pop("amounts", UNSET)
 
@@ -102,7 +102,7 @@ class CongressionalTradeReport:
         issuer = d.pop("issuer", UNSET)
 
         _member_type = d.pop("member_type", UNSET)
-        member_type: Union[Unset, InsiderTradesMemberType]
+        member_type: Unset | InsiderTradesMemberType
         if isinstance(_member_type, Unset):
             member_type = UNSET
         else:
@@ -117,7 +117,7 @@ class CongressionalTradeReport:
         transaction_date = d.pop("transaction_date", UNSET)
 
         _txn_type = d.pop("txn_type", UNSET)
-        txn_type: Union[Unset, InsiderTradesTransactionType]
+        txn_type: Unset | InsiderTradesTransactionType
         if isinstance(_txn_type, Unset):
             txn_type = UNSET
         else:
@@ -139,7 +139,7 @@ class CongressionalTradeReport:
         return congressional_trade_report
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

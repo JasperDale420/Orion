@@ -2,8 +2,8 @@ import asyncio
 import hashlib
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.utils import parse_timestamptz
@@ -21,13 +21,13 @@ class UWDarkPoolConnector:
     Connects to Data Gateway to poll for Unusual Whales Dark Pool prints.
     """
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         gateway_url = gateway_url or os.getenv("GATEWAY_URL", "http://localhost:8080")
         gateway_key = gateway_key or os.getenv("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
         # Use Gateway URL for UW endpoints (auth handled by Gateway)
         self.client = UnusualWhalesClient(base_url=f"{gateway_url}/api/v1/uw", token=gateway_key)
-        self.last_seen_id: Optional[str] = None
-        self.last_poll_ts: Optional[datetime] = None
+        self.last_seen_id: str | None = None
+        self.last_poll_ts: datetime | None = None
         self._watermark_loaded: bool = False
         self._watermark_key: str = "uw_darkpool"
 
@@ -41,7 +41,7 @@ class UWDarkPoolConnector:
         # If 'id' or 'id_' exists, use it.
         source_id = event_data.get("id") or event_data.get("id_")
         if source_id:
-            return hashlib.sha256(f"UW_DARKPOOL_{source_id}".encode("utf-8")).hexdigest()
+            return hashlib.sha256(f"UW_DARKPOOL_{source_id}".encode()).hexdigest()
 
         # Fallback: Hash content
         # Use stable subset: ticker, price, size, timestamp
@@ -100,7 +100,7 @@ class UWDarkPoolConnector:
             session="REG",
         )
 
-    async def _update_watermark(self, events: List[BronzeEvent], now: datetime) -> None:
+    async def _update_watermark(self, events: list[BronzeEvent], now: datetime) -> None:
         """Update watermark based on processed events."""
         if events:
             candidate = max(e.event_ts_utc for e in events if e.event_ts_utc)
@@ -122,7 +122,7 @@ class UWDarkPoolConnector:
         return all_raw
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> List[BronzeEvent]:
+    async def fetch_events(self, lookback_seconds: int = 120, overlap_seconds: int = 120) -> list[BronzeEvent]:
         """Fetches latest dark pool prints."""
         if await self._check_circuit_breaker():
             return []
@@ -132,13 +132,13 @@ class UWDarkPoolConnector:
         try:
             await self._ensure_watermark_loaded()
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             poll_start_ts = self.last_poll_ts or (now - timedelta(seconds=lookback_seconds))
             fetch_start = poll_start_ts - timedelta(seconds=overlap_seconds) if self.last_poll_ts else poll_start_ts
 
             all_raw = await self._fetch_all_raw_for_date_range(fetch_start, now)
 
-            events: List[BronzeEvent] = []
+            events: list[BronzeEvent] = []
             seen_event_ids: set[str] = set()
 
             for item in all_raw:
@@ -170,13 +170,13 @@ class UWDarkPoolConnector:
             logger.error(f"Error fetching UW Dark Pool prints: {e}")
             raise
 
-    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> List[BronzeEvent]:
+    async def fetch_since(self, ts: datetime, *, overlap_seconds: int = 120) -> list[BronzeEvent]:
         """
         PRDv2 7.2: Polling interface shim (fetch_since).
         UW darkpool endpoint is date-based; we filter client-side using timestamps.
         """
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         self.last_poll_ts = ts
         return await self.fetch_events(lookback_seconds=0, overlap_seconds=overlap_seconds)
 

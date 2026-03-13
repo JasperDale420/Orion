@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from orion.processing.feature_engine import FeatureEngine
 from orion.storage.models import BronzeEvent
@@ -6,7 +6,7 @@ from orion.storage.models import BronzeEvent
 
 def test_process_uw_flow_events_adds_evidence_and_dte_and_unique_signal_ids():
     fe = FeatureEngine()
-    ts = datetime.now(timezone.utc).replace(microsecond=0)
+    ts = datetime.now(UTC).replace(microsecond=0)
 
     ev1 = BronzeEvent(
         event_id="evt_1",

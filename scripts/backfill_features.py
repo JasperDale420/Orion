@@ -8,7 +8,6 @@ to enable proper feature enrichment during label backfill.
 import asyncio
 import os
 from datetime import date, timedelta
-from typing import List
 
 from dotenv import load_dotenv
 
@@ -60,7 +59,7 @@ async def backfill_market_tide(api_key: str, start_date: date, end_date: date) -
     return total
 
 
-async def backfill_greek_exposure(api_key: str, tickers: List[str]) -> int:
+async def backfill_greek_exposure(api_key: str, tickers: list[str]) -> int:
     """Backfill greek exposure for tickers (current snapshot only)."""
     connector = UWGreekExposureConnector(api_key)
     print(f"  Greek Exposure: {len(tickers)} tickers")
@@ -68,7 +67,7 @@ async def backfill_greek_exposure(api_key: str, tickers: List[str]) -> int:
     return count
 
 
-async def backfill_max_pain(api_key: str, tickers: List[str]) -> int:
+async def backfill_max_pain(api_key: str, tickers: list[str]) -> int:
     """Backfill max pain for tickers (current snapshot only)."""
     connector = UWMaxPainConnector(api_key)
     print(f"  Max Pain: {len(tickers)} tickers")

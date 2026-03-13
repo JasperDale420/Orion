@@ -1,9 +1,12 @@
 import hashlib
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import parse_timestamptz
+
+logger = setup_struct_logger(__name__)
 
 
 class NormalizationEngine:
@@ -12,7 +15,7 @@ class NormalizationEngine:
     """
 
     @staticmethod
-    def normalize_event(source: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def normalize_event(source: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Routes to specific normalization logic based on source and type.
         """
@@ -31,7 +34,7 @@ class NormalizationEngine:
         return payload
 
     @staticmethod
-    def _normalize_uw_flow(payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_uw_flow(payload: dict[str, Any]) -> dict[str, Any]:
         """
         PRD 6.2 Silver Schema: UW Options Flow
         """
@@ -68,7 +71,13 @@ class NormalizationEngine:
         elif raw_put_call_upper in ("P", "PUT"):
             put_call = "P"
         else:
-            put_call = raw_put_call_upper[:1] if raw_put_call_upper else "C"  # Default to C
+            first_char = raw_put_call_upper[:1] if raw_put_call_upper else ""
+            if first_char in ("P", "C"):
+                put_call = first_char
+                logger.warning("put_call field had unexpected value %r, inferred %r", raw_put_call, put_call)
+            else:
+                put_call = "UNKNOWN"
+                logger.warning("put_call field had unrecognizable value %r, setting UNKNOWN", raw_put_call)
 
         normalized = {
             "ticker": payload.get("ticker"),
@@ -118,7 +127,7 @@ class NormalizationEngine:
         return normalized
 
     @staticmethod
-    def _normalize_uw_darkpool(payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_uw_darkpool(payload: dict[str, Any]) -> dict[str, Any]:
         """
         PRD 6.2 Silver Schema: UW Dark Pool
         """
@@ -141,7 +150,7 @@ class NormalizationEngine:
         }
 
     @staticmethod
-    def _normalize_uw_alert(payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_uw_alert(payload: dict[str, Any]) -> dict[str, Any]:
         from orion.shared.utils import parse_occ_symbol
 
         ts_str = payload.get("timestamp") or payload.get("created_at")
@@ -160,7 +169,7 @@ class NormalizationEngine:
         # Use parsed underlying if available, else use raw ticker
         underlying = occ_data.get("underlying") if occ_data else raw_ticker
 
-        normalized: Dict[str, Any] = {
+        normalized: dict[str, Any] = {
             "ticker": underlying,  # Use underlying stock ticker
             "option_symbol": raw_ticker if occ_data else None,  # Store full OCC symbol
             "alert_ts_utc": alert_ts.isoformat(),
@@ -182,7 +191,7 @@ class NormalizationEngine:
         return normalized
 
     @staticmethod
-    def _normalize_alpaca_bar(payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_alpaca_bar(payload: dict[str, Any]) -> dict[str, Any]:
         """
         PRD 6.2 Silver Schema: Alpaca Bars 1m
         """
@@ -192,7 +201,7 @@ class NormalizationEngine:
             try:
                 bar_ts = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
             except Exception:
-                pass
+                logger.warning("Failed to parse bar timestamp: %r", ts_val)
 
         return {
             "ticker": payload.get("symbol") or payload.get("ticker"),
@@ -207,7 +216,7 @@ class NormalizationEngine:
 
     @staticmethod
     def generate_event_id(
-        source: str, event_type: str, ticker: Optional[str], ts: str, payload_subset: Dict[str, Any]
+        source: str, event_type: str, ticker: str | None, ts: str, payload_subset: dict[str, Any]
     ) -> str:
         """
         PRD 6.1: backup ID generation if provider doesn't give one.

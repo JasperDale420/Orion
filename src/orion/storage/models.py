@@ -27,6 +27,7 @@ class BronzeEvent(Base):
     __table_args__ = (
         Index("idx_bronze_events_ts", "event_ts_utc"),
         Index("idx_bronze_events_source_type", "source", "event_type"),
+        Index("idx_bronze_events_ticker_ts", "ticker", "event_ts_utc"),
     )
 
     def __repr__(self) -> str:

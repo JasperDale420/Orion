@@ -12,22 +12,21 @@ Usage:
 import argparse
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import text
-
 from orion.shared.db_utils import db_query, db_write
 from orion.storage.db import init_db
+from sqlalchemy import text
 
 
-async def get_records_to_backfill(batch_size: int) -> List[Dict[str, Any]]:
+async def get_records_to_backfill(batch_size: int) -> list[dict[str, Any]]:
     """Get records with missing features."""
 
-    async def query(session: Any) -> List[Dict[str, Any]]:
+    async def query(session: Any) -> list[dict[str, Any]]:
         stmt = text(
             """
             SELECT event_id, ticker, option_chain, entry_ts, expiry, dte, iv_at_entry
@@ -57,10 +56,10 @@ async def get_records_to_backfill(batch_size: int) -> List[Dict[str, Any]]:
     return await db_query(query)
 
 
-async def calculate_rvol_1h(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def calculate_rvol_1h(ticker: str, entry_ts: datetime) -> float | None:
     """Calculate 1-hour relative volume."""
 
-    async def query(session: Any) -> Optional[float]:
+    async def query(session: Any) -> float | None:
         try:
             lookback_1h = entry_ts - timedelta(hours=1)
             lookback_30d = entry_ts - timedelta(days=30)
@@ -106,10 +105,10 @@ async def calculate_rvol_1h(ticker: str, entry_ts: datetime) -> Optional[float]:
     return await db_query(query)
 
 
-async def calculate_spy_return_1h(entry_ts: datetime) -> Optional[float]:
+async def calculate_spy_return_1h(entry_ts: datetime) -> float | None:
     """Calculate SPY return in last hour."""
 
-    async def query(session: Any) -> Optional[float]:
+    async def query(session: Any) -> float | None:
         try:
             lookback_1h = entry_ts - timedelta(hours=1)
 
@@ -132,10 +131,10 @@ async def calculate_spy_return_1h(entry_ts: datetime) -> Optional[float]:
     return await db_query(query)
 
 
-async def calculate_52w_high_distance(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def calculate_52w_high_distance(ticker: str, entry_ts: datetime) -> float | None:
     """Calculate % below 52-week high."""
 
-    async def query(session: Any) -> Optional[float]:
+    async def query(session: Any) -> float | None:
         try:
             entry_date = entry_ts.date()
             lookback_52w = entry_date - timedelta(days=365)
@@ -172,10 +171,10 @@ async def calculate_52w_high_distance(ticker: str, entry_ts: datetime) -> Option
     return await db_query(query)
 
 
-async def calculate_darkpool_1h(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def calculate_darkpool_1h(ticker: str, entry_ts: datetime) -> float | None:
     """Calculate 1-hour darkpool volume."""
 
-    async def query(session: Any) -> Optional[float]:
+    async def query(session: Any) -> float | None:
         try:
             lookback_1h = entry_ts - timedelta(hours=1)
             stmt = text(
@@ -195,7 +194,7 @@ async def calculate_darkpool_1h(ticker: str, entry_ts: datetime) -> Optional[flo
     return await db_query(query)
 
 
-def calculate_minutes_to_close(entry_ts: datetime) -> Optional[int]:
+def calculate_minutes_to_close(entry_ts: datetime) -> int | None:
     """Calculate minutes to market close (4pm ET)."""
     try:
         et_offset = timedelta(hours=-5)
@@ -210,7 +209,7 @@ def calculate_minutes_to_close(entry_ts: datetime) -> Optional[int]:
     return None
 
 
-async def update_record(record: Dict[str, Any]) -> bool:
+async def update_record(record: dict[str, Any]) -> bool:
     """Update a single record with calculated features."""
     try:
         ticker = record["ticker"]

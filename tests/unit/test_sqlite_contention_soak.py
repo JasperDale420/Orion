@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+
 from orion.jobs.sqlite_contention_soak import run_sqlite_contention_soak
 
 

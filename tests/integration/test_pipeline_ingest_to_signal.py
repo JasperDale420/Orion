@@ -1,7 +1,8 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from orion.config import risk_settings, system_settings
 from orion.execution.risk_manager import RiskManager
 from orion.execution.signal_preflight import preflight_live_signal
@@ -35,7 +36,7 @@ async def test_pipeline_ingest_to_signal_live_row():
     system_settings.require_rollups_for_signals_live = True
     system_settings.max_data_lag_seconds = 10_000
 
-    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
 
     async with async_session_factory() as session:
         session.add(

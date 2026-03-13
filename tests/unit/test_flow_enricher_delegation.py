@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-import orion.ml.flow_enricher as enricher
 import pytest
+
+import orion.ml.flow_enricher as enricher
 
 
 @pytest.mark.asyncio
 async def test_get_flow_greeks_delegates_to_labeler_and_p2_when_option_chain_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_flow(event_id: str) -> dict[str, float]:
@@ -92,7 +93,7 @@ async def test_get_flow_greeks_skips_p2_when_option_chain_missing(monkeypatch: p
     result = await enricher._get_flow_greeks(
         event_id="evt-2",
         ticker="AAPL",
-        entry_ts=datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+        entry_ts=datetime(2026, 2, 11, 15, 0, tzinfo=UTC),
         option_chain=None,
     )
 
@@ -110,7 +111,7 @@ async def test_get_flow_greeks_skips_p2_when_option_chain_missing(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_get_market_tide_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_tide(ts: datetime, minutes: int = 30) -> dict[str, Any]:
@@ -132,7 +133,7 @@ async def test_get_market_tide_delegates_to_labeler(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_get_iv_rank_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_iv_rank(ticker: str, ts: datetime) -> float:
@@ -156,7 +157,7 @@ async def test_get_iv_rank_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch)
 async def test_get_darkpool_volumes_delegates_to_labeler_and_maps_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_darkpool(ticker: str, ts: datetime) -> dict[str, Any]:
@@ -189,7 +190,7 @@ async def test_get_darkpool_volumes_delegates_to_labeler_and_maps_windows(
 
 @pytest.mark.asyncio
 async def test_get_regime_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_regime(ts: datetime) -> dict[str, Any]:
@@ -222,7 +223,7 @@ async def test_get_regime_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_get_vix_delegates_to_labeler_regime(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_regime(ts: datetime) -> dict[str, Any]:
@@ -245,7 +246,7 @@ async def test_get_vix_delegates_to_labeler_regime(monkeypatch: pytest.MonkeyPat
 async def test_get_flow_metrics_delegates_context_to_labeler_helpers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_flow_agg(ticker: str, ts: datetime) -> dict[str, Any]:
@@ -302,7 +303,7 @@ async def test_get_flow_metrics_delegates_context_to_labeler_helpers(
 async def test_get_window_features_delegates_to_labeler_and_maps_period_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_windows(ticker: str, ts: datetime) -> dict[str, Any]:
@@ -350,7 +351,7 @@ async def test_get_window_features_delegates_to_labeler_and_maps_period_values(
 async def test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_gex(ticker: str, ts: datetime) -> dict[str, Any]:
@@ -382,7 +383,7 @@ async def test_get_gex_at_entry_delegates_base_to_labeler_and_adds_rolling_avg(
 async def test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
 
     async def _labeler_gex(_ticker: str, _ts: datetime) -> dict[str, Any]:
         return {"gex": None, "vex": None}
@@ -400,7 +401,7 @@ async def test_get_gex_at_entry_skips_sql_avg_when_labeler_has_no_snapshot(
 
 @pytest.mark.asyncio
 async def test_get_max_pain_distance_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_max_pain(ticker: str, expiry_date: datetime | None, ts: datetime) -> float:
@@ -433,7 +434,7 @@ async def test_get_max_pain_distance_returns_none_without_dte(monkeypatch: pytes
 
     value = await enricher._get_max_pain_distance(
         "AAPL",
-        datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+        datetime(2026, 2, 11, 15, 0, tzinfo=UTC),
         dte=None,
     )
 
@@ -444,7 +445,7 @@ async def test_get_max_pain_distance_returns_none_without_dte(monkeypatch: pytes
 async def test_get_market_context_delegates_to_labeler_helpers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_rvol(ticker: str, ts: datetime) -> dict[str, Any]:
@@ -494,7 +495,7 @@ async def test_get_market_context_delegates_to_labeler_helpers(
 async def test_get_market_context_defaults_phase1_dte_and_skips_p3_without_expiry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
 
     async def _labeler_rvol(ticker: str, ts: datetime) -> dict[str, Any]:

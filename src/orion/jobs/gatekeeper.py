@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -135,7 +135,7 @@ class Gatekeeper:
                         "metrics_json": metrics.metrics_json,
                     },
                     status="PENDING",
-                    created_at_utc=datetime.now(timezone.utc),
+                    created_at_utc=datetime.now(UTC),
                 )
             )
 
@@ -182,7 +182,7 @@ class Gatekeeper:
                             "metrics_json": metrics.metrics_json,
                         },
                         status="PENDING",
-                        created_at_utc=datetime.now(timezone.utc),
+                        created_at_utc=datetime.now(UTC),
                     )
                 )
 

@@ -1,17 +1,17 @@
-import logging
 import math
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from orion.config import RiskSettings, risk_settings
 from orion.shared.db_utils import db_write
 from orion.shared.decorators import db_retry
+from orion.shared.logger import setup_struct_logger
 
 if TYPE_CHECKING:
     from orion.execution.correlation_adjuster import CorrelationAdjuster
     from orion.storage.models_execution import Position
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 # Initialize metrics
 _metrics: "Metrics | None" = None
@@ -37,14 +37,14 @@ class RiskManager:
 
         self.current_daily_loss = 0.0
         self.open_positions = 0
-        self.ticker_exposures: Dict[str, float] = {}  # ticker -> usd value
-        self.pending_orders: Dict[str, tuple[str, float]] = {}  # order_id -> (ticker, estimated cost signed)
+        self.ticker_exposures: dict[str, float] = {}  # ticker -> usd value
+        self.pending_orders: dict[str, tuple[str, float]] = {}  # order_id -> (ticker, estimated cost signed)
         self.current_equity = 100000.0  # Default fallback, should be synced
         self.starting_equity = self.current_equity
         self.peak_equity = self.current_equity
 
         # Track full position details (qty, avg_entry)
-        self.positions: Dict[str, Dict[str, float]] = {}
+        self.positions: dict[str, dict[str, float]] = {}
 
         # Idempotency Tracking
         self.processed_fill_ids: set[str] = set()
@@ -53,10 +53,10 @@ class RiskManager:
         self.portfolio_delta: float = 0.0
         self.portfolio_gamma: float = 0.0
         self.portfolio_vega: float = 0.0
-        self.position_greeks: Dict[str, Dict[str, float]] = {}  # ticker -> {delta, gamma, theta, vega}
+        self.position_greeks: dict[str, dict[str, float]] = {}  # ticker -> {delta, gamma, theta, vega}
 
         # Sector exposure tracking
-        self.sector_exposures: Dict[str, float] = {}  # sector -> total USD exposure
+        self.sector_exposures: dict[str, float] = {}  # sector -> total USD exposure
 
     def _current_drawdown_pct(self) -> float:
         if self.peak_equity <= 0:
@@ -115,10 +115,7 @@ class RiskManager:
             return False
 
         # 6. Max Ticker Exposure Check
-        if not self._check_ticker_exposure_limit(cfg, ticker, projected_signed, effective_signed):
-            return False
-
-        return True
+        return self._check_ticker_exposure_limit(cfg, ticker, projected_signed, effective_signed)
 
     def check_options_order(
         self,
@@ -154,17 +151,14 @@ class RiskManager:
             return False
 
         # Then check Greeks limits (pass all Greeks for comprehensive check)
-        if not self._check_greeks_limits(cfg, ticker, delta, gamma, vega):
-            return False
-
-        return True
+        return self._check_greeks_limits(cfg, ticker, delta, gamma, vega)
 
     def _check_time_bans(self, cfg: RiskSettings, timestamp: datetime | None = None) -> bool:
         if not cfg.time_of_day_bans:
             return True
 
         if timestamp is None:
-            timestamp = datetime.now(timezone.utc)
+            timestamp = datetime.now(UTC)
 
         # Use exchange_calendars for robust DST/Holiday handling
         if not hasattr(self, "calendar"):
@@ -222,7 +216,7 @@ class RiskManager:
 
     def _calculate_projected_exposure(
         self, ticker: str, estimated_cost: float, side: str, price: float
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         pending_exposure = 0.0
         for _, p_val in self.pending_orders.items():
             # Check p_val tuple (ticker, cost)
@@ -644,10 +638,11 @@ class RiskManager:
         """
 
         async def save_position(session: Any) -> None:
-            from datetime import datetime, timezone
+            from datetime import datetime
+
+            from sqlalchemy import select
 
             from orion.storage.models_execution import Position as PositionModel
-            from sqlalchemy import select
 
             stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
             result = await session.execute(stmt)
@@ -656,7 +651,7 @@ class RiskManager:
             if existing:
                 existing.qty = position.qty
                 existing.avg_price = position.avg_price
-                existing.updated_at_utc = datetime.now(timezone.utc)
+                existing.updated_at_utc = datetime.now(UTC)
             else:
                 session.add(
                     PositionModel(
@@ -674,9 +669,10 @@ class RiskManager:
         Loads risk state from DB (if exists) to survive restarts.
         """
         try:
+            from sqlalchemy import select
+
             from orion.storage.db import async_session_factory
             from orion.storage.models_risk import RiskState
-            from sqlalchemy import select
 
             async with async_session_factory() as session:
                 stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
@@ -714,8 +710,9 @@ class RiskManager:
         """
 
         async def save_risk_state(session: Any) -> None:
-            from orion.storage.models_risk import RiskState
             from sqlalchemy import select
+
+            from orion.storage.models_risk import RiskState
 
             stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
             result = await session.execute(stmt)
@@ -725,7 +722,7 @@ class RiskManager:
                 state = RiskState(id="global_risk_v1")
                 session.add(state)
 
-            state.updated_at_utc = datetime.now(timezone.utc)
+            state.updated_at_utc = datetime.now(UTC)
             state.current_daily_loss = self.current_daily_loss
             state.current_equity = self.current_equity
             state.starting_equity = getattr(self, "starting_equity", self.current_equity)
@@ -843,9 +840,8 @@ class RiskManager:
             self.current_equity += realized_pnl
 
             # Update Daily Loss (Profit reduces daily loss, Loss increases it)
+            # Allow negative values (net profit) so losses accumulate correctly after profits
             self.current_daily_loss -= realized_pnl
-            if self.current_daily_loss < 0:
-                self.current_daily_loss = 0.0
 
             logger.info(
                 f"Fill Processed for {ticker}: Realized PnL=${realized_pnl:.2f}. New DailyLoss=${self.current_daily_loss:.2f}",
@@ -901,7 +897,7 @@ class RiskManager:
             _metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
 
     async def update_post_trade(
-        self, ticker: str, qty: float, price: float, side: str, order_id: Optional[str] = None
+        self, ticker: str, qty: float, price: float, side: str, order_id: str | None = None
     ) -> None:
         """
         Updates internal risk state immediately after an order is sent (Optimistic).
@@ -915,7 +911,7 @@ class RiskManager:
         # Or change call site.
         # Changing call site is better.
         if not order_id:
-            order_id = f"pending_{datetime.now(timezone.utc).timestamp()}"
+            order_id = f"pending_{datetime.now(UTC).timestamp()}"
 
         cost = qty * price
 
@@ -933,7 +929,7 @@ class RiskManager:
             del self.pending_orders[order_id]
 
     def update_metrics(
-        self, realized_pnl: float = 0.0, open_positions_count: Optional[int] = None, open_pnl: float = 0.0
+        self, realized_pnl: float = 0.0, open_positions_count: int | None = None, open_pnl: float = 0.0
     ) -> None:
         """
         Legacy sync method.

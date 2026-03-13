@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Iterable, List
+from collections.abc import Iterable
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,7 @@ async def ingest_bronze_events(
     *,
     run_id: str,
     trace_id: str,
-) -> List[BronzeEvent]:
+) -> list[BronzeEvent]:
     """
     Shared ingestion path used by live ingestion and DLQ replay.
     Ensures deterministic normalization, trading_date/session derivation, and idempotent writes (dedupe).
@@ -24,7 +24,7 @@ async def ingest_bronze_events(
     """
     from orion.core.timekeeping import derive_trading_date_and_session
 
-    normalized_events: List[BronzeEvent] = []
+    normalized_events: list[BronzeEvent] = []
     deduper = DeduplicationEngine(session)
 
     for e in events:
@@ -35,7 +35,7 @@ async def ingest_bronze_events(
             e.ticker = e.payload.get("ticker")
 
         if e.event_ts_utc and e.event_ts_utc.tzinfo is None:
-            e.event_ts_utc = e.event_ts_utc.replace(tzinfo=timezone.utc)
+            e.event_ts_utc = e.event_ts_utc.replace(tzinfo=UTC)
 
         if e.event_ts_utc:
             if e.session is None:
@@ -57,7 +57,7 @@ async def ingest_bronze_events(
             e.ingest = {"connector": "dlq_replay", "run_id": run_id, "trace_id": trace_id, "attempt": 1}
 
         if e.received_ts_utc is None:
-            e.received_ts_utc = datetime.now(timezone.utc)
+            e.received_ts_utc = datetime.now(UTC)
 
         normalized_events.append(e)
 

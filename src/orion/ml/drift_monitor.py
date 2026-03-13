@@ -5,8 +5,9 @@ Detects when production feature distributions shift from training baseline.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from collections import deque
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 
@@ -17,9 +18,7 @@ PSI_THRESHOLD_WARNING = 0.1  # Moderate drift
 PSI_THRESHOLD_CRITICAL = 0.25  # Significant drift requiring investigation
 
 
-def calculate_psi(
-    expected: np.ndarray, actual: np.ndarray, buckets: int = 10
-) -> float:
+def calculate_psi(expected: np.ndarray, actual: np.ndarray, buckets: int = 10) -> float:
     """
     Calculate Population Stability Index between expected and actual distributions.
 
@@ -74,12 +73,10 @@ class FeatureDriftMonitor:
 
     def __init__(self):
         # Feature baselines: feature_name -> {'values': array, 'mean': float, 'std': float}
-        self._baselines: Dict[str, Dict[str, Any]] = {}
-        self._drift_history: List[Dict[str, Any]] = []
+        self._baselines: dict[str, dict[str, Any]] = {}
+        self._drift_history: deque = deque(maxlen=500)
 
-    def set_baseline(
-        self, feature_name: str, values: np.ndarray
-    ) -> Dict[str, float]:
+    def set_baseline(self, feature_name: str, values: np.ndarray) -> dict[str, float]:
         """
         Set baseline distribution for a feature.
 
@@ -107,7 +104,7 @@ class FeatureDriftMonitor:
             "p50": float(np.percentile(values, 50)),
             "p75": float(np.percentile(values, 75)),
             "n_samples": len(values),
-            "created_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
         }
 
         self._baselines[feature_name] = stats
@@ -119,15 +116,13 @@ class FeatureDriftMonitor:
 
         return {k: v for k, v in stats.items() if k != "values"}
 
-    def set_baselines_from_df(self, df: Any, feature_names: List[str]) -> None:
+    def set_baselines_from_df(self, df: Any, feature_names: list[str]) -> None:
         """Set baselines from a DataFrame for multiple features."""
         for name in feature_names:
             if name in df.columns:
                 self.set_baseline(name, df[name].values)
 
-    def check_drift(
-        self, feature_name: str, values: np.ndarray
-    ) -> Dict[str, Any]:
+    def check_drift(self, feature_name: str, values: np.ndarray) -> dict[str, Any]:
         """
         Check a feature for drift against its baseline.
 
@@ -166,7 +161,7 @@ class FeatureDriftMonitor:
             "actual_mean": float(np.mean(values)),
             "mean_shift": float(np.mean(values) - baseline["mean"]),
             "n_samples": len(values),
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
         # Log if drift detected
@@ -181,7 +176,7 @@ class FeatureDriftMonitor:
 
         return result
 
-    def check_all_features(self, df: Any) -> Dict[str, Dict[str, Any]]:
+    def check_all_features(self, df: Any) -> dict[str, dict[str, Any]]:
         """
         Check drift for all baselined features in a DataFrame.
 
@@ -189,12 +184,12 @@ class FeatureDriftMonitor:
             Dict mapping feature names to drift results
         """
         results = {}
-        for feature_name in self._baselines.keys():
+        for feature_name in self._baselines:
             if feature_name in df.columns:
                 results[feature_name] = self.check_drift(feature_name, df[feature_name].values)
         return results
 
-    def get_drift_summary(self) -> Dict[str, Any]:
+    def get_drift_summary(self) -> dict[str, Any]:
         """
         Get summary of all drift checks.
 
@@ -227,7 +222,7 @@ class FeatureDriftMonitor:
 
     def clear_history(self) -> None:
         """Clear drift check history."""
-        self._drift_history = []
+        self._drift_history.clear()
 
     def has_baseline(self, feature_name: str) -> bool:
         """Check if a feature has a baseline set."""
@@ -235,7 +230,7 @@ class FeatureDriftMonitor:
 
 
 # Global monitor instance
-_drift_monitor: Optional[FeatureDriftMonitor] = None
+_drift_monitor: FeatureDriftMonitor | None = None
 
 
 def get_drift_monitor() -> FeatureDriftMonitor:

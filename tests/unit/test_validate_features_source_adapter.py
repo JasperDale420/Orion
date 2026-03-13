@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -126,7 +126,7 @@ async def test_validate_darkpool_prefers_heber_when_available(monkeypatch: pytes
     results = await validate_features.validate_darkpool(
         {"darkpool_volume_1h": 150},
         "AAPL",
-        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+        datetime(2026, 2, 10, 15, 0, tzinfo=UTC),
     )
 
     assert results["failed"] == []
@@ -148,7 +148,7 @@ async def test_validate_overnight_gap_prefers_heber_when_available(monkeypatch: 
     results = await validate_features.validate_overnight_gap(
         {"overnight_gap_pct": 10.0},
         "AAPL",
-        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+        datetime(2026, 2, 10, 15, 0, tzinfo=UTC),
     )
 
     assert results["failed"] == []
@@ -168,7 +168,7 @@ async def test_validate_overnight_gap_returns_empty_when_heber_empty(monkeypatch
     results = await validate_features.validate_overnight_gap(
         {"overnight_gap_pct": 5.0},
         "AAPL",
-        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+        datetime(2026, 2, 10, 15, 0, tzinfo=UTC),
     )
 
     assert results["failed"] == []
@@ -188,7 +188,7 @@ async def test_validate_darkpool_warns_when_heber_empty(monkeypatch: pytest.Monk
     results = await validate_features.validate_darkpool(
         {"darkpool_volume_1h": 200},
         "AAPL",
-        datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+        datetime(2026, 2, 10, 15, 0, tzinfo=UTC),
     )
 
     assert results["passed"] == []
@@ -201,9 +201,9 @@ def test_summarize_heber_frame_uses_instrument_key_and_ts_event() -> None:
         {
             "instrument_key": ["equity:SPY", "equity:SPY", "equity:QQQ"],
             "ts_event": [
-                datetime(2026, 2, 3, 14, tzinfo=timezone.utc),
-                datetime(2026, 2, 4, 14, tzinfo=timezone.utc),
-                datetime(2026, 2, 5, 14, tzinfo=timezone.utc),
+                datetime(2026, 2, 3, 14, tzinfo=UTC),
+                datetime(2026, 2, 4, 14, tzinfo=UTC),
+                datetime(2026, 2, 5, 14, tzinfo=UTC),
             ],
         }
     )
@@ -222,8 +222,8 @@ async def test_load_label_period_prefers_heber_gold_without_local_db(
     outcomes_df = pd.DataFrame(
         {
             "ts_event": [
-                datetime(2026, 2, 3, 14, tzinfo=timezone.utc),
-                datetime(2026, 2, 5, 15, tzinfo=timezone.utc),
+                datetime(2026, 2, 3, 14, tzinfo=UTC),
+                datetime(2026, 2, 5, 15, tzinfo=UTC),
             ],
             "underlying": ["AAPL", "MSFT"],
         }

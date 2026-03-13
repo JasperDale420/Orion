@@ -9,7 +9,7 @@
 **Check**:
 ```sql
 -- Check watermarks
-SELECT * FROM watermarks ORDER BY last_seen_ts_utc DESC;
+SELECT * FROM ingest_watermarks ORDER BY last_seen_ts_utc DESC;
 
 -- Check circuit breaker
 SELECT * FROM system_status;
@@ -68,8 +68,9 @@ SELECT count(*) FROM pg_stat_activity;
 
 **Check**:
 ```sql
-SELECT ticker, COUNT(*) 
-FROM silver_alpaca_bars 
+SELECT ticker, COUNT(*)
+FROM silver_signals
+WHERE signal_type = 'OHLCV_1M'
 GROUP BY ticker;
 ```
 

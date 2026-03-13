@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -22,19 +22,19 @@ class HistoricalRiskReversalSkew:
         ticker (Union[Unset, str]): The stock ticker. Example: AAPL.
     """
 
-    date: Union[Unset, str] = UNSET
-    risk_reversal: Union[Unset, str] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    date: Unset | str = UNSET
+    risk_reversal: Unset | str = UNSET
+    ticker: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         date = self.date
 
         risk_reversal = self.risk_reversal
 
         ticker = self.ticker
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if date is not UNSET:
@@ -47,7 +47,7 @@ class HistoricalRiskReversalSkew:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         date = d.pop("date", UNSET)
 
@@ -65,7 +65,7 @@ class HistoricalRiskReversalSkew:
         return historical_risk_reversal_skew
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

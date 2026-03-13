@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -58,32 +58,32 @@ class OIChange:
         volume (Union[Unset, float]): The price of the tick Example: 19.32.
     """
 
-    avg_price: Union[Unset, float] = UNSET
-    curr_date: Union[Unset, str] = UNSET
-    curr_oi: Union[Unset, float] = UNSET
-    last_ask: Union[Unset, float] = UNSET
-    last_bid: Union[Unset, float] = UNSET
-    last_date: Union[Unset, str] = UNSET
-    last_fill: Union[Unset, float] = UNSET
-    last_oi: Union[Unset, float] = UNSET
-    oi_change: Union[Unset, float] = UNSET
-    oi_diff_plain: Union[Unset, float] = UNSET
-    option_symbol: Union[Unset, str] = UNSET
-    percentage_of_total: Union[Unset, float] = UNSET
-    prev_ask_volume: Union[Unset, float] = UNSET
-    prev_bid_volume: Union[Unset, float] = UNSET
-    prev_mid_volume: Union[Unset, float] = UNSET
-    prev_multi_leg_volume: Union[Unset, float] = UNSET
-    prev_neutral_volume: Union[Unset, float] = UNSET
-    prev_stock_multi_leg_volume: Union[Unset, float] = UNSET
-    prev_total_premium: Union[Unset, float] = UNSET
-    rnk: Union[Unset, float] = UNSET
-    trades: Union[Unset, float] = UNSET
-    underlying_symbol: Union[Unset, float] = UNSET
-    volume: Union[Unset, float] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    avg_price: Unset | float = UNSET
+    curr_date: Unset | str = UNSET
+    curr_oi: Unset | float = UNSET
+    last_ask: Unset | float = UNSET
+    last_bid: Unset | float = UNSET
+    last_date: Unset | str = UNSET
+    last_fill: Unset | float = UNSET
+    last_oi: Unset | float = UNSET
+    oi_change: Unset | float = UNSET
+    oi_diff_plain: Unset | float = UNSET
+    option_symbol: Unset | str = UNSET
+    percentage_of_total: Unset | float = UNSET
+    prev_ask_volume: Unset | float = UNSET
+    prev_bid_volume: Unset | float = UNSET
+    prev_mid_volume: Unset | float = UNSET
+    prev_multi_leg_volume: Unset | float = UNSET
+    prev_neutral_volume: Unset | float = UNSET
+    prev_stock_multi_leg_volume: Unset | float = UNSET
+    prev_total_premium: Unset | float = UNSET
+    rnk: Unset | float = UNSET
+    trades: Unset | float = UNSET
+    underlying_symbol: Unset | float = UNSET
+    volume: Unset | float = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         avg_price = self.avg_price
 
         curr_date = self.curr_date
@@ -130,7 +130,7 @@ class OIChange:
 
         volume = self.volume
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if avg_price is not UNSET:
@@ -183,7 +183,7 @@ class OIChange:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         avg_price = d.pop("avg_price", UNSET)
 
@@ -261,7 +261,7 @@ class OIChange:
         return oi_change
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

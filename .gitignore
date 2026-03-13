@@ -29,6 +29,10 @@ coverage.xml
 # Debug/Output files
 *.txt
 coverage.json
+# Agent temp DB artifacts
+.agents/tmp/**/*.db
+.agents/tmp/**/*.db-journal
+.agents/tmp/**/*.db-wal
 
 # Distribution / Packaging
 dist/
@@ -46,3 +50,17 @@ build/
 
 # Artifacts (generated reports)
 artifacts/
+
+# SonarQube
+.scannerwork/
+sonar_scan.log
+
+# Aider
+.aider*
+.env
+
+# Axon knowledge graph cache
+.axon/
+
+# qlib third-party library
+qlib-main/

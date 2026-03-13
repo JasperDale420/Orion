@@ -1,4 +1,4 @@
-from typing import Awaitable, Callable, Dict, Optional, Union
+from collections.abc import Awaitable, Callable
 
 from alpaca.common.enums import BaseURL
 from alpaca.data.enums import OptionsFeed
@@ -18,8 +18,8 @@ class OptionDataStream(DataStream):
         secret_key: str,
         raw_data: bool = False,
         feed: OptionsFeed = OptionsFeed.INDICATIVE,
-        websocket_params: Optional[Dict] = None,
-        url_override: Optional[str] = None,
+        websocket_params: dict | None = None,
+        url_override: str | None = None,
     ) -> None:
         """
         Instantiates a WebSocket client for accessing live option data.
@@ -48,7 +48,7 @@ class OptionDataStream(DataStream):
         )
 
     def subscribe_trades(
-        self, handler: Callable[[Union[Trade, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Trade | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to trades.
 
@@ -60,7 +60,7 @@ class OptionDataStream(DataStream):
         self._subscribe(handler, symbols, self._handlers["trades"])
 
     def subscribe_quotes(
-        self, handler: Callable[[Union[Quote, Dict]], Awaitable[None]], *symbols: str
+        self, handler: Callable[[Quote | dict], Awaitable[None]], *symbols: str
     ) -> None:
         """Subscribe to quotes
 

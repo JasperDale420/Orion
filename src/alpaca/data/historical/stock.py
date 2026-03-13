@@ -1,12 +1,11 @@
 from collections import defaultdict
 from enum import Enum
-from typing import Dict, List, Optional, Type, Union
 
 from alpaca.common.constants import DATA_V2_MAX_LIMIT
 from alpaca.common.enums import BaseURL
-from alpaca.common.rest import HTTPResult, RESTClient
+from alpaca.common.rest import RESTClient
 from alpaca.common.types import RawData
-from alpaca.data import Bar, Quote, Snapshot, Trade
+from alpaca.data.models import Bar, Quote, Snapshot, Trade
 from alpaca.data.historical.utils import (
     format_dataset_response,
     format_latest_data_response,
@@ -41,12 +40,12 @@ class StockHistoricalDataClient(RESTClient):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        oauth_token: Optional[str] = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        oauth_token: str | None = None,
         use_basic_auth: bool = False,
         raw_data: bool = False,
-        url_override: Optional[str] = None,
+        url_override: str | None = None,
         sandbox: bool = False,
     ) -> None:
         """
@@ -84,7 +83,7 @@ class StockHistoricalDataClient(RESTClient):
 
     def get_stock_bars(
         self, request_params: StockBarsRequest
-    ) -> Union[BarSet, RawData]:
+    ) -> BarSet | RawData:
         """Returns bar data for an equity or list of equities over a given
         time period and timeframe.
 
@@ -112,7 +111,7 @@ class StockHistoricalDataClient(RESTClient):
 
     def get_stock_quotes(
         self, request_params: StockQuotesRequest
-    ) -> Union[QuoteSet, RawData]:
+    ) -> QuoteSet | RawData:
         """Returns level 1 quote data over a given time period for a security or list of securities.
 
         Args:
@@ -138,7 +137,7 @@ class StockHistoricalDataClient(RESTClient):
 
     def get_stock_trades(
         self, request_params: StockTradesRequest
-    ) -> Union[TradeSet, RawData]:
+    ) -> TradeSet | RawData:
         """Returns the price and sales history over a given time period for a security or list of securities.
 
         Args:
@@ -164,7 +163,7 @@ class StockHistoricalDataClient(RESTClient):
 
     def get_stock_latest_trade(
         self, request_params: StockLatestTradeRequest
-    ) -> Union[Dict[str, Trade], RawData]:
+    ) -> dict[str, Trade] | RawData:
         """Retrieves the latest trade for an equity symbol or list of equities.
 
         Args:
@@ -191,7 +190,7 @@ class StockHistoricalDataClient(RESTClient):
 
     def get_stock_latest_quote(
         self, request_params: StockLatestQuoteRequest
-    ) -> Union[Dict[str, Quote], RawData]:
+    ) -> dict[str, Quote] | RawData:
         """Retrieves the latest quote for an equity symbol or list of equity symbols.
 
         Args:
@@ -217,7 +216,7 @@ class StockHistoricalDataClient(RESTClient):
 
     def get_stock_latest_bar(
         self, request_params: StockLatestBarRequest
-    ) -> Union[Dict[str, Bar], RawData]:
+    ) -> dict[str, Bar] | RawData:
         """Retrieves the latest minute bar for an equity symbol or list of equity symbols.
 
         Args:
@@ -243,7 +242,7 @@ class StockHistoricalDataClient(RESTClient):
 
     def get_stock_snapshot(
         self, request_params: StockSnapshotRequest
-    ) -> Union[Dict[str, Snapshot], RawData]:
+    ) -> dict[str, Snapshot] | RawData:
         """Returns snapshots of queried symbols. Snapshots contain latest trade, latest quote, latest minute bar,
         latest daily bar and previous daily bar data for the queried symbols.
 
@@ -275,10 +274,10 @@ class StockHistoricalDataClient(RESTClient):
         endpoint_asset_class: str,
         endpoint_data_type: str,
         api_version: str,
-        symbol_or_symbols: Union[str, List[str]],
-        limit: Optional[int] = None,
+        symbol_or_symbols: str | list[str],
+        limit: int | None = None,
         page_limit: int = DATA_V2_MAX_LIMIT,
-        extension: Optional[DataExtensionType] = None,
+        extension: DataExtensionType | None = None,
         **kwargs,
     ) -> RawData:
         """Performs Data API GET requests accounting for pagination. Data in responses are limited to the page_limit,

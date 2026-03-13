@@ -1,8 +1,9 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+
 from orion.api.deps import get_db
 from orion.api.main import app
 from orion.storage.models_solvers import Solver
@@ -34,7 +35,7 @@ async def override_get_db():
             stage="research",
             is_active=True,
             config={"test": "config"},
-            created_at_utc=datetime.now(timezone.utc),
+            created_at_utc=datetime.now(UTC),
             total_pnl=100.0,
             sharpe_ratio=1.5,
             win_rate=0.6,
@@ -47,7 +48,7 @@ async def override_get_db():
         stage="research",
         is_active=True,
         config={"test": "config"},
-        created_at_utc=datetime.now(timezone.utc),
+        created_at_utc=datetime.now(UTC),
         total_pnl=100.0,
         sharpe_ratio=1.5,
         win_rate=0.6,
@@ -61,7 +62,7 @@ async def override_get_db():
             "stage": "research",
             "is_active": True,
             "config": {"test": "config"},
-            "created_at_utc": datetime.now(timezone.utc),
+            "created_at_utc": datetime.now(UTC),
             "total_pnl": 100.0,
             "sharpe_ratio": 1.5,
             "win_rate": 0.6,

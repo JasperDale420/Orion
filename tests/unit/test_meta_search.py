@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.agents.meta_search_agent import MetaSearchAgent
 from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdit
 from orion.storage.models_solvers import SolverMetrics, SolverRun

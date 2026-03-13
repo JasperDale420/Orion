@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from orion.processing.rules.base import TradingRule
 from orion.storage.models_gold import CandidateTrade
@@ -25,7 +25,7 @@ class RuleEngine:
         cfg = config or {}
         overrides = cfg.get("rule_overrides", {})
 
-        def get_rule_cfg(rule_id: str) -> Dict[str, Any]:
+        def get_rule_cfg(rule_id: str) -> dict[str, Any]:
             return overrides.get(rule_id) or cfg.get(rule_id, {})
 
         zero_dte_cfg = get_rule_cfg("rule_0dte_sweep_v1")
@@ -35,7 +35,7 @@ class RuleEngine:
         short_swing_cfg = get_rule_cfg("rule_short_swing_entry_v1")
 
         # Data-driven entry rules based on price target analysis
-        self.rules: List[TradingRule] = [
+        self.rules: list[TradingRule] = [
             BullishSweepRule(min_premium=bullish_cfg.get("min_premium", 10000.0)),
             BearishPutPressureRule(min_premium=bearish_cfg.get("min_premium", 10000.0)),
             ZeroDTESweepRule(
@@ -53,7 +53,7 @@ class RuleEngine:
         ]
         logger.info(f"RuleEngine initialized with {len(self.rules)} data-driven rules")
 
-    def process_signals(self, signals: List[SilverSignal]) -> List[CandidateTrade]:
+    def process_signals(self, signals: list[SilverSignal]) -> list[CandidateTrade]:
         candidates = []
         for signal in signals:
             for rule in self.rules:

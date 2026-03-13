@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -13,16 +13,16 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     id: str,
     *,
-    limit: Union[Unset, int] = UNSET,
-) -> Dict[str, Any]:
+    limit: Unset | int = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/option-contract/{id}/historic",
         "params": params,
@@ -33,7 +33,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> ErrorMessage | OptionChainContractResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -56,7 +56,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -69,8 +69,8 @@ def sync_detailed(
     id: str,
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     """Price history for the given option contract
 
      Historic EOD Stats for the given option contract
@@ -104,8 +104,8 @@ def sync(
     id: str,
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | OptionChainContractResults | str | None:
     """Price history for the given option contract
 
      Historic EOD Stats for the given option contract
@@ -134,8 +134,8 @@ async def asyncio_detailed(
     id: str,
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     """Price history for the given option contract
 
      Historic EOD Stats for the given option contract
@@ -167,8 +167,8 @@ async def asyncio(
     id: str,
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | OptionChainContractResults | str | None:
     """Price history for the given option contract
 
      Historic EOD Stats for the given option contract

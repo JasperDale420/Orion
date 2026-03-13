@@ -5,8 +5,6 @@ Tests the fixes for:
 2. Vega exposure limits (new feature)
 """
 
-import pytest
-
 from orion.config import RiskSettings
 from orion.execution.risk_manager import RiskManager
 
@@ -24,9 +22,7 @@ class TestProjectedGamma:
         rm.portfolio_gamma = 80.0  # Already have exposure
 
         # This trade would push gamma to 130, exceeding 100 limit
-        result = rm._check_greeks_limits(
-            settings, "AAPL", position_delta=50.0, position_gamma=50.0
-        )
+        result = rm._check_greeks_limits(settings, "AAPL", position_delta=50.0, position_gamma=50.0)
         assert result is False
 
     def test_projected_gamma_allows_within_limit(self):
@@ -39,9 +35,7 @@ class TestProjectedGamma:
         rm.portfolio_gamma = 40.0
 
         # This trade would push gamma to 60, within 100 limit
-        result = rm._check_greeks_limits(
-            settings, "AAPL", position_delta=50.0, position_gamma=20.0
-        )
+        result = rm._check_greeks_limits(settings, "AAPL", position_delta=50.0, position_gamma=20.0)
         assert result is True
 
     def test_gamma_at_exact_limit_allowed(self):
@@ -54,9 +48,7 @@ class TestProjectedGamma:
         rm.portfolio_gamma = 50.0
 
         # This trade would push gamma to exactly 100
-        result = rm._check_greeks_limits(
-            settings, "AAPL", position_delta=50.0, position_gamma=50.0
-        )
+        result = rm._check_greeks_limits(settings, "AAPL", position_delta=50.0, position_gamma=50.0)
         assert result is True
 
     def test_gamma_just_over_limit_blocked(self):
@@ -69,9 +61,7 @@ class TestProjectedGamma:
         rm.portfolio_gamma = 50.0
 
         # This trade would push gamma to 100.1
-        result = rm._check_greeks_limits(
-            settings, "AAPL", position_delta=50.0, position_gamma=50.1
-        )
+        result = rm._check_greeks_limits(settings, "AAPL", position_delta=50.0, position_gamma=50.1)
         assert result is False
 
 
@@ -89,9 +79,7 @@ class TestVegaLimits:
         rm.portfolio_vega = 180.0
 
         # This trade would push vega to 230, exceeding 200 limit
-        result = rm._check_greeks_limits(
-            settings, "AAPL", position_delta=50.0, position_gamma=10.0, position_vega=50.0
-        )
+        result = rm._check_greeks_limits(settings, "AAPL", position_delta=50.0, position_gamma=10.0, position_vega=50.0)
         assert result is False
 
     def test_position_vega_limit(self):
@@ -102,9 +90,7 @@ class TestVegaLimits:
         )
         rm = RiskManager(config=settings)
 
-        result = rm._check_greeks_limits(
-            settings, "AAPL", position_delta=50.0, position_gamma=10.0, position_vega=75.0
-        )
+        result = rm._check_greeks_limits(settings, "AAPL", position_delta=50.0, position_gamma=10.0, position_vega=75.0)
         assert result is False
 
     def test_vega_within_limits_allowed(self):
@@ -117,9 +103,7 @@ class TestVegaLimits:
         rm = RiskManager(config=settings)
         rm.portfolio_vega = 100.0
 
-        result = rm._check_greeks_limits(
-            settings, "AAPL", position_delta=50.0, position_gamma=10.0, position_vega=40.0
-        )
+        result = rm._check_greeks_limits(settings, "AAPL", position_delta=50.0, position_gamma=10.0, position_vega=40.0)
         assert result is True
 
     def test_portfolio_vega_tracking(self):

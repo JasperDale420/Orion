@@ -1,7 +1,7 @@
 import logging
 import time
-from datetime import date, datetime, timezone
-from typing import Dict, Iterable, List, Set
+from collections.abc import Iterable
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 
@@ -22,20 +22,20 @@ class UniverseManager:
     def __init__(self) -> None:
         # Map of ticker -> last_active_utc_timestamp (float seconds)
         # Note: We use system time here for TTL tracking.
-        self.active_tickers: Dict[str, float] = {}
+        self.active_tickers: dict[str, float] = {}
 
         # Explicit static set that never expires (config watchlists)
-        self.static_universe: Set[str] = set(STATIC_WATCHLIST)
+        self.static_universe: set[str] = set(STATIC_WATCHLIST)
 
         # Positions currently held should always be in-universe.
-        self.held_tickers: Set[str] = set()
+        self.held_tickers: set[str] = set()
 
         # Alerts should keep a ticker in-universe longer than generic activity.
-        self.alert_tickers: Dict[str, float] = {}
+        self.alert_tickers: dict[str, float] = {}
 
         # Tickers with explicit option expiry dates (e.g. from Flow/Alerts)
         # These should remain active until the option expires.
-        self.expiry_tickers: Dict[str, date] = {}
+        self.expiry_tickers: dict[str, date] = {}
 
     async def hydrate_from_db(self) -> None:
         """
@@ -43,7 +43,7 @@ class UniverseManager:
         active alerts with future expiration dates.
         """
         logger.info("Hydrating Universe from DB for active option contexts...")
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_str = datetime.now(UTC).strftime("%Y-%m-%d")
 
         count = 0
         try:
@@ -83,7 +83,7 @@ class UniverseManager:
         except Exception as e:
             logger.error(f"Failed to hydrate universe from DB: {e}")
 
-    def update_from_config(self, tickers: List[str]) -> None:
+    def update_from_config(self, tickers: list[str]) -> None:
         """
         Updates the static watchlist (runtime config update).
         """
@@ -167,7 +167,7 @@ class UniverseManager:
             alert_ttl_seconds = ttl_seconds * 2
 
         now = time.time()
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
 
         expired_activity: list[str] = []
         for ticker, last_ts in self.active_tickers.items():
@@ -210,7 +210,7 @@ class UniverseManager:
                 len(expired_expiry_keys),
             )
 
-    def get_active_universe(self) -> List[str]:
+    def get_active_universe(self) -> list[str]:
         """
         Returns the unique union of static and active dynamic tickers.
         """

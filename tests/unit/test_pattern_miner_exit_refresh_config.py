@@ -226,12 +226,11 @@ async def test_fetch_training_data_uses_heber_source_without_local_db(
     assert feature_names == pattern_miner.FEATURE_COLUMNS + pattern_miner.CATEGORICAL_COLUMNS
     assert int(df.iloc[0]["target_hit_target_50"]) == 1
     assert int(df.iloc[0]["target_quick_winner"]) == 1
-    assert float(df.iloc[0]["volume_at_entry"]) == pytest.approx(250.0)
-    assert float(df.iloc[0]["open_interest_at_entry"]) == pytest.approx(400.0)
-    assert float(df.iloc[0]["iv_vs_hv_ratio"]) == pytest.approx(2.0)
-    assert float(df.iloc[0]["ask_side_ratio"]) == pytest.approx(1.0)
-    assert int(df.iloc[0]["is_spread_leg"]) == 1
-    assert str(df.iloc[0]["market_tide_direction"]) == "bullish"
+    assert float(df.iloc[0]["volume"]) == pytest.approx(250.0)
+    assert float(df.iloc[0]["open_interest"]) == pytest.approx(400.0)
+    assert float(df.iloc[0]["iv"]) == pytest.approx(0.42)
+    assert float(df.iloc[0]["realized_vol_20d"]) == pytest.approx(0.21)
+    assert str(df.iloc[0]["side"]) == "ask"
     assert db_calls["count"] == 0
 
 
@@ -415,8 +414,10 @@ async def test_fetch_training_data_drops_no_snapshot_outcomes(
     df, _ = await pattern_miner.fetch_training_data(window_days=30, min_samples=1, quick_winner_seconds=3600)
 
     assert df is not None
-    assert len(df) == 2
-    assert set(df["event_id"].tolist()) == {"evt-expired", "evt-valid"}
+    # _drop_no_snapshot_outcomes no longer filters rows — Heber gold pipelines
+    # handle invalid-alert filtering upstream, so all 3 rows survive.
+    assert len(df) == 3
+    assert set(df["event_id"].tolist()) == {"evt-no-snap", "evt-expired", "evt-valid"}
 
 
 @pytest.mark.asyncio

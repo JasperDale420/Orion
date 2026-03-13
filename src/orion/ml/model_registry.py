@@ -5,13 +5,14 @@ Provides versioning, registration, and rollback capabilities for ML models.
 """
 
 import json
-import logging
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 # Default model directory
 DEFAULT_MODEL_DIR = Path("artifacts/models")
@@ -27,11 +28,11 @@ class ModelMetadata:
         train_auc: float,
         holdout_auc: float,
         created_at: datetime,
-        feature_names: List[str],
+        feature_names: list[str],
         model_path: Path,
         is_active: bool = False,
         ab_weight: float = 1.0,
-        extra_metrics: Optional[Dict[str, float]] = None,
+        extra_metrics: dict[str, float] | None = None,
     ):
         self.model_type = model_type
         self.version = version
@@ -44,7 +45,7 @@ class ModelMetadata:
         self.ab_weight = ab_weight
         self.extra_metrics = extra_metrics or {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "model_type": self.model_type,
@@ -60,7 +61,7 @@ class ModelMetadata:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ModelMetadata":
+    def from_dict(cls, data: dict[str, Any]) -> "ModelMetadata":
         """Create from dictionary."""
         return cls(
             model_type=data["model_type"],
@@ -87,18 +88,18 @@ class ModelRegistry:
     - Metadata persistence
     """
 
-    def __init__(self, model_dir: Optional[Path] = None):
+    def __init__(self, model_dir: Path | None = None):
         self.model_dir = model_dir or DEFAULT_MODEL_DIR
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self._registry_path = self.model_dir / "registry.json"
-        self._models: Dict[str, List[ModelMetadata]] = {}
+        self._models: dict[str, list[ModelMetadata]] = {}
         self._load_registry()
 
     def _load_registry(self) -> None:
         """Load registry from disk."""
         if self._registry_path.exists():
             try:
-                with open(self._registry_path, "r") as f:
+                with open(self._registry_path) as f:
                     data = json.load(f)
                 for model_type, versions in data.get("models", {}).items():
                     self._models[model_type] = [ModelMetadata.from_dict(v) for v in versions]
@@ -113,7 +114,7 @@ class ModelRegistry:
         """Persist registry to disk."""
         data = {
             "models": {model_type: [m.to_dict() for m in versions] for model_type, versions in self._models.items()},
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         with open(self._registry_path, "w") as f:
             json.dump(data, f, indent=2)
@@ -124,8 +125,8 @@ class ModelRegistry:
         model: Any,
         train_auc: float,
         holdout_auc: float,
-        feature_names: List[str],
-        extra_metrics: Optional[Dict[str, float]] = None,
+        feature_names: list[str],
+        extra_metrics: dict[str, float] | None = None,
         auto_activate: bool = True,
     ) -> ModelMetadata:
         """
@@ -168,7 +169,7 @@ class ModelRegistry:
             version=next_version,
             train_auc=train_auc,
             holdout_auc=holdout_auc,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             feature_names=feature_names,
             model_path=model_path,
             is_active=auto_activate,
@@ -200,7 +201,7 @@ class ModelRegistry:
 
         return metadata
 
-    def get_active_model(self, model_type: str) -> Optional[Any]:
+    def get_active_model(self, model_type: str) -> Any | None:
         """
         Get the currently active model for a type.
 
@@ -224,7 +225,7 @@ class ModelRegistry:
         logger.warning(f"Model file not found: {latest.model_path}")
         return None
 
-    def get_active_metadata(self, model_type: str) -> Optional[ModelMetadata]:
+    def get_active_metadata(self, model_type: str) -> ModelMetadata | None:
         """Get metadata for the active model version."""
         versions = self._models.get(model_type, [])
         active = [v for v in versions if v.is_active]
@@ -265,7 +266,7 @@ class ModelRegistry:
 
         return True
 
-    def list_versions(self, model_type: str) -> List[ModelMetadata]:
+    def list_versions(self, model_type: str) -> list[ModelMetadata]:
         """List all versions for a model type."""
         return sorted(
             self._models.get(model_type, []),
@@ -273,7 +274,7 @@ class ModelRegistry:
             reverse=True,
         )
 
-    def configure_ab_test(self, model_type: str, versions: Dict[int, float]) -> None:
+    def configure_ab_test(self, model_type: str, versions: dict[int, float]) -> None:
         """
         Configure A/B testing weights for model versions.
 
@@ -298,14 +299,15 @@ class ModelRegistry:
             extra={"event": "ab_test_configured", "model_type": model_type, "weights": versions},
         )
 
-    def get_ab_model(self, model_type: str) -> Optional[Any]:
+    def get_ab_model(self, model_type: str) -> Any | None:
         """
         Get a model based on A/B testing weights.
 
         Uses weighted random selection among active versions.
         """
-        import joblib
         import random
+
+        import joblib
 
         versions = self._models.get(model_type, [])
         active = [v for v in versions if v.is_active and v.ab_weight > 0]
@@ -369,7 +371,7 @@ class ModelRegistry:
 
 
 # Global registry instance
-_registry: Optional[ModelRegistry] = None
+_registry: ModelRegistry | None = None
 
 
 def get_model_registry() -> ModelRegistry:

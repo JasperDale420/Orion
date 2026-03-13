@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import pandas as pd
 from pydantic import model_validator
@@ -31,13 +31,15 @@ class ClosePositionRequest(NonEmptyRequest):
         percentage (str): The percentage of shares to liquidate.
     """
 
-    qty: Optional[str] = None
-    percentage: Optional[str] = None
+    qty: str | None = None
+    percentage: str | None = None
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
-        qty = values.get("qty", None)
-        percentage = values.get("percentage", None)
+        qty = values.get("qty")
+        percentage = values.get("percentage")
         if qty is None and percentage is None:
             raise ValueError(
                 "qty or percentage must be given to the ClosePositionRequest, got None for both."
@@ -64,10 +66,10 @@ class GetPortfolioHistoryRequest(NonEmptyRequest):
           timeframe less than 1D.
     """
 
-    period: Optional[str] = None
-    timeframe: Optional[str] = None
-    date_end: Optional[date] = None
-    extended_hours: Optional[bool] = None
+    period: str | None = None
+    timeframe: str | None = None
+    date_end: date | None = None
+    extended_hours: bool | None = None
 
 
 class GetCalendarRequest(NonEmptyRequest):
@@ -75,8 +77,8 @@ class GetCalendarRequest(NonEmptyRequest):
     Represents the optional filtering you can do when requesting a Calendar object
     """
 
-    start: Optional[date] = None
-    end: Optional[date] = None
+    start: date | None = None
+    end: date | None = None
 
 
 class CreateWatchlistRequest(NonEmptyRequest):
@@ -89,7 +91,7 @@ class CreateWatchlistRequest(NonEmptyRequest):
     """
 
     name: str
-    symbols: List[str]
+    symbols: list[str]
 
 
 class UpdateWatchlistRequest(NonEmptyRequest):
@@ -101,10 +103,12 @@ class UpdateWatchlistRequest(NonEmptyRequest):
         symbols(Optional[List[str]]): Symbols of Assets to watch
     """
 
-    name: Optional[str] = None
-    symbols: Optional[List[str]] = None
+    name: str | None = None
+    symbols: list[str] | None = None
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
         if ("name" not in values or values["name"] is None) and (
             "symbols" not in values or values["symbols"] is None
@@ -125,10 +129,10 @@ class GetAssetsRequest(NonEmptyRequest):
         attributes (Optional[str]): Comma separated values to query for more than one attribute.
     """
 
-    status: Optional[AssetStatus] = None
-    asset_class: Optional[AssetClass] = None
-    exchange: Optional[AssetExchange] = None
-    attributes: Optional[str] = None
+    status: AssetStatus | None = None
+    asset_class: AssetClass | None = None
+    exchange: AssetExchange | None = None
+    attributes: str | None = None
 
 
 class TakeProfitRequest(NonEmptyRequest):
@@ -153,7 +157,7 @@ class StopLossRequest(NonEmptyRequest):
     """
 
     stop_price: float
-    limit_price: Optional[float] = None
+    limit_price: float | None = None
 
 
 class GetOrdersRequest(NonEmptyRequest):
@@ -170,14 +174,14 @@ class GetOrdersRequest(NonEmptyRequest):
         symbols (Optional[List[str]]): List of symbols to filter by.
     """
 
-    status: Optional[QueryOrderStatus] = None
-    limit: Optional[int] = None  # not pagination = None
-    after: Optional[datetime] = None
-    until: Optional[datetime] = None
-    direction: Optional[Sort] = None
-    nested: Optional[bool] = None
-    side: Optional[OrderSide] = None
-    symbols: Optional[List[str]] = None
+    status: QueryOrderStatus | None = None
+    limit: int | None = None  # not pagination = None
+    after: datetime | None = None
+    until: datetime | None = None
+    direction: Sort | None = None
+    nested: bool | None = None
+    side: OrderSide | None = None
+    symbols: list[str] | None = None
 
 
 class GetOrderByIdRequest(NonEmptyRequest):
@@ -202,19 +206,21 @@ class ReplaceOrderRequest(NonEmptyRequest):
         client_order_id (Optional[str]): A unique identifier for the order.
     """
 
-    qty: Optional[int] = None
-    time_in_force: Optional[TimeInForce] = None
-    limit_price: Optional[float] = None
-    stop_price: Optional[float] = None
-    trail: Optional[float] = None
-    client_order_id: Optional[str] = None
+    qty: int | None = None
+    time_in_force: TimeInForce | None = None
+    limit_price: float | None = None
+    stop_price: float | None = None
+    trail: float | None = None
+    client_order_id: str | None = None
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
-        qty = values.get("qty", None)
-        limit_price = values.get("limit_price", None)
-        stop_price = values.get("stop_price", None)
-        trail = values.get("trail", None)
+        qty = values.get("qty")
+        limit_price = values.get("limit_price")
+        stop_price = values.get("stop_price")
+        trail = values.get("trail")
 
         if (qty is not None) and (qty <= 0):
             raise ValueError("qty must be greater than 0")
@@ -239,7 +245,7 @@ class CancelOrderResponse(ModelWithID):
     """
 
     status: int
-    body: Optional[Dict[str, Any]] = None
+    body: dict[str, Any] | None = None
 
 
 class OrderRequest(NonEmptyRequest):
@@ -263,19 +269,21 @@ class OrderRequest(NonEmptyRequest):
     """
 
     symbol: str
-    qty: Optional[float] = None
-    notional: Optional[float] = None
+    qty: float | None = None
+    notional: float | None = None
     side: OrderSide
     type: OrderType
     time_in_force: TimeInForce
-    order_class: Optional[OrderClass] = None
-    extended_hours: Optional[bool] = None
-    client_order_id: Optional[str] = None
-    take_profit: Optional[TakeProfitRequest] = None
-    stop_loss: Optional[StopLossRequest] = None
-    position_intent: Optional[PositionIntent] = None
+    order_class: OrderClass | None = None
+    extended_hours: bool | None = None
+    client_order_id: str | None = None
+    take_profit: TakeProfitRequest | None = None
+    stop_loss: StopLossRequest | None = None
+    position_intent: PositionIntent | None = None
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
         qty_set = "qty" in values and values["qty"] is not None
         notional_set = "notional" in values and values["notional"] is not None
@@ -365,7 +373,7 @@ class LimitOrderRequest(OrderRequest):
         position_intent (Optional[PositionIntent]): An enum to indicate the desired position strategy: BTO, BTC, STO, STC.
     """
 
-    limit_price: Optional[float] = None
+    limit_price: float | None = None
 
     def __init__(self, **data: Any) -> None:
         data["type"] = OrderType.LIMIT
@@ -373,9 +381,11 @@ class LimitOrderRequest(OrderRequest):
         super().__init__(**data)
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
         if values.get("order_class", "") != OrderClass.OCO:
-            limit_price = values.get("limit_price", None)
+            limit_price = values.get("limit_price")
             if limit_price is None:
                 raise ValueError("limit_price is required")
         return values
@@ -435,8 +445,8 @@ class TrailingStopOrderRequest(OrderRequest):
         position_intent (Optional[PositionIntent]): An enum to indicate the desired position strategy: BTO, BTC, STO, STC.
     """
 
-    trail_price: Optional[float] = None
-    trail_percent: Optional[float] = None
+    trail_price: float | None = None
+    trail_percent: float | None = None
 
     def __init__(self, **data: Any) -> None:
         data["type"] = OrderType.TRAILING_STOP
@@ -444,6 +454,8 @@ class TrailingStopOrderRequest(OrderRequest):
         super().__init__(**data)
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
         trail_percent_set = (
             "trail_percent" in values and values["trail_percent"] is not None
@@ -474,14 +486,16 @@ class GetCorporateAnnouncementsRequest(NonEmptyRequest):
         date_type (Optional[CorporateActionDateType]): The date type for the announcement.
     """
 
-    ca_types: List[CorporateActionType]
+    ca_types: list[CorporateActionType]
     since: date
     until: date
-    symbol: Optional[str] = None
-    cusip: Optional[str] = None
-    date_type: Optional[CorporateActionDateType] = None
+    symbol: str | None = None
+    cusip: str | None = None
+    date_type: CorporateActionDateType | None = None
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
         since = pd.Timestamp(values.get("since")).date()
         until = pd.Timestamp(values.get("until")).date()
@@ -515,16 +529,16 @@ class GetOptionContractsRequest(NonEmptyRequest):
         page_token (Optional[str]): Pagination token to continue from. The value to pass here is returned in specific requests when more data is available than the request limit allows.
     """
 
-    underlying_symbols: Optional[List[str]] = None
-    status: Optional[AssetStatus] = AssetStatus.ACTIVE
-    expiration_date: Optional[Union[date, str]] = None
-    expiration_date_gte: Optional[Union[date, str]] = None
-    expiration_date_lte: Optional[Union[date, str]] = None
-    root_symbol: Optional[str] = None
-    type: Optional[ContractType] = None
-    style: Optional[ExerciseStyle] = None
-    strike_price_gte: Optional[str] = None
-    strike_price_lte: Optional[str] = None
+    underlying_symbols: list[str] | None = None
+    status: AssetStatus | None = AssetStatus.ACTIVE
+    expiration_date: date | str | None = None
+    expiration_date_gte: date | str | None = None
+    expiration_date_lte: date | str | None = None
+    root_symbol: str | None = None
+    type: ContractType | None = None
+    style: ExerciseStyle | None = None
+    strike_price_gte: str | None = None
+    strike_price_lte: str | None = None
 
-    limit: Optional[int] = None
-    page_token: Optional[str] = None
+    limit: int | None = None
+    page_token: str | None = None

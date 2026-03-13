@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from alpaca.common.models import ValidateBaseModel as BaseModel
 from alpaca.common.types import RawData
@@ -30,8 +29,8 @@ class Bar(BaseModel):
     low: float
     close: float
     volume: float
-    trade_count: Optional[float]
-    vwap: Optional[float]
+    trade_count: float | None
+    vwap: float | None
 
     def __init__(self, symbol: str, raw_data: RawData) -> None:
         """Instantiates a bar
@@ -58,7 +57,7 @@ class BarSet(BaseDataSet, TimeSeriesMixin):
         data (Dict[str, List[Bar]]): The collection of Bars keyed by symbol.
     """
 
-    data: Dict[str, List[Bar]] = {}
+    data: dict[str, list[Bar]] = {}
 
     def __init__(
         self,

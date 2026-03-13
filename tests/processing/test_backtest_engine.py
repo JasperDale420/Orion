@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+
 from orion.processing.backtest_engine import BacktestEngine
 from orion.processing.label_engine import TripleBarrierLabeling
 from orion.storage.models_gold import CandidateTrade
@@ -10,7 +11,7 @@ from orion.storage.models_gold import CandidateTrade
 @pytest.fixture
 def mock_risk_manager():
     # Patch the class where it is DEFINED, because it is imported locally in __init__
-    with patch("orion.execution.risk_manager.RiskManager") as MockRM:
+    with patch("orion.execution.risk_manager.RiskManager") as MockRM:  # noqa: N806
         instance = MockRM.return_value
         # Default unrestricted behavior
         instance.calculate_size.return_value = 100.0

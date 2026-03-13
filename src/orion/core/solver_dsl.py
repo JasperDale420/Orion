@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -11,8 +11,8 @@ from orion.core.rule_registry import RuleRegistry
 
 class SolverDSLFeatures(BaseModel):
     feature_set_id: str = Field(default="v1_legacy")
-    event_features: List[str] = Field(default_factory=list)
-    window_features: List[str] = Field(default_factory=list)
+    event_features: list[str] = Field(default_factory=list)
+    window_features: list[str] = Field(default_factory=list)
     feature_engine_version: str = Field(default="v1")
 
     @field_validator("feature_set_id")
@@ -25,12 +25,12 @@ class SolverDSLFeatures(BaseModel):
 
 class SolverDSLModel(BaseModel):
     type: Literal["meta_classifier", "none"] = "meta_classifier"
-    model_version: Optional[str] = None
-    model_uri: Optional[str] = None
-    thresholds: Dict[str, float] = Field(default_factory=dict)
+    model_version: str | None = None
+    model_uri: str | None = None
+    thresholds: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_model_ref(self) -> "SolverDSLModel":
+    def _validate_model_ref(self) -> SolverDSLModel:
         # If a model is requested, require at least one reference.
         if self.type != "none" and not (self.model_version or self.model_uri):
             raise ValueError("model.type=meta_classifier requires model_version or model_uri")
@@ -38,15 +38,15 @@ class SolverDSLModel(BaseModel):
 
 
 class SolverDSLRisk(BaseModel):
-    risk_per_trade_pct: Optional[float] = None
-    risk_per_trade_bps: Optional[int] = None
+    risk_per_trade_pct: float | None = None
+    risk_per_trade_bps: int | None = None
     max_positions: int = Field(default=5, ge=1)
     max_ticker_exposure_pct: float = Field(default=5.0, gt=0)
-    time_of_day_bans: List[str] = Field(default_factory=list)
-    session_filter: List[str] = Field(default_factory=list)
+    time_of_day_bans: list[str] = Field(default_factory=list)
+    session_filter: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate_risk_bounds(self) -> "SolverDSLRisk":
+    def _validate_risk_bounds(self) -> SolverDSLRisk:
         # Normalize pct->bps if provided.
         if self.risk_per_trade_bps is None and self.risk_per_trade_pct is not None:
             self.risk_per_trade_bps = int(round(float(self.risk_per_trade_pct) * 10000.0))
@@ -87,7 +87,7 @@ class SolverDSL(BaseModel):
     PRD Addendum §5.1: strict solver DSL schema stored in solvers.definition_json.
     """
 
-    rules: List[str] = Field(default_factory=list)
+    rules: list[str] = Field(default_factory=list)
     features: SolverDSLFeatures = Field(default_factory=SolverDSLFeatures)
     model: SolverDSLModel = Field(default_factory=SolverDSLModel)
     risk: SolverDSLRisk = Field(default_factory=SolverDSLRisk)
@@ -96,14 +96,14 @@ class SolverDSL(BaseModel):
 
     @field_validator("rules")
     @classmethod
-    def _validate_rules(cls, v: List[str]) -> List[str]:
+    def _validate_rules(cls, v: list[str]) -> list[str]:
         for rule_id in v:
             if not RuleRegistry.exists(rule_id):
                 raise ValueError(f"Unknown rule_id={rule_id}; available={RuleRegistry.list_all()}")
         return v
 
     @classmethod
-    def from_legacy_config(cls, cfg: Dict[str, Any]) -> "SolverDSL":
+    def from_legacy_config(cls, cfg: dict[str, Any]) -> SolverDSL:
         """
         Best-effort conversion from the legacy SolverConfig JSON blob to PRD DSL.
         """
@@ -111,7 +111,7 @@ class SolverDSL(BaseModel):
         features_blob = cfg.get("features") or {}
         model_blob = cfg.get("model") or {}
 
-        rules_list: List[str] = []
+        rules_list: list[str] = []
         for r in cfg.get("rules", []) or []:
             if isinstance(r, str):
                 rules_list.append(r)

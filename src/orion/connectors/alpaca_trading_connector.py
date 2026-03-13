@@ -1,17 +1,17 @@
-import logging
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any
 
 import urllib3.exceptions
-from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
 from requests.exceptions import ConnectionError, Timeout
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
 from orion.config import SystemSettings
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 # Define retry strategy for network operations
 network_retry = retry(
@@ -53,7 +53,7 @@ class AlpacaTradingConnector:
         qty: float,
         side: OrderSide,
         time_in_force: TimeInForce = TimeInForce.DAY,
-        client_order_id: Optional[str] = None,
+        client_order_id: str | None = None,
     ) -> Any:
         """
         Submits a market order.
@@ -82,7 +82,7 @@ class AlpacaTradingConnector:
         side: OrderSide,
         limit_price: float,
         time_in_force: TimeInForce = TimeInForce.DAY,
-        client_order_id: Optional[str] = None,
+        client_order_id: str | None = None,
     ) -> Any:
         """
         Submits a limit order with retry logic.
@@ -117,7 +117,7 @@ class AlpacaTradingConnector:
             raise
 
     @network_retry
-    def get_recent_fills(self, since: Optional[datetime] = None, limit: int = 50) -> List[Any]:
+    def get_recent_fills(self, since: datetime | None = None, limit: int = 50) -> list[Any]:
         """
         Fetches recently closed orders (potential fills) to reconcile state.
         """
@@ -137,7 +137,7 @@ class AlpacaTradingConnector:
             raise
 
     @network_retry
-    def get_all_positions(self) -> List[Any]:
+    def get_all_positions(self) -> list[Any]:
         """
         Get all open positions from Alpaca.
 
@@ -154,7 +154,7 @@ class AlpacaTradingConnector:
             raise
 
     @network_retry
-    def get_position(self, symbol: str) -> Optional[Any]:
+    def get_position(self, symbol: str) -> Any | None:
         """
         Get position for a specific symbol.
 
@@ -171,7 +171,7 @@ class AlpacaTradingConnector:
             raise
 
     @network_retry
-    def close_position(self, symbol: str, qty: Optional[float] = None) -> Any:
+    def close_position(self, symbol: str, qty: float | None = None) -> Any:
         """
         Close a position (fully or partially).
 
@@ -204,7 +204,7 @@ class AlpacaTradingConnector:
             raise
 
     @network_retry
-    def close_all_positions(self) -> List[Any]:
+    def close_all_positions(self) -> list[Any]:
         """
         Close all open positions.
 

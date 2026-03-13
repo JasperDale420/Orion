@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -23,19 +23,19 @@ class OffLitPriceLevel:
         price (Union[Unset, str]): The price level. Example: 120.12.
     """
 
-    lit_vol: Union[Unset, int] = UNSET
-    off_vol: Union[Unset, int] = UNSET
-    price: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    lit_vol: Unset | int = UNSET
+    off_vol: Unset | int = UNSET
+    price: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         lit_vol = self.lit_vol
 
         off_vol = self.off_vol
 
         price = self.price
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if lit_vol is not UNSET:
@@ -48,7 +48,7 @@ class OffLitPriceLevel:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         lit_vol = d.pop("lit_vol", UNSET)
 
@@ -66,7 +66,7 @@ class OffLitPriceLevel:
         return off_lit_price_level
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

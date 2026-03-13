@@ -1,8 +1,8 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, List
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 
@@ -42,7 +42,7 @@ class DLQConsumer:
             msg = result.scalars().first()
             if msg:
                 msg.status = "REPLAYED"
-                msg.error_message = f"Replayed successfully at {datetime.now(timezone.utc)}"
+                msg.error_message = f"Replayed successfully at {datetime.now(UTC)}"
 
         await db_write(update_status)
 
@@ -54,7 +54,7 @@ class DLQConsumer:
 
         batch_size = 10
 
-        async def fetch_dlq_events(session: Any) -> List[Any]:
+        async def fetch_dlq_events(session: Any) -> list[Any]:
             stmt = (
                 select(DeadLetterQueue)
                 .where(DeadLetterQueue.status == "PENDING")
@@ -79,7 +79,7 @@ class DLQConsumer:
 
                     if success:
                         task.status = "REPLAYED"
-                        task.error_message = f"Replayed successfully at {datetime.now(timezone.utc)}"
+                        task.error_message = f"Replayed successfully at {datetime.now(UTC)}"
                         logger.info(f"DLQ {task.id} Success.")
                     else:
                         task.retry_count += 1
@@ -123,7 +123,7 @@ class DLQConsumer:
             event_type=str(task.event_type or "UNKNOWN"),
             ticker=ticker,
             event_ts_utc=event_ts,
-            received_ts_utc=datetime.now(timezone.utc),
+            received_ts_utc=datetime.now(UTC),
             payload=task.payload if isinstance(task.payload, dict) else {"raw_content": str(task.payload)},
             ingest={
                 "connector": "dlq_consumer",
@@ -163,10 +163,7 @@ class DLQConsumer:
         await session.commit()
 
         # Re-run downstream feature + rule pipeline for supported event types.
-        try:
-            self.feature_engine.process_uw_flow(unique_events)
-        except Exception:
-            pass
+        self.feature_engine.process_uw_flow(unique_events)
 
         uw_flow_events = [e for e in unique_events if e.event_type == "UW_FLOW"]
         if uw_flow_events:

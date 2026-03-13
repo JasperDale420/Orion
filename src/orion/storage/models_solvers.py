@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -48,6 +48,8 @@ class Solver(Base):
     max_dd_pct: Mapped[float] = mapped_column(Float, default=0.0)
     stability_score: Mapped[float] = mapped_column(Float, default=0.0)
     oos_expect_bp: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (Index("ix_solver_active_stage", "is_active", "stage"),)
 
     def __repr__(self) -> str:
         return f"<Solver(id={self.solver_id}, family={self.family_name}, active={self.is_active})>"

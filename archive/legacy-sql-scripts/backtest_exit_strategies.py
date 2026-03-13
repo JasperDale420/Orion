@@ -9,22 +9,21 @@ Questions to answer:
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import text
-
 from orion.shared.db_utils import db_query
 from orion.storage.db import init_db
+from sqlalchemy import text
 
 
-async def get_labeled_entries() -> List[Dict[str, Any]]:
+async def get_labeled_entries() -> list[dict[str, Any]]:
     """Get entries from price_target_labels that hit targets."""
 
-    async def query(session: Any) -> List[Dict[str, Any]]:
+    async def query(session: Any) -> list[dict[str, Any]]:
         stmt = text(
             """
             SELECT
@@ -60,10 +59,10 @@ async def get_labeled_entries() -> List[Dict[str, Any]]:
     return await db_query(query)
 
 
-async def get_flows_between(ticker: str, start_ts: datetime, end_ts: datetime) -> List[Dict[str, Any]]:
+async def get_flows_between(ticker: str, start_ts: datetime, end_ts: datetime) -> list[dict[str, Any]]:
     """Get flow data between two timestamps for a ticker."""
 
-    async def query(session: Any) -> List[Dict[str, Any]]:
+    async def query(session: Any) -> list[dict[str, Any]]:
         stmt = text(
             """
             SELECT
@@ -98,10 +97,10 @@ async def get_flows_between(ticker: str, start_ts: datetime, end_ts: datetime) -
 
 
 def check_sentiment_reversal(
-    entry: Dict[str, Any],
-    flows: List[Dict[str, Any]],
+    entry: dict[str, Any],
+    flows: list[dict[str, Any]],
     min_opposing_premium: float = 100000.0,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Check if sentiment reversal exit would have triggered."""
     is_call_entry = entry["put_call"] == "C"
 
@@ -139,10 +138,10 @@ def check_sentiment_reversal(
 
 
 def estimate_return_at_time(
-    entry: Dict[str, Any],
+    entry: dict[str, Any],
     exit_ts: datetime,
-    flows: List[Dict[str, Any]],
-) -> Optional[float]:
+    flows: list[dict[str, Any]],
+) -> float | None:
     """Estimate option return at a given time using nearby flow prices."""
     entry_price = entry["entry_option_price"]
 
@@ -168,7 +167,7 @@ def estimate_return_at_time(
     return None
 
 
-async def analyze_exit_strategies() -> Dict[str, Any]:
+async def analyze_exit_strategies() -> dict[str, Any]:
     """Main analysis: compare exit strategies."""
     await init_db()
 
@@ -261,7 +260,7 @@ async def analyze_exit_strategies() -> Dict[str, Any]:
     return results
 
 
-def print_results(results: Dict[str, Any]) -> None:
+def print_results(results: dict[str, Any]) -> None:
     """Print analysis results."""
     print("\n" + "=" * 60)
     print("EXIT STRATEGY COMPARISON")

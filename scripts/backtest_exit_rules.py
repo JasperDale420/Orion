@@ -9,18 +9,19 @@ and calculates P&L based on underlying price movement.
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from sqlalchemy import select
+
 from orion.processing.rules.exit_rules import get_default_exit_rules
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models_silver import SilverAlpacaBar, SilverOptionFlow
-from sqlalchemy import select
 
 logger = setup_struct_logger("exit_backtest_pnl")
 
@@ -35,11 +36,11 @@ class SimulatedPosition:
     entry_ts: datetime
     entry_price: float  # Underlying price at entry
     option_price: float  # Option price at entry
-    option_chain: Optional[str] = None
-    entry_iv: Optional[float] = None
+    option_chain: str | None = None
+    entry_iv: float | None = None
     entry_premium_window: float = 0.0
     entry_sweep_count: int = 0
-    entry_oi: Optional[float] = None
+    entry_oi: float | None = None
     qty: float = 1.0
 
 
@@ -80,18 +81,18 @@ class BacktestResult:
 
     # Exit metrics
     avg_hold_minutes: float = 0.0
-    exit_triggers: Dict[str, int] = field(default_factory=dict)
-    pnl_by_rule: Dict[str, List[float]] = field(default_factory=dict)
+    exit_triggers: dict[str, int] = field(default_factory=dict)
+    pnl_by_rule: dict[str, list[float]] = field(default_factory=dict)
 
     # Individual trades
-    trades: List[TradeResult] = field(default_factory=list)
+    trades: list[TradeResult] = field(default_factory=list)
 
 
-async def fetch_flow_data(days: int = 7) -> List[Any]:
+async def fetch_flow_data(days: int = 7) -> list[Any]:
     """Fetch historical flow data."""
 
-    async def query(session: Any) -> List[Any]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    async def query(session: Any) -> list[Any]:
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         stmt = (
             select(SilverOptionFlow)
             .where(SilverOptionFlow.flow_ts_utc >= cutoff)
@@ -103,11 +104,11 @@ async def fetch_flow_data(days: int = 7) -> List[Any]:
     return await db_query(query)
 
 
-async def fetch_bar_data(days: int = 7) -> Dict[str, List[Any]]:
+async def fetch_bar_data(days: int = 7) -> dict[str, list[Any]]:
     """Fetch historical 1-minute bar data for price tracking."""
 
-    async def query(session: Any) -> List[Any]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    async def query(session: Any) -> list[Any]:
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         stmt = (
             select(SilverAlpacaBar)
             .where(SilverAlpacaBar.bar_start_ts_utc >= cutoff)
@@ -119,14 +120,14 @@ async def fetch_bar_data(days: int = 7) -> Dict[str, List[Any]]:
     bars = await db_query(query)
 
     # Group by ticker for fast lookup
-    bars_by_ticker: Dict[str, List[Any]] = defaultdict(list)
+    bars_by_ticker: dict[str, list[Any]] = defaultdict(list)
     for bar in bars:
         bars_by_ticker[bar.ticker].append(bar)
 
     return bars_by_ticker
 
 
-def get_price_at_time(bars: List[Any], target_ts: datetime, tolerance_minutes: int = 5) -> Optional[float]:
+def get_price_at_time(bars: list[Any], target_ts: datetime, tolerance_minutes: int = 5) -> float | None:
     """Get underlying price at a specific time from bar data."""
     if not bars:
         return None
@@ -144,12 +145,12 @@ def get_price_at_time(bars: List[Any], target_ts: datetime, tolerance_minutes: i
     return closest_bar.close if closest_bar else None
 
 
-def identify_entries(flow_data: List[Any]) -> List[SimulatedPosition]:
+def identify_entries(flow_data: list[Any]) -> list[SimulatedPosition]:
     """Identify entry signals from flow data."""
     positions = []
     seen_entries: set = set()  # Prevent duplicate entries
 
-    flow_by_ticker: Dict[str, List[Any]] = defaultdict(list)
+    flow_by_ticker: dict[str, list[Any]] = defaultdict(list)
     for flow in flow_data:
         flow_by_ticker[flow.ticker].append(flow)
 
@@ -199,11 +200,11 @@ def identify_entries(flow_data: List[Any]) -> List[SimulatedPosition]:
 
 def evaluate_trade(
     position: SimulatedPosition,
-    flow_data: List[Any],
-    bars_by_ticker: Dict[str, List[Any]],
-    exit_rules: List[Any],
+    flow_data: list[Any],
+    bars_by_ticker: dict[str, list[Any]],
+    exit_rules: list[Any],
     max_hold_minutes: int = 120,
-) -> Optional[TradeResult]:
+) -> TradeResult | None:
     """Evaluate a trade with P&L calculation using flow underlying prices."""
     # Get post-entry flow for exit evaluation
     post_entry_flow = [

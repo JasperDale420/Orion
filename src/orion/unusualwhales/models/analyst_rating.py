@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -42,20 +42,20 @@ class AnalystRating:
             headwind for Apple in Dec. quarter, says UBS.
     """
 
-    action: Union[Unset, AnalystFieldAction] = UNSET
-    analyst_name: Union[Unset, str] = UNSET
-    firm: Union[Unset, str] = UNSET
-    rating: Union[Unset, float] = UNSET
-    recommendation: Union[Unset, AnalystFieldRecommendation] = UNSET
-    sector: Union[Unset, MarketGeneralSector] = UNSET
-    target: Union[Unset, str] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    timestamp: Union[Unset, str] = UNSET
-    title: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    action: Unset | AnalystFieldAction = UNSET
+    analyst_name: Unset | str = UNSET
+    firm: Unset | str = UNSET
+    rating: Unset | float = UNSET
+    recommendation: Unset | AnalystFieldRecommendation = UNSET
+    sector: Unset | MarketGeneralSector = UNSET
+    target: Unset | str = UNSET
+    ticker: Unset | str = UNSET
+    timestamp: Unset | str = UNSET
+    title: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
-        action: Union[Unset, str] = UNSET
+    def to_dict(self) -> dict[str, Any]:
+        action: Unset | str = UNSET
         if not isinstance(self.action, Unset):
             action = self.action.value
 
@@ -65,11 +65,11 @@ class AnalystRating:
 
         rating = self.rating
 
-        recommendation: Union[Unset, str] = UNSET
+        recommendation: Unset | str = UNSET
         if not isinstance(self.recommendation, Unset):
             recommendation = self.recommendation.value
 
-        sector: Union[Unset, str] = UNSET
+        sector: Unset | str = UNSET
         if not isinstance(self.sector, Unset):
             sector = self.sector.value
 
@@ -81,7 +81,7 @@ class AnalystRating:
 
         title = self.title
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if action is not UNSET:
@@ -108,10 +108,10 @@ class AnalystRating:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         _action = d.pop("action", UNSET)
-        action: Union[Unset, AnalystFieldAction]
+        action: Unset | AnalystFieldAction
         if isinstance(_action, Unset):
             action = UNSET
         else:
@@ -124,14 +124,14 @@ class AnalystRating:
         rating = d.pop("rating", UNSET)
 
         _recommendation = d.pop("recommendation", UNSET)
-        recommendation: Union[Unset, AnalystFieldRecommendation]
+        recommendation: Unset | AnalystFieldRecommendation
         if isinstance(_recommendation, Unset):
             recommendation = UNSET
         else:
             recommendation = AnalystFieldRecommendation(_recommendation)
 
         _sector = d.pop("sector", UNSET)
-        sector: Union[Unset, MarketGeneralSector]
+        sector: Unset | MarketGeneralSector
         if isinstance(_sector, Unset):
             sector = UNSET
         else:
@@ -162,7 +162,7 @@ class AnalystRating:
         return analyst_rating
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

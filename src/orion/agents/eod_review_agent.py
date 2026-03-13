@@ -3,22 +3,22 @@ import json
 import math
 import os
 import uuid
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 from dotenv import load_dotenv
+from sqlalchemy import select
+
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
-from sqlalchemy import select
 
 load_dotenv()
 
 from orion.agents.base import BaseAgent
 from orion.agents.codex_client import (
-    build_chat_prompt,
     extract_json_from_response,
     run_codex_completion,
 )
@@ -46,9 +46,9 @@ class EODReviewAgent(BaseAgent):
     def __init__(
         self,
         *,
-        llm_client: Optional[Any] = None,
-        vector_store: Optional[Any] = None,
-        proposal_builder: Optional[ProposalBuilder] = None,
+        llm_client: Any | None = None,
+        vector_store: Any | None = None,
+        proposal_builder: ProposalBuilder | None = None,
     ):
         from orion.config import agent_settings
 
@@ -57,7 +57,7 @@ class EODReviewAgent(BaseAgent):
         self.vector_store = vector_store or VectorStore()
         self.proposal_builder = proposal_builder or ProposalBuilder()
 
-    async def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(self, context: dict[str, Any]) -> dict[str, Any]:
         """
         Satisfies BaseAgent interface. Wraps run_review.
         """
@@ -65,9 +65,9 @@ class EODReviewAgent(BaseAgent):
         result = await self.run_review(target_date)
         return {"status": "completed", **(result or {})}
 
-    async def run_review(self, target_date: datetime.date = None) -> Dict[str, Any]:
+    async def run_review(self, target_date: datetime.date = None) -> dict[str, Any]:
         if not target_date:
-            target_date = datetime.now(timezone.utc).date()
+            target_date = datetime.now(UTC).date()
 
         logger.info(f"Starting EOD Review for {target_date}...")
         run_id = str(uuid.uuid4())
@@ -95,8 +95,11 @@ class EODReviewAgent(BaseAgent):
         filename = f"eod_report_{target_date}.md"
         file_path = os.path.join(reports_dir, filename)
 
-        with open(file_path, "w") as f:
-            f.write(report_text)
+        def _write_report():
+            with open(file_path, "w") as f:
+                f.write(report_text)
+
+        await asyncio.to_thread(_write_report)
 
         # Save Proposals
         proposals = analysis_json.get("proposals", [])
@@ -131,14 +134,16 @@ class EODReviewAgent(BaseAgent):
             "input_snapshot_path": input_snapshot_path,
             "proposal_paths": saved_paths,
             "proposals_count": len(proposals),
+            "solver_edit_proposals": [p for p in proposals if p.get("type") == "solver_edit"],
         }
 
-    async def _persist_solver_edits(self, proposals: List[Dict[str, Any]], run_id: str) -> None:
+    async def _persist_solver_edits(self, proposals: list[dict[str, Any]], run_id: str) -> None:
         if not proposals:
             return
 
-        from orion.storage.models_solvers import Solver
         from sqlalchemy import select
+
+        from orion.storage.models_solvers import Solver
 
         async def save_edits(session: Any) -> None:
             for p in proposals:
@@ -186,8 +191,8 @@ class EODReviewAgent(BaseAgent):
 
         await db_write(save_edits)
 
-    def _day_bounds_utc(self, date: datetime.date) -> Tuple[datetime, datetime]:
-        start_ts = datetime.combine(date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    def _day_bounds_utc(self, date: datetime.date) -> tuple[datetime, datetime]:
+        start_ts = datetime.combine(date, datetime.min.time()).replace(tzinfo=UTC)
         end_ts = start_ts + timedelta(days=1)
         return start_ts, end_ts
 
@@ -208,7 +213,7 @@ class EODReviewAgent(BaseAgent):
             return "POST"
         return "OFF"
 
-    def _psi(self, baseline: List[float], current: List[float], *, bins: int = 10) -> float | None:
+    def _psi(self, baseline: list[float], current: list[float], *, bins: int = 10) -> float | None:
         """
         Population Stability Index between baseline and current.
         Uses baseline quantiles to form bins (common PSI approach).
@@ -219,7 +224,7 @@ class EODReviewAgent(BaseAgent):
         if len(b) < 20 or len(c) < 20:
             return None
         b_sorted = sorted(b)
-        edges: List[float] = []
+        edges: list[float] = []
         for i in range(1, bins):
             q = i / bins
             idx = int(q * (len(b_sorted) - 1))
@@ -259,8 +264,8 @@ class EODReviewAgent(BaseAgent):
         return float(psi)
 
     def _adverse_slippage_bps(
-        self, *, side: Optional[str], limit_price: Optional[float], fill_price: Optional[float]
-    ) -> Optional[float]:
+        self, *, side: str | None, limit_price: float | None, fill_price: float | None
+    ) -> float | None:
         if limit_price is None or fill_price is None:
             return None
         if limit_price <= 0:
@@ -274,7 +279,7 @@ class EODReviewAgent(BaseAgent):
             return (limit_price - fill_price) / limit_price * 10000.0
         return None
 
-    async def _load_regime_bars_from_heber(self, tickers: List[str], start_ts: datetime, end_ts: datetime) -> List[Any]:
+    async def _load_regime_bars_from_heber(self, tickers: list[str], start_ts: datetime, end_ts: datetime) -> list[Any]:
         if not tickers:
             return []
 
@@ -304,7 +309,7 @@ class EODReviewAgent(BaseAgent):
             return []
 
         tickers_upper = {str(t).upper() for t in tickers}
-        rows: List[Any] = []
+        rows: list[Any] = []
         for _, row in frame.iterrows():
             ticker_raw = row.get(ticker_col)
             if ticker_raw is None:
@@ -318,7 +323,7 @@ class EODReviewAgent(BaseAgent):
             rows.append(SimpleNamespace(ticker=ticker, close=float(close)))
         return rows
 
-    async def _gather_data(self, date: datetime.date, *, run_id: str, reports_dir: str) -> Tuple[Dict[str, Any], str]:
+    async def _gather_data(self, date: datetime.date, *, run_id: str, reports_dir: str) -> tuple[dict[str, Any], str]:
         """
         Gather metrics, decisions, and outcomes for the day.
         """
@@ -329,7 +334,7 @@ class EODReviewAgent(BaseAgent):
 
         start_ts, end_ts = self._day_bounds_utc(date)
 
-        async def fetch_all_data(session: Any) -> Dict[str, Any]:
+        async def fetch_all_data(session: Any) -> dict[str, Any]:
             # Decisions for the day
             stmt = select(StrategyDecision).where(
                 StrategyDecision.timestamp_utc >= start_ts, StrategyDecision.timestamp_utc < end_ts
@@ -357,13 +362,11 @@ class EODReviewAgent(BaseAgent):
 
             # Fills (use filled_at_utc when present, fallback to created_at_utc)
             fill_stmt = select(FillRecord).where(
-                (
-                    ((FillRecord.filled_at_utc >= start_ts) & (FillRecord.filled_at_utc < end_ts))
-                    | (
-                        (FillRecord.filled_at_utc.is_(None))
-                        & (FillRecord.created_at_utc >= start_ts)
-                        & (FillRecord.created_at_utc < end_ts)
-                    )
+                ((FillRecord.filled_at_utc >= start_ts) & (FillRecord.filled_at_utc < end_ts))
+                | (
+                    (FillRecord.filled_at_utc.is_(None))
+                    & (FillRecord.created_at_utc >= start_ts)
+                    & (FillRecord.created_at_utc < end_ts)
                 )
             )
             fills = (await session.execute(fill_stmt)).scalars().all()
@@ -378,13 +381,11 @@ class EODReviewAgent(BaseAgent):
             baseline_orders = (await session.execute(baseline_order_stmt)).scalars().all()
 
             baseline_fill_stmt = select(FillRecord).where(
-                (
-                    ((FillRecord.filled_at_utc >= baseline_start) & (FillRecord.filled_at_utc < start_ts))
-                    | (
-                        (FillRecord.filled_at_utc.is_(None))
-                        & (FillRecord.created_at_utc >= baseline_start)
-                        & (FillRecord.created_at_utc < start_ts)
-                    )
+                ((FillRecord.filled_at_utc >= baseline_start) & (FillRecord.filled_at_utc < start_ts))
+                | (
+                    (FillRecord.filled_at_utc.is_(None))
+                    & (FillRecord.created_at_utc >= baseline_start)
+                    & (FillRecord.created_at_utc < start_ts)
                 )
             )
             baseline_fills = (await session.execute(baseline_fill_stmt)).scalars().all()
@@ -487,17 +488,17 @@ class EODReviewAgent(BaseAgent):
         skipped_count = len([d for d in decisions if d.decision == "SKIP"])
 
         # --- slippage joins ---
-        baseline_orders_by_broker: Dict[str, OrderRecord] = {}
+        baseline_orders_by_broker: dict[str, OrderRecord] = {}
         for o in baseline_orders:
             if o.broker_order_id:
                 baseline_orders_by_broker[o.broker_order_id] = o
 
-        orders_by_broker: Dict[str, OrderRecord] = {}
+        orders_by_broker: dict[str, OrderRecord] = {}
         for o in orders:
             if o.broker_order_id:
                 orders_by_broker[o.broker_order_id] = o
 
-        slippage_rows: List[Dict[str, Any]] = []
+        slippage_rows: list[dict[str, Any]] = []
         for f in fills:
             order = orders_by_broker.get(f.broker_order_id)
             limit_price = order.limit_price if order is not None else None
@@ -533,7 +534,7 @@ class EODReviewAgent(BaseAgent):
             "worst_adverse_slippage_bps": max(slippage_bps_vals) if slippage_bps_vals else None,
         }
 
-        baseline_slippage_rows: List[Dict[str, Any]] = []
+        baseline_slippage_rows: list[dict[str, Any]] = []
         for f in baseline_fills:
             order = baseline_orders_by_broker.get(f.broker_order_id)
             limit_price = order.limit_price if order is not None else None
@@ -562,10 +563,10 @@ class EODReviewAgent(BaseAgent):
 
         # --- volatility regimes ---
         # Compute intraday realized vol per ticker using 1m closes.
-        vol_by_ticker: Dict[str, float] = {}
-        closes_by_ticker: Dict[str, List[float]] = {}
-        regime_map: Dict[str, str] = {}
-        regime_stats: Dict[str, Any] = {}
+        vol_by_ticker: dict[str, float] = {}
+        closes_by_ticker: dict[str, list[float]] = {}
+        regime_map: dict[str, str] = {}
+        regime_stats: dict[str, Any] = {}
         for b in bars:
             if b.ticker and b.close is not None:
                 closes_by_ticker.setdefault(b.ticker, []).append(float(b.close))
@@ -602,9 +603,9 @@ class EODReviewAgent(BaseAgent):
             regime_stats.update({"available": False, "computed": 0})
 
         # --- ingestion lag/gap stats ---
-        lag_by_key: Dict[str, List[float]] = {}
-        gaps_by_key: Dict[str, float] = {}
-        last_recv_by_key: Dict[str, datetime] = {}
+        lag_by_key: dict[str, list[float]] = {}
+        gaps_by_key: dict[str, float] = {}
+        last_recv_by_key: dict[str, datetime] = {}
         for ev in sorted(bronze_rows, key=lambda x: x.received_ts_utc or start_ts):
             key = f"{ev.source}:{ev.event_type}"
             if ev.event_ts_utc and ev.received_ts_utc:
@@ -618,14 +619,14 @@ class EODReviewAgent(BaseAgent):
             if ev.received_ts_utc:
                 last_recv_by_key[key] = ev.received_ts_utc
 
-        def _pct(vals: List[float], p: float) -> float | None:
+        def _pct(vals: list[float], p: float) -> float | None:
             if not vals:
                 return None
             s = sorted(vals)
             idx = int(p * (len(s) - 1))
             return float(s[idx])
 
-        ingestion_stats: Dict[str, Any] = {"sources": {}}
+        ingestion_stats: dict[str, Any] = {"sources": {}}
         for key, vals in lag_by_key.items():
             ingestion_stats["sources"][key] = {
                 "count": len(vals),
@@ -655,9 +656,9 @@ class EODReviewAgent(BaseAgent):
                 }
             )
 
-        def _agg(rows: List[dict[str, Any]], key: str) -> Dict[str, Any]:
-            out: Dict[str, Any] = {}
-            groups: Dict[str, List[dict[str, Any]]] = {}
+        def _agg(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
+            out: dict[str, Any] = {}
+            groups: dict[str, list[dict[str, Any]]] = {}
             for r in rows:
                 k = r.get(key) or "UNKNOWN"
                 groups.setdefault(str(k), []).append(r)
@@ -686,8 +687,8 @@ class EODReviewAgent(BaseAgent):
         today_pnls = [r["realized_pnl"] for r in trade_rows if r.get("realized_pnl") is not None]
 
         # --- drift metrics (feature PSI + slippage drift) ---
-        def _extract_feature(rows: List[SilverSignal], feature_key: str) -> List[float]:
-            vals: List[float] = []
+        def _extract_feature(rows: list[SilverSignal], feature_key: str) -> list[float]:
+            vals: list[float] = []
             for r in rows:
                 if not r.features:
                     continue
@@ -697,7 +698,7 @@ class EODReviewAgent(BaseAgent):
             return vals
 
         drift_features = ["close", "volume", "vwap", "flow_net_premium_15m", "flow_count_15m"]
-        feature_shift: Dict[str, Any] = {}
+        feature_shift: dict[str, Any] = {}
         for fk in drift_features:
             bvals = _extract_feature(silver_baseline, fk)
             cvals = _extract_feature(silver_today, fk)
@@ -755,7 +756,7 @@ class EODReviewAgent(BaseAgent):
             "ingestion": ingestion_stats,
         }
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "run_id": run_id,
             "date": str(date),
             "window_utc": {"start": start_ts.isoformat(), "end": end_ts.isoformat()},
@@ -895,19 +896,24 @@ class EODReviewAgent(BaseAgent):
             logger.warning(f"Failed to fetch ML accuracy: {e}")
 
         input_snapshot_path = os.path.join(reports_dir, f"eod_input_{date}_{run_id}.json")
-        with open(input_snapshot_path, "w") as f:
-            json.dump(payload, f, indent=2, sort_keys=True, default=str)
+
+        def _dump_json():
+            with open(input_snapshot_path, "w") as f:
+                json.dump(payload, f, indent=2, sort_keys=True, default=str)
+
+        await asyncio.to_thread(_dump_json)
 
         payload["input_snapshot_path"] = input_snapshot_path
         return payload, input_snapshot_path
 
-    async def _fetch_ml_insights(self) -> Optional[Dict[str, Any]]:
+    async def _fetch_ml_insights(self) -> dict[str, Any] | None:
         """Fetch latest ML pattern insights for LLM context."""
         try:
-            from orion.shared.db_utils import db_query
             from sqlalchemy import text
 
-            async def query(session: Any) -> List[Any]:
+            from orion.shared.db_utils import db_query
+
+            async def query(session: Any) -> list[Any]:
                 # Get most recent insight per model type
                 stmt = text(
                     """
@@ -980,8 +986,13 @@ class EODReviewAgent(BaseAgent):
             logger.debug(f"TradingRAG context fetch failed (non-fatal): {e}")
             return ""
 
-    async def _generate_analysis(self, data: Dict[str, Any], rag_context: str) -> Dict[str, Any]:
+    async def _generate_analysis(self, data: dict[str, Any], rag_context: str) -> dict[str, Any]:
         system_prompt = """You are the Orion EOD Review Agent - analyzing today's trading performance.
+## Your Capabilities
+- You have access to codebase tools: `read_file`, `write_file`, and `run_command`.
+- If you run into errors or missing information, USE YOUR TOOLS to search the codebase, read files, edit your own code, and fix bugs directly.
+- You are fully capable of solving your own problems and editing your own code.
+
 ## Your Data Sources
 1. **ML Pattern Insights** (in `ml_insights`): Pre-computed rules from LightGBM models showing what conditions predict success
    - Models per bucket: 0DTE, SHORT_SWING, SWING, POSITION
@@ -1059,25 +1070,23 @@ Analyze today's performance and identify:
         try:
             from orion.config import agent_settings
 
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
             if self.llm_client is not None:
                 completion = await self.llm_client.chat.completions.create(
                     model=agent_settings.model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    messages=messages,
                 )
                 content = completion.choices[0].message.content
                 return extract_json_from_response(content)
 
-            # Build combined prompt for codex CLI
-            full_prompt = build_chat_prompt(system_prompt, user_prompt)
-
-            # Call codex CLI instead of OpenAI API
+            # Call AI Gateway via codex_client
             response = await run_codex_completion(
-                prompt=full_prompt,
+                messages=messages,
                 model=agent_settings.model_name,
-                reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
             )
 
             return extract_json_from_response(response)

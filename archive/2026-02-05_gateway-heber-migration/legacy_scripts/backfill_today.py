@@ -2,9 +2,8 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from datetime import time as dt_time
-from typing import List
 
 from dotenv import load_dotenv
 
@@ -12,7 +11,6 @@ from dotenv import load_dotenv
 load_dotenv()
 os.environ["DB_URL"] = os.getenv("DB_URL").replace(":5432", ":5440").replace("@timescaledb", "@localhost")
 
-from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.uw_flow_connector import UWFlowConnector
 from orion.core.universe_manager import UniverseManager
@@ -21,6 +19,8 @@ from orion.processing.persistence import persist_silver_from_bronze
 from orion.shared.utils import parse_timestamptz
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.models import BronzeEvent
+
+from orion.config import system_settings
 
 # Setup Logger
 logging.basicConfig(level=logging.INFO)
@@ -38,8 +38,8 @@ async def backfill_uw(date_target: datetime):
     system_settings.uw_fetch_limit = 1000
 
     # Define range (full UTC day)
-    start_ts = datetime.combine(date_target.date(), dt_time.min).replace(tzinfo=timezone.utc)
-    end_ts = datetime.combine(date_target.date(), dt_time.max).replace(tzinfo=timezone.utc)
+    start_ts = datetime.combine(date_target.date(), dt_time.min).replace(tzinfo=UTC)
+    end_ts = datetime.combine(date_target.date(), dt_time.max).replace(tzinfo=UTC)
 
     # Fetch Raw
     raw_events = await connector.fetch_raw_events(start_ts, end_ts)
@@ -73,7 +73,7 @@ async def backfill_uw(date_target: datetime):
                 source_event_id=str(raw.get("id")) if raw.get("id") else None,
                 event_type="UW_FLOW",
                 event_ts_utc=event_ts,
-                received_ts_utc=datetime.now(timezone.utc),
+                received_ts_utc=datetime.now(UTC),
                 payload=raw,
                 session="REG",
             )
@@ -84,15 +84,15 @@ async def backfill_uw(date_target: datetime):
     return bronze_events
 
 
-async def backfill_alpaca(date_target: datetime, tickers: List[str]):
+async def backfill_alpaca(date_target: datetime, tickers: list[str]):
     logger.info(f"Backfilling Alpaca bars for {len(tickers)} tickers on {date_target.date()}...")
     connector = AlpacaMarketConnector(
         api_key=system_settings.alpaca_api_key, secret_key=system_settings.alpaca_secret_key
     )
 
     # Market Hours
-    start_ts = datetime.combine(date_target.date(), dt_time(14, 30)).replace(tzinfo=timezone.utc)  # 09:30 ET
-    end_ts = datetime.combine(date_target.date(), dt_time(21, 0)).replace(tzinfo=timezone.utc)  # 16:00 ET
+    start_ts = datetime.combine(date_target.date(), dt_time(14, 30)).replace(tzinfo=UTC)  # 09:30 ET
+    end_ts = datetime.combine(date_target.date(), dt_time(21, 0)).replace(tzinfo=UTC)  # 16:00 ET
 
     # Use fetch_bars
     events = connector.fetch_bars(tickers, start_ts, end_ts)
@@ -101,7 +101,7 @@ async def backfill_alpaca(date_target: datetime, tickers: List[str]):
 
 
 async def main():
-    target_date = datetime(2025, 12, 23, tzinfo=timezone.utc)
+    target_date = datetime(2025, 12, 23, tzinfo=UTC)
 
     await init_db()
 

@@ -1,7 +1,8 @@
 import pytest
+from pydantic import ValidationError
+
 from alpaca.broker.enums import BankAccountType
 from alpaca.broker.requests import CreateACHRelationshipRequest
-from pydantic import ValidationError
 
 
 def test_valid_request():

@@ -1,7 +1,7 @@
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func
 
@@ -10,7 +10,7 @@ from orion.config import system_settings
 logger = logging.getLogger(__name__)
 
 
-class CriticalHealthException(Exception):
+class CriticalHealthError(Exception):
     pass
 
 
@@ -29,7 +29,7 @@ class HealthMonitor:
         self.LAG_THRESHOLD_SEC = float(system_settings.max_data_lag_seconds)
 
         # Metrics
-        self.metrics: Dict[str, Any] = {}
+        self.metrics: dict[str, Any] = {}
 
     def update_heartbeat(self) -> None:
         self.last_heartbeat_ts = time.time()
@@ -43,7 +43,7 @@ class HealthMonitor:
 
         # Simple lag check: Now - EventTS
         # Ensure UTC comparison
-        now = datetime.now(timezone.utc).replace(tzinfo=None)  # Force naive UTC for comparison
+        now = datetime.now(UTC).replace(tzinfo=None)  # Force naive UTC for comparison
         if event_ts_utc.tzinfo:
             # naive comparison if one is aware and other is not is tricky
             # Let's assume event_ts_utc is naive UTC or convert
@@ -66,7 +66,7 @@ class HealthMonitor:
                 cb = CircuitBreaker()
                 await cb.open(msg)
 
-            raise CriticalHealthException(msg)
+            raise CriticalHealthError(msg)
 
     async def check_health(self) -> None:
         """
@@ -86,7 +86,7 @@ class HealthMonitor:
             cb = CircuitBreaker()
             await cb.open(msg)
 
-            raise CriticalHealthException(msg)
+            raise CriticalHealthError(msg)
 
         self.max_lag_seconds = 0.0  # Reset for next batch
 

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, List
+from typing import Any
 
 from dotenv import load_dotenv
 from sqlalchemy import select
@@ -18,7 +18,7 @@ logger = logging.getLogger("orion.audit_gold")
 
 
 async def audit_gold() -> None:
-    async def fetch_candidates(session: Any) -> List[Any]:
+    async def fetch_candidates(session: Any) -> list[Any]:
         stmt = select(CandidateTrade).order_by(CandidateTrade.timestamp_utc.desc()).limit(10)
         result = await session.execute(stmt)
         return result.scalars().all()

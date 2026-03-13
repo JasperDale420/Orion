@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -12,8 +12,8 @@ from ...types import Response
 
 def _get_kwargs(
     ticker: str,
-) -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+) -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/etfs/{ticker}/info",
     }
@@ -21,9 +21,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(
-    *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, EtfInfo, str]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> ErrorMessage | EtfInfo | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -44,9 +42,7 @@ def _parse_response(
         return None
 
 
-def _build_response(
-    *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, EtfInfo, str]]:
+def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[ErrorMessage | EtfInfo | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -59,7 +55,7 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[ErrorMessage, EtfInfo, str]]:
+) -> Response[ErrorMessage | EtfInfo | str]:
     """Information
 
      Returns the information about the given ETF ticker.
@@ -90,7 +86,7 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[ErrorMessage, EtfInfo, str]]:
+) -> ErrorMessage | EtfInfo | str | None:
     """Information
 
      Returns the information about the given ETF ticker.
@@ -116,7 +112,7 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[ErrorMessage, EtfInfo, str]]:
+) -> Response[ErrorMessage | EtfInfo | str]:
     """Information
 
      Returns the information about the given ETF ticker.
@@ -145,7 +141,7 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[ErrorMessage, EtfInfo, str]]:
+) -> ErrorMessage | EtfInfo | str | None:
     """Information
 
      Returns the information about the given ETF ticker.

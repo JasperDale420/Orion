@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,7 +10,7 @@ from orion.storage.models import BronzeEvent
 
 
 def _sample_flow_event() -> BronzeEvent:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return BronzeEvent(
         event_id="evt_flow_gate",
         source="UW",

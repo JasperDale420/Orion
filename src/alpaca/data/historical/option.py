@@ -1,6 +1,5 @@
 from collections import defaultdict
 from enum import Enum
-from typing import Dict, List, Optional, Union
 
 from alpaca.common.constants import DATA_V2_MAX_LIMIT
 from alpaca.common.enums import BaseURL
@@ -42,12 +41,12 @@ class OptionHistoricalDataClient(RESTClient):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        oauth_token: Optional[str] = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        oauth_token: str | None = None,
         use_basic_auth: bool = False,
         raw_data: bool = False,
-        url_override: Optional[str] = None,
+        url_override: str | None = None,
         sandbox: bool = False,
     ) -> None:
         """
@@ -85,7 +84,7 @@ class OptionHistoricalDataClient(RESTClient):
 
     def get_option_bars(
         self, request_params: OptionBarsRequest
-    ) -> Union[BarSet, RawData]:
+    ) -> BarSet | RawData:
         """Returns bar data for an option contract or list of option contracts over a given
         time period and timeframe.
 
@@ -129,7 +128,7 @@ class OptionHistoricalDataClient(RESTClient):
 
     def get_option_latest_quote(
         self, request_params: OptionLatestQuoteRequest
-    ) -> Union[Dict[str, Quote], RawData]:
+    ) -> dict[str, Quote] | RawData:
         """Retrieves the latest quote for an option symbol or list of option symbols.
 
         Args:
@@ -155,7 +154,7 @@ class OptionHistoricalDataClient(RESTClient):
 
     def get_option_latest_trade(
         self, request_params: OptionLatestTradeRequest
-    ) -> Union[Dict[str, Trade], RawData]:
+    ) -> dict[str, Trade] | RawData:
         """Retrieves the latest trade for an option symbol or list of option symbols.
 
         Args:
@@ -181,7 +180,7 @@ class OptionHistoricalDataClient(RESTClient):
 
     def get_option_trades(
         self, request_params: OptionTradesRequest
-    ) -> Union[TradeSet, RawData]:
+    ) -> TradeSet | RawData:
         """The historical option trades API provides trade data for a list of contract symbols between the specified dates up to 7 days ago.
 
         Args:
@@ -207,7 +206,7 @@ class OptionHistoricalDataClient(RESTClient):
 
     def get_option_snapshot(
         self, request_params: OptionSnapshotRequest
-    ) -> Union[Dict[str, OptionsSnapshot], RawData]:
+    ) -> dict[str, OptionsSnapshot] | RawData:
         """Returns snapshots of queried symbols. OptionsSnapshot contain latest trade,
         latest quote, implied volatility, and greeks for the queried symbols.
 
@@ -235,7 +234,7 @@ class OptionHistoricalDataClient(RESTClient):
 
     def get_option_chain(
         self, request_params: OptionChainRequest
-    ) -> Union[Dict[str, OptionsSnapshot], RawData]:
+    ) -> dict[str, OptionsSnapshot] | RawData:
         """The option chain endpoint for underlying symbol provides the latest trade, latest quote,
         implied volatility, and greeks for each contract symbol of the underlying symbol.
 
@@ -267,11 +266,11 @@ class OptionHistoricalDataClient(RESTClient):
         endpoint_asset_class: str,
         endpoint_data_type: str,
         api_version: str,
-        symbol_or_symbols: Optional[Union[str, List[str]]] = None,
-        limit: Optional[int] = None,
+        symbol_or_symbols: str | list[str] | None = None,
+        limit: int | None = None,
         page_limit: int = DATA_V2_MAX_LIMIT,
-        extension: Optional[DataExtensionType] = None,
-        underlying_symbol: Optional[str] = None,
+        extension: DataExtensionType | None = None,
+        underlying_symbol: str | None = None,
         **kwargs,
     ) -> RawData:
         """Performs Data API GET requests accounting for pagination. Data in responses are limited to the page_limit,

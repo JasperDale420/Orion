@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
+
 from orion.api.main import app
+
 
 def test_custom_404_handler():
     client = TestClient(app)

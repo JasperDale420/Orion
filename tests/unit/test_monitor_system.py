@@ -4,9 +4,10 @@ import os
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from orion.jobs.monitor_system import check_dlq, check_heartbeats
 from orion.storage.models import SystemStatus
 from orion.storage.models_dlq import DeadLetterQueue
@@ -27,15 +28,15 @@ async def test_monitor_logic(caplog, capsys):
 
     async with async_session_factory() as session:
         # Seed 1: Healthy Heartbeat
-        h1 = SystemStatus(key="healthy_service", status="HEALTHY", last_updated_utc=datetime.now(timezone.utc))
+        h1 = SystemStatus(key="healthy_service", status="HEALTHY", last_updated_utc=datetime.now(UTC))
 
         # Seed 2: Stale Heartbeat (10 mins ago)
         # SQLAlchemy server default func.now() might be tricky in sqlite memory if we don't set explicit
-        stale_ts = datetime.now(timezone.utc) - timedelta(minutes=10)
+        stale_ts = datetime.now(UTC) - timedelta(minutes=10)
         h2 = SystemStatus(key="stale_service", status="HEALTHY", last_updated_utc=stale_ts)
 
         # Seed 3: DLQ Entry (Recent)
-        dlq1 = DeadLetterQueue(error_message="Test Error", status="FAILED", timestamp_utc=datetime.now(timezone.utc))
+        dlq1 = DeadLetterQueue(error_message="Test Error", status="FAILED", timestamp_utc=datetime.now(UTC))
 
         session.add_all([h1, h2, dlq1])
         await session.commit()
@@ -46,8 +47,8 @@ async def test_monitor_logic(caplog, capsys):
             await check_heartbeats(session)
             await check_dlq(session)
 
-    # Verify emitted structured logs (stdout JSON in this project).
-    out = capsys.readouterr().out
+    # Verify emitted structured logs
+    out = caplog.text
     assert "ALERT: Stale Heartbeat for stale_service" in out
     assert "Heartbeat OK: healthy_service" in out
     assert "ALERT: 1 new Failures in DLQ" in out

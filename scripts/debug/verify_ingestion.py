@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import contextlib
+
 from orion.storage.db import async_session_factory  # noqa: E402
 from orion.storage.models import BronzeEvent  # noqa: E402
 from orion.storage.models_silver import SilverAlpacaBar, SilverSignal  # noqa: E402
@@ -43,7 +45,5 @@ async def check_ingestion():
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(check_ingestion())
-    except KeyboardInterrupt:
-        pass

@@ -1,5 +1,3 @@
-from typing import Type
-
 from .alerts import AlertsEndpoints
 from .congress import CongressEndpoints
 from .contract import ContractEndpoints
@@ -21,69 +19,69 @@ from .stock import StockEndpoints
 
 class Endpoints:
     @classmethod
-    def alerts(cls) -> Type[AlertsEndpoints]:
+    def alerts(cls) -> type[AlertsEndpoints]:
         return AlertsEndpoints
 
     @classmethod
-    def congress(cls) -> Type[CongressEndpoints]:
+    def congress(cls) -> type[CongressEndpoints]:
         return CongressEndpoints
 
     @classmethod
-    def darkpool(cls) -> Type[DarkpoolEndpoints]:
+    def darkpool(cls) -> type[DarkpoolEndpoints]:
         return DarkpoolEndpoints
 
     @classmethod
-    def earnings(cls) -> Type[EarningsEndpoints]:
+    def earnings(cls) -> type[EarningsEndpoints]:
         return EarningsEndpoints
 
     @classmethod
-    def etfs(cls) -> Type[EtfsEndpoints]:
+    def etfs(cls) -> type[EtfsEndpoints]:
         return EtfsEndpoints
 
     @classmethod
-    def market(cls) -> Type[MarketEndpoints]:
+    def market(cls) -> type[MarketEndpoints]:
         return MarketEndpoints
 
     @classmethod
-    def flow(cls) -> Type[FlowEndpoints]:
+    def flow(cls) -> type[FlowEndpoints]:
         return FlowEndpoints
 
     @classmethod
-    def contract(cls) -> Type[ContractEndpoints]:
+    def contract(cls) -> type[ContractEndpoints]:
         return ContractEndpoints
 
     @classmethod
-    def screener(cls) -> Type[ScreenerEndpoints]:
+    def screener(cls) -> type[ScreenerEndpoints]:
         return ScreenerEndpoints
 
     @classmethod
-    def seasonality(cls) -> Type[SeasonalityEndpoints]:
+    def seasonality(cls) -> type[SeasonalityEndpoints]:
         return SeasonalityEndpoints
 
     @classmethod
-    def stock(cls) -> Type[StockEndpoints]:
+    def stock(cls) -> type[StockEndpoints]:
         return StockEndpoints
 
     @classmethod
-    def group_flow(cls) -> Type[GroupFlowEndpoints]:
+    def group_flow(cls) -> type[GroupFlowEndpoints]:
         return GroupFlowEndpoints
 
     @classmethod
-    def institutions(cls) -> Type[InstitutionsEndpoints]:
+    def institutions(cls) -> type[InstitutionsEndpoints]:
         return InstitutionsEndpoints
 
     @classmethod
-    def net_flow(cls) -> Type[NetFlowEndpoints]:
+    def net_flow(cls) -> type[NetFlowEndpoints]:
         return NetFlowEndpoints
 
     @classmethod
-    def news(cls) -> Type[NewsEndpoints]:
+    def news(cls) -> type[NewsEndpoints]:
         return NewsEndpoints
 
     @classmethod
-    def politician_portfolios(cls) -> Type[PoliticianPortfoliosEndpoints]:
+    def politician_portfolios(cls) -> type[PoliticianPortfoliosEndpoints]:
         return PoliticianPortfoliosEndpoints
 
     @classmethod
-    def shorts(cls) -> Type[ShortsEndpoints]:
+    def shorts(cls) -> type[ShortsEndpoints]:
         return ShortsEndpoints

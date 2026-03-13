@@ -5,18 +5,18 @@ Scales down position size when new asset is highly correlated
 with existing portfolio holdings to reduce concentration risk.
 """
 
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import numpy as np
 
 from orion.config import RiskSettings, risk_settings
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 # In-memory cache for daily returns (ticker -> (timestamp, returns_array))
-_returns_cache: Dict[str, tuple[datetime, np.ndarray]] = {}
+_returns_cache: dict[str, tuple[datetime, np.ndarray]] = {}
 CACHE_TTL_HOURS = 4
 
 
@@ -28,7 +28,7 @@ class CorrelationAdjuster:
     the size is reduced to limit unbounded portfolio risk.
     """
 
-    def __init__(self, market_connector: Optional[Any] = None):
+    def __init__(self, market_connector: Any | None = None):
         """
         Initialize with optional market connector for fetching price data.
 
@@ -40,8 +40,8 @@ class CorrelationAdjuster:
     async def get_size_multiplier(
         self,
         new_ticker: str,
-        existing_tickers: List[str],
-        cfg: Optional[RiskSettings] = None,
+        existing_tickers: list[str],
+        cfg: RiskSettings | None = None,
     ) -> float:
         """
         Calculate size multiplier based on correlation with existing positions.
@@ -98,7 +98,7 @@ class CorrelationAdjuster:
 
     async def _calculate_correlation(
         self, ticker_a: str, ticker_b: str, lookback_days: int, cfg: RiskSettings
-    ) -> Optional[float]:
+    ) -> float | None:
         """Calculate Pearson correlation between two tickers."""
         returns_a = await self._get_daily_returns(ticker_a, lookback_days, cfg)
         returns_b = await self._get_daily_returns(ticker_b, lookback_days, cfg)
@@ -121,22 +121,23 @@ class CorrelationAdjuster:
         except Exception:
             return None
 
-    async def _get_daily_returns(self, ticker: str, lookback_days: int, cfg: RiskSettings) -> Optional[np.ndarray]:
+    async def _get_daily_returns(self, ticker: str, lookback_days: int, cfg: RiskSettings) -> np.ndarray | None:
         """Fetch daily returns with caching."""
-        # Check cache
         cache_key = ticker
         if cache_key in _returns_cache:
             cached_ts, cached_returns = _returns_cache[cache_key]
-            age_hours = (datetime.now(timezone.utc) - cached_ts).total_seconds() / 3600
+            age_hours = (datetime.now(UTC) - cached_ts).total_seconds() / 3600
             if age_hours < CACHE_TTL_HOURS:
                 return cached_returns
+            # Evict expired entry to prevent unbounded growth
+            del _returns_cache[cache_key]
 
         # Fetch from market connector
         if not self.connector:
             return None
 
         try:
-            end_time = datetime.now(timezone.utc)
+            end_time = datetime.now(UTC)
             start_time = end_time - timedelta(days=lookback_days + 10)  # Buffer for weekends
 
             bars = self.connector.fetch_bars([ticker], start_time, end_time)
@@ -159,7 +160,7 @@ class CorrelationAdjuster:
             returns = np.diff(closes) / closes[:-1]
 
             # Cache result
-            _returns_cache[cache_key] = (datetime.now(timezone.utc), returns)
+            _returns_cache[cache_key] = (datetime.now(UTC), returns)
 
             return returns
 

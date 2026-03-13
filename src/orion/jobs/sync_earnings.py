@@ -8,8 +8,8 @@ This job:
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, date, datetime
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -28,14 +28,14 @@ def _gateway_base_url() -> str:
     return base_url.rstrip("/")
 
 
-def _gateway_headers() -> Dict[str, str]:
+def _gateway_headers() -> dict[str, str]:
     api_key = (system_settings.data_gateway_api_key or "").strip()
     if not api_key:
         raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
     return {"X-Gateway-Key": api_key}
 
 
-def _to_float(value: Any) -> Optional[float]:
+def _to_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
@@ -44,7 +44,7 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
-def _parse_gateway_date(raw: Any) -> Optional[date]:
+def _parse_gateway_date(raw: Any) -> date | None:
     if not raw:
         return None
     if isinstance(raw, date):
@@ -62,7 +62,7 @@ def _parse_gateway_date(raw: Any) -> Optional[date]:
     return None
 
 
-async def _fetch_gateway_earnings(endpoint: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+async def _fetch_gateway_earnings(endpoint: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     url = f"{_gateway_base_url()}{endpoint}"
     headers = _gateway_headers()
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -81,7 +81,7 @@ async def _fetch_gateway_earnings(endpoint: str, params: Optional[Dict[str, Any]
     return []
 
 
-async def sync_todays_earnings() -> Dict[str, int]:
+async def sync_todays_earnings() -> dict[str, int]:
     """Sync today's earnings via Data Gateway (premarket + afterhours)."""
     results = {"synced": 0, "errors": 0}
     today = date.today()
@@ -95,7 +95,7 @@ async def sync_todays_earnings() -> Dict[str, int]:
 
 
 async def _fetch_and_sync_earnings(
-    endpoint: str, target_date: date, fallback_announce_time: str, results: Dict[str, int]
+    endpoint: str, target_date: date, fallback_announce_time: str, results: dict[str, int]
 ) -> None:
     """Fetch earnings from Data Gateway endpoint and sync to database."""
     try:
@@ -131,7 +131,7 @@ async def backfill_ticker_earnings(ticker: str) -> int:
     return count
 
 
-async def _process_single_earnings_record(ticker: str, row: Dict[str, Any]) -> int:
+async def _process_single_earnings_record(ticker: str, row: dict[str, Any]) -> int:
     """Process a single earnings record and upsert to database."""
     report_date = _parse_gateway_date(row.get("date") or row.get("report_date") or row.get("earnings_date"))
     if report_date is None:
@@ -164,7 +164,7 @@ def _parse_report_date(report_date_raw: Any) -> date:
     return report_date_raw
 
 
-def _extract_announce_time(e: Any, UNSET: Any) -> Optional[str]:
+def _extract_announce_time(e: Any, UNSET: Any) -> str | None:  # noqa: N803
     """Extract announce time from earnings record."""
     if hasattr(e, "additional_properties") and e.additional_properties:
         return e.additional_properties.get("report_time")
@@ -175,7 +175,7 @@ def _extract_announce_time(e: Any, UNSET: Any) -> Optional[str]:
     return None
 
 
-def _extract_eps_estimate(e: Any, UNSET: Any) -> Optional[float]:
+def _extract_eps_estimate(e: Any, UNSET: Any) -> float | None:  # noqa: N803
     """Extract EPS estimate from earnings record."""
     if not hasattr(e, "street_mean_est") or not e.street_mean_est:
         return None
@@ -186,7 +186,7 @@ def _extract_eps_estimate(e: Any, UNSET: Any) -> Optional[float]:
         return None
 
 
-async def backfill_all_earnings() -> Dict[str, int]:
+async def backfill_all_earnings() -> dict[str, int]:
     """Backfill earnings for all unique tickers via Data Gateway."""
     results = {"tickers": 0, "earnings": 0, "errors": 0}
     tickers = await _get_backfill_tickers_from_heber_gold()
@@ -237,7 +237,7 @@ def _coerce_to_frame(payload: Any) -> pd.DataFrame:
 
 
 async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     reader = get_heber_reader()
     try:
         payload = await asyncio.to_thread(
@@ -251,7 +251,7 @@ async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame:
     return _coerce_to_frame(payload)
 
 
-async def _get_backfill_tickers_from_heber_gold() -> List[str]:
+async def _get_backfill_tickers_from_heber_gold() -> list[str]:
     outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
     features_df = await _read_heber_gold_dataset("meta_label_features")
     tickers = _extract_tickers_from_frame(outcomes_df) | _extract_tickers_from_frame(features_df)
@@ -277,7 +277,7 @@ async def _upsert_earnings(earnings_obj: Any, report_date: date, announce_time: 
     )
 
 
-async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str) -> None:
+async def _upsert_earnings_row(row: dict[str, Any], fallback_announce_time: str) -> None:
     ticker = (row.get("symbol") or row.get("ticker") or "").strip().upper()
     if not ticker:
         return
@@ -308,18 +308,18 @@ async def _upsert_earnings_row(row: Dict[str, Any], fallback_announce_time: str)
 async def _upsert_earnings_direct(
     ticker: str,
     report_date: date,
-    announce_time: Optional[str] = None,
-    eps_estimate: Optional[float] = None,
-    eps_actual: Optional[float] = None,
-    revenue_estimate: Optional[int] = None,
-    revenue_actual: Optional[int] = None,
+    announce_time: str | None = None,
+    eps_estimate: float | None = None,
+    eps_actual: float | None = None,
+    revenue_estimate: int | None = None,
+    revenue_actual: int | None = None,
 ) -> None:
     """Compatibility shim while earnings storage is centralized in Gateway/Heber."""
     _ = (ticker, report_date, announce_time, eps_estimate, eps_actual, revenue_estimate, revenue_actual)
     return None
 
 
-async def get_earnings_for_ticker(ticker: str, as_of_date: date) -> Dict[str, Any]:
+async def get_earnings_for_ticker(ticker: str, as_of_date: date) -> dict[str, Any]:
     """Get earnings info for a ticker as of a specific date.
 
     Returns:

@@ -6,9 +6,11 @@ Used when Greeks are not available from external APIs.
 """
 
 import math
-from typing import Dict, Optional
 
+import structlog
 from scipy.stats import norm
+
+logger = structlog.get_logger()
 
 
 def calculate_greeks(
@@ -18,7 +20,7 @@ def calculate_greeks(
     iv: float,
     risk_free_rate: float = 0.05,
     option_type: str = "CALL",
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """Calculate option Greeks using Black-Scholes model.
 
     Args:
@@ -75,8 +77,15 @@ def calculate_greeks(
             second_term = risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry_years) * nd2_put
             result["theta"] = (first_term + second_term) / 365
 
-    except Exception:
-        pass  # Return None values on error
+    except Exception as e:
+        logger.warning(
+            "Greeks calculation failed",
+            option_type=option_type,
+            spot=spot,
+            strike=strike,
+            error=str(e),
+            exc_info=True,
+        )
 
     return result
 
@@ -88,7 +97,7 @@ def calculate_delta_gamma(
     iv: float,
     option_type: str = "CALL",
     risk_free_rate: float = 0.05,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """Convenience function to get delta and gamma from DTE.
 
     Args:

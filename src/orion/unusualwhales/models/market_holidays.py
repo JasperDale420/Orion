@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union, cast
+from typing import Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -40,13 +40,13 @@ class MarketHolidays:
             Day.
     """
 
-    data: Union[Unset, List[str]] = UNSET
-    early_close: Union[Unset, bool] = UNSET
-    event: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    data: Unset | list[str] = UNSET
+    early_close: Unset | bool = UNSET
+    event: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
-        data: Union[Unset, List[str]] = UNSET
+    def to_dict(self) -> dict[str, Any]:
+        data: Unset | list[str] = UNSET
         if not isinstance(self.data, Unset):
             data = self.data
 
@@ -54,7 +54,7 @@ class MarketHolidays:
 
         event = self.event
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if data is not UNSET:
@@ -67,9 +67,9 @@ class MarketHolidays:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
-        data = cast(List[str], d.pop("data", UNSET))
+        data = cast(list[str], d.pop("data", UNSET))
 
         early_close = d.pop("early_close", UNSET)
 
@@ -85,7 +85,7 @@ class MarketHolidays:
         return market_holidays
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

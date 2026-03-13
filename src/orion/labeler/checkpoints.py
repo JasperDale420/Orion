@@ -5,12 +5,10 @@ Functions for extracting prices at specific time offsets from entry.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
-def get_price_at_offset(
-    prices: List[Dict[str, Any]], entry_ts: datetime, hours: int
-) -> Optional[float]:
+def get_price_at_offset(prices: list[dict[str, Any]], entry_ts: datetime, hours: int) -> float | None:
     """Get price at a specific hours offset from entry.
 
     Args:
@@ -43,9 +41,7 @@ def get_price_at_offset(
     return best_price
 
 
-def get_price_at_offset_minutes(
-    prices: List[Dict[str, Any]], entry_ts: datetime, minutes: int
-) -> Optional[float]:
+def get_price_at_offset_minutes(prices: list[dict[str, Any]], entry_ts: datetime, minutes: int) -> float | None:
     """Get price at a specific minutes offset from entry (for 0DTE).
 
     Args:
@@ -78,9 +74,7 @@ def get_price_at_offset_minutes(
     return best_price
 
 
-def get_price_at_offset_days(
-    prices: List[Dict[str, Any]], entry_ts: datetime, days: int
-) -> Optional[float]:
+def get_price_at_offset_days(prices: list[dict[str, Any]], entry_ts: datetime, days: int) -> float | None:
     """Get price at a specific days offset from entry (for SWING/POSITION).
 
     Args:
@@ -113,7 +107,7 @@ def get_price_at_offset_days(
     return best_price
 
 
-def calculate_volatility(prices: List[float]) -> Optional[float]:
+def calculate_volatility(prices: list[float]) -> float | None:
     """Calculate price volatility (std dev of returns).
 
     Args:
@@ -138,7 +132,7 @@ def calculate_volatility(prices: List[float]) -> Optional[float]:
     return statistics.stdev(returns)
 
 
-def calculate_return(entry_price: float, current_price: Optional[float]) -> Optional[float]:
+def calculate_return(entry_price: float, current_price: float | None) -> float | None:
     """Calculate return percentage from entry to current price.
 
     Args:

@@ -4,8 +4,7 @@ Integration tests for advanced RiskManager features.
 Tests portfolio-level Greeks limits, sector exposure, and 0DTE wind-down.
 """
 
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from orion.config import RiskSettings
