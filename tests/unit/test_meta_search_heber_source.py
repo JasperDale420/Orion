@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -13,7 +13,7 @@ from orion.core.solver_schema import EvaluationTask
 @pytest.mark.asyncio
 async def test_fetch_silver_events_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     agent = MetaSearchAgent.__new__(MetaSearchAgent)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     task = EvaluationTask(
         task_id="t1",
         start_time_utc=now - timedelta(hours=1),
@@ -65,7 +65,7 @@ async def test_fetch_silver_events_prefers_heber(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_fetch_silver_events_returns_empty_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     agent = MetaSearchAgent.__new__(MetaSearchAgent)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     task = EvaluationTask(
         task_id="t2",
         start_time_utc=now - timedelta(hours=1),

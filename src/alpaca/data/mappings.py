@@ -1,6 +1,5 @@
-from typing import Dict
 
-BAR_MAPPING: Dict[str, str] = {
+BAR_MAPPING: dict[str, str] = {
     "t": "timestamp",
     "o": "open",
     "h": "high",
@@ -11,7 +10,7 @@ BAR_MAPPING: Dict[str, str] = {
     "vw": "vwap",
 }
 
-QUOTE_MAPPING: Dict[str, str] = {
+QUOTE_MAPPING: dict[str, str] = {
     "t": "timestamp",
     "ax": "ask_exchange",
     "ap": "ask_price",
@@ -23,7 +22,7 @@ QUOTE_MAPPING: Dict[str, str] = {
     "z": "tape",
 }
 
-TRADE_MAPPING: Dict[str, str] = {
+TRADE_MAPPING: dict[str, str] = {
     "t": "timestamp",
     "p": "price",
     "s": "size",
@@ -33,7 +32,7 @@ TRADE_MAPPING: Dict[str, str] = {
     "z": "tape",
 }
 
-SNAPSHOT_MAPPING: Dict[str, str] = {
+SNAPSHOT_MAPPING: dict[str, str] = {
     "latestTrade": "latest_trade",
     "latestQuote": "latest_quote",
     "minuteBar": "minute_bar",
@@ -43,14 +42,14 @@ SNAPSHOT_MAPPING: Dict[str, str] = {
     "greeks": "greeks",
 }
 
-ORDERBOOK_MAPPING: Dict[str, str] = {
+ORDERBOOK_MAPPING: dict[str, str] = {
     "t": "timestamp",
     "b": "bids",
     "a": "asks",
     "r": "reset",
 }
 
-TRADING_STATUS_MAPPING: Dict[str, str] = {
+TRADING_STATUS_MAPPING: dict[str, str] = {
     "t": "timestamp",
     "sc": "status_code",
     "sm": "status_message",
@@ -59,7 +58,7 @@ TRADING_STATUS_MAPPING: Dict[str, str] = {
     "z": "tape",
 }
 
-TRADE_CANCEL_MAPPING: Dict[str, str] = {
+TRADE_CANCEL_MAPPING: dict[str, str] = {
     "t": "timestamp",
     "p": "price",
     "s": "size",
@@ -69,7 +68,7 @@ TRADE_CANCEL_MAPPING: Dict[str, str] = {
     "z": "tape",
 }
 
-TRADE_CORRECTION_MAPPING: Dict[str, str] = {
+TRADE_CORRECTION_MAPPING: dict[str, str] = {
     "t": "timestamp",
     "x": "exchange",
     "oi": "original_id",

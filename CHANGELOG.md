@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ignore agent temporary database artifacts** (2026-03-10):
+  - Added `.agents/tmp/**/*.db`, `.agents/tmp/**/*.db-journal`, and `.agents/tmp/**/*.db-wal` to `.gitignore` to keep `.agents/tmp` runtime databases out of git history.
+- **Pre-commit detect-secrets false positives** (2026-03-10):
+  - Updated `.pre-commit-config.yaml` to ignore `logs/` files in detect-secrets scanning so generated log output is not flagged during commit/push checks.
+
+- Removed generated `logs/orion.log.*` files from version control and normalized log handling in local `.gitignore` coverage.
+
+- **Test Stability Fixes** (2026-02-25):
+  - Fixed `test_feature_flags.py` by ensuring `FeatureFlags._load_from_env()` is explicitly called during tests to load mocked environment variables correctly.
+  - Fixed `test_uw_max_pain_heber_source.py` by modifying `UWMaxPainConnector._get_current_price()` to return `None` instead of raising a generic `Exception` when the Heber read fails, preventing the process from crashing and tests from failing when Heber is unavailable.
+- **Heber reader parquet noise from macOS sidecar files** (`heber_reader.py`): `_read_table()` now pre-filters `._` prefixed files when reading a directory, preventing PyArrow from attempting to stat macOS metadata sidecar files that cause `EPERM` errors and trigger noisy `heber_reader_filewise_fallback` warnings every ~5 minutes.
+- **Cross-Repo Audit: Retry standardization** (2026-02-22):
+  - Migrated `UWMaxPainConnector` in `src/orion/connectors/uw_max_pain_connector.py` from raw `httpx.get()` to `create_http_client()` for structured logging hooks and consistent timeout configuration.
+  - Updated retry contract tests to mock `connector._client.get` instead of `module.httpx.get`.
+- **Cross-Repo Audit: Financial Precision Fixes** (2026-02-22):
+  - Removed duplicate `max_open_positions` validation in `src/orion/core/solver_schema.py` (copy-paste artifact).
+  - Replaced deprecated `datetime.utcnow` with `datetime.now(timezone.utc)` in `SolverEdit.created_at_utc`.
+- **Cross-Repo Audit: pytz → zoneinfo Migration** (2026-02-22):
+  - Migrated `src/orion/main_meta_weekly.py` and `scripts/verify_ingestion_sleep.py` from deprecated `pytz` to stdlib `zoneinfo`. Replaced `pytz.timezone()` with `ZoneInfo()` and `US/Eastern` with canonical `America/New_York`.
+- **Cross-Repo Audit: Timezone-Aware Timestamps** (2026-02-21):
+  - Fixed `datetime.fromtimestamp()` + `datetime.now()` → UTC-aware in `src/orion/ml/scorer.py` for model freshness check.
+  - Fixed `datetime.now()` → `datetime.now(timezone.utc)` in `src/orion/ml/pattern_miner.py` (insight ID hash) and `src/orion/agents/proposal_builder.py` (filename timestamp).
+- **Cross-Repo Audit: loguru → structlog** (2026-02-21):
+  - Migrated `scripts/verify_activity.py` from loguru to structlog.
+
 ### Removed
 
 - **Decommissioned Redpanda, MinIO, and createbuckets Docker services**:

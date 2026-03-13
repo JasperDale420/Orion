@@ -8,21 +8,21 @@ Labels each flow with actual returns at 15m, 30m, 1h, 2h horizons.
 import asyncio
 import signal
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from sqlalchemy import text
-
 from orion.clients.heber_reader import HeberReader
-from orion.config import SystemSettings
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
+from sqlalchemy import text
+
+from orion.config import SystemSettings
 
 logger = setup_struct_logger("orion.labeler")
 
@@ -60,17 +60,17 @@ class FlowRecord:
     event_id: str
     ticker: str
     flow_ts_utc: datetime
-    expiry: Optional[str]
+    expiry: str | None
     underlying_price: float
-    option_price: Optional[float]
-    premium_usd: Optional[float]
-    aggressor: Optional[str]
-    put_call: Optional[str]
-    is_sweep: Optional[Any]
-    iv: Optional[float]
+    option_price: float | None
+    premium_usd: float | None
+    aggressor: str | None
+    put_call: str | None
+    is_sweep: Any | None
+    iv: float | None
 
 
-def _coerce_dt(value: Any) -> Optional[datetime]:
+def _coerce_dt(value: Any) -> datetime | None:
     if value is None:
         return None
     ts = pd.Timestamp(value)
@@ -81,7 +81,7 @@ def _coerce_dt(value: Any) -> Optional[datetime]:
     return ts.to_pydatetime()
 
 
-def _coerce_float(value: Any) -> Optional[float]:
+def _coerce_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
@@ -90,18 +90,18 @@ def _coerce_float(value: Any) -> Optional[float]:
         return None
 
 
-def _resolve_series_value(row: pd.Series, keys: List[str]) -> Any:
+def _resolve_series_value(row: pd.Series, keys: list[str]) -> Any:
     for key in keys:
         if key in row and pd.notna(row[key]):
             return row[key]
     return None
 
 
-def _normalize_flow_df(raw_df: pd.DataFrame, cutoff: datetime) -> List[FlowRecord]:
+def _normalize_flow_df(raw_df: pd.DataFrame, cutoff: datetime) -> list[FlowRecord]:
     if raw_df.empty:
         return []
 
-    rows: List[FlowRecord] = []
+    rows: list[FlowRecord] = []
     for _, row in raw_df.iterrows():
         event_id = _resolve_series_value(row, ["event_id", "source_event_id", "id"])
         ticker = _resolve_series_value(row, ["ticker", "symbol", "underlying"])
@@ -135,7 +135,7 @@ def _normalize_flow_df(raw_df: pd.DataFrame, cutoff: datetime) -> List[FlowRecor
     return rows
 
 
-async def _filter_unlabeled(records: List[FlowRecord], limit: int) -> List[FlowRecord]:
+async def _filter_unlabeled(records: list[FlowRecord], limit: int) -> list[FlowRecord]:
     if not records:
         return []
 
@@ -154,9 +154,9 @@ async def _filter_unlabeled(records: List[FlowRecord], limit: int) -> List[FlowR
     return unlabeled[:limit]
 
 
-async def get_unlabeled_flows(limit: int = BATCH_SIZE) -> List[Any]:
+async def get_unlabeled_flows(limit: int = BATCH_SIZE) -> list[Any]:
     """Get flow records that haven't been labeled yet, sourced from Heber."""
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     cutoff = now_utc - timedelta(minutes=MIN_AGE_MINUTES)
     start_time = cutoff - timedelta(hours=FLOW_LOOKBACK_HOURS)
 
@@ -168,14 +168,14 @@ async def get_unlabeled_flows(limit: int = BATCH_SIZE) -> List[Any]:
     return await _filter_unlabeled(records, limit=limit)
 
 
-async def get_price_at_time(ticker: str, target_ts: datetime, tolerance_minutes: int = 10) -> Optional[float]:
+async def get_price_at_time(ticker: str, target_ts: datetime, tolerance_minutes: int = 10) -> float | None:
     """Get underlying price near target time using Heber bars."""
     window_start = target_ts - timedelta(minutes=tolerance_minutes)
     window_end = target_ts + timedelta(minutes=tolerance_minutes)
 
     bars = _heber_reader.read_bars(
         symbols=[ticker],
-        asof_time=datetime.now(timezone.utc),
+        asof_time=datetime.now(UTC),
         start_time=window_start,
         end_time=window_end,
     )
@@ -205,14 +205,14 @@ async def get_price_at_time(ticker: str, target_ts: datetime, tolerance_minutes:
     return _coerce_float(best[close_col])
 
 
-def calculate_return(entry_price: float, exit_price: float) -> Optional[float]:
+def calculate_return(entry_price: float, exit_price: float) -> float | None:
     """Calculate percentage return."""
     if entry_price <= 0 or exit_price is None:
         return None
     return ((exit_price - entry_price) / entry_price) * 100
 
 
-def classify_return(return_pct: Optional[float], threshold: float = 0.1) -> str:
+def classify_return(return_pct: float | None, threshold: float = 0.1) -> str:
     """Classify return as WIN/LOSS/FLAT."""
     if return_pct is None:
         return "UNKNOWN"
@@ -223,17 +223,17 @@ def classify_return(return_pct: Optional[float], threshold: float = 0.1) -> str:
     return "FLAT"
 
 
-def parse_expiry(expiry_str: Optional[str]) -> Optional[datetime]:
+def parse_expiry(expiry_str: str | None) -> datetime | None:
     """Parse expiry string to datetime."""
     if not expiry_str:
         return None
     try:
-        return datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=UTC)
     except (ValueError, AttributeError):
         return None
 
 
-def calculate_dte(flow_ts: datetime, expiry: Optional[datetime]) -> Optional[int]:
+def calculate_dte(flow_ts: datetime, expiry: datetime | None) -> int | None:
     """Calculate days to expiry."""
     if not expiry:
         return None
@@ -241,7 +241,7 @@ def calculate_dte(flow_ts: datetime, expiry: Optional[datetime]) -> Optional[int
     return max(0, dte)
 
 
-def classify_trade_type(dte: Optional[int]) -> str:
+def classify_trade_type(dte: int | None) -> str:
     """Classify trade type based on DTE."""
     if dte is None:
         return "UNKNOWN"
@@ -255,7 +255,7 @@ def classify_trade_type(dte: Optional[int]) -> str:
         return "POSITION"
 
 
-async def label_flow(flow: Any) -> Optional[Dict[str, Any]]:
+async def label_flow(flow: Any) -> dict[str, Any] | None:
     """Label a single flow record with price outcomes and DTE classification."""
     ticker = flow.ticker
     flow_ts = flow.flow_ts_utc
@@ -330,7 +330,7 @@ async def label_flow(flow: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-async def persist_labels(labels: List[Dict[str, Any]]) -> int:
+async def persist_labels(labels: list[dict[str, Any]]) -> int:
     """Persist labeled records to database."""
     enabled, control_key, control_raw = _legacy_label_pipeline_control()
     if not enabled:
@@ -452,7 +452,7 @@ async def run_labeling_loop(shutdown_event: asyncio.Event) -> None:
         try:
             await asyncio.wait_for(shutdown_event.wait(), timeout=POLL_INTERVAL_SECONDS)
             break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     logger.info(f"Labeling Service stopped. Total labeled: {total_labeled}")

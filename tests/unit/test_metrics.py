@@ -1,4 +1,5 @@
 import numpy as np
+
 from orion.analysis.metrics import compute_deflated_sharpe_ratio, compute_sharpe_ratio
 
 

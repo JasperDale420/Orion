@@ -18,9 +18,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import text
+
 from orion.shared.db_utils import db_query, db_write
 from orion.storage import db as db_module
-from sqlalchemy import text
 
 SOAK_TABLE = "orion_soak_counter"
 

@@ -12,6 +12,7 @@ packages = [{include = "orion", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.12"
+empire-core = {path = "../empire-core", develop = true}
 requests = "^2.31.0"
 pydantic = "^2.5.0"
 pydantic-settings = "^2.13.0"
@@ -44,6 +45,7 @@ numpy = "<3"
 pyyaml = "^6.0.3"
 joblib = "^1.5.3"
 alpaca-py = "^0.43.2"
+aiohttp = "^3.9.0"
 prometheus-client = "^0.24.1"
 lightgbm = "^4.5.0"
 scikit-learn = "^1.6.0"

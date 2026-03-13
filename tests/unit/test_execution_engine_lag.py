@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.config import system_settings
 from orion.execution.execution_engine import ExecutionEngine
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
@@ -40,7 +41,7 @@ async def test_execution_fresh_signal(engine):
     engine.market_connector.get_latest_price.return_value = 100.0
 
     # Create Candidate (Fresh)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cand = CandidateTrade(
         ticker="AAPL", timestamp_utc=now, direction="LONG", rule_id="test_rule", evidence={"signal_id": "sig1"}
     )
@@ -61,7 +62,7 @@ async def test_execution_stale_signal(engine):
     engine.connector = MagicMock()
 
     # Create Candidate (Stale by 5 mins)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale_ts = now - timedelta(minutes=5)
     cand = CandidateTrade(
         ticker="AAPL", timestamp_utc=stale_ts, direction="LONG", rule_id="test_rule", evidence={"signal_id": "sig1"}

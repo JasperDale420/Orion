@@ -9,9 +9,8 @@ import hashlib
 import logging
 import os
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
-from typing import List
 
 import httpx
 from dotenv import load_dotenv
@@ -42,7 +41,7 @@ UW_BASE_URL = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com/api")
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=2, max=30),
 )
-def fetch_flow_page(older_than: str, limit: int = 500) -> List[dict]:
+def fetch_flow_page(older_than: str, limit: int = 500) -> list[dict]:
     """Fetch a page of flow alerts from UW API."""
     url = f"{UW_BASE_URL}/option-trades/flow-alerts"
     params = {"limit": limit, "older_than": older_than}
@@ -62,12 +61,12 @@ def fetch_flow_page(older_than: str, limit: int = 500) -> List[dict]:
     return data if isinstance(data, list) else []
 
 
-def fetch_day(target_date: date) -> List[dict]:
+def fetch_day(target_date: date) -> list[dict]:
     """Fetch all flow alerts for a given day by paging backwards."""
     all_events = []
     seen_ids = set()
 
-    cursor = datetime.combine(target_date + timedelta(days=1), dt_time(0, 0, tzinfo=timezone.utc)).isoformat()
+    cursor = datetime.combine(target_date + timedelta(days=1), dt_time(0, 0, tzinfo=UTC)).isoformat()
 
     while True:
         logger.info(f"Fetching older_than={cursor}...")
@@ -124,10 +123,10 @@ def generate_event_id(raw: dict) -> str:
 async def backfill_days(days: int = 14):
     """Backfill UW flow data for the past N days."""
     engine = create_async_engine(DB_URL)
-    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)  # noqa: N806
 
     # Calculate date range
-    end_date = datetime.now(timezone.utc).date()
+    end_date = datetime.now(UTC).date()
     start_date = end_date - timedelta(days=days)
     dates = [start_date + timedelta(days=i) for i in range(days + 1) if (start_date + timedelta(days=i)) <= end_date]
 
@@ -171,7 +170,7 @@ async def backfill_days(days: int = 14):
                         "session": "REG",
                         "schema_version": "v1",
                         "event_ts_utc": datetime.fromisoformat(ts_str.replace("Z", "+00:00")),
-                        "received_ts_utc": datetime.now(timezone.utc),
+                        "received_ts_utc": datetime.now(UTC),
                         "payload": raw,  # RAW payload - not normalized!
                         "ingest": {"connector": "raw_backfill", "run_id": f"raw_bf_{target_date}"},
                     }

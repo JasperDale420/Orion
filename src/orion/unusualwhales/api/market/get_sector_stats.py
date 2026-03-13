@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -9,8 +9,8 @@ from ...models.sector_etf_results import SectorETFResults
 from ...types import Response
 
 
-def _get_kwargs() -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+def _get_kwargs() -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/market/sector-etfs",
     }
@@ -18,7 +18,7 @@ def _get_kwargs() -> Dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Optional[Union[SectorETFResults, str]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> SectorETFResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -35,7 +35,7 @@ def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
         return None
 
 
-def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[Union[SectorETFResults, str]]:
+def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[SectorETFResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -47,7 +47,7 @@ def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[SectorETFResults, str]]:
+) -> Response[SectorETFResults | str]:
     """Returns the stats for sector etfs for the most recent trading day
 
      Returns the current Trading Days statistics for the SPDR sector etfs
@@ -77,7 +77,7 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[SectorETFResults, str]]:
+) -> SectorETFResults | str | None:
     """Returns the stats for sector etfs for the most recent trading day
 
      Returns the current Trading Days statistics for the SPDR sector etfs
@@ -103,7 +103,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[SectorETFResults, str]]:
+) -> Response[SectorETFResults | str]:
     """Returns the stats for sector etfs for the most recent trading day
 
      Returns the current Trading Days statistics for the SPDR sector etfs
@@ -131,7 +131,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[SectorETFResults, str]]:
+) -> SectorETFResults | str | None:
     """Returns the stats for sector etfs for the most recent trading day
 
      Returns the current Trading Days statistics for the SPDR sector etfs

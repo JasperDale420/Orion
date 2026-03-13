@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -13,17 +13,17 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     ticker: str,
     *,
-    expiry: Union[Unset, str] = UNSET,
-    option_type: Union[Unset, str] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    exclude_zero_vol_chains: Union[Unset, bool] = UNSET,
-    exclude_zero_dte: Union[Unset, bool] = UNSET,
-    exclude_zero_oi_chains: Union[Unset, bool] = UNSET,
-    maybe_otm_only: Union[Unset, bool] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Dict[str, Any]:
+    expiry: Unset | str = UNSET,
+    option_type: Unset | str = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    exclude_zero_vol_chains: Unset | bool = UNSET,
+    exclude_zero_dte: Unset | bool = UNSET,
+    exclude_zero_oi_chains: Unset | bool = UNSET,
+    maybe_otm_only: Unset | bool = UNSET,
+    limit: Unset | int = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["expiry"] = expiry
 
@@ -43,7 +43,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/option-contracts",
         "params": params,
@@ -54,7 +54,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> ErrorMessage | OptionChainContractResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -77,7 +77,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -90,15 +90,15 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    expiry: Union[Unset, str] = UNSET,
-    option_type: Union[Unset, str] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    exclude_zero_vol_chains: Union[Unset, bool] = UNSET,
-    exclude_zero_dte: Union[Unset, bool] = UNSET,
-    exclude_zero_oi_chains: Union[Unset, bool] = UNSET,
-    maybe_otm_only: Union[Unset, bool] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+    expiry: Unset | str = UNSET,
+    option_type: Unset | str = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    exclude_zero_vol_chains: Unset | bool = UNSET,
+    exclude_zero_dte: Unset | bool = UNSET,
+    exclude_zero_oi_chains: Unset | bool = UNSET,
+    maybe_otm_only: Unset | bool = UNSET,
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     """Option contracts
 
      Returns all option contracts for the given ticker
@@ -147,15 +147,15 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    expiry: Union[Unset, str] = UNSET,
-    option_type: Union[Unset, str] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    exclude_zero_vol_chains: Union[Unset, bool] = UNSET,
-    exclude_zero_dte: Union[Unset, bool] = UNSET,
-    exclude_zero_oi_chains: Union[Unset, bool] = UNSET,
-    maybe_otm_only: Union[Unset, bool] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+    expiry: Unset | str = UNSET,
+    option_type: Unset | str = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    exclude_zero_vol_chains: Unset | bool = UNSET,
+    exclude_zero_dte: Unset | bool = UNSET,
+    exclude_zero_oi_chains: Unset | bool = UNSET,
+    maybe_otm_only: Unset | bool = UNSET,
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | OptionChainContractResults | str | None:
     """Option contracts
 
      Returns all option contracts for the given ticker
@@ -199,15 +199,15 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    expiry: Union[Unset, str] = UNSET,
-    option_type: Union[Unset, str] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    exclude_zero_vol_chains: Union[Unset, bool] = UNSET,
-    exclude_zero_dte: Union[Unset, bool] = UNSET,
-    exclude_zero_oi_chains: Union[Unset, bool] = UNSET,
-    maybe_otm_only: Union[Unset, bool] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+    expiry: Unset | str = UNSET,
+    option_type: Unset | str = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    exclude_zero_vol_chains: Unset | bool = UNSET,
+    exclude_zero_dte: Unset | bool = UNSET,
+    exclude_zero_oi_chains: Unset | bool = UNSET,
+    maybe_otm_only: Unset | bool = UNSET,
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     """Option contracts
 
      Returns all option contracts for the given ticker
@@ -254,15 +254,15 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    expiry: Union[Unset, str] = UNSET,
-    option_type: Union[Unset, str] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    exclude_zero_vol_chains: Union[Unset, bool] = UNSET,
-    exclude_zero_dte: Union[Unset, bool] = UNSET,
-    exclude_zero_oi_chains: Union[Unset, bool] = UNSET,
-    maybe_otm_only: Union[Unset, bool] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+    expiry: Unset | str = UNSET,
+    option_type: Unset | str = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    exclude_zero_vol_chains: Unset | bool = UNSET,
+    exclude_zero_dte: Unset | bool = UNSET,
+    exclude_zero_oi_chains: Unset | bool = UNSET,
+    maybe_otm_only: Unset | bool = UNSET,
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | OptionChainContractResults | str | None:
     """Option contracts
 
      Returns all option contracts for the given ticker

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -26,31 +26,31 @@ def test_env_int_clamps_to_minimum_one(monkeypatch) -> None:
 
 
 def test_should_run_true_when_never_ran() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     assert _should_run(None, 60, now) is True
 
 
 def test_should_run_respects_interval() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     last_run = now - timedelta(seconds=30)
     assert _should_run(last_run, 60, now) is False
     assert _should_run(last_run, 20, now) is True
 
 
 def test_next_last_run_updates_timestamp_only_on_success() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     prev = now - timedelta(minutes=5)
     assert _next_last_run(prev, succeeded=True, now=now) == now
     assert _next_last_run(prev, succeeded=False, now=now) == prev
 
 
 def test_failure_backoff_elapsed_true_without_failure_timestamp() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     assert _failure_backoff_elapsed(last_failure=None, backoff_seconds=120, now=now) is True
 
 
 def test_failure_backoff_elapsed_respects_backoff_window() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     last_failure = now - timedelta(seconds=30)
     assert _failure_backoff_elapsed(last_failure=last_failure, backoff_seconds=60, now=now) is False
     assert _failure_backoff_elapsed(last_failure=last_failure, backoff_seconds=20, now=now) is True
@@ -154,7 +154,7 @@ def test_runtime_backoff_policy_from_value_returns_none_for_unusable_payload() -
 async def test_resolve_runtime_backoff_policy_cached_reuses_when_updated_ts_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    updated = datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc)
+    updated = datetime(2026, 2, 9, 16, 0, tzinfo=UTC)
     calls: list[int] = []
 
     async def _fake_load_runtime_backoff_config_row() -> tuple[datetime, object] | None:

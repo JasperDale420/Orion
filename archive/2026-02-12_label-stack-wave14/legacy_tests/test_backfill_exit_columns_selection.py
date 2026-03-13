@@ -3,11 +3,10 @@ from __future__ import annotations
 import gzip
 import itertools
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-
 from orion.jobs import backfill_exit_columns
 
 
@@ -15,7 +14,7 @@ from orion.jobs import backfill_exit_columns
 async def test_get_records_to_backfill_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
     expected = [
-        {"event_id": "vel-1", "entry_ts": datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)},
+        {"event_id": "vel-1", "entry_ts": datetime(2026, 2, 9, 15, 0, tzinfo=UTC)},
     ]
 
     async def _fake_delegate(
@@ -53,7 +52,7 @@ async def test_get_records_to_backfill_delegates_to_labeler(monkeypatch: pytest.
 async def test_get_all_records_for_checkpoints_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
     expected = [
-        {"event_id": "cp-1", "entry_ts": datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)},
+        {"event_id": "cp-1", "entry_ts": datetime(2026, 2, 9, 15, 0, tzinfo=UTC)},
     ]
 
     async def _fake_delegate(
@@ -89,11 +88,11 @@ async def test_get_all_records_for_checkpoints_delegates_to_labeler(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_get_subsequent_prices_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, Any] = {}
     expected = [
-        {"price": 1.25, "ts": datetime(2026, 2, 9, 15, 5, tzinfo=timezone.utc)},
-        {"price": 1.31, "ts": datetime(2026, 2, 9, 15, 10, tzinfo=timezone.utc)},
+        {"price": 1.25, "ts": datetime(2026, 2, 9, 15, 5, tzinfo=UTC)},
+        {"price": 1.31, "ts": datetime(2026, 2, 9, 15, 10, tzinfo=UTC)},
     ]
 
     async def _labeler_subsequent_prices(option_chain: str, ts: datetime) -> list[dict[str, Any]]:
@@ -123,7 +122,7 @@ async def test_get_subsequent_prices_delegates_to_labeler(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_update_velocity_columns_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     record = {
         "event_id": "vel-1",
         "entry_ts": entry_ts,
@@ -143,7 +142,7 @@ async def test_update_velocity_columns_avoids_local_db_write(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_update_checkpoint_columns_avoids_local_db_write(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     record = {
         "event_id": "cp-1",
         "option_chain": "AAPL260221C00100000",
@@ -187,7 +186,7 @@ async def test_get_records_to_backfill_supports_cursor_filter(
         raising=False,
     )
 
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     records = await backfill_exit_columns.get_records_to_backfill(
         limit=10,
         after_entry_ts=cursor_ts,
@@ -223,7 +222,7 @@ async def test_get_all_records_for_checkpoints_supports_cursor_filter(
         raising=False,
     )
 
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     records = await backfill_exit_columns.get_all_records_for_checkpoints(
         limit=10,
         after_entry_ts=cursor_ts,
@@ -259,7 +258,7 @@ async def test_get_records_to_backfill_supports_timestamp_only_cursor_filter(
         raising=False,
     )
 
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     records = await backfill_exit_columns.get_records_to_backfill(
         limit=10,
         after_entry_ts=cursor_ts,
@@ -295,7 +294,7 @@ async def test_get_all_records_for_checkpoints_supports_timestamp_only_cursor_fi
         raising=False,
     )
 
-    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    cursor_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     records = await backfill_exit_columns.get_all_records_for_checkpoints(
         limit=10,
         after_entry_ts=cursor_ts,
@@ -315,8 +314,8 @@ async def test_run_backfill_paginates_velocity_and_checkpoint_phases(
     velocity_calls: list[dict[str, Any]] = []
     checkpoint_calls: list[dict[str, Any]] = []
 
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    ts2 = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    ts2 = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -397,12 +396,12 @@ async def test_run_backfill_resumes_from_phase_watermarks_and_persists_progress(
     saved_velocity_watermarks: list[datetime] = []
     saved_checkpoint_watermarks: list[datetime] = []
 
-    resumed_velocity_ts = datetime(2026, 2, 9, 13, 0, tzinfo=timezone.utc)
-    resumed_checkpoint_ts = datetime(2026, 2, 9, 13, 30, tzinfo=timezone.utc)
-    vel_ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    vel_ts2 = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
-    cp_ts1 = datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc)
-    cp_ts2 = datetime(2026, 2, 9, 17, 0, tzinfo=timezone.utc)
+    resumed_velocity_ts = datetime(2026, 2, 9, 13, 0, tzinfo=UTC)
+    resumed_checkpoint_ts = datetime(2026, 2, 9, 13, 30, tzinfo=UTC)
+    vel_ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    vel_ts2 = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
+    cp_ts1 = datetime(2026, 2, 9, 16, 0, tzinfo=UTC)
+    cp_ts2 = datetime(2026, 2, 9, 17, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -512,10 +511,10 @@ async def test_run_backfill_resumes_with_keyset_cursor_when_available(
     saved_velocity_cursors: list[tuple[datetime, str]] = []
     saved_checkpoint_cursors: list[tuple[datetime, str]] = []
 
-    resumed_velocity_ts = datetime(2026, 2, 9, 13, 0, tzinfo=timezone.utc)
-    resumed_checkpoint_ts = datetime(2026, 2, 9, 13, 30, tzinfo=timezone.utc)
-    vel_ts = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    cp_ts = datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc)
+    resumed_velocity_ts = datetime(2026, 2, 9, 13, 0, tzinfo=UTC)
+    resumed_checkpoint_ts = datetime(2026, 2, 9, 13, 30, tzinfo=UTC)
+    vel_ts = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    cp_ts = datetime(2026, 2, 9, 16, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -669,8 +668,8 @@ async def test_save_phase_cursors_do_not_write_legacy_watermarks(
     async def _fake_db_write(fn):
         return await fn(_FakeSession())
 
-    ts1 = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
-    ts2 = datetime(2026, 2, 9, 16, 0, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
+    ts2 = datetime(2026, 2, 9, 16, 0, tzinfo=UTC)
     monkeypatch.setattr(backfill_exit_columns, "upsert_cursor_state", _fake_upsert_cursor_state)
     monkeypatch.setattr(backfill_exit_columns, "upsert_watermark", _fake_upsert_watermark, raising=False)
     monkeypatch.setattr(backfill_exit_columns, "db_write", _fake_db_write)
@@ -752,8 +751,8 @@ async def test_run_backfill_continues_when_velocity_update_raises(
     saved_velocity_cursors: list[tuple[datetime, str | None]] = []
     attempted_event_ids: list[str] = []
 
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    ts2 = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    ts2 = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -856,7 +855,7 @@ async def test_run_backfill_writes_dead_letter_for_exhausted_retry(
     tmp_path,
 ) -> None:
     dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -1063,8 +1062,8 @@ async def test_run_backfill_dead_letter_redaction_and_rotation(
     tmp_path,
 ) -> None:
     dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -1169,8 +1168,8 @@ async def test_run_backfill_dead_letter_rotation_tracks_compressed_files(
     tmp_path,
 ) -> None:
     dead_letter_path = tmp_path / "exit_backfill_dead_letter.jsonl"
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -1268,8 +1267,8 @@ async def test_run_backfill_dead_letter_rotation_tracks_compressed_files(
 async def test_run_backfill_aborts_when_max_failed_records_reached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
-    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    ts2 = datetime(2026, 2, 9, 14, 5, tzinfo=UTC)
     checkpoint_calls = {"count": 0}
 
     async def _fake_get_records_to_backfill(
@@ -1366,7 +1365,7 @@ async def test_run_backfill_aborts_when_max_failed_records_reached(
 async def test_run_backfill_summary_includes_elapsed_seconds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -1451,7 +1450,7 @@ async def test_run_backfill_summary_includes_elapsed_seconds(
 async def test_run_backfill_aborts_when_max_duration_seconds_reached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
 
     async def _fake_get_records_to_backfill(
         limit: int,
@@ -1538,7 +1537,7 @@ async def test_run_backfill_aborts_when_max_duration_seconds_reached(
 async def test_run_backfill_aborts_when_max_batches_reached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=timezone.utc)
+    ts1 = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
     checkpoint_calls = {"count": 0}
 
     async def _fake_get_records_to_backfill(

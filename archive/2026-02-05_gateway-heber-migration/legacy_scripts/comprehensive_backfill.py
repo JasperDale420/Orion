@@ -4,9 +4,8 @@ import hashlib
 import logging
 import os
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
-from typing import List
 
 import requests
 from dotenv import load_dotenv
@@ -27,13 +26,14 @@ logger = logging.getLogger("backfill")
 
 # --- Connectors & Models ---
 # We import these AFTER setting env vars if possible, or just rely on them reading env
-from orion.config import system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.uw_flow_connector import UWFlowConnector
 from orion.processing.ingest_pipeline import ingest_bronze_events
 from orion.processing.persistence import persist_bronze_events, persist_silver_from_bronze
 from orion.shared.utils import parse_timestamptz
 from orion.storage.models import BronzeEvent
+
+from orion.config import system_settings
 
 RUN_ID = f"comprehensive_backfill_{datetime.now().strftime('%Y%m%d%H%M')}"
 
@@ -56,7 +56,7 @@ class RobustUWConnector(UWFlowConnector):
 
         limit = 500  # empirically, larger values can be ignored/capped unpredictably
         # Start just after end-of-day to ensure we capture the full day's range when paging backwards.
-        cursor = datetime.combine(target_date + timedelta(days=1), dt_time(0, 0, tzinfo=timezone.utc)).isoformat()
+        cursor = datetime.combine(target_date + timedelta(days=1), dt_time(0, 0, tzinfo=UTC)).isoformat()
 
         while True:
             logger.info(f"[UW Flow] Fetching older_than={cursor} limit={limit}...")
@@ -206,7 +206,7 @@ def fetch_uw_alerts_day(date_target: date) -> list[dict]:
     all_items: list[dict] = []
     seen_ids: set[str] = set()
 
-    cursor = datetime.combine(date_target + timedelta(days=1), dt_time(0, 0, tzinfo=timezone.utc)).isoformat()
+    cursor = datetime.combine(date_target + timedelta(days=1), dt_time(0, 0, tzinfo=UTC)).isoformat()
 
     while True:
         payload = _uw_get_json("/alerts", params={"older_than": cursor})
@@ -314,7 +314,7 @@ async def get_db_url_and_engine():
     return None, None
 
 
-async def backfill_day(session, date_target: date, active_tickers: List[str]):
+async def backfill_day(session, date_target: date, active_tickers: list[str]):
     logger.info(f"=== Starting Backfill for {date_target} ===")
 
     events_to_ingest = []
@@ -351,7 +351,7 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                         event_type="UW_FLOW",
                         ticker=ticker,
                         event_ts_utc=parse_timestamptz(ts_str, strict=True),
-                        received_ts_utc=datetime.now(timezone.utc),
+                        received_ts_utc=datetime.now(UTC),
                         payload=raw,
                         session="REG",
                     )
@@ -372,7 +372,7 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                 # Alerts typically have an id
                 sid = raw.get("id")
                 eid = (
-                    hashlib.sha256(f"UW_ALERT_{sid}".encode("utf-8")).hexdigest()
+                    hashlib.sha256(f"UW_ALERT_{sid}".encode()).hexdigest()
                     if sid
                     else hashlib.sha256(str(raw).encode("utf-8")).hexdigest()
                 )
@@ -386,7 +386,7 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                         event_type="UW_ALERT",
                         ticker=ticker,
                         event_ts_utc=parse_timestamptz(ts_str, strict=True),
-                        received_ts_utc=datetime.now(timezone.utc),
+                        received_ts_utc=datetime.now(UTC),
                         payload=raw,
                         session="REG",
                     )
@@ -412,10 +412,10 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                 # Deterministic hash with (ticker, ts, price, size) if no id.
                 sid = raw.get("id") or raw.get("id_")
                 if sid:
-                    eid = hashlib.sha256(f"UW_DARKPOOL_{sid}".encode("utf-8")).hexdigest()
+                    eid = hashlib.sha256(f"UW_DARKPOOL_{sid}".encode()).hexdigest()
                 else:
                     eid = hashlib.sha256(
-                        f"UW_DARKPOOL_{ticker}_{raw.get('price')}_{raw.get('size')}_{ts_str}".encode("utf-8")
+                        f"UW_DARKPOOL_{ticker}_{raw.get('price')}_{raw.get('size')}_{ts_str}".encode()
                     ).hexdigest()
 
                 events_to_ingest.append(
@@ -426,7 +426,7 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                         event_type="UW_DARKPOOL",
                         ticker=ticker,
                         event_ts_utc=parse_timestamptz(ts_str, strict=True),
-                        received_ts_utc=datetime.now(timezone.utc),
+                        received_ts_utc=datetime.now(UTC),
                         payload=raw,
                         session="REG",
                     )
@@ -448,8 +448,8 @@ async def backfill_day(session, date_target: date, active_tickers: List[str]):
                 paper=system_settings.alpaca_paper,
             )
 
-            start_ts = datetime.combine(date_target, dt_time(14, 30, tzinfo=timezone.utc))  # 09:30 ET
-            end_ts = datetime.combine(date_target, dt_time(21, 0, tzinfo=timezone.utc))  # 16:00 ET
+            start_ts = datetime.combine(date_target, dt_time(14, 30, tzinfo=UTC))  # 09:30 ET
+            end_ts = datetime.combine(date_target, dt_time(21, 0, tzinfo=UTC))  # 16:00 ET
 
             # Chunk tickers to avoid size limits
             chunk_size = 50
@@ -527,7 +527,7 @@ async def main():
         # but importing it is cleaner if available.
         # Let's try raw SQL on 'silver_uw_alerts' table
         try:
-            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today_str = datetime.now(UTC).strftime("%Y-%m-%d")
             q = text("SELECT DISTINCT ticker FROM silver_uw_alerts WHERE expiry >= :today")
             res = await session.execute(q, {"today": today_str})
             db_tickers = {r[0] for r in res if r[0]}
@@ -546,7 +546,7 @@ async def main():
         for i in range(args.days):
             dates.append(start + timedelta(days=i))
     else:
-        end = datetime.now(timezone.utc).date()
+        end = datetime.now(UTC).date()
         start = end - timedelta(days=args.days)
         for i in range(args.days + 1):
             d = start + timedelta(days=i)

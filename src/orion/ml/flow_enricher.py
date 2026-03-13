@@ -8,7 +8,7 @@ Used by both the price target labeler (historical) and ML scorer (real-time).
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any
 
 from orion.main_price_target_labeler import (
     get_darkpool_metrics as get_labeler_darkpool_metrics,
@@ -62,12 +62,12 @@ from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.flow_enricher")
 
-_FLOW_ENRICHER_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
+_FLOW_ENRICHER_FALLBACK_COUNTS: dict[str, int] = defaultdict(int)
 
 
-def _record_enricher_fallback(feature_name: str, error: Optional[Exception] = None, **context: Any) -> None:
+def _record_enricher_fallback(feature_name: str, error: Exception | None = None, **context: Any) -> None:
     _FLOW_ENRICHER_FALLBACK_COUNTS[feature_name] += 1
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "feature": feature_name,
         "fallback_count": _FLOW_ENRICHER_FALLBACK_COUNTS[feature_name],
     }
@@ -81,16 +81,16 @@ async def enrich_flow_for_scoring(
     ticker: str,
     entry_ts: datetime,
     put_call: str,
-    strike: Optional[float] = None,
-    underlying_price: Optional[float] = None,
-    dte: Optional[int] = None,
-    premium_usd: Optional[float] = None,
-    event_id: Optional[str] = None,
-    option_chain: Optional[str] = None,
-    aggressor: Optional[str] = None,
+    strike: float | None = None,
+    underlying_price: float | None = None,
+    dte: int | None = None,
+    premium_usd: float | None = None,
+    event_id: str | None = None,
+    option_chain: str | None = None,
+    aggressor: str | None = None,
     is_sweep: bool = False,
-    expiry: Optional[str] = None,
-) -> Dict[str, Any]:
+    expiry: str | None = None,
+) -> dict[str, Any]:
     """
     Enrich a flow with all features required for ML scoring.
 
@@ -146,7 +146,7 @@ async def enrich_flow_for_scoring(
     }
 
     # Helper for empty greeks
-    async def _empty_greeks() -> Dict[str, Any]:
+    async def _empty_greeks() -> dict[str, Any]:
         return {}
 
     # Parallel enrichment queries for speed
@@ -298,7 +298,7 @@ def _get_session(ts: datetime) -> str:
     return "MID"
 
 
-async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get GEX/VEX at entry time, plus rolling averages from shared labeler helper."""
     try:
         gex_snapshot = await get_labeler_gex_at_entry(ticker, entry_ts)
@@ -328,7 +328,7 @@ async def _get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     }
 
 
-async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
+async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> dict[str, Any]:
     """Get market tide in window before entry."""
     try:
         result = await get_labeler_market_tide_before_entry(entry_ts, minutes=minutes)
@@ -343,7 +343,7 @@ async def _get_market_tide(entry_ts: datetime, minutes: int = 30) -> Dict[str, A
         return {}
 
 
-async def _get_max_pain_distance(ticker: str, entry_ts: datetime, dte: Optional[int] = None) -> Optional[float]:
+async def _get_max_pain_distance(ticker: str, entry_ts: datetime, dte: int | None = None) -> float | None:
     """Get distance to max pain."""
     if dte is None:
         return None
@@ -359,7 +359,7 @@ async def _get_max_pain_distance(ticker: str, entry_ts: datetime, dte: Optional[
         return None
 
 
-async def _get_iv_rank(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def _get_iv_rank(ticker: str, entry_ts: datetime) -> float | None:
     """Get IV rank at entry."""
     try:
         return await get_labeler_iv_rank_at_entry(ticker, entry_ts)
@@ -368,7 +368,7 @@ async def _get_iv_rank(ticker: str, entry_ts: datetime) -> Optional[float]:
         return None
 
 
-async def _get_darkpool_volumes(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
+async def _get_darkpool_volumes(ticker: str, entry_ts: datetime) -> dict[str, float | None]:
     """Get darkpool volumes for multiple windows."""
     try:
         darkpool_metrics = await get_labeler_darkpool_metrics(ticker, entry_ts)
@@ -385,7 +385,7 @@ async def _get_darkpool_volumes(ticker: str, entry_ts: datetime) -> Dict[str, Op
         return {"30m": None, "1h": None, "4h": None, "1d": None}
 
 
-async def _get_regime(entry_ts: datetime) -> Dict[str, str]:
+async def _get_regime(entry_ts: datetime) -> dict[str, str]:
     """Get regime snapshot at entry."""
     try:
         regime = await get_labeler_regime_at_entry(entry_ts)
@@ -406,17 +406,17 @@ async def _get_regime(entry_ts: datetime) -> Dict[str, str]:
 async def _get_flow_greeks(
     event_id: str,
     *,
-    ticker: Optional[str] = None,
-    entry_ts: Optional[datetime] = None,
-    option_chain: Optional[str] = None,
-) -> Dict[str, Optional[float]]:
+    ticker: str | None = None,
+    entry_ts: datetime | None = None,
+    option_chain: str | None = None,
+) -> dict[str, float | None]:
     """Get Greeks from flow event."""
     try:
         flow_greeks = await get_labeler_flow_greeks(event_id)
         if not isinstance(flow_greeks, dict) or not flow_greeks:
             return {}
 
-        result: Dict[str, Optional[float]] = {
+        result: dict[str, float | None] = {
             "delta": flow_greeks.get("delta"),
             "gamma": flow_greeks.get("gamma"),
             "theta": flow_greeks.get("theta"),
@@ -445,7 +445,7 @@ async def _get_flow_greeks(
         return {}
 
 
-async def _get_vix(entry_ts: datetime) -> Optional[float]:
+async def _get_vix(entry_ts: datetime) -> float | None:
     """Get VIX at entry."""
     try:
         regime = await get_labeler_regime_at_entry(entry_ts)
@@ -457,10 +457,10 @@ async def _get_vix(entry_ts: datetime) -> Optional[float]:
         return None
 
 
-async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: Optional[int] = None) -> Dict[str, Any]:
+async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: int | None = None) -> dict[str, Any]:
     """Get additional flow metrics - sector, earnings, flow ratios."""
     # Sector mapping (same as labeler)
-    TICKER_SECTORS = {
+    TICKER_SECTORS = {  # noqa: N806
         "AAPL": "Technology",
         "MSFT": "Technology",
         "GOOGL": "Technology",
@@ -568,9 +568,9 @@ async def _get_flow_metrics(ticker: str, entry_ts: datetime, dte: Optional[int] 
     return result
 
 
-def _coerce_expiry_datetime(expiry: Any, entry_ts: datetime, dte: Optional[int]) -> Optional[datetime]:
+def _coerce_expiry_datetime(expiry: Any, entry_ts: datetime, dte: int | None) -> datetime | None:
     """Normalize expiry input to datetime for delegation helpers."""
-    expiry_dt: Optional[datetime] = None
+    expiry_dt: datetime | None = None
     if isinstance(expiry, datetime):
         expiry_dt = expiry
     elif hasattr(expiry, "year") and hasattr(expiry, "month") and hasattr(expiry, "day"):
@@ -594,10 +594,10 @@ def _coerce_expiry_datetime(expiry: Any, entry_ts: datetime, dte: Optional[int])
 async def _get_market_context(
     ticker: str,
     entry_ts: datetime,
-    dte: Optional[int] = None,
-    option_chain: Optional[str] = None,
-    expiry: Optional[Any] = None,
-) -> Dict[str, Any]:
+    dte: int | None = None,
+    option_chain: str | None = None,
+    expiry: Any | None = None,
+) -> dict[str, Any]:
     """Get market context features via labeler helpers for parity with training."""
     result = {
         "rvol_1h": None,
@@ -637,9 +637,9 @@ async def _get_market_context(
     return result
 
 
-async def _get_window_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def _get_window_features(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get aggregated flow features from shared gold-window helper."""
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
 
     try:
         window_data = await get_labeler_window_features_at_entry(ticker, entry_ts)

@@ -1,5 +1,3 @@
-from typing import Dict, List, Optional
-
 from pydantic import BaseModel
 
 
@@ -10,7 +8,7 @@ class FeatureSet(BaseModel):
 
     set_id: str
     description: str
-    feature_keys: List[str]
+    feature_keys: list[str]
 
 
 class FeatureRegistry:
@@ -18,7 +16,7 @@ class FeatureRegistry:
     Central repository of known Feature Sets.
     """
 
-    _registry: Dict[str, FeatureSet] = {
+    _registry: dict[str, FeatureSet] = {
         "v1_legacy": FeatureSet(
             set_id="v1_legacy",
             description="All available features (OHLCV + Basic Indicators + Simple Flow)",
@@ -45,7 +43,7 @@ class FeatureRegistry:
     }
 
     @classmethod
-    def get(cls, set_id: str) -> Optional[FeatureSet]:
+    def get(cls, set_id: str) -> FeatureSet | None:
         return cls._registry.get(set_id)
 
     @classmethod
@@ -53,5 +51,5 @@ class FeatureRegistry:
         return set_id in cls._registry
 
     @classmethod
-    def list_all(cls) -> List[str]:
+    def list_all(cls) -> list[str]:
         return list(cls._registry.keys())

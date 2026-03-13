@@ -1,7 +1,7 @@
 from datetime import date as datetime_date
 from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
-from typing import Any, Optional, Union
+from typing import Any, Union
 from uuid import UUID
 
 from pydantic import model_validator
@@ -31,15 +31,15 @@ class AccountDocument(BaseModel):
         mime_type (str): The format of content encoded by the string
     """
 
-    id: Optional[UUID]
-    document_type: Optional[DocumentType]
-    document_sub_type: Optional[str] = None
-    content: Optional[str] = None
-    mime_type: Optional[str] = None
+    id: UUID | None
+    document_type: DocumentType | None
+    document_sub_type: str | None = None
+    content: str | None = None
+    mime_type: str | None = None
 
     def __init__(self, **data: Any) -> None:
         # validate the incoming id field for uuid
-        _id = data.get("id", None)
+        _id = data.get("id")
         if isinstance(_id, str):
             data["id"] = UUID(_id)
 
@@ -64,7 +64,7 @@ class TradeDocument(ModelWithID):
 
     name: str
     type: TradeDocumentType
-    sub_type: Optional[TradeDocumentSubType] = None
+    sub_type: TradeDocumentSubType | None = None
     date: datetime_date
 
     def __init__(self, **data: Any) -> None:
@@ -128,20 +128,22 @@ class W8BenDocument(BaseModel):
     timestamp: datetime
 
     # optional fields
-    additional_conditions: Optional[str] = None
-    foreign_tax_id: Optional[str] = None
-    ftin_not_required: Optional[bool] = None
-    income_type: Optional[str] = None
-    mailing_address_city_state: Optional[str] = None
-    mailing_address_country: Optional[str] = None
-    mailing_address_street: Optional[str] = None
-    paragraph_number: Optional[str] = None
-    percent_rate_withholding: Optional[str] = None
-    reference_number: Optional[str] = None
-    residency: Optional[str] = None
-    tax_id_ssn: Optional[str] = None
+    additional_conditions: str | None = None
+    foreign_tax_id: str | None = None
+    ftin_not_required: bool | None = None
+    income_type: str | None = None
+    mailing_address_city_state: str | None = None
+    mailing_address_country: str | None = None
+    mailing_address_street: str | None = None
+    paragraph_number: str | None = None
+    percent_rate_withholding: str | None = None
+    reference_number: str | None = None
+    residency: str | None = None
+    tax_id_ssn: str | None = None
 
     @model_validator(mode="before")
+
+    @classmethod
     def root_validator(cls, values: dict) -> dict:
         foreign_tax_set = (
             "foreign_tax_id" in values and values["foreign_tax_id"] is not None

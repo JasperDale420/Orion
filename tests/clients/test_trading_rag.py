@@ -7,6 +7,7 @@ Tests the TradingRAG client with mocked HTTP responses.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from orion.clients.trading_rag import TradingRAGClient, get_rag_client
 
 

@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -13,11 +13,11 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     ticker: str,
     *,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["date"] = date
 
@@ -25,7 +25,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/greeks",
         "params": params,
@@ -34,9 +34,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(
-    *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, Greeks, str]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> ErrorMessage | Greeks | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -57,9 +55,7 @@ def _parse_response(
         return None
 
 
-def _build_response(
-    *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, Greeks, str]]:
+def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[ErrorMessage | Greeks | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -72,9 +68,9 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Response[Union[ErrorMessage, Greeks, str]]:
+) -> Response[ErrorMessage | Greeks | str]:
     """Option Greeks by Expiry All Strikes
 
      Returns the greeks for each strike for a single expiry date.
@@ -111,9 +107,9 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Optional[Union[ErrorMessage, Greeks, str]]:
+) -> ErrorMessage | Greeks | str | None:
     """Option Greeks by Expiry All Strikes
 
      Returns the greeks for each strike for a single expiry date.
@@ -145,9 +141,9 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Response[Union[ErrorMessage, Greeks, str]]:
+) -> Response[ErrorMessage | Greeks | str]:
     """Option Greeks by Expiry All Strikes
 
      Returns the greeks for each strike for a single expiry date.
@@ -182,9 +178,9 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Optional[Union[ErrorMessage, Greeks, str]]:
+) -> ErrorMessage | Greeks | str | None:
     """Option Greeks by Expiry All Strikes
 
      Returns the greeks for each strike for a single expiry date.

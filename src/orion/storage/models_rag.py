@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, Column, DateTime, String, Text
@@ -24,7 +24,7 @@ class VectorDocument(Base):
     # Metadata for filtering
     metadata_json = Column(JSON, nullable=False, default={})
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
 
 # Alias for legacy imports

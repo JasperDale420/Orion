@@ -16,13 +16,14 @@ Usage:
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import init_db
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 # =============================================================================
 
 
-async def check_zero_valued_bars(lookback_hours: int = 24) -> List[Dict]:
+async def check_zero_valued_bars(lookback_hours: int = 24) -> list[dict]:
     """Check for bars with invalid close values in recent data."""
     if not _prefer_heber_source():
         return []
@@ -49,9 +50,9 @@ async def check_zero_valued_bars(lookback_hours: int = 24) -> List[Dict]:
     return heber_rows or []
 
 
-async def check_data_staleness(stale_minutes: int = 15) -> List[Dict]:
+async def check_data_staleness(stale_minutes: int = 15) -> list[dict]:
     """Check for tickers with stale data during market hours."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     current_hour = now.hour
 
     # Only check during market hours
@@ -64,7 +65,7 @@ async def check_data_staleness(stale_minutes: int = 15) -> List[Dict]:
     return heber_rows or []
 
 
-async def check_bar_gaps(ticker: str = "SPY", gap_minutes: int = 5) -> List[Dict]:
+async def check_bar_gaps(ticker: str = "SPY", gap_minutes: int = 5) -> list[dict]:
     """Check for gaps in bar data for a ticker."""
     if not _prefer_heber_source():
         return []
@@ -72,7 +73,7 @@ async def check_bar_gaps(ticker: str = "SPY", gap_minutes: int = 5) -> List[Dict
     return heber_rows or []
 
 
-async def get_bars_summary() -> Dict:
+async def get_bars_summary() -> dict:
     """Get Alpaca bars data quality summary."""
     if not _prefer_heber_source():
         return {
@@ -105,7 +106,7 @@ async def get_bars_summary() -> Dict:
 # =============================================================================
 
 
-async def get_flow_summary() -> Dict:
+async def get_flow_summary() -> dict:
     """Get UW Flow data quality summary."""
     if not _prefer_heber_source():
         return {
@@ -135,7 +136,7 @@ async def get_flow_summary() -> Dict:
 
 async def check_flow_staleness(stale_minutes: int = 30) -> bool:
     """Check if flow data is stale during market hours."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     current_hour = now.hour
 
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
@@ -152,7 +153,7 @@ async def check_flow_staleness(stale_minutes: int = 30) -> bool:
 # =============================================================================
 
 
-async def get_darkpool_summary() -> Dict:
+async def get_darkpool_summary() -> dict:
     """Get Darkpool data quality summary."""
     if not _prefer_heber_source():
         return {
@@ -182,7 +183,7 @@ async def get_darkpool_summary() -> Dict:
 
 async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
     """Check if darkpool data is stale during market hours."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     current_hour = now.hour
 
     if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
@@ -199,7 +200,7 @@ async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
 # =============================================================================
 
 
-async def get_ml_features_summary() -> Dict:
+async def get_ml_features_summary() -> dict:
     """Get ML feature population summary from Heber watch Gold datasets."""
     if not _prefer_heber_source():
         return _empty_ml_features_summary(backend="source_unavailable")
@@ -210,7 +211,7 @@ async def get_ml_features_summary() -> Dict:
     return _empty_ml_features_summary(backend="heber_unavailable")
 
 
-async def check_recent_labels_features() -> Dict:
+async def check_recent_labels_features() -> dict:
     """Check 24h ML feature population from Heber watch Gold datasets."""
     if not _prefer_heber_source():
         return _empty_recent_labels_summary(backend="source_unavailable")
@@ -360,13 +361,6 @@ def _prefer_heber_source() -> bool:
     return raw not in _PREFER_HEBER_FALSE_VALUES
 
 
-def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
-
-
 def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
     if "ticker" in df.columns:
         return df
@@ -390,7 +384,7 @@ def _latest_event_time(df: pd.DataFrame) -> datetime | None:
     return series.max().to_pydatetime()
 
 
-def _empty_ml_features_summary(backend: str) -> Dict[str, Any]:
+def _empty_ml_features_summary(backend: str) -> dict[str, Any]:
     return {
         "total_labels": 0,
         "ml_ready_count": 0,
@@ -428,7 +422,7 @@ def _empty_ml_features_summary(backend: str) -> Dict[str, Any]:
     }
 
 
-def _empty_recent_labels_summary(backend: str) -> Dict[str, Any]:
+def _empty_recent_labels_summary(backend: str) -> dict[str, Any]:
     return {
         "recent_labels": 0,
         "ml_ready": 0,
@@ -456,7 +450,7 @@ def _coerce_dataframe_payload(payload: Any) -> pd.DataFrame:
 
 
 async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame | None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     reader = get_heber_reader()
     try:
         payload = await asyncio.to_thread(
@@ -508,7 +502,7 @@ def _extract_time_series(df: pd.DataFrame) -> pd.Series:
     return pd.to_datetime(df[time_col], utc=True, errors="coerce")
 
 
-def _coverage_pct(df: pd.DataFrame, total: int, candidate_columns: List[str]) -> float:
+def _coverage_pct(df: pd.DataFrame, total: int, candidate_columns: list[str]) -> float:
     if total <= 0 or df.empty:
         return 0.0
     mask = pd.Series(False, index=df.index)
@@ -518,7 +512,7 @@ def _coverage_pct(df: pd.DataFrame, total: int, candidate_columns: List[str]) ->
     return round(100 * float(mask.sum()) / float(total), 1)
 
 
-def _build_label_feature_coverage(outcomes_df: pd.DataFrame, features_df: pd.DataFrame) -> Dict[str, Any]:
+def _build_label_feature_coverage(outcomes_df: pd.DataFrame, features_df: pd.DataFrame) -> dict[str, Any]:
     base = _empty_ml_features_summary(backend="heber")
     if outcomes_df.empty:
         return base
@@ -585,7 +579,7 @@ def _build_label_feature_coverage(outcomes_df: pd.DataFrame, features_df: pd.Dat
     return base
 
 
-async def _get_ml_features_summary_from_heber() -> Dict[str, Any] | None:
+async def _get_ml_features_summary_from_heber() -> dict[str, Any] | None:
     outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
     if outcomes_df is None:
         return None
@@ -595,7 +589,7 @@ async def _get_ml_features_summary_from_heber() -> Dict[str, Any] | None:
     return _build_label_feature_coverage(outcomes_df, features_df)
 
 
-async def _get_recent_labels_features_from_heber() -> Dict[str, Any] | None:
+async def _get_recent_labels_features_from_heber() -> dict[str, Any] | None:
     outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
     if outcomes_df is None:
         return None
@@ -604,7 +598,7 @@ async def _get_recent_labels_features_from_heber() -> Dict[str, Any] | None:
         return None
 
     entry_ts = _extract_time_series(outcomes_df)
-    cutoff = pd.Timestamp(datetime.now(timezone.utc) - pd.Timedelta(hours=24))
+    cutoff = pd.Timestamp(datetime.now(UTC) - pd.Timedelta(hours=24))
     recent_mask = entry_ts >= cutoff
     recent_outcomes = outcomes_df[recent_mask].copy()
 
@@ -629,7 +623,7 @@ async def _get_recent_labels_features_from_heber() -> Dict[str, Any] | None:
 
 
 async def _read_heber_flow_24h() -> pd.DataFrame | None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     start = now - pd.Timedelta(hours=24)
     reader = get_heber_reader()
     try:
@@ -640,7 +634,7 @@ async def _read_heber_flow_24h() -> pd.DataFrame | None:
 
 
 async def _read_heber_darkpool_24h() -> pd.DataFrame | None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     start = now - pd.Timedelta(hours=24)
     reader = get_heber_reader()
     try:
@@ -653,7 +647,7 @@ async def _read_heber_darkpool_24h() -> pd.DataFrame | None:
         return None
 
 
-async def _get_flow_summary_from_heber() -> Dict | None:
+async def _get_flow_summary_from_heber() -> dict | None:
     df = await _read_heber_flow_24h()
     if df is None:
         return None
@@ -695,11 +689,11 @@ async def _check_flow_staleness_from_heber(stale_minutes: int) -> bool | None:
     latest = _latest_event_time(df)
     if latest is None:
         return False
-    minutes_ago = (datetime.now(timezone.utc) - latest).total_seconds() / 60.0
+    minutes_ago = (datetime.now(UTC) - latest).total_seconds() / 60.0
     return minutes_ago > stale_minutes
 
 
-async def _get_darkpool_summary_from_heber() -> Dict | None:
+async def _get_darkpool_summary_from_heber() -> dict | None:
     df = await _read_heber_darkpool_24h()
     if df is None:
         return None
@@ -742,12 +736,12 @@ async def _check_darkpool_staleness_from_heber(stale_minutes: int) -> bool | Non
     latest = _latest_event_time(df)
     if latest is None:
         return False
-    minutes_ago = (datetime.now(timezone.utc) - latest).total_seconds() / 60.0
+    minutes_ago = (datetime.now(UTC) - latest).total_seconds() / 60.0
     return minutes_ago > stale_minutes
 
 
-async def _read_heber_bars_24h(symbols: List[str] | None = None, lookback_hours: int = 24) -> pd.DataFrame | None:
-    now = datetime.now(timezone.utc)
+async def _read_heber_bars_24h(symbols: list[str] | None = None, lookback_hours: int = 24) -> pd.DataFrame | None:
+    now = datetime.now(UTC)
     start = now - pd.Timedelta(hours=lookback_hours)
     reader = get_heber_reader()
     try:
@@ -769,7 +763,7 @@ def _coerce_bar_time_series(df: pd.DataFrame) -> pd.Series:
     return pd.to_datetime(df[time_col], utc=True, errors="coerce")
 
 
-async def _get_bars_summary_from_heber() -> Dict | None:
+async def _get_bars_summary_from_heber() -> dict | None:
     df = await _read_heber_bars_24h()
     if df is None:
         return None
@@ -805,7 +799,7 @@ async def _get_bars_summary_from_heber() -> Dict | None:
     }
 
 
-async def _check_zero_valued_bars_from_heber(lookback_hours: int) -> List[Dict] | None:
+async def _check_zero_valued_bars_from_heber(lookback_hours: int) -> list[dict] | None:
     df = await _read_heber_bars_24h(lookback_hours=lookback_hours)
     if df is None:
         return None
@@ -844,7 +838,7 @@ async def _check_zero_valued_bars_from_heber(lookback_hours: int) -> List[Dict] 
     ]
 
 
-async def _check_data_staleness_from_heber(stale_minutes: int) -> List[Dict] | None:
+async def _check_data_staleness_from_heber(stale_minutes: int) -> list[dict] | None:
     df = await _read_heber_bars_24h(symbols=CRITICAL_TICKERS)
     if df is None:
         return None
@@ -862,8 +856,8 @@ async def _check_data_staleness_from_heber(stale_minutes: int) -> List[Dict] | N
         return []
 
     latest_by_ticker = temp_df.groupby("ticker", as_index=False)["bar_ts"].max()
-    now = datetime.now(timezone.utc)
-    stale_rows: List[Dict] = []
+    now = datetime.now(UTC)
+    stale_rows: list[dict] = []
     for _, row in latest_by_ticker.iterrows():
         ticker = str(row["ticker"])
         if ticker not in {t.upper() for t in CRITICAL_TICKERS}:
@@ -883,7 +877,7 @@ async def _check_data_staleness_from_heber(stale_minutes: int) -> List[Dict] | N
     return stale_rows
 
 
-async def _check_bar_gaps_from_heber(ticker: str, gap_minutes: int) -> List[Dict] | None:
+async def _check_bar_gaps_from_heber(ticker: str, gap_minutes: int) -> list[dict] | None:
     df = await _read_heber_bars_24h(symbols=[ticker], lookback_hours=24)
     if df is None:
         return None

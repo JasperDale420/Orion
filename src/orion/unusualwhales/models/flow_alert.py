@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+import builtins
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -54,32 +55,32 @@ class FlowAlert:
         volume_oi_ratio (Union[Unset, float]): The price of the tick Example: 19.32.
     """
 
-    alert_rule: Union[Unset, str] = UNSET
-    all_opening_trades: Union[Unset, bool] = UNSET
-    created_at: Union[Unset, str] = UNSET
-    expiry: Union[Unset, str] = UNSET
-    expiry_count: Union[Unset, int] = UNSET
-    has_floor: Union[Unset, bool] = UNSET
-    has_multileg: Union[Unset, bool] = UNSET
-    has_singleleg: Union[Unset, bool] = UNSET
-    has_sweep: Union[Unset, bool] = UNSET
-    open_interest: Union[Unset, float] = UNSET
-    option_chain: Union[Unset, str] = UNSET
-    price: Union[Unset, float] = UNSET
-    strike: Union[Unset, str] = UNSET
-    ticker: Union[Unset, float] = UNSET
-    total_ask_side_prem: Union[Unset, float] = UNSET
-    total_bid_side_prem: Union[Unset, float] = UNSET
-    total_premium: Union[Unset, float] = UNSET
-    total_size: Union[Unset, float] = UNSET
-    trade_count: Union[Unset, float] = UNSET
-    type: Union[Unset, OptionContractType] = UNSET
-    underlying_price: Union[Unset, float] = UNSET
-    volume: Union[Unset, float] = UNSET
-    volume_oi_ratio: Union[Unset, float] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    alert_rule: Unset | str = UNSET
+    all_opening_trades: Unset | bool = UNSET
+    created_at: Unset | str = UNSET
+    expiry: Unset | str = UNSET
+    expiry_count: Unset | int = UNSET
+    has_floor: Unset | bool = UNSET
+    has_multileg: Unset | bool = UNSET
+    has_singleleg: Unset | bool = UNSET
+    has_sweep: Unset | bool = UNSET
+    open_interest: Unset | float = UNSET
+    option_chain: Unset | str = UNSET
+    price: Unset | float = UNSET
+    strike: Unset | str = UNSET
+    ticker: Unset | float = UNSET
+    total_ask_side_prem: Unset | float = UNSET
+    total_bid_side_prem: Unset | float = UNSET
+    total_premium: Unset | float = UNSET
+    total_size: Unset | float = UNSET
+    trade_count: Unset | float = UNSET
+    type: Unset | OptionContractType = UNSET
+    underlying_price: Unset | float = UNSET
+    volume: Unset | float = UNSET
+    volume_oi_ratio: Unset | float = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         alert_rule = self.alert_rule
 
         all_opening_trades = self.all_opening_trades
@@ -118,7 +119,7 @@ class FlowAlert:
 
         trade_count = self.trade_count
 
-        type: Union[Unset, str] = UNSET
+        type: Unset | str = UNSET
         if not isinstance(self.type, Unset):
             type = self.type.value
 
@@ -128,7 +129,7 @@ class FlowAlert:
 
         volume_oi_ratio = self.volume_oi_ratio
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if alert_rule is not UNSET:
@@ -181,7 +182,7 @@ class FlowAlert:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: builtins.type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         alert_rule = d.pop("alert_rule", UNSET)
 
@@ -222,7 +223,7 @@ class FlowAlert:
         trade_count = d.pop("trade_count", UNSET)
 
         _type = d.pop("type", UNSET)
-        type: Union[Unset, OptionContractType]
+        type: Unset | OptionContractType
         if isinstance(_type, Unset):
             type = UNSET
         else:
@@ -264,7 +265,7 @@ class FlowAlert:
         return flow_alert
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

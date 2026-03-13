@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -9,8 +9,8 @@ from ...models.fda_calendar import FdaCalendar
 from ...types import Response
 
 
-def _get_kwargs() -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+def _get_kwargs() -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/market/fda-calendar",
     }
@@ -18,7 +18,7 @@ def _get_kwargs() -> Dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Optional[Union[FdaCalendar, str]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> FdaCalendar | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -35,7 +35,7 @@ def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
         return None
 
 
-def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[Union[FdaCalendar, str]]:
+def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[FdaCalendar | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -47,7 +47,7 @@ def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[FdaCalendar, str]]:
+) -> Response[FdaCalendar | str]:
     """Fda calendar
 
      Returns the fda calendar for the current week.
@@ -72,7 +72,7 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[FdaCalendar, str]]:
+) -> FdaCalendar | str | None:
     """Fda calendar
 
      Returns the fda calendar for the current week.
@@ -93,7 +93,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[FdaCalendar, str]]:
+) -> Response[FdaCalendar | str]:
     """Fda calendar
 
      Returns the fda calendar for the current week.
@@ -116,7 +116,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[FdaCalendar, str]]:
+) -> FdaCalendar | str | None:
     """Fda calendar
 
      Returns the fda calendar for the current week.

@@ -1,18 +1,21 @@
 import asyncio
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from orion.core.solver_schema import ExitLogic, SolverConfig
 from orion.core.solver_validation import ensure_solver_definition_json
 from orion.shared.db_utils import db_write
+from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 from orion.storage.models_solvers import Solver
 
+logger = setup_struct_logger("orion.jobs.seed_solvers")
+
 
 async def seed_default_solver() -> None:
-    print("Initializing DB...")
+    logger.info("Initializing DB...")
     await init_db()
 
     exit_logic = ExitLogic(
@@ -62,27 +65,27 @@ async def seed_default_solver() -> None:
         rule_overrides=base_config["rule_overrides"],
     )
 
-    print(f"Generated Solver ID: {version_id}")
+    logger.info("generated_solver_id", solver_id=version_id)
 
     async def _seed_solver_transaction(session: Any) -> None:
         # Check if exists
         existing = await session.get(Solver, version_id)
         if existing:
-            print("Solver already exists. Activating...")
+            logger.info("Solver already exists. Activating...")
             existing.is_active = True
         else:
-            print("Creating new Solver...")
+            logger.info("Creating new Solver...")
             new_solver = Solver(
                 solver_id=version_id,
                 family_name="Momentum_V1",
                 config=solver_config.model_dump(),
                 is_active=True,
                 stage="research",  # Start in research for refinement loop
-                created_at_utc=datetime.utcnow(),
+                created_at_utc=datetime.now(UTC),
                 definition_json=ensure_solver_definition_json(solver_config.model_dump(mode="json"), None),
             )
             session.add(new_solver)
-        print("Default Solver Seeded and Activated.")
+        logger.info("Default Solver Seeded and Activated.")
 
     await db_write(_seed_solver_transaction)
 

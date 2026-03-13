@@ -1,9 +1,9 @@
 # Orion Database Schema Reference
 
-> **Last Updated**: January 2026  
+> **Last Updated**: March 2026
 > **Database**: PostgreSQL with TimescaleDB + pgvector extensions
 
-The Orion database follows a **Medallion Architecture** (Bronze → Silver → Gold) for data quality and lineage tracking.
+The Orion database follows a **Medallion Architecture** (Bronze -> Silver -> Gold) for data quality and lineage tracking.
 
 ---
 
@@ -15,29 +15,28 @@ graph LR
     B --> C[Silver Layer]
     C --> D[Gold Layer]
     D --> E[Execution Layer]
-    
+
     subgraph "Data Sources"
         A1[Unusual Whales API]
         A2[Alpaca Markets API]
     end
-    
+
     subgraph "Bronze - Raw Ingestion"
         B1[bronze_events]
     end
-    
+
     subgraph "Silver - Normalized"
-        C1[silver_uw_flow]
-        C2[silver_uw_darkpool]
-        C3[silver_alpaca_bars]
-        C4[silver_option_quotes]
+        C1[silver_signals]
+        C2[silver_uw_alerts]
+        C3[silver_earnings_calendar]
     end
-    
+
     subgraph "Gold - Features & ML"
         D1[candidate_trades]
         D2[candidate_labels]
         D3[gold_feature_events]
     end
-    
+
     subgraph "Execution"
         E1[orders]
         E2[fills]
@@ -51,13 +50,18 @@ graph LR
 
 | Layer | Purpose | Table Count | Key Tables |
 |:------|:--------|:-----------:|:-----------|
-| **Bronze** | Raw ingestion, immutable | 3 | `bronze_events`, `system_status`, `ingest_watermarks` |
-| **Silver (Market)** | Normalized OHLCV | 2 | `silver_alpaca_bars`, `silver_option_quotes` |
-| **Silver (Flow)** | Options flow data | 3 | `silver_uw_flow`, `silver_uw_darkpool`, `silver_uw_alerts` |
-| **Gold** | ML features & labels | 6 | `candidate_trades`, `candidate_labels`, `gold_feature_events` |
+| **Bronze** | Raw ingestion, immutable | 1 | `bronze_events` |
+| **Silver** | Normalized signals & alerts | 3 | `silver_signals`, `silver_uw_alerts`, `silver_earnings_calendar` |
+| **Gold** | Candidates, labels, features, rollups | 6 | `candidate_trades`, `candidate_labels`, `gold_feature_events` |
 | **Execution** | Order management | 3 | `orders`, `fills`, `positions_snapshots` |
-| **ML** | Model registry | 3 | `ml_models`, `ml_dataset_snapshots`, `ml_feature_registry` |
-| **System** | Infrastructure | 3 | `instrument_symbology`, `audit_events`, `dead_letter_queue` |
+| **Signals** | Live executable signals | 1 | `signals_live` |
+| **ML** | Pattern insights & predictions | 3 | `ml_pattern_insights`, `ml_feature_importance_history`, `ml_predictions` |
+| **RAG** | Vector search | 1 | `vector_documents` |
+| **Solvers** | Strategy optimization | 6 | `solvers`, `meta_experiments`, `solver_metrics`, `solver_runs`, `solver_edits`, `promotion_recommendations` |
+| **Risk** | Risk state tracking | 2 | `risk_state`, `processed_fills` |
+| **Trade Journal** | Trade lifecycle records | 1 | `trade_journal_entries` |
+| **System** | Infrastructure & audit | 5 | `system_status`, `ingest_watermarks`, `job_cursor_state`, `runtime_config`, `audit_logs` |
+| **DLQ** | Error handling | 1 | `dead_letter_queue` |
 
 ---
 
@@ -107,89 +111,57 @@ Tracks the last processed timestamp for each data source to enable incremental i
 
 ## Silver Layer (Normalized Data)
 
-### `silver_uw_flow`
+### `silver_signals`
 
-Normalized options flow events from Unusual Whales.
+Calculated technical features derived from 1-minute bars.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `signal_id` | String (PK) | Deterministic ID |
+| `ticker` | String (indexed) | Symbol |
+| `signal_ts_utc` | DateTime (indexed) | Signal timestamp |
+| `signal_type` | String | `OHLCV_1M`, `FLOW_AGG_5M` |
+| `features` | JSON | Calculated features (RSI, VWAP, trend, etc.) |
+
+---
+
+### `silver_uw_alerts`
+
+Normalized UW flow alerts.
 
 | Column | Type | Description |
 |:-------|:-----|:------------|
 | `event_id` | String (PK) | Event identifier |
-| `ticker` | String (indexed) | Underlying symbol |
-| `flow_ts_utc` | DateTime (indexed) | Flow timestamp |
+| `source_event_id` | String | Source event ID |
+| `ticker` | String (indexed) | Symbol |
+| `alert_ts_utc` | DateTime (indexed) | Alert timestamp |
 | `put_call` | String(1) | `C` (Call) or `P` (Put) |
-| `expiry` | String | Expiration date (YYYY-MM-DD) |
+| `expiry` | String | Expiration date |
 | `strike` | Float | Strike price |
 | `option_price` | Float | Contract price |
 | `size_contracts` | Integer | Number of contracts |
 | `premium_usd` | Float | Total premium |
-| `bid` | Float | Bid price |
-| `ask` | Float | Ask price |
-| `underlying_price` | Float | Stock price at time of trade |
-| `aggressor` | String | `ASK`, `BID`, or `MID` |
-| `is_sweep` | Boolean | Sweep trade indicator |
-| `iv` | Float | Implied volatility |
-| `volume_oi_ratio` | Float | Volume / Open Interest |
-| `delta_alpaca` | Float | Delta (from Alpaca) |
-| `gamma_alpaca` | Float | Gamma (from Alpaca) |
-| `theta_alpaca` | Float | Theta (from Alpaca) |
-| `vega_alpaca` | Float | Vega (from Alpaca) |
+| `volume_contract` | Float | Volume |
+| `open_interest` | Float | Open interest |
+| `flags_json` | JSON | Alert flags |
+| `alert_tags` | JSON | Alert tags |
 | `ingest` | JSON | Ingestion metadata |
 
 ---
 
-### `silver_uw_darkpool`
+### `silver_earnings_calendar`
 
-Dark pool trade data from Unusual Whales.
-
-| Column | Type | Description |
-|:-------|:-----|:------------|
-| `event_id` | String (PK) | Event identifier |
-| `ticker` | String (indexed) | Symbol |
-| `dark_ts_utc` | DateTime (indexed) | Trade timestamp |
-| `trade_price` | Float | Execution price |
-| `size_shares` | Float | Share volume |
-| `venue` | String | Dark pool venue |
-| `conditions` | String | Trade conditions |
-
----
-
-### `silver_alpaca_bars`
-
-1-minute OHLCV bars from Alpaca Markets.
+Earnings calendar data from UW API for ML features.
 
 | Column | Type | Description |
 |:-------|:-----|:------------|
-| `ticker` | String (PK) | Symbol |
-| `bar_start_ts_utc` | DateTime (PK) | Bar start time |
-| `open` | Float | Open price |
-| `high` | Float | High price |
-| `low` | Float | Low price |
-| `close` | Float | Close price |
-| `volume` | Float | Volume |
-| `vwap` | Float | Volume-weighted average price |
-
----
-
-### `silver_option_quotes`
-
-Real option quotes captured at checkpoint intervals for ML labeling.
-
-| Column | Type | Description |
-|:-------|:-----|:------------|
-| `id` | Integer (PK) | Auto-increment ID |
-| `option_symbol` | String (indexed) | OCC symbol |
-| `underlying_ticker` | String (indexed) | Underlying stock |
-| `flow_event_id` | String (indexed) | Links to flow event |
-| `checkpoint` | String | Time checkpoint: `entry`, `15m`, `30m`, `1h` |
-| `ts_utc` | DateTime | Quote timestamp |
-| `bid_price` | Float | Bid |
-| `ask_price` | Float | Ask |
-| `mid_price` | Float | Mid |
-| `delta` | Float | Delta at checkpoint |
-| `gamma` | Float | Gamma at checkpoint |
-| `theta` | Float | Theta at checkpoint |
-| `vega` | Float | Vega at checkpoint |
-| `iv` | Float | Implied volatility |
+| `ticker` | String(20) (PK) | Symbol |
+| `report_date` | Date (PK) | Earnings report date |
+| `announce_time` | String(20) | `premarket`, `afterhours`, `during` |
+| `eps_estimate` | Float | EPS estimate |
+| `eps_actual` | Float | EPS actual |
+| `revenue_estimate` | BigInteger | Revenue estimate |
+| `revenue_actual` | BigInteger | Revenue actual |
 
 ---
 
@@ -348,20 +320,6 @@ Point-in-time feature vectors (event-level, 1m resolution).
 
 ---
 
-### `gold_feature_windows`
-
-Aggregated/window-level features.
-
-| Column | Type | Description |
-|:-------|:-----|:------------|
-| `ticker` | String (PK) | Symbol |
-| `window_end_ts_utc` | DateTime (PK) | Window end timestamp |
-| `period` | String (PK) | Timeframe: `5m`, `1h` |
-| `feature_set_id` | String (PK) | Feature version |
-| `features` | JSON | Feature vector |
-
----
-
 ## Execution Layer
 
 ### `orders`
@@ -394,6 +352,7 @@ Execution fills from broker.
 | `id` | String (PK) | Fill ID |
 | `ticker` | String (indexed) | Symbol |
 | `broker_order_id` | String (indexed, unique) | Broker order ID |
+| `client_order_id` | String (indexed) | Client order ID |
 | `filled_qty` | Float | Filled quantity |
 | `filled_avg_price` | Float | Average fill price |
 | `side` | String | `buy` or `sell` |
@@ -419,17 +378,27 @@ Point-in-time position snapshots for P&L tracking.
 
 ---
 
-### `silver_signals`
+## Signals
 
-Calculated technical features derived from 1-minute bars.
+### `signals_live`
+
+Executable signals emitted for the trading pipeline with full decision trace and evidence pointers.
 
 | Column | Type | Description |
 |:-------|:-----|:------------|
-| `signal_id` | String (PK) | Deterministic ID |
+| `signal_id` | String (PK) | Signal ID |
+| `timestamp_utc` | DateTime (indexed) | Signal timestamp |
 | `ticker` | String (indexed) | Symbol |
-| `signal_ts_utc` | DateTime (indexed) | Signal timestamp |
-| `signal_type` | String | `OHLCV_1M`, `FLOW_AGG_5M` |
-| `features` | JSON | Calculated features (RSI, VWAP, trend, etc.) |
+| `direction` | String | Trade direction |
+| `rule_id` | String (indexed) | Rule ID |
+| `model_version` | String (indexed) | Model version |
+| `expected_return` | Float | Expected return |
+| `p_take` | Float | Probability of take-profit |
+| `risk_score` | Float | Risk score |
+| `entry_logic` | JSON | Entry logic parameters |
+| `exit_rules` | JSON | Exit rule configuration |
+| `evidence` | JSON | Evidence pointers |
+| `decision_trace_json` | JSON | Full decision trace |
 
 ---
 
@@ -472,11 +441,317 @@ Feature importance tracking over time for drift detection.
 
 ---
 
+### `ml_predictions`
+
+ML prediction records with realized outcomes for accuracy analytics.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Prediction ID |
+| `prediction_ts` | DateTime (indexed) | Prediction timestamp |
+| `symbol` | String (indexed) | Symbol |
+| `option_chain` | String | Option chain identifier |
+| `bucket` | String (indexed) | Classification bucket |
+| `model_type` | String (indexed) | Model type |
+| `prediction_score` | Float | Model prediction score |
+| `prediction_class` | Integer | Predicted class |
+| `confidence` | Float | Confidence score |
+| `position_id` | String (indexed) | Linked position ID |
+| `outcome_ts` | DateTime | Outcome timestamp |
+| `actual_return_pct` | Float | Actual return percentage |
+| `hit_target` | Boolean | Whether target was hit |
+| `hit_stop` | Boolean | Whether stop was hit |
+| `prediction_correct` | Boolean | Whether prediction was correct |
+
+---
+
+## RAG / Vector Search
+
+### `vector_documents`
+
+768-dimensional embeddings for RAG/hybrid search (pgvector).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `doc_id` | String (PK) | Document ID |
+| `source_type` | String | Source type: `CANDIDATE_TRADE`, `NEWS`, `PRD` |
+| `source_id` | String | Source identifier |
+| `content` | Text | Text content |
+| `embedding` | JSON | Raw embedding list (portable) |
+| `embedding_vec` | Vector(768) | pgvector column (nomic-embed-text) |
+| `metadata_json` | JSON | Metadata for filtering |
+
+---
+
+## Solver Tables
+
+### `solvers`
+
+Strategy configurations (DNA) for trading strategies.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `solver_id` | String (PK) | Hash of config |
+| `family_name` | String | Strategy family (e.g., `TrendRider`) |
+| `name` | String | Solver name |
+| `version` | Integer | Version number |
+| `status` | String | `draft`, `candidate`, `active`, `deprecated` |
+| `parent_solver_id` | String (FK) | Parent solver for lineage |
+| `created_by` | String | `human`, `llm_eod_agent`, `meta_agent` |
+| `notes` | String | Notes |
+| `definition_json` | JSON | DSL definition |
+| `config` | JSON | The DNA configuration |
+| `is_active` | Boolean | Active flag |
+| `stage` | String | `research`, `shadow`, `paper`, `live` |
+| `total_pnl` | Float | Total P&L |
+| `sharpe_ratio` | Float | Sharpe ratio |
+| `win_rate` | Float | Win rate |
+| `trades_count` | Integer | Total trades |
+| `info_ratio` | Float | Information ratio |
+| `profit_factor` | Float | Profit factor |
+| `max_dd_pct` | Float | Max drawdown % |
+| `stability_score` | Float | Stability score |
+| `oos_expect_bp` | Float | Out-of-sample expected bps |
+
+---
+
+### `meta_experiments`
+
+Automated experiment runs (e.g., evolution generations).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `experiment_id` | String (PK) | Experiment ID |
+| `description` | String | Description |
+| `status` | String | `running`, `completed`, `failed` |
+| `start_time_utc` | DateTime | Start time |
+| `end_time_utc` | DateTime | End time |
+| `trial_count` | Integer | Total trials |
+| `best_solver_id` | String (FK) | Best solver from experiment |
+
+---
+
+### `solver_metrics`
+
+Aggregated metrics per solver per context.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | UUID |
+| `solver_id` | String (FK, indexed) | Links to solvers |
+| `sector` | String | Sector (default: `ALL`) |
+| `ticker_bucket` | String | Ticker bucket |
+| `horizon_profile` | String | Horizon profile |
+| `dataset_tag` | String | `train`, `val`, `test` |
+| `num_runs` | Integer | Number of runs |
+| `num_trades` | Integer | Number of trades |
+| `sharpe_ratio` | Float | Sharpe ratio |
+| `info_ratio` | Float | Information ratio |
+| `profit_factor` | Float | Profit factor |
+| `oos_expect_bp` | Float | Out-of-sample expected bps |
+| `max_dd_pct` | Float | Max drawdown % |
+| `stability_score` | Float | Stability score |
+| `metrics_json` | JSON | Full metrics blob |
+
+---
+
+### `solver_runs`
+
+One row per solver evaluation/backtest run.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | UUID |
+| `solver_id` | String (FK, indexed) | Links to solvers |
+| `dataset_tag` | String | `train`, `val`, `test`, `live_replay`, `shadow` |
+| `time_window_start` | DateTime | Window start |
+| `time_window_end` | DateTime | Window end |
+| `num_candidates` | Integer | Candidates evaluated |
+| `num_trades` | Integer | Trades executed |
+| `gross_pnl` | Float | Gross P&L |
+| `net_pnl` | Float | Net P&L |
+| `profit_factor` | Float | Profit factor |
+| `max_drawdown_pct` | Float | Max drawdown % |
+| `expect_return_bp` | Float | Expected return bps |
+| `metrics_json` | JSON | Full metrics |
+
+---
+
+### `solver_edits`
+
+Genetic lineage tracking for derived solvers.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Edit ID |
+| `experiment_id` | String (FK) | Links to meta_experiments |
+| `base_solver_id` | String (FK) | Parent solver |
+| `new_solver_id` | String (FK) | Derived solver |
+| `edit_json` | JSON | Edit operations |
+| `generated_by` | String | `meta_agent`, `llm_eod_agent` |
+| `reward` | Float | Reward after evaluation |
+
+---
+
+### `promotion_recommendations`
+
+Proposed stage transitions for solvers requiring approval.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Recommendation ID |
+| `solver_id` | String (FK) | Links to solvers |
+| `current_stage` | String | Current stage |
+| `recommended_stage` | String | Proposed stage |
+| `reason` | String | Justification |
+| `metrics_snapshot` | JSON | Metrics at time of proposal |
+| `status` | String | `PENDING`, `APPROVED`, `REJECTED` |
+
+---
+
+## Risk Tables
+
+### `risk_state`
+
+Persisted daily risk metrics (survives restarts).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | e.g., `global_risk_v1` |
+| `current_daily_loss` | Float | Current daily loss |
+| `current_equity` | Float | Current equity |
+| `starting_equity` | Float | Starting equity |
+| `peak_equity` | Float | Peak equity |
+| `open_positions_count` | Integer | Open position count |
+
+---
+
+### `processed_fills`
+
+Tracks processed fill IDs to prevent duplicate processing on restart.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `fill_id` | String (PK) | Fill ID from broker |
+| `client_order_id` | String (indexed) | Client order ID |
+| `ticker` | String | Symbol |
+| `qty` | Float | Quantity |
+
+---
+
+## Trade Journal
+
+### `trade_journal_entries`
+
+Trade lifecycle records linking signal/decision to evidence, orders, and fills.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `decision_id` | String (PK) | Decision ID |
+| `signal_id` | String (indexed) | Links to signals_live |
+| `candidate_id` | String (indexed) | Links to candidate_trades |
+| `solver_id` | String (indexed) | Links to solvers |
+| `ticker` | String (indexed) | Symbol |
+| `direction` | String | Trade direction |
+| `evidence` | JSON | Evidence pointers |
+| `decision_trace_json` | JSON | Decision trace |
+| `client_order_id` | String (indexed) | Client order ID |
+| `broker_order_id` | String (indexed) | Broker order ID |
+| `filled_qty` | Float | Filled quantity |
+| `filled_avg_price` | Float | Average fill price |
+| `filled_at_utc` | DateTime | Fill timestamp |
+| `realized_pnl` | Float | Realized P&L |
+| `notes` | String | Notes |
+| `raw_json` | JSON | Full raw data |
+
+---
+
+## System Tables
+
+### `system_status`
+
+Global system health state.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `key` | String (PK) | Status key (e.g., `global_health`) |
+| `status` | String | `HEALTHY`, `UNHEALTHY` |
+| `last_updated_utc` | DateTime | Last update timestamp |
+| `details` | String | Additional details |
+
+---
+
+### `job_cursor_state`
+
+Cursor state for background jobs (supports both timestamp and ID-based cursors).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `key` | String (PK) | Cursor key |
+| `last_seen_ts_utc` | DateTime | Last processed timestamp |
+| `last_seen_id` | String | Last processed ID |
+| `updated_ts_utc` | DateTime | When cursor was updated |
+
+---
+
+### `runtime_config`
+
+Dynamic runtime configuration (key-value JSON store).
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `key` | String (PK) | Config key |
+| `value_json` | JSON | Config value |
+| `updated_ts_utc` | DateTime | Last update timestamp |
+
+---
+
+### `audit_logs`
+
+HTTP request audit log for API access tracking.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | Log entry ID |
+| `created_at_utc` | DateTime | Timestamp |
+| `run_id` | String | Run ID correlation |
+| `trace_id` | String (indexed) | Trace ID correlation |
+| `method` | String | HTTP method |
+| `path` | String | Request path |
+| `status_code` | Integer | Response status code |
+| `client_host` | String | Client IP |
+| `query_params` | JSON | Query parameters |
+
+---
+
+### `dead_letter_queue`
+
+Failed events for investigation and replay.
+
+| Column | Type | Description |
+|:-------|:-----|:------------|
+| `id` | String (PK) | DLQ entry ID |
+| `event_id` | String (indexed) | Original event ID |
+| `source` | String | Data source |
+| `source_event_id` | String | Source event ID |
+| `event_type` | String | Event type |
+| `ticker` | String (indexed) | Symbol |
+| `event_ts_utc` | DateTime | Original event timestamp |
+| `run_id` | String | Run ID |
+| `trace_id` | String | Trace ID |
+| `payload` | JSON | Original payload |
+| `error_message` | String | Error details |
+| `stack_trace` | String | Stack trace |
+| `timestamp_utc` | DateTime | When queued |
+| `retry_count` | Integer | Retry attempts |
+| `status` | String | `FAILED`, `REPLAYED`, `IGNORED` |
+
+---
+
 ## Database Features
 
 - **TimescaleDB**: Hypertable optimization for time-series queries
 - **pgvector**: 768-dimensional embeddings in `vector_documents`
-- **Immutable Audit**: `audit_events` uses hash chain for tamper-evidence
 
 ---
 
@@ -486,15 +761,17 @@ All SQLAlchemy models are defined in:
 
 ```
 src/orion/storage/
-├── models.py           # Bronze layer (BronzeEvent, SystemStatus, IngestWatermark)
-├── models_silver.py    # Silver layer tables
-├── models_gold.py      # Gold layer tables
-├── models_execution.py # Execution layer tables
-├── models_ml.py        # ML registry tables
-├── models_audit.py     # Audit events
-├── models_dlq.py       # Dead letter queue
-├── models_earnings.py  # Earnings data
-├── models_risk.py      # Risk management
-├── models_signals.py   # Signal tables
-└── models_solvers.py   # Solver optimization
+├── models.py              # Bronze layer (BronzeEvent, SystemStatus, IngestWatermark, JobCursorState, RuntimeConfig)
+├── models_silver.py       # Silver layer (SilverSignal, SilverUWAlert)
+├── models_gold.py         # Gold layer (CandidateTrade, ExitDecision, StrategyDecision, GoldTickerRollup, CandidateLabel, LabelEvent, LabelWindow, GoldFeatureEvent)
+├── models_execution.py    # Execution layer (OrderRecord, FillRecord, PositionSnapshot)
+├── models_signals.py      # Live signals (SignalLive)
+├── models_ml.py           # ML tables (MLPatternInsight, MLFeatureImportanceHistory, MLPrediction)
+├── models_rag.py          # Vector search (VectorDocument)
+├── models_solvers.py      # Solver optimization (Solver, MetaExperiment, SolverMetrics, SolverRun, SolverEdits, PromotionRecommendation)
+├── models_risk.py         # Risk management (RiskState, ProcessedFill)
+├── models_trade_journal.py # Trade journal (TradeJournalEntry)
+├── models_audit.py        # Audit logs (AuditLog)
+├── models_dlq.py          # Dead letter queue (DeadLetterQueue)
+└── models_earnings.py     # Earnings data (SilverEarningsCalendar)
 ```

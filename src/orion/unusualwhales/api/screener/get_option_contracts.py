@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -17,50 +17,50 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    sectors: Union[Unset, List[SingleSector]] = UNSET,
-    min_underlying_price: Union[Unset, int] = UNSET,
-    max_underlying_price: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_strike: Union[Unset, int] = UNSET,
-    max_strike: Union[Unset, int] = UNSET,
-    type: Union[Unset, OptionType] = UNSET,
-    expiry_dates: Union[Unset, str] = UNSET,
-    min_marketcap: Union[Unset, int] = UNSET,
-    max_marketcap: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    max_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    min_floor_volume_ratio: Union[Unset, int] = UNSET,
-    max_floor_volume_ratio: Union[Unset, int] = UNSET,
-    min_perc_change: Union[Unset, int] = UNSET,
-    max_perc_change: Union[Unset, int] = UNSET,
-    min_daily_perc_change: Union[Unset, int] = UNSET,
-    max_daily_perc_change: Union[Unset, int] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    min_floor_volume: Union[Unset, int] = UNSET,
-    max_floor_volume: Union[Unset, int] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    order: Union[Unset, ScreenerContractOrderByField] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Dict[str, Any]:
+    ticker_symbol: Unset | str = UNSET,
+    sectors: Unset | list[SingleSector] = UNSET,
+    min_underlying_price: Unset | int = UNSET,
+    max_underlying_price: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_strike: Unset | int = UNSET,
+    max_strike: Unset | int = UNSET,
+    type: Unset | OptionType = UNSET,
+    expiry_dates: Unset | str = UNSET,
+    min_marketcap: Unset | int = UNSET,
+    max_marketcap: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_multileg_volume_ratio: Unset | int = UNSET,
+    max_multileg_volume_ratio: Unset | int = UNSET,
+    min_floor_volume_ratio: Unset | int = UNSET,
+    max_floor_volume_ratio: Unset | int = UNSET,
+    min_perc_change: Unset | int = UNSET,
+    max_perc_change: Unset | int = UNSET,
+    min_daily_perc_change: Unset | int = UNSET,
+    max_daily_perc_change: Unset | int = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    min_floor_volume: Unset | int = UNSET,
+    max_floor_volume: Unset | int = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    order: Unset | ScreenerContractOrderByField = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["ticker_symbol"] = ticker_symbol
 
-    json_sectors: Union[Unset, List[str]] = UNSET
+    json_sectors: Unset | list[str] = UNSET
     if not isinstance(sectors, Unset):
         json_sectors = []
         for componentsschemas_sectors_item_data in sectors:
@@ -87,7 +87,7 @@ def _get_kwargs(
 
     params["max_strike"] = max_strike
 
-    json_type: Union[Unset, str] = UNSET
+    json_type: Unset | str = UNSET
     if not isinstance(type, Unset):
         json_type = type.value
 
@@ -137,7 +137,7 @@ def _get_kwargs(
 
     params["vol_greater_oi"] = vol_greater_oi
 
-    json_issue_types: Union[Unset, List[str]] = UNSET
+    json_issue_types: Unset | list[str] = UNSET
     if not isinstance(issue_types, Unset):
         json_issue_types = []
         for componentsschemas_issue_types_item_data in issue_types:
@@ -146,13 +146,13 @@ def _get_kwargs(
 
     params["issue_types[]"] = json_issue_types
 
-    json_order: Union[Unset, str] = UNSET
+    json_order: Unset | str = UNSET
     if not isinstance(order, Unset):
         json_order = order.value
 
     params["order"] = json_order
 
-    json_order_direction: Union[Unset, str] = UNSET
+    json_order_direction: Unset | str = UNSET
     if not isinstance(order_direction, Unset):
         json_order_direction = order_direction.value
 
@@ -160,7 +160,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/screener/option-contracts",
         "params": params,
@@ -171,7 +171,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, OptionContractScreenerResults, str]]:
+) -> ErrorMessage | OptionContractScreenerResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -194,7 +194,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, OptionContractScreenerResults, str]]:
+) -> Response[ErrorMessage | OptionContractScreenerResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -206,44 +206,44 @@ def _build_response(
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    sectors: Union[Unset, List[SingleSector]] = UNSET,
-    min_underlying_price: Union[Unset, int] = UNSET,
-    max_underlying_price: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_strike: Union[Unset, int] = UNSET,
-    max_strike: Union[Unset, int] = UNSET,
-    type: Union[Unset, OptionType] = UNSET,
-    expiry_dates: Union[Unset, str] = UNSET,
-    min_marketcap: Union[Unset, int] = UNSET,
-    max_marketcap: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    max_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    min_floor_volume_ratio: Union[Unset, int] = UNSET,
-    max_floor_volume_ratio: Union[Unset, int] = UNSET,
-    min_perc_change: Union[Unset, int] = UNSET,
-    max_perc_change: Union[Unset, int] = UNSET,
-    min_daily_perc_change: Union[Unset, int] = UNSET,
-    max_daily_perc_change: Union[Unset, int] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    min_floor_volume: Union[Unset, int] = UNSET,
-    max_floor_volume: Union[Unset, int] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    order: Union[Unset, ScreenerContractOrderByField] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Response[Union[ErrorMessage, OptionContractScreenerResults, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    sectors: Unset | list[SingleSector] = UNSET,
+    min_underlying_price: Unset | int = UNSET,
+    max_underlying_price: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_strike: Unset | int = UNSET,
+    max_strike: Unset | int = UNSET,
+    type: Unset | OptionType = UNSET,
+    expiry_dates: Unset | str = UNSET,
+    min_marketcap: Unset | int = UNSET,
+    max_marketcap: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_multileg_volume_ratio: Unset | int = UNSET,
+    max_multileg_volume_ratio: Unset | int = UNSET,
+    min_floor_volume_ratio: Unset | int = UNSET,
+    max_floor_volume_ratio: Unset | int = UNSET,
+    min_perc_change: Unset | int = UNSET,
+    max_perc_change: Unset | int = UNSET,
+    min_daily_perc_change: Unset | int = UNSET,
+    max_daily_perc_change: Unset | int = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    min_floor_volume: Unset | int = UNSET,
+    max_floor_volume: Unset | int = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    order: Unset | ScreenerContractOrderByField = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> Response[ErrorMessage | OptionContractScreenerResults | str]:
     """Screener for Option Contracts
 
      A contract screener endpoint to screen the market for contracts by a variety of filter options.
@@ -399,44 +399,44 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    sectors: Union[Unset, List[SingleSector]] = UNSET,
-    min_underlying_price: Union[Unset, int] = UNSET,
-    max_underlying_price: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_strike: Union[Unset, int] = UNSET,
-    max_strike: Union[Unset, int] = UNSET,
-    type: Union[Unset, OptionType] = UNSET,
-    expiry_dates: Union[Unset, str] = UNSET,
-    min_marketcap: Union[Unset, int] = UNSET,
-    max_marketcap: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    max_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    min_floor_volume_ratio: Union[Unset, int] = UNSET,
-    max_floor_volume_ratio: Union[Unset, int] = UNSET,
-    min_perc_change: Union[Unset, int] = UNSET,
-    max_perc_change: Union[Unset, int] = UNSET,
-    min_daily_perc_change: Union[Unset, int] = UNSET,
-    max_daily_perc_change: Union[Unset, int] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    min_floor_volume: Union[Unset, int] = UNSET,
-    max_floor_volume: Union[Unset, int] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    order: Union[Unset, ScreenerContractOrderByField] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Optional[Union[ErrorMessage, OptionContractScreenerResults, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    sectors: Unset | list[SingleSector] = UNSET,
+    min_underlying_price: Unset | int = UNSET,
+    max_underlying_price: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_strike: Unset | int = UNSET,
+    max_strike: Unset | int = UNSET,
+    type: Unset | OptionType = UNSET,
+    expiry_dates: Unset | str = UNSET,
+    min_marketcap: Unset | int = UNSET,
+    max_marketcap: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_multileg_volume_ratio: Unset | int = UNSET,
+    max_multileg_volume_ratio: Unset | int = UNSET,
+    min_floor_volume_ratio: Unset | int = UNSET,
+    max_floor_volume_ratio: Unset | int = UNSET,
+    min_perc_change: Unset | int = UNSET,
+    max_perc_change: Unset | int = UNSET,
+    min_daily_perc_change: Unset | int = UNSET,
+    max_daily_perc_change: Unset | int = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    min_floor_volume: Unset | int = UNSET,
+    max_floor_volume: Unset | int = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    order: Unset | ScreenerContractOrderByField = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> ErrorMessage | OptionContractScreenerResults | str | None:
     """Screener for Option Contracts
 
      A contract screener endpoint to screen the market for contracts by a variety of filter options.
@@ -587,44 +587,44 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    sectors: Union[Unset, List[SingleSector]] = UNSET,
-    min_underlying_price: Union[Unset, int] = UNSET,
-    max_underlying_price: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_strike: Union[Unset, int] = UNSET,
-    max_strike: Union[Unset, int] = UNSET,
-    type: Union[Unset, OptionType] = UNSET,
-    expiry_dates: Union[Unset, str] = UNSET,
-    min_marketcap: Union[Unset, int] = UNSET,
-    max_marketcap: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    max_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    min_floor_volume_ratio: Union[Unset, int] = UNSET,
-    max_floor_volume_ratio: Union[Unset, int] = UNSET,
-    min_perc_change: Union[Unset, int] = UNSET,
-    max_perc_change: Union[Unset, int] = UNSET,
-    min_daily_perc_change: Union[Unset, int] = UNSET,
-    max_daily_perc_change: Union[Unset, int] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    min_floor_volume: Union[Unset, int] = UNSET,
-    max_floor_volume: Union[Unset, int] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    order: Union[Unset, ScreenerContractOrderByField] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Response[Union[ErrorMessage, OptionContractScreenerResults, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    sectors: Unset | list[SingleSector] = UNSET,
+    min_underlying_price: Unset | int = UNSET,
+    max_underlying_price: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_strike: Unset | int = UNSET,
+    max_strike: Unset | int = UNSET,
+    type: Unset | OptionType = UNSET,
+    expiry_dates: Unset | str = UNSET,
+    min_marketcap: Unset | int = UNSET,
+    max_marketcap: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_multileg_volume_ratio: Unset | int = UNSET,
+    max_multileg_volume_ratio: Unset | int = UNSET,
+    min_floor_volume_ratio: Unset | int = UNSET,
+    max_floor_volume_ratio: Unset | int = UNSET,
+    min_perc_change: Unset | int = UNSET,
+    max_perc_change: Unset | int = UNSET,
+    min_daily_perc_change: Unset | int = UNSET,
+    max_daily_perc_change: Unset | int = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    min_floor_volume: Unset | int = UNSET,
+    max_floor_volume: Unset | int = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    order: Unset | ScreenerContractOrderByField = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> Response[ErrorMessage | OptionContractScreenerResults | str]:
     """Screener for Option Contracts
 
      A contract screener endpoint to screen the market for contracts by a variety of filter options.
@@ -778,44 +778,44 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-    ticker_symbol: Union[Unset, str] = UNSET,
-    sectors: Union[Unset, List[SingleSector]] = UNSET,
-    min_underlying_price: Union[Unset, int] = UNSET,
-    max_underlying_price: Union[Unset, int] = UNSET,
-    is_otm: Union[Unset, bool] = UNSET,
-    min_dte: Union[Unset, int] = UNSET,
-    max_dte: Union[Unset, int] = UNSET,
-    min_diff: Union[Unset, int] = UNSET,
-    max_diff: Union[Unset, int] = UNSET,
-    min_strike: Union[Unset, int] = UNSET,
-    max_strike: Union[Unset, int] = UNSET,
-    type: Union[Unset, OptionType] = UNSET,
-    expiry_dates: Union[Unset, str] = UNSET,
-    min_marketcap: Union[Unset, int] = UNSET,
-    max_marketcap: Union[Unset, int] = UNSET,
-    min_volume: Union[Unset, int] = UNSET,
-    max_volume: Union[Unset, int] = UNSET,
-    min_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    max_multileg_volume_ratio: Union[Unset, int] = UNSET,
-    min_floor_volume_ratio: Union[Unset, int] = UNSET,
-    max_floor_volume_ratio: Union[Unset, int] = UNSET,
-    min_perc_change: Union[Unset, int] = UNSET,
-    max_perc_change: Union[Unset, int] = UNSET,
-    min_daily_perc_change: Union[Unset, int] = UNSET,
-    max_daily_perc_change: Union[Unset, int] = UNSET,
-    min_premium: Union[Unset, int] = UNSET,
-    max_premium: Union[Unset, int] = UNSET,
-    min_volume_oi_ratio: Union[Unset, int] = UNSET,
-    max_volume_oi_ratio: Union[Unset, int] = UNSET,
-    min_open_interest: Union[Unset, int] = UNSET,
-    max_open_interest: Union[Unset, int] = UNSET,
-    min_floor_volume: Union[Unset, int] = UNSET,
-    max_floor_volume: Union[Unset, int] = UNSET,
-    vol_greater_oi: Union[Unset, bool] = UNSET,
-    issue_types: Union[Unset, List[SingleIssueType]] = UNSET,
-    order: Union[Unset, ScreenerContractOrderByField] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Optional[Union[ErrorMessage, OptionContractScreenerResults, str]]:
+    ticker_symbol: Unset | str = UNSET,
+    sectors: Unset | list[SingleSector] = UNSET,
+    min_underlying_price: Unset | int = UNSET,
+    max_underlying_price: Unset | int = UNSET,
+    is_otm: Unset | bool = UNSET,
+    min_dte: Unset | int = UNSET,
+    max_dte: Unset | int = UNSET,
+    min_diff: Unset | int = UNSET,
+    max_diff: Unset | int = UNSET,
+    min_strike: Unset | int = UNSET,
+    max_strike: Unset | int = UNSET,
+    type: Unset | OptionType = UNSET,
+    expiry_dates: Unset | str = UNSET,
+    min_marketcap: Unset | int = UNSET,
+    max_marketcap: Unset | int = UNSET,
+    min_volume: Unset | int = UNSET,
+    max_volume: Unset | int = UNSET,
+    min_multileg_volume_ratio: Unset | int = UNSET,
+    max_multileg_volume_ratio: Unset | int = UNSET,
+    min_floor_volume_ratio: Unset | int = UNSET,
+    max_floor_volume_ratio: Unset | int = UNSET,
+    min_perc_change: Unset | int = UNSET,
+    max_perc_change: Unset | int = UNSET,
+    min_daily_perc_change: Unset | int = UNSET,
+    max_daily_perc_change: Unset | int = UNSET,
+    min_premium: Unset | int = UNSET,
+    max_premium: Unset | int = UNSET,
+    min_volume_oi_ratio: Unset | int = UNSET,
+    max_volume_oi_ratio: Unset | int = UNSET,
+    min_open_interest: Unset | int = UNSET,
+    max_open_interest: Unset | int = UNSET,
+    min_floor_volume: Unset | int = UNSET,
+    max_floor_volume: Unset | int = UNSET,
+    vol_greater_oi: Unset | bool = UNSET,
+    issue_types: Unset | list[SingleIssueType] = UNSET,
+    order: Unset | ScreenerContractOrderByField = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> ErrorMessage | OptionContractScreenerResults | str | None:
     """Screener for Option Contracts
 
      A contract screener endpoint to screen the market for contracts by a variety of filter options.

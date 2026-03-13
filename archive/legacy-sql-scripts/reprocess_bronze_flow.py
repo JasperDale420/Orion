@@ -9,7 +9,6 @@ import logging
 import os
 
 from dotenv import load_dotenv
-
 from orion.core.logging_config import setup_logging
 
 load_dotenv()
@@ -24,12 +23,11 @@ logger = logging.getLogger("reprocess")
 
 
 async def reprocess_bronze_to_silver():
-    from sqlalchemy import func, select
-
     from orion.processing.normalizer import NormalizationEngine
     from orion.processing.persistence import persist_silver_from_bronze
     from orion.storage.db import async_session_factory, init_db
     from orion.storage.models import BronzeEvent
+    from sqlalchemy import func, select
 
     await init_db()
 

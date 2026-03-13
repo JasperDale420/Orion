@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.core.universe_manager import UniverseManager
 from orion.storage.models import BronzeEvent
 

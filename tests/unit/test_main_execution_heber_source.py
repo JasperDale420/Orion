@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pandas as pd
@@ -12,7 +11,7 @@ from orion import main_execution
 
 @pytest.mark.asyncio
 async def test_fetch_recent_flow_for_ticker_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fake_reader = MagicMock()
     fake_reader.read_flow.return_value = pd.DataFrame(
         {
@@ -118,7 +117,7 @@ async def test_fetch_recent_flow_for_ticker_skips_heber_when_disabled(monkeypatc
 async def test_fetch_recent_flow_from_heber_skips_invalid_and_non_matching_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fake_reader = MagicMock()
     fake_reader.read_flow.return_value = pd.DataFrame(
         {

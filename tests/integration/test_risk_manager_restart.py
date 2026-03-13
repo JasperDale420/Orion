@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+
 from alpaca.trading.enums import OrderSide, OrderType
 from orion.execution.risk_manager import RiskManager
 

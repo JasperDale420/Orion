@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -10,7 +10,7 @@ from orion import main_option_quote_tracker as oqt
 
 @pytest.mark.asyncio
 async def test_get_pending_checkpoints_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     flow_df = pd.DataFrame(
         {
             "event_id": ["evt-1", "evt-2"],
@@ -94,7 +94,7 @@ async def test_store_quote_and_get_existing_quotes_use_in_memory_cache(monkeypat
         option_symbol="SPY260220C00500000",
         underlying_ticker="SPY",
         checkpoint="15m",
-        ts_utc=datetime.now(timezone.utc),
+        ts_utc=datetime.now(UTC),
         quote_data={"mid_price": 1.23},
     )
 

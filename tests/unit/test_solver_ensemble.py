@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.analysis.regime import MarketRegime
 from orion.core.solver_schema import SolverConfig
 from orion.processing.signal_engine import SignalEngine
@@ -65,7 +66,7 @@ async def test_ensemble_decision_consensus():
             candidate_id="c1",
             source="UW",
             ticker="AAPL",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             rule_id="rule_sweep",
             confidence=0.5,
             direction="LONG",
@@ -116,7 +117,7 @@ async def test_ensemble_decision_rejection():
             candidate_id="c2",
             source="UW",
             ticker="TSLA",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             rule_id="rule_sweep",
             confidence=0.5,
             direction="SHORT",

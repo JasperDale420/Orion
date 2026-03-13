@@ -1,10 +1,9 @@
 from datetime import date
-from typing import Optional
 from uuid import UUID
 
 from alpaca.broker.enums import JournalEntryType, JournalStatus
-from alpaca.common.models import ModelWithID
 from alpaca.common.enums import SupportedCurrencies
+from alpaca.common.models import ModelWithID
 
 
 class Journal(ModelWithID):
@@ -45,19 +44,19 @@ class Journal(ModelWithID):
     from_account: UUID
     entry_type: JournalEntryType
     status: JournalStatus
-    net_amount: Optional[float] = None
-    symbol: Optional[str] = None
-    qty: Optional[float] = None
-    price: Optional[float] = None
-    description: Optional[str] = None
-    settle_date: Optional[date] = None
-    system_date: Optional[date] = None
-    transmitter_name: Optional[str] = None
-    transmitter_account_number: Optional[str] = None
-    transmitter_address: Optional[str] = None
-    transmitter_financial_institution: Optional[str] = None
-    transmitter_timestamp: Optional[str] = None
-    currency: Optional[SupportedCurrencies] = None
+    net_amount: float | None = None
+    symbol: str | None = None
+    qty: float | None = None
+    price: float | None = None
+    description: str | None = None
+    settle_date: date | None = None
+    system_date: date | None = None
+    transmitter_name: str | None = None
+    transmitter_account_number: str | None = None
+    transmitter_address: str | None = None
+    transmitter_financial_institution: str | None = None
+    transmitter_timestamp: str | None = None
+    currency: SupportedCurrencies | None = None
 
 
 class BatchJournalResponse(Journal):
@@ -68,4 +67,4 @@ class BatchJournalResponse(Journal):
         error_message (Optional[str]): An message that contains error details for failed journals.
     """
 
-    error_message: Optional[str] = None
+    error_message: str | None = None

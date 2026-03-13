@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.processing.signal_engine import SignalEngine
 from orion.storage.models_gold import CandidateTrade
 
@@ -33,7 +34,7 @@ async def test_signal_engine_fallback_when_router_empty():
     candidate = CandidateTrade(
         candidate_id="test_cand_1",
         ticker="AAPL",
-        timestamp_utc=datetime.now(timezone.utc),
+        timestamp_utc=datetime.now(UTC),
         rule_id="rule_test",
         direction="LONG",
         confidence=1.0,

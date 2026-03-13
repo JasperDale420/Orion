@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 VALID_FLOW = {
     "id": "FLOW_TEST_1",
     "ticker": "AAPL",
-    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "timestamp": datetime.now(UTC).isoformat(),
     "premium": 1000,
     "strike_price": 150,
     "expiry": "2025-01-17",
@@ -105,7 +105,7 @@ async def test_uw_darkpool_dlq_integration(cleanup_dlq, mocker):
             {
                 "id": "DARK_TEST_1",
                 "ticker": "TSLA",
-                "executed_at": datetime.now(timezone.utc).isoformat(),
+                "executed_at": datetime.now(UTC).isoformat(),
                 "price": 200,
                 "size": 100,
             },

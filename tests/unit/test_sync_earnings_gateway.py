@@ -35,7 +35,7 @@ async def test_fetch_gateway_earnings_uses_x_gateway_key(monkeypatch: pytest.Mon
         def __init__(self, *args, **kwargs) -> None:
             return None
 
-        async def __aenter__(self) -> "_FakeAsyncClient":
+        async def __aenter__(self) -> _FakeAsyncClient:
             return self
 
         async def __aexit__(self, exc_type, exc, tb) -> None:

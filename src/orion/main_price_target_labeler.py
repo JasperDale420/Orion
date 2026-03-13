@@ -9,9 +9,9 @@ import math
 import os
 import signal
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 logger = setup_struct_logger("orion.price_target")
 _heber_reader = HeberReader()
 
-_PRICE_TARGET_FALLBACK_COUNTS: Dict[str, int] = defaultdict(int)
+_PRICE_TARGET_FALLBACK_COUNTS: dict[str, int] = defaultdict(int)
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
@@ -58,9 +58,9 @@ def _legacy_label_pipelines_enabled() -> bool:
     return enabled
 
 
-def _record_price_target_fallback(feature_name: str, error: Optional[Exception] = None, **context: Any) -> None:
+def _record_price_target_fallback(feature_name: str, error: Exception | None = None, **context: Any) -> None:
     _PRICE_TARGET_FALLBACK_COUNTS[feature_name] += 1
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "feature": feature_name,
         "fallback_count": _PRICE_TARGET_FALLBACK_COUNTS[feature_name],
     }
@@ -71,7 +71,7 @@ def _record_price_target_fallback(feature_name: str, error: Optional[Exception] 
 
 
 # Static sector mapping for reliable feature calculation (avoids unreliable API calls)
-SECTOR_MAPPING: Dict[str, str] = {
+SECTOR_MAPPING: dict[str, str] = {
     # Technology
     "AAPL": "Technology",
     "MSFT": "Technology",
@@ -250,8 +250,13 @@ SECTOR_MAPPING: Dict[str, str] = {
 
 
 def calculate_black_scholes_delta(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str
-) -> Optional[float]:
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    option_type: str,  # noqa: N803
+) -> float | None:
     """Calculate option delta using Black-Scholes model.
 
     Args:
@@ -277,7 +282,7 @@ def calculate_black_scholes_delta(
         return None
 
 
-def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> Optional[float]:
+def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> float | None:  # noqa: N803
     """Calculate option gamma using Black-Scholes model.
 
     Args:
@@ -299,7 +304,7 @@ def calculate_black_scholes_gamma(S: float, K: float, T: float, r: float, sigma:
         return None
 
 
-def calculate_iv_rank_from_history(current_iv: float, iv_history: List[float]) -> Optional[float]:
+def calculate_iv_rank_from_history(current_iv: float, iv_history: list[float]) -> float | None:
     """Calculate IV rank as percentile within historical IV range.
 
     Args:
@@ -318,17 +323,17 @@ def calculate_iv_rank_from_history(current_iv: float, iv_history: List[float]) -
     return min(100.0, max(0.0, (current_iv - min_iv) / (max_iv - min_iv) * 100))
 
 
-def parse_expiry(expiry_str: Optional[str]) -> Optional[datetime]:
+def parse_expiry(expiry_str: str | None) -> datetime | None:
     """Parse expiry string to datetime."""
     if not expiry_str:
         return None
     try:
-        return datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=UTC)
     except (ValueError, AttributeError):
         return None
 
 
-def calculate_dte(flow_ts: datetime, expiry: Optional[datetime]) -> Optional[int]:
+def calculate_dte(flow_ts: datetime, expiry: datetime | None) -> int | None:
     """Calculate days to expiry."""
     if not expiry:
         return None
@@ -336,7 +341,7 @@ def calculate_dte(flow_ts: datetime, expiry: Optional[datetime]) -> Optional[int
     return max(0, dte)
 
 
-def classify_trade_type(dte: Optional[int]) -> str:
+def classify_trade_type(dte: int | None) -> str:
     """Classify trade type based on DTE."""
     if dte is None:
         return "UNKNOWN"
@@ -349,7 +354,7 @@ def classify_trade_type(dte: Optional[int]) -> str:
     return "POSITION"
 
 
-async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
+async def get_entry_signals(limit: int = BATCH_SIZE) -> list[Any]:
     """Get entries that haven't been labeled for price targets yet.
 
     Criteria:
@@ -374,7 +379,7 @@ async def get_entry_signals(limit: int = BATCH_SIZE) -> List[Any]:
     return []
 
 
-async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[Dict[str, Any]]:
+async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> list[dict[str, Any]]:
     """Get all subsequent prices for an option chain after entry."""
     heber_prices = _get_subsequent_prices_from_heber(option_chain, entry_ts)
     if heber_prices is not None:
@@ -386,7 +391,7 @@ async def get_subsequent_prices(option_chain: str, entry_ts: datetime) -> List[D
 def _build_backfill_cursor_clause(
     after_entry_ts: datetime | None,
     after_event_id: str | None,
-    params: Dict[str, Any],
+    params: dict[str, Any],
 ) -> str:
     """Build keyset cursor predicate for backfill candidate queries."""
     if after_entry_ts is not None and after_event_id is not None:
@@ -408,7 +413,7 @@ async def get_velocity_backfill_candidates(
     limit: int = 1000,
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Legacy no-op; local velocity backfill candidate discovery is decommissioned."""
     _ = (limit, after_entry_ts, after_event_id)
     logger.warning(
@@ -426,7 +431,7 @@ async def get_checkpoint_backfill_candidates(
     limit: int = 1000,
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Legacy no-op; local checkpoint backfill candidate discovery is decommissioned."""
     _ = (limit, after_entry_ts, after_event_id)
     logger.warning(
@@ -440,15 +445,15 @@ async def get_checkpoint_backfill_candidates(
     return []
 
 
-def _pick_first_existing_column(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
+def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
     for column in columns:
         if column in df.columns:
             return column
     return None
 
 
-def _extract_entry_signal_row(row: pd.Series) -> Optional[SimpleNamespace]:
-    def _first(keys: List[str]) -> Any:
+def _extract_entry_signal_row(row: pd.Series) -> SimpleNamespace | None:
+    def _first(keys: list[str]) -> Any:
         for key in keys:
             if key in row and pd.notna(row[key]):
                 return row[key]
@@ -485,7 +490,7 @@ def _extract_entry_signal_row(row: pd.Series) -> Optional[SimpleNamespace]:
 
     expiry_dt = parse_expiry(str(expiry)) if expiry is not None else None
     dte = calculate_dte(flow_ts, expiry_dt)
-    age = datetime.now(timezone.utc) - flow_ts
+    age = datetime.now(UTC) - flow_ts
     min_age = _min_entry_age_for_dte(dte)
     if age < min_age:
         return None
@@ -504,7 +509,7 @@ def _extract_entry_signal_row(row: pd.Series) -> Optional[SimpleNamespace]:
     )
 
 
-def _min_entry_age_for_dte(dte: Optional[int]) -> timedelta:
+def _min_entry_age_for_dte(dte: int | None) -> timedelta:
     if dte == 0:
         return timedelta(minutes=15)
     if dte is not None and 1 <= dte <= 3:
@@ -526,7 +531,7 @@ def _is_truthy(value: Any) -> bool:
     return False
 
 
-async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
+async def _get_labeled_price_target_event_ids(event_ids: list[str]) -> set[str]:
     """Legacy no-op; local labeled-event lookup is decommissioned."""
     if not event_ids:
         return set()
@@ -541,8 +546,8 @@ async def _get_labeled_price_target_event_ids(event_ids: List[str]) -> Set[str]:
     return set()
 
 
-async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
-    now_utc = datetime.now(timezone.utc)
+async def _get_entry_signals_from_heber(limit: int) -> list[Any]:
+    now_utc = datetime.now(UTC)
     flow_df = _heber_reader.read_flow(
         asof_time=now_utc,
         start_time=now_utc - timedelta(days=365),
@@ -550,7 +555,7 @@ async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
     if flow_df.empty:
         return []
 
-    candidates: List[SimpleNamespace] = []
+    candidates: list[SimpleNamespace] = []
     for _, row in flow_df.iterrows():
         normalized = _extract_entry_signal_row(row)
         if normalized is not None:
@@ -564,10 +569,10 @@ async def _get_entry_signals_from_heber(limit: int) -> List[Any]:
     return [item for item in candidates if item.event_id not in labeled_ids][:limit]
 
 
-def _get_subsequent_prices_from_heber(option_chain: str, entry_ts: datetime) -> Optional[List[Dict[str, Any]]]:
+def _get_subsequent_prices_from_heber(option_chain: str, entry_ts: datetime) -> list[dict[str, Any]] | None:
     try:
         flow_df = _heber_reader.read_flow(
-            asof_time=datetime.now(timezone.utc),
+            asof_time=datetime.now(UTC),
             start_time=entry_ts,
         )
     except Exception as e:
@@ -583,7 +588,7 @@ def _get_subsequent_prices_from_heber(option_chain: str, entry_ts: datetime) -> 
     if chain_col is None or ts_col is None or price_col is None:
         return None
 
-    prices: List[Dict[str, Any]] = []
+    prices: list[dict[str, Any]] = []
     for _, row in flow_df.iterrows():
         if str(row.get(chain_col)) != option_chain:
             continue
@@ -599,17 +604,17 @@ def _get_subsequent_prices_from_heber(option_chain: str, entry_ts: datetime) -> 
     return prices
 
 
-async def get_real_checkpoint_prices(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
+async def get_real_checkpoint_prices(event_id: str) -> dict[str, dict[str, float | None]]:
     """Get real option prices and Greeks from Heber event-level checkpoint data."""
     return _get_real_checkpoint_prices_from_heber(event_id)
 
 
-def _get_real_checkpoint_prices_from_heber(event_id: str) -> Dict[str, Dict[str, Optional[float]]]:
+def _get_real_checkpoint_prices_from_heber(event_id: str) -> dict[str, dict[str, float | None]]:
     event_id_str = str(event_id)
     try:
         flow_df = _heber_reader.read_flow(
-            asof_time=datetime.now(timezone.utc),
-            start_time=datetime.now(timezone.utc) - timedelta(days=365),
+            asof_time=datetime.now(UTC),
+            start_time=datetime.now(UTC) - timedelta(days=365),
         )
     except Exception as e:
         _record_price_target_fallback("checkpoint_quote_heber_lookup", e, event_id=event_id_str)
@@ -635,9 +640,9 @@ def _get_real_checkpoint_prices_from_heber(event_id: str) -> Dict[str, Dict[str,
     vega_col = _pick_first_existing_column(filtered, ["vega", "vega_alpaca"])
     iv_col = _pick_first_existing_column(filtered, ["iv", "iv_alpaca", "implied_volatility"])
 
-    data: Dict[str, Dict[str, Optional[float]]] = {}
+    data: dict[str, dict[str, float | None]] = {}
 
-    def _clean_float(value: Any) -> Optional[float]:
+    def _clean_float(value: Any) -> float | None:
         parsed = _coerce_float(value)
         if parsed is None or pd.isna(parsed):
             return None
@@ -664,7 +669,7 @@ def _get_real_checkpoint_prices_from_heber(event_id: str) -> Dict[str, Dict[str,
     return data
 
 
-async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> Dict[str, Any]:
+async def get_opposing_flow(ticker: str, put_call: str, entry_ts: datetime, end_ts: datetime) -> dict[str, Any]:
     """Get opposing flow during holding period."""
     heber_result = _get_opposing_flow_from_heber(ticker, put_call, entry_ts, end_ts)
     if heber_result is not None:
@@ -678,7 +683,7 @@ def _get_opposing_flow_from_heber(
     put_call: str,
     entry_ts: datetime,
     end_ts: datetime,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     opposing_type = "P" if str(put_call).upper() == "C" else "C"
     entry_utc = _coerce_dt_utc(entry_ts)
     end_utc = _coerce_dt_utc(end_ts)
@@ -751,7 +756,7 @@ def _get_opposing_flow_from_heber(
     }
 
 
-async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get the closest GEX values before entry time."""
     heber_result = _get_gex_at_entry_from_heber(ticker, entry_ts)
     if heber_result is not None:
@@ -760,7 +765,7 @@ async def get_gex_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
     return {"gex": None, "vex": None}
 
 
-async def get_gex_rolling_averages(ticker: str, entry_ts: datetime, days: int = 20) -> Dict[str, Optional[float]]:
+async def get_gex_rolling_averages(ticker: str, entry_ts: datetime, days: int = 20) -> dict[str, float | None]:
     """Get rolling average GEX/VEX values prior to entry time."""
     heber_result = _get_gex_rolling_averages_from_heber(ticker, entry_ts, days=days)
     if heber_result is not None:
@@ -773,7 +778,7 @@ def _get_gex_rolling_averages_from_heber(
     ticker: str,
     entry_ts: datetime,
     days: int = 20,
-) -> Optional[Dict[str, Optional[float]]]:
+) -> dict[str, float | None] | None:
     lookback_days = max(days, 1)
     try:
         df = _heber_reader.read_greek_exposure(
@@ -815,7 +820,7 @@ def _get_gex_rolling_averages_from_heber(
     return {"gex_rolling_avg": gex_val, "vex_rolling_avg": vex_val}
 
 
-async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Build 1h/1d/1w window features directly from Heber silver datasets."""
     entry_utc = _coerce_dt_utc(entry_ts)
     if entry_utc is None:
@@ -848,7 +853,7 @@ async def get_window_features_at_entry(ticker: str, entry_ts: datetime) -> Dict[
         "1w": timedelta(weeks=1),
     }
 
-    features_by_period: Dict[str, Any] = {}
+    features_by_period: dict[str, Any] = {}
     for period, window_size in period_windows.items():
         start_utc = entry_utc - window_size
         flow_window = flow_frame[(flow_frame["ts"] > start_utc) & (flow_frame["ts"] <= entry_utc)]
@@ -968,7 +973,7 @@ def _normalize_window_darkpool_frame(darkpool_df: pd.DataFrame, *, ticker: str) 
     return frame[frame["ticker"] == str(ticker).upper()]
 
 
-async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
+async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> dict[str, Any]:
     """Get market tide sum for the period before entry."""
     heber_result = _get_market_tide_before_entry_from_heber(entry_ts, minutes)
     if heber_result is not None:
@@ -977,7 +982,7 @@ async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) ->
     return {"net_premium": None, "direction": None}
 
 
-def _get_gex_at_entry_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
+def _get_gex_at_entry_from_heber(ticker: str, entry_ts: datetime) -> dict[str, Any] | None:
     try:
         df = _heber_reader.read_greek_exposure(
             symbols=[ticker],
@@ -997,8 +1002,8 @@ def _get_gex_at_entry_from_heber(ticker: str, entry_ts: datetime) -> Optional[Di
     if ts_col is None or gex_col is None:
         return None
 
-    best_ts: Optional[datetime] = None
-    best_values: Optional[Dict[str, Any]] = None
+    best_ts: datetime | None = None
+    best_values: dict[str, Any] | None = None
     for _, row in df.iterrows():
         row_ts = _coerce_dt_utc(row.get(ts_col))
         if row_ts is None or row_ts > entry_ts:
@@ -1013,7 +1018,7 @@ def _get_gex_at_entry_from_heber(ticker: str, entry_ts: datetime) -> Optional[Di
     return best_values
 
 
-def _get_market_tide_before_entry_from_heber(entry_ts: datetime, minutes: int = 30) -> Optional[Dict[str, Any]]:
+def _get_market_tide_before_entry_from_heber(entry_ts: datetime, minutes: int = 30) -> dict[str, Any] | None:
     net_premium = _get_heber_market_tide_net_premium(entry_ts, minutes)
     if net_premium is None:
         return None
@@ -1025,7 +1030,7 @@ def _market_tide_direction(net_premium: float) -> str:
     return "BULLISH" if net_premium > 0 else "BEARISH" if net_premium < 0 else "NEUTRAL"
 
 
-def _normalize_put_call(value: Any) -> Optional[str]:
+def _normalize_put_call(value: Any) -> str | None:
     if value is None:
         return None
     put_call = str(value).strip().upper()
@@ -1036,7 +1041,7 @@ def _normalize_put_call(value: Any) -> Optional[str]:
     return None
 
 
-def _sum_market_tide_from_dataframe(df: pd.DataFrame, start_ts: datetime, entry_ts: datetime) -> Optional[float]:
+def _sum_market_tide_from_dataframe(df: pd.DataFrame, start_ts: datetime, entry_ts: datetime) -> float | None:
     ts_col = _pick_first_existing_column(df, ["ts_utc", "flow_ts_utc", "ts_event", "timestamp", "created_at"])
     if ts_col is None:
         return None
@@ -1086,7 +1091,7 @@ def _sum_market_tide_from_dataframe(df: pd.DataFrame, start_ts: datetime, entry_
     return total_net
 
 
-def _get_heber_market_tide_net_premium(entry_ts: datetime, minutes: int = 30) -> Optional[float]:
+def _get_heber_market_tide_net_premium(entry_ts: datetime, minutes: int = 30) -> float | None:
     start_ts = entry_ts - timedelta(minutes=minutes)
     try:
         tide_df = _heber_reader.read_market_tide(
@@ -1121,13 +1126,13 @@ def _map_vix_proxy_to_regime(vix_proxy: float) -> str:
     return "LOW"
 
 
-def _get_heber_vix_proxy_snapshot_at_or_before(entry_ts: datetime) -> Optional[Dict[str, Any]]:
+def _get_heber_vix_proxy_snapshot_at_or_before(entry_ts: datetime) -> dict[str, Any] | None:
     """Best-effort Heber lookup for VIX proxy (VIXY) and prior-close delta."""
-    ts_utc = entry_ts if entry_ts.tzinfo is not None else entry_ts.replace(tzinfo=timezone.utc)
+    ts_utc = entry_ts if entry_ts.tzinfo is not None else entry_ts.replace(tzinfo=UTC)
     try:
         bars = _heber_reader.read_bars(
             symbols=["VIXY"],
-            asof_time=datetime.now(timezone.utc),
+            asof_time=datetime.now(UTC),
             start_time=ts_utc - timedelta(days=7),
             end_time=ts_utc + timedelta(minutes=1),
         )
@@ -1143,7 +1148,7 @@ def _get_heber_vix_proxy_snapshot_at_or_before(entry_ts: datetime) -> Optional[D
     if ts_col is None or close_col is None:
         return None
 
-    candidates: List[tuple[datetime, float]] = []
+    candidates: list[tuple[datetime, float]] = []
     for _, row in bars.iterrows():
         row_ts = _coerce_dt_utc(row.get(ts_col))
         row_close = _coerce_float(row.get(close_col))
@@ -1167,7 +1172,7 @@ def _get_heber_vix_proxy_snapshot_at_or_before(entry_ts: datetime) -> Optional[D
     }
 
 
-async def get_max_pain_distance(ticker: str, expiry_date: Optional[datetime], entry_ts: datetime) -> Optional[float]:
+async def get_max_pain_distance(ticker: str, expiry_date: datetime | None, entry_ts: datetime) -> float | None:
     """Get distance to max pain at entry time."""
     if not expiry_date:
         return None
@@ -1180,7 +1185,7 @@ def _get_max_pain_distance_from_heber(
     ticker: str,
     expiry_date: Any,
     entry_ts: datetime,
-) -> Optional[float]:
+) -> float | None:
     entry_date = entry_ts.date()
     expiry = expiry_date.date() if isinstance(expiry_date, datetime) else expiry_date
     try:
@@ -1205,8 +1210,8 @@ def _get_max_pain_distance_from_heber(
     if expiry_col is None or dist_col is None or ts_col is None:
         return None
 
-    best_ts: Optional[datetime] = None
-    best_distance: Optional[float] = None
+    best_ts: datetime | None = None
+    best_distance: float | None = None
     for _, row in max_pain_df.iterrows():
         row_expiry = _coerce_date(row.get(expiry_col))
         if row_expiry != expiry:
@@ -1217,7 +1222,7 @@ def _get_max_pain_distance_from_heber(
             row_date = _coerce_date(row.get(ts_col))
             if row_date is None:
                 continue
-            row_ts = datetime.combine(row_date, datetime.min.time(), tzinfo=timezone.utc)
+            row_ts = datetime.combine(row_date, datetime.min.time(), tzinfo=UTC)
 
         if row_ts.date() > entry_date:
             continue
@@ -1233,7 +1238,7 @@ def _get_max_pain_distance_from_heber(
     return best_distance
 
 
-async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> float | None:
     """Get IV rank at entry time with Heber-first sourcing."""
     heber_iv_rank = _get_iv_rank_from_heber(ticker, entry_ts)
     if heber_iv_rank is not None:
@@ -1242,7 +1247,7 @@ async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[floa
     return _estimate_iv_rank_from_heber_flow(ticker, entry_ts)
 
 
-def _estimate_iv_rank_from_heber_flow(ticker: str, target_ts: datetime) -> Optional[float]:
+def _estimate_iv_rank_from_heber_flow(ticker: str, target_ts: datetime) -> float | None:
     """Estimate IV rank from Heber flow IV history when IV-rank snapshots are unavailable."""
     target_utc = _coerce_dt_utc(target_ts)
     if target_utc is None:
@@ -1295,7 +1300,7 @@ def _estimate_iv_rank_from_heber_flow(ticker: str, target_ts: datetime) -> Optio
     return 50.0
 
 
-async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
+async def get_regime_at_entry(entry_ts: datetime) -> dict[str, Any]:
     """Get regime snapshot at entry time from Heber VIX proxy + market tide."""
     from orion.analysis.regime import MultiAxisRegimeDetector
 
@@ -1322,7 +1327,7 @@ async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
     }
 
 
-def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
+def get_entry_time_features(entry_ts: datetime) -> dict[str, Any]:
     """Extract time-based features from entry timestamp."""
     hour = entry_ts.hour
     # Session classification (ET times assuming UTC input)
@@ -1341,7 +1346,7 @@ def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
     }
 
 
-async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> float | None:
     """Get underlying stock price at entry time from bars."""
     heber_price = _get_heber_close_at_or_before(ticker, entry_ts)
     if heber_price is not None:
@@ -1350,7 +1355,7 @@ async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Opti
     return None
 
 
-async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> Optional[float]:
+async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> float | None:
     """Get underlying stock price at offset from entry."""
     target_ts = entry_ts + timedelta(hours=hours)
     heber_price = _get_heber_close_at_or_before(ticker, target_ts)
@@ -1360,7 +1365,7 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
     return None
 
 
-def _coerce_dt_utc(value: Any) -> Optional[datetime]:
+def _coerce_dt_utc(value: Any) -> datetime | None:
     if value is None:
         return None
     try:
@@ -1374,7 +1379,7 @@ def _coerce_dt_utc(value: Any) -> Optional[datetime]:
     return ts.to_pydatetime()
 
 
-def _coerce_date(value: Any) -> Optional[date]:
+def _coerce_date(value: Any) -> date | None:
     if value is None:
         return None
     try:
@@ -1386,7 +1391,7 @@ def _coerce_date(value: Any) -> Optional[date]:
     return ts.date()
 
 
-def _coerce_float(value: Any) -> Optional[float]:
+def _coerce_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
@@ -1395,13 +1400,13 @@ def _coerce_float(value: Any) -> Optional[float]:
         return None
 
 
-def _get_heber_close_at_or_before(ticker: str, target_ts: datetime) -> Optional[float]:
+def _get_heber_close_at_or_before(ticker: str, target_ts: datetime) -> float | None:
     """Best-effort Heber bars lookup for the latest close at-or-before target time."""
-    ts_utc = target_ts if target_ts.tzinfo is not None else target_ts.replace(tzinfo=timezone.utc)
+    ts_utc = target_ts if target_ts.tzinfo is not None else target_ts.replace(tzinfo=UTC)
     try:
         bars = _heber_reader.read_bars(
             symbols=[ticker],
-            asof_time=datetime.now(timezone.utc),
+            asof_time=datetime.now(UTC),
             start_time=ts_utc - timedelta(days=7),
             end_time=ts_utc + timedelta(minutes=1),
         )
@@ -1417,7 +1422,7 @@ def _get_heber_close_at_or_before(ticker: str, target_ts: datetime) -> Optional[
     if ts_col is None or close_col is None:
         return None
 
-    candidates: List[tuple[datetime, float]] = []
+    candidates: list[tuple[datetime, float]] = []
     for _, row in bars.iterrows():
         row_ts = _coerce_dt_utc(row.get(ts_col))
         row_close = _coerce_float(row.get(close_col))
@@ -1433,7 +1438,7 @@ def _get_heber_close_at_or_before(ticker: str, target_ts: datetime) -> Optional[
     return candidates[0][1]
 
 
-async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
+async def get_flow_greeks(event_id: str) -> dict[str, float | None]:
     """Get Greeks from stored values or Alpaca API, with Black-Scholes fallback.
 
     Priority:
@@ -1489,8 +1494,8 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
             return result
 
     # Fallback to Black-Scholes if Alpaca unavailable
-    S = float(flow_data.get("underlying_price") or 0)
-    K = float(flow_data.get("strike") or 0)
+    S = float(flow_data.get("underlying_price") or 0)  # noqa: N806
+    K = float(flow_data.get("strike") or 0)  # noqa: N806
     iv = flow_data.get("iv")
     sigma = float(iv) if iv else 0
     put_call = flow_data.get("put_call", "C")
@@ -1498,7 +1503,7 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     flow_ts = flow_data.get("flow_ts")
 
     # Calculate time to expiry in years
-    T = 0.0
+    T = 0.0  # noqa: N806
     if expiry and flow_ts:
         if isinstance(expiry, str):
             try:
@@ -1517,7 +1522,7 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
             else:
                 flow_date = flow_ts
             days_to_expiry = (expiry_date - flow_date).days
-            T = max(days_to_expiry / 365.0, 1 / 365.0)
+            T = max(days_to_expiry / 365.0, 1 / 365.0)  # noqa: N806
 
     # Calculate delta and gamma using Black-Scholes
     if S > 0 and K > 0 and sigma > 0 and T > 0:
@@ -1527,12 +1532,12 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     return result
 
 
-def _get_flow_greeks_from_heber(event_id: str) -> Optional[Dict[str, Any]]:
+def _get_flow_greeks_from_heber(event_id: str) -> dict[str, Any] | None:
     event_id_str = str(event_id)
     try:
         flow_df = _heber_reader.read_flow(
-            asof_time=datetime.now(timezone.utc),
-            start_time=datetime.now(timezone.utc) - timedelta(days=365),
+            asof_time=datetime.now(UTC),
+            start_time=datetime.now(UTC) - timedelta(days=365),
         )
     except Exception as e:
         _record_price_target_fallback("flow_greeks_heber_lookup", e, event_id=event_id_str)
@@ -1558,7 +1563,7 @@ def _get_flow_greeks_from_heber(event_id: str) -> Optional[Dict[str, Any]]:
     else:
         row = filtered.iloc[-1]
 
-    def _first_value(columns: List[str]) -> Any:
+    def _first_value(columns: list[str]) -> Any:
         for column in columns:
             if column in row and pd.notna(row[column]):
                 return row[column]
@@ -1583,7 +1588,7 @@ def _get_flow_greeks_from_heber(event_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
-async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> Optional[float]:
+async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> float | None:
     """Get IV rank at a time offset."""
     target_ts = entry_ts + timedelta(hours=hours)
 
@@ -1594,7 +1599,7 @@ async def get_iv_at_offset(ticker: str, entry_ts: datetime, hours: int = 0) -> O
     return _estimate_iv_rank_from_heber_flow(ticker, target_ts)
 
 
-def _get_iv_rank_from_heber(ticker: str, target_ts: datetime) -> Optional[float]:
+def _get_iv_rank_from_heber(ticker: str, target_ts: datetime) -> float | None:
     try:
         iv_rank_df = _heber_reader.read_iv_rank(
             symbols=[ticker],
@@ -1613,15 +1618,15 @@ def _get_iv_rank_from_heber(ticker: str, target_ts: datetime) -> Optional[float]
     if ts_col is None or iv_rank_col is None:
         return None
 
-    best_ts: Optional[datetime] = None
-    best_iv_rank: Optional[float] = None
+    best_ts: datetime | None = None
+    best_iv_rank: float | None = None
     for _, row in iv_rank_df.iterrows():
         row_ts = _coerce_dt_utc(row.get(ts_col))
         if row_ts is None:
             row_date = _coerce_date(row.get(ts_col))
             if row_date is None:
                 continue
-            row_ts = datetime.combine(row_date, datetime.min.time(), tzinfo=timezone.utc)
+            row_ts = datetime.combine(row_date, datetime.min.time(), tzinfo=UTC)
 
         if row_ts > target_ts:
             continue
@@ -1637,7 +1642,7 @@ def _get_iv_rank_from_heber(ticker: str, target_ts: datetime) -> Optional[float]
     return best_iv_rank
 
 
-async def get_darkpool_volume(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> Optional[float]:
+async def get_darkpool_volume(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> float | None:
     """Get aggregate darkpool volume in a time window before entry.
 
     Returns total shares traded in darkpools for this ticker.
@@ -1654,7 +1659,7 @@ async def get_darkpool_volume(ticker: str, entry_ts: datetime, window_minutes: i
     return None
 
 
-def _get_darkpool_volume_from_heber(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> Optional[float]:
+def _get_darkpool_volume_from_heber(ticker: str, entry_ts: datetime, window_minutes: int = 60) -> float | None:
     start_ts = entry_ts - timedelta(minutes=window_minutes)
 
     try:
@@ -1691,7 +1696,7 @@ def _get_darkpool_volume_from_heber(ticker: str, entry_ts: datetime, window_minu
     return float(total)
 
 
-async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
+async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> dict[str, float | None]:
     """Get darkpool metrics for all trade bucket windows.
 
     Returns dict with volume for different time windows to support
@@ -1731,7 +1736,7 @@ async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Opt
     }
 
 
-async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
+async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> dict[str, float | None]:
     """Get relative volume metrics vs historical average.
 
     - rvol_1h: Current hour volume / avg hourly volume (20-day)
@@ -1752,7 +1757,7 @@ async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Optiona
     }
 
 
-def _get_rvol_metrics_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
+def _get_rvol_metrics_from_heber(ticker: str, entry_ts: datetime) -> dict[str, float | None] | None:
     entry_utc = _coerce_dt_utc(entry_ts)
     if entry_utc is None:
         return None
@@ -1838,7 +1843,7 @@ def _get_rvol_metrics_from_heber(ticker: str, entry_ts: datetime) -> Optional[Di
     }
 
 
-async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
+async def get_flow_aggression(ticker: str, entry_ts: datetime) -> dict[str, float | None]:
     """Get flow aggression metrics for this ticker in the last hour.
 
     - ask_side_ratio: % of trades hitting ask (bullish)
@@ -1852,7 +1857,7 @@ async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Opti
     return {"ask_side_ratio": None, "sweep_ratio_1h": None, "same_ticker_premium_1h": None}
 
 
-def _get_flow_aggression_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Optional[float]]]:
+def _get_flow_aggression_from_heber(ticker: str, entry_ts: datetime) -> dict[str, float | None] | None:
     entry_utc = _coerce_dt_utc(entry_ts)
     if entry_utc is None:
         return None
@@ -1929,7 +1934,7 @@ def _get_flow_aggression_from_heber(ticker: str, entry_ts: datetime) -> Optional
     }
 
 
-async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> float | None:
     """Get institutional-grade flow for LEAP trades (past week).
 
     Returns sum of premium from trades > $50,000 in the past week.
@@ -1942,7 +1947,7 @@ async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> Optional
     return None
 
 
-def _get_institutional_flow_1w_from_heber(ticker: str, entry_ts: datetime) -> Optional[float]:
+def _get_institutional_flow_1w_from_heber(ticker: str, entry_ts: datetime) -> float | None:
     entry_utc = _coerce_dt_utc(entry_ts)
     if entry_utc is None:
         return None
@@ -1994,7 +1999,7 @@ def _get_institutional_flow_1w_from_heber(ticker: str, entry_ts: datetime) -> Op
     return float(filtered["premium"].sum())
 
 
-async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) -> Dict[str, Any]:
+async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) -> dict[str, Any]:
     """Get Phase 1 bucket-specific features.
 
     - minutes_to_close: Minutes until 4pm ET (for 0DTE time decay)
@@ -2003,7 +2008,7 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
     - earnings_in_dte_window: Will earnings occur before expiry? (for LEAP)
     - vwap_distance_pct: Distance from VWAP (all buckets)
     """
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "minutes_to_close": None,
         "overnight_gap_pct": None,
         "price_change_5d_prior": None,
@@ -2035,8 +2040,8 @@ async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) 
     return result
 
 
-def _get_phase1_bucket_features_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
-    result: Dict[str, Any] = {
+def _get_phase1_bucket_features_from_heber(ticker: str, entry_ts: datetime) -> dict[str, Any] | None:
+    result: dict[str, Any] = {
         "overnight_gap_pct": None,
         "price_change_5d_prior": None,
         "vwap_distance_pct": None,
@@ -2105,8 +2110,8 @@ def _get_phase1_bucket_features_from_heber(ticker: str, entry_ts: datetime) -> O
     today_rows = before_entry[before_entry["day"] == entry_date]
     prior_rows = before_entry[before_entry["day"] < entry_date]
 
-    today_open: Optional[float] = None
-    prior_close: Optional[float] = None
+    today_open: float | None = None
+    prior_close: float | None = None
     if not today_rows.empty:
         today_open = _coerce_float(today_rows.iloc[0]["open"])
     if not prior_rows.empty:
@@ -2132,7 +2137,7 @@ def _get_phase1_bucket_features_from_heber(ticker: str, entry_ts: datetime) -> O
     return None
 
 
-async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) -> Dict[str, Optional[float]]:
+async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) -> dict[str, float | None]:
     """Get P2 ML features: OI change momentum and IV vs HV ratio."""
     heber_result = _get_p2_features_from_heber(ticker, option_chain, entry_ts)
     if heber_result is not None:
@@ -2146,10 +2151,8 @@ async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) ->
     }
 
 
-def _get_p2_features_from_heber(
-    ticker: str, option_chain: str, entry_ts: datetime
-) -> Optional[Dict[str, Optional[float]]]:
-    result: Dict[str, Optional[float]] = {
+def _get_p2_features_from_heber(ticker: str, option_chain: str, entry_ts: datetime) -> dict[str, float | None] | None:
+    result: dict[str, float | None] = {
         "oi_change_1d": None,
         "oi_change_pct": None,
         "iv_vs_hv_ratio": None,
@@ -2205,9 +2208,9 @@ def _get_p2_features_from_heber(
     current_day_rows = scoped_flow[scoped_flow["ts"].dt.date == entry_date]
     prior_rows = scoped_flow[scoped_flow["ts"] < entry_utc]
 
-    current_oi: Optional[float] = None
-    prior_oi: Optional[float] = None
-    iv_value: Optional[float] = None
+    current_oi: float | None = None
+    prior_oi: float | None = None
+    iv_value: float | None = None
     if not current_day_rows.empty:
         latest_current = current_day_rows.iloc[-1]
         current_oi = _coerce_float(latest_current.get("open_interest"))
@@ -2273,7 +2276,7 @@ def _get_p2_features_from_heber(
     return None
 
 
-async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entry_ts: datetime) -> Dict[str, Any]:
+async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entry_ts: datetime) -> dict[str, Any]:
     """Get P3 ML features: 52w high distance, spread detection, same-expiry trades.
 
     - high_52w_distance_pct: % below 52-week high (for LEAP mean reversion)
@@ -2291,8 +2294,8 @@ async def get_p3_features(ticker: str, option_chain: str, expiry: datetime, entr
     }
 
 
-def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetime) -> Optional[Dict[str, Any]]:
-    result: Dict[str, Any] = {
+def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetime) -> dict[str, Any] | None:
+    result: dict[str, Any] = {
         "high_52w_distance_pct": None,
         "is_spread_leg": None,
         "same_expiry_trades_1h": None,
@@ -2396,7 +2399,7 @@ def _get_p3_features_from_heber(ticker: str, expiry: datetime, entry_ts: datetim
     return None
 
 
-async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get sector flow and correlation features."""
     heber_result = _get_sector_correlation_features_from_heber(ticker, entry_ts)
     if heber_result is not None:
@@ -2410,8 +2413,8 @@ async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Di
     }
 
 
-def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime) -> Optional[Dict[str, Any]]:
-    result: Dict[str, Any] = {
+def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime) -> dict[str, Any] | None:
+    result: dict[str, Any] = {
         "sector_net_premium_1h": None,
         "sector_flow_direction": None,
         "spy_correlation_5d": None,
@@ -2506,7 +2509,7 @@ def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime)
                     if prior_close > 0:
                         result["spy_return_1h"] = ((current_close - prior_close) / prior_close) * 100.0
 
-    correlation_start = datetime.combine(lookback_5d, datetime.min.time(), tzinfo=timezone.utc)
+    correlation_start = datetime.combine(lookback_5d, datetime.min.time(), tzinfo=UTC)
     try:
         bars_df = _heber_reader.read_bars(
             symbols=[ticker, "SPY"],
@@ -2557,8 +2560,8 @@ def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime)
 
 
 # Ticker info cache to avoid repeated API calls
-_ticker_info_cache: Dict[str, Dict[str, Any]] = {}
-_uw_client: Optional[UnusualWhalesClient] = None
+_ticker_info_cache: dict[str, dict[str, Any]] = {}
+_uw_client: UnusualWhalesClient | None = None
 
 
 def _get_uw_client() -> UnusualWhalesClient:
@@ -2574,7 +2577,7 @@ def _get_uw_client() -> UnusualWhalesClient:
     return _uw_client
 
 
-async def get_ticker_info(ticker: str) -> Dict[str, Any]:
+async def get_ticker_info(ticker: str) -> dict[str, Any]:
     """Fetch ticker info from UW API with caching.
 
     Uses both /api/stock/{ticker}/info and /api/earnings/{ticker} endpoints
@@ -2585,7 +2588,7 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
         return _ticker_info_cache[ticker]
 
     # Initialize empty cache entry
-    cache_entry: Dict[str, Any] = {
+    cache_entry: dict[str, Any] = {
         "sector": None,
         "next_earnings_date": None,
         "announce_time": None,
@@ -2661,7 +2664,7 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
     return cache_entry
 
 
-async def get_sector_info(ticker: str) -> Dict[str, Optional[str]]:
+async def get_sector_info(ticker: str) -> dict[str, str | None]:
     """Get sector from static mapping (reliable) or fallback to UW API.
 
     Uses static SECTOR_MAPPING for common tickers to ensure reliability.
@@ -2681,7 +2684,7 @@ async def get_sector_info(ticker: str) -> Dict[str, Optional[str]]:
         return {"sector": "Other", "industry": None}
 
 
-async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get days to/from earnings based on UW ticker info.
 
     Uses next_earnings_date if available, otherwise uses last_earnings_date
@@ -2721,7 +2724,7 @@ async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> Dict[str, A
     return {"days_to_earnings": None, "is_post_earnings": None}
 
 
-def get_price_at_offset_minutes(prices: List[Dict[str, Any]], entry_ts: datetime, minutes: int) -> Optional[float]:
+def get_price_at_offset_minutes(prices: list[dict[str, Any]], entry_ts: datetime, minutes: int) -> float | None:
     """Get price at a specific minutes offset from entry (for 0DTE)."""
     target_ts = entry_ts + timedelta(minutes=minutes)
     closest = None
@@ -2735,7 +2738,7 @@ def get_price_at_offset_minutes(prices: List[Dict[str, Any]], entry_ts: datetime
     return closest
 
 
-def get_price_at_offset_days(prices: List[Dict[str, Any]], entry_ts: datetime, days: int) -> Optional[float]:
+def get_price_at_offset_days(prices: list[dict[str, Any]], entry_ts: datetime, days: int) -> float | None:
     """Get price at a specific days offset from entry (for SWING/POSITION)."""
     target_ts = entry_ts + timedelta(days=days)
     closest = None
@@ -2749,7 +2752,7 @@ def get_price_at_offset_days(prices: List[Dict[str, Any]], entry_ts: datetime, d
     return closest
 
 
-def get_price_at_offset(prices: List[Dict[str, Any]], entry_ts: datetime, hours: int) -> Optional[float]:
+def get_price_at_offset(prices: list[dict[str, Any]], entry_ts: datetime, hours: int) -> float | None:
     """Get price at a specific time offset from entry."""
     target_ts = entry_ts + timedelta(hours=hours)
     closest = None
@@ -2763,7 +2766,7 @@ def get_price_at_offset(prices: List[Dict[str, Any]], entry_ts: datetime, hours:
     return closest
 
 
-def calculate_volatility(prices: List[float]) -> Optional[float]:
+def calculate_volatility(prices: list[float]) -> float | None:
     """Calculate price volatility (std dev of returns)."""
     if len(prices) < 3:
         return None
@@ -2801,9 +2804,9 @@ async def get_checkpoint_greeks(
     ticker: str,
     entry_ts: datetime,
     entry_price: float,
-    expiry: Optional[datetime],
-    dte: Optional[int],
-) -> Dict[str, Dict[str, Optional[float]]]:
+    expiry: datetime | None,
+    dte: int | None,
+) -> dict[str, dict[str, float | None]]:
     """Fetch Greeks and underlying price at each checkpoint from Alpaca.
 
     Since Alpaca only provides current data, this only populates
@@ -2815,14 +2818,14 @@ async def get_checkpoint_greeks(
     """
     from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
 
-    now = datetime.now(timezone.utc)
-    results: Dict[str, Dict[str, Optional[float]]] = {}
+    now = datetime.now(UTC)
+    results: dict[str, dict[str, float | None]] = {}
 
     for cp_suffix, offset in CHECKPOINT_OFFSETS.items():
         checkpoint_ts = entry_ts + offset
 
         # Initialize with NULLs
-        cp_data: Dict[str, Optional[float]] = {
+        cp_data: dict[str, float | None] = {
             "delta": None,
             "gamma": None,
             "theta": None,
@@ -2875,7 +2878,7 @@ async def get_checkpoint_greeks(
     return results
 
 
-async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
+async def label_entry(entry: Any) -> dict[str, Any] | None:
     """Label a single entry with comprehensive price target tracking."""
     option_chain = entry.option_chain
     entry_price = entry.option_price
@@ -3173,7 +3176,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     real_quotes = await get_real_checkpoint_prices(entry.event_id)
 
     # Helper to get price: prefer real quote, fallback to flow data
-    def _get_checkpoint_price(checkpoint: str, flow_price_fn, *flow_args) -> Optional[float]:
+    def _get_checkpoint_price(checkpoint: str, flow_price_fn, *flow_args) -> float | None:
         """Get checkpoint price: real quote first, then flow fallback."""
         quote_data = real_quotes.get(checkpoint)
         if quote_data is not None and quote_data.get("price") is not None:
@@ -3181,7 +3184,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
         return flow_price_fn(*flow_args)
 
     # Helper to get Greeks at checkpoint
-    def _get_checkpoint_greeks(checkpoint: str) -> Dict[str, Optional[float]]:
+    def _get_checkpoint_greeks(checkpoint: str) -> dict[str, float | None]:
         """Get Greeks at checkpoint from Alpaca quote data."""
         quote_data = real_quotes.get(checkpoint)
         if quote_data is None:
@@ -3574,7 +3577,7 @@ async def label_entry(entry: Any) -> Optional[Dict[str, Any]]:
     return label
 
 
-async def persist_labels(labels: List[Dict[str, Any]]) -> int:
+async def persist_labels(labels: list[dict[str, Any]]) -> int:
     """Legacy no-op; local label persistence is decommissioned."""
     if not labels:
         return 0

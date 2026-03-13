@@ -5,12 +5,12 @@ Implements token bucket algorithm to respect Alpaca's 200 requests/minute limit.
 """
 
 import asyncio
-import logging
 import time
 from collections import deque
-from typing import Optional
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 
 class OrderRateLimiter:
@@ -32,7 +32,7 @@ class OrderRateLimiter:
     def __init__(
         self,
         max_per_minute: int = 200,
-        burst_size: Optional[int] = None,
+        burst_size: int | None = None,
         window_seconds: float = 60.0,
     ):
         """
@@ -108,9 +108,9 @@ class OrderRateLimiter:
                 await asyncio.sleep(min(wait_time, timeout - (time.monotonic() - start_time)))
 
     async def acquire_or_raise(self, timeout: float = 5.0) -> None:
-        """Acquire a slot or raise RateLimitExceeded."""
+        """Acquire a slot or raise RateLimitExceededError."""
         if not await self.acquire(timeout):
-            raise RateLimitExceeded(
+            raise RateLimitExceededError(
                 f"Rate limit exceeded: {self.requests_in_window}/{self.max_per_minute} requests/min"
             )
 
@@ -134,14 +134,14 @@ class OrderRateLimiter:
         self._request_times.clear()
 
 
-class RateLimitExceeded(Exception):
+class RateLimitExceededError(Exception):
     """Raised when rate limit is exceeded and cannot be waited."""
 
     pass
 
 
 # Global rate limiter instance for Alpaca orders
-_order_limiter: Optional[OrderRateLimiter] = None
+_order_limiter: OrderRateLimiter | None = None
 
 
 def get_order_rate_limiter() -> OrderRateLimiter:

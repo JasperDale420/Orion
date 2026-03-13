@@ -1,0 +1,22 @@
+meta:
+  run_id: 57d8925b-cddd-4d34-85d2-49218bc58fe4
+  created_at: '2026-02-26T21:30:25.699548+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-26_57d8925b-cddd-4d34-85d2-49218bc58fe4.json
+  report_path: artifacts/reports/eod_report_2026-02-26.md
+proposal:
+  type: config_patch
+  priority: 2
+  rationale: System is generating zero signals - need diagnostic logging to understand
+    why signal engine isn't firing.
+  evidence_pointers:
+    signals_live.total: 0
+    decisions.total: 0
+  test_plan:
+  - Enable debug logging for 2 hours
+  - Review signal generation logs
+  changes:
+    logging.signal_engine_level: DEBUG
+    logging.feature_calculation_level: DEBUG
+    diagnostics.signal_generation_report: true

@@ -1,6 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from orion.execution.signal_preflight import preflight_live_signal
 from orion.storage.db import async_session_factory
 from orion.storage.models_gold import CandidateTrade, GoldTickerRollup, StrategyDecision
@@ -25,7 +26,7 @@ async def test_preflight_rejects_when_risk_manager_rejects(monkeypatch):
 
     system_settings.require_rollups_for_signals_live = False
 
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = datetime.now(UTC).replace(microsecond=0)
     cand = CandidateTrade(
         candidate_id="cand_1",
         ticker="SPY",
@@ -69,7 +70,7 @@ async def test_preflight_includes_rollup_snapshot(monkeypatch):
 
     system_settings.require_rollups_for_signals_live = True
 
-    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
     rollup_ts_5m = now.replace(minute=(now.minute // 5) * 5)
     rollup_id_5m = f"SPY|5m|{rollup_ts_5m.isoformat()}"
 

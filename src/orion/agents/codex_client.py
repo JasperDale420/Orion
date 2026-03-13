@@ -1,15 +1,17 @@
 """
-Codex CLI Client - Async wrapper for headless codex execution.
+Codex CLI Client - Async wrapper for headless LLM execution.
 
-Calls `codex exec` via subprocess to run LLM completions through the
-locally authenticated codex CLI instead of direct API calls.
+Routes through Empire AI Gateway (localhost:8002/v1) with glm-5 as the
+default model. Supports tool execution for self-editing capabilities.
 """
 
 import asyncio
 import json
 import logging
-import shutil
-from typing import Optional
+import os
+from typing import Any
+
+import aiohttp
 
 from orion.config import agent_settings
 
@@ -17,196 +19,193 @@ logger = logging.getLogger(__name__)
 
 
 class CodexClientError(Exception):
-    """Raised when codex CLI execution fails."""
+    """Raised when LLM execution fails."""
 
-    pass
+
+# Basic tools the agent can use to solve its own problems
+AGENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read the contents of a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "Absolute path to the file"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write contents to a file, completely overwriting it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the file"},
+                    "content": {"type": "string", "description": "The new contents of the file"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "Run a shell command and return its output.",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string", "description": "The shell command to run"}},
+                "required": ["command"],
+            },
+        },
+    },
+]
+
+
+async def execute_tool(name: str, args: dict) -> str:
+    """Execute local tools on behalf of the agent."""
+    try:
+        if name == "read_file":
+            path = args.get("path", "")
+            if not os.path.exists(path):
+                return f"Error: File {path} does not exist."
+
+            def _read_file():
+                with open(path, encoding="utf-8") as f:
+                    return f.read()
+
+            return await asyncio.to_thread(_read_file)
+
+        if name == "write_file":
+            path = args.get("path", "")
+            content = args.get("content", "")
+
+            def _write_file():
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+            await asyncio.to_thread(_write_file)
+            return f"Successfully wrote {len(content)} bytes to {path}."
+
+        if name == "run_command":
+            cmd = args.get("command", "")
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+
+            output = ""
+            if stdout:
+                output += f"STDOUT:\n{stdout.decode('utf-8', errors='replace')}\n"
+            if stderr:
+                output += f"STDERR:\n{stderr.decode('utf-8', errors='replace')}\n"
+
+            return output if output else f"Command completed with exit code {proc.returncode} and no output."
+
+        return f"Error: Tool '{name}' not recognized."
+
+    except Exception as e:
+        return f"Tool execution failed: {e}"
 
 
 async def run_codex_completion(
-    prompt: str,
+    prompt: str = None,
     *,
-    model: str = "gpt-5.2",
-    reasoning_level: str = "extra_high",
+    messages: list[dict[str, Any]] = None,
+    model: str = None,
     timeout_seconds: int = 300,
 ) -> str:
     """
-    Run LLM completion using DeepSeek API (preferred) or codex CLI (fallback).
+    Run LLM completion using AI Gateway with tool-calling support.
 
     Args:
-        prompt: The full prompt to send (system + user combined).
-        model: Model to use (default: gpt-5.2 for codex, deepseek-reasoner for DeepSeek).
-        reasoning_level: Reasoning intensity (extra_high for complex analysis).
+        prompt: Legacy full prompt string.
+        messages: List of chat messages (preferred).
+        model: Model to use (defaults to agent_settings.model_name).
         timeout_seconds: Max time to wait for completion.
-
-    Returns:
-        The raw text response from LLM.
-
-    Raises:
-        CodexClientError: If both DeepSeek and codex fail.
     """
-    # Try DeepSeek API first if configured
-    deepseek_api_key = agent_settings.deepseek_api_key
-    deepseek_model = agent_settings.deepseek_model
+    model = model or getattr(agent_settings, "model_name", "glm-5")
+    api_key = getattr(agent_settings, "ai_gateway_key", "empire-ai-gateway-key")
+    base_url = getattr(agent_settings, "ai_gateway_url", "http://localhost:8002/v1")
 
-    if deepseek_api_key and deepseek_api_key != "your-deepseek-api-key-here":  # pragma: allowlist secret
-        try:
-            return await _run_deepseek_completion(
-                prompt=prompt,
-                model=deepseek_model,
-                api_key=deepseek_api_key,
-                timeout_seconds=timeout_seconds,
-            )
-        except Exception as e:
-            logger.warning(f"DeepSeek failed, falling back to codex: {e}")
-
-    # Fallback to codex CLI
-    codex_path = shutil.which("codex")
-    if not codex_path:
-        raise CodexClientError("codex CLI not found in PATH. Please install codex: https://github.com/openai/codex")
-
-    # Build command with autonomy flags
-    cmd = [
-        codex_path,
-        "exec",
-        "-m",
-        model,
-        "--full-auto",  # Non-interactive, auto-approve commands
-        "--skip-git-repo-check",  # Allow running outside git repos
-        "--sandbox",
-        "workspace-write",  # Allow file writes in workspace
-    ]
-
-    # Add reasoning level config if specified
-    if reasoning_level:
-        cmd.extend(["-c", f"reasoning_level={reasoning_level}"])
+    if not messages:
+        messages = [{"role": "user", "content": prompt}]
 
     logger.info(
-        "Running codex completion",
-        extra={
-            "event": "codex_exec_start",
-            "model": model,
-            "reasoning_level": reasoning_level,
-            "prompt_length": len(prompt),
-        },
-    )
-
-    try:
-        # Run codex with prompt via stdin
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(input=prompt.encode("utf-8")),
-            timeout=timeout_seconds,
-        )
-
-        if process.returncode != 0:
-            error_msg = stderr.decode("utf-8", errors="replace")
-            logger.error(
-                "Codex execution failed",
-                extra={
-                    "event": "codex_exec_error",
-                    "returncode": process.returncode,
-                    "stderr": error_msg[:500],
-                },
-            )
-            raise CodexClientError(f"Codex failed (exit {process.returncode}): {error_msg}")
-
-        response = stdout.decode("utf-8", errors="replace").strip()
-
-        logger.info(
-            "Codex completion successful",
-            extra={
-                "event": "codex_exec_success",
-                "response_length": len(response),
-            },
-        )
-
-        return response
-
-    except asyncio.TimeoutError as err:
-        logger.error(
-            f"Codex execution timed out after {timeout_seconds}s",
-            extra={"event": "codex_exec_timeout", "timeout_seconds": timeout_seconds},
-        )
-        raise CodexClientError(f"Codex timed out after {timeout_seconds} seconds") from err
-
-
-async def _run_deepseek_completion(
-    prompt: str,
-    model: str,
-    api_key: str,
-    timeout_seconds: int = 300,
-) -> str:
-    """Run completion using DeepSeek API."""
-    import aiohttp
-
-    logger.info(
-        "Running DeepSeek completion",
-        extra={
-            "event": "deepseek_start",
-            "model": model,
-            "prompt_length": len(prompt),
-        },
+        "Starting LLM execution via AI Gateway",
+        extra={"event": "llm_exec_start", "model": model, "message_count": len(messages)},
     )
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
+        # Agent execution loop to process tool calls
+        for _ in range(10):  # Max 10 tool iterations
+            pay_json = {
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
+                "tools": AGENT_TOOLS,
+                "tool_choice": "auto",
                 "temperature": 0.7,
                 "max_tokens": 4096,
-            },
-            timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-        ) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                raise CodexClientError(f"DeepSeek API error {resp.status}: {error_text}")
+            }
 
-            data = await resp.json()
-            response = data["choices"][0]["message"]["content"]
+            try:
+                async with session.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=pay_json,
+                    timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        logger.error(f"AI Gateway error {resp.status}: {error_text}")
+                        raise CodexClientError(f"Gateway API error {resp.status}: {error_text}")
 
-            logger.info(
-                "DeepSeek completion successful",
-                extra={
-                    "event": "deepseek_success",
-                    "response_length": len(response),
-                },
-            )
+                    data = await resp.json()
+                    message = data["choices"][0]["message"]
 
-            return response
+                    # Add assistant response to history
+                    messages.append(message)
+
+                    # Check if there are tool calls
+                    if message.get("tool_calls"):
+                        for tc in message["tool_calls"]:
+                            tool_name = tc["function"]["name"]
+                            tool_args = json.loads(tc["function"]["arguments"])
+
+                            logger.info(f"LLM executing tool: {tool_name}", extra={"args": tool_args})
+
+                            result_str = await execute_tool(tool_name, tool_args)
+
+                            logger.info(f"Tool {tool_name} completed", extra={"result_len": len(result_str)})
+
+                            messages.append(
+                                {"role": "tool", "tool_call_id": tc["id"], "name": tool_name, "content": result_str}
+                            )
+
+                        # Continue loop to send tool results back to LLM
+                        continue
+
+                    # No tool calls, return final content
+                    return message.get("content", "")
+
+            except TimeoutError as exc:
+                logger.error("LLM request timed out")
+                raise CodexClientError(f"LLM request timed out after {timeout_seconds}s") from exc
+
+        raise CodexClientError("Max tool iterations exceeded")
 
 
 def extract_json_from_response(response: str) -> dict:
-    """
-    Extract JSON from a codex response that may contain markdown fences.
-
-    Args:
-        response: Raw text response from codex.
-
-    Returns:
-        Parsed JSON dict.
-
-    Raises:
-        ValueError: If no valid JSON found.
-    """
+    """Extract JSON from a codex response that may contain markdown fences."""
     text = response.strip()
 
-    # Try to extract from markdown code fences
     if "```json" in text:
         text = text.split("```json")[1].split("```")[0].strip()
     elif "```" in text:
-        # Try generic code fence
         parts = text.split("```")
         if len(parts) >= 2:
             text = parts[1].strip()
@@ -220,34 +219,21 @@ def extract_json_from_response(response: str) -> dict:
 def build_chat_prompt(
     system_prompt: str,
     user_prompt: str,
-    conversation_history: Optional[list] = None,
+    conversation_history: list | None = None,
 ) -> str:
     """
-    Build a single prompt string from chat-style messages.
-
-    Codex exec takes a single prompt, so we combine system/user/history
-    into a structured format.
-
-    Args:
-        system_prompt: System instructions.
-        user_prompt: User message.
-        conversation_history: Optional list of prior messages.
-
-    Returns:
-        Combined prompt string.
+    Backwards compatibility function to build a single prompt string.
+    New callers should pass native `messages` lists to run_codex_completion.
     """
-    parts = []
-
-    parts.append(f"<system>\n{system_prompt}\n</system>")
+    parts = [f"<system>\\n{system_prompt}\\n</system>"]
 
     if conversation_history:
         for msg in conversation_history:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            parts.append(f"<{role}>\n{content}\n</{role}>")
+            parts.append(f"<{role}>\\n{content}\\n</{role}>")
 
-    parts.append(f"<user>\n{user_prompt}\n</user>")
-
+    parts.append(f"<user>\\n{user_prompt}\\n</user>")
     parts.append("<assistant>")
 
-    return "\n\n".join(parts)
+    return "\\n\\n".join(parts)

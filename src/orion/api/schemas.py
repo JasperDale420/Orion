@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -9,7 +9,7 @@ class SolverResponse(BaseModel):
     family_name: str
     stage: str
     is_active: bool
-    config: Dict[str, Any]
+    config: dict[str, Any]
     created_at_utc: datetime
     # Metrics snapshot
     total_pnl: float
@@ -31,7 +31,7 @@ class SolverMetricsResponse(BaseModel):
     profit_factor: float
     max_dd_pct: float
     stability_score: float
-    metrics_json: Dict[str, Any]
+    metrics_json: dict[str, Any]
     evaluated_at_utc: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -41,9 +41,9 @@ class ExperimentResponse(BaseModel):
     experiment_id: str
     description: str
     status: str
-    best_solver_id: Optional[str]
+    best_solver_id: str | None
     start_time_utc: datetime
-    end_time_utc: Optional[datetime]
+    end_time_utc: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -54,10 +54,10 @@ class PromotionRecommendationResponse(BaseModel):
     current_stage: str
     recommended_stage: str
     reason: str
-    metrics_snapshot: Optional[Dict[str, Any]]
+    metrics_snapshot: dict[str, Any] | None
     status: str
     created_at_utc: datetime
-    reviewed_at_utc: Optional[datetime]
-    reviewed_by: Optional[str]
+    reviewed_at_utc: datetime | None
+    reviewed_by: str | None
 
     model_config = ConfigDict(from_attributes=True)

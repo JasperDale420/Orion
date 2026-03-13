@@ -15,8 +15,8 @@ Usage:
 
 import argparse
 import asyncio
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -79,6 +79,7 @@ from orion.main_price_target_labeler import (
 from orion.main_price_target_labeler import (
     get_underlying_price_at_offset as get_labeler_underlying_price_at_offset,
 )
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -108,15 +109,15 @@ def extract_underlying_ticker(option_symbol: str) -> str:
 
 
 # Ticker info cache
-_ticker_info_cache: Dict[str, Dict[str, Any]] = {}
+_ticker_info_cache: dict[str, dict[str, Any]] = {}
 
 
-async def get_ticker_info(ticker: str) -> Dict[str, Any]:
+async def get_ticker_info(ticker: str) -> dict[str, Any]:
     """Fetch ticker info via shared labeler helper with local cache."""
     if ticker in _ticker_info_cache:
         return _ticker_info_cache[ticker]
 
-    cache_entry: Dict[str, Any] = {
+    cache_entry: dict[str, Any] = {
         "sector": None,
         "next_earnings_date": None,
         "announce_time": None,
@@ -137,17 +138,17 @@ async def get_ticker_info(ticker: str) -> Dict[str, Any]:
     return cache_entry
 
 
-async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_earnings_proximity(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get earnings proximity via shared labeler helper."""
     return await get_labeler_earnings_proximity(ticker, entry_ts)
 
 
-def get_entry_time_features(entry_ts: datetime) -> Dict[str, Any]:
+def get_entry_time_features(entry_ts: datetime) -> dict[str, Any]:
     """Delegate to live labeler logic to keep backfill semantics aligned."""
     return get_labeler_entry_time_features(entry_ts)
 
 
-async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
+async def get_flow_greeks(event_id: str) -> dict[str, float | None]:
     """Get flow Greeks/volume/OI.
 
     Delegates to the shared price-target labeler helper so backfill and
@@ -156,7 +157,7 @@ async def get_flow_greeks(event_id: str) -> Dict[str, Optional[float]]:
     return await get_labeler_flow_greeks(event_id)
 
 
-async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> float | None:
     """Get underlying stock price at entry time.
 
     Delegates to the shared price-target labeler helper so backfill and
@@ -165,7 +166,7 @@ async def get_underlying_price_at_entry(ticker: str, entry_ts: datetime) -> Opti
     return await get_labeler_underlying_price_at_entry(ticker, entry_ts)
 
 
-async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> Optional[float]:
+async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours: int) -> float | None:
     """Get underlying stock price at offset from entry.
 
     Delegates to the shared price-target labeler helper so backfill and
@@ -174,57 +175,57 @@ async def get_underlying_price_at_offset(ticker: str, entry_ts: datetime, hours:
     return await get_labeler_underlying_price_at_offset(ticker, entry_ts, hours)
 
 
-async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) -> Dict[str, Any]:
+async def get_phase1_bucket_features(ticker: str, entry_ts: datetime, dte: int) -> dict[str, Any]:
     """Get phase-1 bucket features via shared labeler helper."""
     return await get_labeler_phase1_bucket_features(ticker, entry_ts, dte)
 
 
-async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_sector_correlation_features(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get sector-correlation context via shared labeler helper."""
     return await get_labeler_sector_correlation_features(ticker, entry_ts)
 
 
-async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def get_iv_rank_at_entry(ticker: str, entry_ts: datetime) -> float | None:
     """Get IV rank at entry via shared labeler helper."""
     return await get_labeler_iv_rank_at_entry(ticker, entry_ts)
 
 
-async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_p2_features(ticker: str, option_chain: str, entry_ts: datetime) -> dict[str, Any]:
     """Get P2 option features via shared labeler helper."""
     return await get_labeler_p2_features(ticker, option_chain, entry_ts)
 
 
-async def get_p3_features(ticker: str, option_chain: str, expiry: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_p3_features(ticker: str, option_chain: str, expiry: str, entry_ts: datetime) -> dict[str, Any]:
     """Get P3 option features via shared labeler helper."""
     return await get_labeler_p3_features(ticker, option_chain, expiry, entry_ts)
 
 
-async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_darkpool_metrics(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get darkpool metrics via shared labeler helper."""
     return await get_labeler_darkpool_metrics(ticker, entry_ts)
 
 
-async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_rvol_metrics(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get RVOL metrics via shared labeler helper."""
     return await get_labeler_rvol_metrics(ticker, entry_ts)
 
 
-async def get_flow_aggression(ticker: str, entry_ts: datetime) -> Dict[str, Any]:
+async def get_flow_aggression(ticker: str, entry_ts: datetime) -> dict[str, Any]:
     """Get flow aggression metrics via shared labeler helper."""
     return await get_labeler_flow_aggression(ticker, entry_ts)
 
 
-async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> Optional[float]:
+async def get_institutional_flow_1w(ticker: str, entry_ts: datetime) -> float | None:
     """Get institutional flow aggregate via shared labeler helper."""
     return await get_labeler_institutional_flow_1w(ticker, entry_ts)
 
 
-async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> Dict[str, Any]:
+async def get_market_tide_before_entry(entry_ts: datetime, minutes: int = 30) -> dict[str, Any]:
     """Get market tide context via shared labeler helper."""
     return await get_labeler_market_tide_before_entry(entry_ts, minutes=minutes)
 
 
-async def get_regime_at_entry(entry_ts: datetime) -> Dict[str, Any]:
+async def get_regime_at_entry(entry_ts: datetime) -> dict[str, Any]:
     """Get regime context via shared labeler helper."""
     return await get_labeler_regime_at_entry(entry_ts)
 
@@ -233,7 +234,7 @@ async def get_records_to_backfill(
     limit: int = 1000,
     after_entry_ts: datetime | None = None,
     after_event_id: str | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Get records missing ML feature columns from Heber Gold datasets."""
     outcomes_df = await _read_heber_gold_dataset("labels_alert_barriers")
     if outcomes_df.empty:
@@ -286,13 +287,6 @@ async def get_records_to_backfill(
     return [dict(record) for record in records]
 
 
-def _first_existing_column(df: pd.DataFrame, names: List[str]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
-
-
 def _coerce_dataframe(payload: Any) -> pd.DataFrame:
     if isinstance(payload, pd.DataFrame):
         return payload.copy()
@@ -305,7 +299,7 @@ def _coerce_dataframe(payload: Any) -> pd.DataFrame:
 
 
 async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     reader = get_heber_reader()
     try:
         payload = await asyncio.to_thread(
@@ -420,8 +414,8 @@ async def _get_option_chain_for_event(event_id: str) -> str:
     try:
         flow_df = await asyncio.to_thread(
             get_heber_reader().read_flow,
-            asof_time=datetime.now(timezone.utc),
-            start_time=datetime.now(timezone.utc) - timedelta(days=365),
+            asof_time=datetime.now(UTC),
+            start_time=datetime.now(UTC) - timedelta(days=365),
         )
     except Exception as e:
         logger.debug(f"Failed to load flow rows for option_chain lookup: {e}")
@@ -475,13 +469,13 @@ async def _save_backfill_cursor(entry_ts: datetime, event_id: str | None) -> Non
     await db_write(write)
 
 
-async def update_ml_features(record: Dict[str, Any]) -> bool:
+async def update_ml_features(record: dict[str, Any]) -> bool:
     """Update ML feature columns for a record."""
     event_id = record["event_id"]
     ticker = record["ticker"]
     entry_ts = record["entry_ts"]
 
-    updates: Dict[str, Any] = {}
+    updates: dict[str, Any] = {}
 
     # Time features
     time_features = get_entry_time_features(entry_ts)

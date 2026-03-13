@@ -1,12 +1,13 @@
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone
 
 import pytest
+
 from orion.agents.meta_search_agent import EditOpType, MetaSearchAgent
 from orion.config import RiskSettings
 from orion.core.solver_router import SolverRouter
-from orion.core.solver_schema import SolverConfig, SolverRiskConfig, LiveContext
+from orion.core.solver_schema import LiveContext, SolverConfig, SolverRiskConfig
 from orion.execution.risk_manager import RiskManager
 
 
@@ -68,19 +69,11 @@ async def test_solver_router_filtering():
     paper_solver = MockSolver(stage="paper")
 
     # Context: LIVE
-    live_context = LiveContext(
-        ticker="AAPL",
-        current_stage="live",
-        regime="neutral",
-        time_of_day_utc=datetime.now(timezone.utc)
-    )
+    live_context = LiveContext(ticker="AAPL", current_stage="live", regime="neutral", time_of_day_utc=datetime.now(UTC))
 
     # Context: PAPER
     paper_context = LiveContext(
-        ticker="AAPL",
-        current_stage="paper",
-        regime="neutral",
-        time_of_day_utc=datetime.now(timezone.utc)
+        ticker="AAPL", current_stage="paper", regime="neutral", time_of_day_utc=datetime.now(UTC)
     )
 
     # Mock DB
@@ -120,7 +113,7 @@ async def test_solver_router_filtering():
             async_return(mock_result),
             async_return(mock_result_empty),
             async_return(mock_result),
-            async_return(mock_result_metrics)
+            async_return(mock_result_metrics),
         ]
 
         # Run LIVE

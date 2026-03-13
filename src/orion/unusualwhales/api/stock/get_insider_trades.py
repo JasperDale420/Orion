@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -12,8 +12,8 @@ from ...types import Response
 
 def _get_kwargs(
     ticker: str,
-) -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+) -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/insider-buy-sells",
     }
@@ -23,7 +23,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, InsiderStatistics, str]]:
+) -> ErrorMessage | InsiderStatistics | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -46,7 +46,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, InsiderStatistics, str]]:
+) -> Response[ErrorMessage | InsiderStatistics | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -59,7 +59,7 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[ErrorMessage, InsiderStatistics, str]]:
+) -> Response[ErrorMessage | InsiderStatistics | str]:
     """Insider buy & sells
 
      Returns the total amount of purchases & sells as well as notional values for insider transactions
@@ -91,7 +91,7 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[ErrorMessage, InsiderStatistics, str]]:
+) -> ErrorMessage | InsiderStatistics | str | None:
     """Insider buy & sells
 
      Returns the total amount of purchases & sells as well as notional values for insider transactions
@@ -118,7 +118,7 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[ErrorMessage, InsiderStatistics, str]]:
+) -> Response[ErrorMessage | InsiderStatistics | str]:
     """Insider buy & sells
 
      Returns the total amount of purchases & sells as well as notional values for insider transactions
@@ -148,7 +148,7 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[ErrorMessage, InsiderStatistics, str]]:
+) -> ErrorMessage | InsiderStatistics | str | None:
     """Insider buy & sells
 
      Returns the total amount of purchases & sells as well as notional values for insider transactions

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, Index, String
@@ -17,9 +17,7 @@ class SignalLive(Base):
     __tablename__ = "signals_live"
 
     signal_id: Mapped[str] = mapped_column(String, primary_key=True)
-    created_at_utc: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     timestamp_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)

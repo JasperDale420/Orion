@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -10,7 +10,7 @@ from orion.connectors import vix_proxy_connector as vpc
 
 @pytest.mark.asyncio
 async def test_get_vixy_bars_prefers_heber_without_local_db_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "instrument_key": ["equity:VIXY", "equity:QQQ", "equity:VIXY"],
@@ -60,7 +60,7 @@ async def test_get_vixy_bars_returns_empty_when_heber_unavailable(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_get_vixy_bars_uses_default_supported_timeframe(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     captured: dict[str, object] = {}
 
     class _FakeReader:
@@ -97,7 +97,7 @@ async def test_persist_and_get_current_vix_use_in_memory_cache(monkeypatch: pyte
     connector = vpc.VIXProxyConnector()
     await connector._persist(
         {
-            "ts_utc": datetime.now(timezone.utc),
+            "ts_utc": datetime.now(UTC),
             "vix": 18.5,
             "vvix": None,
             "vix_1d_change": -1.2,

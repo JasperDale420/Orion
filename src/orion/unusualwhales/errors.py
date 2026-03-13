@@ -1,7 +1,7 @@
 """Contains shared errors types that can be raised from API functions"""
 
 
-class UnexpectedStatus(Exception):
+class UnexpectedStatusError(Exception):
     """Raised by api functions when the response status an undocumented status and Client.raise_on_unexpected_status is True"""
 
     def __init__(self, status_code: int, content: bytes):
@@ -13,4 +13,7 @@ class UnexpectedStatus(Exception):
         )
 
 
-__all__ = ["UnexpectedStatus"]
+# Backwards-compatible alias for auto-generated API code
+UnexpectedStatus = UnexpectedStatusError
+
+__all__ = ["UnexpectedStatus", "UnexpectedStatusError"]

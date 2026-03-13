@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -19,7 +19,7 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
     record = {
         "event_id": "evt-1",
         "ticker": "AAPL",
-        "entry_ts": datetime(2026, 2, 6, 16, 0, tzinfo=timezone.utc),
+        "entry_ts": datetime(2026, 2, 6, 16, 0, tzinfo=UTC),
         "expiry": "2026-02-21",
         "dte": 15,
         "option_chain": "AAPL260221C00100000",
@@ -150,7 +150,7 @@ async def test_update_ml_features_calls_sector_corr_with_two_args(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_get_underlying_price_at_entry_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
 
     async def _labeler_entry(ticker: str, ts: datetime) -> float:
@@ -172,7 +172,7 @@ async def test_get_underlying_price_at_entry_delegates_to_labeler(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_get_underlying_price_at_offset_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
 
     async def _labeler_offset(ticker: str, ts: datetime, hours: int) -> float:
@@ -237,7 +237,7 @@ async def test_get_ticker_info_delegates_to_labeler(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_get_earnings_proximity_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"days_to_earnings": 4, "is_post_earnings": False}
 
@@ -256,7 +256,7 @@ async def test_get_earnings_proximity_delegates_to_labeler(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_get_phase1_bucket_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {
         "overnight_gap_pct": 0.1,
@@ -282,7 +282,7 @@ async def test_get_phase1_bucket_features_delegates_to_labeler(monkeypatch: pyte
 
 @pytest.mark.asyncio
 async def test_get_sector_correlation_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {
         "sector_net_premium_1h": 10.0,
@@ -306,7 +306,7 @@ async def test_get_sector_correlation_features_delegates_to_labeler(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_get_iv_rank_at_entry_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
 
     async def _labeler_iv_rank(ticker: str, ts: datetime) -> float:
@@ -324,7 +324,7 @@ async def test_get_iv_rank_at_entry_delegates_to_labeler(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_get_p2_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"oi_change_1d": 1.0, "oi_change_pct": 2.0, "iv_vs_hv_ratio": 1.1}
 
@@ -348,7 +348,7 @@ async def test_get_p2_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_get_p3_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"high_52w_distance_pct": 3.0, "is_spread_leg": False, "same_expiry_trades_1h": 2}
 
@@ -374,7 +374,7 @@ async def test_get_p3_features_delegates_to_labeler(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_get_darkpool_metrics_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"darkpool_1h": 1}
 
@@ -391,7 +391,7 @@ async def test_get_darkpool_metrics_delegates_to_labeler(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_get_rvol_metrics_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"rvol_1h": 1.0}
 
@@ -408,7 +408,7 @@ async def test_get_rvol_metrics_delegates_to_labeler(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_get_flow_aggression_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"ask_side_ratio": 0.7}
 
@@ -425,7 +425,7 @@ async def test_get_flow_aggression_delegates_to_labeler(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_get_institutional_flow_1w_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
 
     async def _labeler_inst_flow(ticker: str, ts: datetime) -> float:
@@ -441,7 +441,7 @@ async def test_get_institutional_flow_1w_delegates_to_labeler(monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_get_market_tide_before_entry_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"net_premium": 123.0, "direction": "BULLISH"}
 
@@ -458,7 +458,7 @@ async def test_get_market_tide_before_entry_delegates_to_labeler(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_get_regime_at_entry_delegates_to_labeler(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
     captured: dict[str, object] = {}
     expected = {"trend_regime": "UP"}
 

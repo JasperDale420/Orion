@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,9 +25,9 @@ class RollupBuilder:
         Upserts results into GoldTickerRollup table.
         """
         if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
+            start_time = start_time.replace(tzinfo=UTC)
         if end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
+            end_time = end_time.replace(tzinfo=UTC)
 
         # 1. Fetch Source Data
         stmt = (
@@ -70,6 +70,11 @@ class RollupBuilder:
         if df.empty:
             return None
 
+        # Ensure numeric columns to avoid object dtype which raises ZeroDivisionError mathematically
+        for col in ["open", "high", "low", "close", "volume", "vwap"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
         # 3. Define Rollup Periods (5m, 1h, 1d, 1w - no 1m as per user preference)
         periods = {"5m": "5min", "1h": "1h", "1d": "1D", "1w": "1W"}
 
@@ -98,13 +103,17 @@ class RollupBuilder:
                         "dollar_vol": "sum",
                     }
                 )
-                .dropna()
+                .dropna(subset=["open", "high", "low", "close", "volume"])
             )
 
             if resampled.empty:
                 continue
 
-            resampled["vwap"] = resampled["dollar_vol"] / resampled["volume"]
+            import numpy as np
+
+            # Avoid division by zero when volume is zero
+            safe_volume = resampled["volume"].replace(0, np.nan)
+            resampled["vwap"] = resampled["dollar_vol"] / safe_volume
             resampled["vwap"] = resampled["vwap"].fillna(resampled["close"])  # Fallback
 
             # 4. Persist to Gold

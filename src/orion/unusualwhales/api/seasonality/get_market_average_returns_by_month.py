@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -9,8 +9,8 @@ from ...models.seasonality_market_results import SeasonalityMarketResults
 from ...types import Response
 
 
-def _get_kwargs() -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+def _get_kwargs() -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/seasonality/market",
     }
@@ -18,9 +18,7 @@ def _get_kwargs() -> Dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(
-    *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[SeasonalityMarketResults, str]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> SeasonalityMarketResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -39,7 +37,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[SeasonalityMarketResults, str]]:
+) -> Response[SeasonalityMarketResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -51,7 +49,7 @@ def _build_response(
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[SeasonalityMarketResults, str]]:
+) -> Response[SeasonalityMarketResults | str]:
     """Market Seasonality for ETFs
 
      Returns the average return by month for the tickers SPY, QQQ, IWM, XLE, XLC, XLK, XLV, XLP, XLY,
@@ -77,7 +75,7 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[SeasonalityMarketResults, str]]:
+) -> SeasonalityMarketResults | str | None:
     """Market Seasonality for ETFs
 
      Returns the average return by month for the tickers SPY, QQQ, IWM, XLE, XLC, XLK, XLV, XLP, XLY,
@@ -99,7 +97,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-) -> Response[Union[SeasonalityMarketResults, str]]:
+) -> Response[SeasonalityMarketResults | str]:
     """Market Seasonality for ETFs
 
      Returns the average return by month for the tickers SPY, QQQ, IWM, XLE, XLC, XLK, XLV, XLP, XLY,
@@ -123,7 +121,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-) -> Optional[Union[SeasonalityMarketResults, str]]:
+) -> SeasonalityMarketResults | str | None:
     """Market Seasonality for ETFs
 
      Returns the average return by month for the tickers SPY, QQQ, IWM, XLE, XLC, XLK, XLV, XLP, XLY,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, Optional, Set
+from typing import Any
 
 from sqlalchemy import text
 
@@ -13,15 +13,15 @@ class SchemaValidationError(ValueError):
         self,
         message: str,
         *,
-        unknown_columns: Optional[Iterable[str]] = None,
-        missing_columns: Optional[Iterable[str]] = None,
+        unknown_columns: Iterable[str] | None = None,
+        missing_columns: Iterable[str] | None = None,
     ) -> None:
         super().__init__(message)
         self.unknown_columns = tuple(sorted(set(unknown_columns or [])))
         self.missing_columns = tuple(sorted(set(missing_columns or [])))
 
 
-async def fetch_table_columns(session: Any, table_name: str, schema: str = "public") -> Set[str]:
+async def fetch_table_columns(session: Any, table_name: str, schema: str = "public") -> set[str]:
     """Read column names for a table from information_schema."""
     stmt = text(
         """
@@ -43,8 +43,8 @@ async def fetch_table_columns(session: Any, table_name: str, schema: str = "publ
 
 def resolve_insert_columns(
     row: Mapping[str, Any],
-    allowed_columns: Set[str],
-    required_columns: Optional[Iterable[str]] = None,
+    allowed_columns: set[str],
+    required_columns: Iterable[str] | None = None,
 ) -> list[str]:
     """Resolve ordered insert columns and reject unknown/missing keys."""
     required = set(required_columns or [])

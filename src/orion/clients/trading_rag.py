@@ -7,7 +7,7 @@ Provides access to indexed trading books for context-aware Q&A.
 
 import os
 from inspect import isawaitable
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -36,7 +36,7 @@ class TradingRAGClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -55,7 +55,7 @@ class TradingRAGClient:
         self,
         query: str,
         top_k: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve relevant document chunks for a query.
 
@@ -91,7 +91,7 @@ class TradingRAGClient:
         self,
         query: str,
         top_k: int = 5,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get an LLM-generated answer based on retrieved context.
 
@@ -137,7 +137,7 @@ class TradingRAGClient:
 
 
 # Singleton instance
-_rag_client: Optional[TradingRAGClient] = None
+_rag_client: TradingRAGClient | None = None
 
 
 def get_rag_client() -> TradingRAGClient:

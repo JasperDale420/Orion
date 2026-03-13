@@ -6,15 +6,14 @@ Fetches VIX and VVIX data and classifies volatility regime.
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
-from typing import Any, Dict, List
-
-from sqlalchemy import text
+from datetime import UTC, date, datetime
+from typing import Any
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from orion.shared.db_utils import db_write
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +36,14 @@ class VIXConnector:
     def __init__(self, api_key: str, api_secret: str):
         self.client = StockHistoricalDataClient(api_key, api_secret)
 
-    def fetch_vix_bars(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    def fetch_vix_bars(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
         """Fetch VIX daily bars."""
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=["VIX"],
                 timeframe=TimeFrame.Day,
-                start=datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-                end=datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+                start=datetime.combine(start_date, datetime.min.time()).replace(tzinfo=UTC),
+                end=datetime.combine(end_date, datetime.max.time()).replace(tzinfo=UTC),
             )
             bars = self.client.get_stock_bars(request)
 
@@ -64,14 +63,14 @@ class VIXConnector:
             logger.warning(f"Failed to fetch VIX bars: {e}")
             return []
 
-    def fetch_vvix_bars(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    def fetch_vvix_bars(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
         """Fetch VVIX daily bars."""
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=["VVIX"],
                 timeframe=TimeFrame.Day,
-                start=datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc),
-                end=datetime.combine(end_date, datetime.max.time()).replace(tzinfo=timezone.utc),
+                start=datetime.combine(start_date, datetime.min.time()).replace(tzinfo=UTC),
+                end=datetime.combine(end_date, datetime.max.time()).replace(tzinfo=UTC),
             )
             bars = self.client.get_stock_bars(request)
 
@@ -136,7 +135,7 @@ class VIXConnector:
 
         return stored
 
-    async def _persist(self, record: Dict[str, Any]) -> None:
+    async def _persist(self, record: dict[str, Any]) -> None:
         """Persist VIX record to database."""
 
         async def write(session: Any) -> None:

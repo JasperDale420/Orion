@@ -1,8 +1,9 @@
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from alpaca.trading.enums import OrderSide
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
@@ -25,6 +26,7 @@ async def test_execution_enforces_limit_order(mock_env):
     # Patch MarketConnector in its source (local import)
     with (
         patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
         patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()
@@ -46,14 +48,14 @@ async def test_execution_enforces_limit_order(mock_env):
         candidate = CandidateTrade(
             candidate_id="test_id",
             ticker="AAPL",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             rule_id="test_rule",
             direction="LONG",
             evidence={},
         )
         decision = StrategyDecision(
             decision="EXECUTE",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             strategy_version_id="test",
             ticker="test",
             candidate_id="test",
@@ -80,6 +82,7 @@ async def test_execution_blocks_shorting(mock_env):
 
     with (
         patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
         patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()
@@ -93,14 +96,14 @@ async def test_execution_blocks_shorting(mock_env):
         candidate = CandidateTrade(
             candidate_id="test_id",
             ticker="AAPL",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             rule_id="test_rule",
             direction="SHORT",
             evidence={},
         )
         decision = StrategyDecision(
             decision="EXECUTE",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             strategy_version_id="test",
             ticker="test",
             candidate_id="test",
@@ -120,6 +123,7 @@ async def test_execution_allows_closing_short_disabled(mock_env):
 
     with (
         patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
         patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()
@@ -138,14 +142,14 @@ async def test_execution_allows_closing_short_disabled(mock_env):
         candidate = CandidateTrade(
             candidate_id="test_id",
             ticker="AAPL",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             rule_id="test_rule",
             direction="SHORT",  # "SHORT" direction might be used by signal to indicate "SELL"
             evidence={},
         )
         decision = StrategyDecision(
             decision="EXECUTE",
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             strategy_version_id="test",
             ticker="test",
             candidate_id="test",

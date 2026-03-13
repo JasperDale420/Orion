@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -12,16 +12,16 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    limit: Union[Unset, int] = UNSET,
-) -> Dict[str, Any]:
+    limit: Unset | int = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["limit"] = limit
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/market/total-options-volume",
         "params": params,
@@ -32,7 +32,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, MarketOptionsVolume, str]]:
+) -> ErrorMessage | MarketOptionsVolume | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -55,7 +55,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, MarketOptionsVolume, str]]:
+) -> Response[ErrorMessage | MarketOptionsVolume | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -67,8 +67,8 @@ def _build_response(
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, MarketOptionsVolume, str]]:
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | MarketOptionsVolume | str]:
     """Get Options Activity for the Entire Market (Market Tide)
 
      Returns the total options volume and premium for all trade executions
@@ -105,8 +105,8 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, MarketOptionsVolume, str]]:
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | MarketOptionsVolume | str | None:
     """Get Options Activity for the Entire Market (Market Tide)
 
      Returns the total options volume and premium for all trade executions
@@ -138,8 +138,8 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Response[Union[ErrorMessage, MarketOptionsVolume, str]]:
+    limit: Unset | int = UNSET,
+) -> Response[ErrorMessage | MarketOptionsVolume | str]:
     """Get Options Activity for the Entire Market (Market Tide)
 
      Returns the total options volume and premium for all trade executions
@@ -174,8 +174,8 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-    limit: Union[Unset, int] = UNSET,
-) -> Optional[Union[ErrorMessage, MarketOptionsVolume, str]]:
+    limit: Unset | int = UNSET,
+) -> ErrorMessage | MarketOptionsVolume | str | None:
     """Get Options Activity for the Entire Market (Market Tide)
 
      Returns the total options volume and premium for all trade executions

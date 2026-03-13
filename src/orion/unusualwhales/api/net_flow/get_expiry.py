@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -10,11 +10,11 @@ from ...types import Response
 
 def _get_kwargs(
     *,
-    tide_type: Optional[str] = None,
-    moneyness: Optional[str] = None,
-    expiration: Optional[str] = None,
-) -> Dict[str, Any]:
-    params: Dict[str, Any] = {}
+    tide_type: str | None = None,
+    moneyness: str | None = None,
+    expiration: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {}
     if tide_type is not None:
         params["tide_type"] = tide_type
     if moneyness is not None:
@@ -22,7 +22,7 @@ def _get_kwargs(
     if expiration is not None:
         params["expiration"] = expiration
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/net-flow/expiry",
         "params": params,
@@ -31,7 +31,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Optional[Dict[str, Any]]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> dict[str, Any] | None:
     if response.status_code == HTTPStatus.OK:
         response_200 = response.json()
         return response_200
@@ -41,7 +41,7 @@ def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
         return None
 
 
-def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[Dict[str, Any]]:
+def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Response[dict[str, Any]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -53,10 +53,10 @@ def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-    tide_type: Optional[str] = None,
-    moneyness: Optional[str] = None,
-    expiration: Optional[str] = None,
-) -> Response[Dict[str, Any]]:
+    tide_type: str | None = None,
+    moneyness: str | None = None,
+    expiration: str | None = None,
+) -> Response[dict[str, Any]]:
     """Net Flow Expiry
 
     Returns net premium flow by tide_type category, moneyness category, and expiration category.
@@ -78,10 +78,10 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-    tide_type: Optional[str] = None,
-    moneyness: Optional[str] = None,
-    expiration: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+    tide_type: str | None = None,
+    moneyness: str | None = None,
+    expiration: str | None = None,
+) -> dict[str, Any] | None:
     """Net Flow Expiry
 
     Returns net premium flow by tide_type category, moneyness category, and expiration category.
@@ -98,10 +98,10 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-    tide_type: Optional[str] = None,
-    moneyness: Optional[str] = None,
-    expiration: Optional[str] = None,
-) -> Response[Dict[str, Any]]:
+    tide_type: str | None = None,
+    moneyness: str | None = None,
+    expiration: str | None = None,
+) -> Response[dict[str, Any]]:
     """Net Flow Expiry
 
     Returns net premium flow by tide_type category, moneyness category, and expiration category.
@@ -121,10 +121,10 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-    tide_type: Optional[str] = None,
-    moneyness: Optional[str] = None,
-    expiration: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+    tide_type: str | None = None,
+    moneyness: str | None = None,
+    expiration: str | None = None,
+) -> dict[str, Any] | None:
     """Net Flow Expiry
 
     Returns net premium flow by tide_type category, moneyness category, and expiration category.

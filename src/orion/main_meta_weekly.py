@@ -97,11 +97,11 @@ async def run_scheduled() -> None:
     """
     Run in scheduled mode - execute every Friday at 5:30 PM EST.
     """
-    import pytz
+    from zoneinfo import ZoneInfo
 
-    est = pytz.timezone("US/Eastern")
+    est = ZoneInfo("America/New_York")
 
-    logger.info("Running in scheduled mode. Waiting for Friday 5:30 PM EST...")
+    logger.info("Running in scheduled mode. Waiting for Friday 5:30 PM ET...")
 
     while True:
         now = datetime.now(est)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -83,7 +83,7 @@ def test_list_datasets_uses_canonical_api_v1_endpoint(base_url: str) -> None:
 
 
 def test_read_bars_filters_instrument_and_asof(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     bars = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
@@ -108,7 +108,7 @@ def test_read_bars_filters_instrument_and_asof(tmp_path: Path) -> None:
 
 
 def test_read_bars_rejects_unsupported_timeframe(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     bars = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL"],
@@ -129,7 +129,7 @@ def test_read_bars_rejects_unsupported_timeframe(tmp_path: Path) -> None:
 
 
 def test_read_flow_applies_min_premium(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     flow = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY", "equity:SPY", "equity:QQQ"],
@@ -149,7 +149,7 @@ def test_read_flow_applies_min_premium(tmp_path: Path) -> None:
 
 
 def test_read_darkpool_falls_back_to_legacy_alias_dataset(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     darkpool = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY"],
@@ -168,7 +168,7 @@ def test_read_darkpool_falls_back_to_legacy_alias_dataset(tmp_path: Path) -> Non
 
 
 def test_read_darkpool_prefers_canonical_dataset_when_both_exist(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     canonical = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY"],
@@ -196,7 +196,7 @@ def test_read_darkpool_prefers_canonical_dataset_when_both_exist(tmp_path: Path)
 
 
 def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     gold = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
@@ -229,7 +229,7 @@ def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:
 
 
 def test_read_gold_features_supports_nested_watch_layout(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 12, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 12, 14, 0, tzinfo=UTC)
     features = pd.DataFrame(
         {
             "alert_id": ["evt-1"],
@@ -262,7 +262,7 @@ def test_read_gold_features_supports_nested_watch_layout(tmp_path: Path) -> None
 
 
 def test_read_greek_exposure_filters_symbol_and_asof(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     greek = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
@@ -283,7 +283,7 @@ def test_read_greek_exposure_filters_symbol_and_asof(tmp_path: Path) -> None:
 
 
 def test_read_market_tide_filters_time_and_asof(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     tide = pd.DataFrame(
         {
             "ts_utc": [base - timedelta(minutes=30), base, base + timedelta(minutes=10)],
@@ -305,7 +305,7 @@ def test_read_market_tide_filters_time_and_asof(tmp_path: Path) -> None:
 
 
 def test_read_max_pain_filters_symbol_and_asof(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     max_pain = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
@@ -330,7 +330,7 @@ def test_read_max_pain_filters_symbol_and_asof(tmp_path: Path) -> None:
 
 
 def test_read_iv_rank_filters_symbol_and_asof(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     iv_rank = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:MSFT"],
@@ -350,7 +350,7 @@ def test_read_iv_rank_filters_symbol_and_asof(tmp_path: Path) -> None:
 
 
 def test_read_bars_handles_hive_partition_column_type_conflict(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     _write_partition_conflict_parquet(
         tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05" / "part-0.parquet",
         ts=base,
@@ -364,7 +364,7 @@ def test_read_bars_handles_hive_partition_column_type_conflict(tmp_path: Path) -
 
 
 def test_read_market_tide_handles_hive_partition_column_type_conflict(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     _write_partition_conflict_parquet(
         tmp_path / "silver" / "feed=market_tide" / "instrument_type=equity" / "dt=2026-02-05" / "part-0.parquet",
         ts=base,
@@ -378,7 +378,7 @@ def test_read_market_tide_handles_hive_partition_column_type_conflict(tmp_path: 
 
 
 def test_read_bars_skips_corrupt_parquet_file_and_keeps_valid_rows(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     valid = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL"],
@@ -412,6 +412,33 @@ def test_is_corrupt_parquet_error_detects_dataset_open_variant() -> None:
     assert HeberReader._is_corrupt_parquet_error(exc) is True
 
 
+def test_is_schema_merge_error_detects_incompatible_types_variant() -> None:
+    exc = TypeError(
+        "Unable to merge: Field feed has incompatible types: "
+        "string vs dictionary<values=string, indices=int32, ordered=0>"
+    )
+
+    assert HeberReader._is_schema_merge_parquet_error(exc) is True
+
+
+def test_read_parquet_falls_back_to_filewise_on_incompatible_types_error(tmp_path: Path) -> None:
+    reader = HeberReader(data_root=tmp_path)
+    expected = pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [150.0]})
+
+    def _raise_incompatible_types_error(**_kwargs):  # noqa: ANN003
+        raise TypeError(
+            "Unable to merge: Field feed has incompatible types: "
+            "string vs dictionary<values=string, indices=int32, ordered=0>"
+        )
+
+    reader._read_table = _raise_incompatible_types_error  # type: ignore[method-assign]
+    reader._read_parquet_filewise = lambda **_kwargs: expected  # type: ignore[method-assign]
+
+    result = reader._read_parquet(path=tmp_path / "silver" / "feed=bars", columns=None, filters=None)
+
+    assert result.equals(expected)
+
+
 def test_read_parquet_falls_back_to_filewise_on_schema_merge_error(tmp_path: Path) -> None:
     reader = HeberReader(data_root=tmp_path)
     expected = pd.DataFrame({"alert_id": ["evt-1"], "premium": [125000.0]})
@@ -428,7 +455,7 @@ def test_read_parquet_falls_back_to_filewise_on_schema_merge_error(tmp_path: Pat
 
 
 def test_read_parquet_filewise_skips_hidden_sidecar_files(tmp_path: Path) -> None:
-    base = datetime(2026, 2, 5, 14, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     valid = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL"],

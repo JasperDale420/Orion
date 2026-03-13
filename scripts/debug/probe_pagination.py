@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 from dotenv import load_dotenv
@@ -34,7 +34,7 @@ async def probe_alerts_older_than():
     headers = {"Authorization": f"Bearer {UW_API_KEY}"}
 
     # Start from Now
-    cursor_ts = datetime.now(timezone.utc).isoformat()
+    cursor_ts = datetime.now(UTC).isoformat()
 
     async with httpx.AsyncClient() as client:
         # Page 1

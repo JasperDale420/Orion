@@ -1,0 +1,24 @@
+meta:
+  run_id: 3cecf7cf-134d-4991-be5d-e5f53fc1094c
+  created_at: '2026-03-02T21:30:27.145801+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-03-02_3cecf7cf-134d-4991-be5d-e5f53fc1094c.json
+  report_path: artifacts/reports/eod_report_2026-03-02.md
+proposal:
+  type: config_patch
+  priority: 1
+  rationale: System produced zero signals/trades today, suggesting potential over-filtering.
+    Need diagnostic mode to understand why.
+  evidence_pointers:
+    decisions_executed: 0
+    signals_live: 0
+    trade_journal: 0
+  test_plan:
+  - Enable debug logging for signal generation pipeline
+  - Check filter rule hit rates for next trading session
+  - Verify data ingestion completeness for tomorrow
+  changes:
+    diagnostics.signal_generation_debug: true
+    diagnostics.log_filter_rejections: true
+    safety.min_daily_signals_alert: 1

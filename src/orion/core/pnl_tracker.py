@@ -7,11 +7,11 @@ and alerts for risk thresholds.
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, date
-from typing import Dict, List, Optional, Any
+from datetime import date, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from orion.config import risk_settings, RiskSettings
+from orion.config import RiskSettings, risk_settings
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class PositionPnL:
     unrealized_pnl_pct: float
     realized_pnl: float
     side: str  # "long" or "short"
-    sector: Optional[str] = None
+    sector: str | None = None
     last_updated: datetime = field(default_factory=lambda: datetime.now(ET))
 
 
@@ -77,7 +77,7 @@ class PnLTracker:
 
     def __init__(self, config: RiskSettings | None = None):
         self.config = config if config else risk_settings
-        self.positions: Dict[str, PositionPnL] = {}
+        self.positions: dict[str, PositionPnL] = {}
         self.daily_realized_pnl: float = 0.0
         self.trades_today: int = 0
         self.winners: int = 0
@@ -85,8 +85,8 @@ class PnLTracker:
         self.starting_equity: float = 0.0
         self.current_equity: float = 0.0
         self.high_water_mark: float = 0.0
-        self.alerts: List[RiskAlert] = []
-        self._last_alert_check: Optional[datetime] = None
+        self.alerts: list[RiskAlert] = []
+        self._last_alert_check: datetime | None = None
 
     def update_position(
         self,
@@ -96,7 +96,7 @@ class PnLTracker:
         current_price: float,
         realized_pnl: float = 0.0,
         side: str = "long",
-        sector: Optional[str] = None,
+        sector: str | None = None,
     ) -> PositionPnL:
         """Update or create a position with current market data."""
         market_value = abs(quantity) * current_price
@@ -126,7 +126,7 @@ class PnLTracker:
         self.positions[ticker] = position
         return position
 
-    def close_position(self, ticker: str, exit_price: float) -> Optional[float]:
+    def close_position(self, ticker: str, exit_price: float) -> float | None:
         """Close a position and record realized P&L."""
         if ticker not in self.positions:
             return None
@@ -157,7 +157,7 @@ class PnLTracker:
 
         return realized_pnl
 
-    def get_portfolio_summary(self) -> Dict[str, Any]:
+    def get_portfolio_summary(self) -> dict[str, Any]:
         """Get current portfolio P&L summary."""
         total_unrealized = sum(p.unrealized_pnl for p in self.positions.values())
         total_market_value = sum(p.market_value for p in self.positions.values())
@@ -197,7 +197,7 @@ class PnLTracker:
             "timestamp": datetime.now(ET).isoformat(),
         }
 
-    def get_position_details(self) -> List[Dict[str, Any]]:
+    def get_position_details(self) -> list[dict[str, Any]]:
         """Get detailed breakdown of all positions."""
         return [
             {
@@ -216,9 +216,9 @@ class PnLTracker:
             for p in sorted(self.positions.values(), key=lambda x: abs(x.unrealized_pnl), reverse=True)
         ]
 
-    def get_sector_breakdown(self) -> Dict[str, Dict[str, float]]:
+    def get_sector_breakdown(self) -> dict[str, dict[str, float]]:
         """Get P&L breakdown by sector."""
-        sectors: Dict[str, Dict[str, float]] = {}
+        sectors: dict[str, dict[str, float]] = {}
 
         for p in self.positions.values():
             sector = p.sector or "Unknown"
@@ -231,9 +231,9 @@ class PnLTracker:
 
         return sectors
 
-    def check_risk_alerts(self) -> List[RiskAlert]:
+    def check_risk_alerts(self) -> list[RiskAlert]:
         """Check for risk threshold breaches and generate alerts."""
-        alerts: List[RiskAlert] = []
+        alerts: list[RiskAlert] = []
         summary = self.get_portfolio_summary()
 
         # Check daily loss limit
@@ -319,7 +319,7 @@ class PnLTracker:
 
 
 # Global instance
-_pnl_tracker: Optional[PnLTracker] = None
+_pnl_tracker: PnLTracker | None = None
 
 
 def get_pnl_tracker() -> PnLTracker:

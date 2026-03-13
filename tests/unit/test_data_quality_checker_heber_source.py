@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -10,7 +10,7 @@ from orion.jobs import data_quality_checker as dqc
 
 @pytest.mark.asyncio
 async def test_get_flow_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     flow_df = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY", "equity:QQQ", "equity:SPY"],
@@ -61,7 +61,7 @@ async def test_get_flow_summary_returns_empty_when_heber_unavailable(monkeypatch
 
 @pytest.mark.asyncio
 async def test_check_flow_staleness_uses_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     flow_df = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY"],
@@ -84,7 +84,7 @@ async def test_check_flow_staleness_uses_heber(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_get_darkpool_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     darkpool_df = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY", "equity:QQQ"],
@@ -116,7 +116,7 @@ async def test_get_darkpool_summary_prefers_heber(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_get_bars_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY", "equity:QQQ", "equity:SPY"],
@@ -148,7 +148,7 @@ async def test_get_bars_summary_prefers_heber(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_check_data_staleness_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY", "equity:QQQ", "equity:QQQ"],
@@ -174,7 +174,7 @@ async def test_check_data_staleness_prefers_heber(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_check_bar_gaps_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
             "instrument_key": ["equity:SPY", "equity:SPY", "equity:SPY"],
@@ -218,7 +218,7 @@ async def test_get_bars_summary_returns_empty_when_heber_unavailable(monkeypatch
 
 @pytest.mark.asyncio
 async def test_get_ml_features_summary_prefers_heber_gold(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     outcomes_df = pd.DataFrame(
         {
             "alert_id": ["a1", "a2", "a3"],
@@ -269,7 +269,7 @@ async def test_get_ml_features_summary_prefers_heber_gold(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_check_recent_labels_features_prefers_heber_gold(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     outcomes_df = pd.DataFrame(
         {
             "alert_id": ["a1", "a2", "old"],

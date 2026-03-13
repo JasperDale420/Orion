@@ -1,10 +1,9 @@
 from datetime import datetime
-from typing import List, Optional
 from uuid import UUID
 
-from alpaca.common.models import ModelWithID, ValidateBaseModel as BaseModel
-
 from alpaca.broker.enums import CIPApprovalStatus, CIPProvider, CIPResult, CIPStatus
+from alpaca.common.models import ModelWithID
+from alpaca.common.models import ValidateBaseModel as BaseModel
 
 
 class CIPKYCInfo(BaseModel):
@@ -34,24 +33,24 @@ class CIPKYCInfo(BaseModel):
     """
 
     id: str
-    risk_score: Optional[int] = None
-    risk_level: Optional[str] = None
-    risk_categories: Optional[List[str]] = None
-    applicant_name: Optional[str] = None
-    email_address: Optional[str] = None
-    nationality: Optional[str] = None
-    date_of_birth: Optional[datetime] = None
-    address: Optional[str] = None
-    postal_code: Optional[str] = None
-    country_of_residency: Optional[str] = None
-    kyc_completed_at: Optional[datetime] = None
-    ip_address: Optional[str] = None
-    check_initiated_at: Optional[datetime] = None
-    check_completed_at: Optional[datetime] = None
-    approval_status: Optional[CIPApprovalStatus] = None
-    approved_by: Optional[str] = None
-    approved_reason: Optional[str] = None
-    approved_at: Optional[datetime] = None
+    risk_score: int | None = None
+    risk_level: str | None = None
+    risk_categories: list[str] | None = None
+    applicant_name: str | None = None
+    email_address: str | None = None
+    nationality: str | None = None
+    date_of_birth: datetime | None = None
+    address: str | None = None
+    postal_code: str | None = None
+    country_of_residency: str | None = None
+    kyc_completed_at: datetime | None = None
+    ip_address: str | None = None
+    check_initiated_at: datetime | None = None
+    check_completed_at: datetime | None = None
+    approval_status: CIPApprovalStatus | None = None
+    approved_by: str | None = None
+    approved_reason: str | None = None
+    approved_at: datetime | None = None
 
 
 class CIPDocument(BaseModel):
@@ -97,26 +96,26 @@ class CIPDocument(BaseModel):
     """
 
     id: str
-    result: Optional[CIPResult] = None
-    status: Optional[CIPStatus] = None
-    created_at: Optional[datetime] = None
-    date_of_birth: Optional[datetime] = None
-    date_of_expiry: Optional[datetime] = None
-    document_numbers: Optional[List[str]] = None
-    document_type: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    gender: Optional[str] = None
-    issuing_country: Optional[str] = None
-    nationality: Optional[str] = None
-    age_validation: Optional[CIPResult] = None
-    compromised_document: Optional[CIPResult] = None
-    police_record: Optional[CIPStatus] = None
-    data_comparison: Optional[CIPResult] = None
-    data_comparison_breakdown: Optional[str] = None
-    image_integrity: Optional[CIPResult] = None
-    image_integrity_breakdown: Optional[str] = None
-    visual_authenticity: Optional[str] = None
+    result: CIPResult | None = None
+    status: CIPStatus | None = None
+    created_at: datetime | None = None
+    date_of_birth: datetime | None = None
+    date_of_expiry: datetime | None = None
+    document_numbers: list[str] | None = None
+    document_type: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    gender: str | None = None
+    issuing_country: str | None = None
+    nationality: str | None = None
+    age_validation: CIPResult | None = None
+    compromised_document: CIPResult | None = None
+    police_record: CIPStatus | None = None
+    data_comparison: CIPResult | None = None
+    data_comparison_breakdown: str | None = None
+    image_integrity: CIPResult | None = None
+    image_integrity_breakdown: str | None = None
+    visual_authenticity: str | None = None
 
 
 class CIPPhoto(BaseModel):
@@ -142,15 +141,15 @@ class CIPPhoto(BaseModel):
     """
 
     id: str
-    result: Optional[CIPResult] = None
-    status: Optional[CIPStatus] = None
-    created_at: Optional[datetime] = None
-    face_comparision: Optional[CIPResult] = None
-    face_comparison_breakdown: Optional[str] = None
-    image_integrity: Optional[CIPResult] = None
-    image_integrity_breakdown: Optional[str] = None
-    visual_authenticity: Optional[CIPResult] = None
-    visual_authenticity_breakdown: Optional[str] = None
+    result: CIPResult | None = None
+    status: CIPStatus | None = None
+    created_at: datetime | None = None
+    face_comparision: CIPResult | None = None
+    face_comparison_breakdown: str | None = None
+    image_integrity: CIPResult | None = None
+    image_integrity_breakdown: str | None = None
+    visual_authenticity: CIPResult | None = None
+    visual_authenticity_breakdown: str | None = None
 
 
 class CIPIdentity(BaseModel):
@@ -180,19 +179,19 @@ class CIPIdentity(BaseModel):
     """
 
     id: str
-    result: Optional[CIPResult] = None
-    status: Optional[CIPStatus] = None
-    created_at: Optional[datetime] = None
-    matched_address: Optional[CIPResult] = None
-    matched_addresses: Optional[str] = None
-    sources: Optional[CIPResult] = None
-    sources_breakdown: Optional[str] = None
-    address: Optional[CIPResult] = None
-    address_breakdown: Optional[str] = None
-    date_of_birth: Optional[CIPResult] = None
-    date_of_birth_breakdown: Optional[str] = None
-    tax_id: Optional[CIPResult] = None
-    tax_id_breakdown: Optional[str] = None
+    result: CIPResult | None = None
+    status: CIPStatus | None = None
+    created_at: datetime | None = None
+    matched_address: CIPResult | None = None
+    matched_addresses: str | None = None
+    sources: CIPResult | None = None
+    sources_breakdown: str | None = None
+    address: CIPResult | None = None
+    address_breakdown: str | None = None
+    date_of_birth: CIPResult | None = None
+    date_of_birth_breakdown: str | None = None
+    tax_id: CIPResult | None = None
+    tax_id_breakdown: str | None = None
 
 
 class CIPWatchlist(BaseModel):
@@ -215,14 +214,14 @@ class CIPWatchlist(BaseModel):
     """
 
     id: str
-    result: Optional[CIPResult] = None
-    status: Optional[CIPStatus] = None
-    created_at: Optional[datetime] = None
-    records: Optional[str] = None
-    politically_exposed_person: Optional[CIPResult] = None
-    sanction: Optional[CIPResult] = None
-    adverse_media: Optional[CIPResult] = None
-    monitored_lists: Optional[CIPResult] = None
+    result: CIPResult | None = None
+    status: CIPStatus | None = None
+    created_at: datetime | None = None
+    records: str | None = None
+    politically_exposed_person: CIPResult | None = None
+    sanction: CIPResult | None = None
+    adverse_media: CIPResult | None = None
+    monitored_lists: CIPResult | None = None
 
 
 class CIPInfo(ModelWithID):
@@ -245,14 +244,14 @@ class CIPInfo(ModelWithID):
     """
 
     account_id: UUID
-    provider_name: List[CIPProvider]
+    provider_name: list[CIPProvider]
     created_at: datetime
     updated_at: datetime
-    kyc: Optional[CIPKYCInfo] = None
-    document: Optional[CIPDocument] = None
-    photo: Optional[CIPPhoto] = None
-    identity: Optional[CIPIdentity] = None
-    watchlist: Optional[CIPWatchlist] = None
+    kyc: CIPKYCInfo | None = None
+    document: CIPDocument | None = None
+    photo: CIPPhoto | None = None
+    identity: CIPIdentity | None = None
+    watchlist: CIPWatchlist | None = None
 
     def __init__(self, *args, **kwargs):
         # upcast into uuid

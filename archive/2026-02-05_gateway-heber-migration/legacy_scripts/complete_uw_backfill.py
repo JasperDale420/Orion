@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import requests
 from dotenv import load_dotenv
@@ -15,13 +15,14 @@ db_url = os.getenv("DB_URL", "")
 if ":5432" in db_url:
     os.environ["DB_URL"] = db_url.replace(":5432", ":5440").replace("@timescaledb", "@localhost")
 
-from orion.config import system_settings
 from orion.connectors.uw_flow_connector import UWFlowConnector
 from orion.processing.ingest_pipeline import ingest_bronze_events
 from orion.processing.persistence import persist_silver_from_bronze
 from orion.shared.utils import parse_timestamptz
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.models import BronzeEvent
+
+from orion.config import system_settings
 
 # Setup Logger
 logging.basicConfig(level=logging.INFO)
@@ -146,7 +147,7 @@ async def main():
                 source_event_id=str(raw.get("id")) if raw.get("id") else None,
                 event_type="UW_FLOW",
                 event_ts_utc=event_ts,
-                received_ts_utc=datetime.now(timezone.utc),
+                received_ts_utc=datetime.now(UTC),
                 payload=raw,
                 session="REG",
             )

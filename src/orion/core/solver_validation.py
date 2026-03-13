@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any
 
 from orion.core.errors import ErrorCode
 from orion.core.solver_dsl import SolverDSL
 
 
-def validate_solver_definition_json(definition_json: Dict[str, Any]) -> SolverDSL:
+def validate_solver_definition_json(definition_json: dict[str, Any]) -> SolverDSL:
     """
     Validates a solver DSL definition_json per PRD Addendum FR 5.1.1.
     Returns the parsed DSL object (typed).
@@ -16,8 +16,8 @@ def validate_solver_definition_json(definition_json: Dict[str, Any]) -> SolverDS
 
 
 def ensure_solver_definition_json(
-    config_blob: Dict[str, Any], definition_json: Dict[str, Any] | None
-) -> Dict[str, Any]:
+    config_blob: dict[str, Any], definition_json: dict[str, Any] | None
+) -> dict[str, Any]:
     """
     Ensures we have a PRD DSL definition_json. If missing, derive from legacy config.
     Always returns a JSON-serializable dict.

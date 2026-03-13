@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+
 from orion.processing.rules.flow_rules import BearishPutPressureRule, BullishSweepRule
 from orion.storage.models_silver import SilverSignal
 
@@ -8,7 +9,7 @@ from orion.storage.models_silver import SilverSignal
 @pytest.fixture
 def mock_signal():
     return SilverSignal(
-        signal_id="sig_123", ticker="SPY", signal_ts_utc=datetime.now(timezone.utc), signal_type="UW_FLOW", features={}
+        signal_id="sig_123", ticker="SPY", signal_ts_utc=datetime.now(UTC), signal_type="UW_FLOW", features={}
     )
 
 

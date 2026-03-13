@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -9,7 +9,7 @@ import orion.main_price_target_labeler as labeler
 
 @pytest.mark.asyncio
 async def test_get_entry_signals_prefers_heber_flow_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_ts = now - timedelta(hours=3)
 
     class _FakeHeberReader:
@@ -33,6 +33,7 @@ async def test_get_entry_signals_prefers_heber_flow_when_available(monkeypatch: 
 
     async def _fake_get_labeled_event_ids(_event_ids: list[str]) -> set[str]:
         return set()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "_get_labeled_price_target_event_ids", _fake_get_labeled_event_ids, raising=False)
 
@@ -48,6 +49,7 @@ async def test_get_entry_signals_returns_empty_when_heber_empty(monkeypatch: pyt
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     entries = await labeler.get_entry_signals(limit=3)
@@ -57,7 +59,7 @@ async def test_get_entry_signals_returns_empty_when_heber_empty(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_get_subsequent_prices_prefers_heber_flow_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -75,6 +77,7 @@ async def test_get_subsequent_prices_prefers_heber_flow_when_available(monkeypat
                     },
                 ]
             )
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     prices = await labeler.get_subsequent_prices("AAPL250117C00200000", entry_ts)
@@ -89,11 +92,12 @@ async def test_get_subsequent_prices_prefers_heber_flow_when_available(monkeypat
 async def test_get_subsequent_prices_returns_empty_when_heber_missing_columns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame([{"unexpected": "shape"}])
+
     monkeypatch.setattr(labeler, "_heber_reader", _FakeHeberReader(), raising=False)
 
     prices = await labeler.get_subsequent_prices("AAPL250117C00200000", entry_ts)

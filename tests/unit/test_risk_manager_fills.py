@@ -19,8 +19,8 @@ async def test_process_fill_long_profit(risk_manager_factory):
     assert pos["qty"] == 0
 
     assert rm.current_equity == pytest.approx(10100.0)
-    # Daily loss should act correctly (it was 0, profit 100 -> stays 0)
-    assert rm.current_daily_loss == pytest.approx(0.0)
+    # Daily loss tracks net: profit of 100 means daily_loss goes to -100
+    assert rm.current_daily_loss == pytest.approx(-100.0)
 
 
 @pytest.mark.asyncio

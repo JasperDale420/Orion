@@ -2,7 +2,7 @@ import argparse
 import os
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +22,8 @@ class DarkpoolPrint:
 def _parse_ts(ts: str) -> datetime:
     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _as_float(v: Any) -> float | None:

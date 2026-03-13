@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,7 +24,7 @@ async def test_websocket_stream_flow():
     # Raising ExitException to break the 'while True' loop in test without retry
 
     flow_event = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "ticker": "AAPL",
         "premium": 50000,
         "type": "trade",

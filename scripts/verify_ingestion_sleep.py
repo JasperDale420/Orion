@@ -1,10 +1,9 @@
 from datetime import datetime, timedelta
-
-import pytz
+from zoneinfo import ZoneInfo
 
 
 def verify_sleep_logic():
-    eastern = pytz.timezone("America/New_York")
+    eastern = ZoneInfo("America/New_York")
     test_cases = [
         # (Current Time ET description, simulated datetime object)
         ("Weekday 11:00 AM (Active)", datetime(2023, 10, 25, 11, 0, 0, tzinfo=eastern)),

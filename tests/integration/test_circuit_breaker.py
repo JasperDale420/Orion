@@ -2,9 +2,10 @@ import asyncio
 from datetime import datetime
 
 import pytest
+from sqlalchemy import insert
+
 from orion.storage.models import SystemStatus
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
-from sqlalchemy import insert
 
 
 @pytest.mark.asyncio
@@ -51,6 +52,7 @@ async def test_circuit_breaker_blocks_trade():
     # 3. Attempt Execution
     with (
         patch("orion.execution.execution_engine.AlpacaTradingConnector"),
+        patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
         patch("orion.execution.execution_engine.AlpacaMarketConnector"),
     ):
         engine = ExecutionEngine()

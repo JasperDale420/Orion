@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -9,7 +9,7 @@ import orion.main_price_target_labeler as labeler
 
 @pytest.mark.asyncio
 async def test_get_gex_at_entry_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
@@ -29,7 +29,7 @@ async def test_get_gex_at_entry_prefers_heber_when_available(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_get_gex_at_entry_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
@@ -44,7 +44,7 @@ async def test_get_gex_at_entry_returns_none_when_heber_empty(monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_get_gex_rolling_averages_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
@@ -64,7 +64,7 @@ async def test_get_gex_rolling_averages_prefers_heber_when_available(monkeypatch
 
 @pytest.mark.asyncio
 async def test_get_gex_rolling_averages_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_greek_exposure(self, **_kwargs: Any) -> pd.DataFrame:
@@ -81,7 +81,7 @@ async def test_get_gex_rolling_averages_returns_none_when_heber_empty(monkeypatc
 async def test_get_market_tide_before_entry_prefers_heber_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_market_tide(self, **_kwargs: Any) -> pd.DataFrame:
@@ -104,7 +104,7 @@ async def test_get_market_tide_before_entry_prefers_heber_when_available(
 async def test_get_market_tide_before_entry_returns_none_when_heber_shape_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_market_tide(self, **_kwargs: Any) -> pd.DataFrame:
@@ -119,7 +119,7 @@ async def test_get_market_tide_before_entry_returns_none_when_heber_shape_missin
 
 @pytest.mark.asyncio
 async def test_get_darkpool_volume_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
@@ -141,7 +141,7 @@ async def test_get_darkpool_volume_prefers_heber_when_available(monkeypatch: pyt
 async def test_get_darkpool_volume_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 9, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_darkpool(self, **_kwargs: Any) -> pd.DataFrame:
@@ -155,7 +155,7 @@ async def test_get_darkpool_volume_returns_none_when_heber_empty(
 
 @pytest.mark.asyncio
 async def test_get_rvol_metrics_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
@@ -179,7 +179,7 @@ async def test_get_rvol_metrics_prefers_heber_when_available(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_get_rvol_metrics_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
@@ -203,7 +203,7 @@ async def test_get_rvol_metrics_returns_none_when_heber_empty(monkeypatch: pytes
 async def test_get_window_features_at_entry_builds_period_windows_from_heber(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
     flow_df = pd.DataFrame(
         {
             "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:AAPL", "equity:MSFT"],
@@ -276,7 +276,7 @@ async def test_get_window_features_at_entry_returns_empty_dict_when_heber_lookup
     monkeypatch.setattr(labeler, "_heber_reader", _FailingHeberReader(), raising=False)
     monkeypatch.setattr(labeler, "db_query", _fail_db_query, raising=False)
 
-    result = await labeler.get_window_features_at_entry("AAPL", datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc))
+    result = await labeler.get_window_features_at_entry("AAPL", datetime(2026, 2, 11, 15, 0, tzinfo=UTC))
 
     assert result == {}
 
@@ -292,7 +292,7 @@ async def test_get_velocity_backfill_candidates_is_decommissioned_noop(
 
     records = await labeler.get_velocity_backfill_candidates(
         limit=12,
-        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
+        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=UTC),
         after_event_id="vel-120",
     )
 
@@ -310,7 +310,7 @@ async def test_get_checkpoint_backfill_candidates_is_decommissioned_noop(
 
     records = await labeler.get_checkpoint_backfill_candidates(
         limit=20,
-        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=timezone.utc),
+        after_entry_ts=datetime(2026, 2, 9, 15, 0, tzinfo=UTC),
         after_event_id="cp-120",
     )
 
@@ -321,7 +321,7 @@ async def test_get_checkpoint_backfill_candidates_is_decommissioned_noop(
 async def test_get_sector_correlation_features_prefers_heber_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -359,16 +359,16 @@ async def test_get_sector_correlation_features_prefers_heber_when_available(
 
             return pd.DataFrame(
                 [
-                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 100.0},
-                    {"ts_event": datetime(2026, 2, 7, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 102.0},
-                    {"ts_event": datetime(2026, 2, 8, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 104.0},
-                    {"ts_event": datetime(2026, 2, 9, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 106.0},
-                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "AAPL", "close": 108.0},
-                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 200.0},
-                    {"ts_event": datetime(2026, 2, 7, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 202.0},
-                    {"ts_event": datetime(2026, 2, 8, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 204.0},
-                    {"ts_event": datetime(2026, 2, 9, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 206.0},
-                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc), "symbol": "SPY", "close": 208.0},
+                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=UTC), "symbol": "AAPL", "close": 100.0},
+                    {"ts_event": datetime(2026, 2, 7, 20, 0, tzinfo=UTC), "symbol": "AAPL", "close": 102.0},
+                    {"ts_event": datetime(2026, 2, 8, 20, 0, tzinfo=UTC), "symbol": "AAPL", "close": 104.0},
+                    {"ts_event": datetime(2026, 2, 9, 20, 0, tzinfo=UTC), "symbol": "AAPL", "close": 106.0},
+                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=UTC), "symbol": "AAPL", "close": 108.0},
+                    {"ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=UTC), "symbol": "SPY", "close": 200.0},
+                    {"ts_event": datetime(2026, 2, 7, 20, 0, tzinfo=UTC), "symbol": "SPY", "close": 202.0},
+                    {"ts_event": datetime(2026, 2, 8, 20, 0, tzinfo=UTC), "symbol": "SPY", "close": 204.0},
+                    {"ts_event": datetime(2026, 2, 9, 20, 0, tzinfo=UTC), "symbol": "SPY", "close": 206.0},
+                    {"ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=UTC), "symbol": "SPY", "close": 208.0},
                 ]
             )
 
@@ -386,7 +386,7 @@ async def test_get_sector_correlation_features_prefers_heber_when_available(
 async def test_get_sector_correlation_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -435,7 +435,7 @@ async def test_get_ticker_info_returns_defaults_without_db_lookup(
 
 @pytest.mark.asyncio
 async def test_get_opposing_flow_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
     end_ts = entry_ts + timedelta(hours=2)
 
     class _FakeHeberReader:
@@ -494,7 +494,7 @@ async def test_get_opposing_flow_prefers_heber_when_available(monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_get_opposing_flow_returns_zeroes_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
     end_ts = entry_ts + timedelta(hours=2)
 
     class _FakeHeberReader:
@@ -510,7 +510,7 @@ async def test_get_opposing_flow_returns_zeroes_when_heber_empty(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_get_flow_aggression_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -565,7 +565,7 @@ async def test_get_flow_aggression_prefers_heber_when_available(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_get_flow_aggression_returns_none_when_heber_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -584,7 +584,7 @@ async def test_get_flow_aggression_returns_none_when_heber_empty(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_get_institutional_flow_1w_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -609,7 +609,7 @@ async def test_get_institutional_flow_1w_prefers_heber_when_available(monkeypatc
 async def test_get_institutional_flow_1w_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:
@@ -624,32 +624,32 @@ async def test_get_institutional_flow_1w_returns_none_when_heber_empty(
 
 @pytest.mark.asyncio
 async def test_get_phase1_bucket_features_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
                     {
-                        "ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 6, 20, 0, tzinfo=UTC),
                         "open": 90.0,
                         "close": 90.0,
                         "vwap": 90.0,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=UTC),
                         "open": 100.0,
                         "close": 100.0,
                         "vwap": 100.0,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 14, 30, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 14, 30, tzinfo=UTC),
                         "open": 102.0,
                         "close": 103.0,
                         "vwap": 101.0,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=UTC),
                         "open": 103.0,
                         "close": 104.0,
                         "vwap": 102.0,
@@ -675,7 +675,7 @@ async def test_get_phase1_bucket_features_prefers_heber_when_available(monkeypat
 async def test_get_phase1_bucket_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
@@ -698,7 +698,7 @@ async def test_get_phase1_bucket_features_returns_none_when_heber_empty(
 
 @pytest.mark.asyncio
 async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
     option_chain = "AAPL250221C00190000"
 
     class _FakeHeberReader:
@@ -706,25 +706,25 @@ async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.
             return pd.DataFrame(
                 [
                     {
-                        "ts_event": datetime(2026, 2, 10, 15, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 10, 15, 0, tzinfo=UTC),
                         "option_chain": option_chain,
                         "open_interest": 110,
                         "iv": 0.24,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=UTC),
                         "option_chain": option_chain,
                         "open_interest": 120,
                         "iv": 0.28,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 16, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 16, 0, tzinfo=UTC),
                         "option_chain": option_chain,
                         "open_interest": 130,
                         "iv": 0.30,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=UTC),
                         "option_chain": "MSFT250221C00400000",
                         "open_interest": 999,
                         "iv": 0.99,
@@ -734,7 +734,7 @@ async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.
 
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             close_values = [100.0, 102.0, 101.0, 103.0, 105.0, 104.0, 107.0, 106.0, 108.0, 111.0, 109.0, 112.0]
-            start_day = datetime(2026, 1, 30, 20, 0, tzinfo=timezone.utc)
+            start_day = datetime(2026, 1, 30, 20, 0, tzinfo=UTC)
             rows = []
             for idx, close in enumerate(close_values):
                 rows.append({"ts_event": start_day + timedelta(days=idx), "symbol": "AAPL", "close": close})
@@ -761,7 +761,7 @@ async def test_get_p2_features_prefers_heber_when_available(monkeypatch: pytest.
 async def test_get_p2_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
     option_chain = "AAPL250221C00190000"
 
     class _FakeHeberReader:
@@ -785,33 +785,33 @@ async def test_get_p2_features_returns_none_when_heber_empty(
 
 @pytest.mark.asyncio
 async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
-    expiry = datetime(2026, 2, 21, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
+    expiry = datetime(2026, 2, 21, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame(
                 [
                     {
-                        "ts_event": datetime(2026, 2, 1, 20, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 1, 20, 0, tzinfo=UTC),
                         "symbol": "AAPL",
                         "high": 150.0,
                         "close": 140.0,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 10, 20, 0, tzinfo=UTC),
                         "symbol": "AAPL",
                         "high": 160.0,
                         "close": 155.0,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 0, tzinfo=UTC),
                         "symbol": "AAPL",
                         "high": 158.0,
                         "close": 150.0,
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=UTC),
                         "symbol": "MSFT",
                         "high": 500.0,
                         "close": 500.0,
@@ -823,22 +823,22 @@ async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.
             return pd.DataFrame(
                 [
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 5, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 5, tzinfo=UTC),
                         "ticker": "AAPL",
                         "expiry": "2026-02-21",
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 20, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 20, tzinfo=UTC),
                         "ticker": "AAPL",
                         "expiry": "2026-02-21",
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 14, 20, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 14, 20, tzinfo=UTC),
                         "ticker": "AAPL",
                         "expiry": "2026-02-21",
                     },
                     {
-                        "ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=timezone.utc),
+                        "ts_event": datetime(2026, 2, 11, 15, 10, tzinfo=UTC),
                         "ticker": "AAPL",
                         "expiry": "2026-02-28",
                     },
@@ -858,8 +858,8 @@ async def test_get_p3_features_prefers_heber_when_available(monkeypatch: pytest.
 async def test_get_p3_features_returns_none_when_heber_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=timezone.utc)
-    expiry = datetime(2026, 2, 21, tzinfo=timezone.utc)
+    entry_ts = datetime(2026, 2, 11, 15, 30, tzinfo=UTC)
+    expiry = datetime(2026, 2, 21, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_bars(self, **_kwargs: Any) -> pd.DataFrame:
@@ -882,7 +882,7 @@ async def test_get_p3_features_returns_none_when_heber_empty(
 @pytest.mark.asyncio
 async def test_get_flow_greeks_prefers_heber_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
     event_id = "evt-123"
-    flow_ts = datetime(2026, 2, 11, 15, 0, tzinfo=timezone.utc)
+    flow_ts = datetime(2026, 2, 11, 15, 0, tzinfo=UTC)
 
     class _FakeHeberReader:
         def read_flow(self, **_kwargs: Any) -> pd.DataFrame:

@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
+
 from orion.core.feature_registry import FeatureRegistry
 from orion.processing.feature_engine import FeatureEngine
 
@@ -30,7 +31,7 @@ async def test_feature_engine_compute_subset():
 
     # Mock History
     ticker = "AAPL"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     df = pd.DataFrame(
         {
@@ -73,7 +74,7 @@ async def test_feature_engine_compute_subset():
 async def test_feature_engine_unknown_set_fallback():
     engine = FeatureEngine()
     ticker = "AAPL"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     df = pd.DataFrame({"close": [100.0]}, index=[now])
     engine.history[ticker] = df
     candidate = MockCandidate(ticker, now)

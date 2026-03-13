@@ -1,6 +1,6 @@
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -14,8 +14,8 @@ class MockBronzeEvent:
         self.source = "TEST"
         self.source_event_id = str(i)
         self.event_type = "TEST_TYPE"
-        self.event_ts_utc = datetime.now(timezone.utc)
-        self.received_ts_utc = datetime.now(timezone.utc)
+        self.event_ts_utc = datetime.now(UTC)
+        self.received_ts_utc = datetime.now(UTC)
         self.trading_date = None
         self.session = "OPEN"
         self.ticker = "AAPL"
@@ -26,7 +26,7 @@ class MockBronzeEvent:
 
 def reproduce():
     # Setup
-    N = 100000
+    N = 100000  # noqa: N806
     print(f"Generating {N} mock events...")
     events = [MockBronzeEvent(i) for i in range(N)]
 

@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -47,31 +47,31 @@ class DarkpoolTrade:
         volume (Union[Unset, int]): The volume of the ticker for the Trading Day. Example: 23132119.
     """
 
-    canceled: Union[Unset, bool] = UNSET
-    executed_at: Union[Unset, str] = UNSET
-    ext_hour_sold_codes: Union[Unset, None, SingleTradeExternalHourSoldCode] = UNSET
-    market_center: Union[Unset, str] = UNSET
-    nbbo_ask: Union[Unset, float] = UNSET
-    nbbo_ask_quantity: Union[Unset, float] = UNSET
-    nbbo_bid: Union[Unset, float] = UNSET
-    nbbo_bid_quantity: Union[Unset, float] = UNSET
-    premium: Union[Unset, str] = UNSET
-    price: Union[Unset, str] = UNSET
-    sale_cond_codes: Union[Unset, None, SingleTradeSaleCondCode] = UNSET
-    size: Union[Unset, int] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    tracking_id: Union[Unset, int] = UNSET
-    trade_code: Union[Unset, None, SingleTradeTradeCode] = UNSET
-    trade_settlement: Union[Unset, None, SingleTradeSettlement] = UNSET
-    volume: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    canceled: Unset | bool = UNSET
+    executed_at: Unset | str = UNSET
+    ext_hour_sold_codes: Unset | None | SingleTradeExternalHourSoldCode = UNSET
+    market_center: Unset | str = UNSET
+    nbbo_ask: Unset | float = UNSET
+    nbbo_ask_quantity: Unset | float = UNSET
+    nbbo_bid: Unset | float = UNSET
+    nbbo_bid_quantity: Unset | float = UNSET
+    premium: Unset | str = UNSET
+    price: Unset | str = UNSET
+    sale_cond_codes: Unset | None | SingleTradeSaleCondCode = UNSET
+    size: Unset | int = UNSET
+    ticker: Unset | str = UNSET
+    tracking_id: Unset | int = UNSET
+    trade_code: Unset | None | SingleTradeTradeCode = UNSET
+    trade_settlement: Unset | None | SingleTradeSettlement = UNSET
+    volume: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         canceled = self.canceled
 
         executed_at = self.executed_at
 
-        ext_hour_sold_codes: Union[Unset, None, str] = UNSET
+        ext_hour_sold_codes: Unset | None | str = UNSET
         if not isinstance(self.ext_hour_sold_codes, Unset):
             ext_hour_sold_codes = self.ext_hour_sold_codes.value if self.ext_hour_sold_codes else None
 
@@ -89,7 +89,7 @@ class DarkpoolTrade:
 
         price = self.price
 
-        sale_cond_codes: Union[Unset, None, str] = UNSET
+        sale_cond_codes: Unset | None | str = UNSET
         if not isinstance(self.sale_cond_codes, Unset):
             sale_cond_codes = self.sale_cond_codes.value if self.sale_cond_codes else None
 
@@ -99,17 +99,17 @@ class DarkpoolTrade:
 
         tracking_id = self.tracking_id
 
-        trade_code: Union[Unset, None, str] = UNSET
+        trade_code: Unset | None | str = UNSET
         if not isinstance(self.trade_code, Unset):
             trade_code = self.trade_code.value if self.trade_code else None
 
-        trade_settlement: Union[Unset, None, str] = UNSET
+        trade_settlement: Unset | None | str = UNSET
         if not isinstance(self.trade_settlement, Unset):
             trade_settlement = self.trade_settlement.value if self.trade_settlement else None
 
         volume = self.volume
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if canceled is not UNSET:
@@ -150,14 +150,14 @@ class DarkpoolTrade:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         canceled = d.pop("canceled", UNSET)
 
         executed_at = d.pop("executed_at", UNSET)
 
         _ext_hour_sold_codes = d.pop("ext_hour_sold_codes", UNSET)
-        ext_hour_sold_codes: Union[Unset, None, SingleTradeExternalHourSoldCode]
+        ext_hour_sold_codes: Unset | None | SingleTradeExternalHourSoldCode
         if isinstance(_ext_hour_sold_codes, Unset):
             ext_hour_sold_codes = UNSET
         elif _ext_hour_sold_codes is None:
@@ -180,7 +180,7 @@ class DarkpoolTrade:
         price = d.pop("price", UNSET)
 
         _sale_cond_codes = d.pop("sale_cond_codes", UNSET)
-        sale_cond_codes: Union[Unset, None, SingleTradeSaleCondCode]
+        sale_cond_codes: Unset | None | SingleTradeSaleCondCode
         if isinstance(_sale_cond_codes, Unset):
             sale_cond_codes = UNSET
         elif _sale_cond_codes is None:
@@ -195,7 +195,7 @@ class DarkpoolTrade:
         tracking_id = d.pop("tracking_id", UNSET)
 
         _trade_code = d.pop("trade_code", UNSET)
-        trade_code: Union[Unset, None, SingleTradeTradeCode]
+        trade_code: Unset | None | SingleTradeTradeCode
         if isinstance(_trade_code, Unset):
             trade_code = UNSET
         elif _trade_code is None:
@@ -204,7 +204,7 @@ class DarkpoolTrade:
             trade_code = SingleTradeTradeCode(_trade_code)
 
         _trade_settlement = d.pop("trade_settlement", UNSET)
-        trade_settlement: Union[Unset, None, SingleTradeSettlement]
+        trade_settlement: Unset | None | SingleTradeSettlement
         if isinstance(_trade_settlement, Unset):
             trade_settlement = UNSET
         elif _trade_settlement is None:
@@ -238,7 +238,7 @@ class DarkpoolTrade:
         return darkpool_trade
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

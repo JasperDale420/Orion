@@ -7,13 +7,14 @@ sys.modules["litellm"] = MagicMock()
 from unittest.mock import patch
 
 import pytest
+
 from orion.agents.meta_search_agent import MetaSearchAgent
 from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdit, SolverFeatures
 
 
 @pytest.fixture
 def agent():
-    with patch("orion.agents.meta_agent.MetaAgent") as MockMeta:
+    with patch("orion.agents.meta_agent.MetaAgent") as MockMeta:  # noqa: N806
         agent = MetaSearchAgent()
         # Ensure meta_agent inside is also a mock
         agent.meta_agent = MockMeta.return_value

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -55,26 +55,26 @@ class CountrySectorExposure:
             .
     """
 
-    country: Union[Unset, List["EtfCountriesItem"]] = UNSET
-    sector: Union[Unset, List["EtfSectorsItem"]] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    country: Unset | list["EtfCountriesItem"] = UNSET
+    sector: Unset | list["EtfSectorsItem"] = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
-        country: Union[Unset, List[Dict[str, Any]]] = UNSET
+    def to_dict(self) -> dict[str, Any]:
+        country: Unset | list[dict[str, Any]] = UNSET
         if not isinstance(self.country, Unset):
             country = []
             for componentsschemas_etf_countries_item_data in self.country:
                 componentsschemas_etf_countries_item = componentsschemas_etf_countries_item_data.to_dict()
                 country.append(componentsschemas_etf_countries_item)
 
-        sector: Union[Unset, List[Dict[str, Any]]] = UNSET
+        sector: Unset | list[dict[str, Any]] = UNSET
         if not isinstance(self.sector, Unset):
             sector = []
             for componentsschemas_etf_sectors_item_data in self.sector:
                 componentsschemas_etf_sectors_item = componentsschemas_etf_sectors_item_data.to_dict()
                 sector.append(componentsschemas_etf_sectors_item)
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if country is not UNSET:
@@ -85,7 +85,7 @@ class CountrySectorExposure:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         from ..models.etf_countries_item import EtfCountriesItem
         from ..models.etf_sectors_item import EtfSectorsItem
 
@@ -113,7 +113,7 @@ class CountrySectorExposure:
         return country_sector_exposure
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

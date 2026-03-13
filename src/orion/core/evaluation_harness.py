@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 import pandas as pd
@@ -21,22 +21,22 @@ class DatasetSpec:
     """
 
     dataset_tag: str
-    time_window_start: Optional[datetime]
-    time_window_end: Optional[datetime]
+    time_window_start: datetime | None
+    time_window_end: datetime | None
 
 
 def _compute_t1_times(
-    candidates: List[CandidateTrade],
-    price_data: Dict[str, pd.DataFrame],
+    candidates: list[CandidateTrade],
+    price_data: dict[str, pd.DataFrame],
     labeler: TripleBarrierLabeling,
 ) -> pd.Series:
     candidates_sorted = sorted(candidates, key=lambda x: x.timestamp_utc)
 
-    events_by_ticker: Dict[str, List[datetime]] = {}
+    events_by_ticker: dict[str, list[datetime]] = {}
     for c in candidates_sorted:
         events_by_ticker.setdefault(c.ticker, []).append(c.timestamp_utc)
 
-    t1_by_event: Dict[Tuple[str, datetime], datetime] = {}
+    t1_by_event: dict[tuple[str, datetime], datetime] = {}
     for ticker, events in events_by_ticker.items():
         df = price_data.get(ticker)
         if df is None or "close" not in df.columns:
@@ -47,11 +47,11 @@ def _compute_t1_times(
         for event_ts, row in labels.iterrows():
             hit_ts = row.get("barrier_hit_ts")
             if pd.notna(hit_ts):
-                t1_by_event[
-                    (ticker, event_ts.to_pydatetime() if hasattr(event_ts, "to_pydatetime") else event_ts)
-                ] = hit_ts
+                t1_by_event[(ticker, event_ts.to_pydatetime() if hasattr(event_ts, "to_pydatetime") else event_ts)] = (
+                    hit_ts
+                )
 
-    t1_times: List[datetime] = []
+    t1_times: list[datetime] = []
     for c in candidates_sorted:
         hit = t1_by_event.get((c.ticker, c.timestamp_utc))
         if hit is None:
@@ -77,14 +77,14 @@ def _compute_t1_times(
 def run_solver_backtest(
     *,
     solver_id: str,
-    candidates: List[CandidateTrade],
-    price_data: Dict[str, pd.DataFrame],
+    candidates: list[CandidateTrade],
+    price_data: dict[str, pd.DataFrame],
     dataset_spec: DatasetSpec,
     solver_config: Any,
     n_splits: int = 3,
     embargo_pct: float = 0.01,
     n_trials: int = 1,
-) -> Tuple[SolverRun, Dict[str, Any]]:
+) -> tuple[SolverRun, dict[str, Any]]:
     """
     PRD.md FR 5.2.1: RunSolverBacktest.
 

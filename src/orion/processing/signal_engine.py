@@ -1,18 +1,19 @@
 import hashlib
-import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from orion.analysis.regime import MultiAxisRegimeDetector, RegimeDetector
 from orion.config import risk_settings, system_settings
+from orion.core.enums import DecisionStatus
 from orion.core.errors import ErrorCode, FeatureComputationError, ModelInferenceError
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_router import SolverRouter
 from orion.core.solver_schema import LiveContext
 from orion.processing.feature_engine import FeatureEngine
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class SignalEngine:
@@ -57,7 +58,7 @@ class SignalEngine:
                 legacy_candidates.append(
                     CandidateTrade(
                         candidate_id=hashlib.sha256(
-                            f"{signal.ticker}_{ts.isoformat()}_bullish_sweep_v1".encode("utf-8")
+                            f"{signal.ticker}_{ts.isoformat()}_bullish_sweep_v1".encode()
                         ).hexdigest(),
                         ticker=signal.ticker,
                         timestamp_utc=ts,
@@ -126,6 +127,7 @@ class SignalEngine:
                     dte = 0
             except Exception:
                 dte = None
+                logger.debug("DTE calculation failed", extra={"ticker": candidate.ticker}, exc_info=True)
 
         payload = {
             "ticker": candidate.ticker,
@@ -186,7 +188,7 @@ class SignalEngine:
                 model_version=None,
                 decision="SKIP",
                 reason=f"Regime SHOCK/blocked: vol={regime_snapshot.vol.value}, vix={regime_snapshot.vix_regime.value}",
-                executed_successfully="SKIPPED",
+                executed_successfully=DecisionStatus.SKIPPED,
                 execution_params={},
                 decision_trace_json={
                     "regime_blocked": True,
@@ -232,7 +234,7 @@ class SignalEngine:
                         model_version=None,
                         decision="SKIP",
                         reason=f"ML pre-filter: score {ml_score:.2f} below threshold ({ml_threshold})",
-                        executed_successfully="SKIPPED",
+                        executed_successfully=DecisionStatus.SKIPPED,
                         execution_params={},
                         decision_trace_json={
                             "ml_prefilter": True,
@@ -280,13 +282,13 @@ class SignalEngine:
         decision_record = StrategyDecision(
             decision_id=f"dec_{candidate.candidate_id}",
             candidate_id=candidate.candidate_id,
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             ticker=candidate.ticker,
             strategy_version_id="V1_LEGACY",  # Default placeholder
             model_version=None,
             decision="SKIP",
             reason="Default: No decision made",
-            executed_successfully="PENDING",
+            executed_successfully=DecisionStatus.PENDING,
             execution_params={},
             decision_trace_json={},
         )
@@ -311,12 +313,18 @@ class SignalEngine:
                         ss.config, candidate, feature_engine=self.feature_engine
                     )
                 except (ModelInferenceError, FeatureComputationError) as e:
+                    error_code = getattr(e, "code", ErrorCode.EXECUTION_FAILED)
+                    if hasattr(error_code, "value"):
+                        error_code_value = error_code.value
+                    else:
+                        error_code_value = str(error_code)
+
                     logger.error(
                         f"Solver {ss.solver_id} FAILED FAST: {e}",
                         extra={
                             "event_type": "SOLVER_EXEC_CRASH",
                             "solver_id": ss.solver_id,
-                            "error_code": e.code.value if hasattr(e, "code") else ErrorCode.EXECUTION_FAILED.value,
+                            "error_code": error_code_value,
                         },
                     )
                     continue
@@ -451,13 +459,13 @@ class SignalEngine:
         return StrategyDecision(
             decision_id=f"fallback_{candidate.candidate_id}",
             candidate_id=candidate.candidate_id,
-            timestamp_utc=datetime.now(timezone.utc),
+            timestamp_utc=datetime.now(UTC),
             ticker=candidate.ticker,
             strategy_version_id=system_settings.baseline_solver_id or "FALLBACK_V1",
             model_version=None,
             decision="SKIP",
             reason="Fallback: Router empty and no baseline solver applied; defaulting to safety SKIP",
-            executed_successfully="SKIPPED",
+            executed_successfully=DecisionStatus.SKIPPED,
             execution_params={},
             decision_trace_json={
                 "fallback_triggered": True,

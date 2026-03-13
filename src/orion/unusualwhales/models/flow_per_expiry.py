@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -70,32 +70,32 @@ class FlowPerExpiry:
         ticker (Union[Unset, str]): The stock ticker. Example: AAPL.
     """
 
-    call_otm_premium: Union[Unset, str] = UNSET
-    call_otm_trades: Union[Unset, int] = UNSET
-    call_otm_volume: Union[Unset, int] = UNSET
-    call_premium: Union[Unset, str] = UNSET
-    call_premium_ask_side: Union[Unset, str] = UNSET
-    call_premium_bid_side: Union[Unset, str] = UNSET
-    call_trades: Union[Unset, int] = UNSET
-    call_volume: Union[Unset, int] = UNSET
-    call_volume_ask_side: Union[Unset, int] = UNSET
-    call_volume_bid_side: Union[Unset, int] = UNSET
-    date: Union[Unset, str] = UNSET
-    expiry: Union[Unset, str] = UNSET
-    put_otm_premium: Union[Unset, str] = UNSET
-    put_otm_trades: Union[Unset, int] = UNSET
-    put_otm_volume: Union[Unset, int] = UNSET
-    put_premium: Union[Unset, str] = UNSET
-    put_premium_ask_side: Union[Unset, str] = UNSET
-    put_premium_bid_side: Union[Unset, str] = UNSET
-    put_trades: Union[Unset, int] = UNSET
-    put_volume: Union[Unset, int] = UNSET
-    put_volume_ask_side: Union[Unset, int] = UNSET
-    put_volume_bid_side: Union[Unset, int] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    call_otm_premium: Unset | str = UNSET
+    call_otm_trades: Unset | int = UNSET
+    call_otm_volume: Unset | int = UNSET
+    call_premium: Unset | str = UNSET
+    call_premium_ask_side: Unset | str = UNSET
+    call_premium_bid_side: Unset | str = UNSET
+    call_trades: Unset | int = UNSET
+    call_volume: Unset | int = UNSET
+    call_volume_ask_side: Unset | int = UNSET
+    call_volume_bid_side: Unset | int = UNSET
+    date: Unset | str = UNSET
+    expiry: Unset | str = UNSET
+    put_otm_premium: Unset | str = UNSET
+    put_otm_trades: Unset | int = UNSET
+    put_otm_volume: Unset | int = UNSET
+    put_premium: Unset | str = UNSET
+    put_premium_ask_side: Unset | str = UNSET
+    put_premium_bid_side: Unset | str = UNSET
+    put_trades: Unset | int = UNSET
+    put_volume: Unset | int = UNSET
+    put_volume_ask_side: Unset | int = UNSET
+    put_volume_bid_side: Unset | int = UNSET
+    ticker: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         call_otm_premium = self.call_otm_premium
 
         call_otm_trades = self.call_otm_trades
@@ -142,7 +142,7 @@ class FlowPerExpiry:
 
         ticker = self.ticker
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if call_otm_premium is not UNSET:
@@ -195,7 +195,7 @@ class FlowPerExpiry:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         call_otm_premium = d.pop("call_otm_premium", UNSET)
 
@@ -273,7 +273,7 @@ class FlowPerExpiry:
         return flow_per_expiry
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

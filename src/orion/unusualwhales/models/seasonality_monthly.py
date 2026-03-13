@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -33,17 +33,17 @@ class SeasonalityMonthly:
         years (Union[Unset, float]): The number of years used to calculate the data. Example: 3.
     """
 
-    avg_change: Union[Unset, float] = UNSET
-    max_change: Union[Unset, float] = UNSET
-    median_change: Union[Unset, float] = UNSET
-    min_change: Union[Unset, float] = UNSET
-    month: Union[Unset, int] = UNSET
-    positive_closes: Union[Unset, int] = UNSET
-    positive_months_perc: Union[Unset, float] = UNSET
-    years: Union[Unset, float] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    avg_change: Unset | float = UNSET
+    max_change: Unset | float = UNSET
+    median_change: Unset | float = UNSET
+    min_change: Unset | float = UNSET
+    month: Unset | int = UNSET
+    positive_closes: Unset | int = UNSET
+    positive_months_perc: Unset | float = UNSET
+    years: Unset | float = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         avg_change = self.avg_change
 
         max_change = self.max_change
@@ -60,7 +60,7 @@ class SeasonalityMonthly:
 
         years = self.years
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if avg_change is not UNSET:
@@ -83,7 +83,7 @@ class SeasonalityMonthly:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         avg_change = d.pop("avg_change", UNSET)
 
@@ -116,7 +116,7 @@ class SeasonalityMonthly:
         return seasonality_monthly
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

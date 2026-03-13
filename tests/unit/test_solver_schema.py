@@ -1,8 +1,9 @@
 from datetime import datetime
 
 import pytest
-from orion.core.solver_schema import EditOp, EditOpType, SolverEdit
 from pydantic import ValidationError
+
+from orion.core.solver_schema import EditOp, EditOpType, SolverEdit
 
 
 def test_edit_op_creation():

@@ -10,26 +10,25 @@ Usage:
 
 import asyncio
 import os
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import requests
-from sqlalchemy import text
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
+from sqlalchemy import text
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = setup_struct_logger("orion.backfill_historical_gex")
 
 BASE_URL = "https://api.unusualwhales.com"
 
 
-async def get_dates_needing_gex() -> List[date]:
+async def get_dates_needing_gex() -> list[date]:
     """Find trading dates where we have labels but no GEX data."""
 
-    async def query(session: Any) -> List[Any]:
+    async def query(session: Any) -> list[Any]:
         stmt = text("""
             SELECT DISTINCT DATE(entry_ts) as trading_date
             FROM price_target_labels
@@ -41,7 +40,7 @@ async def get_dates_needing_gex() -> List[date]:
 
     label_dates = await db_query(query)
 
-    async def query_gex_dates(session: Any) -> List[Any]:
+    async def query_gex_dates(session: Any) -> list[Any]:
         stmt = text("""
             SELECT DISTINCT DATE(ts_utc) as trading_date
             FROM silver_greek_exposure
@@ -60,11 +59,11 @@ async def get_dates_needing_gex() -> List[date]:
     return missing_dates
 
 
-async def get_tickers_for_date(trading_date: date) -> Set[str]:
+async def get_tickers_for_date(trading_date: date) -> set[str]:
     """Get unique underlying tickers from labels for a specific date."""
 
-    async def query(session: Any) -> List[Any]:
-        start_ts = datetime.combine(trading_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    async def query(session: Any) -> list[Any]:
+        start_ts = datetime.combine(trading_date, datetime.min.time()).replace(tzinfo=UTC)
         end_ts = start_ts + timedelta(days=1)
 
         stmt = text("""
@@ -96,7 +95,7 @@ async def get_tickers_for_date(trading_date: date) -> Set[str]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-def fetch_gex_for_date(ticker: str, trading_date: date, api_key: str) -> Optional[Dict[str, Any]]:
+def fetch_gex_for_date(ticker: str, trading_date: date, api_key: str) -> dict[str, Any] | None:
     """Fetch GEX for a ticker on a specific historical date."""
     date_str = trading_date.strftime("%Y-%m-%d")
     url = f"{BASE_URL}/api/stock/{ticker}/greek-exposure"
@@ -112,7 +111,7 @@ def fetch_gex_for_date(ticker: str, trading_date: date, api_key: str) -> Optiona
         return None
 
 
-async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) -> bool:
+async def store_gex_data(ticker: str, trading_date: date, data: dict[str, Any]) -> bool:
     """Store GEX data in silver_greek_exposure table."""
 
     exposure_data = data.get("data")
@@ -158,7 +157,7 @@ async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) 
         spot = 0
 
     # Use midday timestamp for the historical record
-    ts_utc = datetime.combine(trading_date, datetime.min.time()).replace(hour=12, tzinfo=timezone.utc)
+    ts_utc = datetime.combine(trading_date, datetime.min.time()).replace(hour=12, tzinfo=UTC)
 
     async def write(session: Any) -> None:
         stmt = text("""
@@ -194,7 +193,7 @@ async def store_gex_data(ticker: str, trading_date: date, data: Dict[str, Any]) 
     return True
 
 
-async def run_backfill() -> Dict[str, Any]:
+async def run_backfill() -> dict[str, Any]:
     """Run the historical GEX backfill."""
 
     await init_db()

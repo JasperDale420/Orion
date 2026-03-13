@@ -420,11 +420,16 @@ class HeberReader:
             table = self._read_table(path=path, columns=columns, filters=filters, partitioning=None)
             return cast(pd.DataFrame, table.to_pandas())
         except Exception as exc:
-            if self._is_corrupt_parquet_error(exc) or self._is_schema_merge_parquet_error(exc):
+            if (
+                self._is_corrupt_parquet_error(exc)
+                or self._is_schema_merge_parquet_error(exc)
+                or isinstance(exc, OSError)
+            ):
                 logger.warning(
                     "heber_reader_filewise_fallback",
                     path=str(path),
                     error=str(exc),
+                    error_type=type(exc).__name__,
                 )
                 return self._read_parquet_filewise(path=path, columns=columns, filters=filters)
             logger.error(
@@ -442,7 +447,15 @@ class HeberReader:
         partitioning: str | None,
     ) -> Any:
         try:
-            return pq.read_table(path, columns=columns, filters=filters if filters else None, partitioning=partitioning)
+            source: Path | list[str] = path
+            if path.is_dir():
+                # Pre-filter to skip macOS ._ sidecar files that cause
+                # EPERM errors and trigger noisy filewise fallback warnings.
+                valid_files = [str(f) for f in sorted(path.rglob("*.parquet")) if not f.name.startswith("._")]
+                source = valid_files if valid_files else path
+            return pq.read_table(
+                source, columns=columns, filters=filters if filters else None, partitioning=partitioning
+            )
         except Exception as exc:
             if self._is_corrupt_parquet_error(exc):
                 raise
@@ -468,6 +481,7 @@ class HeberReader:
             return pd.DataFrame()
 
         frames: list[pd.DataFrame] = []
+        skipped_count = 0
         for parquet_file in parquet_files:
             try:
                 table = self._read_table(path=parquet_file, columns=columns, filters=filters, partitioning=None)
@@ -475,11 +489,22 @@ class HeberReader:
                 if not frame.empty:
                     frames.append(frame)
             except Exception as file_exc:
+                skipped_count += 1
                 logger.warning(
-                    "heber_reader_skip_file",
+                    "heber_reader_skip_corrupt_file",
                     path=str(parquet_file),
                     error=str(file_exc),
+                    error_type=type(file_exc).__name__,
                 )
+
+        if skipped_count:
+            logger.warning(
+                "heber_reader_filewise_summary",
+                dataset_path=str(path),
+                total_files=len(parquet_files),
+                skipped_files=skipped_count,
+                loaded_files=len(frames),
+            )
 
         if not frames:
             return pd.DataFrame()
@@ -487,19 +512,27 @@ class HeberReader:
 
     @staticmethod
     def _is_corrupt_parquet_error(exc: Exception) -> bool:
+        exc_type_name = type(exc).__name__
+        if exc_type_name in ("ArrowInvalid", "ArrowIOError"):
+            return True
         message = str(exc).lower()
         return (
             "parquet magic bytes not found in footer" in message
             or "could not read schema from" in message
             or "is this a 'parquet' file?" in message
+            or "couldn't deserialize thrift" in message
+            or "not a parquet file" in message
+            or "corrupted" in message
             or ("error creating dataset" in message and "could not open parquet input source" in message)
         )
 
     @staticmethod
     def _is_schema_merge_parquet_error(exc: Exception) -> bool:
         message = str(exc).lower()
-        return ("unsupported cast from" in message and "to null" in message and "cast_null" in message) or (
-            "could not merge schemas" in message
+        return (
+            ("unsupported cast from" in message and "to null" in message and "cast_null" in message)
+            or ("could not merge schemas" in message)
+            or ("unable to merge" in message and "incompatible types" in message)
         )
 
 

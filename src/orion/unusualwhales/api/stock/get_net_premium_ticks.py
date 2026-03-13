@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -13,16 +13,16 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     ticker: str,
     *,
-    date: Union[Unset, str] = UNSET,
-) -> Dict[str, Any]:
+    date: Unset | str = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["date"] = date
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/net-prem-ticks",
         "params": params,
@@ -33,7 +33,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, NetPremTickResults, str]]:
+) -> ErrorMessage | NetPremTickResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -56,7 +56,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, NetPremTickResults, str]]:
+) -> Response[ErrorMessage | NetPremTickResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -69,8 +69,8 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Response[Union[ErrorMessage, NetPremTickResults, str]]:
+    date: Unset | str = UNSET,
+) -> Response[ErrorMessage | NetPremTickResults | str]:
     r"""Net Prem Ticks
 
      Returns the net premium ticks for a given ticker which can be used to build the following chart:
@@ -148,8 +148,8 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Optional[Union[ErrorMessage, NetPremTickResults, str]]:
+    date: Unset | str = UNSET,
+) -> ErrorMessage | NetPremTickResults | str | None:
     r"""Net Prem Ticks
 
      Returns the net premium ticks for a given ticker which can be used to build the following chart:
@@ -222,8 +222,8 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Response[Union[ErrorMessage, NetPremTickResults, str]]:
+    date: Unset | str = UNSET,
+) -> Response[ErrorMessage | NetPremTickResults | str]:
     r"""Net Prem Ticks
 
      Returns the net premium ticks for a given ticker which can be used to build the following chart:
@@ -299,8 +299,8 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-) -> Optional[Union[ErrorMessage, NetPremTickResults, str]]:
+    date: Unset | str = UNSET,
+) -> ErrorMessage | NetPremTickResults | str | None:
     r"""Net Prem Ticks
 
      Returns the net premium ticks for a given ticker which can be used to build the following chart:

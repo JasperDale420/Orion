@@ -1,5 +1,4 @@
 from collections import defaultdict
-from typing import Dict, Type
 
 from alpaca.common import HTTPResult, RawData
 
@@ -11,7 +10,7 @@ v2/stocks and v1beta2/crypto
 """
 
 
-def parse_obj_as_symbol_dict(model: Type, raw_data: RawData) -> Dict[str, Type]:
+def parse_obj_as_symbol_dict(model: type, raw_data: RawData) -> dict[str, type]:
     """
     Parses raw_data into a dictionary where the keys are the string valued symbols and the values are the
     parsed data into the model.

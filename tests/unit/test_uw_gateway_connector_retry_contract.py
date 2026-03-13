@@ -107,7 +107,10 @@ def test_fetch_retries_transient_503_then_succeeds(
         calls.append((args, kwargs))
         return responses.pop(0)
 
-    monkeypatch.setattr(module.httpx, "get", _fake_get)
+    if hasattr(connector, "_client"):
+        monkeypatch.setattr(connector._client, "get", _fake_get)
+    else:
+        monkeypatch.setattr(module.httpx, "get", _fake_get)
 
     result = fetch(*call_args)
 
@@ -133,7 +136,10 @@ def test_fetch_does_not_retry_non_retryable_404(
         calls.append((args, kwargs))
         return _FakeResponse(404)
 
-    monkeypatch.setattr(module.httpx, "get", _fake_get)
+    if hasattr(connector, "_client"):
+        monkeypatch.setattr(connector._client, "get", _fake_get)
+    else:
+        monkeypatch.setattr(module.httpx, "get", _fake_get)
 
     result = fetch(*call_args)
 

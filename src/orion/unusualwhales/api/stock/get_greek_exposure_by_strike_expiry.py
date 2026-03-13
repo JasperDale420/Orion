@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -13,11 +13,11 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     ticker: str,
     *,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["date"] = date
 
@@ -25,7 +25,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/greek-exposure/strike-expiry",
         "params": params,
@@ -36,7 +36,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, GreekExposureByStrikeAndExpiryResults, str]]:
+) -> ErrorMessage | GreekExposureByStrikeAndExpiryResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -59,7 +59,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, GreekExposureByStrikeAndExpiryResults, str]]:
+) -> Response[ErrorMessage | GreekExposureByStrikeAndExpiryResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -72,9 +72,9 @@ def sync_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Response[Union[ErrorMessage, GreekExposureByStrikeAndExpiryResults, str]]:
+) -> Response[ErrorMessage | GreekExposureByStrikeAndExpiryResults | str]:
     """Greek Exposure By Strike And Expiry
 
      The greek exposure of a ticker grouped by strike price for a specific expiry date.
@@ -111,9 +111,9 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Optional[Union[ErrorMessage, GreekExposureByStrikeAndExpiryResults, str]]:
+) -> ErrorMessage | GreekExposureByStrikeAndExpiryResults | str | None:
     """Greek Exposure By Strike And Expiry
 
      The greek exposure of a ticker grouped by strike price for a specific expiry date.
@@ -145,9 +145,9 @@ async def asyncio_detailed(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Response[Union[ErrorMessage, GreekExposureByStrikeAndExpiryResults, str]]:
+) -> Response[ErrorMessage | GreekExposureByStrikeAndExpiryResults | str]:
     """Greek Exposure By Strike And Expiry
 
      The greek exposure of a ticker grouped by strike price for a specific expiry date.
@@ -182,9 +182,9 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
+    date: Unset | str = UNSET,
     expiry: str,
-) -> Optional[Union[ErrorMessage, GreekExposureByStrikeAndExpiryResults, str]]:
+) -> ErrorMessage | GreekExposureByStrikeAndExpiryResults | str | None:
     """Greek Exposure By Strike And Expiry
 
      The greek exposure of a ticker grouped by strike price for a specific expiry date.

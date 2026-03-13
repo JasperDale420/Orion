@@ -1,7 +1,7 @@
 import hashlib
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
@@ -16,7 +16,7 @@ class TradingRule(ABC):
         self.rule_id = rule_id
 
     @abstractmethod
-    def evaluate(self, signal: SilverSignal) -> Optional[CandidateTrade]:
+    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         """
         Evaluate a signal and return a CandidateTrade if criteria met, else None.
         """
@@ -34,9 +34,9 @@ class TradingRule(ABC):
         """
         ts = signal.signal_ts_utc
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         else:
-            ts = ts.astimezone(timezone.utc)
+            ts = ts.astimezone(UTC)
 
         def _rollup_id(*, ticker: str, period: str, ts_utc: datetime) -> str:
             return f"{ticker}|{period}|{ts_utc.isoformat()}"

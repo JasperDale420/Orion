@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from orion.core.errors import ErrorCode, ModelInferenceError
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_schema import SolverConfig, SolverModel
@@ -36,22 +37,27 @@ async def test_fail_fast_solver_pipeline():
         candidate_id="c1", ticker="AAPL", direction="LONG", timestamp_utc="2024-01-01T12:00:00Z", confidence=0.9
     )
 
-    # Mock ModelRegistry to return a broken model
+    # Mock get_model_registry to return a broken model via get_active_model
     mock_model = MagicMock()
     mock_model.predict_proba.side_effect = Exception("Inference Crashed")
 
-    with patch("orion.core.model_registry.ModelRegistry.get", return_value=mock_model):
-        with patch("orion.processing.feature_engine.FeatureEngine") as MockFeat:
-            # Mock feature engine to work
-            feat_instance = MockFeat.return_value
-            feat_instance.compute = AsyncMock(return_value={"close": 100})
+    mock_registry_instance = MagicMock()
+    mock_registry_instance.get_active_model.return_value = mock_model
 
-            # Execute and Expect Error
-            with pytest.raises(ModelInferenceError) as excinfo:
-                await pipeline.execute(solver, candidate, feature_engine=feat_instance)
+    with (
+        patch("orion.ml.model_registry.get_model_registry", return_value=mock_registry_instance),
+        patch("orion.processing.feature_engine.FeatureEngine") as MockFeat,  # noqa: N806
+    ):
+        # Mock feature engine to work
+        feat_instance = MockFeat.return_value
+        feat_instance.compute = AsyncMock(return_value={"close": 100})
 
-            assert "Inference Failed" in str(excinfo.value)
-            assert excinfo.value.code == ErrorCode.MODEL_INFERENCE_FAILED
+        # Execute and Expect Error
+        with pytest.raises(ModelInferenceError) as excinfo:
+            await pipeline.execute(solver, candidate, feature_engine=feat_instance)
+
+        assert "Inference Failed" in str(excinfo.value)
+        assert excinfo.value.code == ErrorCode.MODEL_INFERENCE_FAILED
 
 
 @pytest.mark.asyncio
@@ -106,7 +112,7 @@ async def test_execution_engine_non_blocking_init():
     Verifies ExecutionEngine.__init__ does not call sync_with_broker.
     """
     # We mock RiskManager to ensure it is NOT called during init
-    with patch("orion.execution.risk_manager.RiskManager") as MockRM:
+    with patch("orion.execution.risk_manager.RiskManager") as MockRM:  # noqa: N806
         rm_instance = MockRM.return_value
         rm_instance.initialize = AsyncMock()
         rm_instance.evaluate_drawdown_kill_switch = AsyncMock()  # Fix await error

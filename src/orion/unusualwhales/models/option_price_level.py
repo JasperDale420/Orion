@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -22,19 +22,19 @@ class OptionPriceLevel:
         put_volume (Union[Unset, int]): The sum of the size of all the put transactions that executed. Example: 808326.
     """
 
-    call_volume: Union[Unset, int] = UNSET
-    price: Union[Unset, str] = UNSET
-    put_volume: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    call_volume: Unset | int = UNSET
+    price: Unset | str = UNSET
+    put_volume: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         call_volume = self.call_volume
 
         price = self.price
 
         put_volume = self.put_volume
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if call_volume is not UNSET:
@@ -47,7 +47,7 @@ class OptionPriceLevel:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         call_volume = d.pop("call_volume", UNSET)
 
@@ -65,7 +65,7 @@ class OptionPriceLevel:
         return option_price_level
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

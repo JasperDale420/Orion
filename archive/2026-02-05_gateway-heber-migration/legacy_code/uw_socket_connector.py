@@ -3,8 +3,9 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
+from typing import Any
 
 import websockets
 from orion.core.errors import ErrorCode, ProviderError
@@ -23,12 +24,12 @@ class UWWebsocketConnector:
 
     WS_URL = os.getenv("UW_WS_URL", "wss://api.unusualwhales.com/socket")
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("UW_API_KEY")
         if not self.api_key:
             raise ProviderError("UW_API_KEY is required.", code=ErrorCode.PROVIDER_AUTH_FAILED)
 
-    def _generate_event_id(self, event_data: Dict[str, Any]) -> str:
+    def _generate_event_id(self, event_data: dict[str, Any]) -> str:
         """
         Generates deterministic event ID.
         Matches logic in Poll Connector for consistency.
@@ -52,7 +53,7 @@ class UWWebsocketConnector:
         await ws.send(json.dumps(auth_msg))
         logger.info("Sent Websocket Auth")
 
-    async def stream(self, channels: List[str] | None = None) -> AsyncGenerator[BronzeEvent, None]:
+    async def stream(self, channels: list[str] | None = None) -> AsyncGenerator[BronzeEvent, None]:
         """
         Yields BronzeEvents from the websocket stream.
         Handles reconnection automatically via explicit loop.
@@ -105,7 +106,7 @@ class UWWebsocketConnector:
                         if not isinstance(event_payload, dict):
                             continue
 
-                        now = datetime.now(timezone.utc)
+                        now = datetime.now(UTC)
 
                         # Attempt timestamp parse
                         ts_str = event_payload.get("timestamp")
@@ -116,7 +117,7 @@ class UWWebsocketConnector:
                             event_ts = now
 
                         if event_ts.tzinfo is None:
-                            event_ts = event_ts.replace(tzinfo=timezone.utc)
+                            event_ts = event_ts.replace(tzinfo=UTC)
 
                         event_id = self._generate_event_id(event_payload)
 
@@ -131,7 +132,7 @@ class UWWebsocketConnector:
 
                         yield bronze
 
-            except (websockets.ConnectionClosed, OSError, asyncio.TimeoutError) as e:
+            except (TimeoutError, websockets.ConnectionClosed, OSError) as e:
                 logger.warning(f"Websocket connection lost: {e}. Retrying in {backoff}s...")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)

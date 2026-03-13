@@ -1,14 +1,13 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
-
 from orion.shared.db_utils import db_write
 from orion.storage.models_gold import GoldTickerRollup, LabelWindow
+from sqlalchemy import select
 
 logger = logging.getLogger("orion.jobs.window_label_job")
 
@@ -24,9 +23,9 @@ class WindowLabelingJob:
         self.forward_horizons_min = self._parse_forward_horizons()
 
     @staticmethod
-    def _parse_forward_horizons() -> List[int]:
+    def _parse_forward_horizons() -> list[int]:
         raw = os.getenv("ORION_WINDOW_LABEL_FORWARD_HORIZONS_MIN", "5,15,60,390")
-        out: List[int] = []
+        out: list[int] = []
         for part in raw.split(","):
             part = part.strip()
             if not part:
@@ -41,8 +40,8 @@ class WindowLabelingJob:
 
     @staticmethod
     def _compute_forward_returns(
-        close_series: pd.Series, entry_ts: pd.Timestamp, horizons_min: List[int]
-    ) -> Dict[str, float | None]:
+        close_series: pd.Series, entry_ts: pd.Timestamp, horizons_min: list[int]
+    ) -> dict[str, float | None]:
         prices = close_series.sort_index()
         if prices.empty:
             return {f"{h}m": None for h in horizons_min}
@@ -57,7 +56,7 @@ class WindowLabelingJob:
         if p0 == 0:
             return {f"{h}m": None for h in horizons_min}
 
-        out: Dict[str, float | None] = {}
+        out: dict[str, float | None] = {}
         for h in horizons_min:
             target_ts = entry_ts + pd.Timedelta(minutes=h)
             idx = prices.index.get_indexer([target_ts], method="bfill")
@@ -76,7 +75,7 @@ class WindowLabelingJob:
         """
         Labels recent rollup windows for the configured period.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
 
         # This part of the provided edit was malformed and incomplete.
         # Assuming the intent was to replace the original logic with a call to LabelEngine
@@ -113,7 +112,7 @@ class WindowLabelingJob:
                 return 0
 
             # Group per ticker for efficient series ops.
-            by_ticker: Dict[str, List[GoldTickerRollup]] = {}
+            by_ticker: dict[str, list[GoldTickerRollup]] = {}
             for r in rows:
                 by_ticker.setdefault(r.ticker, []).append(r)
 

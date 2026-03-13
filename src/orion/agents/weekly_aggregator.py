@@ -9,9 +9,9 @@ Collects and summarizes weekly data for meta-agent analysis:
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from sqlalchemy import and_, func, select
 
@@ -28,7 +28,7 @@ class WeeklyDataAggregator:
     def __init__(self, artifacts_dir: str = "artifacts/reports") -> None:
         self.artifacts_dir = Path(artifacts_dir)
 
-    async def aggregate_week(self, week_end: Optional[datetime] = None) -> Dict[str, Any]:
+    async def aggregate_week(self, week_end: datetime | None = None) -> dict[str, Any]:
         """
         Aggregate all data for the week ending on the specified date.
 
@@ -39,7 +39,7 @@ class WeeklyDataAggregator:
             Combined weekly data for meta-agent analysis.
         """
         if week_end is None:
-            week_end = datetime.now(timezone.utc)
+            week_end = datetime.now(UTC)
 
         week_start = week_end - timedelta(days=7)
 
@@ -47,7 +47,7 @@ class WeeklyDataAggregator:
 
         eod_data = await self.aggregate_eod_reports(week_start, week_end)
         trade_data = await self.aggregate_trade_data(week_start, week_end)
-        ml_data = await self.aggregate_ml_insights(week_start, week_end)
+        ml_data = await self.aggregate_ml_insights(week_start, week_end, eod_data=eod_data)
 
         return {
             "period": {
@@ -59,7 +59,7 @@ class WeeklyDataAggregator:
             "ml_insights": ml_data,
         }
 
-    async def aggregate_eod_reports(self, week_start: datetime, week_end: datetime) -> Dict[str, Any]:
+    async def aggregate_eod_reports(self, week_start: datetime, week_end: datetime) -> dict[str, Any]:
         """
         Collect and summarize EOD reports from the week.
         """
@@ -88,12 +88,12 @@ class WeeklyDataAggregator:
                 try:
                     # Parse date from filename: eod_input_2026-01-06_uuid.json
                     date_str = f.name.split("_")[2]
-                    file_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    file_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=UTC)
 
                     if not (week_start <= file_date <= week_end):
                         continue
 
-                    with open(f, "r") as fp:
+                    with open(f) as fp:
                         data = json.load(fp)
 
                     reports.append(
@@ -161,14 +161,14 @@ class WeeklyDataAggregator:
 
         return summary
 
-    async def aggregate_trade_data(self, week_start: datetime, week_end: datetime) -> Dict[str, Any]:
+    async def aggregate_trade_data(self, week_start: datetime, week_end: datetime) -> dict[str, Any]:
         """
         Aggregate trade execution data from the database.
         """
         from orion.storage.models_gold import StrategyDecision
         from orion.storage.models_trade_journal import TradeJournalEntry
 
-        async def fetch_trade_stats(session: Any) -> Dict[str, Any]:
+        async def fetch_trade_stats(session: Any) -> dict[str, Any]:
             # Count decisions
             stmt_decisions = select(
                 func.count(StrategyDecision.decision_id).label("total"),
@@ -242,20 +242,74 @@ class WeeklyDataAggregator:
             logger.error(f"Failed to aggregate trade data: {e}")
             return {"decisions": {}, "trades": {}, "error": str(e)}
 
-    async def aggregate_ml_insights(self, week_start: datetime, week_end: datetime) -> Dict[str, Any]:
+    async def aggregate_ml_insights(
+        self,
+        week_start: datetime,
+        week_end: datetime,
+        eod_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
-        Aggregate ML model insights from EOD reports (no separate MLInsight table).
+        Aggregate ML model insights and compute per-bucket drift from AUC scores
+        already collected in aggregate_eod_reports.
         """
-        # ML insights are embedded in EOD reports, already aggregated in aggregate_eod_reports
-        # Return empty structure - will be populated from EOD data
+        ml_auc_scores: dict[str, list[dict[str, Any]]] = (eod_data or {}).get("ml_auc_scores", {})
+
+        drift_analysis: dict[str, Any] = {}
+        buckets: list[str] = []
+        total_insights = 0
+
+        for bucket, scores in ml_auc_scores.items():
+            if not scores:
+                continue
+            buckets.append(bucket)
+            total_insights += len(scores)
+
+            # Sort by date to compute trend
+            sorted_scores = sorted(scores, key=lambda s: s["date"])
+            auc_values = [s["auc"] for s in sorted_scores]
+
+            if len(auc_values) < 2:
+                # Not enough data points to compute drift for this bucket
+                drift_analysis[bucket] = {
+                    "trend": "insufficient",
+                    "data_points": len(auc_values),
+                    "current_auc": auc_values[-1] if auc_values else None,
+                    "drift": 0.0,
+                }
+                continue
+
+            # Compare first half vs second half averages to detect trend
+            mid = len(auc_values) // 2
+            first_half_mean = sum(auc_values[:mid]) / mid
+            second_half_mean = sum(auc_values[mid:]) / len(auc_values[mid:])
+            drift_delta = second_half_mean - first_half_mean
+            current_auc = auc_values[-1]
+
+            # Classify trend: degrading if AUC dropped by >0.02, improving if rose >0.02
+            if drift_delta < -0.02:
+                trend = "degrading"
+            elif drift_delta > 0.02:
+                trend = "improving"
+            else:
+                trend = "stable"
+
+            drift_analysis[bucket] = {
+                "trend": trend,
+                "drift": drift_delta,
+                "current_auc": current_auc,
+                "data_points": len(auc_values),
+                "first_half_mean_auc": round(first_half_mean, 4),
+                "second_half_mean_auc": round(second_half_mean, 4),
+            }
+
         return {
-            "buckets": [],
-            "total_insights": 0,
-            "drift_analysis": {},
+            "buckets": buckets,
+            "total_insights": total_insights,
+            "drift_analysis": drift_analysis,
         }
 
 
-async def run_weekly_aggregation() -> Dict[str, Any]:
+async def run_weekly_aggregation() -> dict[str, Any]:
     """
     Convenience function to run weekly aggregation.
     """

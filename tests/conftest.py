@@ -1,7 +1,7 @@
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 # --- 1. Global Environment Setup (Pre-Import) ---
 # Must happen before any orion modules are imported to ensure Settings pick these up.
@@ -19,6 +19,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+for dependency in ("empire-core", "empire-schemas", "empire-gateway-client"):
+    dep_path = REPO_ROOT.parent / dependency
+    dep_src_path = dep_path / "src"
+    if str(dep_path) not in sys.path:
+        sys.path.insert(0, str(dep_path))
+    if dep_src_path.exists() and str(dep_src_path) not in sys.path:
+        sys.path.insert(0, str(dep_src_path))
 
 # --- 2. Import-Time Mocking ---
 # Global mock for pandas_ta (missing dep)

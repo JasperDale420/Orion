@@ -6,8 +6,8 @@ Generates CandidateTrades for flows that exceed the score threshold.
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from orion.ml.scorer import get_scorer
 from orion.shared.logger import setup_struct_logger
@@ -35,7 +35,7 @@ class MLFlowProcessor:
             extra={"event": "processor_init", "threshold": score_threshold},
         )
 
-    def process_flows(self, flows: List[Dict[str, Any]]) -> List[CandidateTrade]:
+    def process_flows(self, flows: list[dict[str, Any]]) -> list[CandidateTrade]:
         """
         Score all flows and generate CandidateTrades for those above threshold.
 
@@ -80,7 +80,7 @@ class MLFlowProcessor:
 
         return candidates
 
-    async def process_flows_enriched(self, flows: List[Dict[str, Any]]) -> List[CandidateTrade]:
+    async def process_flows_enriched(self, flows: list[dict[str, Any]]) -> list[CandidateTrade]:
         """
         Score all flows with full feature enrichment.
 
@@ -101,7 +101,7 @@ class MLFlowProcessor:
         candidates = []
 
         # Score each flow with enrichment (async)
-        async def score_flow(flow: Dict[str, Any]) -> tuple:
+        async def score_flow(flow: dict[str, Any]) -> tuple:
             score = await self.scorer.score_enriched(flow)
             return flow, score
 
@@ -146,7 +146,7 @@ class MLFlowProcessor:
 
         return candidates
 
-    def _flow_to_candidate(self, flow: Dict[str, Any], score: float) -> Optional[CandidateTrade]:
+    def _flow_to_candidate(self, flow: dict[str, Any], score: float) -> CandidateTrade | None:
         """Convert a high-scoring flow to a CandidateTrade with options contract details."""
         ticker = flow.get("ticker")
         if not ticker:
@@ -157,7 +157,7 @@ class MLFlowProcessor:
         if isinstance(flow_ts, str):
             flow_ts = datetime.fromisoformat(flow_ts.replace("Z", "+00:00"))
         elif not isinstance(flow_ts, datetime):
-            flow_ts = datetime.now(timezone.utc)
+            flow_ts = datetime.now(UTC)
 
         # Determine direction from put/call and aggressor
         put_call = flow.get("put_call", "C")
@@ -189,7 +189,7 @@ class MLFlowProcessor:
         expiry_str = flow.get("expiry")
         if expiry_str:
             try:
-                expiration_date = datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                expiration_date = datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=UTC)
             except ValueError:
                 logger.warning(f"Failed to parse expiry date: {expiry_str}")
 
@@ -246,7 +246,7 @@ class MLFlowProcessor:
         strike_str = f"{strike_int:08d}"
         return f"{ticker.upper()}{date_str}{opt_type}{strike_str}"
 
-    def _get_rule_tags(self, flow: Dict[str, Any], score: float) -> List[str]:
+    def _get_rule_tags(self, flow: dict[str, Any], score: float) -> list[str]:
         """
         Get explainability tags based on flow characteristics.
         These are not pre-filters, just labels for understanding why ML scored high.
@@ -283,9 +283,9 @@ class MLFlowProcessor:
 
 
 def process_flows_with_ml(
-    flows: List[Dict[str, Any]],
+    flows: list[dict[str, Any]],
     threshold: float = DEFAULT_SCORE_THRESHOLD,
-) -> List[CandidateTrade]:
+) -> list[CandidateTrade]:
     """
     Convenience function to process flows with ML scoring.
     """

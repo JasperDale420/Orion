@@ -7,10 +7,10 @@ def test_error_code_enum():
 
 
 def test_orion_error_structure():
-    err = OrionError("test message", code=ErrorCode.VALIDATION_ERROR, context={"foo": "bar"})
+    err = OrionError("test message", code=ErrorCode.VALIDATION_ERROR, details={"foo": "bar"})
     assert str(err) == "test message"
-    assert err.code == ErrorCode.VALIDATION_ERROR
-    assert err.context == {"foo": "bar"}
+    assert err.code == ErrorCode.VALIDATION_ERROR.value
+    assert err.details == {"foo": "bar"}
 
 
 def test_provider_error_inheritance():

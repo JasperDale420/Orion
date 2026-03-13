@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+import builtins
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -27,31 +28,31 @@ class ImbalancesVolume:
         value (Union[Unset, int]): The imbalance value. Example: 483000000.
     """
 
-    date: Union[Unset, str] = UNSET
-    event: Union[Unset, MarketGeneralImbalanceEvent] = UNSET
-    side: Union[Unset, MarketGeneralImbalanceSide] = UNSET
-    type: Union[Unset, MarketGeneralImbalanceType] = UNSET
-    value: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    date: Unset | str = UNSET
+    event: Unset | MarketGeneralImbalanceEvent = UNSET
+    side: Unset | MarketGeneralImbalanceSide = UNSET
+    type: Unset | MarketGeneralImbalanceType = UNSET
+    value: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         date = self.date
 
-        event: Union[Unset, str] = UNSET
+        event: Unset | str = UNSET
         if not isinstance(self.event, Unset):
             event = self.event.value
 
-        side: Union[Unset, str] = UNSET
+        side: Unset | str = UNSET
         if not isinstance(self.side, Unset):
             side = self.side.value
 
-        type: Union[Unset, str] = UNSET
+        type: Unset | str = UNSET
         if not isinstance(self.type, Unset):
             type = self.type.value
 
         value = self.value
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if date is not UNSET:
@@ -68,26 +69,26 @@ class ImbalancesVolume:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: builtins.type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         date = d.pop("date", UNSET)
 
         _event = d.pop("event", UNSET)
-        event: Union[Unset, MarketGeneralImbalanceEvent]
+        event: Unset | MarketGeneralImbalanceEvent
         if isinstance(_event, Unset):
             event = UNSET
         else:
             event = MarketGeneralImbalanceEvent(_event)
 
         _side = d.pop("side", UNSET)
-        side: Union[Unset, MarketGeneralImbalanceSide]
+        side: Unset | MarketGeneralImbalanceSide
         if isinstance(_side, Unset):
             side = UNSET
         else:
             side = MarketGeneralImbalanceSide(_side)
 
         _type = d.pop("type", UNSET)
-        type: Union[Unset, MarketGeneralImbalanceType]
+        type: Unset | MarketGeneralImbalanceType
         if isinstance(_type, Unset):
             type = UNSET
         else:
@@ -107,7 +108,7 @@ class ImbalancesVolume:
         return imbalances_volume
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

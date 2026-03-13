@@ -9,16 +9,16 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
-from sqlalchemy import text
-
 from orion.clients.heber_reader import get_heber_reader
-from orion.config import system_settings
 from orion.core.logging_config import setup_logging
 from orion.shared.db_utils import db_write
+from sqlalchemy import text
+
+from orion.config import system_settings
 
 logger = logging.getLogger("orion.jobs.window_feature_job")
 
@@ -47,8 +47,8 @@ class WindowFeatureJob:
     def __init__(
         self,
         *,
-        tickers: List[str] | None = None,
-        periods: List[str] | None = None,
+        tickers: list[str] | None = None,
+        periods: list[str] | None = None,
         loop_interval_seconds: float = 60.0,
         prefer_heber: bool | None = None,
     ):
@@ -59,7 +59,7 @@ class WindowFeatureJob:
 
     async def run_once(self) -> int:
         """Build window features for all tickers and periods. Returns count of rows created."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         total_rows = 0
 
         for ticker in self.tickers:
@@ -93,7 +93,7 @@ class WindowFeatureJob:
 
     async def _build_features(
         self, ticker: str, window_start: datetime, window_end: datetime, period: str
-    ) -> Dict[str, Any] | None:
+    ) -> dict[str, Any] | None:
         """Query data sources and aggregate features for the window."""
         if not self.prefer_heber:
             return None
@@ -106,14 +106,14 @@ class WindowFeatureJob:
 
     async def _build_features_from_local_db(
         self, ticker: str, window_start: datetime, window_end: datetime, period: str
-    ) -> Dict[str, Any] | None:
+    ) -> dict[str, Any] | None:
         """Legacy local-DB path is disabled in Heber-only mode."""
         _ = (ticker, window_start, window_end, period)
         return None
 
     async def _build_features_from_heber(
         self, ticker: str, window_start: datetime, window_end: datetime, period: str
-    ) -> Dict[str, Any] | None:
+    ) -> dict[str, Any] | None:
         """Read Heber flow/darkpool datasets and aggregate equivalent window features."""
         reader = get_heber_reader()
         try:
@@ -219,7 +219,7 @@ class WindowFeatureJob:
             "window_end": window_end.isoformat(),
         }
 
-    async def _persist_features(self, ticker: str, window_end: datetime, period: str, features: Dict[str, Any]) -> None:
+    async def _persist_features(self, ticker: str, window_end: datetime, period: str, features: dict[str, Any]) -> None:
         """Upsert window features to gold_feature_windows."""
 
         async def write(session: Any) -> None:
@@ -243,7 +243,7 @@ class WindowFeatureJob:
                     "period": period,
                     "feature_set_id": FEATURE_SET_ID,
                     "features": json.dumps(features),
-                    "created_at": datetime.now(timezone.utc),
+                    "created_at": datetime.now(UTC),
                 },
             )
 
@@ -279,7 +279,7 @@ def _prefer_heber_source(prefer_heber: bool | None) -> bool:
     return raw not in _PREFER_HEBER_FALSE_VALUES
 
 
-def _first_existing_column(df: pd.DataFrame, candidates: List[str]) -> str | None:
+def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for name in candidates:
         if name in df.columns:
             return name

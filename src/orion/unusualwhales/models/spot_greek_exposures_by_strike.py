@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -51,24 +51,24 @@ class SpotGreekExposuresByStrike:
         time (Union[Unset, str]): The UTC timestamp of the calculation Example: 2023-12-13 05:00:41.481000+00:00.
     """
 
-    call_charm_oi: Union[Unset, str] = UNSET
-    call_charm_vol: Union[Unset, str] = UNSET
-    call_gamma_oi: Union[Unset, str] = UNSET
-    call_gamma_vol: Union[Unset, str] = UNSET
-    call_vanna_oi: Union[Unset, str] = UNSET
-    call_vanna_vol: Union[Unset, str] = UNSET
-    price: Union[Unset, str] = UNSET
-    put_charm_oi: Union[Unset, str] = UNSET
-    put_charm_vol: Union[Unset, str] = UNSET
-    put_gamma_oi: Union[Unset, str] = UNSET
-    put_gamma_vol: Union[Unset, str] = UNSET
-    put_vanna_oi: Union[Unset, str] = UNSET
-    put_vanna_vol: Union[Unset, str] = UNSET
-    strike: Union[Unset, str] = UNSET
-    time: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    call_charm_oi: Unset | str = UNSET
+    call_charm_vol: Unset | str = UNSET
+    call_gamma_oi: Unset | str = UNSET
+    call_gamma_vol: Unset | str = UNSET
+    call_vanna_oi: Unset | str = UNSET
+    call_vanna_vol: Unset | str = UNSET
+    price: Unset | str = UNSET
+    put_charm_oi: Unset | str = UNSET
+    put_charm_vol: Unset | str = UNSET
+    put_gamma_oi: Unset | str = UNSET
+    put_gamma_vol: Unset | str = UNSET
+    put_vanna_oi: Unset | str = UNSET
+    put_vanna_vol: Unset | str = UNSET
+    strike: Unset | str = UNSET
+    time: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         call_charm_oi = self.call_charm_oi
 
         call_charm_vol = self.call_charm_vol
@@ -99,7 +99,7 @@ class SpotGreekExposuresByStrike:
 
         time = self.time
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if call_charm_oi is not UNSET:
@@ -136,7 +136,7 @@ class SpotGreekExposuresByStrike:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         call_charm_oi = d.pop("call_charm_oi", UNSET)
 
@@ -190,7 +190,7 @@ class SpotGreekExposuresByStrike:
         return spot_greek_exposures_by_strike
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

@@ -5,16 +5,17 @@ Revises: 0016_prd_feature_label_contracts
 Create Date: 2025-12-18
 """
 
-from typing import Sequence, Union
+import contextlib
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
 
 revision: str = "0017_extend_dlq_envelope_fields"
-down_revision: Union[str, None] = "0016_prd_feature_label_contracts"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0016_prd_feature_label_contracts"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -49,20 +50,14 @@ def upgrade() -> None:
         pass
 
     # Indexes for faster replay selection / correlation
-    try:
+    with contextlib.suppress(Exception):
         op.create_index("ix_dead_letter_queue_event_id", "dead_letter_queue", ["event_id"], unique=False)
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         op.create_index("ix_dead_letter_queue_ticker", "dead_letter_queue", ["ticker"], unique=False)
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         op.create_index(
             "ix_dead_letter_queue_status_retry", "dead_letter_queue", ["status", "retry_count"], unique=False
         )
-    except Exception:
-        pass
 
 
 def downgrade() -> None:
@@ -73,10 +68,8 @@ def downgrade() -> None:
 
     # Drop indexes first where supported
     for idx in ["ix_dead_letter_queue_status_retry", "ix_dead_letter_queue_ticker", "ix_dead_letter_queue_event_id"]:
-        try:
+        with contextlib.suppress(Exception):
             op.drop_index(idx, table_name="dead_letter_queue")
-        except Exception:
-            pass
 
     cols = {c["name"] for c in insp.get_columns("dead_letter_queue")}
     for name in ["trace_id", "run_id", "event_ts_utc", "ticker", "source_event_id", "event_id"]:

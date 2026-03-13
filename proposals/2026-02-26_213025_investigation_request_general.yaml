@@ -1,0 +1,20 @@
+meta:
+  run_id: 57d8925b-cddd-4d34-85d2-49218bc58fe4
+  created_at: '2026-02-26T21:30:25.701364+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-26_57d8925b-cddd-4d34-85d2-49218bc58fe4.json
+  report_path: artifacts/reports/eod_report_2026-02-26.md
+proposal:
+  type: investigation_request
+  priority: 1
+  rationale: Missing ML insights data in snapshot - cannot assess predictive patterns
+    or propose solver edits without this critical information.
+  evidence_pointers:
+    ml_insights_missing: true
+    ml_prediction_accuracy.total_predictions: 0
+  test_plan:
+  - Verify ML insights pipeline is operational
+  - Check model inference logs
+  recommendation: Investigate ML inference service and ensure ml_insights are populated
+    in next snapshot

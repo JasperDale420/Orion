@@ -2,20 +2,24 @@ import asyncio
 import os
 import re
 import signal
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
 
+import contextlib
+
 from sqlalchemy import select
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.core.enums import DecisionStatus
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
@@ -36,7 +40,7 @@ def _should_apply_options_exit_rules(position: Any) -> bool:
     return bool(option_chain)
 
 
-def _scope_recent_flow_for_position(position: Any, recent_flow: List[Any]) -> List[Any]:
+def _scope_recent_flow_for_position(position: Any, recent_flow: list[Any]) -> list[Any]:
     """
     Scope ticker-level recent flow to the tracked option contract when possible.
 
@@ -65,7 +69,7 @@ def _scope_recent_flow_for_position(position: Any, recent_flow: List[Any]) -> Li
     return scoped
 
 
-def _parse_option_chain_contract(option_chain: str) -> Optional[Tuple[str, str, float]]:
+def _parse_option_chain_contract(option_chain: str) -> tuple[str, str, float] | None:
     """
     Parse OCC option chain to comparable contract components.
 
@@ -80,7 +84,7 @@ def _parse_option_chain_contract(option_chain: str) -> Optional[Tuple[str, str, 
     return (expiry, put_call, strike)
 
 
-def _flow_matches_contract_components(flow: Any, contract: Tuple[str, str, float]) -> bool:
+def _flow_matches_contract_components(flow: Any, contract: tuple[str, str, float]) -> bool:
     expiry, put_call, strike = contract
     flow_expiry = str(getattr(flow, "expiry", "") or "").strip()
     flow_put_call = str(getattr(flow, "put_call", "") or "").strip().upper()
@@ -99,13 +103,6 @@ def _flow_matches_contract_components(flow: Any, contract: Tuple[str, str, float
 def _prefer_heber_recent_flow_source() -> bool:
     raw = os.getenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _normalize_flow_ticker(value: Any) -> str | None:
@@ -140,9 +137,9 @@ def _coerce_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] | None:
+async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> list[Any] | None:
     reader = get_heber_reader()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(minutes=minutes)
     try:
         frame = await asyncio.to_thread(
@@ -178,7 +175,7 @@ async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] 
     work = work.dropna(subset=["_event_ts"]).sort_values("_event_ts", ascending=False).head(100)
 
     ticker_upper = ticker.upper()
-    rows: List[Any] = []
+    rows: list[Any] = []
     for idx, row in work.iterrows():
         flow_ticker = _normalize_flow_ticker(row.get(ticker_col))
         if flow_ticker != ticker_upper:
@@ -223,7 +220,7 @@ async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> List[Any] 
     return rows
 
 
-async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[Any]:
+async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> list[Any]:
     """Fetch recent flow data for a ticker for exit rule evaluation."""
     if _prefer_heber_recent_flow_source():
         heber_rows = await _fetch_recent_flow_from_heber(ticker=ticker, minutes=minutes)
@@ -238,7 +235,7 @@ async def fetch_recent_flow_for_ticker(ticker: str, minutes: int = 30) -> List[A
     return []
 
 
-async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
+async def fetch_pending_candidates(limit: int = 100) -> list[CandidateTrade]:
     """
     Fetches CandidateTrades that have NOT been processed (no matching StrategyDecision).
     """
@@ -447,7 +444,7 @@ async def main() -> None:
                     pre = await db_query(run_preflight)
                     if not pre.ok:
                         decision.decision = "SKIP"
-                        decision.executed_successfully = "SKIPPED"
+                        decision.executed_successfully = DecisionStatus.SKIPPED
                         decision.reason = f"Preflight reject: {pre.reason}"
                         decision.decision_trace_json = decision.decision_trace_json or {}
                         decision.decision_trace_json["preflight_reject"] = {"reason": pre.reason, **(pre.extra or {})}
@@ -462,21 +459,21 @@ async def main() -> None:
                 await save_decision(decision, candidate)
 
                 # 5. Execute (if EXECUTE)
-                exec_status = "SKIPPED"
+                exec_status = DecisionStatus.SKIPPED
                 if decision.decision == "EXECUTE":
                     try:
                         # Fix: Call execute_order with decision object
                         await execution_engine.execute_order(decision, candidate)
 
                         # Check result in decision object itself (updated by engine)
-                        if decision.executed_successfully == "TRUE":
-                            exec_status = "TRUE"
+                        if decision.executed_successfully == DecisionStatus.TRUE:
+                            exec_status = DecisionStatus.TRUE
                         else:
-                            exec_status = "FALSE"
+                            exec_status = DecisionStatus.FALSE
 
                     except Exception as exe:
                         logger.error(f"Execution Exception: {exe}")
-                        exec_status = "FALSE"
+                        exec_status = DecisionStatus.FALSE
 
                 # 6. Update Decision Status
                 await update_decision_status(decision.decision_id, exec_status)
@@ -495,6 +492,15 @@ async def main() -> None:
                     )
                     continue
 
+                # Guard: skip if a close order is already in progress for this symbol
+                # (e.g. the ML exit classifier in PositionMonitor already submitted one)
+                if position_manager.is_closing(position.ticker):
+                    logger.info(
+                        f"Rule-based exit skipped: {position.ticker} already has a close in progress",
+                        extra={"event_type": "EXIT_RULE_DUPLICATE_BLOCKED", "ticker": position.ticker},
+                    )
+                    continue
+
                 # Fetch recent flow for this ticker (last 30 min)
                 recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
                 scoped_flow = _scope_recent_flow_for_position(position, recent_flow)
@@ -507,14 +513,21 @@ async def main() -> None:
                             extra={"event_type": "EXIT_SIGNAL", "ticker": position.ticker, "rule_id": exit_sig.rule_id},
                         )
                         if exit_sig.urgency == "IMMEDIATE":
-                            closed = await execution_engine.close_position(
-                                ticker=position.ticker,
-                                qty=position.qty,
-                                exit_signal=exit_sig,
-                                direction=position.direction,
-                            )
-                            if closed:
-                                position_manager.remove_position(position.candidate_id)
+                            # Mark symbol as closing to prevent duplicate close from PositionMonitor
+                            if not position_manager.mark_closing(position.ticker):
+                                break  # Another close already in progress
+
+                            try:
+                                closed = await execution_engine.close_position(
+                                    ticker=position.ticker,
+                                    qty=position.qty,
+                                    exit_signal=exit_sig,
+                                    direction=position.direction,
+                                )
+                                if closed:
+                                    position_manager.remove_position(position.candidate_id)
+                            finally:
+                                position_manager.unmark_closing(position.ticker)
                             break  # Exit on first immediate signal
         except Exception as exit_err:
             logger.error(f"Exit rule evaluation error: {exit_err}")
@@ -527,14 +540,12 @@ async def main() -> None:
         try:
             await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_time)
             break  # Shutdown set
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # Sleep done, continue loop
 
     logger.info("Execution Service Stopped.")
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

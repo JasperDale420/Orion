@@ -5,7 +5,7 @@ Provides reusable base classes and utilities for common patterns.
 """
 
 import asyncio
-from typing import Any, Dict, Type, TypeVar
+from typing import Any, TypeVar
 
 T = TypeVar("T", bound="AsyncSingleton")
 
@@ -24,11 +24,11 @@ class AsyncSingleton:
         instance = await MyService.get_instance()
     """
 
-    _instances: Dict[Type["AsyncSingleton"], "AsyncSingleton"] = {}
+    _instances: dict[type["AsyncSingleton"], "AsyncSingleton"] = {}
     _lock: asyncio.Lock = asyncio.Lock()
 
     @classmethod
-    async def get_instance(cls: Type[T], *args: Any, **kwargs: Any) -> T:
+    async def get_instance(cls: type[T], *args: Any, **kwargs: Any) -> T:
         """
         Get or create the singleton instance of this class.
 

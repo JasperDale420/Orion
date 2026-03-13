@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -15,8 +15,8 @@ from ...types import Response
 
 def _get_kwargs(
     ticker: str,
-) -> Dict[str, Any]:
-    _kwargs: Dict[str, Any] = {
+) -> dict[str, Any]:
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/info",
     }
@@ -26,14 +26,13 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[
-    Union[
-        ErrorMessage,
-        ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated,
-        TickerInfoResults,
-        str,
-    ]
-]:
+) -> (
+    ErrorMessage
+    | ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated
+    | TickerInfoResults
+    | str
+    | None
+):
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -63,12 +62,10 @@ def _parse_response(
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
 ) -> Response[
-    Union[
-        ErrorMessage,
-        ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated,
-        TickerInfoResults,
-        str,
-    ]
+    ErrorMessage
+    | ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated
+    | TickerInfoResults
+    | str
 ]:
     return Response(
         status_code=HTTPStatus(response.status_code),
@@ -83,12 +80,10 @@ def sync_detailed(
     *,
     client: UnusualWhalesClient,
 ) -> Response[
-    Union[
-        ErrorMessage,
-        ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated,
-        TickerInfoResults,
-        str,
-    ]
+    ErrorMessage
+    | ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated
+    | TickerInfoResults
+    | str
 ]:
     """Ticker Information
 
@@ -120,14 +115,13 @@ def sync(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[
-    Union[
-        ErrorMessage,
-        ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated,
-        TickerInfoResults,
-        str,
-    ]
-]:
+) -> (
+    ErrorMessage
+    | ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated
+    | TickerInfoResults
+    | str
+    | None
+):
     """Ticker Information
 
      Returns a information about the given ticker.
@@ -154,12 +148,10 @@ async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
 ) -> Response[
-    Union[
-        ErrorMessage,
-        ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated,
-        TickerInfoResults,
-        str,
-    ]
+    ErrorMessage
+    | ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated
+    | TickerInfoResults
+    | str
 ]:
     """Ticker Information
 
@@ -189,14 +181,13 @@ async def asyncio(
     ticker: str,
     *,
     client: UnusualWhalesClient,
-) -> Optional[
-    Union[
-        ErrorMessage,
-        ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated,
-        TickerInfoResults,
-        str,
-    ]
-]:
+) -> (
+    ErrorMessage
+    | ErrorMessageStatingThatTheRequestedElementWasNotFoundCausingAnEmptyResultToBeGenerated
+    | TickerInfoResults
+    | str
+    | None
+):
     """Ticker Information
 
      Returns a information about the given ticker.

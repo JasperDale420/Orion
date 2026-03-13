@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from orion.connectors.uw_flow_connector import UWFlowConnector
@@ -21,7 +21,7 @@ def test_init_raises_without_api_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_poll_uses_db_watermark_and_persists_updates(mock_env):
-    base_now = datetime.now(timezone.utc)
+    base_now = datetime.now(UTC)
     prior_wm = base_now - timedelta(seconds=10)
 
     async with async_session_factory() as session:
@@ -61,7 +61,7 @@ async def test_poll_uses_db_watermark_and_persists_updates(mock_env):
 
 @pytest.mark.asyncio
 async def test_watermark_persists_across_instances(mock_env):
-    base_now = datetime.now(timezone.utc)
+    base_now = datetime.now(UTC)
     prior_wm = base_now - timedelta(seconds=30)
 
     async with async_session_factory() as session:

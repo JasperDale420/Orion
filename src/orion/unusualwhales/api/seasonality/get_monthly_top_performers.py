@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -16,16 +16,16 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     month: SingleMonthNumber,
     *,
-    min_years: Union[Unset, int] = UNSET,
-    ticker_for_sector: Union[Unset, str] = UNSET,
-    s_p_500_nasdaq_only: Union[Unset, bool] = UNSET,
-    min_oi: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, SeasonalityPerformanceOrderBy] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Dict[str, Any]:
+    min_years: Unset | int = UNSET,
+    ticker_for_sector: Unset | str = UNSET,
+    s_p_500_nasdaq_only: Unset | bool = UNSET,
+    min_oi: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | SeasonalityPerformanceOrderBy = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["min_years"] = min_years
 
@@ -37,13 +37,13 @@ def _get_kwargs(
 
     params["limit"] = limit
 
-    json_order: Union[Unset, str] = UNSET
+    json_order: Unset | str = UNSET
     if not isinstance(order, Unset):
         json_order = order.value
 
     params["order"] = json_order
 
-    json_order_direction: Union[Unset, str] = UNSET
+    json_order_direction: Unset | str = UNSET
     if not isinstance(order_direction, Unset):
         json_order_direction = order_direction.value
 
@@ -51,7 +51,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/seasonality/{month}/performers",
         "params": params,
@@ -62,7 +62,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, SeasonalityPerformersResults, str]]:
+) -> ErrorMessage | SeasonalityPerformersResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -85,7 +85,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, SeasonalityPerformersResults, str]]:
+) -> Response[ErrorMessage | SeasonalityPerformersResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -98,14 +98,14 @@ def sync_detailed(
     month: SingleMonthNumber,
     *,
     client: UnusualWhalesClient,
-    min_years: Union[Unset, int] = UNSET,
-    ticker_for_sector: Union[Unset, str] = UNSET,
-    s_p_500_nasdaq_only: Union[Unset, bool] = UNSET,
-    min_oi: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, SeasonalityPerformanceOrderBy] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Response[Union[ErrorMessage, SeasonalityPerformersResults, str]]:
+    min_years: Unset | int = UNSET,
+    ticker_for_sector: Unset | str = UNSET,
+    s_p_500_nasdaq_only: Unset | bool = UNSET,
+    min_oi: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | SeasonalityPerformanceOrderBy = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> Response[ErrorMessage | SeasonalityPerformersResults | str]:
     """Get Top Performers for a Month
 
      Returns the tickers with the highest performance in terms of price change in the month over the
@@ -160,14 +160,14 @@ def sync(
     month: SingleMonthNumber,
     *,
     client: UnusualWhalesClient,
-    min_years: Union[Unset, int] = UNSET,
-    ticker_for_sector: Union[Unset, str] = UNSET,
-    s_p_500_nasdaq_only: Union[Unset, bool] = UNSET,
-    min_oi: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, SeasonalityPerformanceOrderBy] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Optional[Union[ErrorMessage, SeasonalityPerformersResults, str]]:
+    min_years: Unset | int = UNSET,
+    ticker_for_sector: Unset | str = UNSET,
+    s_p_500_nasdaq_only: Unset | bool = UNSET,
+    min_oi: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | SeasonalityPerformanceOrderBy = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> ErrorMessage | SeasonalityPerformersResults | str | None:
     """Get Top Performers for a Month
 
      Returns the tickers with the highest performance in terms of price change in the month over the
@@ -217,14 +217,14 @@ async def asyncio_detailed(
     month: SingleMonthNumber,
     *,
     client: UnusualWhalesClient,
-    min_years: Union[Unset, int] = UNSET,
-    ticker_for_sector: Union[Unset, str] = UNSET,
-    s_p_500_nasdaq_only: Union[Unset, bool] = UNSET,
-    min_oi: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, SeasonalityPerformanceOrderBy] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Response[Union[ErrorMessage, SeasonalityPerformersResults, str]]:
+    min_years: Unset | int = UNSET,
+    ticker_for_sector: Unset | str = UNSET,
+    s_p_500_nasdaq_only: Unset | bool = UNSET,
+    min_oi: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | SeasonalityPerformanceOrderBy = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> Response[ErrorMessage | SeasonalityPerformersResults | str]:
     """Get Top Performers for a Month
 
      Returns the tickers with the highest performance in terms of price change in the month over the
@@ -277,14 +277,14 @@ async def asyncio(
     month: SingleMonthNumber,
     *,
     client: UnusualWhalesClient,
-    min_years: Union[Unset, int] = UNSET,
-    ticker_for_sector: Union[Unset, str] = UNSET,
-    s_p_500_nasdaq_only: Union[Unset, bool] = UNSET,
-    min_oi: Union[Unset, int] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, SeasonalityPerformanceOrderBy] = UNSET,
-    order_direction: Union[Unset, OrderDirection] = UNSET,
-) -> Optional[Union[ErrorMessage, SeasonalityPerformersResults, str]]:
+    min_years: Unset | int = UNSET,
+    ticker_for_sector: Unset | str = UNSET,
+    s_p_500_nasdaq_only: Unset | bool = UNSET,
+    min_oi: Unset | int = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | SeasonalityPerformanceOrderBy = UNSET,
+    order_direction: Unset | OrderDirection = UNSET,
+) -> ErrorMessage | SeasonalityPerformersResults | str | None:
     """Get Top Performers for a Month
 
      Returns the tickers with the highest performance in terms of price change in the month over the

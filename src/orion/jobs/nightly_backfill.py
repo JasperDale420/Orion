@@ -10,7 +10,7 @@ Usage:
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from orion.config import SystemSettings
 from orion.core.market_schedule import MarketSchedule
@@ -71,7 +71,7 @@ def _session_run_time_utc(dt: datetime) -> datetime | None:
 
 def get_next_run_time() -> datetime:
     """Get the next scheduled run time (session close + delay on trading days)."""
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     for day_offset in range(0, 14):
         candidate_day = now_utc + timedelta(days=day_offset)
         run_time = _session_run_time_utc(candidate_day)
@@ -123,7 +123,7 @@ async def main() -> None:
 
     while True:
         next_run = get_next_run_time()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         wait_seconds = (next_run - now).total_seconds()
 
         logger.info(f"Next backfill scheduled for {next_run.isoformat()} (in {wait_seconds / 3600:.1f} hours)")

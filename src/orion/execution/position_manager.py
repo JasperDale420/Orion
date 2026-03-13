@@ -7,16 +7,18 @@ Per Dynamic Exit Strategies PDF:
 - Integrates with broker for actual position tracking
 """
 
-import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from orion.shared.db_utils import db_query
-from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
 from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+from orion.core.enums import DecisionStatus
+from orion.shared.db_utils import db_query
+from orion.shared.logger import setup_struct_logger
+from orion.storage.models_gold import CandidateTrade, ExitDecision, StrategyDecision
+
+logger = setup_struct_logger(__name__)
 
 
 @dataclass
@@ -31,21 +33,21 @@ class OpenPosition:
     # Entry timing
     entry_ts: datetime
     entry_price: float
-    entry_option_price: Optional[float] = None
+    entry_option_price: float | None = None
 
     # Entry context for exit rules
-    option_chain: Optional[str] = None  # Full OCC symbol
-    entry_iv: Optional[float] = None
+    option_chain: str | None = None  # Full OCC symbol
+    entry_iv: float | None = None
     entry_premium_window: float = 0.0  # Sum of aligned premium at entry
     entry_sweep_count: int = 0  # Sweeps in first 5 min window
-    entry_oi: Optional[float] = None  # Open interest at entry
+    entry_oi: float | None = None  # Open interest at entry
 
     # Position size
     qty: float = 0.0
 
     # Metadata
     rule_id: str = ""
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class PositionManager:
@@ -61,20 +63,23 @@ class PositionManager:
 
     def __init__(self) -> None:
         # Key positions by candidate_id to avoid collapsing same-underlying contracts.
-        self._positions: Dict[str, OpenPosition] = {}
+        self._positions: dict[str, OpenPosition] = {}
         self._initialized = False
+        # Guard against duplicate close orders from parallel exit systems
+        # (PositionMonitor ML exits + rule-based exits in main_execution.py).
+        self._closing_symbols: set[str] = set()
 
     async def initialize(self) -> None:
         """Load open positions from database on startup."""
         try:
             # Fetch executed decisions without exit
-            async def fetch_open_positions(session: Any) -> List[Any]:
+            async def fetch_open_positions(session: Any) -> list[Any]:
                 stmt = (
                     select(StrategyDecision, CandidateTrade)
                     .join(CandidateTrade, StrategyDecision.candidate_id == CandidateTrade.candidate_id)
                     .outerjoin(ExitDecision, StrategyDecision.candidate_id == ExitDecision.candidate_id)
                     .where(
-                        StrategyDecision.executed_successfully == "TRUE",
+                        StrategyDecision.executed_successfully == DecisionStatus.TRUE,
                         ExitDecision.exit_id.is_(None),
                     )
                     .order_by(StrategyDecision.timestamp_utc.desc())
@@ -100,7 +105,7 @@ class PositionManager:
 
     def _create_position_from_decision(
         self, decision: StrategyDecision, candidate: CandidateTrade
-    ) -> Optional[OpenPosition]:
+    ) -> OpenPosition | None:
         """Create OpenPosition from database records."""
         try:
             ep = decision.execution_params or {}
@@ -130,7 +135,7 @@ class PositionManager:
         self,
         candidate: CandidateTrade,
         decision: StrategyDecision,
-        entry_context: Optional[Dict[str, Any]] = None,
+        entry_context: dict[str, Any] | None = None,
     ) -> OpenPosition:
         """
         Add a new position after successful execution.
@@ -153,7 +158,7 @@ class PositionManager:
             direction=candidate.direction,
             candidate_id=candidate.candidate_id,
             decision_id=decision.decision_id,
-            entry_ts=decision.timestamp_utc or datetime.now(timezone.utc),
+            entry_ts=decision.timestamp_utc or datetime.now(UTC),
             entry_price=entry_price,
             entry_option_price=float(entry_option_price) if entry_option_price is not None else None,
             option_chain=option_chain,
@@ -177,18 +182,46 @@ class PositionManager:
         )
         return pos
 
-    def get_position(self, ticker: str) -> Optional[OpenPosition]:
+    def is_closing(self, symbol: str) -> bool:
+        """Check if a close order is already in progress for this symbol."""
+        return symbol in self._closing_symbols
+
+    def mark_closing(self, symbol: str) -> bool:
+        """
+        Mark a symbol as having a close order in progress.
+
+        Returns True if the symbol was successfully marked (was not already closing).
+        Returns False if a close is already in progress (duplicate close blocked).
+        """
+        if symbol in self._closing_symbols:
+            logger.warning(
+                f"Duplicate close blocked: {symbol} already has a close in progress",
+                extra={"event_type": "DUPLICATE_CLOSE_BLOCKED", "ticker": symbol},
+            )
+            return False
+        self._closing_symbols.add(symbol)
+        logger.info(
+            f"Symbol marked as closing: {symbol}",
+            extra={"event_type": "CLOSE_IN_PROGRESS", "ticker": symbol},
+        )
+        return True
+
+    def unmark_closing(self, symbol: str) -> None:
+        """Remove the closing-in-progress guard for a symbol."""
+        self._closing_symbols.discard(symbol)
+
+    def get_position(self, ticker: str) -> OpenPosition | None:
         """Get the most recent tracked position for a ticker if exists."""
         matches = [p for p in self._positions.values() if p.ticker == ticker]
         if not matches:
             return None
         return max(matches, key=lambda p: p.entry_ts)
 
-    def get_open_positions(self) -> List[OpenPosition]:
+    def get_open_positions(self) -> list[OpenPosition]:
         """Return all open positions."""
         return list(self._positions.values())
 
-    def remove_position(self, identifier: str) -> Optional[OpenPosition]:
+    def remove_position(self, identifier: str) -> OpenPosition | None:
         """
         Remove position after exit.
 
@@ -244,7 +277,7 @@ class PositionManager:
             logger.error(f"Failed to sync with broker: {e}")
 
     @staticmethod
-    def _resolve_option_chain(candidate: CandidateTrade, entry_context: Dict[str, Any]) -> Optional[str]:
+    def _resolve_option_chain(candidate: CandidateTrade, entry_context: dict[str, Any]) -> str | None:
         """
         Resolve canonical option contract for tracked positions.
 

@@ -1,16 +1,15 @@
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from alpaca.broker.enums import (
     ACHRelationshipStatus,
     BankAccountType,
     BankStatus,
-    IdentifierType,
-    TransferType,
-    TransferStatus,
-    TransferDirection,
     FeePaymentMethod,
+    IdentifierType,
+    TransferDirection,
+    TransferStatus,
+    TransferType,
 )
 from alpaca.common.models import ModelWithID
 
@@ -39,8 +38,8 @@ class ACHRelationship(ModelWithID):
     bank_account_type: BankAccountType
     bank_account_number: str
     bank_routing_number: str
-    nickname: Optional[str] = None
-    processor_token: Optional[str] = None
+    nickname: str | None = None
+    processor_token: str | None = None
 
 
 class Bank(ModelWithID):
@@ -99,16 +98,16 @@ class Transfer(ModelWithID):
 
     account_id: UUID
     created_at: datetime
-    updated_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
-    relationship_id: Optional[UUID] = None
-    bank_id: Optional[UUID] = None
+    updated_at: datetime | None = None
+    expires_at: datetime | None = None
+    relationship_id: UUID | None = None
+    bank_id: UUID | None = None
     amount: str
     type: TransferType
     status: TransferStatus
     direction: TransferDirection
-    reason: Optional[str] = None
-    requested_amount: Optional[str] = None
-    fee: Optional[str] = None
-    fee_payment_method: Optional[FeePaymentMethod] = None
-    additional_information: Optional[str] = None
+    reason: str | None = None
+    requested_amount: str | None = None
+    fee: str | None = None
+    fee_payment_method: FeePaymentMethod | None = None
+    additional_information: str | None = None

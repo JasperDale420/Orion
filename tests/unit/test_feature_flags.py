@@ -61,6 +61,7 @@ class TestFeatureFlags:
     def test_load_from_env(self) -> None:
         """Flags should be loadable from environment variables."""
         flags = feature_flags.FeatureFlags()
+        flags._load_from_env()
         # Should be True from env, not False from default
         assert flags.is_enabled("ENABLE_LIVE_TRADING") is True
 
@@ -68,6 +69,7 @@ class TestFeatureFlags:
     def test_load_from_env_false(self) -> None:
         """Env value '0' should set flag to False."""
         flags = feature_flags.FeatureFlags()
+        flags._load_from_env()
         assert flags.is_enabled("ENABLE_PAPER_TRADING") is False
 
 

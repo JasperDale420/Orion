@@ -12,9 +12,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Sequence
-from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -324,7 +323,7 @@ async def run_guardrail_loop() -> None:
     runtime_backoff_policy: dict[str, int] | None = None
 
     while True:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         env_backoff_policy_raw, env_backoff_policy = _resolve_job_failure_backoff_policy_cached(
             default_seconds=failure_backoff_seconds,
             cached_raw=env_backoff_policy_raw,

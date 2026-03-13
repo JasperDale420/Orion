@@ -4,20 +4,20 @@ Integration tests for ML model registry and drift monitoring.
 Tests versioning, A/B testing, and feature drift detection.
 """
 
+import shutil
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
-from datetime import datetime, timezone
-import tempfile
-import shutil
 
-from orion.ml.model_registry import ModelRegistry, ModelMetadata
 from orion.ml.drift_monitor import (
-    calculate_psi,
-    FeatureDriftMonitor,
-    PSI_THRESHOLD_WARNING,
     PSI_THRESHOLD_CRITICAL,
+    PSI_THRESHOLD_WARNING,
+    FeatureDriftMonitor,
+    calculate_psi,
 )
+from orion.ml.model_registry import ModelRegistry
 
 
 # Module-level MockModel for picklability (required by joblib)
@@ -27,8 +27,9 @@ class PicklableMockModel:
     def __init__(self, version: int = 1):
         self.version = version
 
-    def predict_proba(self, X):
+    def predict_proba(self, X):  # noqa: N803
         return np.array([[0.5, 0.5]])
+
 
 class TestModelRegistry:
     """Tests for the ModelRegistry."""

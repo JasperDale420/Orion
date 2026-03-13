@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -25,7 +25,7 @@ async def check_heartbeats(session: Any) -> None:
     result = await session.execute(stmt)
     statuses = result.scalars().all()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for s in statuses:
         if not s.last_updated_utc:
@@ -34,7 +34,7 @@ async def check_heartbeats(session: Any) -> None:
         # Ensure timezone awareness
         last_update = s.last_updated_utc
         if last_update.tzinfo is None:
-            last_update = last_update.replace(tzinfo=timezone.utc)
+            last_update = last_update.replace(tzinfo=UTC)
 
         lag_seconds = (now - last_update).total_seconds()
 
@@ -60,7 +60,7 @@ async def check_dlq(session: Any) -> None:
     """
     Checks DeadLetterQueue for recent failures.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     lookback_time = now - timedelta(minutes=DLQ_LOOKBACK_MINUTES)
 
     # Count failed items since lookback

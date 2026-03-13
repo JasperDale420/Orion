@@ -51,7 +51,7 @@ async def prune_bronze_events():
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import delete
     from orion.storage.models import BronzeEvent
-    
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     stmt = delete(BronzeEvent).where(BronzeEvent.event_ts_utc < cutoff)
     await session.execute(stmt)
@@ -62,12 +62,12 @@ async def prune_bronze_events():
 
 ```sql
 -- Bronze events older than 90 days
-DELETE FROM bronze_events 
+DELETE FROM bronze_events
 WHERE event_ts_utc < NOW() - INTERVAL '90 days';
 
 -- DLQ events older than 30 days
-DELETE FROM dlq_events 
-WHERE created_at < NOW() - INTERVAL '30 days';
+DELETE FROM dead_letter_queue
+WHERE timestamp_utc < NOW() - INTERVAL '30 days';
 ```
 
 ## Data Classification

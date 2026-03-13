@@ -2,8 +2,7 @@ import logging
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 import pandas as pd
 import s3fs
@@ -21,11 +20,11 @@ class LakehouseWriter:
 
     def __init__(
         self,
-        endpoint_url: Optional[str] = None,
-        access_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        bucket: Optional[str] = None,
-        max_workers: Optional[int] = None,
+        endpoint_url: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
+        bucket: str | None = None,
+        max_workers: int | None = None,
     ):
         endpoint_url = endpoint_url or os.getenv("ORION_LAKEHOUSE_ENDPOINT_URL")
         access_key = access_key or os.getenv("ORION_LAKEHOUSE_ACCESS_KEY")
@@ -48,7 +47,7 @@ class LakehouseWriter:
         }
         self.fs = s3fs.S3FileSystem(client_kwargs=client_kwargs, anon=False)
 
-    def write_events(self, events: List[BronzeEvent]) -> None:
+    def write_events(self, events: list[BronzeEvent]) -> None:
         """
         Writes a batch of events to the lakehouse.
         """
@@ -99,7 +98,7 @@ class LakehouseWriter:
         """
         Writes a single partition to S3.
         """
-        filename = f"{datetime.now(timezone.utc).strftime('%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
+        filename = f"{datetime.now(UTC).strftime('%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
         path = f"s3://{self.bucket}/v1/{source}/{event_type}/date={date_str}/{filename}"
 
         # Write to S3

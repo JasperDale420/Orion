@@ -1,6 +1,8 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
+
 from orion.api.main import app
+
 
 @pytest.mark.asyncio
 async def test_custom_404_handler():

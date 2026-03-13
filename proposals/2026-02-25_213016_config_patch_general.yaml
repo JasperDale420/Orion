@@ -1,0 +1,22 @@
+meta:
+  run_id: 02587b62-ddb9-44ef-9b3e-9fc564d292c1
+  created_at: '2026-02-25T21:30:16.428280+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-02-25_02587b62-ddb9-44ef-9b3e-9fc564d292c1.json
+  report_path: artifacts/reports/eod_report_2026-02-25.md
+proposal:
+  type: config_patch
+  rationale: High ingestion lag observed in ALPACA_BAR_1M source (max gap 120s, max
+    lag 850s). This may prevent timely signal generation. Increase tolerance or alert
+    thresholds for data gaps to avoid system paralysis.
+  evidence_pointers:
+    ingestion_source: ALPACA:ALPACA_BAR_1M
+    max_gap_s: 120.282073
+    lag_max_s: 850.710052
+  test_plan:
+  - Monitor lag metrics for 24h after patch
+  - Verify signal generation resumes with acceptable lag
+  changes:
+    ingestion.max_allowed_gap_seconds: 180
+    ingestion.alert_lag_threshold_seconds: 600

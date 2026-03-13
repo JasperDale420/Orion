@@ -1,8 +1,9 @@
 import asyncio
+import contextlib
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -10,6 +11,7 @@ from sqlalchemy import func, select
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
+from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 
@@ -42,13 +44,6 @@ DATASET_SPECS: tuple[ReconciliationDataset, ...] = (
 def _prefer_heber_source() -> bool:
     raw = os.getenv("ORION_RECONCILE_BACKFILL_PREFER_HEBER", "1").strip().lower()
     return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _first_existing_column(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
-    for name in names:
-        if name in df.columns:
-            return name
-    return None
 
 
 def _normalize_ticker(value: Any) -> str | None:
@@ -91,7 +86,7 @@ async def _heber_counts_for_spec(
     spec: ReconciliationDataset, start_date: datetime
 ) -> dict[tuple[str, str], int] | None:
     reader = get_heber_reader()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     try:
         if spec.name == "ALPACA_BAR_1M":
             frame = await asyncio.to_thread(
@@ -131,7 +126,7 @@ async def run_reconciliation(lookback_days: int = 7) -> None:
     """
     logger.info(f"Starting Data Reconciliation (Lookback: {lookback_days} days)...")
 
-    start_date = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    start_date = datetime.now(UTC) - timedelta(days=lookback_days)
 
     async with async_session_factory() as session:
         try:
@@ -217,7 +212,5 @@ async def run_reconciliation(lookback_days: int = 7) -> None:
 if __name__ == "__main__":
     # Setup simple logging for standalone run
     setup_logging()
-    try:
+    with contextlib.suppress(KeyboardInterrupt, SystemExit):
         asyncio.run(run_reconciliation(lookback_days=30))
-    except (KeyboardInterrupt, SystemExit):
-        pass

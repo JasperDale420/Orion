@@ -1,14 +1,13 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
-
 from orion.processing.label_engine import TripleBarrierLabeling
 from orion.storage.models import CandidateTrade, GoldTickerRollup
 from orion.storage.models_gold import CandidateLabel
+from sqlalchemy import select
 
 logger = logging.getLogger("orion.jobs.label_job")
 
@@ -23,7 +22,7 @@ class LabelingJob:
         self.forward_horizons_min = self._parse_forward_horizons()
 
     @staticmethod
-    def _parse_forward_horizons() -> List[int]:
+    def _parse_forward_horizons() -> list[int]:
         """
         PRD 6.3: forward returns (1m/5m/1h/1d/3d etc; configurable).
         Config via env `ORION_LABEL_FORWARD_HORIZONS_MIN` as comma-separated minutes.
@@ -31,7 +30,7 @@ class LabelingJob:
         import os
 
         raw = os.getenv("ORION_LABEL_FORWARD_HORIZONS_MIN", "1,5,60,390,1170")
-        out: List[int] = []
+        out: list[int] = []
         for part in raw.split(","):
             part = part.strip()
             if not part:
@@ -47,8 +46,8 @@ class LabelingJob:
 
     @staticmethod
     def _compute_forward_returns(
-        close_series: pd.Series, entry_ts: pd.Timestamp, horizons_min: List[int]
-    ) -> Dict[str, float | None]:
+        close_series: pd.Series, entry_ts: pd.Timestamp, horizons_min: list[int]
+    ) -> dict[str, float | None]:
         """
         Computes forward returns for the given horizons from a close price series.
         Returns dict keyed by '<minutes>m' (e.g., '5m') with float returns or None if unavailable.
@@ -67,7 +66,7 @@ class LabelingJob:
         if p0 == 0:
             return {f"{h}m": None for h in horizons_min}
 
-        out: Dict[str, float | None] = {}
+        out: dict[str, float | None] = {}
         for h in horizons_min:
             target_ts = entry_ts + pd.Timedelta(minutes=h)
             idx = prices.index.get_indexer([target_ts], method="bfill")
@@ -91,7 +90,7 @@ class LabelingJob:
             # 1. potential candidates: > 60 mins old, not in candidate_labels
             # Simplified for v1: Just grab some recent candidates and check if label exists
             # Ideally: Left join where label is null
-            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=65)
+            cutoff_time = datetime.now(UTC) - timedelta(minutes=65)
 
             # Select candidates created before cutoff
             # That don't have a label

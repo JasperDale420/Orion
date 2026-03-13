@@ -6,8 +6,7 @@ Runs twice weekly (Monday and Friday) after market close to train ML models and 
 
 import asyncio
 import signal
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from orion.config import SystemSettings
 from orion.core.logging_config import setup_logging
@@ -64,7 +63,7 @@ async def run_mining_job() -> None:
 
     logger.info(
         "Starting pattern mining job",
-        extra={"event": "pattern_mining_start", "ts": datetime.now(timezone.utc).isoformat()},
+        extra={"event": "pattern_mining_start", "ts": datetime.now(UTC).isoformat()},
     )
 
     try:
@@ -92,12 +91,12 @@ async def run_mining_job() -> None:
         raise
 
 
-def get_next_run_close() -> Optional[datetime]:
+def get_next_run_close() -> datetime | None:
     """
     Calculate the next Monday or Friday market close time.
     """
     schedule = MarketSchedule()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     today = now.date()
 
     # Find next Monday or Friday
@@ -110,7 +109,7 @@ def get_next_run_close() -> Optional[datetime]:
 
             try:
                 _, close_time = schedule.get_open_close(
-                    datetime.combine(check_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                    datetime.combine(check_date, datetime.min.time()).replace(tzinfo=UTC)
                 )
                 if close_time:
                     return close_time
@@ -120,7 +119,7 @@ def get_next_run_close() -> Optional[datetime]:
     # Fallback: next Monday at 21:00 UTC
     days_until_monday = (0 - now.weekday()) % 7 or 7
     fallback_date = today + timedelta(days=days_until_monday)
-    return datetime.combine(fallback_date, datetime.min.time()).replace(hour=21, minute=0, tzinfo=timezone.utc)
+    return datetime.combine(fallback_date, datetime.min.time()).replace(hour=21, minute=0, tzinfo=UTC)
 
 
 async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
@@ -136,10 +135,10 @@ async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
     close_time = get_next_run_close()
     if close_time is None:
         # Shouldn't happen, but fallback to 1 hour
-        close_time = datetime.now(timezone.utc) + timedelta(hours=1)
+        close_time = datetime.now(UTC) + timedelta(hours=1)
 
     target_time = close_time + timedelta(minutes=POST_CLOSE_DELAY_MINUTES)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if now >= target_time:
         # Already past today's target, find next run day
@@ -150,7 +149,7 @@ async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
     wait_seconds = max(0, (target_time - now).total_seconds())
 
     # Check for drift every hour (or until scheduled time)
-    DRIFT_CHECK_INTERVAL = 3600  # 1 hour
+    DRIFT_CHECK_INTERVAL = 3600  # noqa: N806 - 1 hour
     actual_wait = min(wait_seconds, DRIFT_CHECK_INTERVAL)
 
     day_name = target_time.strftime("%A")
@@ -168,7 +167,7 @@ async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
     try:
         await asyncio.wait_for(shutdown_event.wait(), timeout=actual_wait)
         return (False, False)  # Shutdown requested
-    except asyncio.TimeoutError:
+    except TimeoutError:
         # Check if we hit the scheduled time
         if actual_wait == wait_seconds:
             return (True, False)  # Time to run scheduled

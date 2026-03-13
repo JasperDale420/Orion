@@ -1,7 +1,10 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+
 from orion.core.solver_schema import SolverConfig
 from orion.execution.execution_engine import ExecutionEngine
 from orion.execution.risk_manager import RiskManager
@@ -15,8 +18,6 @@ from orion.processing.signal_engine import SignalEngine
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_solvers import Solver, SolverMetrics
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 
 @pytest.mark.asyncio
@@ -87,15 +88,13 @@ async def test_full_system_flow():
         from orion.storage.models import SystemStatus
 
         session.add(
-            SystemStatus(
-                key="global_health", status="HEALTHY", details="E2E Test", last_updated_utc=datetime.now(timezone.utc)
-            )
+            SystemStatus(key="global_health", status="HEALTHY", details="E2E Test", last_updated_utc=datetime.now(UTC))
         )
 
         await session.commit()
 
     # 3. Step 1: Ingestion (Bronze Event)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     raw_event = BronzeEvent(
         event_id="evt_1",
         source="UW",
@@ -184,8 +183,8 @@ async def test_full_system_flow():
     # 6. Step 4: Execution
     # Mock Alpaca
     with (
-        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConn,
-        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,
+        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConn,  # noqa: N806
+        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,  # noqa: N806
     ):
         mock_conn = MockConn.return_value
         mock_market = MockMarket.return_value
@@ -219,8 +218,9 @@ async def test_full_system_flow():
     # 7. Step 5: Persistence Verification
     # Check that OrderRecord was created
     # Check that OrderRecord was created
-    from orion.storage.models_execution import OrderRecord
     from sqlalchemy import select
+
+    from orion.storage.models_execution import OrderRecord
 
     async with test_session_factory() as session:
         orders = (await session.execute(select(OrderRecord))).scalars().all()

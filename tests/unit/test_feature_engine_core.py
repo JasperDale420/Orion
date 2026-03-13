@@ -1,9 +1,11 @@
 """
 Unit tests for FeatureEngine signal processing logic.
 """
-from datetime import datetime, timedelta, timezone
+
+from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from orion.processing.feature_engine import FeatureEngine
 from orion.storage.models import BronzeEvent
 
@@ -17,7 +19,7 @@ def feature_engine():
 @pytest.fixture
 def sample_alpaca_bar_event():
     """Sample Alpaca bar event."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return BronzeEvent(
         event_id="bar_1",
         source="ALPACA",
@@ -46,7 +48,7 @@ def sample_alpaca_bar_event():
 @pytest.fixture
 def sample_uw_flow_event():
     """Sample UW flow event."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return BronzeEvent(
         event_id="flow_1",
         source="UW",

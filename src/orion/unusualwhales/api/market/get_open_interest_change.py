@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -12,18 +12,18 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    date: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, OrderDirection] = UNSET,
-) -> Dict[str, Any]:
+    date: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | OrderDirection = UNSET,
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["date"] = date
 
     params["limit"] = limit
 
-    json_order: Union[Unset, str] = UNSET
+    json_order: Unset | str = UNSET
     if not isinstance(order, Unset):
         json_order = order.value
 
@@ -31,7 +31,7 @@ def _get_kwargs(
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/market/oi-change",
         "params": params,
@@ -40,7 +40,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> Optional[OIChangeResults]:
+def _parse_response(*, client: UnusualWhalesClient, response: httpx.Response) -> OIChangeResults | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -66,9 +66,9 @@ def _build_response(*, client: UnusualWhalesClient, response: httpx.Response) ->
 def sync_detailed(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, OrderDirection] = UNSET,
+    date: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | OrderDirection = UNSET,
 ) -> Response[OIChangeResults]:
     """Returns the Option Contracts With The Highest Open Interest Change by Date
 
@@ -110,10 +110,10 @@ def sync_detailed(
 def sync(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, OrderDirection] = UNSET,
-) -> Optional[OIChangeResults]:
+    date: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | OrderDirection = UNSET,
+) -> OIChangeResults | None:
     """Returns the Option Contracts With The Highest Open Interest Change by Date
 
      Returns the non-Index/non-ETF contracts and OI change data with the highest OI change (default:
@@ -149,9 +149,9 @@ def sync(
 async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, OrderDirection] = UNSET,
+    date: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | OrderDirection = UNSET,
 ) -> Response[OIChangeResults]:
     """Returns the Option Contracts With The Highest Open Interest Change by Date
 
@@ -191,10 +191,10 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: UnusualWhalesClient,
-    date: Union[Unset, str] = UNSET,
-    limit: Union[Unset, int] = UNSET,
-    order: Union[Unset, OrderDirection] = UNSET,
-) -> Optional[OIChangeResults]:
+    date: Unset | str = UNSET,
+    limit: Unset | int = UNSET,
+    order: Unset | OrderDirection = UNSET,
+) -> OIChangeResults | None:
     """Returns the Option Contracts With The Highest Open Interest Change by Date
 
      Returns the non-Index/non-ETF contracts and OI change data with the highest OI change (default:

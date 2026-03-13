@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import List
+from datetime import UTC, datetime
+
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
 
-async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]) -> None:
+async def persist_bronze_events(session: AsyncSession, events: list[BronzeEvent]) -> None:
     if not events:
         return
 
@@ -36,7 +36,7 @@ async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]
             }
         )
 
-    BATCH_SIZE = 1000
+    BATCH_SIZE = 1000  # noqa: N806
     for i in range(0, len(values), BATCH_SIZE):
         batch = values[i : i + BATCH_SIZE]
         stmt = insert(BronzeEvent).values(batch)
@@ -44,13 +44,13 @@ async def persist_bronze_events(session: AsyncSession, events: List[BronzeEvent]
         await session.execute(stmt)
 
 
-async def persist_silver_from_bronze(session: AsyncSession, events: List[BronzeEvent]) -> None:
+async def persist_silver_from_bronze(session: AsyncSession, events: list[BronzeEvent]) -> None:
     if not events:
         return
     logger.info("Skipping local Silver materialization; Heber is the canonical Silver source")
 
 
-async def persist_silver_signals(session: AsyncSession, signals: List[SilverSignal]) -> None:
+async def persist_silver_signals(session: AsyncSession, signals: list[SilverSignal]) -> None:
     if not signals:
         return
 
@@ -63,11 +63,11 @@ async def persist_silver_signals(session: AsyncSession, signals: List[SilverSign
                 "signal_ts_utc": s.signal_ts_utc,
                 "signal_type": s.signal_type,
                 "features": s.features,
-                "created_at_utc": datetime.now(timezone.utc),
+                "created_at_utc": datetime.now(UTC),
             }
         )
 
-    BATCH_SIZE = 1000
+    BATCH_SIZE = 1000  # noqa: N806
     for i in range(0, len(values), BATCH_SIZE):
         batch = values[i : i + BATCH_SIZE]
         stmt = insert(SilverSignal).values(batch)
@@ -75,7 +75,7 @@ async def persist_silver_signals(session: AsyncSession, signals: List[SilverSign
         await session.execute(stmt)
 
 
-async def persist_candidates(session: AsyncSession, candidates: List[CandidateTrade]) -> None:
+async def persist_candidates(session: AsyncSession, candidates: list[CandidateTrade]) -> None:
     if not candidates:
         return
 
@@ -92,11 +92,11 @@ async def persist_candidates(session: AsyncSession, candidates: List[CandidateTr
                 "source": c.source,
                 "execution_params": c.execution_params,
                 "evidence": c.evidence,
-                "created_at_utc": c.created_at_utc or datetime.now(timezone.utc),
+                "created_at_utc": c.created_at_utc or datetime.now(UTC),
             }
         )
 
-    BATCH_SIZE = 1000
+    BATCH_SIZE = 1000  # noqa: N806
     for i in range(0, len(values), BATCH_SIZE):
         batch = values[i : i + BATCH_SIZE]
         stmt = insert(CandidateTrade).values(batch)

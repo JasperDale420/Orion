@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -14,15 +14,15 @@ def _get_kwargs(
     ticker: str,
     *,
     expirations: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     # Dictionary of query parameters to be sent with the request.
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
     params["expirations[]"] = expirations
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
-    _kwargs: Dict[str, Any] = {
+    _kwargs: dict[str, Any] = {
         "method": "get",
         "url": f"/api/stock/{ticker}/atm-chains",
         "params": params,
@@ -33,7 +33,7 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> ErrorMessage | OptionChainContractResults | str | None:
     response_json = response.json()
     if response_json.get("data") is not None:
         response_json = response_json["data"]
@@ -56,7 +56,7 @@ def _parse_response(
 
 def _build_response(
     *, client: UnusualWhalesClient, response: httpx.Response
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -70,7 +70,7 @@ def sync_detailed(
     *,
     client: UnusualWhalesClient,
     expirations: str,
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     """ATM option contracts for the given expiries
 
      Returns the ATM option contracts for the given expirations
@@ -104,7 +104,7 @@ def sync(
     *,
     client: UnusualWhalesClient,
     expirations: str,
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> ErrorMessage | OptionChainContractResults | str | None:
     """ATM option contracts for the given expiries
 
      Returns the ATM option contracts for the given expirations
@@ -133,7 +133,7 @@ async def asyncio_detailed(
     *,
     client: UnusualWhalesClient,
     expirations: str,
-) -> Response[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> Response[ErrorMessage | OptionChainContractResults | str]:
     """ATM option contracts for the given expiries
 
      Returns the ATM option contracts for the given expirations
@@ -165,7 +165,7 @@ async def asyncio(
     *,
     client: UnusualWhalesClient,
     expirations: str,
-) -> Optional[Union[ErrorMessage, OptionChainContractResults, str]]:
+) -> ErrorMessage | OptionChainContractResults | str | None:
     """ATM option contracts for the given expiries
 
      Returns the ATM option contracts for the given expirations

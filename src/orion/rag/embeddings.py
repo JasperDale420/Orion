@@ -4,8 +4,9 @@ Embedding client that supports both OpenAI and local Ollama inference.
 Uses Ollama by default for local inference, falls back to OpenAI if configured.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import List, Optional
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -34,7 +35,7 @@ class EmbeddingClient:
         self.ollama_url = f"{OLLAMA_BASE_URL}/api/embeddings"
 
         # Fallback to OpenAI if configured
-        self.openai_client: Optional["AsyncOpenAI"] = None
+        self.openai_client: AsyncOpenAI | None = None
         api_key = agent_settings.openai_api_key
         if api_key and not api_key.startswith("sk-your"):
             try:
@@ -50,7 +51,7 @@ class EmbeddingClient:
         )
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    async def get_embedding(self, text: str) -> List[float]:
+    async def get_embedding(self, text: str) -> list[float]:
         """
         Get embedding for text using Ollama (preferred) or OpenAI.
         """
@@ -70,7 +71,7 @@ class EmbeddingClient:
 
         raise RuntimeError("No embedding backend available (Ollama or OpenAI)")
 
-    async def _get_ollama_embedding(self, text: str) -> List[float]:
+    async def _get_ollama_embedding(self, text: str) -> list[float]:
         """Get embedding from local Ollama."""
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -84,7 +85,7 @@ class EmbeddingClient:
                 raise RuntimeError(f"No embedding in Ollama response: {data}")
             return embedding
 
-    async def _get_openai_embedding(self, text: str) -> List[float]:
+    async def _get_openai_embedding(self, text: str) -> list[float]:
         """Get embedding from OpenAI API."""
         if not self.openai_client:
             raise RuntimeError("OpenAI client not configured")

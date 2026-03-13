@@ -5,12 +5,10 @@ Tests position tracking, portfolio summaries, and risk alerts.
 """
 
 import pytest
-from datetime import datetime
 
 from orion.config import RiskSettings
 from orion.core.pnl_tracker import (
     PnLTracker,
-    PositionPnL,
     get_pnl_tracker,
     reset_pnl_tracker,
 )
@@ -131,7 +129,7 @@ class TestPnLTracker:
         tracker.update_position("BAD", 1000, 100.0, 94.0, side="long")  # -$6000 = 6% drawdown
 
         # Force portfolio summary update to calculate drawdown
-        summary = tracker.get_portfolio_summary()
+        tracker.get_portfolio_summary()
 
         # Now check alerts - drawdown should be ~6%
         alerts = tracker.check_risk_alerts()

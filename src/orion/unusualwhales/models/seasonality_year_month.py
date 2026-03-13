@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -23,14 +23,14 @@ class SeasonalityYearMonth:
         year (Union[Unset, int]): The Year. Example: 5.
     """
 
-    change: Union[Unset, float] = UNSET
-    close: Union[Unset, str] = UNSET
-    month: Union[Unset, int] = UNSET
-    open_: Union[Unset, str] = UNSET
-    year: Union[Unset, int] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    change: Unset | float = UNSET
+    close: Unset | str = UNSET
+    month: Unset | int = UNSET
+    open_: Unset | str = UNSET
+    year: Unset | int = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         change = self.change
 
         close = self.close
@@ -41,7 +41,7 @@ class SeasonalityYearMonth:
 
         year = self.year
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if change is not UNSET:
@@ -58,7 +58,7 @@ class SeasonalityYearMonth:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         change = d.pop("change", UNSET)
 
@@ -82,7 +82,7 @@ class SeasonalityYearMonth:
         return seasonality_year_month
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

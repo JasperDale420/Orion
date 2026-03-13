@@ -16,9 +16,9 @@ psql -h localhost -p 5432 -U orion -d orion
 
 ```sql
 -- Last 10 bronze events
-SELECT event_id, event_type, ticker, event_ts_utc, created_at_utc 
-FROM bronze_events 
-ORDER BY created_at_utc DESC 
+SELECT event_id, event_type, ticker, event_ts_utc, created_at_utc
+FROM bronze_events
+ORDER BY created_at_utc DESC
 LIMIT 10;
 ```
 
@@ -47,9 +47,9 @@ SELECT * FROM ingest_watermarks ORDER BY last_seen_ts_utc DESC;
 
 ```sql
 -- Events that failed processing
-SELECT * FROM dlq_events 
-WHERE processed = false 
-ORDER BY created_at_utc DESC 
+SELECT * FROM dead_letter_queue
+WHERE status = 'FAILED'
+ORDER BY timestamp_utc DESC
 LIMIT 20;
 ```
 
@@ -57,8 +57,8 @@ LIMIT 20;
 
 ```sql
 -- Active solvers
-SELECT solver_id, status, stage, created_at_utc 
-FROM solvers 
+SELECT solver_id, status, stage, created_at_utc
+FROM solvers
 WHERE status = 'active';
 ```
 
@@ -76,7 +76,7 @@ VACUUM ANALYZE gold_feature_events;
 
 ```sql
 -- Reset UW flow watermark to 24 hours ago
-UPDATE ingest_watermarks 
+UPDATE ingest_watermarks
 SET last_seen_ts_utc = NOW() - INTERVAL '24 hours'
 WHERE key = 'uw_flow';
 ```

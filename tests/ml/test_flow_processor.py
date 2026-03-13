@@ -4,9 +4,10 @@ Tests for MLFlowProcessor.
 Tests flow processing and candidate generation logic.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+
 from orion.ml.flow_processor import MLFlowProcessor, process_flows_with_ml
 
 
@@ -23,7 +24,7 @@ class TestMLFlowProcessor:
         """Flow that should score high."""
         return {
             "ticker": "AAPL",
-            "flow_ts_utc": datetime.now(timezone.utc),
+            "flow_ts_utc": datetime.now(UTC),
             "premium_usd": 500000,
             "is_sweep": "true",
             "aggressor": "ASK",
@@ -42,7 +43,7 @@ class TestMLFlowProcessor:
         """Flow that should score low."""
         return {
             "ticker": "XYZ",
-            "flow_ts_utc": datetime.now(timezone.utc),
+            "flow_ts_utc": datetime.now(UTC),
             "premium_usd": 5000,
             "is_sweep": "false",
             "aggressor": "MID",
@@ -111,7 +112,7 @@ class TestMLFlowProcessor:
         """Test bullish call gets LONG direction."""
         flow = {
             "ticker": "SPY",
-            "flow_ts_utc": datetime.now(timezone.utc),
+            "flow_ts_utc": datetime.now(UTC),
             "put_call": "C",
             "aggressor": "ASK",
             "premium_usd": 500000,
@@ -132,7 +133,7 @@ class TestMLFlowProcessor:
         """Test bullish put (BID aggressor) gets LONG direction."""
         flow = {
             "ticker": "SPY",
-            "flow_ts_utc": datetime.now(timezone.utc),
+            "flow_ts_utc": datetime.now(UTC),
             "put_call": "P",
             "aggressor": "BID",
             "premium_usd": 500000,

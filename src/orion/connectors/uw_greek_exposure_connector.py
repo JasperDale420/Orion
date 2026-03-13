@@ -6,8 +6,8 @@ Fetches GEX (Gamma), VEX (Vanna), CEX (Charm) exposure data via Data Gateway.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def _is_retryable_gateway_status(status_code: Optional[int]) -> bool:
+def _is_retryable_gateway_status(status_code: int | None) -> bool:
     return status_code in RETRYABLE_GATEWAY_STATUS_CODES
 
 
 class UWGreekExposureConnector:
     """Fetches Greek exposure (GEX, Vanna, Charm) via Data Gateway."""
 
-    def __init__(self, gateway_url: Optional[str] = None, gateway_key: Optional[str] = None):
+    def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
         self.gateway_url = (gateway_url or system_settings.data_gateway_url or "").strip().rstrip("/")
         if not self.gateway_url:
             raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
@@ -33,10 +33,10 @@ class UWGreekExposureConnector:
         if not self.gateway_key:
             raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
         self.headers = {"X-Gateway-Key": self.gateway_key}
-        self._latest_exposures: list[Dict[str, Any]] = []
+        self._latest_exposures: list[dict[str, Any]] = []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _fetch_greek_exposure(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def _fetch_greek_exposure(self, ticker: str) -> dict[str, Any] | None:
         """Fetch greek exposure for a ticker via Data Gateway."""
         url = f"{self.gateway_url}/api/v1/uw/{ticker}/spot-exposures"
         try:
@@ -64,10 +64,10 @@ class UWGreekExposureConnector:
             logger.warning(f"Failed to fetch greek exposure for {ticker}: {e}")
             return None
 
-    async def fetch_and_store(self, tickers: List[str]) -> int:
+    async def fetch_and_store(self, tickers: list[str]) -> int:
         """Fetch greek exposure for multiple tickers and store."""
         stored = 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for ticker in tickers:
             try:
@@ -138,7 +138,7 @@ class UWGreekExposureConnector:
 
         return stored
 
-    async def _persist_exposure(self, record: Dict[str, Any]) -> None:
+    async def _persist_exposure(self, record: dict[str, Any]) -> None:
         """Persist latest greek exposure samples in memory."""
         self._latest_exposures.append(dict(record))
         if len(self._latest_exposures) > 2000:

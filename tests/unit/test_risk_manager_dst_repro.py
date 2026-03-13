@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from orion.config import RiskSettings
 from orion.execution.risk_manager import RiskManager
@@ -24,7 +24,7 @@ def test_dst_time_handling():
     rm = RiskManager(config=settings)
 
     # 9:32 AM EDT = 13:32 UTC
-    summer_time = datetime(2025, 7, 10, 13, 32, 0, tzinfo=timezone.utc)
+    summer_time = datetime(2025, 7, 10, 13, 32, 0, tzinfo=UTC)
 
     # Expect False (Trade Rejected due to Ban)
     # If it returns True, the bug is present.

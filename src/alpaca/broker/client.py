@@ -1,6 +1,7 @@
 import base64
 import warnings
-from typing import Any, Callable, Dict, Iterator, List, Optional, Type, Union
+from collections.abc import Callable, Iterator
+from typing import Any
 from uuid import UUID
 
 import sseclient
@@ -143,12 +144,12 @@ class BrokerClient(RESTClient):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
         api_version: str = "v1",
         sandbox: bool = True,
         raw_data: bool = False,
-        url_override: Optional[str] = None,
+        url_override: str | None = None,
     ):
         """
         Args:
@@ -185,11 +186,11 @@ class BrokerClient(RESTClient):
     def _iterate_over_pages(
         self,
         endpoint: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         response_field: str,
-        base_model_type: Type[BaseModel],
-        max_items_limit: Optional[int] = None,
-    ) -> Iterator[Union[RawData, BaseModel]]:
+        base_model_type: type[BaseModel],
+        max_items_limit: int | None = None,
+    ) -> Iterator[RawData | BaseModel]:
         """
         Internal method to iterate over the result pages.
         """
@@ -210,7 +211,7 @@ class BrokerClient(RESTClient):
                 break
             result = response.get(response_field, None)
 
-            if not isinstance(result, List) or len(result) == 0:
+            if not isinstance(result, list) or len(result) == 0:
                 break
 
             num_items_returned = len(result)
@@ -226,7 +227,7 @@ class BrokerClient(RESTClient):
             if self._use_raw_data:
                 yield result
             else:
-                yield TypeAdapter(type=List[base_model_type]).validate_python(result)
+                yield TypeAdapter(type=list[base_model_type]).validate_python(result)
 
             if max_items_limit is not None and total_items >= max_items_limit:
                 break
@@ -243,7 +244,7 @@ class BrokerClient(RESTClient):
     def create_account(
         self,
         account_data: CreateAccountRequest,
-    ) -> Union[Account, RawData]:
+    ) -> Account | RawData:
         """
         Create an account.
 
@@ -262,8 +263,8 @@ class BrokerClient(RESTClient):
 
     def get_account_by_id(
         self,
-        account_id: Union[UUID, str],
-    ) -> Union[Account, RawData]:
+        account_id: UUID | str,
+    ) -> Account | RawData:
         """
         Get an Account by its associated account_id.
 
@@ -284,9 +285,9 @@ class BrokerClient(RESTClient):
 
     def update_account(
         self,
-        account_id: Union[UUID, str],
+        account_id: UUID | str,
         update_data: UpdateAccountRequest,
-    ) -> Union[Account, RawData]:
+    ) -> Account | RawData:
         """
         Updates data for an account with an id of `account_id`. Note that not all data for an account is modifiable
         after creation so there is a special data type of AccountUpdateRequest representing the data that is
@@ -317,7 +318,7 @@ class BrokerClient(RESTClient):
 
     def delete_account(
         self,
-        account_id: Union[UUID, str],
+        account_id: UUID | str,
     ) -> None:
         """
         DEPRECATED:
@@ -333,14 +334,14 @@ class BrokerClient(RESTClient):
         warnings.warn(
             "delete_account is deprecated and will be removed in a future version."
             "Please use `close_account(account_id)` instead",
-            DeprecationWarning,
+            DeprecationWarning, stacklevel=2,
         )
 
         self.close_account(account_id)
 
     def close_account(
         self,
-        account_id: Union[UUID, str],
+        account_id: UUID | str,
     ) -> None:
         """
         This operation closes an active account. The underlying records and information of the account are not deleted by this operation.
@@ -362,8 +363,8 @@ class BrokerClient(RESTClient):
 
     def list_accounts(
         self,
-        search_parameters: Optional[ListAccountsRequest] = None,
-    ) -> Union[List[Account], RawData]:
+        search_parameters: ListAccountsRequest | None = None,
+    ) -> list[Account] | RawData:
         """
         Get a List of Accounts allowing for passing in some filters.
 
@@ -381,18 +382,18 @@ class BrokerClient(RESTClient):
             params["entities"] = ",".join(params["entities"])
 
         response = self.get(
-            f"/accounts",
+            "/accounts",
             params,
         )
 
         if self._use_raw_data:
             return response
-        return TypeAdapter(List[Account]).validate_python(response)
+        return TypeAdapter(list[Account]).validate_python(response)
 
     def get_trade_account_by_id(
         self,
-        account_id: Union[UUID, str],
-    ) -> Union[TradeAccount, RawData]:
+        account_id: UUID | str,
+    ) -> TradeAccount | RawData:
         """
         Gets TradeAccount information for a given Account id.
 
@@ -415,8 +416,8 @@ class BrokerClient(RESTClient):
 
     def upload_documents_to_account(
         self,
-        account_id: Union[UUID, str],
-        document_data: List[Union[UploadDocumentRequest, UploadW8BenDocumentRequest]],
+        account_id: UUID | str,
+        document_data: list[UploadDocumentRequest | UploadW8BenDocumentRequest],
     ) -> None:
         """
         Allows you to upload up to 10 documents at a time for an Account.
@@ -452,8 +453,8 @@ class BrokerClient(RESTClient):
 
     def get_trade_configuration_for_account(
         self,
-        account_id: Union[UUID, str],
-    ) -> Union[TradeAccountConfiguration, RawData]:
+        account_id: UUID | str,
+    ) -> TradeAccountConfiguration | RawData:
         """
         Gets the TradeAccountConfiguration for a given Account.
 
@@ -475,9 +476,9 @@ class BrokerClient(RESTClient):
 
     def update_trade_configuration_for_account(
         self,
-        account_id: Union[UUID, str],
+        account_id: UUID | str,
         config: TradeAccountConfiguration,
-    ) -> Union[TradeAccountConfiguration, RawData]:
+    ) -> TradeAccountConfiguration | RawData:
         """
         Updates an Account with new TradeAccountConfiguration information.
 
@@ -502,8 +503,8 @@ class BrokerClient(RESTClient):
 
     def get_cip_data_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-    ) -> Union[CIPInfo, RawData]:
+        account_id: UUID | str,
+    ) -> CIPInfo | RawData:
         """
         Get CIP Info for an account.
 
@@ -523,9 +524,9 @@ class BrokerClient(RESTClient):
 
     def upload_cip_data_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        cip_data: Dict[str, Any],
-    ) -> Union[CIPInfo, RawData]:
+        account_id: UUID | str,
+        cip_data: dict[str, Any],
+    ) -> CIPInfo | RawData:
         """
         Uploads CIP information for an account.
 
@@ -549,9 +550,9 @@ class BrokerClient(RESTClient):
     def get_account_activities(
         self,
         activity_filter: GetAccountActivitiesRequest,
-        max_items_limit: Optional[int] = None,
-        handle_pagination: Optional[PaginationType] = None,
-    ) -> Union[List[BaseActivity], Iterator[List[BaseActivity]]]:
+        max_items_limit: int | None = None,
+        handle_pagination: PaginationType | None = None,
+    ) -> list[BaseActivity] | Iterator[list[BaseActivity]]:
         """
         Gets a list of Account activities, with various filtering options. Please see the documentation for
         GetAccountActivitiesRequest for more information as to what filters are available.
@@ -591,9 +592,9 @@ class BrokerClient(RESTClient):
     def _get_account_activities_iterator(
         self,
         activity_filter: GetAccountActivitiesRequest,
-        mapping: Callable[[HTTPResult], List[BaseActivity]],
-        max_items_limit: Optional[int] = None,
-    ) -> Iterator[List[BaseActivity]]:
+        mapping: Callable[[HTTPResult], list[BaseActivity]],
+        max_items_limit: int | None = None,
+    ) -> Iterator[list[BaseActivity]]:
         """
         Private method for handling the iterator parts of get_account_activities
         """
@@ -632,7 +633,7 @@ class BrokerClient(RESTClient):
 
             # the api returns [] when it's done
 
-            if not isinstance(result, List) or len(result) == 0:
+            if not isinstance(result, list) or len(result) == 0:
                 break
 
             num_items_returned = len(result)
@@ -665,7 +666,7 @@ class BrokerClient(RESTClient):
             request_fields["page_token"] = last_result["id"]
 
     @staticmethod
-    def _parse_activity(data: dict) -> Union[TradeActivity, NonTradeActivity]:
+    def _parse_activity(data: dict) -> TradeActivity | NonTradeActivity:
         """
         We cannot just use TypeAdapter for Activity types since we need to know what child instance to cast it into.
 
@@ -692,9 +693,9 @@ class BrokerClient(RESTClient):
 
     def get_trade_documents_for_account(
         self,
-        account_id: Union[UUID, str],
-        documents_filter: Optional[GetTradeDocumentsRequest] = None,
-    ) -> Union[List[TradeDocument], RawData]:
+        account_id: UUID | str,
+        documents_filter: GetTradeDocumentsRequest | None = None,
+    ) -> list[TradeDocument] | RawData:
         """
         Gets the list of TradeDocuments for an Account.
 
@@ -717,13 +718,13 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return result
 
-        return TypeAdapter(List[TradeDocument]).validate_python(result)
+        return TypeAdapter(list[TradeDocument]).validate_python(result)
 
     def get_trade_document_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        document_id: Union[UUID, str],
-    ) -> Union[TradeDocument, RawData]:
+        account_id: UUID | str,
+        document_id: UUID | str,
+    ) -> TradeDocument | RawData:
         """
         Gets a single TradeDocument by its id
 
@@ -750,8 +751,8 @@ class BrokerClient(RESTClient):
 
     def download_trade_document_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        document_id: Union[UUID, str],
+        account_id: UUID | str,
+        document_id: UUID | str,
         file_path: str,
     ) -> None:
         """
@@ -768,7 +769,7 @@ class BrokerClient(RESTClient):
 
         account_id = validate_uuid_id_param(account_id)
         document_id = validate_uuid_id_param(document_id, "document_id")
-        response: Optional[Response] = None
+        response: Response | None = None
 
         # self.get/post/etc all set follow redirects to false, however API will return a 301 redirect we need to follow,
         # so we just do a raw request
@@ -817,9 +818,9 @@ class BrokerClient(RESTClient):
 
     def create_ach_relationship_for_account(
         self,
-        account_id: Union[UUID, str],
-        ach_data: Union[CreateACHRelationshipRequest, CreatePlaidRelationshipRequest],
-    ) -> Union[ACHRelationship, RawData]:
+        account_id: UUID | str,
+        ach_data: CreateACHRelationshipRequest | CreatePlaidRelationshipRequest,
+    ) -> ACHRelationship | RawData:
         """
         Creates a single ACH relationship for the given account.
 
@@ -852,9 +853,9 @@ class BrokerClient(RESTClient):
 
     def get_ach_relationships_for_account(
         self,
-        account_id: Union[UUID, str],
-        statuses: Optional[List[ACHRelationshipStatus]] = None,
-    ) -> Union[List[ACHRelationship], RawData]:
+        account_id: UUID | str,
+        statuses: list[ACHRelationshipStatus] | None = None,
+    ) -> list[ACHRelationship] | RawData:
         """
         Gets the ACH relationships for an account.
 
@@ -876,12 +877,12 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return response
 
-        return TypeAdapter(List[ACHRelationship]).validate_python(response)
+        return TypeAdapter(list[ACHRelationship]).validate_python(response)
 
     def delete_ach_relationship_for_account(
         self,
-        account_id: Union[UUID, str],
-        ach_relationship_id: Union[UUID, str],
+        account_id: UUID | str,
+        ach_relationship_id: UUID | str,
     ) -> None:
         """
         Delete an ACH Relation by its ID.
@@ -901,9 +902,9 @@ class BrokerClient(RESTClient):
 
     def create_bank_for_account(
         self,
-        account_id: Union[UUID, str],
+        account_id: UUID | str,
         bank_data: CreateBankRequest,
-    ) -> Union[Bank, RawData]:
+    ) -> Bank | RawData:
         """
         Creates a single bank relationship for the given account.
 
@@ -926,8 +927,8 @@ class BrokerClient(RESTClient):
 
     def get_banks_for_account(
         self,
-        account_id: Union[UUID, str],
-    ) -> Union[List[Bank], RawData]:
+        account_id: UUID | str,
+    ) -> list[Bank] | RawData:
         """
         Gets the Banks for an account.
 
@@ -943,12 +944,12 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return response
 
-        return TypeAdapter(List[Bank]).validate_python(response)
+        return TypeAdapter(list[Bank]).validate_python(response)
 
     def delete_bank_for_account(
         self,
-        account_id: Union[UUID, str],
-        bank_id: Union[UUID, str],
+        account_id: UUID | str,
+        bank_id: UUID | str,
     ) -> None:
         """
         Delete a Bank by its ID.
@@ -966,9 +967,9 @@ class BrokerClient(RESTClient):
 
     def create_transfer_for_account(
         self,
-        account_id: Union[UUID, str],
-        transfer_data: Union[CreateACHTransferRequest, CreateBankTransferRequest],
-    ) -> Union[Transfer, RawData]:
+        account_id: UUID | str,
+        transfer_data: CreateACHTransferRequest | CreateBankTransferRequest,
+    ) -> Transfer | RawData:
         """
         Creates a single Transfer for the given account.
 
@@ -992,11 +993,11 @@ class BrokerClient(RESTClient):
 
     def get_transfers_for_account(
         self,
-        account_id: Union[UUID, str],
-        transfers_filter: Optional[GetTransfersRequest] = None,
-        max_items_limit: Optional[int] = None,
-        handle_pagination: Optional[PaginationType] = None,
-    ) -> Union[List[Transfer], Iterator[List[Transfer]]]:
+        account_id: UUID | str,
+        transfers_filter: GetTransfersRequest | None = None,
+        max_items_limit: int | None = None,
+        handle_pagination: PaginationType | None = None,
+    ) -> list[Transfer] | Iterator[list[Transfer]]:
         """
         Gets the transfers for an account.
 
@@ -1033,8 +1034,8 @@ class BrokerClient(RESTClient):
         self,
         account_id: UUID,
         transfers_filter: GetTransfersRequest,
-        max_items_limit: Optional[int],
-    ) -> Iterator[List[Transfer]]:
+        max_items_limit: int | None,
+    ) -> Iterator[list[Transfer]]:
         """
         Private method for handling the iterator parts of get_transfers_for_account.
         """
@@ -1047,7 +1048,7 @@ class BrokerClient(RESTClient):
             result = self.get(f"/accounts/{account_id}/transfers", request_fields)
 
             # The api returns [] when it's done.
-            if not isinstance(result, List) or len(result) == 0:
+            if not isinstance(result, list) or len(result) == 0:
                 break
 
             num_items_returned = len(result)
@@ -1061,15 +1062,15 @@ class BrokerClient(RESTClient):
             else:
                 total_items += num_items_returned
 
-            yield TypeAdapter(List[Transfer]).validate_python(result)
+            yield TypeAdapter(list[Transfer]).validate_python(result)
 
             if max_items_limit is not None and total_items >= max_items_limit:
                 break
 
     def cancel_transfer_for_account(
         self,
-        account_id: Union[UUID, str],
-        transfer_id: Union[UUID, str],
+        account_id: UUID | str,
+        transfer_id: UUID | str,
     ) -> None:
         """
         Cancel a Transfer by its ID.
@@ -1089,8 +1090,8 @@ class BrokerClient(RESTClient):
 
     def get_all_positions_for_account(
         self,
-        account_id: Union[UUID, str],
-    ) -> Union[List[Position], RawData]:
+        account_id: UUID | str,
+    ) -> list[Position] | RawData:
         """
         Gets all the current positions for an account.
 
@@ -1105,11 +1106,11 @@ class BrokerClient(RESTClient):
 
         if self._use_raw_data:
             return response
-        return TypeAdapter(List[Position]).validate_python(response)
+        return TypeAdapter(list[Position]).validate_python(response)
 
     def get_all_accounts_positions(
         self,
-    ) -> Union[AllAccountsPositions, RawData]:
+    ) -> AllAccountsPositions | RawData:
         """
         Gets all the current positions for every account in bulk.
 
@@ -1124,8 +1125,8 @@ class BrokerClient(RESTClient):
         return AllAccountsPositions(**response)
 
     def get_open_position_for_account(
-        self, account_id: Union[UUID, str], symbol_or_asset_id: Union[UUID, str]
-    ) -> Union[Position, RawData]:
+        self, account_id: UUID | str, symbol_or_asset_id: UUID | str
+    ) -> Position | RawData:
         """
         Gets the open position for an account for a single asset. Throws an APIError if the position does not exist.
 
@@ -1149,9 +1150,9 @@ class BrokerClient(RESTClient):
 
     def close_all_positions_for_account(
         self,
-        account_id: Union[UUID, str],
-        cancel_orders: Optional[bool] = None,
-    ) -> Union[List[ClosePositionResponse], RawData]:
+        account_id: UUID | str,
+        cancel_orders: bool | None = None,
+    ) -> list[ClosePositionResponse] | RawData:
         """
         Liquidates all positions for an account.
 
@@ -1173,14 +1174,14 @@ class BrokerClient(RESTClient):
 
         if self._use_raw_data:
             return response
-        return TypeAdapter(List[ClosePositionResponse]).validate_python(response)
+        return TypeAdapter(list[ClosePositionResponse]).validate_python(response)
 
     def close_position_for_account(
         self,
-        account_id: Union[UUID, str],
-        symbol_or_asset_id: Union[UUID, str],
-        close_options: Optional[ClosePositionRequest] = None,
-    ) -> Union[Order, RawData]:
+        account_id: UUID | str,
+        symbol_or_asset_id: UUID | str,
+        close_options: ClosePositionRequest | None = None,
+    ) -> Order | RawData:
         """
         Liquidates the position for an account for a single asset.
 
@@ -1208,9 +1209,9 @@ class BrokerClient(RESTClient):
 
     def get_portfolio_history_for_account(
         self,
-        account_id: Union[UUID, str],
-        history_filter: Optional[GetPortfolioHistoryRequest] = None,
-    ) -> Union[PortfolioHistory, RawData]:
+        account_id: UUID | str,
+        history_filter: GetPortfolioHistoryRequest | None = None,
+    ) -> PortfolioHistory | RawData:
         """
         Gets the portfolio history statistics for an account.
 
@@ -1235,7 +1236,7 @@ class BrokerClient(RESTClient):
 
     # ############################## CLOCK & CALENDAR ################################# #
 
-    def get_clock(self) -> Union[Clock, RawData]:
+    def get_clock(self) -> Clock | RawData:
         """
         Gets the current market timestamp, whether or not the market is currently open, as well as the times
         of the next market open and close.
@@ -1253,8 +1254,8 @@ class BrokerClient(RESTClient):
 
     def get_calendar(
         self,
-        filters: Optional[GetCalendarRequest] = None,
-    ) -> Union[List[Calendar], RawData]:
+        filters: GetCalendarRequest | None = None,
+    ) -> list[Calendar] | RawData:
         """
         The calendar API serves the full list of market days from 1970 to 2029. It can also be queried by specifying a
         start and/or end time to narrow down the results.
@@ -1276,14 +1277,14 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return result
 
-        return TypeAdapter(List[Calendar]).validate_python(result)
+        return TypeAdapter(list[Calendar]).validate_python(result)
 
     # ############################## WATCHLISTS ################################# #
 
     def get_watchlists_for_account(
         self,
-        account_id: Union[UUID, str],
-    ) -> Union[List[Watchlist], RawData]:
+        account_id: UUID | str,
+    ) -> list[Watchlist] | RawData:
         """
         Returns all watchlists for an account.
 
@@ -1300,13 +1301,13 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return result
 
-        return TypeAdapter(List[Watchlist]).validate_python(result)
+        return TypeAdapter(list[Watchlist]).validate_python(result)
 
     def get_watchlist_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        watchlist_id: Union[UUID, str],
-    ) -> Union[Watchlist, RawData]:
+        account_id: UUID | str,
+        watchlist_id: UUID | str,
+    ) -> Watchlist | RawData:
         """
         Returns a specific watchlist by its id for a given account.
 
@@ -1329,9 +1330,9 @@ class BrokerClient(RESTClient):
 
     def create_watchlist_for_account(
         self,
-        account_id: Union[UUID, str],
+        account_id: UUID | str,
         watchlist_data: CreateWatchlistRequest,
-    ) -> Union[Watchlist, RawData]:
+    ) -> Watchlist | RawData:
         """
         Creates a new watchlist for a given account.
 
@@ -1356,12 +1357,12 @@ class BrokerClient(RESTClient):
 
     def update_watchlist_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        watchlist_id: Union[UUID, str],
+        account_id: UUID | str,
+        watchlist_id: UUID | str,
         # Might be worth taking a union of this and Watchlist itself; but then we should make a change like that SDK
         # wide. Probably a good 0.2.x change
         watchlist_data: UpdateWatchlistRequest,
-    ) -> Union[Watchlist, RawData]:
+    ) -> Watchlist | RawData:
         """
         Updates a watchlist with new data.
 
@@ -1388,10 +1389,10 @@ class BrokerClient(RESTClient):
 
     def add_asset_to_watchlist_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        watchlist_id: Union[UUID, str],
+        account_id: UUID | str,
+        watchlist_id: UUID | str,
         symbol: str,
-    ) -> Union[Watchlist, RawData]:
+    ) -> Watchlist | RawData:
         """
         Adds an asset by its symbol to a specified watchlist for a given account.
         Args:
@@ -1418,8 +1419,8 @@ class BrokerClient(RESTClient):
 
     def delete_watchlist_from_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        watchlist_id: Union[UUID, str],
+        account_id: UUID | str,
+        watchlist_id: UUID | str,
     ) -> None:
         """
         Deletes a watchlist. This is permanent.
@@ -1438,10 +1439,10 @@ class BrokerClient(RESTClient):
 
     def remove_asset_from_watchlist_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        watchlist_id: Union[UUID, str],
+        account_id: UUID | str,
+        watchlist_id: UUID | str,
         symbol: str,
-    ) -> Union[Watchlist, RawData]:
+    ) -> Watchlist | RawData:
         """
         Removes an asset from a watchlist for a given account.
 
@@ -1470,7 +1471,7 @@ class BrokerClient(RESTClient):
     def create_journal(
         self,
         journal_data: CreateJournalRequest,
-    ) -> Union[Journal, RawData]:
+    ) -> Journal | RawData:
         """
         The journal API allows you to transfer cash and securities between accounts.
 
@@ -1494,7 +1495,7 @@ class BrokerClient(RESTClient):
     def create_batch_journal(
         self,
         batch_data: CreateBatchJournalRequest,
-    ) -> Union[List[BatchJournalResponse], RawData]:
+    ) -> list[BatchJournalResponse] | RawData:
         """
         A batch journal moves assets from one account into many others.
 
@@ -1513,12 +1514,12 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return response
 
-        return TypeAdapter(List[BatchJournalResponse]).validate_python(response)
+        return TypeAdapter(list[BatchJournalResponse]).validate_python(response)
 
     def create_reverse_batch_journal(
         self,
         reverse_batch_data: CreateReverseBatchJournalRequest,
-    ) -> Union[List[BatchJournalResponse], RawData]:
+    ) -> list[BatchJournalResponse] | RawData:
         """
         A  reverse batch journal moves assets into one account from many others.
 
@@ -1537,11 +1538,11 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return response
 
-        return TypeAdapter(List[BatchJournalResponse]).validate_python(response)
+        return TypeAdapter(list[BatchJournalResponse]).validate_python(response)
 
     def get_journals(
-        self, journal_filter: Optional[GetJournalsRequest] = None
-    ) -> Union[List[Journal], RawData]:
+        self, journal_filter: GetJournalsRequest | None = None
+    ) -> list[Journal] | RawData:
         """
         Returns journals from the master list.
 
@@ -1558,11 +1559,11 @@ class BrokerClient(RESTClient):
         if self._use_raw_data:
             return response
 
-        return TypeAdapter(List[Journal]).validate_python(response)
+        return TypeAdapter(list[Journal]).validate_python(response)
 
     def get_journal_by_id(
-        self, journal_id: Union[UUID, str] = None
-    ) -> Union[Journal, RawData]:
+        self, journal_id: UUID | str = None
+    ) -> Journal | RawData:
         """
         Returns a specific journal by its id.
 
@@ -1583,7 +1584,7 @@ class BrokerClient(RESTClient):
 
     def cancel_journal_by_id(
         self,
-        journal_id: Union[UUID, str],
+        journal_id: UUID | str,
     ) -> None:
         """
         Cancels a specific journal by its id.
@@ -1601,8 +1602,8 @@ class BrokerClient(RESTClient):
     # ############################## Assets ################################# #
 
     def get_all_assets(
-        self, filter: Optional[GetAssetsRequest] = None
-    ) -> Union[List[Asset], RawData]:
+        self, filter: GetAssetsRequest | None = None
+    ) -> list[Asset] | RawData:
         """
         The assets API serves as the master list of assets available for trade and data consumption from Alpaca.
         Some assets are not tradable with Alpaca. These assets will be marked with the flag tradable=false.
@@ -1616,16 +1617,16 @@ class BrokerClient(RESTClient):
         # checking to see if we specified at least one param
         params = filter.to_request_fields() if filter is not None else {}
 
-        response = self.get(f"/assets", params)
+        response = self.get("/assets", params)
 
         if self._use_raw_data:
             return response
 
         return TypeAdapter(
-            List[Asset],
+            list[Asset],
         ).validate_python(response)
 
-    def get_asset(self, symbol_or_asset_id: Union[UUID, str]) -> Union[Asset, RawData]:
+    def get_asset(self, symbol_or_asset_id: UUID | str) -> Asset | RawData:
         """
         Returns a specific asset by its symbol or asset id. If the specified asset does not exist
         a 404 error will be thrown.
@@ -1649,8 +1650,8 @@ class BrokerClient(RESTClient):
     # ############################## ORDERS ################################# #
 
     def submit_order_for_account(
-        self, account_id: Union[UUID, str], order_data: OrderRequest
-    ) -> Union[Order, RawData]:
+        self, account_id: UUID | str, order_data: OrderRequest
+    ) -> Order | RawData:
         """Creates an order to buy or sell an asset for an account.
 
         Args:
@@ -1673,8 +1674,8 @@ class BrokerClient(RESTClient):
         return Order(**response)
 
     def get_orders_for_account(
-        self, account_id: Union[UUID, str], filter: Optional[GetOrdersRequest] = None
-    ) -> Union[List[Order], RawData]:
+        self, account_id: UUID | str, filter: GetOrdersRequest | None = None
+    ) -> list[Order] | RawData:
         """
         Returns all orders for an account. Orders can be filtered by parameters.
 
@@ -1699,15 +1700,15 @@ class BrokerClient(RESTClient):
             return response
 
         return TypeAdapter(
-            List[Order],
+            list[Order],
         ).validate_python(response)
 
     def get_order_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        order_id: Union[UUID, str],
-        filter: Optional[GetOrderByIdRequest] = None,
-    ) -> Union[Order, RawData]:
+        account_id: UUID | str,
+        order_id: UUID | str,
+        filter: GetOrderByIdRequest | None = None,
+    ) -> Order | RawData:
         """
         Returns a specific order by its order id.
 
@@ -1733,8 +1734,8 @@ class BrokerClient(RESTClient):
         return Order(**response)
 
     def get_order_for_account_by_client_id(
-        self, account_id: Union[UUID, str], client_id: str
-    ) -> Union[Order, RawData]:
+        self, account_id: UUID | str, client_id: str
+    ) -> Order | RawData:
         """
         Returns a specific order by its client order id.
 
@@ -1760,10 +1761,10 @@ class BrokerClient(RESTClient):
 
     def replace_order_for_account_by_id(
         self,
-        account_id: Union[UUID, str],
-        order_id: Union[UUID, str],
-        order_data: Optional[ReplaceOrderRequest] = None,
-    ) -> Union[Order, RawData]:
+        account_id: UUID | str,
+        order_id: UUID | str,
+        order_data: ReplaceOrderRequest | None = None,
+    ) -> Order | RawData:
         """
         Updates an order with new parameters.
 
@@ -1791,8 +1792,8 @@ class BrokerClient(RESTClient):
         return Order(**response)
 
     def cancel_orders_for_account(
-        self, account_id: Union[UUID, str]
-    ) -> Union[List[CancelOrderResponse], RawData]:
+        self, account_id: UUID | str
+    ) -> list[CancelOrderResponse] | RawData:
         """
         Cancels all orders.
 
@@ -1810,11 +1811,11 @@ class BrokerClient(RESTClient):
             return response
 
         return TypeAdapter(
-            List[CancelOrderResponse],
+            list[CancelOrderResponse],
         ).validate_python(response)
 
     def cancel_order_for_account_by_id(
-        self, account_id: Union[UUID, str], order_id: Union[UUID, str]
+        self, account_id: UUID | str, order_id: UUID | str
     ) -> None:
         """
         Cancels a specific order by its order id.
@@ -1835,7 +1836,7 @@ class BrokerClient(RESTClient):
 
     def get_corporate_announcements(
         self, filter: GetCorporateAnnouncementsRequest
-    ) -> Union[List[CorporateActionAnnouncement], RawData]:
+    ) -> list[CorporateActionAnnouncement] | RawData:
         """
         Returns corporate action announcements data given specified search criteria.
         Args:
@@ -1854,12 +1855,12 @@ class BrokerClient(RESTClient):
             return response
 
         return TypeAdapter(
-            List[CorporateActionAnnouncement],
+            list[CorporateActionAnnouncement],
         ).validate_python(response)
 
     def get_corporate_announcement_by_id(
-        self, corporate_announcment_id: Union[UUID, str]
-    ) -> Union[CorporateActionAnnouncement, RawData]:
+        self, corporate_announcment_id: UUID | str
+    ) -> CorporateActionAnnouncement | RawData:
         """
         Returns a specific corporate action announcement.
         Args:
@@ -1883,7 +1884,7 @@ class BrokerClient(RESTClient):
     # ############################## EVENTS ################################# #
 
     def get_account_status_events(
-        self, filter: Optional[GetEventsRequest] = None
+        self, filter: GetEventsRequest | None = None
     ) -> Iterator:
         """
         Subscribes to SSE stream for account status events.
@@ -1914,7 +1915,7 @@ class BrokerClient(RESTClient):
         for event in client.events():
             yield event.data
 
-    def get_trade_events(self, filter: Optional[GetEventsRequest] = None) -> Iterator:
+    def get_trade_events(self, filter: GetEventsRequest | None = None) -> Iterator:
         """
         Subscribes to SSE stream for trade events.
 
@@ -1943,7 +1944,7 @@ class BrokerClient(RESTClient):
         for event in client.events():
             yield event.data
 
-    def get_journal_events(self, filter: Optional[GetEventsRequest] = None) -> Iterator:
+    def get_journal_events(self, filter: GetEventsRequest | None = None) -> Iterator:
         """
         Subscribes to SSE stream for journal status events.
 
@@ -1973,7 +1974,7 @@ class BrokerClient(RESTClient):
             yield event.data
 
     def get_transfer_events(
-        self, filter: Optional[GetEventsRequest] = None
+        self, filter: GetEventsRequest | None = None
     ) -> Iterator:
         """
         Subscribes to SSE stream for transfer status events.
@@ -2004,7 +2005,7 @@ class BrokerClient(RESTClient):
             yield event.data
 
     def get_non_trading_activity_events(
-        self, filter: Optional[GetEventsRequest] = None
+        self, filter: GetEventsRequest | None = None
     ) -> Iterator:
         """
         Subscribes to SSE stream for non trading activity events.
@@ -2048,7 +2049,7 @@ class BrokerClient(RESTClient):
 
     def create_portfolio(
         self, portfolio_request: CreatePortfolioRequest
-    ) -> Union[Portfolio, RawData]:
+    ) -> Portfolio | RawData:
         """
         Create a new portfolio.
 
@@ -2072,8 +2073,8 @@ class BrokerClient(RESTClient):
 
     def get_all_portfolios(
         self,
-        filter: Optional[GetPortfoliosRequest] = None,
-    ) -> Union[List[Portfolio], List[RawData]]:
+        filter: GetPortfoliosRequest | None = None,
+    ) -> list[Portfolio] | list[RawData]:
         """
         Retrieves all portfolios based on the filter provided.
 
@@ -2094,12 +2095,12 @@ class BrokerClient(RESTClient):
             return response
 
         return TypeAdapter(
-            List[Portfolio],
+            list[Portfolio],
         ).validate_python(response)
 
     def get_portfolio_by_id(
-        self, portfolio_id: Union[UUID, str]
-    ) -> Union[Portfolio, RawData]:
+        self, portfolio_id: UUID | str
+    ) -> Portfolio | RawData:
         """
         Retrieves a specific portfolio using its ID.
 
@@ -2119,9 +2120,9 @@ class BrokerClient(RESTClient):
 
     def update_portfolio_by_id(
         self,
-        portfolio_id: Union[UUID, str],
+        portfolio_id: UUID | str,
         update_request: UpdatePortfolioRequest,
-    ) -> Union[Portfolio, RawData]:
+    ) -> Portfolio | RawData:
         """
         Updates a portfolio by ID.
         If weights or conditions are changed, all subscribed accounts will be evaluated for rebalancing at the next opportunity (normal market hours).
@@ -2148,7 +2149,7 @@ class BrokerClient(RESTClient):
 
         return Portfolio(**response)
 
-    def inactivate_portfolio_by_id(self, portfolio_id: Union[UUID, str]) -> None:
+    def inactivate_portfolio_by_id(self, portfolio_id: UUID | str) -> None:
         """
         Sets a portfolio to “inactive”, so it can be filtered out of the list request.
         Only permitted if there are no active subscriptions to this portfolio and this portfolio is not a listed in the weights of any active portfolios.
@@ -2167,7 +2168,7 @@ class BrokerClient(RESTClient):
 
     def create_subscription(
         self, subscription_request: CreateSubscriptionRequest
-    ) -> Union[Subscription, RawData]:
+    ) -> Subscription | RawData:
         """
         Create a new subscription.
 
@@ -2189,10 +2190,10 @@ class BrokerClient(RESTClient):
 
     def get_all_subscriptions(
         self,
-        filter: Optional[GetSubscriptionsRequest] = None,
-        max_items_limit: Optional[int] = None,
-        handle_pagination: Optional[PaginationType] = None,
-    ) -> Union[List[Subscription], List[RawData]]:
+        filter: GetSubscriptionsRequest | None = None,
+        max_items_limit: int | None = None,
+        handle_pagination: PaginationType | None = None,
+    ) -> list[Subscription] | list[RawData]:
         """
         Retrieves all subscriptions based on the filter provided.
 
@@ -2225,8 +2226,8 @@ class BrokerClient(RESTClient):
         )
 
     def get_subscription_by_id(
-        self, subscription_id: Union[UUID, str]
-    ) -> Union[Subscription, RawData]:
+        self, subscription_id: UUID | str
+    ) -> Subscription | RawData:
         """
         Get a subscription by its ID.
 
@@ -2245,7 +2246,7 @@ class BrokerClient(RESTClient):
 
         return Subscription(**response)
 
-    def unsubscribe_account(self, subscription_id: Union[UUID, str]) -> None:
+    def unsubscribe_account(self, subscription_id: UUID | str) -> None:
         """
         Deletes the subscription which stops the rebalancing of an account.
 
@@ -2260,7 +2261,7 @@ class BrokerClient(RESTClient):
 
     def create_manual_run(
         self, rebalancing_run_request: CreateRunRequest
-    ) -> Union[RebalancingRun, RawData]:
+    ) -> RebalancingRun | RawData:
         """
         Create a new manual rebalancing run.
 
@@ -2282,10 +2283,10 @@ class BrokerClient(RESTClient):
 
     def get_all_runs(
         self,
-        filter: Optional[GetRunsRequest] = None,
-        max_items_limit: Optional[int] = None,
-        handle_pagination: Optional[PaginationType] = None,
-    ) -> Union[List[RebalancingRun], List[RawData]]:
+        filter: GetRunsRequest | None = None,
+        max_items_limit: int | None = None,
+        handle_pagination: PaginationType | None = None,
+    ) -> list[RebalancingRun] | list[RawData]:
         """
         Get all runs.
 
@@ -2313,7 +2314,7 @@ class BrokerClient(RESTClient):
 
         return BrokerClient._return_paginated_result(runs_iterator, handle_pagination)
 
-    def get_run_by_id(self, run_id: Union[UUID, str]) -> Union[RebalancingRun, RawData]:
+    def get_run_by_id(self, run_id: UUID | str) -> RebalancingRun | RawData:
         """
         Get a run by its ID.
 
@@ -2332,7 +2333,7 @@ class BrokerClient(RESTClient):
 
         return RebalancingRun(**response)
 
-    def cancel_run_by_id(self, run_id: Union[UUID, str]) -> None:
+    def cancel_run_by_id(self, run_id: UUID | str) -> None:
         """
         Cancels a run.
 
@@ -2348,9 +2349,9 @@ class BrokerClient(RESTClient):
 
     def exercise_options_position_for_account_by_id(
         self,
-        symbol_or_contract_id: Union[UUID, str],
-        account_id: Union[UUID, str],
-        commission: Optional[float] = None,
+        symbol_or_contract_id: UUID | str,
+        account_id: UUID | str,
+        commission: float | None = None,
     ) -> None:
         """
         This endpoint enables the correspondent to exercise a held option contract for an account, converting it into the underlying asset based on the specified terms.

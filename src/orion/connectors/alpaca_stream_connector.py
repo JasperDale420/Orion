@@ -7,17 +7,19 @@ connection if Gateway is unavailable.
 """
 
 import asyncio
+import contextlib
 import hashlib
-import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from orion.config import system_settings
+from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class AlpacaStreamConnector:
@@ -32,11 +34,11 @@ class AlpacaStreamConnector:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
         feed: str = "sip",
-        on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
-        use_gateway: Optional[bool] = None,
+        on_bar_callback: Callable[[BronzeEvent], None] | None = None,
+        use_gateway: bool | None = None,
     ):
         self._use_gateway = use_gateway if use_gateway is not None else bool(system_settings.orion_use_gateway)
         self.on_bar_callback = on_bar_callback
@@ -51,14 +53,14 @@ class AlpacaStreamConnector:
         self._secret_key = secret_key
 
         # Track subscribed tickers
-        self._subscribed_tickers: Set[str] = set()
+        self._subscribed_tickers: set[str] = set()
 
         # Event queue for buffering bars
         self._event_queue: asyncio.Queue[BronzeEvent] = asyncio.Queue()
 
         # Running state
         self._running = False
-        self._stream_task: Optional[asyncio.Task] = None
+        self._stream_task: asyncio.Task | None = None
 
         if self._use_gateway:
             logger.info("AlpacaStreamConnector initialized in Gateway mode")
@@ -100,7 +102,7 @@ class AlpacaStreamConnector:
             except asyncio.QueueFull:
                 logger.warning("Event queue full, dropping event")
 
-    def _generate_event_id(self, ticker: str, bar_data: Dict[str, Any]) -> str:
+    def _generate_event_id(self, ticker: str, bar_data: dict[str, Any]) -> str:
         """Generates a deterministic event ID based on event content."""
         raw_str = f"ALPACA_BAR_1M_{ticker}_{bar_data.get('timestamp', '')}_{bar_data.get('volume', '')}"
         return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
@@ -139,7 +141,7 @@ class AlpacaStreamConnector:
                 source="ALPACA",
                 event_type="ALPACA_BAR_1M",
                 event_ts_utc=event_ts,
-                received_ts_utc=datetime.now(timezone.utc),
+                received_ts_utc=datetime.now(UTC),
                 payload=payload,
             )
 
@@ -156,7 +158,7 @@ class AlpacaStreamConnector:
         except Exception as e:
             logger.error(f"Error processing streaming bar: {e}", exc_info=True)
 
-    async def subscribe(self, tickers: List[str]) -> None:
+    async def subscribe(self, tickers: list[str]) -> None:
         """Subscribe to bar updates for the given tickers."""
         if not tickers:
             return
@@ -176,7 +178,7 @@ class AlpacaStreamConnector:
 
         self._subscribed_tickers.update(new_tickers)
 
-    async def unsubscribe(self, tickers: List[str]) -> None:
+    async def unsubscribe(self, tickers: list[str]) -> None:
         """Unsubscribe from bar updates for the given tickers."""
         if not tickers:
             return
@@ -240,12 +242,10 @@ class AlpacaStreamConnector:
 
             if self._stream_task:
                 self._stream_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._stream_task
-                except asyncio.CancelledError:
-                    pass  # Expected when stopping - no need to re-raise here as this is the stop() method
 
-    async def drain_events(self, max_events: int = 1000) -> List[BronzeEvent]:
+    async def drain_events(self, max_events: int = 1000) -> list[BronzeEvent]:
         """
         Drain buffered events from the queue.
         Used when not using callback mode.
@@ -267,12 +267,12 @@ class AlpacaStreamConnector:
         return self._running
 
     @property
-    def subscribed_tickers(self) -> Set[str]:
+    def subscribed_tickers(self) -> set[str]:
         return self._subscribed_tickers.copy()
 
 
 def create_alpaca_stream_connector(
-    on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
+    on_bar_callback: Callable[[BronzeEvent], None] | None = None,
 ) -> AlpacaStreamConnector:
     """Create AlpacaStreamConnector using environment configuration."""
     return AlpacaStreamConnector(

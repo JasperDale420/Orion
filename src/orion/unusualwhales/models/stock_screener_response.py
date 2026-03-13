@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -110,53 +110,53 @@ class StockScreenerResponse:
         week_52_low (Union[Unset, str]): The 52 week low stock price of the ticker. Example: 124.17.
     """
 
-    avg_30_day_call_volume: Union[Unset, str] = UNSET
-    avg_30_day_put_volume: Union[Unset, str] = UNSET
-    avg_3_day_call_volume: Union[Unset, str] = UNSET
-    avg_3_day_put_volume: Union[Unset, str] = UNSET
-    avg_7_day_call_volume: Union[Unset, str] = UNSET
-    avg_7_day_put_volume: Union[Unset, str] = UNSET
-    bearish_premium: Union[Unset, str] = UNSET
-    bullish_premium: Union[Unset, str] = UNSET
-    call_open_interest: Union[Unset, int] = UNSET
-    call_premium: Union[Unset, str] = UNSET
-    call_volume: Union[Unset, int] = UNSET
-    call_volume_ask_side: Union[Unset, int] = UNSET
-    call_volume_bid_side: Union[Unset, int] = UNSET
-    close: Union[Unset, str] = UNSET
-    er_time: Union[Unset, StockEarningsTime] = UNSET
-    implied_move: Union[Unset, str] = UNSET
-    implied_move_perc: Union[Unset, str] = UNSET
-    is_index: Union[Unset, bool] = UNSET
-    issue_type: Union[Unset, StockIssueType] = UNSET
-    iv30d: Union[Unset, str] = UNSET
-    iv30d_1d: Union[Unset, str] = UNSET
-    iv30d_1m: Union[Unset, str] = UNSET
-    iv30d_1w: Union[Unset, str] = UNSET
-    iv_rank: Union[Unset, str] = UNSET
-    marketcap: Union[Unset, str] = UNSET
-    net_call_premium: Union[Unset, str] = UNSET
-    net_put_premium: Union[Unset, str] = UNSET
-    next_dividend_date: Union[Unset, datetime.date] = UNSET
-    next_earnings_date: Union[Unset, datetime.date] = UNSET
-    prev_call_oi: Union[Unset, int] = UNSET
-    prev_close: Union[Unset, str] = UNSET
-    prev_put_oi: Union[Unset, int] = UNSET
-    put_call_ratio: Union[Unset, str] = UNSET
-    put_open_interest: Union[Unset, int] = UNSET
-    put_premium: Union[Unset, str] = UNSET
-    put_volume: Union[Unset, int] = UNSET
-    put_volume_ask_side: Union[Unset, int] = UNSET
-    put_volume_bid_side: Union[Unset, int] = UNSET
-    sector: Union[Unset, MarketGeneralSector] = UNSET
-    ticker: Union[Unset, str] = UNSET
-    total_open_interest: Union[Unset, int] = UNSET
-    volatility: Union[Unset, str] = UNSET
-    week_52_high: Union[Unset, str] = UNSET
-    week_52_low: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    avg_30_day_call_volume: Unset | str = UNSET
+    avg_30_day_put_volume: Unset | str = UNSET
+    avg_3_day_call_volume: Unset | str = UNSET
+    avg_3_day_put_volume: Unset | str = UNSET
+    avg_7_day_call_volume: Unset | str = UNSET
+    avg_7_day_put_volume: Unset | str = UNSET
+    bearish_premium: Unset | str = UNSET
+    bullish_premium: Unset | str = UNSET
+    call_open_interest: Unset | int = UNSET
+    call_premium: Unset | str = UNSET
+    call_volume: Unset | int = UNSET
+    call_volume_ask_side: Unset | int = UNSET
+    call_volume_bid_side: Unset | int = UNSET
+    close: Unset | str = UNSET
+    er_time: Unset | StockEarningsTime = UNSET
+    implied_move: Unset | str = UNSET
+    implied_move_perc: Unset | str = UNSET
+    is_index: Unset | bool = UNSET
+    issue_type: Unset | StockIssueType = UNSET
+    iv30d: Unset | str = UNSET
+    iv30d_1d: Unset | str = UNSET
+    iv30d_1m: Unset | str = UNSET
+    iv30d_1w: Unset | str = UNSET
+    iv_rank: Unset | str = UNSET
+    marketcap: Unset | str = UNSET
+    net_call_premium: Unset | str = UNSET
+    net_put_premium: Unset | str = UNSET
+    next_dividend_date: Unset | datetime.date = UNSET
+    next_earnings_date: Unset | datetime.date = UNSET
+    prev_call_oi: Unset | int = UNSET
+    prev_close: Unset | str = UNSET
+    prev_put_oi: Unset | int = UNSET
+    put_call_ratio: Unset | str = UNSET
+    put_open_interest: Unset | int = UNSET
+    put_premium: Unset | str = UNSET
+    put_volume: Unset | int = UNSET
+    put_volume_ask_side: Unset | int = UNSET
+    put_volume_bid_side: Unset | int = UNSET
+    sector: Unset | MarketGeneralSector = UNSET
+    ticker: Unset | str = UNSET
+    total_open_interest: Unset | int = UNSET
+    volatility: Unset | str = UNSET
+    week_52_high: Unset | str = UNSET
+    week_52_low: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         avg_30_day_call_volume = self.avg_30_day_call_volume
 
         avg_30_day_put_volume = self.avg_30_day_put_volume
@@ -185,7 +185,7 @@ class StockScreenerResponse:
 
         close = self.close
 
-        er_time: Union[Unset, str] = UNSET
+        er_time: Unset | str = UNSET
         if not isinstance(self.er_time, Unset):
             er_time = self.er_time.value
 
@@ -195,7 +195,7 @@ class StockScreenerResponse:
 
         is_index = self.is_index
 
-        issue_type: Union[Unset, str] = UNSET
+        issue_type: Unset | str = UNSET
         if not isinstance(self.issue_type, Unset):
             issue_type = self.issue_type.value
 
@@ -215,11 +215,11 @@ class StockScreenerResponse:
 
         net_put_premium = self.net_put_premium
 
-        next_dividend_date: Union[Unset, str] = UNSET
+        next_dividend_date: Unset | str = UNSET
         if not isinstance(self.next_dividend_date, Unset):
             next_dividend_date = self.next_dividend_date.isoformat()
 
-        next_earnings_date: Union[Unset, str] = UNSET
+        next_earnings_date: Unset | str = UNSET
         if not isinstance(self.next_earnings_date, Unset):
             next_earnings_date = self.next_earnings_date.isoformat()
 
@@ -241,7 +241,7 @@ class StockScreenerResponse:
 
         put_volume_bid_side = self.put_volume_bid_side
 
-        sector: Union[Unset, str] = UNSET
+        sector: Unset | str = UNSET
         if not isinstance(self.sector, Unset):
             sector = self.sector.value
 
@@ -255,7 +255,7 @@ class StockScreenerResponse:
 
         week_52_low = self.week_52_low
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if avg_30_day_call_volume is not UNSET:
@@ -350,7 +350,7 @@ class StockScreenerResponse:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         avg_30_day_call_volume = d.pop("avg_30_day_call_volume", UNSET)
 
@@ -381,7 +381,7 @@ class StockScreenerResponse:
         close = d.pop("close", UNSET)
 
         _er_time = d.pop("er_time", UNSET)
-        er_time: Union[Unset, StockEarningsTime]
+        er_time: Unset | StockEarningsTime
         if isinstance(_er_time, Unset):
             er_time = UNSET
         else:
@@ -394,7 +394,7 @@ class StockScreenerResponse:
         is_index = d.pop("is_index", UNSET)
 
         _issue_type = d.pop("issue_type", UNSET)
-        issue_type: Union[Unset, StockIssueType]
+        issue_type: Unset | StockIssueType
         if isinstance(_issue_type, Unset):
             issue_type = UNSET
         else:
@@ -417,14 +417,14 @@ class StockScreenerResponse:
         net_put_premium = d.pop("net_put_premium", UNSET)
 
         _next_dividend_date = d.pop("next_dividend_date", UNSET)
-        next_dividend_date: Union[Unset, datetime.date]
+        next_dividend_date: Unset | datetime.date
         if isinstance(_next_dividend_date, Unset):
             next_dividend_date = UNSET
         else:
             next_dividend_date = isoparse(_next_dividend_date).date()
 
         _next_earnings_date = d.pop("next_earnings_date", UNSET)
-        next_earnings_date: Union[Unset, datetime.date]
+        next_earnings_date: Unset | datetime.date
         if isinstance(_next_earnings_date, Unset):
             next_earnings_date = UNSET
         else:
@@ -449,7 +449,7 @@ class StockScreenerResponse:
         put_volume_bid_side = d.pop("put_volume_bid_side", UNSET)
 
         _sector = d.pop("sector", UNSET)
-        sector: Union[Unset, MarketGeneralSector]
+        sector: Unset | MarketGeneralSector
         if isinstance(_sector, Unset):
             sector = UNSET
         else:
@@ -516,7 +516,7 @@ class StockScreenerResponse:
         return stock_screener_response
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:

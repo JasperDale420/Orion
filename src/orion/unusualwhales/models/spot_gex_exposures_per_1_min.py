@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -50,19 +50,19 @@ class SpotGEXExposuresPer1Min:
              Example: -5559678859.12.
     """
 
-    charm_per_one_percent_move_oi: Union[Unset, str] = UNSET
-    charm_per_one_percent_move_vol: Union[Unset, str] = UNSET
-    delta_per_one_percent_move_oi: Union[Unset, str] = UNSET
-    delta_per_one_percent_move_vol: Union[Unset, str] = UNSET
-    gamma_per_one_percent_move_oi: Union[Unset, str] = UNSET
-    gamma_per_one_percent_move_vol: Union[Unset, str] = UNSET
-    price: Union[Unset, str] = UNSET
-    time: Union[Unset, str] = UNSET
-    vanna_per_one_percent_move_oi: Union[Unset, str] = UNSET
-    vanna_per_one_percent_move_vol: Union[Unset, str] = UNSET
-    additional_properties: Dict[str, Any] = _attrs_field(init=False, factory=dict)
+    charm_per_one_percent_move_oi: Unset | str = UNSET
+    charm_per_one_percent_move_vol: Unset | str = UNSET
+    delta_per_one_percent_move_oi: Unset | str = UNSET
+    delta_per_one_percent_move_vol: Unset | str = UNSET
+    gamma_per_one_percent_move_oi: Unset | str = UNSET
+    gamma_per_one_percent_move_vol: Unset | str = UNSET
+    price: Unset | str = UNSET
+    time: Unset | str = UNSET
+    vanna_per_one_percent_move_oi: Unset | str = UNSET
+    vanna_per_one_percent_move_vol: Unset | str = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         charm_per_one_percent_move_oi = self.charm_per_one_percent_move_oi
 
         charm_per_one_percent_move_vol = self.charm_per_one_percent_move_vol
@@ -83,7 +83,7 @@ class SpotGEXExposuresPer1Min:
 
         vanna_per_one_percent_move_vol = self.vanna_per_one_percent_move_vol
 
-        field_dict: Dict[str, Any] = {}
+        field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
         if charm_per_one_percent_move_oi is not UNSET:
@@ -110,7 +110,7 @@ class SpotGEXExposuresPer1Min:
         return field_dict
 
     @classmethod
-    def from_dict(cls: Type[T], src_dict: Dict[str, Any]) -> T:
+    def from_dict(cls: type[T], src_dict: dict[str, Any]) -> T:
         d = src_dict.copy()
         charm_per_one_percent_move_oi = d.pop("charm_per_one_percent_move_oi", UNSET)
 
@@ -149,7 +149,7 @@ class SpotGEXExposuresPer1Min:
         return spot_gex_exposures_per_1_min
 
     @property
-    def additional_keys(self) -> List[str]:
+    def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
     def __getitem__(self, key: str) -> Any:
