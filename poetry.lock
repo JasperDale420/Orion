@@ -908,14 +908,14 @@ files = [
 
 [[package]]
 name = "exchange-calendars"
-version = "4.13.1"
+version = "4.13.2"
 description = "Calendars for securities exchanges"
 optional = false
 python-versions = "<4,>=3.10"
 groups = ["main"]
 files = [
-    {file = "exchange_calendars-4.13.1-py3-none-any.whl", hash = "sha256:cf39d2128a4da3ac253283f91ab63d79930a68196a3aac811091a4e38b6cbe49"},
-    {file = "exchange_calendars-4.13.1.tar.gz", hash = "sha256:42a4c7296da1f71b9625c668c9b3359cf5de4a2ffca28842b230e062bb4961ba"},
+    {file = "exchange_calendars-4.13.2-py3-none-any.whl", hash = "sha256:fc5a2ad0d61b5c3a6539a3061cd4cbb55c59f4a903455cec7926e4b798919996"},
+    {file = "exchange_calendars-4.13.2.tar.gz", hash = "sha256:a9459425dd64142cd54fbc639847403c7e0c33d60fbc326c94fc1d6bd127f002"},
 ]
 
 [package.dependencies]
@@ -4712,4 +4712,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "13c00f0018a1933ffe4623bb52f6086731d7a36031aaa490676c7eefe760b56d"
+content-hash = "81e4b6c633e7ee04241d665d43203fb087290f1035185e3bf81366690d7c5e95"
