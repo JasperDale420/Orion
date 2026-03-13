@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Ledger adapter** (2026-03-13):
+  - New `OrionLedgerAdapter` class (`src/orion/core/ledger_adapter.py`) bridges Orion execution events to the empire_core `LedgerWriter`. Tracks orders, fills, trades, and positions using the standardised ledger schema.
+  - Full test suite (`tests/test_ledger_adapter.py`) covering order placement, buy/sell fills, trade open/close, P&L calculation, and error handling.
+
 ### Fixed
 
 - **Logging test stability** (2026-03-13):
