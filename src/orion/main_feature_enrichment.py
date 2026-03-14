@@ -161,15 +161,32 @@ def _map_vix_proxy_to_regime(vix_proxy: float) -> str:
 
 
 def _get_latest_vix_data_from_heber() -> dict[str, float | str | None] | None:
+    # VIX proxy candidates: (symbol, multiplier_to_approximate_vix)
+    vix_proxy_candidates = [
+        ("VIXY", 2.0),
+        ("UVIX", 2.85),
+        ("VIXM", 1.25),
+    ]
+
+    for proxy_symbol, multiplier in vix_proxy_candidates:
+        result = _try_vix_proxy_from_heber(proxy_symbol, multiplier)
+        if result is not None:
+            return result
+
+    logger.debug("No VIX proxy data found in Heber (tried %s)", [c[0] for c in vix_proxy_candidates])
+    return None
+
+
+def _try_vix_proxy_from_heber(proxy_symbol: str, multiplier: float) -> dict[str, float | str | None] | None:
     try:
         now = datetime.now(UTC)
         bars_df = _heber_reader.read_bars(
-            symbols=["VIXY"],
+            symbols=[proxy_symbol],
             asof_time=now,
-            start_time=now - pd.Timedelta(days=3),
+            start_time=now - pd.Timedelta(days=10),
         )
     except Exception:
-        logger.debug("Heber VIXY bars read failed, falling back to local DB", exc_info=True)
+        logger.debug("Heber %s bars read failed", proxy_symbol, exc_info=True)
         return None
 
     if bars_df.empty:
@@ -179,7 +196,7 @@ def _get_latest_vix_data_from_heber() -> dict[str, float | str | None] | None:
     symbol_col = _first_existing_column(bars_df, ["symbol", "ticker", "underlying", "instrument_key"])
     if symbol_col is not None:
         symbols = bars_df[symbol_col].astype(str).str.upper().str.split(":").str[-1]
-        bars_df = bars_df.loc[symbols == "VIXY"]
+        bars_df = bars_df.loc[symbols == proxy_symbol.upper()]
     if bars_df.empty:
         return None
 
@@ -195,19 +212,21 @@ def _get_latest_vix_data_from_heber() -> dict[str, float | str | None] | None:
 
     latest = bars_df.iloc[-1]
     latest_close = float(latest["_close"])
+    vix_approx = latest_close * multiplier
     target_prior_ts = latest["_ts"] - pd.Timedelta(days=1)
     prior_rows = bars_df.loc[bars_df["_ts"] <= target_prior_ts]
     if prior_rows.empty:
         vix_1d_change = 0.0
     else:
         prior_close = float(prior_rows.iloc[-1]["_close"])
-        vix_1d_change = ((latest_close - prior_close) / prior_close) * 100 if prior_close > 0 else 0.0
+        prior_vix = prior_close * multiplier
+        vix_1d_change = ((vix_approx - prior_vix) / prior_vix) * 100 if prior_vix > 0 else 0.0
 
     return {
-        "vix": latest_close,
+        "vix": vix_approx,
         "vvix": None,
         "vix_1d_change": vix_1d_change,
-        "vix_regime": _map_vix_proxy_to_regime(latest_close),
+        "vix_regime": _map_vix_proxy_to_regime(vix_approx),
     }
 
 
@@ -431,8 +450,29 @@ def _log_ticker_source_transition(source: str, previous_source: str | None, tick
     return source
 
 
+def _extract_tickers_from_bars(limit: int) -> list[str]:
+    """Extract active tickers from Heber bars (equity instrument keys)."""
+    try:
+        now_utc = datetime.now(UTC)
+        return _heber_reader.read_recent_equity_symbols(
+            asof_time=now_utc,
+            start_time=now_utc - pd.Timedelta(days=1),
+            limit=limit,
+        )
+    except Exception:
+        logger.debug("Heber bars ticker discovery failed", exc_info=True)
+        return []
+
+
 async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], str]:
-    """Get tickers with recent flow activity and the source used."""
+    """Get tickers with recent flow activity and the source used.
+
+    Tries three sources in order:
+    1. Heber flow_alerts (options flow activity — best signal for active tickers)
+    2. Heber bars (equity bars — shows what instruments have recent data)
+    3. Static fallback list (safety net)
+    """
+    # Primary: flow alerts
     try:
         now_utc = datetime.now(UTC)
         flow_df = _heber_reader.read_flow(
@@ -443,7 +483,19 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], st
         if tickers:
             return tickers, "heber"
     except Exception:
-        logger.debug("Heber flow ticker discovery failed; using static fallback", exc_info=True)
+        logger.debug("Heber flow ticker discovery failed", exc_info=True)
+
+    # Secondary: bars instrument keys
+    bars_tickers = _extract_tickers_from_bars(limit=limit)
+    if bars_tickers:
+        logger.info(
+            "Ticker discovery fell back to Heber bars",
+            extra={
+                "event": "feature_enrichment_ticker_source_bars_fallback",
+                "tickers_count": len(bars_tickers),
+            },
+        )
+        return bars_tickers, "heber"
 
     return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
 

@@ -8,7 +8,6 @@ Collects and summarizes weekly data for meta-agent analysis:
 """
 
 import json
-import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,10 +17,11 @@ import aiofiles
 from sqlalchemy import Integer, and_, func, select
 
 from orion.shared.db_utils import db_query
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import StrategyDecision
 from orion.storage.models_trade_journal import TradeJournalEntry
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class WeeklyDataAggregator:

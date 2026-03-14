@@ -109,29 +109,32 @@ async def test_fail_fast_signal_engine_integration():
 @pytest.mark.asyncio
 async def test_execution_engine_non_blocking_init():
     """
-    Verifies ExecutionEngine.__init__ does not call sync_with_broker.
+    Verifies ExecutionEngine.__init__ does not perform async operations.
+    Async initialization (risk sync from MCP) happens in initialize().
     """
-    # We mock RiskManager to ensure it is NOT called during init
-    with patch("orion.execution.risk_manager.RiskManager") as MockRM:  # noqa: N806
-        rm_instance = MockRM.return_value
-        rm_instance.initialize = AsyncMock()
-        rm_instance.evaluate_drawdown_kill_switch = AsyncMock()  # Fix await error
+    # Instantiate (engine initializes in no-op mode, connectors are None)
+    executor = ExecutionEngine()
 
-        # Instantiate
-        with patch("orion.execution.execution_engine.AlpacaTradingConnector"):
-            executor = ExecutionEngine()
-            executor.connector = MagicMock()  # Force connector to exist so sync runs
+    # Verify no async operations happened during __init__
+    assert executor.connector is None
+    assert executor.market_connector is None
+    assert executor._mcp_available is False
 
-        # Assert sync_with_broker was NOT called (it's moved to initialize)
-        rm_instance.sync_with_broker.assert_not_called()
+    # Now call initialize with MCP mocked
+    executor._mcp_available = True
+    executor._mcp_check_ts = None  # Force re-check
 
-        # Now call initialize
-        with patch("orion.execution.execution_engine.async_session_factory"):
-            await executor.initialize()
+    mock_client = AsyncMock()
+    mock_client.get_market_clock.return_value = {"is_open": True}
+    mock_client.get_account.return_value = {"equity": "50000.0", "last_equity": "50000.0"}
+    mock_client.get_positions.return_value = []
+    executor._mcp_client = mock_client
+    executor._get_mcp_client = lambda: mock_client
 
-        # Now it SHOULD be called (via asyncio.to_thread, so we mock that too or assert side effect?)
-        # Since we use asyncio.to_thread(self.risk_manager.sync_with_broker, ...),
-        # checking the mock call on rm_instance works if it was passed correctly.
-        # But asyncio.to_thread runs it in thread.
-        # Let's just verify it was called eventually.
-        rm_instance.sync_with_broker.assert_called_once()
+    with patch("orion.execution.execution_engine.async_session_factory"):
+        executor.risk_manager.initialize = AsyncMock()
+        executor.risk_manager.evaluate_drawdown_kill_switch = AsyncMock()
+        await executor.initialize()
+
+    # Verify initialize ran (risk manager was initialized)
+    executor.risk_manager.initialize.assert_called_once()

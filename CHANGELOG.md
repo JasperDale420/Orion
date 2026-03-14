@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pattern miner gets 0 training outcomes from Heber Gold** (2026-03-14):
+  - The pattern miner re-read `labels_alert_barriers` and `meta_label_features` from disk for each of the 16 bucket x target combinations. A transient volume-mount or I/O failure during any single read would zero-out that entire training run with no retries.
+  - Added `_prefetch_heber_gold_data()` that reads all Gold datasets once before the bucket loop, with up to 3 retries and exponential backoff for transient failures.
+  - `run_all_pattern_mining()` now prefetches data once and passes it to all 16 bucket iterations, eliminating redundant disk reads.
+  - Added diagnostic logging to `HeberReader.read_gold_features()` when Gold paths are missing, including data root existence checks and candidate paths tried. Previously, empty reads were completely silent.
+  - Backward compatible: `fetch_training_data()` still works standalone without prefetching.
+
+- **Feature enrichment VIX proxy returns 0 rows** (2026-03-13):
+  - VIXY (the 1x VIX short-term futures ETF) stopped appearing in Heber bars after Feb 13, 2026. Both the `VIXProxyConnector` and `_get_latest_vix_data_from_heber()` now try multiple VIX proxy symbols in priority order: VIXY, UVIX (2x leveraged, available daily), VIXM (mid-term futures). Each has an appropriate multiplier to approximate the VIX level.
+  - Added a 10-day recency filter to prevent using stale VIX proxy data.
+  - Fixed a bug where `_get_latest_vix_data_from_heber()` used the raw ETF close price as the VIX level instead of applying the proxy multiplier.
+
+- **Feature enrichment ticker discovery stuck on static fallback** (2026-03-13):
+  - Added a secondary Heber-based ticker discovery path using equity bars data. When flow_alerts fails or returns empty, the system now extracts active tickers from recent equity bar instrument keys before falling back to the static 10-ticker list.
+  - Added `HeberReader.read_recent_equity_symbols()` method for discovering active equity tickers from bars data.
+
+### Changed
+
+- **Execution engine wired to MCP Server** (2026-03-13):
+  - Replaced direct Alpaca connector with Shared-MCP-Server client for order execution, position queries, and account sync. The engine no longer requires Alpaca API keys directly; the MCP server manages its own credentials.
+  - Removed `alpaca.trading.enums` dependency (`OrderSide`, `TimeInForce`) from execution engine; uses plain strings instead.
+  - `poll_fills()` no longer spams "unauthorized" errors every second when no broker connection exists. Silently no-ops when MCP server is unavailable.
+  - Risk sync at startup now pulls account equity and positions from MCP server instead of direct Alpaca API.
+  - All risk management checks (daily loss, drawdown, Greeks, sector exposure, circuit breaker, 0DTE wind-down) remain fully intact.
+  - Paper mode remains the default (`ORION_STAGE=paper`).
+  - Graceful degradation: if MCP server is unreachable, the engine logs once and skips execution (no error spam).
+  - Updated tests to use MCP client mocks instead of direct Alpaca connector mocks.
+
+### Fixed
+
+- **EOD Agent LLM calls failing with LogRecord conflict** (2026-03-13):
+  - `codex_client.py`, `proposal_builder.py`, `meta_agent.py`, and `weekly_aggregator.py` used stdlib `logging.getLogger()` instead of the Empire structlog logger. When structlog was configured by the EOD service, stdlib `logger.info(..., extra={...})` calls collided with structlog's LogRecord processing, causing `"Attempt to overwrite 'args' in LogRecord"` errors on every LLM call. Switched all agent modules to use `orion.shared.logger.setup_struct_logger()` with structlog keyword arguments.
+  - `extract_json_from_response()` failed when LLM responses contained JSON embedded in prose, wrapped in non-standard fences, or truncated at the token limit. Rewrote with four extraction strategies: direct parse, markdown fence extraction, outermost-brace matching, and truncated-JSON repair. Also increased `max_tokens` from 4096 to 8192 to reduce truncation.
+
+- **RAG embedding dimension mismatch** (2026-03-13):
+  - The pgvector `embedding_vec` column was created as `Vector(1536)` (OpenAI dimensions) in migration 0004, but the system uses Ollama's `nomic-embed-text` model which produces 768-dim embeddings. This caused all server-side vector searches to fail, falling back to degraded Python-based ranking.
+  - Added migration `0024_fix_embedding_vec_dimension` to alter the column from 1536 to 768 dimensions. Existing embeddings will be dropped; re-indexing is required after migration (`python -m orion.rag.indexer`).
+  - Fixed the original migration (0004) to use `Vector(768)` for fresh database setups.
+
 ### Added
 
 - **Ledger adapter** (2026-03-13):

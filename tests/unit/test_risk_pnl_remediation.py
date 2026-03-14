@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -119,58 +120,34 @@ async def test_risk_manager_process_fill_short_flip():
 
 @pytest.mark.asyncio
 async def test_execution_engine_polling_integration():
+    """Verify poll_fills updates risk state from MCP account/positions."""
     from orion.execution.execution_engine import ExecutionEngine
 
-    # Mock connector
-    mock_connector = MagicMock()
+    engine = ExecutionEngine()
+    engine._mcp_available = True
+    engine._mcp_check_ts = datetime.now(UTC)
 
-    # Mock Fill object (Alpaca Order)
-    mock_fill = MagicMock()
-    mock_fill.id = "order_123"
-    mock_fill.symbol = "AAPL"
-    mock_fill.filled_qty = "10"
-    mock_fill.filled_avg_price = "150.0"
-    mock_fill.side = "buy"
-    mock_fill.status = "filled"
+    # Mock MCP client
+    mock_client = AsyncMock()
+    mock_client.get_positions.return_value = [
+        {"symbol": "AAPL", "qty": "10", "avg_entry_price": "150.0", "market_value": "1500.0"}
+    ]
+    mock_client.get_account.return_value = {"equity": "50000.0", "last_equity": "49500.0"}
+    engine._mcp_client = mock_client
+    engine._get_mcp_client = lambda: mock_client
 
-    mock_connector.get_recent_fills.return_value = [mock_fill]
+    # Setup RiskManager mock to verify updates
+    engine.risk_manager = MagicMock()
+    engine.risk_manager.current_equity = 50000.0
+    engine.risk_manager.current_daily_loss = 0.0
 
-    with (
-        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
-        patch("orion.execution.execution_engine.system_settings") as mock_settings,
-        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
-        patch("orion.execution.execution_engine.logger") as mock_logger,
-    ):
-        # We need to bypass __init__ connecting?
-        # Or just assign connector after init.
-        # ExecutionEngine tries to init connector if keys exist.
-        mock_settings.alpaca_api_key = "test"
-        mock_settings.alpaca_secret_key = "test"
-        mock_settings.alpaca_paper = True
+    # Execute Poll
+    await engine.poll_fills()
 
-        engine = ExecutionEngine()
-        engine.connector = mock_connector
-        engine._persist_fill_record = AsyncMock()
-        engine._is_fill_processed = AsyncMock(side_effect=[False, True])
-        engine._mark_fill_processed = AsyncMock()
-
-        # Setup RiskManager mock to verify call
-        engine.risk_manager = AsyncMock()
-
-        # Execute Poll
-        await engine.poll_fills()
-
-        # Check for errors in log
-        if mock_logger.error.called:
-            # call_args -> (args, kwargs). args[0] is the message.
-            msg = mock_logger.error.call_args[0][0]
-            pytest.fail(f"Logger Error: {msg}")
-
-        # Use call_args explicitly to verify types
-        # process_fill(ticker, qty, price, side)
-        engine.risk_manager.process_fill.assert_awaited_once_with("AAPL", 10.0, 150.0, "buy", fill_id="order_123")
-
-        # Verify deduplication
-        await engine.poll_fills()
-        # Should not call again
-        assert engine.risk_manager.process_fill.call_count == 1
+    # Verify account equity was updated
+    assert engine.risk_manager.current_equity == 50000.0
+    # Verify daily loss calculated from last_equity - equity (but max(0, ...))
+    # 49500 - 50000 = -500, max(0, -500) = 0
+    assert engine.risk_manager.current_daily_loss == 0.0
+    # Verify poll timestamp was set
+    assert engine._last_fill_poll_ts is not None

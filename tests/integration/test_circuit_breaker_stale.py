@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import insert
@@ -15,6 +15,7 @@ async def test_stale_heartbeat_blocks_trade():
     """
     # 1. Setup Environment
     from datetime import timedelta
+    from unittest.mock import AsyncMock
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy.pool import StaticPool
@@ -41,7 +42,7 @@ async def test_stale_heartbeat_blocks_trade():
 
     # 2. Seed STALE Healthy Status
     # Default ingestion_heartbeat_max_age is 70s. We set lag to 90s.
-    stale_time = datetime.utcnow() - timedelta(seconds=90)
+    stale_time = datetime.now(UTC) - timedelta(seconds=90)
 
     async with test_session_factory() as session:
         await session.execute(
@@ -51,26 +52,34 @@ async def test_stale_heartbeat_blocks_trade():
         )
         await session.commit()
 
-    from unittest.mock import patch
+    # 3. Attempt Execution with MCP mocked as available
+    engine = ExecutionEngine()
+    engine._mcp_available = True
+    engine._mcp_check_ts = datetime.now(UTC)
 
-    # 3. Attempt Execution
-    with (
-        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
-        patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
-        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
-    ):
-        engine = ExecutionEngine()
-        engine.connector = True
-        engine.market_connector = True
+    mock_client = AsyncMock()
+    mock_client.get_market_clock.return_value = {"is_open": True}
+    mock_client.get_stock_snapshot.return_value = {
+        "latestTrade": {"p": 100.0},
+        "latestQuote": {"bp": 99.95, "ap": 100.05},
+    }
+    mock_client._call_tool.return_value = {"id": "order-123", "status": "accepted"}
+    engine._mcp_client = mock_client
+    engine._get_mcp_client = lambda: mock_client
 
     candidate = CandidateTrade(
-        candidate_id="c2", ticker="QQQ", timestamp_utc=datetime.utcnow(), rule_id="r1", direction="SHORT", evidence={}
+        candidate_id="c2",
+        ticker="QQQ",
+        timestamp_utc=datetime.now(UTC),
+        rule_id="r1",
+        direction="SHORT",
+        evidence={},
     )
 
     decision = StrategyDecision(
         decision_id="test_cb_stale",
         candidate_id="c2",
-        timestamp_utc=datetime.utcnow(),
+        timestamp_utc=datetime.now(UTC),
         ticker="QQQ",
         strategy_version_id="v1",
         decision="EXECUTE",

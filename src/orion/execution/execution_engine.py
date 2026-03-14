@@ -6,8 +6,6 @@ from typing import Any
 
 from sqlalchemy import select
 
-from alpaca.trading.enums import OrderSide, TimeInForce
-
 from orion.config import risk_settings, system_settings
 from orion.core.enums import DecisionStatus
 from orion.core.errors import ErrorCode
@@ -27,9 +25,13 @@ class ExecutionEngine:
     """
     Translates Agent decisions into broker orders.
 
-    Trading is routed through Data Gateway. Direct Alpaca connectors
-    have been archived. The engine operates in no-op mode until
-    Data Gateway trading proxy is integrated.
+    Trading is routed through the Shared-MCP-Server which provides Alpaca
+    trading tools (place_order, close_position, get_account, etc.).
+    The MCP server manages its own Alpaca credentials; this engine does
+    not require direct Alpaca API keys.
+
+    Paper mode is controlled by ORION_STAGE (default: "paper") and the
+    MCP server's own Alpaca configuration (paper vs live).
     """
 
     def __init__(self) -> None:
@@ -38,19 +40,55 @@ class ExecutionEngine:
 
         self.risk_manager = RiskManager()
 
-        # Trading connectors are pending Data Gateway integration.
-        # The engine operates in safe no-op mode: decisions are evaluated
-        # and logged but no orders are submitted.
-        logger.info(
-            "ExecutionEngine initialized in no-op mode pending Data Gateway trading integration",
-            extra={"event_type": "EXECUTION_INIT_NOOP"},
-        )
+        # MCP Server client for order execution
+        self._mcp_client = None
+        self._mcp_available = False
+
+        # Legacy connector references (kept None for interface compatibility)
         self.connector = None
         self.options_connector = None
         self.market_connector = None
 
-        self.order_history = deque(maxlen=20)
+        self.order_history: deque[bool] = deque(maxlen=20)
         self.last_positions_snapshot_ts: datetime | None = None
+        self._last_fill_poll_ts: datetime | None = None
+
+    def _get_mcp_client(self) -> Any:
+        """Lazy-initialize MCP client singleton."""
+        if self._mcp_client is None:
+            from orion.clients.mcp_server import get_mcp_client
+
+            self._mcp_client = get_mcp_client()
+        return self._mcp_client
+
+    async def _check_mcp_available(self) -> bool:
+        """Check if MCP server is reachable. Caches result for 60s."""
+        if hasattr(self, "_mcp_check_ts") and self._mcp_check_ts:
+            elapsed = (datetime.now(UTC) - self._mcp_check_ts).total_seconds()
+            if elapsed < 60:
+                return self._mcp_available
+
+        try:
+            client = self._get_mcp_client()
+            result = await client.get_market_clock()
+            self._mcp_available = "error" not in result
+        except Exception:
+            self._mcp_available = False
+
+        self._mcp_check_ts = datetime.now(UTC)
+
+        if not self._mcp_available:
+            logger.warning(
+                "MCP server unavailable; execution engine in degraded mode",
+                extra={"event_type": "MCP_UNAVAILABLE"},
+            )
+        else:
+            logger.info(
+                "MCP server connection verified",
+                extra={"event_type": "MCP_AVAILABLE"},
+            )
+
+        return self._mcp_available
 
     async def initialize(self) -> None:
         """
@@ -60,13 +98,8 @@ class ExecutionEngine:
         if hasattr(self.risk_manager, "initialize"):
             await self.risk_manager.initialize()
 
-        # Sync Risk Manager with Broker (Moved from __init__)
-        if self.connector and self.risk_manager:
-            # Run in thread to avoid blocking loop if sync is slow
-            await asyncio.to_thread(self.risk_manager.sync_with_broker, self.connector)
-            # Re-evaluate kill switch after broker sync refreshes equity/positions.
-            if hasattr(self.risk_manager, "evaluate_drawdown_kill_switch"):
-                await self.risk_manager.evaluate_drawdown_kill_switch()
+        # Sync risk state from MCP server (account equity, positions)
+        await self._sync_risk_from_mcp()
 
         try:
 
@@ -103,9 +136,84 @@ class ExecutionEngine:
                 },
             )
 
+    async def _sync_risk_from_mcp(self) -> None:
+        """Sync risk manager state from MCP server (account + positions)."""
+        if not await self._check_mcp_available():
+            logger.info(
+                "Skipping MCP risk sync; server unavailable. Using persisted risk state.",
+                extra={"event_type": "MCP_RISK_SYNC_SKIPPED"},
+            )
+            return
+
+        try:
+            client = self._get_mcp_client()
+
+            # Sync account equity
+            account = await client.get_account()
+            if "error" not in account:
+                equity = float(account.get("equity", 0) or 0)
+                last_equity = float(account.get("last_equity", 0) or account.get("equity", 0) or 0)
+
+                if equity > 0:
+                    self.risk_manager.current_equity = equity
+                    self.risk_manager.starting_equity = last_equity
+                    self.risk_manager.current_daily_loss = max(0.0, last_equity - equity)
+                    logger.info(
+                        "Risk state synced from MCP account",
+                        extra={
+                            "event_type": "MCP_RISK_SYNC",
+                            "equity": equity,
+                            "daily_loss": self.risk_manager.current_daily_loss,
+                        },
+                    )
+
+            # Sync positions
+            positions = await client.get_positions()
+            if positions:
+                self.risk_manager.positions = {}
+                self.risk_manager.ticker_exposures = {}
+                for p in positions:
+                    symbol = p.get("symbol", "")
+                    qty = float(p.get("qty", 0) or 0)
+                    avg_entry = float(p.get("avg_entry_price", 0) or 0)
+                    market_value = float(p.get("market_value", 0) or 0)
+
+                    self.risk_manager.positions[symbol] = {"qty": qty, "avg_entry": avg_entry}
+                    self.risk_manager.ticker_exposures[symbol] = abs(market_value)
+
+                self.risk_manager.open_positions = len(
+                    [p for p in self.risk_manager.positions.values() if abs(p["qty"]) > 1e-9]
+                )
+                logger.info(
+                    "Positions synced from MCP",
+                    extra={
+                        "event_type": "MCP_POSITIONS_SYNC",
+                        "open_positions": self.risk_manager.open_positions,
+                    },
+                )
+
+            # Re-evaluate kill switch after sync
+            if hasattr(self.risk_manager, "evaluate_drawdown_kill_switch"):
+                await self.risk_manager.evaluate_drawdown_kill_switch()
+
+        except Exception as e:
+            logger.error(
+                "Failed to sync risk state from MCP",
+                extra={"event_type": "MCP_RISK_SYNC_ERROR", "error": str(e)},
+            )
+
     async def execute_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        if not self.connector:
-            logger.warning("No connector available. Skipping execution.")
+        if not await self._check_mcp_available():
+            logger.warning(
+                "MCP server unavailable. Order logged but not submitted.",
+                extra={
+                    "event_type": "EXECUTION_NOOP",
+                    "ticker": candidate.ticker,
+                    "decision": decision.decision,
+                },
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "MCP Server Unavailable"
             return
 
         action = decision.decision.upper()
@@ -134,14 +242,14 @@ class ExecutionEngine:
             await maybe_result
 
     async def _execute_equity_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        """Execute a standard equity order."""
+        """Execute a standard equity order via MCP server."""
 
         # 1. Pre-Flight Checks (Health, Lag, Shorting)
         if not await self._pre_flight_checks(decision, candidate):
             return
 
-        # 2. Price Discovery
-        current_price = self._get_execution_price(decision, candidate)
+        # 2. Price Discovery via MCP
+        current_price = await self._get_execution_price_mcp(decision, candidate)
         if current_price <= 0:
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Price Fetch Failed"
@@ -153,10 +261,8 @@ class ExecutionEngine:
             return  # Decision updated in helper
 
         # 4. Check Risk Manager
-        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side.value):
-            logger.error(
-                "execution_blocked_by_risk", ticker=candidate.ticker, qty=qty, price=current_price, side=side.value
-            )
+        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side):
+            logger.error("execution_blocked_by_risk", ticker=candidate.ticker, qty=qty, price=current_price, side=side)
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Risk Rejection"
             return
@@ -181,17 +287,11 @@ class ExecutionEngine:
             decision.reason = "High Error Rate"
             return
 
-        # 6. Execution
-        await self._submit_order(decision, candidate, side, qty, limit_price)
+        # 6. Execution via MCP
+        await self._submit_order_mcp(decision, candidate, side, qty, limit_price)
 
     async def _execute_options_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        """Execute an options order."""
-
-        if not self.options_connector:
-            logger.warning("No options connector available. Skipping options execution.")
-            decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = "Options Connector Missing"
-            return
+        """Execute an options order via MCP server."""
 
         # 1. Pre-Flight Checks
         if not await self._pre_flight_checks(decision, candidate):
@@ -210,9 +310,20 @@ class ExecutionEngine:
                 decision.reason = f"DTE Too Low ({dte} days)"
                 return
 
-        # 3. Get current option price
-        quote = await self.options_connector.get_option_quote(candidate.option_symbol)
-        option_price = quote.get("mid") or quote.get("ask") or candidate.premium
+        # 3. Get current option price via MCP
+        client = self._get_mcp_client()
+        chain_result = await client.get_option_chain(candidate.ticker)
+        option_price = candidate.premium  # Fallback to candidate premium
+
+        if "error" not in chain_result and candidate.option_symbol:
+            # Try to extract mid price from chain
+            contracts = chain_result.get("contracts", [])
+            for contract in contracts:
+                if contract.get("symbol") == candidate.option_symbol:
+                    mid = contract.get("mid") or contract.get("ask")
+                    if mid and float(mid) > 0:
+                        option_price = float(mid)
+                    break
 
         if not option_price or option_price <= 0:
             logger.error("options_price_fetch_failed", option_symbol=candidate.option_symbol, ticker=candidate.ticker)
@@ -222,7 +333,7 @@ class ExecutionEngine:
 
         # 4. Calculate contracts based on max premium
         max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
-        num_contracts = self.options_connector.calculate_option_contracts(max_premium, option_price)
+        num_contracts = max(0, int(max_premium / (option_price * 100)))
 
         if num_contracts <= 0:
             logger.warning(
@@ -237,7 +348,6 @@ class ExecutionEngine:
 
         # 4b. 0DTE Wind-Down: reduce size and/or block near close
         if dte is not None and dte == 0:
-            # Check hard cutoff first
             allowed, reason = self.risk_manager.check_zero_dte_winddown(dte)
             if not allowed:
                 logger.warning(
@@ -250,7 +360,6 @@ class ExecutionEngine:
                 decision.reason = f"0DTE Wind-Down: {reason}"
                 return
 
-            # Apply size reduction multiplier
             multiplier = self.risk_manager.get_zero_dte_size_multiplier(dte)
             if multiplier < 1.0:
                 original_contracts = num_contracts
@@ -263,7 +372,7 @@ class ExecutionEngine:
                     multiplier=multiplier,
                 )
 
-        # 5. Risk Manager Check (direction already normalized in execute())
+        # 5. Risk Manager Check
         side_value = "buy" if candidate.direction == "LONG" else "sell"
         if not self.risk_manager.check_order(candidate.ticker, num_contracts, option_price * 100, side_value):
             logger.error(
@@ -283,8 +392,8 @@ class ExecutionEngine:
             decision.reason = "High Error Rate"
             return
 
-        # 6. Submit options order
-        await self._submit_options_order(decision, candidate, num_contracts, option_price)
+        # 7. Submit options order via MCP
+        await self._submit_options_order_mcp(decision, candidate, num_contracts, option_price)
 
     async def _pre_flight_checks(self, decision: StrategyDecision, candidate: CandidateTrade) -> bool:
         """System Health, Data Lag, Shorting Checks"""
@@ -298,8 +407,8 @@ class ExecutionEngine:
 
         # Shorting Guard
         exposure = self.risk_manager.ticker_exposures.get(candidate.ticker, 0.0)
-        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
-        is_short_opening = side == OrderSide.SELL and exposure <= 0
+        side = "buy" if candidate.direction == "LONG" else "sell"
+        is_short_opening = side == "sell" and exposure <= 0
 
         if is_short_opening and not self.risk_manager.config.enable_shorting:
             logger.warning("Execution BLOCKED: Shorting is disabled")
@@ -324,22 +433,37 @@ class ExecutionEngine:
 
         return True
 
-    def _get_execution_price(self, decision: StrategyDecision, candidate: CandidateTrade) -> float:
+    async def _get_execution_price_mcp(self, decision: StrategyDecision, candidate: CandidateTrade) -> float:
+        """Get latest price via MCP server."""
         try:
-            price = self.market_connector.get_latest_price(candidate.ticker)
-            if price > 0:
-                return price
-        except Exception:
-            pass
+            client = self._get_mcp_client()
+            snapshot = await client.get_stock_snapshot(candidate.ticker)
+            if "error" not in snapshot:
+                # Try latest trade price, then latest quote mid
+                latest_trade = snapshot.get("latestTrade", {}) or snapshot.get("latest_trade", {})
+                if latest_trade:
+                    price = float(latest_trade.get("p", 0) or latest_trade.get("price", 0) or 0)
+                    if price > 0:
+                        return price
 
-        # Fallback
+                latest_quote = snapshot.get("latestQuote", {}) or snapshot.get("latest_quote", {})
+                if latest_quote:
+                    bid = float(latest_quote.get("bp", 0) or latest_quote.get("bid_price", 0) or 0)
+                    ask = float(latest_quote.get("ap", 0) or latest_quote.get("ask_price", 0) or 0)
+                    if bid > 0 and ask > 0:
+                        return (bid + ask) / 2.0
+        except Exception as e:
+            logger.warning("mcp_price_fetch_failed", ticker=candidate.ticker, error=str(e))
+
+        # Fallback to execution params
         ep = decision.execution_params or {}
         return float(ep.get("limit_price", 0.0))
 
     def _calculate_order_params(
         self, decision: StrategyDecision, candidate: CandidateTrade, current_price: float
-    ) -> tuple[Any, float, float]:
-        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
+    ) -> tuple[str, float, float]:
+        """Calculate order side, quantity, and limit price."""
+        side = "buy" if candidate.direction == "LONG" else "sell"
         qty = self.risk_manager.calculate_size(entry_price=current_price)
 
         if qty <= 0:
@@ -349,7 +473,7 @@ class ExecutionEngine:
             return side, 0.0, 0.0
 
         entry_buffer_bps = 10
-        if side == OrderSide.BUY:
+        if side == "buy":
             limit_price = current_price * (1 + entry_buffer_bps / 10000.0)
         else:
             limit_price = current_price * (1 - entry_buffer_bps / 10000.0)
@@ -366,8 +490,9 @@ class ExecutionEngine:
             return True
         return False
 
-    async def _submit_order(self, decision: Any, candidate: Any, side: Any, qty: float, limit_price: float) -> None:
-        logger.info("execution_triggered", side=str(side), qty=qty, ticker=candidate.ticker, limit_price=limit_price)
+    async def _submit_order_mcp(self, decision: Any, candidate: Any, side: str, qty: float, limit_price: float) -> None:
+        """Submit equity order via MCP server."""
+        logger.info("execution_triggered", side=side, qty=qty, ticker=candidate.ticker, limit_price=limit_price)
 
         # Rate limit check before order submission
         rate_limiter = get_order_rate_limiter()
@@ -393,22 +518,31 @@ class ExecutionEngine:
             )
 
         try:
-            order = self.connector.submit_limit_order(
-                symbol=candidate.ticker,
-                qty=qty,
-                side=side,
-                limit_price=limit_price,
-                time_in_force=TimeInForce.DAY,
-                client_order_id=client_order_id,
+            client = self._get_mcp_client()
+            result = await client._call_tool(
+                "place_order",
+                {
+                    "symbol": candidate.ticker,
+                    "qty": qty,
+                    "side": side,
+                    "type": "limit",
+                    "limit_price": limit_price,
+                    "time_in_force": "day",
+                    "client_order_id": client_order_id,
+                },
             )
+
+            if "error" in result:
+                raise RuntimeError(f"MCP order failed: {result['error']}")
+
             await self._persist_order_record(
                 decision=decision,
                 candidate=candidate,
                 client_order_id=client_order_id,
-                side=str(side),
+                side=side,
                 qty=qty,
                 limit_price=limit_price,
-                broker_order=order,
+                broker_order=result,
                 error_message=None,
             )
             logger.info("execution_successful", client_order_id=client_order_id, ticker=candidate.ticker)
@@ -421,7 +555,7 @@ class ExecutionEngine:
                 decision=decision,
                 candidate=candidate,
                 client_order_id=client_order_id,
-                side=str(side),
+                side=side,
                 qty=qty,
                 limit_price=limit_price,
                 broker_order=None,
@@ -432,10 +566,10 @@ class ExecutionEngine:
             decision.reason = f"Broker Error: {e}"
             self._record_result(False)
 
-    async def _submit_options_order(
+    async def _submit_options_order_mcp(
         self, decision: Any, candidate: Any, num_contracts: int, option_price: float
     ) -> None:
-        """Submit an options order."""
+        """Submit an options order via MCP server."""
         logger.info(
             "options_execution_triggered",
             num_contracts=num_contracts,
@@ -450,27 +584,34 @@ class ExecutionEngine:
         decision.execution_params["order_type"] = "OPTIONS"
         decision.execution_params["contracts"] = num_contracts
 
-        # Determine side from direction
-        side = OrderSide.BUY if candidate.direction == "LONG" else OrderSide.SELL
+        side = "buy" if candidate.direction == "LONG" else "sell"
 
         try:
-            order = self.options_connector.submit_option_order(
-                option_symbol=candidate.option_symbol,
-                qty=num_contracts,
-                side=side,
-                order_type="limit",
-                limit_price=option_price,
-                client_order_id=client_order_id,
+            client = self._get_mcp_client()
+            result = await client._call_tool(
+                "place_order",
+                {
+                    "symbol": candidate.option_symbol,
+                    "qty": num_contracts,
+                    "side": side,
+                    "type": "limit",
+                    "limit_price": option_price,
+                    "time_in_force": "day",
+                    "client_order_id": client_order_id,
+                },
             )
+
+            if "error" in result:
+                raise RuntimeError(f"MCP options order failed: {result['error']}")
 
             await self._persist_order_record(
                 decision=decision,
                 candidate=candidate,
                 client_order_id=client_order_id,
-                side=str(side.value),
+                side=side,
                 qty=num_contracts,
                 limit_price=option_price,
-                broker_order=order,
+                broker_order=result,
                 error_message=None,
             )
 
@@ -489,7 +630,7 @@ class ExecutionEngine:
                 decision=decision,
                 candidate=candidate,
                 client_order_id=client_order_id,
-                side=str(side.value),
+                side=side,
                 qty=num_contracts,
                 limit_price=option_price,
                 broker_order=None,
@@ -514,42 +655,36 @@ class ExecutionEngine:
         use_market_order: bool = False,
     ) -> bool:
         """
-        Close a position based on exit signal.
+        Close a position based on exit signal via MCP server.
 
         Args:
             ticker: Symbol to close
             qty: Quantity to close
             exit_signal: ExitSignal from exit rule
+            direction: Position direction (LONG/SHORT)
             use_market_order: If True, use market order; else limit with buffer
 
         Returns:
             True if order submitted successfully
         """
-        if not self.connector:
-            logger.warning("No connector available. Cannot close position.")
+        if not await self._check_mcp_available():
+            logger.warning(
+                "MCP server unavailable. Cannot close position.",
+                extra={"event_type": "CLOSE_POSITION_NOOP", "ticker": ticker},
+            )
             return False
 
         try:
-            # Get current price
-            current_price = self.market_connector.get_latest_price(ticker) if self.market_connector else 0.0
-
-            if current_price <= 0:
-                logger.error(f"Cannot close {ticker}: Failed to get current price")
-                return False
-
-            # Determine order params
-            side = OrderSide.BUY if str(direction).upper() == "SHORT" else OrderSide.SELL
+            client = self._get_mcp_client()
             client_order_id = str(uuid.uuid4())
 
             if use_market_order or exit_signal.urgency == "IMMEDIATE":
-                # Market order for urgent exits
-                order = self.connector.submit_market_order(
-                    symbol=ticker,
-                    qty=qty,
-                    side=side,
-                    time_in_force=TimeInForce.DAY,
-                    client_order_id=client_order_id,
-                )
+                # Use MCP close_position for market-style close
+                result = await client.close_position(ticker, qty=qty)
+
+                if "error" in result:
+                    raise RuntimeError(f"MCP close_position failed: {result['error']}")
+
                 logger.info(
                     f"EXIT MARKET ORDER: {ticker} x{qty} - Reason: {exit_signal.reason}",
                     extra={
@@ -562,18 +697,40 @@ class ExecutionEngine:
                     },
                 )
             else:
-                # Limit order with small buffer below current price
-                exit_buffer_bps = 5  # 5 basis points buffer
+                # Get current price for limit order
+                snapshot = await client.get_stock_snapshot(ticker)
+                current_price = 0.0
+                if "error" not in snapshot:
+                    latest_trade = snapshot.get("latestTrade", {}) or snapshot.get("latest_trade", {})
+                    if latest_trade:
+                        current_price = float(latest_trade.get("p", 0) or latest_trade.get("price", 0) or 0)
+
+                if current_price <= 0:
+                    logger.error(f"Cannot close {ticker}: Failed to get current price")
+                    return False
+
+                exit_buffer_bps = 5
                 limit_price = round(current_price * (1 - exit_buffer_bps / 10000.0), 2)
 
-                order = self.connector.submit_limit_order(
-                    symbol=ticker,
-                    qty=qty,
-                    side=side,
-                    limit_price=limit_price,
-                    time_in_force=TimeInForce.DAY,
-                    client_order_id=client_order_id,
+                # Determine side: closing LONG = sell, closing SHORT = buy
+                close_side = "buy" if str(direction).upper() == "SHORT" else "sell"
+
+                result = await client._call_tool(
+                    "place_order",
+                    {
+                        "symbol": ticker,
+                        "qty": qty,
+                        "side": close_side,
+                        "type": "limit",
+                        "limit_price": limit_price,
+                        "time_in_force": "day",
+                        "client_order_id": client_order_id,
+                    },
                 )
+
+                if "error" in result:
+                    raise RuntimeError(f"MCP exit limit order failed: {result['error']}")
+
                 logger.info(
                     f"EXIT LIMIT ORDER: {ticker} x{qty} @ {limit_price} - Reason: {exit_signal.reason}",
                     extra={
@@ -588,7 +745,7 @@ class ExecutionEngine:
                 )
 
             # Persist exit decision
-            await self._persist_exit_decision(ticker, exit_signal, client_order_id, order)
+            await self._persist_exit_decision(ticker, exit_signal, client_order_id, result)
             self._record_result(True)
             return True
 
@@ -607,7 +764,11 @@ class ExecutionEngine:
             async def save_exit(session: Any) -> None:
                 from orion.storage.models_gold import ExitDecision
 
-                broker_order_id = str(getattr(order, "id", "")) if order else None
+                broker_order_id = None
+                if isinstance(order, dict):
+                    broker_order_id = str(order.get("id", "")) or None
+                elif order is not None:
+                    broker_order_id = str(getattr(order, "id", "")) if order else None
 
                 session.add(
                     ExitDecision(
@@ -676,10 +837,6 @@ class ExecutionEngine:
                 )
                 return False
 
-            # Optional: Check 'last_updated_utc' staleness?
-            # If ingestion died hard, it might check 'Healthy' but be 1 hour old.
-            # PRD 9.1 says "UW ingestion heartbeat missing > 60s".
-            # If record is > 60s old, Ingestion is dead.
             now = datetime.now(UTC)
             if status_record.last_updated_utc:
                 last_updated = ensure_utc(status_record.last_updated_utc)
@@ -702,32 +859,39 @@ class ExecutionEngine:
 
     async def poll_fills(self) -> None:
         """
-        Polls broker for recent fills and updates RiskManager.
-        Should be called periodically by the main execution loop.
+        Polls MCP server for recent fills and updates RiskManager.
+        Called periodically by the main execution loop.
+
+        Gracefully no-ops if MCP server is unavailable (no error spam).
         """
-        if not self.connector:
+        if not self._mcp_available:
+            # Don't spam errors every second; just silently skip
             return
 
         try:
-            # Poll for fills in the last X minutes (e.g. 5 mins) to catch anything missed
-            # Use last_poll_ts or default to 5 min ago
-            now = datetime.now(UTC)
-            lookback = getattr(self, "last_fill_poll_ts", now - timedelta(minutes=5))
-            # Safety buffer: overlap by 10s
-            fetch_start = lookback - timedelta(seconds=10)
+            client = self._get_mcp_client()
 
-            fills = await asyncio.to_thread(self.connector.get_recent_fills, since=fetch_start)
+            # Get all positions to update risk state
+            positions = await client.get_positions()
+            if not positions:
+                return
 
-            if fills:
-                logger.info(f"Found {len(fills)} new fills during polling.")
-                for fill in fills:
-                    await self._process_single_fill(fill)
+            # Refresh account equity
+            account = await client.get_account()
+            if "error" not in account:
+                equity = float(account.get("equity", 0) or 0)
+                if equity > 0:
+                    self.risk_manager.current_equity = equity
+                    last_equity = float(account.get("last_equity", 0) or account.get("equity", 0) or 0)
+                    self.risk_manager.current_daily_loss = max(0.0, last_equity - equity)
 
-            self.last_fill_poll_ts = now
-            await self._maybe_snapshot_positions()
+            self._last_fill_poll_ts = datetime.now(UTC)
 
         except Exception as e:
-            logger.error(f"Failed to poll fills: {e}")
+            logger.warning(
+                "Fill polling via MCP failed",
+                extra={"event_type": "FILL_POLL_ERROR", "error": str(e)},
+            )
 
     async def _process_single_fill(self, fill: Any) -> None:
         """
@@ -737,36 +901,39 @@ class ExecutionEngine:
         processing the incremental amount since last update.
         """
         try:
-            order_id = str(fill.id)
-            client_oid = getattr(fill, "client_order_id", None) or order_id
+            order_id = str(fill.get("id", "")) if isinstance(fill, dict) else str(fill.id)
+            client_oid = (
+                fill.get("client_order_id") if isinstance(fill, dict) else getattr(fill, "client_order_id", None)
+            ) or order_id
             if await self._is_fill_processed(order_id):
                 return
 
-            # Get current filled qty and total order qty
-            filled_qty = float(fill.filled_qty) if fill.filled_qty else 0.0
-            total_qty = float(fill.qty) if fill.qty else filled_qty
-            filled_avg_price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
+            if isinstance(fill, dict):
+                filled_qty = float(fill.get("filled_qty", 0) or 0)
+                total_qty = float(fill.get("qty", 0) or filled_qty)
+                filled_avg_price = float(fill.get("filled_avg_price", 0) or 0)
+                ticker = fill.get("symbol", "")
+                side = fill.get("side", "")
+            else:
+                filled_qty = float(fill.filled_qty) if fill.filled_qty else 0.0
+                total_qty = float(fill.qty) if fill.qty else filled_qty
+                filled_avg_price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
+                ticker = fill.symbol
+                side = str(fill.side)
 
-            # Track partial fills: only process incremental fills
+            # Track partial fills
             if not hasattr(self, "_partial_fill_tracker"):
-                self._partial_fill_tracker: dict = {}  # order_id -> last_filled_qty
+                self._partial_fill_tracker: dict = {}
 
             last_filled = self._partial_fill_tracker.get(order_id, 0.0)
             incremental_qty = filled_qty - last_filled
 
             if incremental_qty <= 0:
-                # No new fills since last check
                 return
 
-            # Update tracker
             self._partial_fill_tracker[order_id] = filled_qty
-
-            # Check if this is a partial or complete fill
             is_partial = filled_qty < total_qty
             fill_type = "PARTIAL" if is_partial else "COMPLETE"
-
-            ticker = fill.symbol
-            side = str(fill.side)
 
             logger.info(
                 f"Processing {fill_type} fill: {ticker} {side} {incremental_qty:.2f} @ {filled_avg_price:.2f} "
@@ -781,7 +948,6 @@ class ExecutionEngine:
                 },
             )
 
-            # Process the incremental fill amount through risk manager
             fill_id = order_id if last_filled == 0 else f"{order_id}_{filled_qty}"
             await self.risk_manager.process_fill(ticker, incremental_qty, filled_avg_price, side, fill_id=fill_id)
 
@@ -792,7 +958,6 @@ class ExecutionEngine:
                 exposure_change = fill_cost if side.lower() == "buy" else -fill_cost
                 self.risk_manager.update_sector_exposure(sector, exposure_change)
 
-            # Only remove from pending orders when fully filled
             if not is_partial:
                 await self._remove_pending_order_compat(client_oid)
                 self._partial_fill_tracker.pop(order_id, None)
@@ -801,14 +966,17 @@ class ExecutionEngine:
             await self._mark_fill_processed(order_id, client_oid=client_oid, ticker=ticker, qty=incremental_qty)
 
         except Exception as e:
-            logger.error(f"Failed to process fill {getattr(fill, 'id', 'unknown')}: {e}")
+            fill_id_str = (
+                str(fill.get("id", "unknown")) if isinstance(fill, dict) else str(getattr(fill, "id", "unknown"))
+            )
+            logger.error(f"Failed to process fill {fill_id_str}: {e}")
 
     @db_retry
     async def _maybe_snapshot_positions(self, min_interval_seconds: int = 60) -> None:
         """
-        PRDv2 12.4: Persist positions snapshots (Alpaca source-of-truth) once trading is enabled.
+        PRDv2 12.4: Persist positions snapshots via MCP server.
         """
-        if not self.connector:
+        if not self._mcp_available:
             return
 
         now = datetime.now(UTC)
@@ -818,7 +986,8 @@ class ExecutionEngine:
             return
 
         try:
-            positions = await asyncio.to_thread(self.connector.client.get_all_positions)
+            client = self._get_mcp_client()
+            positions = await client.get_positions()
         except Exception as e:
             logger.error(
                 "Failed to fetch positions for snapshot",
@@ -835,7 +1004,7 @@ class ExecutionEngine:
 
             rows = []
             for p in positions:
-                snapshot = self._create_position_snapshot(p, now, PositionSnapshot)
+                snapshot = self._create_position_snapshot_from_dict(p, now, PositionSnapshot)
                 if snapshot:
                     rows.append(snapshot)
 
@@ -852,9 +1021,9 @@ class ExecutionEngine:
                 extra={"event_type": "POSITIONS_SNAPSHOT_PERSIST_ERROR", "error": str(e)},
             )
 
-    def _create_position_snapshot(self, p: Any, now: datetime, model_class: Any) -> Any | None:
-        """Helper to create a PositionSnapshot model from an Alpaca position."""
-        symbol = getattr(p, "symbol", None)
+    def _create_position_snapshot_from_dict(self, p: dict, now: datetime, model_class: Any) -> Any | None:
+        """Helper to create a PositionSnapshot model from an MCP position dict."""
+        symbol = p.get("symbol")
         if not symbol:
             return None
 
@@ -864,15 +1033,10 @@ class ExecutionEngine:
             except Exception:
                 return None
 
-        qty = _maybe_float(getattr(p, "qty", None)) or 0.0
-        avg_entry = _maybe_float(getattr(p, "avg_entry_price", None))
-        market_value = _maybe_float(getattr(p, "market_value", None))
-        unrealized_pl = _maybe_float(getattr(p, "unrealized_pl", None))
-
-        if hasattr(p, "model_dump"):
-            raw = p.model_dump(mode="json")
-        else:
-            raw = getattr(p, "__dict__", None) or {"repr": repr(p)}
+        qty = _maybe_float(p.get("qty")) or 0.0
+        avg_entry = _maybe_float(p.get("avg_entry_price"))
+        market_value = _maybe_float(p.get("market_value"))
+        unrealized_pl = _maybe_float(p.get("unrealized_pl"))
 
         return model_class(
             id=str(uuid.uuid4()),
@@ -882,7 +1046,7 @@ class ExecutionEngine:
             avg_entry_price=avg_entry,
             market_value=market_value,
             unrealized_pl=unrealized_pl,
-            raw_json=raw,
+            raw_json=p,
         )
 
     async def _is_fill_processed(self, order_id: str) -> bool:
@@ -944,9 +1108,14 @@ class ExecutionEngine:
             status = None
             raw = {}
             if broker_order is not None:
-                broker_order_id = str(getattr(broker_order, "id", None) or "")
-                status = str(getattr(broker_order, "status", None) or "")
-                raw = broker_order.model_dump(mode="json") if hasattr(broker_order, "model_dump") else {}
+                if isinstance(broker_order, dict):
+                    broker_order_id = str(broker_order.get("id", "")) or None
+                    status = str(broker_order.get("status", "")) or None
+                    raw = broker_order
+                else:
+                    broker_order_id = str(getattr(broker_order, "id", None) or "")
+                    status = str(getattr(broker_order, "status", None) or "")
+                    raw = broker_order.model_dump(mode="json") if hasattr(broker_order, "model_dump") else {}
 
             session.add(
                 OrderRecord(
@@ -965,7 +1134,7 @@ class ExecutionEngine:
                 )
             )
 
-            # PRD §12.4: Ensure a trade journal entry exists and links to order ids.
+            # PRD SS12.4: Ensure a trade journal entry exists and links to order ids.
             try:
                 from orion.storage.models_trade_journal import TradeJournalEntry
 
@@ -1004,14 +1173,24 @@ class ExecutionEngine:
 
             from orion.storage.models_execution import FillRecord
 
-            broker_order_id = str(getattr(fill, "id", ""))
-            ticker = getattr(fill, "symbol", None) or ""
-            client_oid = getattr(fill, "client_order_id", None)
-            qty = float(getattr(fill, "filled_qty", 0) or 0)
-            price = float(getattr(fill, "filled_avg_price", 0) or 0)
-            side = str(getattr(fill, "side", "")) or None
-            filled_at = getattr(fill, "filled_at", None) or getattr(fill, "filled_at_utc", None)
-            raw = fill.model_dump(mode="json") if hasattr(fill, "model_dump") else {}
+            if isinstance(fill, dict):
+                broker_order_id = str(fill.get("id", ""))
+                ticker = fill.get("symbol", "")
+                client_oid = fill.get("client_order_id")
+                qty = float(fill.get("filled_qty", 0) or 0)
+                price = float(fill.get("filled_avg_price", 0) or 0)
+                side = fill.get("side") or None
+                filled_at = fill.get("filled_at") or fill.get("filled_at_utc")
+                raw = fill
+            else:
+                broker_order_id = str(getattr(fill, "id", ""))
+                ticker = getattr(fill, "symbol", None) or ""
+                client_oid = getattr(fill, "client_order_id", None)
+                qty = float(getattr(fill, "filled_qty", 0) or 0)
+                price = float(getattr(fill, "filled_avg_price", 0) or 0)
+                side = str(getattr(fill, "side", "")) or None
+                filled_at = getattr(fill, "filled_at", None) or getattr(fill, "filled_at_utc", None)
+                raw = fill.model_dump(mode="json") if hasattr(fill, "model_dump") else {}
 
             values = {
                 "id": str(uuid.uuid4()),
@@ -1029,7 +1208,7 @@ class ExecutionEngine:
             stmt = stmt.on_conflict_do_nothing(index_elements=["broker_order_id"])
             await session.execute(stmt)
 
-            # PRD §12.4: Update trade journal fill pointers by broker_order_id.
+            # PRD SS12.4: Update trade journal fill pointers by broker_order_id.
             try:
                 from orion.storage.models_trade_journal import TradeJournalEntry
 

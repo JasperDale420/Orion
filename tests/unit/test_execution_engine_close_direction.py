@@ -1,32 +1,73 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from alpaca.trading.enums import OrderSide
 from orion.execution.execution_engine import ExecutionEngine
 
 
 @pytest.mark.asyncio
 async def test_close_position_uses_buy_side_for_short_direction() -> None:
     engine = ExecutionEngine.__new__(ExecutionEngine)
-    engine.connector = Mock()
-    engine.market_connector = Mock()
+    engine._mcp_available = True
+    engine._mcp_check_ts = datetime.now(UTC)
     engine.risk_manager = Mock()
     engine.order_history = []
     engine.last_positions_snapshot_ts = None
-    engine.market_connector.get_latest_price.return_value = 100.0
-    engine.connector.submit_market_order.return_value = SimpleNamespace(id="order-1")
-    engine._persist_exit_decision = AsyncMock()  # type: ignore[method-assign]
-    engine._record_result = Mock()  # type: ignore[method-assign]
 
-    exit_signal = SimpleNamespace(urgency="IMMEDIATE", reason="stop", rule_id="rule.stop")
+    # Mock MCP client
+    mock_client = AsyncMock()
+    mock_client.close_position.return_value = {"id": "order-1", "status": "accepted"}
+    engine._mcp_client = mock_client
+    engine._get_mcp_client = lambda: mock_client
+    engine._check_mcp_available = AsyncMock(return_value=True)
+
+    engine._persist_exit_decision = AsyncMock()
+    engine._record_result = Mock()
+
+    exit_signal = SimpleNamespace(urgency="IMMEDIATE", reason="stop", rule_id="rule.stop", confidence=0.9, details={})
 
     closed = await engine.close_position(ticker="AAPL", qty=1.0, exit_signal=exit_signal, direction="SHORT")
 
     assert closed is True
-    assert engine.connector.submit_market_order.called
-    kwargs = engine.connector.submit_market_order.call_args.kwargs
-    assert kwargs["side"] == OrderSide.BUY
+    # IMMEDIATE urgency uses close_position MCP tool
+    mock_client.close_position.assert_called_once_with("AAPL", qty=1.0)
+
+
+@pytest.mark.asyncio
+async def test_close_position_limit_order_for_long_direction() -> None:
+    """Non-immediate exit for LONG position uses limit sell order."""
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    engine._mcp_available = True
+    engine._mcp_check_ts = datetime.now(UTC)
+    engine.risk_manager = Mock()
+    engine.order_history = []
+    engine.last_positions_snapshot_ts = None
+
+    mock_client = AsyncMock()
+    mock_client.get_stock_snapshot.return_value = {
+        "latestTrade": {"p": 100.0},
+    }
+    mock_client._call_tool.return_value = {"id": "order-2", "status": "accepted"}
+    engine._mcp_client = mock_client
+    engine._get_mcp_client = lambda: mock_client
+    engine._check_mcp_available = AsyncMock(return_value=True)
+
+    engine._persist_exit_decision = AsyncMock()
+    engine._record_result = Mock()
+
+    exit_signal = SimpleNamespace(urgency="NORMAL", reason="take_profit", rule_id="rule.tp", confidence=0.8, details={})
+
+    closed = await engine.close_position(ticker="AAPL", qty=5.0, exit_signal=exit_signal, direction="LONG")
+
+    assert closed is True
+    # Non-immediate uses place_order with limit type
+    mock_client._call_tool.assert_called_once()
+    call_args = mock_client._call_tool.call_args[0]
+    assert call_args[0] == "place_order"
+    order_args = call_args[1]
+    assert order_args["side"] == "sell"  # Closing LONG = sell
+    assert order_args["type"] == "limit"

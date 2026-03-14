@@ -7,16 +7,6 @@ import pytest
 from orion.ingestion.service import IngestionService
 
 
-class _DummyAlpacaMarketConnector:
-    def __init__(self, *args, **kwargs) -> None:
-        return None
-
-
-class _DummyAlpacaStreamConnector:
-    def __init__(self, *args, **kwargs) -> None:
-        return None
-
-
 class _DummyRollupJob:
     def __init__(self, *args, **kwargs) -> None:
         return None
@@ -31,10 +21,7 @@ async def _async_noop(*args, **kwargs) -> None:
 
 @pytest.mark.asyncio
 async def test_ingestion_source_profile_polling_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_USE_ALPACA_STREAMING", "false")
-    monkeypatch.setattr("orion.ingestion.service.AlpacaMarketConnector", _DummyAlpacaMarketConnector)
-    monkeypatch.setattr("orion.ingestion.service.AlpacaStreamConnector", _DummyAlpacaStreamConnector)
-
+    """Alpaca connectors are archived. Service always reports polling mode with no streaming."""
     service = IngestionService()
     profile = service._active_event_source_profile()
 
@@ -52,9 +39,6 @@ async def test_initialize_skips_startup_earnings_sync(monkeypatch: pytest.Monkey
         sync_call_count["value"] += 1
         return {"synced": 0, "errors": 0}
 
-    monkeypatch.setenv("ORION_USE_ALPACA_STREAMING", "false")
-    monkeypatch.setattr("orion.ingestion.service.AlpacaMarketConnector", _DummyAlpacaMarketConnector)
-    monkeypatch.setattr("orion.ingestion.service.AlpacaStreamConnector", _DummyAlpacaStreamConnector)
     monkeypatch.setattr("orion.ingestion.service.init_db", _async_noop)
     monkeypatch.setattr("orion.jobs.sync_earnings.sync_todays_earnings", _sync_todays_earnings)
     monkeypatch.setattr("orion.jobs.rollup_job.RollupJob", _DummyRollupJob)

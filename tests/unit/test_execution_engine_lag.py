@@ -8,17 +8,28 @@ from orion.execution.execution_engine import ExecutionEngine
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 
+def _make_mcp_client_mock():
+    """Create a mock MCP client that returns successful responses."""
+    mock = AsyncMock()
+    mock.get_market_clock.return_value = {"is_open": True}
+    mock.get_stock_snapshot.return_value = {
+        "latestTrade": {"p": 100.0},
+        "latestQuote": {"bp": 99.95, "ap": 100.05},
+    }
+    mock._call_tool.return_value = {"id": "order-123", "status": "accepted"}
+    return mock
+
+
 @pytest.fixture
 def engine():
-    # Patch credentials and Connectors to avoid real init
-    with (
-        patch.object(system_settings, "alpaca_api_key", "test_key"),
-        patch.object(system_settings, "alpaca_secret_key", "test_secret"),
-        patch("orion.execution.execution_engine.AlpacaTradingConnector"),
-        patch("orion.execution.execution_engine.AlpacaMarketConnector"),
-        patch("orion.execution.execution_engine.AlpacaOptionsConnector"),
-    ):
-        return ExecutionEngine()
+    ee = ExecutionEngine()
+    # Set up MCP mock so execute_order proceeds
+    ee._mcp_available = True
+    ee._mcp_check_ts = datetime.now(UTC)
+    mock_client = _make_mcp_client_mock()
+    ee._mcp_client = mock_client
+    ee._get_mcp_client = lambda: mock_client
+    return ee
 
 
 @pytest.mark.asyncio
@@ -28,17 +39,14 @@ async def test_execution_fresh_signal(engine):
     """
     # Mock System Health Check to pass
     engine._check_system_health = AsyncMock(return_value=True)
-    engine.connector = MagicMock()
     engine.risk_manager = MagicMock()
     # Mock risk checks passing
     engine.risk_manager.config.enable_shorting = True
     engine.risk_manager.check_order.return_value = True
+    engine.risk_manager.check_sector_exposure.return_value = True
     engine.risk_manager.calculate_size.return_value = 10
-    engine.risk_manager.update_post_trade = AsyncMock()  # Fix await usage
-
-    # Mock market connector
-    engine.market_connector = MagicMock()
-    engine.market_connector.get_latest_price.return_value = 100.0
+    engine.risk_manager.update_post_trade = AsyncMock()
+    engine.risk_manager.remove_pending_order = AsyncMock()
 
     # Create Candidate (Fresh)
     now = datetime.now(UTC)
@@ -50,7 +58,9 @@ async def test_execution_fresh_signal(engine):
     await engine.execute_order(decision, cand)
 
     assert decision.executed_successfully == "TRUE"
-    assert engine.connector.submit_limit_order.called
+    # Verify order was placed via MCP
+    mock_client = engine._mcp_client
+    mock_client._call_tool.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -59,7 +69,6 @@ async def test_execution_stale_signal(engine):
     Test that execution is blocked when signal is stale.
     """
     engine._check_system_health = AsyncMock(return_value=True)
-    engine.connector = MagicMock()
 
     # Create Candidate (Stale by 5 mins)
     now = datetime.now(UTC)
@@ -75,4 +84,6 @@ async def test_execution_stale_signal(engine):
 
     assert decision.executed_successfully == "FALSE"
     assert "Data Lag" in decision.reason
-    assert not engine.connector.submit_limit_order.called
+    # No order should have been placed
+    mock_client = engine._mcp_client
+    mock_client._call_tool.assert_not_called()

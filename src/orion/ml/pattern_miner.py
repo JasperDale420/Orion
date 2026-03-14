@@ -669,44 +669,104 @@ async def _load_equity_gold_features(reader: Any, now: Any) -> dict[str, Any]:
     return equity_datasets
 
 
+async def _prefetch_heber_gold_data(
+    max_retries: int = 3,
+    retry_delay_seconds: float = 5.0,
+) -> tuple[Any, Any, dict[str, Any]] | None:
+    """Read labels_alert_barriers, meta_label_features, and equity Gold datasets once.
+
+    Retries on empty results to handle transient volume-mount or I/O failures.
+    Returns ``(outcomes_raw, features_raw, equity_gold)`` or ``None`` on failure.
+    """
+    reader = get_heber_reader()
+    now = datetime.now(UTC)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            outcomes_payload = await asyncio.to_thread(
+                reader.read_gold_features,
+                dataset="labels_alert_barriers",
+                asof_time=now,
+            )
+            features_payload = await asyncio.to_thread(
+                reader.read_gold_features,
+                dataset="meta_label_features",
+                asof_time=now,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Failed to read Heber gold training datasets (attempt {attempt}/{max_retries}): {exc}",
+                extra={
+                    "event": "pattern_miner_heber_training_read_failed",
+                    "training_source": "heber_gold",
+                    "attempt": attempt,
+                    "max_retries": max_retries,
+                },
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(retry_delay_seconds * attempt)
+                continue
+            return None
+
+        outcomes_raw = _coerce_dataframe(outcomes_payload)
+        features_raw = _coerce_dataframe(features_payload)
+
+        if not outcomes_raw.empty:
+            logger.info(
+                f"Prefetched Heber gold training data: {len(outcomes_raw)} outcomes, {len(features_raw)} features",
+                extra={
+                    "event": "pattern_miner_heber_prefetch_success",
+                    "outcomes_count": len(outcomes_raw),
+                    "features_count": len(features_raw),
+                    "attempt": attempt,
+                },
+            )
+            equity_gold = await _load_equity_gold_features(reader, now)
+            return outcomes_raw, features_raw, equity_gold
+
+        # Empty result -- may be a transient volume issue
+        logger.warning(
+            f"Heber gold data empty on attempt {attempt}/{max_retries}",
+            extra={
+                "event": "pattern_miner_heber_prefetch_empty",
+                "attempt": attempt,
+                "max_retries": max_retries,
+                "data_root": str(reader.data_root),
+                "data_root_exists": reader.data_root.exists(),
+                "gold_dir_exists": (reader.data_root / "gold").exists(),
+            },
+        )
+        if attempt < max_retries:
+            await asyncio.sleep(retry_delay_seconds * attempt)
+
+    logger.error(
+        "Heber gold data empty after all retries",
+        extra={
+            "event": "pattern_miner_heber_prefetch_exhausted",
+            "max_retries": max_retries,
+        },
+    )
+    return None
+
+
 async def _fetch_training_data_from_heber(
     *,
     cutoff: datetime,
     min_samples: int,
     trade_type_filter: str | None,
     quick_winner_seconds: int,
+    prefetched: tuple[Any, Any, dict[str, Any]] | None = None,
 ) -> tuple[Any, list[str]]:
     import pandas as pd
 
-    reader = get_heber_reader()
-    now = datetime.now(UTC)
+    if prefetched is not None:
+        outcomes_raw, features_raw, equity_gold = prefetched
+    else:
+        result = await _prefetch_heber_gold_data()
+        if result is None:
+            return None, []
+        outcomes_raw, features_raw, equity_gold = result
 
-    try:
-        outcomes_payload = await asyncio.to_thread(
-            reader.read_gold_features,
-            dataset="labels_alert_barriers",
-            asof_time=now,
-        )
-        features_payload = await asyncio.to_thread(
-            reader.read_gold_features,
-            dataset="meta_label_features",
-            asof_time=now,
-        )
-    except Exception as exc:
-        logger.warning(
-            f"Failed to read Heber gold training datasets: {exc}",
-            extra={
-                "event": "pattern_miner_heber_training_read_failed",
-                "training_source": "heber_gold",
-            },
-        )
-        return None, []
-
-    # Load equity-level Gold datasets (momentum, volatility, flow)
-    equity_gold = await _load_equity_gold_features(reader, now)
-
-    outcomes_raw = _coerce_dataframe(outcomes_payload)
-    features_raw = _coerce_dataframe(features_payload)
     logger.info(f"Raw outcomes size: {len(outcomes_raw)}")
     logger.info(f"Raw features size: {len(features_raw)}")
 
@@ -942,6 +1002,7 @@ async def fetch_training_data(
     min_samples: int = 100,
     trade_type_filter: str | None = None,
     quick_winner_seconds: int = 3600,
+    prefetched: tuple[Any, Any, dict[str, Any]] | None = None,
 ) -> tuple[Any, list[str]]:
     """
     Fetch training data for pattern miner.
@@ -951,6 +1012,8 @@ async def fetch_training_data(
         min_samples: Minimum samples required
         trade_type_filter: Optional SQL filter for trade_type (e.g., "trade_type = '0DTE'")
         quick_winner_seconds: Time threshold for quick_winner target (bucket-specific)
+        prefetched: Pre-loaded (outcomes_raw, features_raw, equity_gold) tuple to avoid
+            redundant disk reads when training multiple buckets.
 
     Returns:
         Tuple of (pandas DataFrame, list of feature names)
@@ -975,6 +1038,7 @@ async def fetch_training_data(
         min_samples=min_samples,
         trade_type_filter=trade_type_filter,
         quick_winner_seconds=quick_winner_seconds,
+        prefetched=prefetched,
     )
 
 
@@ -1353,6 +1417,7 @@ async def run_pattern_mining(
     target_name: str = "hit_target_50",
     bucket_name: str | None = None,
     bucket_config: dict[str, Any] | None = None,
+    prefetched: tuple[Any, Any, dict[str, Any]] | None = None,
 ) -> PatternInsight | None:
     """
     Run full pattern mining pipeline for a single target and optional bucket.
@@ -1361,6 +1426,8 @@ async def run_pattern_mining(
         target_name: Target to predict (hit_target_50, avoid_stop)
         bucket_name: Trade bucket name (0DTE, SHORT_SWING, SWING, POSITION)
         bucket_config: Config dict with filter, window_days, min_samples
+        prefetched: Pre-loaded (outcomes_raw, features_raw, equity_gold) tuple to avoid
+            redundant disk reads when training multiple buckets.
 
     Returns:
         PatternInsight if successful, None otherwise.
@@ -1385,6 +1452,7 @@ async def run_pattern_mining(
         min_samples=min_samples,
         trade_type_filter=trade_filter,
         quick_winner_seconds=quick_winner_seconds,
+        prefetched=prefetched,
     )
     if df is None or df.empty:
         logger.warning(f"No training data available for {model_type}")
@@ -1473,6 +1541,23 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
     insights: dict[str, PatternInsight] = {}
     alerts: list[str] = []
 
+    # Prefetch Heber Gold data ONCE for all bucket x target combinations.
+    # Previously each of the 16 iterations re-read the same parquet datasets
+    # from disk, which was both slow and fragile (a transient volume-mount
+    # failure during the read window would zero-out every bucket).
+    prefetched = await _prefetch_heber_gold_data()
+    if prefetched is None:
+        logger.error(
+            "Cannot train any models: Heber gold data unavailable after retries",
+            extra={"event": "pattern_miner_heber_prefetch_failed"},
+        )
+        alerts.append("ALL: Heber gold data unavailable - no models trained")
+        return MLInsightsSummary(
+            generated_at_utc=datetime.now(UTC),
+            insights=insights,
+            alerts=alerts,
+        )
+
     # Train entry models: Iterate over each bucket x target
     # Include quick_winner which is dynamically generated per bucket
     all_target_names = list(TARGETS.keys()) + ["quick_winner"]
@@ -1483,6 +1568,7 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
                     target_name=target_name,
                     bucket_name=bucket_name,
                     bucket_config=bucket_config,
+                    prefetched=prefetched,
                 )
                 if insight:
                     insights[insight.model_type] = insight

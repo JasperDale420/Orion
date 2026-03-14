@@ -35,6 +35,8 @@ async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(UTC)
+    # VIXY close=12.0 * multiplier 2.0 = VIX approx 24.0 (ELEVATED)
+    # Prior VIXY close=10.0 * 2.0 = 20.0 → change = (24-20)/20 * 100 = 20%
     bars_df = pd.DataFrame(
         {
             "bar_start_ts": [
@@ -42,7 +44,7 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
                 now - timedelta(days=1),
                 now - timedelta(minutes=1),
             ],
-            "close": [20.0, 20.0, 24.0],
+            "close": [10.0, 10.0, 12.0],
             "symbol": ["VIXY", "VIXY", "VIXY"],
         }
     )
@@ -57,6 +59,7 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
 
     vix_data = await feature_enrichment.get_latest_vix_data()
 
+    # VIXY close 12.0 * multiplier 2.0 = 24.0 VIX approx
     assert vix_data["vix"] == pytest.approx(24.0)
     assert vix_data["vix_1d_change"] == pytest.approx(20.0)
     assert vix_data["vix_regime"] == "ELEVATED"

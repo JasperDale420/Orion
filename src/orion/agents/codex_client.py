@@ -7,15 +7,16 @@ default model. Supports tool execution for self-editing capabilities.
 
 import asyncio
 import json
-import logging
 import os
+import re
 from typing import Any
 
 import aiohttp
 
 from orion.config import agent_settings
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class CodexClientError(Exception):
@@ -137,7 +138,9 @@ async def run_codex_completion(
 
     logger.info(
         "Starting LLM execution via AI Gateway",
-        extra={"event": "llm_exec_start", "model": model, "message_count": len(messages)},
+        event_type="llm_exec_start",
+        model=model,
+        message_count=len(messages),
     )
 
     async with aiohttp.ClientSession() as session:
@@ -149,7 +152,7 @@ async def run_codex_completion(
                 "tools": AGENT_TOOLS,
                 "tool_choice": "auto",
                 "temperature": 0.7,
-                "max_tokens": 4096,
+                "max_tokens": 8192,
             }
 
             try:
@@ -161,7 +164,11 @@ async def run_codex_completion(
                 ) as resp:
                     if resp.status != 200:
                         error_text = await resp.text()
-                        logger.error(f"AI Gateway error {resp.status}: {error_text}")
+                        logger.error(
+                            "AI Gateway error",
+                            status=resp.status,
+                            response_body=error_text[:500],
+                        )
                         raise CodexClientError(f"Gateway API error {resp.status}: {error_text}")
 
                     data = await resp.json()
@@ -176,11 +183,19 @@ async def run_codex_completion(
                             tool_name = tc["function"]["name"]
                             tool_args = json.loads(tc["function"]["arguments"])
 
-                            logger.info(f"LLM executing tool: {tool_name}", extra={"tool_args": tool_args})
+                            logger.info(
+                                "LLM executing tool",
+                                tool_name=tool_name,
+                                tool_arg_keys=list(tool_args.keys()),
+                            )
 
                             result_str = await execute_tool(tool_name, tool_args)
 
-                            logger.info(f"Tool {tool_name} completed", extra={"result_len": len(result_str)})
+                            logger.info(
+                                "Tool completed",
+                                tool_name=tool_name,
+                                result_len=len(result_str),
+                            )
 
                             messages.append(
                                 {"role": "tool", "tool_call_id": tc["id"], "name": tool_name, "content": result_str}
@@ -193,27 +208,132 @@ async def run_codex_completion(
                     return message.get("content", "")
 
             except TimeoutError as exc:
-                logger.error("LLM request timed out")
+                logger.error("LLM request timed out", timeout_seconds=timeout_seconds)
                 raise CodexClientError(f"LLM request timed out after {timeout_seconds}s") from exc
 
         raise CodexClientError("Max tool iterations exceeded")
 
 
 def extract_json_from_response(response: str) -> dict:
-    """Extract JSON from a codex response that may contain markdown fences."""
+    """Extract JSON from a codex response that may contain markdown fences or surrounding text.
+
+    Handles:
+    - Clean JSON
+    - JSON wrapped in ```json ... ``` or ``` ... ``` fences
+    - JSON embedded in prose text (finds outermost { ... })
+    - Truncated JSON (attempts to repair missing closing braces/brackets)
+    """
+    if not response or not response.strip():
+        raise ValueError("Empty response from LLM")
+
     text = response.strip()
 
+    # Strategy 1: Try direct parse (clean JSON)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Extract from markdown fences
     if "```json" in text:
-        text = text.split("```json")[1].split("```")[0].strip()
+        fenced = text.split("```json", 1)[1].split("```", 1)[0].strip()
+        try:
+            return json.loads(fenced)
+        except json.JSONDecodeError:
+            # May be truncated, try repair below
+            text = fenced
     elif "```" in text:
         parts = text.split("```")
         if len(parts) >= 2:
-            text = parts[1].strip()
+            fenced = parts[1].strip()
+            try:
+                return json.loads(fenced)
+            except json.JSONDecodeError:
+                text = fenced
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse JSON from response: {e}") from e
+    # Strategy 3: Find the outermost JSON object in the text
+    brace_start = text.find("{")
+    if brace_start != -1:
+        # Find matching closing brace by counting depth
+        depth = 0
+        in_string = False
+        escape_next = False
+        best_end = -1
+        for i in range(brace_start, len(text)):
+            ch = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\":
+                escape_next = True
+                continue
+            if ch == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    best_end = i
+                    break
+
+        if best_end != -1:
+            candidate = text[brace_start : best_end + 1]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+
+        # Strategy 4: Truncated JSON - try to repair by closing open braces/brackets
+        candidate = text[brace_start:]
+        candidate = _repair_truncated_json(candidate)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Failed to parse JSON from LLM response (length={len(response)})")
+
+
+def _repair_truncated_json(text: str) -> str:
+    """Attempt to repair truncated JSON by closing unclosed braces/brackets and strings."""
+    # Strip trailing comma or incomplete key-value
+    text = re.sub(r",\s*$", "", text)
+    # Strip trailing incomplete string value (key: "incomplete...)
+    text = re.sub(r':\s*"[^"]*$', ': ""', text)
+    # Strip trailing incomplete key ("key...)
+    text = re.sub(r',\s*"[^"]*$', "", text)
+
+    # Track the stack of unclosed delimiters in order
+    stack: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in ("}", "]") and stack and stack[-1] == ch:
+            stack.pop()
+
+    # Close in reverse order (innermost first)
+    stack.reverse()
+    text += "".join(stack)
+    return text
 
 
 def build_chat_prompt(

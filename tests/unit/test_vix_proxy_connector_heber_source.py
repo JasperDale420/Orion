@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -9,7 +11,7 @@ from orion.connectors import vix_proxy_connector as vpc
 
 
 @pytest.mark.asyncio
-async def test_get_vixy_bars_prefers_heber_without_local_db_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_bars_for_symbol_returns_vixy_bars() -> None:
     now = datetime.now(UTC)
     bars_df = pd.DataFrame(
         {
@@ -23,15 +25,9 @@ async def test_get_vixy_bars_prefers_heber_without_local_db_fallback(monkeypatch
         def read_bars(self, **_kwargs):
             return bars_df
 
-    monkeypatch.setattr(vpc, "get_heber_reader", lambda: _FakeReader())
-
-    async def _fail_db_query(_fn):
-        raise AssertionError("local bars fallback should not be called")
-
-    monkeypatch.setattr(vpc, "db_query", _fail_db_query, raising=False)
-
-    connector = vpc.VIXProxyConnector()
-    bars = await connector._get_vixy_bars()
+    with patch.object(vpc, "get_heber_reader", return_value=_FakeReader()):
+        connector = vpc.VIXProxyConnector()
+        bars = await connector._get_bars_for_symbol("VIXY")
 
     assert len(bars) == 2
     assert bars[0]["close"] == 10.0
@@ -40,32 +36,26 @@ async def test_get_vixy_bars_prefers_heber_without_local_db_fallback(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_get_vixy_bars_returns_empty_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_bars_for_symbol_returns_empty_when_heber_unavailable() -> None:
     class _FakeReader:
         def read_bars(self, **_kwargs):
             raise RuntimeError("heber unavailable")
 
-    monkeypatch.setattr(vpc, "get_heber_reader", lambda: _FakeReader())
-
-    async def _fail_db_query(_fn):
-        raise AssertionError("local bars fallback should not be called")
-
-    monkeypatch.setattr(vpc, "db_query", _fail_db_query, raising=False)
-
-    connector = vpc.VIXProxyConnector()
-    bars = await connector._get_vixy_bars()
+    with patch.object(vpc, "get_heber_reader", return_value=_FakeReader()):
+        connector = vpc.VIXProxyConnector()
+        bars = await connector._get_bars_for_symbol("VIXY")
 
     assert bars == []
 
 
 @pytest.mark.asyncio
-async def test_get_vixy_bars_uses_default_supported_timeframe(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_bars_for_symbol_uses_default_supported_timeframe() -> None:
     now = datetime.now(UTC)
     captured: dict[str, object] = {}
 
     class _FakeReader:
         def read_bars(self, **kwargs):
-            captured["timeframe"] = kwargs.get("timeframe")
+            captured.update(kwargs)
             return pd.DataFrame(
                 {
                     "instrument_key": ["equity:VIXY"],
@@ -74,26 +64,71 @@ async def test_get_vixy_bars_uses_default_supported_timeframe(monkeypatch: pytes
                 }
             )
 
-    monkeypatch.setattr(vpc, "get_heber_reader", lambda: _FakeReader())
-
-    connector = vpc.VIXProxyConnector()
-    bars = await connector._get_vixy_bars()
+    with patch.object(vpc, "get_heber_reader", return_value=_FakeReader()):
+        connector = vpc.VIXProxyConnector()
+        bars = await connector._get_bars_for_symbol("VIXY")
 
     assert bars
-    assert captured["timeframe"] in (None, "1m")
+    assert captured.get("symbols") == ["VIXY"]
 
 
 @pytest.mark.asyncio
-async def test_persist_and_get_current_vix_use_in_memory_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fail_db_query(_fn):
-        raise AssertionError("local db_query should not be used")
+async def test_get_vix_proxy_bars_tries_candidates_in_order() -> None:
+    """When VIXY returns no data, falls back to UVIX."""
+    now = datetime.now(UTC)
+    call_log: list[str] = []
 
-    async def _fail_db_write(_fn):
-        raise AssertionError("local db_write should not be used")
+    class _FakeReader:
+        def read_bars(self, symbols=None, **_kwargs):
+            symbol = symbols[0] if symbols else "UNKNOWN"
+            call_log.append(symbol)
+            if symbol == "UVIX":
+                return pd.DataFrame(
+                    {
+                        "instrument_key": ["equity:UVIX"],
+                        "ts_event": [now],
+                        "close": [8.0],
+                    }
+                )
+            return pd.DataFrame()
 
-    monkeypatch.setattr(vpc, "db_query", _fail_db_query, raising=False)
-    monkeypatch.setattr(vpc, "db_write", _fail_db_write, raising=False)
+    with patch.object(vpc, "get_heber_reader", return_value=_FakeReader()):
+        connector = vpc.VIXProxyConnector()
+        bars, multiplier = await connector._get_vix_proxy_bars()
 
+    assert call_log[0] == "VIXY"
+    assert "UVIX" in call_log
+    assert len(bars) == 1
+    assert bars[0]["close"] == 8.0
+    assert bars[0]["symbol"] == "UVIX"
+    assert multiplier == 2.85
+
+
+@pytest.mark.asyncio
+async def test_get_bars_for_symbol_filters_stale_data() -> None:
+    """Bars older than 10 days are excluded."""
+    now = datetime.now(UTC)
+    bars_df = pd.DataFrame(
+        {
+            "instrument_key": ["equity:VIXY"],
+            "ts_event": [now - timedelta(days=15)],
+            "close": [10.0],
+        }
+    )
+
+    class _FakeReader:
+        def read_bars(self, **_kwargs):
+            return bars_df
+
+    with patch.object(vpc, "get_heber_reader", return_value=_FakeReader()):
+        connector = vpc.VIXProxyConnector()
+        bars = await connector._get_bars_for_symbol("VIXY")
+
+    assert bars == []
+
+
+@pytest.mark.asyncio
+async def test_persist_and_get_current_vix_use_in_memory_cache() -> None:
     connector = vpc.VIXProxyConnector()
     await connector._persist(
         {

@@ -1446,7 +1446,10 @@ async def get_flow_greeks(event_id: str) -> dict[str, float | None]:
     2. Alpaca API (for flows ingested before Greeks enrichment)
     3. Black-Scholes fallback (if Alpaca unavailable)
     """
-    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+    try:
+        from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+    except (ImportError, ModuleNotFoundError):
+        get_option_greeks = None  # Connector archived; Alpaca API fallback unavailable
 
     result = {
         "delta": None,
@@ -1482,7 +1485,7 @@ async def get_flow_greeks(event_id: str) -> dict[str, float | None]:
         return result
 
     # Priority 2: Try Alpaca API (for flows ingested before Greeks enrichment)
-    if option_chain:
+    if option_chain and get_option_greeks is not None:
         alpaca_greeks = await get_option_greeks(option_chain)
         if alpaca_greeks.get("delta") is not None:
             result["delta"] = alpaca_greeks.get("delta")
@@ -2816,7 +2819,10 @@ async def get_checkpoint_greeks(
     Returns:
         Dict mapping checkpoint suffix to Greeks + decay features + underlying
     """
-    from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+    try:
+        from orion.connectors.alpaca_option_greeks_connector import get_option_greeks
+    except (ImportError, ModuleNotFoundError):
+        get_option_greeks = None  # Connector archived; Alpaca API fallback unavailable
 
     now = datetime.now(UTC)
     results: dict[str, dict[str, float | None]] = {}
@@ -2839,7 +2845,7 @@ async def get_checkpoint_greeks(
 
         # Only fetch live data if checkpoint is within 5 minutes of now (real-time labeling)
         time_to_checkpoint = abs((now - checkpoint_ts).total_seconds())
-        if time_to_checkpoint < 300:  # 5 minutes
+        if time_to_checkpoint < 300 and get_option_greeks is not None:  # 5 minutes
             try:
                 greeks = await get_option_greeks(option_chain)
                 cp_data["delta"] = greeks.get("delta")

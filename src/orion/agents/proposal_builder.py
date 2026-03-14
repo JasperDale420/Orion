@@ -1,11 +1,12 @@
-import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
 
 import yaml
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 
 class ProposalBuilder:
@@ -66,11 +67,9 @@ class ProposalBuilder:
             if not ok:
                 logger.error(
                     "Invalid proposal; refusing to save",
-                    extra={
-                        "event_type": "EOD_PROPOSAL_INVALID",
-                        "missing": missing,
-                        "proposal_type": proposal.get("type"),
-                    },
+                    event_type="EOD_PROPOSAL_INVALID",
+                    missing=missing,
+                    proposal_type=proposal.get("type"),
                 )
                 return None
 

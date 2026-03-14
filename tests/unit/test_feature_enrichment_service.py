@@ -730,7 +730,10 @@ class TestGetActiveTickersWithSource:
     async def test_falls_back_to_static_on_heber_failure(self):
         from orion.main_feature_enrichment import STATIC_TICKER_FALLBACK, get_active_tickers_with_source
 
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with (
+            patch("orion.main_feature_enrichment._heber_reader") as mock_reader,
+            patch("orion.main_feature_enrichment._extract_tickers_from_bars", return_value=[]),
+        ):
             mock_reader.read_flow.side_effect = RuntimeError("Heber down")
             tickers, source = await get_active_tickers_with_source(limit=5)
 
@@ -742,7 +745,10 @@ class TestGetActiveTickersWithSource:
     async def test_falls_back_when_flow_df_empty(self):
         from orion.main_feature_enrichment import STATIC_TICKER_FALLBACK, get_active_tickers_with_source
 
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with (
+            patch("orion.main_feature_enrichment._heber_reader") as mock_reader,
+            patch("orion.main_feature_enrichment._extract_tickers_from_bars", return_value=[]),
+        ):
             mock_reader.read_flow.return_value = pd.DataFrame()
             tickers, source = await get_active_tickers_with_source(limit=3)
 
