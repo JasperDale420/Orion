@@ -198,8 +198,8 @@ class ZeroDTESweepRule(TradingRule):
 
         # Time filter: market open hour (14:00 UTC = 9:00 ET)
         signal_hour = None
-        if signal.event_ts_utc:
-            signal_hour = signal.event_ts_utc.hour
+        if signal.signal_ts_utc:
+            signal_hour = signal.signal_ts_utc.hour
         if signal_hour is not None and signal_hour != self.market_open_hour_utc:
             # Still allow, but lower confidence for non-optimal times
             pass
@@ -301,7 +301,7 @@ class SwingEntryRule(TradingRule):
             return None
 
         # Calculate confidence based on hour
-        signal_hour = signal.event_ts_utc.hour if signal.event_ts_utc else None
+        signal_hour = signal.signal_ts_utc.hour if signal.signal_ts_utc else None
 
         confidence = 0.65
         if signal_hour in self.optimal_hours_utc:
@@ -388,7 +388,7 @@ class ShortSwingEntryRule(TradingRule):
         if aggressor not in ["ASK", "ABOVE_ASK"]:
             return None
 
-        signal_hour = signal.event_ts_utc.hour if signal.event_ts_utc else None
+        signal_hour = signal.signal_ts_utc.hour if signal.signal_ts_utc else None
         confidence = 0.60
         if signal_hour in self.optimal_hours_utc:
             confidence += 0.1

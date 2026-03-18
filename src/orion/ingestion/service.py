@@ -295,8 +295,10 @@ class IngestionService:
             payload["premium_usd"] = float(payload["premium"])
         if "expiry" in payload:
             payload["expiry"] = str(payload["expiry"])
-        if "aggressor" in payload:
-            payload["aggressor_ind"] = str(payload["aggressor"]).upper() if payload["aggressor"] else None
+            dte = IngestionService._compute_dte(payload["expiry"], now)
+            if dte is not None:
+                payload["dte"] = dte
+        payload["aggressor_ind"] = IngestionService._infer_aggressor(payload)
 
         event_id = str(payload.get("event_id") or uuid.uuid4())
 
@@ -315,6 +317,31 @@ class IngestionService:
             ticker=ticker,
             payload=payload,
         )
+
+    @staticmethod
+    def _compute_dte(expiry_str: str, now: datetime) -> int | None:
+        """Compute days-to-expiry from expiry string."""
+        try:
+            from datetime import date as _date
+
+            exp = _date.fromisoformat(expiry_str[:10])
+            return max(0, (exp - now.date()).days)
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _infer_aggressor(payload: dict) -> str:
+        """Infer aggressor from raw field or ask/bid side premium."""
+        raw = payload.get("aggressor")
+        if raw:
+            return str(raw).upper()
+        ask = float(payload.get("total_ask_side_prem") or 0)
+        bid = float(payload.get("total_bid_side_prem") or 0)
+        if ask > bid and ask > 0:
+            return "ASK"
+        if bid > ask and bid > 0:
+            return "BID"
+        return "MID"
 
     async def _normalize_and_dedupe(self, events: list[BronzeEvent], trace_id: str) -> list[BronzeEvent]:
         normalized = []
