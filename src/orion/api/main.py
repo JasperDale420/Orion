@@ -689,6 +689,10 @@ async def get_flows(
     created_col = _first_existing_column(work, ("created_at_utc", "created_at", "ts_available"))
 
     work = work.sort_values("_event_ts", ascending=False).head(limit)
+    if created_col:
+        # Parse created timestamps once for the full batch to avoid per-row datetime parsing overhead.
+        work["_created_at_utc"] = pd.to_datetime(work[created_col], utc=True, errors="coerce")
+
     rows: list[dict[str, Any]] = []
     for idx, row in work.iterrows():
         event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
@@ -698,9 +702,7 @@ async def get_flows(
         normalized_ticker = _normalize_flow_ticker(row.get(ticker_col))
         if normalized_ticker is None:
             continue
-        created_at = (
-            pd.to_datetime(row.get(created_col), utc=True, errors="coerce") if created_col else pd.NaT  # type: ignore[arg-type]
-        )
+        created_at = row.get("_created_at_utc") if created_col else pd.NaT
         created_at_utc = created_at.to_pydatetime() if not pd.isna(created_at) else None
 
         rows.append(

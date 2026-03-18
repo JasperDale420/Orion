@@ -81,3 +81,61 @@ async def test_flows_endpoint_returns_empty_when_heber_read_fails(monkeypatch: p
         rows = (await client.get("/flows", headers=headers, params={"ticker": "SPY"})).json()
 
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_flows_endpoint_parses_created_timestamps_vectorized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """created_at parsing should be vectorized instead of per-row."""
+    monkeypatch.setenv("ORION_API_KEY", "testkey")
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    flow_df = pd.DataFrame(
+        [
+            {
+                "event_id": "flow_1",
+                "instrument_key": "equity:SPY",
+                "ts_event": now - timedelta(seconds=10),
+                "premium": 1500.0,
+                "created_at": (now - timedelta(seconds=20)).isoformat(),
+            },
+            {
+                "event_id": "flow_2",
+                "instrument_key": "equity:SPY",
+                "ts_event": now - timedelta(seconds=5),
+                "premium": 2500.0,
+                "created_at": (now - timedelta(seconds=10)).isoformat(),
+            },
+            {
+                "event_id": "flow_3",
+                "instrument_key": "equity:SPY",
+                "ts_event": now - timedelta(seconds=1),
+                "premium": 3500.0,
+                "created_at": (now - timedelta(seconds=5)).isoformat(),
+            },
+        ]
+    )
+
+    class _FakeReader:
+        def read_flow(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return flow_df
+
+    monkeypatch.setattr("orion.api.main.get_heber_reader", lambda: _FakeReader())
+
+    import orion.api.main as api_main
+
+    original_to_datetime = api_main.pd.to_datetime
+    calls: list[object] = []
+
+    def _counting_to_datetime(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(args[0] if args else None)
+        return original_to_datetime(*args, **kwargs)
+
+    monkeypatch.setattr(api_main.pd, "to_datetime", _counting_to_datetime)
+
+    headers = {"x-api-key": "testkey"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/flows", headers=headers, params={"ticker": "SPY"})
+
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+    assert len(calls) == 2

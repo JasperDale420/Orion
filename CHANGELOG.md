@@ -23,6 +23,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Optimized `/flows` timestamp normalization hot path (TDD)**:
+  - Updated `src/orion/api/main.py` to parse `created_at` timestamps once as a vectorized Pandas column instead of re-running `pd.to_datetime(...)` inside the row loop.
+  - Added a regression/performance guard test in `tests/api/test_flow_filters.py` that asserts timestamp parsing happens in batch (2 calls total: event timestamp + created timestamp), preventing future per-row regressions.
+  - Expected impact: removes one expensive datetime parse per returned flow row (up to `limit` rows), reducing response CPU cost for large `/flows` payloads.
+  - Measurement snapshot (local synthetic benchmark, 5000 timestamps):
+    - per-row parse loop: `7.526553s`
+    - vectorized parse: `0.003880s`
+    - speedup: `~1940x` for the timestamp parsing step.
+
 - **Gateway auth-contract hardening for UW connectors (RCA/TDD)**:
   - Updated:
     - `/Users/jacobmcmillan/Empire/Orion/src/orion/connectors/uw_market_tide_connector.py`
