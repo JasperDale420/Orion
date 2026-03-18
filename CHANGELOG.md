@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Lint errors in integration test** (2026-03-18):
+  - Removed extraneous `f` prefix from two f-strings without placeholders in `tests/integration/test_e2e_flow_pipeline.py`.
+  - Added `strict=False` to `zip()` call in the same file to satisfy B905 rule.
+
 - **Pattern miner gets 0 training outcomes from Heber Gold** (2026-03-14):
   - The pattern miner re-read `labels_alert_barriers` and `meta_label_features` from disk for each of the 16 bucket x target combinations. A transient volume-mount or I/O failure during any single read would zero-out that entire training run with no retries.
   - Added `_prefetch_heber_gold_data()` that reads all Gold datasets once before the bucket loop, with up to 3 retries and exponential backoff for transient failures.
