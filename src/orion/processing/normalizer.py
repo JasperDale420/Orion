@@ -19,7 +19,7 @@ class NormalizationEngine:
         """
         Routes to specific normalization logic based on source and type.
         """
-        if source == "UW":
+        if source in ("UW", "HEBER"):
             if event_type == "UW_FLOW":
                 return NormalizationEngine._normalize_uw_flow(payload)
             elif event_type == "UW_DARKPOOL":

@@ -279,9 +279,54 @@ class IngestionService:
             return []
 
     @staticmethod
+    def _make_json_safe(value: Any) -> Any:
+        """Convert Parquet-native types and NaN/Inf to JSON-serializable Python types."""
+        import math
+        import numpy as np
+        import pandas as pd
+
+        if value is None:
+            return None
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return value
+        if isinstance(value, pd.Timestamp):
+            if pd.isna(value):
+                return None
+            return value.isoformat()
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, (np.integer,)):
+            return int(value)
+        if isinstance(value, (np.floating,)):
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return float(value)
+        if isinstance(value, np.bool_):
+            return bool(value)
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, dict):
+            return {k: IngestionService._make_json_safe(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [IngestionService._make_json_safe(v) for v in value]
+        return value
+
+    @staticmethod
     def _heber_row_to_event(row: Any, now: datetime) -> BronzeEvent | None:
-        """Convert a Heber Silver flow_alerts row to a BronzeEvent."""
-        payload = {k: v for k, v in row.to_dict().items() if v is not None}
+        """Convert a Heber Silver flow_alerts row to a BronzeEvent.
+
+        Source is set to "UW" because the data originates from Unusual Whales.
+        Heber is the storage layer; provenance is tracked via ingest.connector.
+        """
+        raw = row.to_dict()
+        # Convert Parquet-native types (Timestamp, numpy int/float, NaT) to JSON-safe values
+        payload = {
+            k: IngestionService._make_json_safe(v)
+            for k, v in raw.items()
+            if v is not None and not (hasattr(v, "__class__") and v.__class__.__name__ == "NaTType")
+        }
 
         ticker = str(payload.get("underlying") or payload.get("symbol") or "")
         if not ticker:
@@ -302,15 +347,18 @@ class IngestionService:
 
         event_id = str(payload.get("event_id") or uuid.uuid4())
 
-        ts_event = payload.get("ts_event")
-        if hasattr(ts_event, "to_pydatetime"):
-            ts_event = ts_event.to_pydatetime()
-        if not isinstance(ts_event, datetime):
+        # Extract event timestamp before it was converted to ISO string
+        ts_event_raw = raw.get("ts_event")
+        if hasattr(ts_event_raw, "to_pydatetime"):
+            ts_event = ts_event_raw.to_pydatetime()
+        elif isinstance(ts_event_raw, datetime):
+            ts_event = ts_event_raw
+        else:
             ts_event = now
 
         return BronzeEvent(
             event_id=event_id,
-            source="HEBER",
+            source="UW",
             event_type="UW_FLOW",
             event_ts_utc=ts_event,
             received_ts_utc=now,
@@ -348,6 +396,8 @@ class IngestionService:
         for e in events:
             try:
                 e.payload = NormalizationEngine.normalize_event(e.source, e.event_type, e.payload)
+                # Scrub NaN/Inf values introduced by normalizer float() casts
+                e.payload = IngestionService._make_json_safe(e.payload)
                 self._enrich_temporal_data(e)
                 if not e.ticker:
                     payload_ticker = e.payload.get("ticker")
