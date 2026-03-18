@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import exchange_calendars as xcals
 
 from orion.config import system_settings
+from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
@@ -63,6 +64,7 @@ class IngestionService:
 
         # State
         self.eod_trigger_last_run: str | None = None
+        self._last_flow_poll_ts: datetime = datetime.now(UTC) - timedelta(minutes=15)
         self._eod_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
 
@@ -167,6 +169,14 @@ class IngestionService:
         for event in all_events:
             self._tag_ingest_metadata(event, trace_id, "gateway_stream")
 
+        # Poll Heber for new UW flow alerts
+        flow_events = self._poll_heber_flow(trace_id)
+        all_events.extend(flow_events)
+
+        # Update universe with flow-derived tickers for dynamic bar subscriptions
+        for event in flow_events:
+            self.universe.update_from_event(event)
+
         # Process & Persist
         if all_events:
             all_events = await self._normalize_and_dedupe(all_events, trace_id)
@@ -179,7 +189,14 @@ class IngestionService:
         self._check_eod_trigger()
 
         logger.info(
-            "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
+            "Ingestion heartbeat",
+            extra={
+                "trace_id": trace_id,
+                "context": {
+                    "processed_events": len(all_events),
+                    "flow_events": len(flow_events),
+                },
+            },
         )
 
     async def _sync_gateway_subscriptions(self) -> None:
@@ -219,12 +236,85 @@ class IngestionService:
 
     def _active_event_source_profile(self) -> dict[str, str | bool | list[str]]:
         return {
-            "data_source": "gateway_stream",
+            "data_source": "gateway_stream+heber_flow",
             "gateway_connected": self.gateway_stream.is_running,
             "subscribed_symbols": sorted(self.gateway_stream.subscribed_symbols),
-            "produced_event_types": ["ALPACA_BAR_1M"],
-            "uw_flow_darkpool_ingestion": "external_gateway_heber_pipeline",
+            "produced_event_types": ["ALPACA_BAR_1M", "UW_FLOW"],
+            "flow_source": "heber_silver",
         }
+
+    def _poll_heber_flow(self, trace_id: str) -> list[BronzeEvent]:
+        """Poll Heber Silver for new UW flow alerts since last poll."""
+        try:
+            reader = get_heber_reader()
+            now = datetime.now(UTC)
+            df = reader.read_flow(
+                symbols=None,
+                asof_time=now,
+                start_time=self._last_flow_poll_ts,
+            )
+
+            if df.empty:
+                return []
+
+            self._last_flow_poll_ts = now
+            events: list[BronzeEvent] = []
+
+            for _, row in df.iterrows():
+                event = self._heber_row_to_event(row, now)
+                if event:
+                    self._tag_ingest_metadata(event, trace_id, "heber_flow")
+                    events.append(event)
+
+            if events:
+                logger.info(
+                    f"Polled {len(events)} UW flow alerts from Heber",
+                    extra={"flow_count": len(events)},
+                )
+
+            return events
+
+        except Exception as e:
+            logger.error(f"Heber flow poll failed: {e}", exc_info=True)
+            return []
+
+    @staticmethod
+    def _heber_row_to_event(row: Any, now: datetime) -> BronzeEvent | None:
+        """Convert a Heber Silver flow_alerts row to a BronzeEvent."""
+        payload = {k: v for k, v in row.to_dict().items() if v is not None}
+
+        ticker = str(payload.get("underlying") or payload.get("symbol") or "")
+        if not ticker:
+            return None
+
+        payload["ticker"] = ticker
+        if "put_call" in payload:
+            pc = str(payload["put_call"]).upper()
+            payload["put_call"] = pc[0] if pc else ""
+        if "premium" in payload:
+            payload["premium_usd"] = float(payload["premium"])
+        if "expiry" in payload:
+            payload["expiry"] = str(payload["expiry"])
+        if "aggressor" in payload:
+            payload["aggressor_ind"] = str(payload["aggressor"]).upper() if payload["aggressor"] else None
+
+        event_id = str(payload.get("event_id") or uuid.uuid4())
+
+        ts_event = payload.get("ts_event")
+        if hasattr(ts_event, "to_pydatetime"):
+            ts_event = ts_event.to_pydatetime()
+        if not isinstance(ts_event, datetime):
+            ts_event = now
+
+        return BronzeEvent(
+            event_id=event_id,
+            source="HEBER",
+            event_type="UW_FLOW",
+            event_ts_utc=ts_event,
+            received_ts_utc=now,
+            ticker=ticker,
+            payload=payload,
+        )
 
     async def _normalize_and_dedupe(self, events: list[BronzeEvent], trace_id: str) -> list[BronzeEvent]:
         normalized = []

@@ -263,15 +263,16 @@ class TestActiveEventSourceProfile:
     def test_gateway_streaming_profile(self):
         svc = self._make_service_with_gateway(gateway_running=True)
         profile = svc._active_event_source_profile()
-        assert profile["data_source"] == "gateway_stream"
+        assert profile["data_source"] == "gateway_stream+heber_flow"
         assert profile["gateway_connected"] is True
         assert "ALPACA_BAR_1M" in profile["produced_event_types"]
+        assert "UW_FLOW" in profile["produced_event_types"]
 
     @pytest.mark.unit
     def test_gateway_disconnected_profile(self):
         svc = self._make_service_with_gateway(gateway_running=False)
         profile = svc._active_event_source_profile()
-        assert profile["data_source"] == "gateway_stream"
+        assert profile["data_source"] == "gateway_stream+heber_flow"
         assert profile["gateway_connected"] is False
 
 
@@ -776,3 +777,115 @@ class TestUpdateHealthStatus:
 
             mock_logger.critical.assert_called_once()
             svc.health_monitor.update_db_status.assert_called_once_with(False, "lag too high")
+
+
+# ---------------------------------------------------------------------------
+# Heber Flow Poll
+# ---------------------------------------------------------------------------
+class TestHeberFlowPoll:
+    """Tests for IngestionService._poll_heber_flow() and _heber_row_to_event()."""
+
+    def _make_service(self):
+        with (
+            patch("orion.ingestion.service.HealthMonitor"),
+            patch("orion.ingestion.service.UniverseManager"),
+            patch("orion.ingestion.service.FeatureEngine"),
+            patch("orion.ingestion.service.RuleEngine"),
+            patch("orion.ingestion.service.LakehouseWriter"),
+            patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
+        ):
+            mock_factory.return_value = MagicMock()
+            from orion.ingestion.service import IngestionService
+
+            return IngestionService()
+
+    @pytest.mark.unit
+    def test_converts_heber_row_to_bronze_event(self):
+        import pandas as pd
+
+        svc = self._make_service()
+        row = pd.Series(
+            {
+                "event_id": "abc123",
+                "underlying": "AAPL",
+                "symbol": "AAPL",
+                "premium": 500000.0,
+                "put_call": "C",
+                "is_sweep": True,
+                "expiry": "2026-04-17",
+                "aggressor": "ask",
+                "ts_event": pd.Timestamp("2026-03-10 15:00:00", tz="UTC"),
+            }
+        )
+
+        now = datetime(2026, 3, 10, 16, 0, 0, tzinfo=UTC)
+        event = svc._heber_row_to_event(row, now)
+
+        assert event is not None
+        assert event.event_type == "UW_FLOW"
+        assert event.source == "HEBER"
+        assert event.ticker == "AAPL"
+        assert event.event_id == "abc123"
+        assert event.payload["premium_usd"] == pytest.approx(500000.0)
+        assert event.payload["put_call"] == "C"
+        assert event.payload["expiry"] == "2026-04-17"
+        assert event.payload["aggressor_ind"] == "ASK"
+
+    @pytest.mark.unit
+    def test_row_without_ticker_returns_none(self):
+        import pandas as pd
+
+        svc = self._make_service()
+        row = pd.Series({"event_id": "abc", "premium": 100.0})
+        result = svc._heber_row_to_event(row, datetime.now(UTC))
+        assert result is None
+
+    @pytest.mark.unit
+    def test_poll_returns_empty_on_empty_dataframe(self):
+        import pandas as pd
+
+        svc = self._make_service()
+        mock_reader = MagicMock()
+        mock_reader.read_flow.return_value = pd.DataFrame()
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            events = svc._poll_heber_flow("trace123")
+
+        assert events == []
+
+    @pytest.mark.unit
+    def test_poll_advances_timestamp_on_success(self):
+        import pandas as pd
+
+        svc = self._make_service()
+        original_ts = svc._last_flow_poll_ts
+
+        mock_reader = MagicMock()
+        mock_reader.read_flow.return_value = pd.DataFrame(
+            [
+                {
+                    "event_id": "e1",
+                    "underlying": "SPY",
+                    "premium": 1000.0,
+                    "ts_event": pd.Timestamp("2026-03-10 15:00:00", tz="UTC"),
+                }
+            ]
+        )
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            events = svc._poll_heber_flow("trace123")
+
+        assert len(events) == 1
+        assert svc._last_flow_poll_ts > original_ts
+
+    @pytest.mark.unit
+    def test_poll_returns_empty_on_exception(self):
+        svc = self._make_service()
+        mock_reader = MagicMock()
+        mock_reader.read_flow.side_effect = RuntimeError("parquet broken")
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            events = svc._poll_heber_flow("trace123")
+
+        assert events == []
