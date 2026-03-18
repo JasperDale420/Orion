@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
 
-# Alpaca connectors archived (Phase 3) — all market data now sourced via Data-Gateway/Heber
+from orion.config import system_settings
+from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.core.universe_manager import UniverseManager
@@ -48,11 +49,13 @@ class IngestionService:
         self.rule_engine = RuleEngine()
         self.lakehouse = LakehouseWriter()
 
-        # Alpaca connectors archived — market data routed through Data-Gateway/Heber
-        self.alpaca = None
-        self.alpaca_stream = None
-        self._use_streaming = False
-        logger.info("Alpaca connectors disabled; market data sourced from Data-Gateway/Heber")
+        # Gateway stream client for real-time bar data from Data-Gateway
+        try:
+            self.gateway_stream = create_gateway_stream_client()
+            logger.info("GatewayStreamClient created; market data sourced from Data-Gateway")
+        except ValueError as e:
+            logger.error(f"Failed to create GatewayStreamClient: {e}")
+            raise
 
         # Timezone settings
         self.eastern = ZoneInfo("America/New_York")
@@ -91,7 +94,18 @@ class IngestionService:
         except Exception as e:
             logger.warning(f"Failed to start rollup job: {e}")
 
-        # Alpaca streaming is disabled (connectors archived)
+        # Start Gateway WebSocket stream and subscribe to initial tickers
+        try:
+            await self.gateway_stream.start()
+            initial_tickers = list(system_settings.static_watchlist)
+            await self.gateway_stream.subscribe(initial_tickers)
+            logger.info(
+                "Gateway stream started and subscribed to initial tickers",
+                extra={"ticker_count": len(initial_tickers), "tickers": initial_tickers},
+            )
+        except Exception as e:
+            logger.error(f"Failed to start Gateway stream: {e}", exc_info=True)
+            raise
 
         logger.info("Ingestion source profile", extra={"context": self._active_event_source_profile()})
         logger.info("Ingestion Service Initialized.")
@@ -134,8 +148,9 @@ class IngestionService:
         await self.stop()
 
     async def stop(self) -> None:
-        if self.alpaca_stream:
-            await self.alpaca_stream.stop()
+        if self.gateway_stream and self.gateway_stream.is_running:
+            await self.gateway_stream.stop()
+            logger.info("Gateway stream client stopped")
         logger.info("Ingestion Service Stopped.")
 
     async def _run_cycle(self) -> None:
@@ -143,16 +158,16 @@ class IngestionService:
         self.health_monitor.update_heartbeat()
 
         trace_id = str(uuid.uuid4())
-        all_events: list[BronzeEvent] = []
 
-        # UW flow/darkpool ingestion is externalized to Gateway/Heber pipelines.
-        # This service currently emits Alpaca market bars only.
+        # Sync subscriptions: subscribe to any new tickers discovered by the universe
+        await self._sync_gateway_subscriptions()
 
-        # 2. Get Alpaca bars (streaming preferred, polling as fallback)
-        alpaca_events = await self._poll_alpaca_events(trace_id)
-        all_events.extend(alpaca_events)
+        # Drain buffered bar events from the Gateway WebSocket stream
+        all_events = self.gateway_stream.drain_events()
+        for event in all_events:
+            self._tag_ingest_metadata(event, trace_id, "gateway_stream")
 
-        # 3. Process & Persist
+        # Process & Persist
         if all_events:
             all_events = await self._normalize_and_dedupe(all_events, trace_id)
             if all_events:
@@ -160,32 +175,24 @@ class IngestionService:
                 await self._process_features_and_rules(all_events)
                 await self._write_to_lakehouse(all_events, trace_id)
 
-        # 4. Process EOD Trigger
+        # Process EOD Trigger
         self._check_eod_trigger()
 
         logger.info(
             "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
         )
 
-    async def _poll_alpaca_events(self, trace_id: str) -> list[BronzeEvent]:
-        """Alpaca polling disabled — connectors archived in favor of Data-Gateway."""
-        return []
-
-    async def _drain_alpaca_stream(self, active_tickers: list[str], trace_id: str) -> list[BronzeEvent]:
-        """Drain events from Alpaca WebSocket stream."""
-        # Ensure newly added tickers are subscribed
-        new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
-        if new_tickers:
-            await self.alpaca_stream.subscribe(list(new_tickers))
-
-        # Drain any buffered streaming events
-        streaming_events = await self.alpaca_stream.drain_events()
-        if streaming_events:
-            for e in streaming_events:
-                self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
-            logger.debug(f"Drained {len(streaming_events)} streaming events")
-
-        return streaming_events
+    async def _sync_gateway_subscriptions(self) -> None:
+        """Subscribe to any tickers the universe knows about that the Gateway doesn't."""
+        try:
+            universe_tickers = set(self.universe.get_active_universe())
+            currently_subscribed = self.gateway_stream.subscribed_symbols
+            new_tickers = universe_tickers - currently_subscribed
+            if new_tickers:
+                await self.gateway_stream.subscribe(list(new_tickers))
+                logger.info(f"Subscribed to {len(new_tickers)} new tickers via Gateway")
+        except Exception as e:
+            logger.warning(f"Failed to sync Gateway subscriptions: {e}")
 
     async def _check_overnight_sleep(self) -> None:
         from orion.core.market_schedule import MarketSchedule
@@ -212,15 +219,12 @@ class IngestionService:
 
     def _active_event_source_profile(self) -> dict[str, str | bool | list[str]]:
         return {
-            "alpaca_streaming_enabled": self._use_streaming,
-            "alpaca_mode": "streaming" if self.alpaca_stream is not None else "polling",
+            "data_source": "gateway_stream",
+            "gateway_connected": self.gateway_stream.is_running,
+            "subscribed_symbols": sorted(self.gateway_stream.subscribed_symbols),
             "produced_event_types": ["ALPACA_BAR_1M"],
             "uw_flow_darkpool_ingestion": "external_gateway_heber_pipeline",
         }
-
-    async def _poll_alpaca(self, tickers: list[str], trace_id: str) -> list[BronzeEvent]:
-        """Alpaca REST polling disabled — connectors archived."""
-        return []
 
     async def _normalize_and_dedupe(self, events: list[BronzeEvent], trace_id: str) -> list[BronzeEvent]:
         normalized = []

@@ -1,16 +1,20 @@
-"""Unit tests for orion.ingestion.service.IngestionService.
-
-Tests cover construction, event enrichment, metadata tagging,
-pipeline methods, DLQ handling, and EOD trigger logic with all
-external dependencies mocked.
-"""
-
 import asyncio
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# Common patches needed for constructing IngestionService with mocked gateway
+GATEWAY_PATCHES = [
+    "orion.ingestion.service.HealthMonitor",
+    "orion.ingestion.service.UniverseManager",
+    "orion.ingestion.service.FeatureEngine",
+    "orion.ingestion.service.RuleEngine",
+    "orion.ingestion.service.LakehouseWriter",
+    "orion.ingestion.service.xcals",
+    "orion.ingestion.service.create_gateway_stream_client",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +56,10 @@ class TestIngestionServiceInit:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_client = MagicMock()
+            mock_factory.return_value = mock_client
             from orion.ingestion.service import IngestionService
 
             svc = IngestionService()
@@ -74,15 +81,17 @@ class TestIngestionServiceInit:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             svc = IngestionService()
             assert svc.run_id == "test-run-42"
 
     @pytest.mark.unit
-    def test_alpaca_connectors_disabled(self):
-        """Alpaca connectors are archived; service initializes with None connectors."""
+    def test_gateway_stream_client_initialized(self):
+        """Gateway stream client is created via factory during construction."""
         with (
             patch("orion.ingestion.service.HealthMonitor"),
             patch("orion.ingestion.service.UniverseManager"),
@@ -90,13 +99,15 @@ class TestIngestionServiceInit:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_client = MagicMock()
+            mock_factory.return_value = mock_client
             from orion.ingestion.service import IngestionService
 
             svc = IngestionService()
-            assert svc.alpaca is None
-            assert svc.alpaca_stream is None
-            assert svc._use_streaming is False
+            mock_factory.assert_called_once()
+            assert svc.gateway_stream is mock_client
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +124,9 @@ class TestEnrichTemporalData:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -175,7 +188,9 @@ class TestTagIngestMetadata:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -224,8 +239,8 @@ class TestTagIngestMetadata:
 class TestActiveEventSourceProfile:
     """Tests for _active_event_source_profile()."""
 
-    def _make_service_with_streaming(self, has_stream):
-        """Create service. Alpaca connectors are archived so streaming is always disabled."""
+    def _make_service_with_gateway(self, gateway_running=True):
+        """Create service with a mock gateway stream client."""
         with (
             patch("orion.ingestion.service.HealthMonitor"),
             patch("orion.ingestion.service.UniverseManager"),
@@ -233,27 +248,31 @@ class TestActiveEventSourceProfile:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_client = MagicMock()
+            mock_client.is_running = gateway_running
+            mock_client.subscribed_symbols = {"SPY", "QQQ"}
+            mock_factory.return_value = mock_client
             from orion.ingestion.service import IngestionService
 
             svc = IngestionService()
-            if has_stream:
-                # Simulate a stream connector being present for profile test
-                svc.alpaca_stream = MagicMock()
             return svc
 
     @pytest.mark.unit
-    def test_streaming_profile(self):
-        svc = self._make_service_with_streaming(True)
+    def test_gateway_streaming_profile(self):
+        svc = self._make_service_with_gateway(gateway_running=True)
         profile = svc._active_event_source_profile()
-        assert profile["alpaca_mode"] == "streaming"
+        assert profile["data_source"] == "gateway_stream"
+        assert profile["gateway_connected"] is True
         assert "ALPACA_BAR_1M" in profile["produced_event_types"]
 
     @pytest.mark.unit
-    def test_polling_profile(self):
-        svc = self._make_service_with_streaming(False)
+    def test_gateway_disconnected_profile(self):
+        svc = self._make_service_with_gateway(gateway_running=False)
         profile = svc._active_event_source_profile()
-        assert profile["alpaca_mode"] == "polling"
+        assert profile["data_source"] == "gateway_stream"
+        assert profile["gateway_connected"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +289,9 @@ class TestCheckEodTrigger:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -336,7 +357,9 @@ class TestSendToDlq:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -436,7 +459,9 @@ class TestPersistLoopCrash:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -468,26 +493,31 @@ class TestStop:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
 
     @pytest.mark.unit
     @pytest.mark.asyncio
-    async def test_stop_closes_stream_connector(self):
+    async def test_stop_closes_gateway_stream(self):
         svc = self._make_service()
         mock_stream = AsyncMock()
-        svc.alpaca_stream = mock_stream
+        mock_stream.is_running = True
+        svc.gateway_stream = mock_stream
 
         await svc.stop()
         mock_stream.stop.assert_called_once()
 
     @pytest.mark.unit
     @pytest.mark.asyncio
-    async def test_stop_without_stream_succeeds(self):
+    async def test_stop_without_running_stream_succeeds(self):
         svc = self._make_service()
-        svc.alpaca_stream = None
+        mock_stream = MagicMock()
+        mock_stream.is_running = False
+        svc.gateway_stream = mock_stream
 
         # Should not raise
         await svc.stop()
@@ -496,11 +526,8 @@ class TestStop:
 # ---------------------------------------------------------------------------
 # _poll_alpaca_events (async)
 # ---------------------------------------------------------------------------
-class TestPollAlpacaEvents:
-    """Tests for IngestionService._poll_alpaca_events().
-
-    Alpaca connectors are archived. _poll_alpaca_events() always returns [].
-    """
+class TestGatewayStreamDrain:
+    """Tests for gateway stream event draining in _run_cycle."""
 
     def _make_service(self):
         with (
@@ -510,18 +537,23 @@ class TestPollAlpacaEvents:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_client = MagicMock()
+            mock_client.drain_events.return_value = []
+            mock_client.subscribed_symbols = set()
+            mock_factory.return_value = mock_client
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
 
     @pytest.mark.unit
     @pytest.mark.asyncio
-    async def test_returns_empty_always(self):
-        """Alpaca polling is disabled; method always returns empty list."""
+    async def test_drain_returns_empty_when_no_events(self):
+        """Gateway drain returns empty list when no bar data has arrived."""
         svc = self._make_service()
-        result = await svc._poll_alpaca_events("trace-1")
-        assert result == []
+        events = svc.gateway_stream.drain_events()
+        assert events == []
 
 
 # ---------------------------------------------------------------------------
@@ -538,7 +570,9 @@ class TestProcessFeaturesAndRules:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -597,7 +631,9 @@ class TestWriteToLakehouse:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -640,7 +676,9 @@ class TestRunPipeline:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
@@ -703,7 +741,9 @@ class TestUpdateHealthStatus:
             patch("orion.ingestion.service.RuleEngine"),
             patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
+            mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
             return IngestionService()
