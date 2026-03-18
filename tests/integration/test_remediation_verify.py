@@ -116,20 +116,18 @@ async def test_execution_engine_non_blocking_init():
     executor = ExecutionEngine()
 
     # Verify no async operations happened during __init__
-    assert executor.connector is None
-    assert executor.market_connector is None
-    assert executor._mcp_available is False
+    assert executor._gateway_available is False
 
     # Now call initialize with MCP mocked
-    executor._mcp_available = True
-    executor._mcp_check_ts = None  # Force re-check
+    executor._gateway_available = True
+    executor._gateway_check_ts = None  # Force re-check
 
     mock_client = AsyncMock()
-    mock_client.get_market_clock.return_value = {"is_open": True}
+    mock_client.get_clock.return_value = {"is_open": True}
     mock_client.get_account.return_value = {"equity": "50000.0", "last_equity": "50000.0"}
     mock_client.get_positions.return_value = []
-    executor._mcp_client = mock_client
-    executor._get_mcp_client = lambda: mock_client
+    executor._gateway_client = mock_client
+    executor._get_gateway_client = lambda: mock_client
 
     with patch("orion.execution.execution_engine.async_session_factory"):
         executor.risk_manager.initialize = AsyncMock()

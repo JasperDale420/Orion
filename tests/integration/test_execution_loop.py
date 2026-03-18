@@ -56,6 +56,8 @@ async def test_execution_loop_flow():
         source="TEST",
         execution_params={"limit_price": 100.0},
         evidence={"test": True},
+        option_symbol="SPY260418C00500000",
+        premium=1.0,
     )
 
     # SYSTEM STATUS
@@ -176,25 +178,24 @@ async def test_execution_loop_flow():
         else:
             print("--- SYSTEM STATUS DEBUG: NONE FOUND ---")
 
-    # 6. Execution Engine (uses MCP client for order submission)
+    # 6. Execution Engine (uses Gateway client for order submission)
     execution = ExecutionEngine()
-    execution._mcp_available = True
-    execution._mcp_check_ts = datetime.now(UTC)
+    execution._gateway_available = True
+    execution._gateway_check_ts = datetime.now(UTC)
 
     mock_client = AsyncMock()
-    mock_client.get_market_clock.return_value = {"is_open": True}
-    mock_client.get_stock_snapshot.return_value = {
-        "latestTrade": {"p": 100.0},
-        "latestQuote": {"bp": 99.95, "ap": 100.05},
+    mock_client.get_clock.return_value = {"is_open": True}
+    mock_client.get_option_chain.return_value = {
+        "contracts": [{"symbol": "SPY260418C00500000", "mid": 1.0, "ask": 1.05}]
     }
-    mock_client._call_tool.return_value = {"id": "order-123", "status": "accepted"}
-    execution._mcp_client = mock_client
-    execution._get_mcp_client = lambda: mock_client
+    mock_client.create_order.return_value = {"id": "order-123", "status": "accepted"}
+    execution._gateway_client = mock_client
+    execution._get_gateway_client = lambda: mock_client
 
     # Bypass Risk checks for test
     execution.risk_manager.check_order = MagicMock(return_value=True)
     execution.risk_manager.check_sector_exposure = MagicMock(return_value=True)
-    execution.risk_manager.calculate_size = MagicMock(return_value=10)
+    execution.risk_manager.current_equity = 100000.0
     execution.risk_manager.update_post_trade = AsyncMock()
     execution.risk_manager.remove_pending_order = AsyncMock()
 
@@ -203,7 +204,7 @@ async def test_execution_loop_flow():
     await execution.execute_order(decision, target_candidate)
     print("--- EXECUTE CALLED ---")
 
-    mock_client._call_tool.assert_called_once()
+    mock_client.create_order.assert_called_once()
     print("--- ORDER SUBMITTED ---")
 
     # 7. Update Status

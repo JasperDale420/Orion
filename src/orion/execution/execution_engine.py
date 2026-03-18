@@ -25,70 +25,61 @@ class ExecutionEngine:
     """
     Translates Agent decisions into broker orders.
 
-    Trading is routed through the Shared-MCP-Server which provides Alpaca
-    trading tools (place_order, close_position, get_account, etc.).
-    The MCP server manages its own Alpaca credentials; this engine does
-    not require direct Alpaca API keys.
+    Trading is routed through the Data Gateway which proxies to Alpaca.
+    Options-only: candidates without an option_symbol are rejected.
 
-    Paper mode is controlled by ORION_STAGE (default: "paper") and the
-    MCP server's own Alpaca configuration (paper vs live).
+    Paper mode is controlled by the Data Gateway's Alpaca configuration.
     """
 
     def __init__(self) -> None:
-        # Initialize Risk Manager (autoloads RiskConfig from env)
         from orion.execution.risk_manager import RiskManager
 
         self.risk_manager = RiskManager()
 
-        # MCP Server client for order execution
-        self._mcp_client = None
-        self._mcp_available = False
-
-        # Legacy connector references (kept None for interface compatibility)
-        self.connector = None
-        self.options_connector = None
-        self.market_connector = None
+        # Data Gateway trading client
+        self._gateway_client = None
+        self._gateway_available = False
 
         self.order_history: deque[bool] = deque(maxlen=20)
         self.last_positions_snapshot_ts: datetime | None = None
         self._last_fill_poll_ts: datetime | None = None
 
-    def _get_mcp_client(self) -> Any:
-        """Lazy-initialize MCP client singleton."""
-        if self._mcp_client is None:
-            from orion.clients.mcp_server import get_mcp_client
+    def _get_gateway_client(self) -> Any:
+        """Lazy-initialize Gateway trading client singleton."""
+        if self._gateway_client is None:
+            from orion.clients.gateway_trading_client import get_gateway_trading_client
 
-            self._mcp_client = get_mcp_client()
-        return self._mcp_client
+            self._gateway_client = get_gateway_trading_client()
+        return self._gateway_client
 
-    async def _check_mcp_available(self) -> bool:
-        """Check if MCP server is reachable. Caches result for 60s."""
-        if hasattr(self, "_mcp_check_ts") and self._mcp_check_ts:
-            elapsed = (datetime.now(UTC) - self._mcp_check_ts).total_seconds()
+    async def _check_gateway_available(self) -> bool:
+        """Check if Data Gateway is reachable. Caches result for 60s."""
+        if hasattr(self, "_gateway_check_ts") and self._gateway_check_ts:
+            elapsed = (datetime.now(UTC) - self._gateway_check_ts).total_seconds()
             if elapsed < 60:
-                return self._mcp_available
+                return self._gateway_available
 
         try:
-            client = self._get_mcp_client()
-            result = await client.get_market_clock()
-            self._mcp_available = "error" not in result
+            client = self._get_gateway_client()
+            result = await client.get_clock()
+            self._gateway_available = "error" not in result
         except Exception:
-            self._mcp_available = False
+            self._gateway_available = False
 
-        self._mcp_check_ts = datetime.now(UTC)
+        self._gateway_check_ts = datetime.now(UTC)
 
-        if not self._mcp_available:
+        if not self._gateway_available:
             logger.warning(
-                "MCP server unavailable; execution engine in degraded mode",
-                extra={"event_type": "MCP_UNAVAILABLE"},
+                "Data Gateway unavailable; execution engine in degraded mode",
+                extra={"event_type": "GATEWAY_UNAVAILABLE"},
             )
         else:
             logger.info(
-                "MCP server connection verified",
-                extra={"event_type": "MCP_AVAILABLE"},
+                "Data Gateway connection verified",
+                extra={"event_type": "GATEWAY_AVAILABLE"},
             )
 
-        return self._mcp_available
+        return self._gateway_available
 
     async def initialize(self) -> None:
         """
@@ -98,8 +89,8 @@ class ExecutionEngine:
         if hasattr(self.risk_manager, "initialize"):
             await self.risk_manager.initialize()
 
-        # Sync risk state from MCP server (account equity, positions)
-        await self._sync_risk_from_mcp()
+        # Sync risk state from Data Gateway (account equity, positions)
+        await self._sync_risk_from_gateway()
 
         try:
 
@@ -136,17 +127,17 @@ class ExecutionEngine:
                 },
             )
 
-    async def _sync_risk_from_mcp(self) -> None:
-        """Sync risk manager state from MCP server (account + positions)."""
-        if not await self._check_mcp_available():
+    async def _sync_risk_from_gateway(self) -> None:
+        """Sync risk manager state from Data Gateway (account + positions)."""
+        if not await self._check_gateway_available():
             logger.info(
-                "Skipping MCP risk sync; server unavailable. Using persisted risk state.",
-                extra={"event_type": "MCP_RISK_SYNC_SKIPPED"},
+                "Skipping Gateway risk sync; server unavailable. Using persisted risk state.",
+                extra={"event_type": "GATEWAY_RISK_SYNC_SKIPPED"},
             )
             return
 
         try:
-            client = self._get_mcp_client()
+            client = self._get_gateway_client()
 
             # Sync account equity
             account = await client.get_account()
@@ -159,9 +150,9 @@ class ExecutionEngine:
                     self.risk_manager.starting_equity = last_equity
                     self.risk_manager.current_daily_loss = max(0.0, last_equity - equity)
                     logger.info(
-                        "Risk state synced from MCP account",
+                        "Risk state synced from Gateway account",
                         extra={
-                            "event_type": "MCP_RISK_SYNC",
+                            "event_type": "GATEWAY_RISK_SYNC",
                             "equity": equity,
                             "daily_loss": self.risk_manager.current_daily_loss,
                         },
@@ -185,9 +176,9 @@ class ExecutionEngine:
                     [p for p in self.risk_manager.positions.values() if abs(p["qty"]) > 1e-9]
                 )
                 logger.info(
-                    "Positions synced from MCP",
+                    "Positions synced from Gateway",
                     extra={
-                        "event_type": "MCP_POSITIONS_SYNC",
+                        "event_type": "GATEWAY_POSITIONS_SYNC",
                         "open_positions": self.risk_manager.open_positions,
                     },
                 )
@@ -198,14 +189,14 @@ class ExecutionEngine:
 
         except Exception as e:
             logger.error(
-                "Failed to sync risk state from MCP",
-                extra={"event_type": "MCP_RISK_SYNC_ERROR", "error": str(e)},
+                "Failed to sync risk state from Gateway",
+                extra={"event_type": "GATEWAY_RISK_SYNC_ERROR", "error": str(e)},
             )
 
     async def execute_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        if not await self._check_mcp_available():
+        if not await self._check_gateway_available():
             logger.warning(
-                "MCP server unavailable. Order logged but not submitted.",
+                "Data Gateway unavailable. Order logged but not submitted.",
                 extra={
                     "event_type": "EXECUTION_NOOP",
                     "ticker": candidate.ticker,
@@ -213,7 +204,7 @@ class ExecutionEngine:
                 },
             )
             decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = "MCP Server Unavailable"
+            decision.reason = "Data Gateway Unavailable"
             return
 
         action = decision.decision.upper()
@@ -225,13 +216,18 @@ class ExecutionEngine:
         if isinstance(candidate.direction, str):
             candidate.direction = candidate.direction.upper()
 
-        # Check if this is an options trade
-        is_options_trade = bool(candidate.option_symbol)
+        # Options-only: reject candidates without an option_symbol
+        if not candidate.option_symbol:
+            logger.warning(
+                "execution_rejected_no_option_symbol",
+                ticker=candidate.ticker,
+                reason="Options only — no option_symbol on candidate",
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = "Options only"
+            return
 
-        if is_options_trade:
-            await self._execute_options_order(decision, candidate)
-        else:
-            await self._execute_equity_order(decision, candidate)
+        await self._execute_options_order(decision, candidate)
 
     async def _remove_pending_order_compat(self, order_id: str) -> None:
         """Support both sync and async remove_pending_order implementations."""
@@ -241,57 +237,10 @@ class ExecutionEngine:
         if asyncio.iscoroutine(maybe_result):
             await maybe_result
 
-    async def _execute_equity_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        """Execute a standard equity order via MCP server."""
-
-        # 1. Pre-Flight Checks (Health, Lag, Shorting)
-        if not await self._pre_flight_checks(decision, candidate):
-            return
-
-        # 2. Price Discovery via MCP
-        current_price = await self._get_execution_price_mcp(decision, candidate)
-        if current_price <= 0:
-            decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = "Price Fetch Failed"
-            return
-
-        # 3. Sizing & Risk Check
-        side, qty, limit_price = self._calculate_order_params(decision, candidate, current_price)
-        if qty <= 0:
-            return  # Decision updated in helper
-
-        # 4. Check Risk Manager
-        if not self.risk_manager.check_order(candidate.ticker, qty, current_price, side):
-            logger.error("execution_blocked_by_risk", ticker=candidate.ticker, qty=qty, price=current_price, side=side)
-            decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = "Risk Rejection"
-            return
-
-        # 4b. Sector Exposure Check
-        estimated_cost = qty * current_price
-        sector = SECTOR_MAPPING.get(candidate.ticker)
-        if sector and not self.risk_manager.check_sector_exposure(sector, estimated_cost):
-            logger.error(
-                "execution_blocked_by_sector_exposure",
-                ticker=candidate.ticker,
-                sector=sector,
-                estimated_cost=estimated_cost,
-            )
-            decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = f"Sector Exposure Limit ({sector})"
-            return
-
-        # 5. Circuit Breaker
-        if self._check_circuit_breaker():
-            decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = "High Error Rate"
-            return
-
-        # 6. Execution via MCP
-        await self._submit_order_mcp(decision, candidate, side, qty, limit_price)
+    # NOTE: _execute_equity_order removed — Orion is options-only.
 
     async def _execute_options_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
-        """Execute an options order via MCP server."""
+        """Execute an options order via Data Gateway."""
 
         # 1. Pre-Flight Checks
         if not await self._pre_flight_checks(decision, candidate):
@@ -310,13 +259,12 @@ class ExecutionEngine:
                 decision.reason = f"DTE Too Low ({dte} days)"
                 return
 
-        # 3. Get current option price via MCP
-        client = self._get_mcp_client()
+        # 3. Get current option price via Data Gateway
+        client = self._get_gateway_client()
         chain_result = await client.get_option_chain(candidate.ticker)
         option_price = candidate.premium  # Fallback to candidate premium
 
         if "error" not in chain_result and candidate.option_symbol:
-            # Try to extract mid price from chain
             contracts = chain_result.get("contracts", [])
             for contract in contracts:
                 if contract.get("symbol") == candidate.option_symbol:
@@ -392,8 +340,8 @@ class ExecutionEngine:
             decision.reason = "High Error Rate"
             return
 
-        # 7. Submit options order via MCP
-        await self._submit_options_order_mcp(decision, candidate, num_contracts, option_price)
+        # 7. Submit options order via Data Gateway
+        await self._submit_options_order(decision, candidate, num_contracts, option_price)
 
     async def _pre_flight_checks(self, decision: StrategyDecision, candidate: CandidateTrade) -> bool:
         """System Health, Data Lag, Shorting Checks"""
@@ -433,52 +381,7 @@ class ExecutionEngine:
 
         return True
 
-    async def _get_execution_price_mcp(self, decision: StrategyDecision, candidate: CandidateTrade) -> float:
-        """Get latest price via MCP server."""
-        try:
-            client = self._get_mcp_client()
-            snapshot = await client.get_stock_snapshot(candidate.ticker)
-            if "error" not in snapshot:
-                # Try latest trade price, then latest quote mid
-                latest_trade = snapshot.get("latestTrade", {}) or snapshot.get("latest_trade", {})
-                if latest_trade:
-                    price = float(latest_trade.get("p", 0) or latest_trade.get("price", 0) or 0)
-                    if price > 0:
-                        return price
-
-                latest_quote = snapshot.get("latestQuote", {}) or snapshot.get("latest_quote", {})
-                if latest_quote:
-                    bid = float(latest_quote.get("bp", 0) or latest_quote.get("bid_price", 0) or 0)
-                    ask = float(latest_quote.get("ap", 0) or latest_quote.get("ask_price", 0) or 0)
-                    if bid > 0 and ask > 0:
-                        return (bid + ask) / 2.0
-        except Exception as e:
-            logger.warning("mcp_price_fetch_failed", ticker=candidate.ticker, error=str(e))
-
-        # Fallback to execution params
-        ep = decision.execution_params or {}
-        return float(ep.get("limit_price", 0.0))
-
-    def _calculate_order_params(
-        self, decision: StrategyDecision, candidate: CandidateTrade, current_price: float
-    ) -> tuple[str, float, float]:
-        """Calculate order side, quantity, and limit price."""
-        side = "buy" if candidate.direction == "LONG" else "sell"
-        qty = self.risk_manager.calculate_size(entry_price=current_price)
-
-        if qty <= 0:
-            logger.warning("calculated_qty_0", ticker=candidate.ticker, current_price=current_price)
-            decision.executed_successfully = DecisionStatus.SKIPPED
-            decision.reason = "Size 0"
-            return side, 0.0, 0.0
-
-        entry_buffer_bps = 10
-        if side == "buy":
-            limit_price = current_price * (1 + entry_buffer_bps / 10000.0)
-        else:
-            limit_price = current_price * (1 - entry_buffer_bps / 10000.0)
-
-        return side, float(qty), round(limit_price, 2)
+    # NOTE: _get_execution_price_mcp, _calculate_order_params, _submit_order_mcp removed — equity path deleted.
 
     def _check_circuit_breaker(self) -> bool:
         if not self.order_history:
@@ -490,86 +393,10 @@ class ExecutionEngine:
             return True
         return False
 
-    async def _submit_order_mcp(self, decision: Any, candidate: Any, side: str, qty: float, limit_price: float) -> None:
-        """Submit equity order via MCP server."""
-        logger.info("execution_triggered", side=side, qty=qty, ticker=candidate.ticker, limit_price=limit_price)
-
-        # Rate limit check before order submission
-        rate_limiter = get_order_rate_limiter()
-        if not await rate_limiter.acquire(timeout=10.0):
-            logger.warning(
-                "rate_limit_reached",
-                ticker=candidate.ticker,
-                capacity=rate_limiter.available_capacity,
-                max_capacity=rate_limiter.max_per_minute,
-            )
-            decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = "Rate limit exceeded"
-            return
-
-        client_order_id = str(uuid.uuid4())
-        decision.execution_params = decision.execution_params or {}
-        decision.execution_params["client_order_id"] = client_order_id
-
-        # Optimistic Risk Update
-        if hasattr(self.risk_manager, "update_post_trade"):
-            await self.risk_manager.update_post_trade(
-                ticker=candidate.ticker, qty=qty, price=limit_price, side=candidate.direction, order_id=client_order_id
-            )
-
-        try:
-            client = self._get_mcp_client()
-            result = await client._call_tool(
-                "place_order",
-                {
-                    "symbol": candidate.ticker,
-                    "qty": qty,
-                    "side": side,
-                    "type": "limit",
-                    "limit_price": limit_price,
-                    "time_in_force": "day",
-                    "client_order_id": client_order_id,
-                },
-            )
-
-            if "error" in result:
-                raise RuntimeError(f"MCP order failed: {result['error']}")
-
-            await self._persist_order_record(
-                decision=decision,
-                candidate=candidate,
-                client_order_id=client_order_id,
-                side=side,
-                qty=qty,
-                limit_price=limit_price,
-                broker_order=result,
-                error_message=None,
-            )
-            logger.info("execution_successful", client_order_id=client_order_id, ticker=candidate.ticker)
-            decision.executed_successfully = DecisionStatus.TRUE
-            self._record_result(True)
-        except Exception as e:
-            await self._remove_pending_order_compat(client_order_id)
-
-            await self._persist_order_record(
-                decision=decision,
-                candidate=candidate,
-                client_order_id=client_order_id,
-                side=side,
-                qty=qty,
-                limit_price=limit_price,
-                broker_order=None,
-                error_message=str(e),
-            )
-            logger.error("execution_failed", error=str(e), client_order_id=client_order_id, ticker=candidate.ticker)
-            decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = f"Broker Error: {e}"
-            self._record_result(False)
-
-    async def _submit_options_order_mcp(
+    async def _submit_options_order(
         self, decision: Any, candidate: Any, num_contracts: int, option_price: float
     ) -> None:
-        """Submit an options order via MCP server."""
+        """Submit an options order via Data Gateway."""
         logger.info(
             "options_execution_triggered",
             num_contracts=num_contracts,
@@ -586,23 +413,43 @@ class ExecutionEngine:
 
         side = "buy" if candidate.direction == "LONG" else "sell"
 
+        # Rate limit check before order submission
+        rate_limiter = get_order_rate_limiter()
+        if not await rate_limiter.acquire(timeout=10.0):
+            logger.warning(
+                "rate_limit_reached",
+                ticker=candidate.ticker,
+                capacity=rate_limiter.available_capacity,
+                max_capacity=rate_limiter.max_per_minute,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Rate limit exceeded"
+            return
+
+        # Optimistic Risk Update
+        if hasattr(self.risk_manager, "update_post_trade"):
+            await self.risk_manager.update_post_trade(
+                ticker=candidate.ticker,
+                qty=num_contracts,
+                price=option_price,
+                side=candidate.direction,
+                order_id=client_order_id,
+            )
+
         try:
-            client = self._get_mcp_client()
-            result = await client._call_tool(
-                "place_order",
-                {
-                    "symbol": candidate.option_symbol,
-                    "qty": num_contracts,
-                    "side": side,
-                    "type": "limit",
-                    "limit_price": option_price,
-                    "time_in_force": "day",
-                    "client_order_id": client_order_id,
-                },
+            client = self._get_gateway_client()
+            result = await client.create_order(
+                symbol=candidate.option_symbol,
+                qty=num_contracts,
+                side=side,
+                order_type="limit",
+                limit_price=option_price,
+                time_in_force="day",
+                client_order_id=client_order_id,
             )
 
             if "error" in result:
-                raise RuntimeError(f"MCP options order failed: {result['error']}")
+                raise RuntimeError(f"Gateway options order failed: {result['error']}")
 
             await self._persist_order_record(
                 decision=decision,
@@ -626,6 +473,8 @@ class ExecutionEngine:
             self._record_result(True)
 
         except Exception as e:
+            await self._remove_pending_order_compat(client_order_id)
+
             await self._persist_order_record(
                 decision=decision,
                 candidate=candidate,
@@ -655,7 +504,7 @@ class ExecutionEngine:
         use_market_order: bool = False,
     ) -> bool:
         """
-        Close a position based on exit signal via MCP server.
+        Close a position based on exit signal via Data Gateway.
 
         Args:
             ticker: Symbol to close
@@ -667,23 +516,22 @@ class ExecutionEngine:
         Returns:
             True if order submitted successfully
         """
-        if not await self._check_mcp_available():
+        if not await self._check_gateway_available():
             logger.warning(
-                "MCP server unavailable. Cannot close position.",
+                "Data Gateway unavailable. Cannot close position.",
                 extra={"event_type": "CLOSE_POSITION_NOOP", "ticker": ticker},
             )
             return False
 
         try:
-            client = self._get_mcp_client()
+            client = self._get_gateway_client()
             client_order_id = str(uuid.uuid4())
 
             if use_market_order or exit_signal.urgency == "IMMEDIATE":
-                # Use MCP close_position for market-style close
                 result = await client.close_position(ticker, qty=qty)
 
                 if "error" in result:
-                    raise RuntimeError(f"MCP close_position failed: {result['error']}")
+                    raise RuntimeError(f"Gateway close_position failed: {result['error']}")
 
                 logger.info(
                     f"EXIT MARKET ORDER: {ticker} x{qty} - Reason: {exit_signal.reason}",
@@ -715,21 +563,18 @@ class ExecutionEngine:
                 # Determine side: closing LONG = sell, closing SHORT = buy
                 close_side = "buy" if str(direction).upper() == "SHORT" else "sell"
 
-                result = await client._call_tool(
-                    "place_order",
-                    {
-                        "symbol": ticker,
-                        "qty": qty,
-                        "side": close_side,
-                        "type": "limit",
-                        "limit_price": limit_price,
-                        "time_in_force": "day",
-                        "client_order_id": client_order_id,
-                    },
+                result = await client.create_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=close_side,
+                    order_type="limit",
+                    limit_price=limit_price,
+                    time_in_force="day",
+                    client_order_id=client_order_id,
                 )
 
                 if "error" in result:
-                    raise RuntimeError(f"MCP exit limit order failed: {result['error']}")
+                    raise RuntimeError(f"Gateway exit limit order failed: {result['error']}")
 
                 logger.info(
                     f"EXIT LIMIT ORDER: {ticker} x{qty} @ {limit_price} - Reason: {exit_signal.reason}",
@@ -859,17 +704,16 @@ class ExecutionEngine:
 
     async def poll_fills(self) -> None:
         """
-        Polls MCP server for recent fills and updates RiskManager.
+        Polls Data Gateway for positions/account and updates RiskManager.
         Called periodically by the main execution loop.
 
-        Gracefully no-ops if MCP server is unavailable (no error spam).
+        Gracefully no-ops if Gateway is unavailable.
         """
-        if not self._mcp_available:
-            # Don't spam errors every second; just silently skip
+        if not self._gateway_available:
             return
 
         try:
-            client = self._get_mcp_client()
+            client = self._get_gateway_client()
 
             # Get all positions to update risk state
             positions = await client.get_positions()
@@ -889,7 +733,7 @@ class ExecutionEngine:
 
         except Exception as e:
             logger.warning(
-                "Fill polling via MCP failed",
+                "Fill polling via Gateway failed",
                 extra={"event_type": "FILL_POLL_ERROR", "error": str(e)},
             )
 
@@ -974,9 +818,9 @@ class ExecutionEngine:
     @db_retry
     async def _maybe_snapshot_positions(self, min_interval_seconds: int = 60) -> None:
         """
-        PRDv2 12.4: Persist positions snapshots via MCP server.
+        Persist positions snapshots via Data Gateway.
         """
-        if not self._mcp_available:
+        if not self._gateway_available:
             return
 
         now = datetime.now(UTC)
@@ -986,7 +830,7 @@ class ExecutionEngine:
             return
 
         try:
-            client = self._get_mcp_client()
+            client = self._get_gateway_client()
             positions = await client.get_positions()
         except Exception as e:
             logger.error(
@@ -1022,7 +866,7 @@ class ExecutionEngine:
             )
 
     def _create_position_snapshot_from_dict(self, p: dict, now: datetime, model_class: Any) -> Any | None:
-        """Helper to create a PositionSnapshot model from an MCP position dict."""
+        """Helper to create a PositionSnapshot model from a Gateway position dict."""
         symbol = p.get("symbol")
         if not symbol:
             return None

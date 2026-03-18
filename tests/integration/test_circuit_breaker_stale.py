@@ -52,20 +52,16 @@ async def test_stale_heartbeat_blocks_trade():
         )
         await session.commit()
 
-    # 3. Attempt Execution with MCP mocked as available
+    # 3. Attempt Execution with Gateway mocked as available
     engine = ExecutionEngine()
-    engine._mcp_available = True
-    engine._mcp_check_ts = datetime.now(UTC)
+    engine._gateway_available = True
+    engine._gateway_check_ts = datetime.now(UTC)
 
     mock_client = AsyncMock()
-    mock_client.get_market_clock.return_value = {"is_open": True}
-    mock_client.get_stock_snapshot.return_value = {
-        "latestTrade": {"p": 100.0},
-        "latestQuote": {"bp": 99.95, "ap": 100.05},
-    }
-    mock_client._call_tool.return_value = {"id": "order-123", "status": "accepted"}
-    engine._mcp_client = mock_client
-    engine._get_mcp_client = lambda: mock_client
+    mock_client.get_clock.return_value = {"is_open": True}
+    mock_client.get_option_chain.return_value = {"contracts": [{"symbol": "QQQ260418C00400000", "mid": 1.0}]}
+    mock_client.create_order.return_value = {"id": "order-123", "status": "accepted"}
+    engine._get_gateway_client = lambda: mock_client
 
     candidate = CandidateTrade(
         candidate_id="c2",
@@ -74,6 +70,8 @@ async def test_stale_heartbeat_blocks_trade():
         rule_id="r1",
         direction="SHORT",
         evidence={},
+        option_symbol="QQQ260418C00400000",
+        premium=1.0,
     )
 
     decision = StrategyDecision(

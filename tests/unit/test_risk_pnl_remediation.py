@@ -124,8 +124,8 @@ async def test_execution_engine_polling_integration():
     from orion.execution.execution_engine import ExecutionEngine
 
     engine = ExecutionEngine()
-    engine._mcp_available = True
-    engine._mcp_check_ts = datetime.now(UTC)
+    engine._gateway_available = True
+    engine._gateway_check_ts = datetime.now(UTC)
 
     # Mock MCP client
     mock_client = AsyncMock()
@@ -133,8 +133,8 @@ async def test_execution_engine_polling_integration():
         {"symbol": "AAPL", "qty": "10", "avg_entry_price": "150.0", "market_value": "1500.0"}
     ]
     mock_client.get_account.return_value = {"equity": "50000.0", "last_equity": "49500.0"}
-    engine._mcp_client = mock_client
-    engine._get_mcp_client = lambda: mock_client
+    engine._gateway_client = mock_client
+    engine._get_gateway_client = lambda: mock_client
 
     # Setup RiskManager mock to verify updates
     engine.risk_manager = MagicMock()

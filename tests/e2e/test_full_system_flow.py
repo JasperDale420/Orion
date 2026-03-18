@@ -142,6 +142,9 @@ async def test_full_system_flow():
             direction="LONG",
             confidence=1.0,
             evidence={"signal_id": signals[0].signal_id},
+            option_symbol="SPY260418C00500000",
+            premium=1.0,
+            expiration_date=now + timedelta(days=30),
         )
         mock_rules.return_value = [cand]
 
@@ -180,27 +183,28 @@ async def test_full_system_flow():
 
     # ExecutionEngine.execute_order takes (decision, candidate) objects.
 
-    # 6. Step 4: Execution (via MCP mock)
+    # 6. Step 4: Execution (via Gateway mock)
     from unittest.mock import AsyncMock
 
     ee = ExecutionEngine()
-    ee._mcp_available = True
-    ee._mcp_check_ts = datetime.now(UTC)
+    ee._gateway_available = True
+    ee._gateway_check_ts = datetime.now(UTC)
 
     mock_client = AsyncMock()
-    mock_client.get_market_clock.return_value = {"is_open": True}
-    mock_client.get_stock_snapshot.return_value = {
-        "latestTrade": {"p": 500.0},
-        "latestQuote": {"bp": 499.95, "ap": 500.05},
+    mock_client.get_clock.return_value = {"is_open": True}
+    mock_client.get_option_chain.return_value = {
+        "contracts": [
+            {"symbol": "SPY260418C00500000", "mid": 1.0, "ask": 1.05},
+        ]
     }
-    mock_client._call_tool.return_value = {"id": "mock_order_123", "status": "accepted"}
-    ee._mcp_client = mock_client
-    ee._get_mcp_client = lambda: mock_client
+    mock_client.create_order.return_value = {"id": "mock_order_123", "status": "accepted"}
+    ee._get_gateway_client = lambda: mock_client
 
     ee.risk_manager = MagicMock(spec=RiskManager)
     ee.risk_manager.check_order.return_value = True
     ee.risk_manager.check_sector_exposure.return_value = True
     ee.risk_manager.calculate_size.return_value = 10
+    ee.risk_manager.current_equity = 100000.0
     ee.risk_manager.ticker_exposures = {}
     ee.risk_manager.config = MagicMock()
     ee.risk_manager.config.enable_shorting = True
@@ -209,9 +213,9 @@ async def test_full_system_flow():
 
     await ee.execute_order(decision, candidates[0])
 
-    # Verify order was placed via MCP (only if EXECUTE)
+    # Verify order was placed via Gateway (only if EXECUTE)
     if decision.decision == "EXECUTE":
-        mock_client._call_tool.assert_called()
+        mock_client.create_order.assert_called()
 
     assert decision.executed_successfully == "TRUE"
 

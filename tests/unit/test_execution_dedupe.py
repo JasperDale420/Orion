@@ -10,8 +10,8 @@ from orion.execution.execution_engine import ExecutionEngine
 def engine():
     """Create ExecutionEngine with MCP mock for fill polling."""
     ee = ExecutionEngine()
-    ee._mcp_available = True
-    ee._mcp_check_ts = datetime.now(UTC)
+    ee._gateway_available = True
+    ee._gateway_check_ts = datetime.now(UTC)
 
     mock_client = AsyncMock()
     mock_client.get_positions.return_value = [
@@ -19,8 +19,8 @@ def engine():
     ]
     mock_client.get_account.return_value = {"equity": "50000.0", "last_equity": "50000.0"}
 
-    ee._mcp_client = mock_client
-    ee._get_mcp_client = lambda: mock_client
+    ee._gateway_client = mock_client
+    ee._get_gateway_client = lambda: mock_client
     yield ee
 
 
