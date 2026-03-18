@@ -173,9 +173,8 @@ class IngestionService:
         flow_events = self._poll_heber_flow(trace_id)
         all_events.extend(flow_events)
 
-        # Update universe with flow-derived tickers for dynamic bar subscriptions
-        for event in flow_events:
-            self.universe.update_from_event(event)
+        # Universe updates are deferred to _run_pipeline — only tickers
+        # that generate candidates get Gateway bar subscriptions.
 
         # Process & Persist
         if all_events:
@@ -441,6 +440,9 @@ class IngestionService:
                 candidates = self.rule_engine.process_signals(signals)
                 if candidates:
                     await self._save_candidates(candidates)
+                    # Subscribe to bar data only for tickers that generated candidates
+                    for c in candidates:
+                        self.universe.add_ticker(c.ticker)
         except Exception as e:
             logger.error(f"{label} Pipeline Error: {e}")
 

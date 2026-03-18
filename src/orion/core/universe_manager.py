@@ -96,6 +96,11 @@ class UniverseManager:
         """
         self.held_tickers = {t for t in tickers if t}
 
+    def add_ticker(self, ticker: str) -> None:
+        """Promote a ticker into the active universe by name."""
+        if ticker:
+            self.active_tickers[ticker] = time.time()
+
     def update_from_event(self, event: BronzeEvent) -> None:
         """
         Promotes a ticker based on an incoming event (e.g. Alert or significant print).
