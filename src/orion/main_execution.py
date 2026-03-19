@@ -19,6 +19,7 @@ from orion.processing.signal_engine import SignalEngine
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
+from orion.storage.models import SystemStatus
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 from orion.storage.models_signals import SignalLive
 from orion.storage.models_trade_journal import TradeJournalEntry
@@ -243,7 +244,7 @@ async def fetch_pending_candidates(limit: int = 100) -> List[CandidateTrade]:
     Fetches CandidateTrades that have NOT been processed (no matching StrategyDecision).
     """
 
-    async def query_candidates(session: Any) -> None:
+    async def query_candidates(session: Any) -> List[CandidateTrade]:
         # Subquery to find processed IDs
         # (Naive approach for v1: Select candidates where candidate_id NOT IN (select candidate_id from strategy_decisions))
         # Better: Outer join?
@@ -366,6 +367,33 @@ async def update_decision_status(decision_id: str, status: str) -> None:
     await db_write(update_status)
 
 
+async def update_heartbeat() -> None:
+    """
+    Updates the execution service heartbeat in SystemStatus.
+    This prevents the watchdog from tripping the circuit breaker.
+    """
+
+    async def _update(session: Any) -> None:
+        stmt = select(SystemStatus).where(SystemStatus.key == "EXECUTION_HEARTBEAT")
+        result = await session.execute(stmt)
+        record = result.scalars().first()
+        now = datetime.now(timezone.utc)
+        if record:
+            record.last_updated_utc = now
+            record.status = "ALIVE"
+        else:
+            session.add(
+                SystemStatus(
+                    key="EXECUTION_HEARTBEAT",
+                    status="ALIVE",
+                    details="Main execution loop running",
+                    last_updated_utc=now,
+                )
+            )
+
+    await db_write(_update)
+
+
 async def main() -> None:
     # Graceful Shutdown Setup
     loop = asyncio.get_running_loop()
@@ -402,6 +430,12 @@ async def main() -> None:
     logger.info("Engines Initialized. Entering Service Loop.")
 
     while not shutdown_event.is_set():
+        # Update heartbeat at the start of every loop iteration
+        try:
+            await update_heartbeat()
+        except Exception as hb_err:
+            logger.warning(f"Failed to update heartbeat: {hb_err}")
+
         start_time = loop.time()
 
         try:
