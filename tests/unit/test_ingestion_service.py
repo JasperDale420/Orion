@@ -824,7 +824,7 @@ class TestHeberFlowPoll:
 
         assert event is not None
         assert event.event_type == "UW_FLOW"
-        assert event.source == "HEBER"
+        assert event.source == "UW"
         assert event.ticker == "AAPL"
         assert event.event_id == "abc123"
         assert event.payload["premium_usd"] == pytest.approx(500000.0)
