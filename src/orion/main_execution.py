@@ -14,6 +14,7 @@ load_dotenv()
 from sqlalchemy import select
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.core.health_monitor import HealthMonitor
 from orion.execution.execution_engine import ExecutionEngine
 from orion.processing.signal_engine import SignalEngine
 from orion.shared.db_utils import db_query, db_write
@@ -391,6 +392,9 @@ async def main() -> None:
     position_manager = PositionManager()
     exit_rules = get_default_exit_rules()
 
+    # Initialize Health Monitor
+    health_monitor = HealthMonitor()
+
     # Initialize history for execution error tracking
     await execution_engine.initialize()
     await signal_engine.initialize()
@@ -403,6 +407,9 @@ async def main() -> None:
 
     while not shutdown_event.is_set():
         start_time = loop.time()
+
+        # Emit heartbeat at start of each loop iteration
+        health_monitor.update_heartbeat()
 
         try:
             # 1.5 Poll Fills (Real-time Risk Updates)
@@ -429,6 +436,9 @@ async def main() -> None:
             logger.info(f"Processing {len(candidates)} new candidates...")
 
             for candidate in candidates:
+                # Emit heartbeat before each candidate processing to prevent timeout during batch processing
+                health_monitor.update_heartbeat()
+
                 # 3. Policy Execution
                 decision = await signal_engine.decide(candidate)
 
@@ -494,6 +504,9 @@ async def main() -> None:
                         extra={"event_type": "EXIT_RULE_SKIP_NON_OPTION", "ticker": position.ticker},
                     )
                     continue
+
+                # Emit heartbeat before processing each position's exit rules
+                health_monitor.update_heartbeat()
 
                 # Fetch recent flow for this ticker (last 30 min)
                 recent_flow = await fetch_recent_flow_for_ticker(position.ticker, minutes=30)
