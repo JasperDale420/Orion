@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import os
 import re
@@ -26,6 +28,23 @@ from orion.storage.models_trade_journal import TradeJournalEntry
 # Configure Logger
 logger = setup_struct_logger("orion.execution")
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
+
+# Heartbeat configuration
+HEARTBEAT_INTERVAL_SECONDS = 30.0  # Emit heartbeat every 30s (well under 60s threshold)
+_last_heartbeat_time: datetime | None = None
+
+
+def _emit_heartbeat() -> None:
+    """Emit heartbeat to health monitor."""
+    global _last_heartbeat_time
+    _last_heartbeat_time = datetime.now(timezone.utc)
+    logger.info(
+        "Execution service heartbeat",
+        extra={
+            "event_type": "EXECUTION_HEARTBEAT",
+            "timestamp_utc": _last_heartbeat_time.isoformat(),
+        },
+    )
 
 
 def _should_apply_options_exit_rules(position: Any) -> bool:
@@ -366,6 +385,20 @@ async def update_decision_status(decision_id: str, status: str) -> None:
     await db_write(update_status)
 
 
+async def _heartbeat_loop(shutdown_event: asyncio.Event) -> None:
+    """Background task that emits heartbeats at regular intervals."""
+    while not shutdown_event.is_set():
+        try:
+            _emit_heartbeat()
+        except Exception as e:
+            logger.error(f"Heartbeat emission failed: {e}")
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=HEARTBEAT_INTERVAL_SECONDS)
+            break  # Shutdown signaled
+        except asyncio.TimeoutError:
+            pass  # Continue loop
+
+
 async def main() -> None:
     # Graceful Shutdown Setup
     loop = asyncio.get_running_loop()
@@ -379,6 +412,12 @@ async def main() -> None:
         loop.add_signal_handler(sig, _signal_handler)
 
     logger.info("Starting Orion Execution Service (V1 Deterministic)...")
+
+    # Emit initial heartbeat
+    _emit_heartbeat()
+
+    # Start background heartbeat task
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(shutdown_event))
 
     # 1. Initialize Engines
     signal_engine = SignalEngine()
@@ -529,6 +568,14 @@ async def main() -> None:
             break  # Shutdown set
         except asyncio.TimeoutError:
             pass  # Sleep done, continue loop
+
+    # Cleanup: Cancel heartbeat task and wait for it to finish
+    shutdown_event.set()
+    heartbeat_task.cancel()
+    try:
+        await heartbeat_task
+    except asyncio.CancelledError:
+        pass
 
     logger.info("Execution Service Stopped.")
 
