@@ -26,6 +26,11 @@ MAX_RECONNECT_ATTEMPTS = 10
 INITIAL_RECONNECT_DELAY = 1.0
 MAX_RECONNECT_DELAY = 16.0
 
+# Watchdog settings
+# Max silence time before we force a reconnect.
+# Set to 30s to trigger recovery well before the 60s system heartbeat threshold.
+MAX_SILENCE_SECONDS = 30.0
+
 
 class GatewayStreamClient:
     """
@@ -37,6 +42,7 @@ class GatewayStreamClient:
     - Event normalization to BronzeEvent
     - Heartbeat responses
     - Automatic reconnection with exponential backoff
+    - Watchdog for silent connection detection
     """
 
     def __init__(
@@ -62,6 +68,10 @@ class GatewayStreamClient:
         # Background tasks
         self._receive_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+
+        # Watchdog state
+        self._last_received_ts: Optional[datetime] = None
 
     @staticmethod
     def _normalize_ws_url(gateway_url: str) -> str:
@@ -148,6 +158,8 @@ class GatewayStreamClient:
 
             if auth_result.get("status") == "ok":
                 self._authenticated = True
+                # Reset watchdog timer on successful connect
+                self._last_received_ts = datetime.now(timezone.utc)
                 logger.info("Gateway WebSocket authenticated successfully")
                 return True
             else:
@@ -322,6 +334,10 @@ class GatewayStreamClient:
                     continue
 
                 message = await self._websocket.recv()
+
+                # Update watchdog timestamp for ANY message received
+                self._last_received_ts = datetime.now(timezone.utc)
+
                 data = self._loads_message(message)
 
                 msg_type = data.get("type") or data.get("event_type")
@@ -352,6 +368,32 @@ class GatewayStreamClient:
                 logger.error(f"Receive loop error: {e}", exc_info=True)
                 await asyncio.sleep(1.0)
 
+    async def _watchdog_loop(self) -> None:
+        """
+        Monitors connection health by checking time since last message.
+        If silent for too long, forces a reconnect to recover from 'zombie' connections.
+        """
+        while self._running:
+            await asyncio.sleep(5.0)  # Check every 5 seconds
+
+            if not self._websocket:
+                continue
+
+            if self._last_received_ts:
+                silence_duration = (datetime.now(timezone.utc) - self._last_received_ts).total_seconds()
+
+                if silence_duration > MAX_SILENCE_SECONDS:
+                    logger.warning(
+                        f"Gateway connection silent for {silence_duration:.1f}s. "
+                        f"Forcing reconnect to prevent heartbeat failure."
+                    )
+                    try:
+                        # Closing the socket will trigger ConnectionClosed in _receive_loop
+                        # which initiates the reconnection logic.
+                        await self._websocket.close()
+                    except Exception:
+                        pass  # Ignore errors closing a potentially dead socket
+
     async def _process_bar_message(self, data: Dict[str, Any]) -> None:
         """Process incoming bar data and convert to BronzeEvent."""
         try:
@@ -369,10 +411,7 @@ class GatewayStreamClient:
                 payload = data
 
             instrument_key = (
-                data.get("instrument_key")
-                or envelope.get("instrument_key")
-                or payload.get("instrument_key")
-                or ""
+                data.get("instrument_key") or envelope.get("instrument_key") or payload.get("instrument_key") or ""
             )
             top_symbol = data.get("symbol") or envelope.get("symbol")
             payload_symbol = payload.get("symbol") or payload.get("S")
@@ -389,10 +428,7 @@ class GatewayStreamClient:
 
             # Parse timestamp
             timestamp_value = (
-                payload.get("t")
-                or payload.get("timestamp")
-                or envelope.get("ts_event")
-                or data.get("ts_event")
+                payload.get("t") or payload.get("timestamp") or envelope.get("ts_event") or data.get("ts_event")
             )
             event_ts = self._parse_timestamp(timestamp_value)
 
@@ -441,6 +477,7 @@ class GatewayStreamClient:
             await self._send_subscribe(list(self._subscribed_symbols))
 
         self._receive_task = asyncio.create_task(self._receive_loop())
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         logger.info("Gateway stream client started")
 
     async def stop(self) -> None:
@@ -457,6 +494,13 @@ class GatewayStreamClient:
                 await self._receive_task
             except asyncio.CancelledError:
                 pass  # Expected when stopping - no need to re-raise here as this is the stop() method
+
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
 
         if self._websocket:
             await self._websocket.close()

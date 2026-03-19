@@ -9,6 +9,7 @@ from orion.config import risk_settings, system_settings
 from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
 from orion.connectors.alpaca_options_connector import AlpacaOptionsConnector
 from orion.connectors.alpaca_trading_connector import AlpacaTradingConnector
+from orion.core.circuit_breaker import CircuitBreaker
 from orion.core.errors import ErrorCode
 from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query, db_write
@@ -35,6 +36,9 @@ class ExecutionEngine:
         from orion.execution.risk_manager import RiskManager
 
         self.risk_manager = RiskManager()
+
+        # Initialize Circuit Breaker
+        self.circuit_breaker = CircuitBreaker()
 
         if not api_key or not secret_key:
             logger.warning(
@@ -412,7 +416,7 @@ class ExecutionEngine:
             )
 
             premium_paid = num_contracts * option_price * 100
-            logger.info(f"OPTIONS Execution Successful {client_order_id} | " f"Premium: ${premium_paid:.2f}")
+            logger.info(f"OPTIONS Execution Successful {client_order_id} | Premium: ${premium_paid:.2f}")
             decision.executed_successfully = "TRUE"
             self._record_result(True)
 
@@ -557,6 +561,7 @@ class ExecutionEngine:
     async def _check_system_health(self) -> bool:
         """
         Queries SystemStatus table to ensure Global Health is OK.
+        Also checks heartbeat staleness and triggers CircuitBreaker if needed.
         """
         from orion.storage.models import SystemStatus
 
@@ -589,21 +594,32 @@ class ExecutionEngine:
                 )
                 return False
 
-            # Optional: Check 'last_updated_utc' staleness?
+            # Check 'last_updated_utc' staleness (Heartbeat check)
             # If ingestion died hard, it might check 'Healthy' but be 1 hour old.
             # PRD 9.1 says "UW ingestion heartbeat missing > 60s".
-            # If record is > 60s old, Ingestion is dead.
             now = datetime.now(timezone.utc)
             if status_record.last_updated_utc:
                 last_updated = ensure_utc(status_record.last_updated_utc)
 
                 age = (now - last_updated).total_seconds()
-                if age > system_settings.ingestion_heartbeat_max_age:
+                # Use getattr to safely access the setting, default to 60.0s if not configured
+                heartbeat_max_age = getattr(system_settings, "ingestion_heartbeat_max_age", 60.0)
+
+                if age > heartbeat_max_age:
                     logger.error(
                         f"System Health Record STALE ({age:.1f}s). Ingestion likely dead.",
                         extra={"event_type": "HEALTH_CHECK_FAILED", "reason": "Stale", "age_seconds": age},
                     )
+
+                    # Trigger Circuit Breaker
+                    reason = f"CRITICAL: Heartbeat missing for {age:.2f}s > {heartbeat_max_age}s"
+                    await self.circuit_breaker.open(reason)
                     return False
+
+            # If healthy, check if circuit breaker needs to be reset
+            if await self.circuit_breaker.is_open():
+                logger.info("System health recovered. Closing Circuit Breaker.")
+                await self.circuit_breaker.close()
 
             return True
         except Exception as e:
