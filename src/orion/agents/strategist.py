@@ -7,6 +7,7 @@ from orion.agents.codex_client import (
     build_chat_prompt,
     extract_json_from_response,
     run_codex_completion,
+    MaxToolIterationsExceededError,
 )
 from orion.rag.vector_store import VectorStore
 from orion.storage.models_gold import CandidateTrade
@@ -68,10 +69,19 @@ class StrategistAgent(BaseAgent):
                 prompt=full_prompt,
                 model=agent_settings.model_name,
                 reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
+                max_tool_iterations=10,  # Strategist should not need many tool iterations
             )
 
             return extract_json_from_response(response)
 
+        except MaxToolIterationsExceededError as e:
+            logger.error(f"Strategist Agent exceeded max tool iterations: {e}")
+            # Return SKIP decision to be safe - don't execute if we can't analyze
+            return {
+                "decision": "SKIP",
+                "rationale": f"Analysis could not be completed due to tool iteration limit. "
+                f"Defaulting to SKIP for safety. Error: {e}",
+            }
         except Exception as e:
             logger.error(f"Strategist Agent Error: {e}")
             return {"decision": "ERROR", "rationale": str(e)}

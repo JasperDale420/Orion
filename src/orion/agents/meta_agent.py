@@ -8,6 +8,7 @@ from orion.agents.codex_client import (
     build_chat_prompt,
     extract_json_from_response,
     run_codex_completion,
+    MaxToolIterationsExceededError,
 )
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.solver_schema import EditOp, EditOpType, SolverConfig, SolverEdit
@@ -101,43 +102,26 @@ class MetaAgent(BaseAgent):
         except Exception as e:
             logger.debug(f"Failed to fetch ML performance: {e}")
 
+        # 0c. Fetch market regime context directly (instead of relying on LLM tools)
+        market_regime_context = await self._fetch_market_regime_context()
+
         augmented_context = performance_context
         if rag_context:
             augmented_context += f"\n\n{rag_context}"
         if ml_performance_context:
             augmented_context += f"\n\n{ml_performance_context}"
+        if market_regime_context:
+            augmented_context += f"\n\n{market_regime_context}"
 
-        # 1. Initialize MCP Client & Fetch Tools
-        from orion.connectors.mcp_client import MCPClient
-
-        mcp = MCPClient()
-        available_tools = []
-        try:
-            available_tools = await mcp.list_tools()
-            logger.info(f"MetaAgent discovered {len(available_tools)} MCP tools.")
-        except Exception as e:
-            logger.warning(f"MetaAgent failed to list MCP tools: {e}")
-
-        # 2. Convert MCP tools to OpenAI Tool Schemas
-        openai_tools = []
-        for t in available_tools:
-            openai_tools.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parameters": t.get("inputSchema", {}),
-                    },
-                }
-            )
+        # Note: MCP tools are discovered but not currently passed to codex CLI.
+        # The codex CLI may have its own built-in tools. The prompt below does not
+        # require tool usage to complete the task.
 
         system_prompt = (
             "You are an expert Quant Researcher AI (Poetiq-style).\n"
             "Your goal is to evolve trading strategies (Solvers) to maximize Sharpe Ratio and minimize Drawdown.\n"
-            "You have access to live market data tools. USE THEM. Verify current market regime (volatility, sector rotation, flow) before proposing changes.\n"
-            "You will be given a Base Solver Configuration (JSON) and its Performance Context.\n"
-            "You must propose 3 distinct variations (mutations) to improve the strategy.\n"
+            "You will be given a Base Solver Configuration (JSON), its Performance Context, and current Market Regime data.\n"
+            "Analyze the data provided and propose 3 distinct variations (mutations) to improve the strategy.\n"
             "Mutations can include:\n"
             "- Modifying parameters (thresholds, multipliers)\n"
             "- Toggling features\n"
@@ -161,12 +145,10 @@ class MetaAgent(BaseAgent):
         user_prompt = (
             f"Base Config:\n{base_config.model_dump_json(indent=2)}\n\n"
             f"Context:\n{augmented_context}\n\n"
-            "Step 1: Analyze the market using available tools (e.g. get_market_tide, get_volatility).\n"
-            "Step 2: Propose 3 variants based on your findings."
+            "Based on the provided data, propose 3 variants to improve the strategy."
         )
 
         # 3. Execute via Codex CLI
-        # Codex handles tool calling internally, so we just send the prompt
         final_json_response = None
 
         try:
@@ -179,6 +161,7 @@ class MetaAgent(BaseAgent):
                 model=agent_settings.model_name,
                 reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
                 timeout_seconds=600,  # Longer timeout for complex strategy analysis
+                max_tool_iterations=15,  # Allow reasonable tool use iterations
             )
 
             if not final_json_response:
@@ -229,6 +212,55 @@ class MetaAgent(BaseAgent):
 
             return variants
 
+        except MaxToolIterationsExceededError as e:
+            logger.error(f"MetaAgent exceeded max tool iterations: {e}")
+            # Return empty variants - the system will continue with existing solvers
+            return []
         except Exception as e:
             logger.error(f"MetaAgent Gen Failed: {e}")
             return []
+
+    async def _fetch_market_regime_context(self) -> str:
+        """
+        Fetch current market regime data directly via connectors.
+
+        This provides market context to the LLM without relying on
+        tool-calling which can cause iteration loops.
+        """
+        context_lines = ["--- Current Market Regime ---"]
+        try:
+            from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
+
+            connector = UWMarketTideConnector()
+            tide = await connector.get_market_tide()
+            if tide:
+                context_lines.append(f"Market Tide: {tide.get('sentiment', 'unknown')}")
+                context_lines.append(f"Trend: {tide.get('trend', 'unknown')}")
+        except Exception as e:
+            logger.debug(f"Failed to fetch market tide: {e}")
+            context_lines.append("Market Tide: unavailable")
+
+        try:
+            from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
+
+            connector = UWIVRankConnector()
+            # Get IV rank for SPY as market proxy
+            iv_rank = await connector.get_iv_rank("SPY")
+            if iv_rank is not None:
+                context_lines.append(f"SPY IV Rank: {iv_rank:.1f}%")
+        except Exception as e:
+            logger.debug(f"Failed to fetch IV rank: {e}")
+            context_lines.append("SPY IV Rank: unavailable")
+
+        try:
+            from orion.connectors.uw_greek_exposure_connector import UWGreekExposureConnector
+
+            connector = UWGreekExposureConnector()
+            exposure = await connector.get_market_exposure()
+            if exposure:
+                context_lines.append(f"Market Gamma Exposure: {exposure.get('gamma', 'unknown')}")
+                context_lines.append(f"Market Delta Exposure: {exposure.get('delta', 'unknown')}")
+        except Exception as e:
+            logger.debug(f"Failed to fetch greek exposure: {e}")
+
+        return "\n".join(context_lines)

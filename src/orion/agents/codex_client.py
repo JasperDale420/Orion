@@ -22,12 +22,19 @@ class CodexClientError(Exception):
     pass
 
 
+class MaxToolIterationsExceededError(CodexClientError):
+    """Raised when codex exceeds max tool iterations without completing."""
+
+    pass
+
+
 async def run_codex_completion(
     prompt: str,
     *,
     model: str = "gpt-5.2",
     reasoning_level: str = "extra_high",
     timeout_seconds: int = 300,
+    max_tool_iterations: int = 10,
 ) -> str:
     """
     Run LLM completion using DeepSeek API (preferred) or codex CLI (fallback).
@@ -37,12 +44,14 @@ async def run_codex_completion(
         model: Model to use (default: gpt-5.2 for codex, deepseek-reasoner for DeepSeek).
         reasoning_level: Reasoning intensity (extra_high for complex analysis).
         timeout_seconds: Max time to wait for completion.
+        max_tool_iterations: Maximum number of tool call iterations before failing.
 
     Returns:
         The raw text response from LLM.
 
     Raises:
         CodexClientError: If both DeepSeek and codex fail.
+        MaxToolIterationsExceededError: If max tool iterations is exceeded.
     """
     # Try DeepSeek API first if configured
     deepseek_api_key = agent_settings.deepseek_api_key
@@ -80,12 +89,16 @@ async def run_codex_completion(
     if reasoning_level:
         cmd.extend(["-c", f"reasoning_level={reasoning_level}"])
 
+    # Add max tool iterations limit to prevent infinite loops
+    cmd.extend(["-c", f"max_tool_iterations={max_tool_iterations}"])
+
     logger.info(
         "Running codex completion",
         extra={
             "event": "codex_exec_start",
             "model": model,
             "reasoning_level": reasoning_level,
+            "max_tool_iterations": max_tool_iterations,
             "prompt_length": len(prompt),
         },
     )
@@ -106,6 +119,23 @@ async def run_codex_completion(
 
         if process.returncode != 0:
             error_msg = stderr.decode("utf-8", errors="replace")
+
+            # Check for max tool iterations error
+            if "max tool iterations" in error_msg.lower() or "tool iterations exceeded" in error_msg.lower():
+                logger.error(
+                    "Codex exceeded max tool iterations",
+                    extra={
+                        "event": "codex_max_iterations_exceeded",
+                        "max_tool_iterations": max_tool_iterations,
+                        "stderr": error_msg[:500],
+                    },
+                )
+                raise MaxToolIterationsExceededError(
+                    f"Codex exceeded max tool iterations ({max_tool_iterations}). "
+                    f"Consider simplifying the prompt or increasing max_tool_iterations. "
+                    f"Error: {error_msg[:200]}"
+                )
+
             logger.error(
                 "Codex execution failed",
                 extra={

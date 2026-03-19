@@ -21,6 +21,7 @@ from orion.agents.codex_client import (
     build_chat_prompt,
     extract_json_from_response,
     run_codex_completion,
+    MaxToolIterationsExceededError,
 )
 from orion.agents.proposal_builder import ProposalBuilder
 from orion.core.id_utils import deterministic_solver_id
@@ -383,7 +384,7 @@ class EODReviewAgent(BaseAgent):
                     | (
                         (FillRecord.filled_at_utc.is_(None))
                         & (FillRecord.created_at_utc >= baseline_start)
-                        & (FillRecord.created_at_utc < start_ts)
+                        & (FillRecord.created_at_utc < end_ts)
                     )
                 )
             )
@@ -985,7 +986,7 @@ class EODReviewAgent(BaseAgent):
 ## Your Data Sources
 1. **ML Pattern Insights** (in `ml_insights`): Pre-computed rules from LightGBM models showing what conditions predict success
    - Models per bucket: 0DTE, SHORT_SWING, SWING, POSITION
-   - Look at AUC scores (>0.6 = useful), top rules, and feature importance
+   - Look at Auc scores (>0.6 = useful), top rules, and feature importance
 2. **Today's Decisions**: Execute/Skip actions and their outcomes
 3. **Trade Journal**: P&L, execution quality, slippage
 4. **Regime Data**: Current market regime (vol, trend, risk, session)
@@ -1078,9 +1079,18 @@ Analyze today's performance and identify:
                 prompt=full_prompt,
                 model=agent_settings.model_name,
                 reasoning_level=getattr(agent_settings, "reasoning_level", "extra_high"),
+                max_tool_iterations=15,  # Allow reasonable tool use iterations
             )
 
             return extract_json_from_response(response)
+        except MaxToolIterationsExceededError as e:
+            logger.error(f"LLM exceeded max tool iterations: {e}")
+            return {
+                "analysis": f"Analysis could not be completed due to tool iteration limit. "
+                f"The LLM may have been attempting to use tools that are not available. "
+                f"Error: {e}",
+                "proposals": [],
+            }
         except Exception as e:
             logger.error(f"LLM Failed: {e}")
             return {"analysis": f"Error: {e}", "proposals": []}
