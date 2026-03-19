@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import urlparse, urlunparse
 
+import httpx
 import websockets
 from websockets.exceptions import ConnectionClosed
 
@@ -25,6 +26,11 @@ logger = logging.getLogger(__name__)
 MAX_RECONNECT_ATTEMPTS = 10
 INITIAL_RECONNECT_DELAY = 1.0
 MAX_RECONNECT_DELAY = 16.0
+
+# Health check settings
+HEALTH_CHECK_RETRIES = 3
+HEALTH_CHECK_RETRY_DELAY = 1.0
+HEALTH_CHECK_TIMEOUT = 5.0
 
 
 class GatewayStreamClient:
@@ -45,7 +51,9 @@ class GatewayStreamClient:
         api_key: str,
         on_bar_callback: Optional[Callable[[BronzeEvent], None]] = None,
     ):
+        self.gateway_url = gateway_url
         self.ws_url = self._normalize_ws_url(gateway_url)
+        self.http_base_url = self._normalize_http_url(gateway_url)
 
         self.api_key = api_key
         self.on_bar_callback = on_bar_callback
@@ -99,6 +107,77 @@ class GatewayStreamClient:
 
         return urlunparse((ws_scheme, parsed.netloc, ws_path, "", "", ""))
 
+    @staticmethod
+    def _normalize_http_url(gateway_url: str) -> str:
+        """
+        Normalize gateway base URL to an HTTP endpoint for health checks.
+
+        Supports host-only, HTTP(S), and WS(S) inputs.
+        """
+        raw = (gateway_url or "").strip()
+        if not raw:
+            raise ValueError("gateway_url is required")
+
+        if "://" not in raw:
+            raw = f"http://{raw}"
+
+        parsed = urlparse(raw)
+
+        scheme_map = {
+            "http": "http",
+            "https": "https",
+            "ws": "http",
+            "wss": "https",
+        }
+        http_scheme = scheme_map.get(parsed.scheme, "http")
+
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/api/v1"):
+            path = path[: -len("/api/v1")]
+
+        return urlunparse((http_scheme, parsed.netloc, path, "", "", ""))
+
+    async def _health_check(
+        self,
+        retries: int = HEALTH_CHECK_RETRIES,
+        retry_delay: float = HEALTH_CHECK_RETRY_DELAY,
+        timeout: float = HEALTH_CHECK_TIMEOUT,
+    ) -> bool:
+        """
+        Check gateway HTTP health endpoint before WebSocket connection.
+
+        Returns True if health check passes, False otherwise.
+        """
+        health_url = f"{self.http_base_url}/health"
+
+        for attempt in range(1, max(1, retries) + 1):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.get(health_url)
+
+                    if response.status_code == 200:
+                        payload = response.json()
+                        if isinstance(payload, dict) and str(payload.get("status", "")).lower() == "ok":
+                            logger.info(f"Gateway health check passed (attempt {attempt})")
+                            return True
+                        else:
+                            logger.warning(f"Gateway health check returned unexpected payload: {payload}")
+                    else:
+                        logger.warning(f"Gateway health check returned status {response.status_code}")
+
+            except httpx.ConnectError as e:
+                logger.warning(f"Gateway health check connection failed (attempt {attempt}/{retries}): {e}")
+            except httpx.TimeoutException as e:
+                logger.warning(f"Gateway health check timed out (attempt {attempt}/{retries}): {e}")
+            except Exception as e:
+                logger.warning(f"Gateway health check failed (attempt {attempt}/{retries}): {e}")
+
+            if attempt < retries:
+                await asyncio.sleep(retry_delay)
+
+        logger.error(f"Gateway health check failed after {retries} attempts")
+        return False
+
     async def _cleanup_failed_connection(self) -> None:
         """Best-effort websocket cleanup for failed handshake/connect paths."""
         if self._websocket:
@@ -121,6 +200,11 @@ class GatewayStreamClient:
     async def connect(self) -> bool:
         """Establish WebSocket connection and authenticate."""
         try:
+            # First, verify the HTTP endpoint is healthy before attempting WebSocket
+            if not await self._health_check():
+                logger.error("Gateway health check failed, not attempting WebSocket connection")
+                return False
+
             logger.info(f"Connecting to Gateway WebSocket: {self.ws_url}")
             self._websocket = await websockets.connect(
                 self.ws_url,
@@ -369,10 +453,7 @@ class GatewayStreamClient:
                 payload = data
 
             instrument_key = (
-                data.get("instrument_key")
-                or envelope.get("instrument_key")
-                or payload.get("instrument_key")
-                or ""
+                data.get("instrument_key") or envelope.get("instrument_key") or payload.get("instrument_key") or ""
             )
             top_symbol = data.get("symbol") or envelope.get("symbol")
             payload_symbol = payload.get("symbol") or payload.get("S")
@@ -389,10 +470,7 @@ class GatewayStreamClient:
 
             # Parse timestamp
             timestamp_value = (
-                payload.get("t")
-                or payload.get("timestamp")
-                or envelope.get("ts_event")
-                or data.get("ts_event")
+                payload.get("t") or payload.get("timestamp") or envelope.get("ts_event") or data.get("ts_event")
             )
             event_ts = self._parse_timestamp(timestamp_value)
 
@@ -434,6 +512,7 @@ class GatewayStreamClient:
         self._running = True
 
         if not await self.connect():
+            self._running = False
             raise ConnectionError("Failed to connect to Gateway WebSocket")
 
         # Flush queued subscriptions that were requested before startup.
