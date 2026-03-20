@@ -91,7 +91,7 @@ async def test_risk_manager_pending_orders(risk_manager):
 @pytest.mark.asyncio
 async def test_risk_manager_state_persistence(risk_manager):
     """Test risk state persistence to database."""
-    with patch("orion.execution.risk_manager.db_write", new_callable=AsyncMock) as mock_db_write:
+    with patch("orion.execution.risk.manager.db_write", new_callable=AsyncMock) as mock_db_write:
         # Update position via fill path (calls _save_state)
         await risk_manager.process_fill("SPY", 100, 500.0, "BUY", "fill_persist")
 
