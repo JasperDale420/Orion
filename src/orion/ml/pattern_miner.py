@@ -19,7 +19,7 @@ import numpy as np
 from sqlalchemy import text
 
 from orion.clients.heber_reader import get_heber_reader
-from orion.config import SystemSettings, system_settings
+from orion.config import system_settings
 from orion.ml.schemas import (
     FeatureImportance,
     MLInsightsSummary,
@@ -264,49 +264,6 @@ TARGETS = {
     """,
     # quick_winner is dynamically generated per bucket - see get_quick_winner_target()
 }
-
-
-def _legacy_pattern_training_control() -> tuple[bool, str, str]:
-    settings = SystemSettings()
-
-    specific_key = "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING"
-    if settings.legacy_pattern_miner_training_enabled is not None:
-        enabled = settings.legacy_pattern_miner_training_enabled
-        raw = "true" if enabled else "false"
-        return enabled, specific_key, raw
-
-    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    enabled = settings.legacy_label_pipelines_enabled
-    raw = "true" if enabled else "false"
-    return enabled, global_key, raw
-
-
-def _pattern_miner_training_source() -> str:
-    settings = SystemSettings()
-    raw_source = (settings.pattern_miner_training_source or "heber_gold").strip().lower()
-
-    if raw_source in {"heber", "heber_gold", "gold"}:
-        return "heber_gold"
-    if raw_source in {"legacy", "legacy_sql", "local", "local_sql"}:
-        logger.warning(
-            "Legacy pattern-miner SQL training source is decommissioned; falling back to heber_gold",
-            extra={
-                "event": "pattern_miner_training_source_legacy_decommissioned",
-                "training_source": raw_source,
-                "fallback_training_source": "heber_gold",
-            },
-        )
-        return "heber_gold"
-
-    logger.warning(
-        f"Invalid pattern-miner training source '{raw_source}', falling back to heber_gold",
-        extra={
-            "event": "pattern_miner_training_source_invalid",
-            "training_source": raw_source,
-            "fallback_training_source": "heber_gold",
-        },
-    )
-    return "heber_gold"
 
 
 from orion.ml.heber_utils import coerce_dataframe as _coerce_dataframe
@@ -1018,21 +975,7 @@ async def fetch_training_data(
     Returns:
         Tuple of (pandas DataFrame, list of feature names)
     """
-    enabled, control_key, control_raw = _legacy_pattern_training_control()
-    if not enabled:
-        logger.warning(
-            "Legacy pattern-miner training disabled by config",
-            extra={
-                "event": "legacy_label_pipeline_disabled",
-                "pipeline": "orion.ml.pattern_miner",
-                "control_key": control_key,
-                "control_raw": control_raw,
-            },
-        )
-        return None, []
-
     cutoff = datetime.now(UTC) - timedelta(days=window_days)
-    _ = _pattern_miner_training_source()
     return await _fetch_training_data_from_heber(
         cutoff=cutoff,
         min_samples=min_samples,

@@ -24,7 +24,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from orion.clients.heber_reader import get_heber_reader
-from orion.config import SystemSettings, system_settings
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.exit_classifier")
@@ -63,49 +63,6 @@ EXIT_FEATURE_NAMES: tuple[str, ...] = (
     "window_sweep_ratio_1w",
     "window_call_put_ratio_1w",
 )
-
-
-def _legacy_exit_training_control() -> tuple[bool, str, str]:
-    settings = SystemSettings()
-
-    specific_key = "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING"
-    if settings.legacy_exit_classifier_training_enabled is not None:
-        enabled = settings.legacy_exit_classifier_training_enabled
-        raw = "true" if enabled else "false"
-        return enabled, specific_key, raw
-
-    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    enabled = settings.legacy_label_pipelines_enabled
-    raw = "true" if enabled else "false"
-    return enabled, global_key, raw
-
-
-def _exit_classifier_training_source() -> str:
-    settings = SystemSettings()
-    raw_source = (settings.exit_classifier_training_source or "heber_gold").strip().lower()
-
-    if raw_source in {"heber", "heber_gold", "gold"}:
-        return "heber_gold"
-    if raw_source in {"legacy", "legacy_sql", "local", "local_sql"}:
-        logger.warning(
-            "Legacy exit-classifier SQL training source is decommissioned; falling back to heber_gold",
-            extra={
-                "event": "exit_classifier_training_source_legacy_decommissioned",
-                "training_source": raw_source,
-                "fallback_training_source": "heber_gold",
-            },
-        )
-        return "heber_gold"
-
-    logger.warning(
-        f"Invalid exit-classifier training source '{raw_source}', falling back to heber_gold",
-        extra={
-            "event": "exit_classifier_training_source_invalid",
-            "training_source": raw_source,
-            "fallback_training_source": "heber_gold",
-        },
-    )
-    return "heber_gold"
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -827,19 +784,6 @@ async def build_bucket_training_data(
     Uses bucket-appropriate checkpoints from the configured training source.
     """
     feature_names = list(EXIT_FEATURE_NAMES)
-    enabled, control_key, control_raw = _legacy_exit_training_control()
-    if not enabled:
-        logger.warning(
-            "Legacy exit-classifier training disabled by config",
-            extra={
-                "event": "legacy_label_pipeline_disabled",
-                "pipeline": "orion.ml.exit_classifier",
-                "control_key": control_key,
-                "control_raw": control_raw,
-            },
-        )
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))  # noqa: N806
-        return X_empty, y_empty, feature_names
 
     checkpoints = BUCKET_CHECKPOINTS.get(bucket, [])
     if not checkpoints:
@@ -848,7 +792,6 @@ async def build_bucket_training_data(
         return X_empty, y_empty, feature_names
 
     _ = force_schema_refresh
-    _ = _exit_classifier_training_source()
     return await _build_bucket_training_data_from_heber(bucket, feature_names)
 
 

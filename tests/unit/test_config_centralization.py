@@ -81,46 +81,17 @@ def test_heber_settings_env_mapping():
         assert str(s.heber_data_root) == "/tmp/heber-data"
 
 
-def test_legacy_label_gate_settings_env_mapping():
-    """Verify centralized legacy gate env vars map into typed system settings."""
-    with patch.dict(
-        os.environ,
-        {
-            "ORION_ENABLE_LEGACY_LABEL_PIPELINES": "false",
-            "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER": "false",
-            "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER": "true",
-            "ORION_ENABLE_LEGACY_PATTERN_MINER": "false",
-            "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL": "true",
-            "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS": "false",
-            "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING": "true",
-            "ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING": "false",
-            "ORION_PATTERN_MINER_TRAINING_SOURCE": "heber_gold",
-            "ORION_EXIT_CLASSIFIER_TRAINING_SOURCE": "legacy_sql",
-        },
-        clear=True,
-    ):
-        from orion.config import SystemSettings
-
-        s = SystemSettings()
-        assert s.legacy_label_pipelines_enabled is False
-        assert s.legacy_option_quote_tracker_enabled is False
-        assert s.legacy_price_target_labeler_enabled is True
-        assert s.legacy_pattern_miner_enabled is False
-        assert s.legacy_nightly_backfill_enabled is True
-        assert s.legacy_quality_guardrails_enabled is False
-        assert s.legacy_exit_classifier_training_enabled is True
-        assert s.legacy_pattern_miner_training_enabled is False
-        assert s.pattern_miner_training_source == "heber_gold"
-        assert s.exit_classifier_training_source == "legacy_sql"
-
-
-def test_training_source_defaults_are_heber_first() -> None:
+def test_legacy_label_gate_fields_removed():
+    """Verify legacy gate fields have been removed from SystemSettings."""
     with patch.dict(os.environ, {}, clear=True):
         from orion.config import SystemSettings
 
         s = SystemSettings()
-        assert s.pattern_miner_training_source == "heber_gold"
-        assert s.exit_classifier_training_source == "heber_gold"
+        assert not hasattr(s, "legacy_label_pipelines_enabled")
+        assert not hasattr(s, "legacy_option_quote_tracker_enabled")
+        assert not hasattr(s, "legacy_pattern_miner_enabled")
+        assert not hasattr(s, "pattern_miner_training_source")
+        assert not hasattr(s, "exit_classifier_training_source")
 
 
 def test_system_settings_no_longer_exposes_decommissioned_flow_labeler_gate() -> None:
