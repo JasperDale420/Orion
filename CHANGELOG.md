@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Legacy feature flags, dead services, and vendored Alpaca deleted** (2026-03-20):
+  - Removed 10 legacy config fields from `SystemSettings` (8 `legacy_*_enabled` feature flags + 2 `*_training_source` fields).
+  - Deleted 7 dead source files: `main_option_quote_tracker.py`, `main_price_target_labeler.py`, `jobs/nightly_backfill.py`, `jobs/quality_guardrails.py`, `jobs/cleanup_legacy_backfill_watermarks.py`, `jobs/backfill_ml_features.py`.
+  - Removed 4 Docker Compose services: `price_target_labeler`, `option_quote_tracker`, `nightly-backfill`, `quality-guardrails`.
+  - Promoted `pattern-miner` from `legacy-labels` profile to a standard service.
+  - Stripped legacy guard functions (`_legacy_label_pipeline_control`, `_legacy_*_training_control`) from `main_pattern_miner.py`, `ml/pattern_miner.py`, `ml/exit_classifier.py`.
+  - Removed 8 legacy env vars from `.env.example`.
+  - Deleted 16 test files referencing removed modules.
+  - Deleted vendored `src/alpaca/` (v0.32.0); pip-installed `alpaca-py ^0.43.2` provides the same modules.
+  - Removed `src/alpaca` from ruff `extend-exclude` and mypy `exclude` in `pyproject.toml`.
+  - Deleted 10 scratch/debug files from repo root (`test_arrow*.py`, `test_gateway.py`, `test_rglob.py`, `fix_mocks.py`, `run_mining_now.py`).
+
 ### Added
 
 - **Ledger adapter wired into execution flow** (2026-03-19):
