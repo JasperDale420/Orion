@@ -1,0 +1,180 @@
+"""Fill processing, position snapshot persistence, and partial fill tracking."""
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from orion.execution.persistence import (
+    is_fill_processed,
+    mark_fill_processed,
+    persist_fill_record,
+)
+from orion.labeler.constants import SECTOR_MAPPING
+from orion.shared.db_utils import db_write
+from orion.shared.decorators import db_retry
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
+
+
+class FillProcessor:
+    """Processes broker fills and manages position snapshots.
+
+    Tracks partial fills via an internal tracker and delegates
+    persistence to the execution.persistence module.
+    """
+
+    def __init__(self) -> None:
+        self._partial_fill_tracker: dict[str, float] = {}
+
+    async def process_single_fill(self, fill: Any, risk_manager: Any, remove_pending_fn: Any) -> None:
+        """Process a single fill event, updating risk state and persisting.
+
+        Handles partial fills by tracking cumulative filled quantity and only
+        processing the incremental amount since last update.
+        """
+        try:
+            order_id = str(fill.get("id", "")) if isinstance(fill, dict) else str(fill.id)
+            client_oid = (
+                fill.get("client_order_id") if isinstance(fill, dict) else getattr(fill, "client_order_id", None)
+            ) or order_id
+            if await is_fill_processed(order_id):
+                return
+
+            if isinstance(fill, dict):
+                filled_qty = float(fill.get("filled_qty", 0) or 0)
+                total_qty = float(fill.get("qty", 0) or filled_qty)
+                filled_avg_price = float(fill.get("filled_avg_price", 0) or 0)
+                ticker = fill.get("symbol", "")
+                side = fill.get("side", "")
+            else:
+                filled_qty = float(fill.filled_qty) if fill.filled_qty else 0.0
+                total_qty = float(fill.qty) if fill.qty else filled_qty
+                filled_avg_price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
+                ticker = fill.symbol
+                side = str(fill.side)
+
+            last_filled = self._partial_fill_tracker.get(order_id, 0.0)
+            incremental_qty = filled_qty - last_filled
+
+            if incremental_qty <= 0:
+                return
+
+            self._partial_fill_tracker[order_id] = filled_qty
+            is_partial = filled_qty < total_qty
+            fill_type = "PARTIAL" if is_partial else "COMPLETE"
+
+            logger.info(
+                f"Processing {fill_type} fill: {ticker} {side} {incremental_qty:.2f} @ {filled_avg_price:.2f} "
+                f"(total: {filled_qty:.2f}/{total_qty:.2f})",
+                extra={
+                    "event_type": f"FILL_{fill_type}",
+                    "order_id": order_id,
+                    "ticker": ticker,
+                    "incremental_qty": incremental_qty,
+                    "filled_qty": filled_qty,
+                    "total_qty": total_qty,
+                },
+            )
+
+            fill_id = order_id if last_filled == 0 else f"{order_id}_{filled_qty}"
+            await risk_manager.process_fill(ticker, incremental_qty, filled_avg_price, side, fill_id=fill_id)
+
+            # Update sector exposure tracking
+            sector = SECTOR_MAPPING.get(ticker)
+            if sector:
+                fill_cost = incremental_qty * filled_avg_price
+                exposure_change = fill_cost if side.lower() == "buy" else -fill_cost
+                risk_manager.update_sector_exposure(sector, exposure_change)
+
+            if not is_partial:
+                await remove_pending_fn(client_oid)
+                self._partial_fill_tracker.pop(order_id, None)
+
+            await persist_fill_record(fill)
+            await mark_fill_processed(order_id, client_oid=client_oid, ticker=ticker, qty=incremental_qty)
+
+        except Exception as e:
+            fill_id_str = (
+                str(fill.get("id", "unknown")) if isinstance(fill, dict) else str(getattr(fill, "id", "unknown"))
+            )
+            logger.error(f"Failed to process fill {fill_id_str}: {e}")
+
+
+@db_retry
+async def maybe_snapshot_positions(
+    gateway_client: Any,
+    last_snapshot_ts: datetime | None,
+    min_interval_seconds: int = 60,
+) -> datetime | None:
+    """Persist position snapshots from Data Gateway.
+
+    Returns updated snapshot timestamp, or None if no snapshot was taken.
+    """
+    now = datetime.now(UTC)
+    if last_snapshot_ts and (now - last_snapshot_ts) < timedelta(seconds=min_interval_seconds):
+        return None
+
+    try:
+        positions = await gateway_client.get_positions()
+    except Exception as e:
+        logger.error(
+            "Failed to fetch positions for snapshot",
+            extra={"event_type": "POSITIONS_SNAPSHOT_FETCH_ERROR", "error": str(e)},
+        )
+        return None
+
+    if not positions:
+        return now
+
+    try:
+        from orion.storage.models_execution import PositionSnapshot
+
+        rows = []
+        for p in positions:
+            snapshot = _create_position_snapshot_from_dict(p, now, PositionSnapshot)
+            if snapshot:
+                rows.append(snapshot)
+
+        async def save_snapshots(session: Any) -> None:
+            session.add_all(rows)
+
+        await db_write(save_snapshots)
+
+        logger.info("Positions snapshot persisted", extra={"event_type": "POSITIONS_SNAPSHOT", "count": len(rows)})
+        return now
+    except Exception as e:
+        logger.error(
+            "Failed to persist positions snapshot",
+            extra={"event_type": "POSITIONS_SNAPSHOT_PERSIST_ERROR", "error": str(e)},
+        )
+        return None
+
+
+def _create_position_snapshot_from_dict(p: dict, now: datetime, model_class: Any) -> Any | None:
+    """Create a PositionSnapshot model from a Gateway position dict."""
+    symbol = p.get("symbol")
+    if not symbol:
+        return None
+
+    def _maybe_float(v: Any) -> float | None:
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+
+    qty = _maybe_float(p.get("qty")) or 0.0
+    avg_entry = _maybe_float(p.get("avg_entry_price"))
+    market_value = _maybe_float(p.get("market_value"))
+    unrealized_pl = _maybe_float(p.get("unrealized_pl"))
+
+    return model_class(
+        id=str(uuid.uuid4()),
+        snapshot_ts_utc=now,
+        ticker=str(symbol),
+        qty=float(qty),
+        avg_entry_price=avg_entry,
+        market_value=market_value,
+        unrealized_pl=unrealized_pl,
+        raw_json=p,
+    )
