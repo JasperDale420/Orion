@@ -506,6 +506,13 @@ async def test_run_all_pattern_mining_passes_exit_refresh_flags(monkeypatch: pyt
     monkeypatch.setattr(pattern_miner, "TRADE_BUCKET_CONFIGS", {}, raising=False)
     monkeypatch.setattr(pattern_miner, "TARGETS", {}, raising=False)
 
+    import pandas as pd
+
+    async def _fake_prefetch_heber_gold_data(**kwargs: object) -> tuple[object, object, dict[str, object]]:
+        return (pd.DataFrame(), pd.DataFrame(), {})
+
+    monkeypatch.setattr(pattern_miner, "_prefetch_heber_gold_data", _fake_prefetch_heber_gold_data)
+
     async def _fake_train_all_exit_classifiers(
         force_schema_refresh: bool = False,
         refresh_each_bucket: bool = False,

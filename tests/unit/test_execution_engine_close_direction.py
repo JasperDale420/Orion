@@ -17,6 +17,7 @@ async def test_close_position_uses_buy_side_for_short_direction() -> None:
     engine.risk_manager = Mock()
     engine.order_history = []
     engine.last_positions_snapshot_ts = None
+    engine._ledger = None
 
     mock_client = AsyncMock()
     mock_client.close_position.return_value = {"id": "order-1", "status": "accepted"}
@@ -44,6 +45,7 @@ async def test_close_position_limit_order_for_long_direction() -> None:
     engine.risk_manager = Mock()
     engine.order_history = []
     engine.last_positions_snapshot_ts = None
+    engine._ledger = None
 
     mock_client = AsyncMock()
     mock_client.get_stock_snapshot.return_value = {

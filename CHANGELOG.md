@@ -6,7 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Ledger adapter wired into execution flow** (2026-03-19):
+  - `OrionLedgerAdapter` is now instantiated in `main_execution.py` and passed to `ExecutionEngine`.
+  - Orders are recorded to the unified ledger after successful submission in `_submit_options_order()` and `close_position()`.
+  - Fills are recorded to the unified ledger after processing in `_process_single_fill()`.
+  - All ledger calls wrapped in try/except — failures never interrupt trading.
+  - Enables EmpireUI to read Orion trade data from the standardized `ledger.db`.
+
 ### Fixed
+
+- **Maintenance: fixed 5 failing unit tests** (2026-03-20):
+  - `test_execution_engine_close_direction`: two tests constructed `ExecutionEngine` via `__new__` without setting `_ledger`, causing `AttributeError` when `close_position()` accessed it. Added `engine._ledger = None` to both tests.
+  - `test_ingestion_source_profile`: both tests instantiated `IngestionService()` without mocking `create_gateway_stream_client`, which raises `ValueError` when `DATA_GATEWAY_API_KEY` is absent. Mocked the factory; updated assertions to match the current `_active_event_source_profile()` response shape; added `AsyncMock` for `start`/`subscribe` and mock for `feature_engine.hydrate_history`.
+  - `test_run_all_pattern_mining_passes_exit_refresh_flags`: test timed out (>30 s) because `_prefetch_heber_gold_data` performed a real filesystem `rglob` scan on `/Volumes/heber`. Added a monkeypatch that returns empty DataFrames immediately.
 
 - **Lint errors in integration test** (2026-03-18):
   - Removed extraneous `f` prefix from two f-strings without placeholders in `tests/integration/test_e2e_flow_pipeline.py`.

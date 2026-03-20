@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -21,14 +22,17 @@ async def _async_noop(*args, **kwargs) -> None:
 
 @pytest.mark.asyncio
 async def test_ingestion_source_profile_polling_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Alpaca connectors are archived. Service always reports polling mode with no streaming."""
+    """Service reports gateway_stream data source with bar and flow event types."""
+    mock_stream = MagicMock()
+    mock_stream.is_running = False
+    mock_stream.subscribed_symbols = set()
+    monkeypatch.setattr("orion.ingestion.service.create_gateway_stream_client", lambda *a, **kw: mock_stream)
     service = IngestionService()
     profile = service._active_event_source_profile()
 
-    assert profile["alpaca_streaming_enabled"] is False
-    assert profile["alpaca_mode"] == "polling"
-    assert profile["produced_event_types"] == ["ALPACA_BAR_1M"]
-    assert profile["uw_flow_darkpool_ingestion"] == "external_gateway_heber_pipeline"
+    assert profile["data_source"] == "gateway_stream+heber_flow"
+    assert "ALPACA_BAR_1M" in profile["produced_event_types"]
+    assert profile["flow_source"] == "heber_silver"
 
 
 @pytest.mark.asyncio
@@ -39,12 +43,20 @@ async def test_initialize_skips_startup_earnings_sync(monkeypatch: pytest.Monkey
         sync_call_count["value"] += 1
         return {"synced": 0, "errors": 0}
 
+    mock_stream = MagicMock()
+    mock_stream.is_running = False
+    mock_stream.subscribed_symbols = set()
+    mock_stream.start = AsyncMock()
+    mock_stream.subscribe = AsyncMock()
+
+    monkeypatch.setattr("orion.ingestion.service.create_gateway_stream_client", lambda *a, **kw: mock_stream)
     monkeypatch.setattr("orion.ingestion.service.init_db", _async_noop)
     monkeypatch.setattr("orion.jobs.sync_earnings.sync_todays_earnings", _sync_todays_earnings)
     monkeypatch.setattr("orion.jobs.rollup_job.RollupJob", _DummyRollupJob)
 
     service = IngestionService()
     monkeypatch.setattr(service.universe, "hydrate_from_db", _async_noop)
+    monkeypatch.setattr(service.feature_engine, "hydrate_history", AsyncMock())
 
     await service.initialize()
     if service._rollup_task is not None:
