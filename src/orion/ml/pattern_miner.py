@@ -1,860 +1,73 @@
 """
 ML Pattern Miner.
 
-Core logic for training LightGBM models on trading data and extracting
+Orchestrates training LightGBM models on trading data and extracting
 human-readable rules for the EOD agent.
+
+Sub-modules:
+  - feature_config: Feature column lists, targets, bucket configs
+  - training_data: Heber Gold data loading, normalization, feature joining
+  - model_training: LightGBM training, saving, rule/importance extraction
 """
 
-import asyncio
 import hashlib
 import os
-import pickle
-import re
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 from sqlalchemy import text
 
-from orion.clients.heber_reader import get_heber_reader
-from orion.config import system_settings
+from orion.ml.feature_config import (
+    ALERT_FLOW_CONTEXT_FEATURES,
+    ALERT_SECTOR_FLOW_FEATURES,
+    ALL_EQUITY_FEATURE_COLUMNS,
+    CATEGORICAL_COLUMNS,
+    EQUITY_DARKPOOL_FEATURES,
+    EQUITY_FLOW_FEATURES,
+    EQUITY_FLOW_NORM_FEATURES,
+    EQUITY_FLOW_TOXICITY_FEATURES,
+    EQUITY_GEX_REGIME_FEATURES,
+    EQUITY_GOLD_DATASETS,
+    EQUITY_IV_SURFACE_FEATURES,
+    EQUITY_MARKET_TIDE_FEATURES,
+    EQUITY_MOMENTUM_FEATURES,
+    EQUITY_OI_MOMENTUM_FEATURES,
+    EQUITY_REGIME_FEATURES,
+    EQUITY_STRADDLE_FEATURES,
+    EQUITY_TICKER_RATES_FEATURES,
+    EQUITY_TREND_SCAN_FEATURES,
+    EQUITY_VOLATILITY_FEATURES,
+    FEATURE_COLUMNS,
+    TARGETS,
+    TRADE_BUCKET_CONFIGS,
+    get_quick_winner_target,
+)
+from orion.ml.model_training import (
+    MODEL_DIR,
+    extract_feature_importance,
+    extract_tree_rules,
+    prepare_features,
+    save_model,
+    train_model,
+)
 from orion.ml.schemas import (
     FeatureImportance,
     MLInsightsSummary,
     PatternInsight,
     TreeRule,
 )
+from orion.ml.training_data import (
+    fetch_training_data,
+    prefetch_heber_gold_data,
+)
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.pattern_miner")
 
-# Model output directory - models are saved here for MLScorer to load
-MODEL_DIR = system_settings.model_dir
 
-
-# Feature configuration - ENTRY-TIME ONLY (no outcome leakage)
-# These features are known at trade entry and don't reveal the outcome
-FEATURE_COLUMNS = [
-    # Alert-level features (25 original)
-    "strike",
-    "days_to_expiry",
-    "premium",
-    "volume",
-    "open_interest",
-    "volume_oi_ratio",
-    "spot_price",
-    "contract_price",
-    "moneyness",
-    "log_moneyness",
-    "delta",
-    "gamma",
-    "theta",
-    "vega",
-    "iv",
-    "underlying_30d_return",
-    "underlying_5d_return",
-    "underlying_1d_return",
-    "realized_vol_20d",
-    "iv_rank",
-    "hour_of_day",
-    "minute_of_hour",
-    "day_of_week",
-    "minutes_since_open",
-    "minutes_to_close",
-    # Equity-level Gold features (18 new — asof-joined from Heber Gold)
-    # Momentum (from momentum_features Gold dataset)
-    "momentum_1d",
-    "momentum_5d",
-    "momentum_10d",
-    "momentum_20d",
-    "rsi_14",
-    "rsi_28",
-    "macd",
-    "macd_signal",
-    # Volatility (from volatility_features Gold dataset)
-    "vol_5d",
-    "vol_20d",
-    "vol_ratio_5_20",
-    "atr_14",
-    "bb_width_20",
-    "price_zscore_20d",
-    # Flow (from flow_features Gold dataset)
-    "total_premium_24h",
-    "call_put_premium_ratio",
-    "net_premium_24h",
-    "sweep_count_24h",
-    "net_bull_premium_lr",
-    "sweep_volume_share",
-    # Market regime (from market_regime_features Gold dataset — market-level, broadcast to all tickers)
-    "dispersion",
-    "vol_of_vol",
-    "breadth_proxy",
-    "yield_curve_slope",
-    # Derived features (computed at runtime from existing features)
-    "iv_vs_realized",
-    "vega_theta_ratio",
-    "gamma_delta_ratio",
-    "dollar_gamma",
-    "theta_premium_ratio",
-    # Flow normalization (from flow_normalization_features Gold dataset)
-    "adv_premium_20d",
-    "adv_volume_20d",
-    "adv_oi_20d",
-    # Runtime-derived from flow normalization
-    "premium_vs_adv",
-    "volume_vs_adoi",
-    "relative_oi_buildup",
-    # IV surface (from iv_surface_features Gold dataset)
-    "put_call_iv_skew",
-    "term_structure_slope",
-    "iv_change_1d",
-    # Ticker base rates (from ticker_base_rates Gold dataset)
-    "ticker_win_rate_90d",
-    "ticker_alert_frequency",
-    "ticker_flow_predictability",
-    # Flow context (from flow_context_features Gold dataset — per-alert)
-    "same_ticker_alerts_1h",
-    "directional_agreement_4h",
-    "repeat_ticker_days_5d",
-    # GEX regime (from gex_regime_features Gold dataset — market-level)
-    "net_gex",
-    "gex_regime",
-    "gex_flip_distance",
-    # Flow toxicity (from flow_toxicity_features Gold dataset)
-    "flow_toxicity_1d",
-    "toxicity_acceleration",
-    # OI momentum (from oi_momentum_features Gold dataset)
-    "oi_buildup_ratio",
-    "new_position_signal",
-    "oi_change_momentum_5d",
-    # Market tide context (from market_tide_context_features Gold dataset — market-level)
-    "market_sentiment_score",
-    "market_premium_momentum",
-    # Darkpool confirmation (from darkpool_features Gold dataset)
-    "darkpool_notional_1d",
-    "darkpool_premium_ratio",
-    "darkpool_activity_zscore",
-    # Straddle momentum (from straddle_momentum_features Gold dataset)
-    "straddle_return_1m",
-    "straddle_return_3m",
-    # Trend scanning labels/features (from trend_scan_features Gold dataset)
-    "trend_scan_horizon",
-    "trend_scan_t_value",
-    # Sector flow context (from sector_flow_features Gold dataset — per-alert)
-    "sector_flow_alignment",
-    "sector_call_put_ratio",
-    # New runtime derived features
-    "ask_side_dominance",
-    "aggressor_conviction",
-    "max_pain_distance",
-    "days_to_nearest_opex",
-]
-
-# Equity-level feature names grouped by source Gold dataset
-EQUITY_MOMENTUM_FEATURES = [
-    "momentum_1d",
-    "momentum_5d",
-    "momentum_10d",
-    "momentum_20d",
-    "rsi_14",
-    "rsi_28",
-    "macd",
-    "macd_signal",
-]
-EQUITY_VOLATILITY_FEATURES = [
-    "vol_5d",
-    "vol_20d",
-    "vol_ratio_5_20",
-    "atr_14",
-    "bb_width_20",
-    "price_zscore_20d",
-]
-EQUITY_FLOW_FEATURES = [
-    "total_premium_24h",
-    "call_put_premium_ratio",
-    "net_premium_24h",
-    "sweep_count_24h",
-    "net_bull_premium_lr",
-    "sweep_volume_share",
-]
-EQUITY_REGIME_FEATURES: list[str] = [
-    "dispersion",
-    "vol_of_vol",
-    "breadth_proxy",
-    "yield_curve_slope",
-]
-EQUITY_FLOW_NORM_FEATURES = ["adv_premium_20d", "adv_volume_20d", "adv_oi_20d"]
-EQUITY_IV_SURFACE_FEATURES = ["put_call_iv_skew", "term_structure_slope", "iv_change_1d"]
-EQUITY_TICKER_RATES_FEATURES = ["ticker_win_rate_90d", "ticker_alert_frequency", "ticker_flow_predictability"]
-ALERT_FLOW_CONTEXT_FEATURES = ["same_ticker_alerts_1h", "directional_agreement_4h", "repeat_ticker_days_5d"]
-EQUITY_GEX_REGIME_FEATURES = ["net_gex", "gex_regime", "gex_flip_distance"]
-EQUITY_FLOW_TOXICITY_FEATURES = ["flow_toxicity_1d", "toxicity_acceleration"]
-EQUITY_OI_MOMENTUM_FEATURES = ["oi_buildup_ratio", "new_position_signal", "oi_change_momentum_5d"]
-EQUITY_MARKET_TIDE_FEATURES = ["market_sentiment_score", "market_premium_momentum"]
-EQUITY_DARKPOOL_FEATURES = ["darkpool_notional_1d", "darkpool_premium_ratio", "darkpool_activity_zscore"]
-EQUITY_STRADDLE_FEATURES = ["straddle_return_1m", "straddle_return_3m"]
-EQUITY_TREND_SCAN_FEATURES = ["trend_scan_horizon", "trend_scan_t_value"]
-ALERT_SECTOR_FLOW_FEATURES = ["sector_flow_alignment", "sector_call_put_ratio"]
-
-EQUITY_GOLD_DATASETS: dict[str, list[str]] = {
-    "momentum_features": EQUITY_MOMENTUM_FEATURES,
-    "volatility_features": EQUITY_VOLATILITY_FEATURES,
-    "flow_features": EQUITY_FLOW_FEATURES,
-    "market_regime_features": EQUITY_REGIME_FEATURES,
-    "flow_normalization_features": EQUITY_FLOW_NORM_FEATURES,
-    "iv_surface_features": EQUITY_IV_SURFACE_FEATURES,
-    "ticker_base_rates": EQUITY_TICKER_RATES_FEATURES,
-    "gex_regime_features": EQUITY_GEX_REGIME_FEATURES,
-    "flow_toxicity_features": EQUITY_FLOW_TOXICITY_FEATURES,
-    "oi_momentum_features": EQUITY_OI_MOMENTUM_FEATURES,
-    "market_tide_context_features": EQUITY_MARKET_TIDE_FEATURES,
-    "darkpool_features": EQUITY_DARKPOOL_FEATURES,
-    "straddle_momentum_features": EQUITY_STRADDLE_FEATURES,
-    "trend_scan_features": EQUITY_TREND_SCAN_FEATURES,
-}
-ALL_EQUITY_FEATURE_COLUMNS = (
-    EQUITY_MOMENTUM_FEATURES
-    + EQUITY_VOLATILITY_FEATURES
-    + EQUITY_FLOW_FEATURES
-    + EQUITY_REGIME_FEATURES
-    + EQUITY_FLOW_NORM_FEATURES
-    + EQUITY_IV_SURFACE_FEATURES
-    + EQUITY_TICKER_RATES_FEATURES
-    + EQUITY_GEX_REGIME_FEATURES
-    + EQUITY_FLOW_TOXICITY_FEATURES
-    + EQUITY_OI_MOMENTUM_FEATURES
-    + EQUITY_MARKET_TIDE_FEATURES
-    + EQUITY_DARKPOOL_FEATURES
-    + EQUITY_STRADDLE_FEATURES
-    + EQUITY_TREND_SCAN_FEATURES
-)
-
-CATEGORICAL_COLUMNS = [
-    "put_call",
-    "alert_type",
-    "side",
-    "aggressor",
-    "is_bullish",
-    "is_bearish",
-    "is_sweep",
-    "is_block",
-    "is_unusual",
-]
-
-# Target definitions - 4 targets for diverse signal dimensions
-# Note: quick_winner has bucket-specific thresholds defined in TRADE_BUCKET_CONFIGS
-TARGETS = {
-    # Original targets
-    "hit_target_50": """
-        CASE WHEN hit_50_pct_ts IS NOT NULL
-             AND (hit_stop_20_pct_ts IS NULL OR hit_50_pct_ts < hit_stop_20_pct_ts)
-        THEN 1 ELSE 0 END
-    """,
-    "avoid_stop": """
-        CASE WHEN hit_stop_20_pct_ts IS NULL THEN 1 ELSE 0 END
-    """,
-    # New targets
-    "hit_target_100": """
-        CASE WHEN hit_100_pct_ts IS NOT NULL
-             AND (hit_stop_20_pct_ts IS NULL OR hit_100_pct_ts < hit_stop_20_pct_ts)
-        THEN 1 ELSE 0 END
-    """,
-    # quick_winner is dynamically generated per bucket - see get_quick_winner_target()
-}
-
-
-from orion.ml.heber_utils import coerce_dataframe as _coerce_dataframe
-from orion.ml.heber_utils import first_existing_column as _first_existing_column
-from orion.ml.heber_utils import generate_deterministic_event_ids as _generate_deterministic_event_ids
-
-
-def _validate_heber_training_contract(outcomes_raw: Any, features_raw: Any) -> None:
-    if outcomes_raw.empty and features_raw.empty:
-        return
-
-    required_outcome_families: dict[str, list[str]] = {
-        "event_id": ["alert_id", "event_id", "watch_id", "instrument_key"],
-        "entry_ts": ["entry_ts", "alert_time", "ts_event", "ts_available"],
-        "outcome_or_hit_tp": ["outcome", "outcome_reason", "status", "hit_tp_first", "contract_hit_tp_first"],
-        "trading_minutes_to_hit": ["trading_minutes_to_hit", "bars_to_hit"],
-    }
-    soft_feature_families: dict[str, list[str]] = {
-        "event_id": ["alert_id", "event_id", "watch_id", "instrument_key"],
-    }
-
-    missing_outcome_families = [
-        family
-        for family, candidates in required_outcome_families.items()
-        if _first_existing_column(outcomes_raw, candidates) is None
-    ]
-    missing_feature_families = [
-        family
-        for family, candidates in soft_feature_families.items()
-        if _first_existing_column(features_raw, candidates) is None
-    ]
-
-    if not missing_outcome_families and not missing_feature_families:
-        return
-
-    if missing_outcome_families:
-        message = f"Heber training contract mismatch: labels_alert_barriers missing {missing_outcome_families}"
-        logger.error(
-            message,
-            extra={
-                "event": "pattern_miner_heber_training_contract_mismatch",
-                "missing_outcome_families": missing_outcome_families,
-                "outcomes_columns": sorted(str(col) for col in outcomes_raw.columns),
-            },
-        )
-        raise RuntimeError(message)
-
-    if missing_feature_families:
-        logger.warning(
-            "Heber feature dataset missing event_id family; will generate deterministic IDs",
-            extra={
-                "event": "pattern_miner_heber_features_missing_event_id",
-                "missing_feature_families": missing_feature_families,
-                "features_columns": sorted(str(col) for col in features_raw.columns),
-            },
-        )
-
-
-def _normalize_heber_outcomes(frame: Any) -> Any:
-    import pandas as pd
-
-    if frame.empty:
-        return pd.DataFrame(
-            columns=[
-                "event_id",
-                "entry_ts",
-                "outcome",
-                "hit_tp_first",
-                "trading_minutes_to_hit",
-                "bars_to_hit",
-                "snapshot_count",
-                "no_snapshot",
-            ]
-        )
-
-    event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
-    ts_column = _first_existing_column(frame, ["entry_ts", "alert_time", "ts_event", "ts_available"])
-    outcome_column = _first_existing_column(frame, ["outcome", "outcome_reason", "status"])
-    hit_tp_column = _first_existing_column(frame, ["hit_tp_first", "contract_hit_tp_first"])
-    trading_minutes_column = _first_existing_column(frame, ["trading_minutes_to_hit", "bars_to_hit"])
-    bars_to_hit_column = _first_existing_column(frame, ["bars_to_hit"])
-    event_series = frame[event_column].astype(str) if event_column else pd.Series(index=frame.index, dtype=object)
-    ts_series = (
-        pd.to_datetime(frame[ts_column], utc=True, errors="coerce")
-        if ts_column
-        else pd.Series(index=frame.index, dtype="datetime64[ns, UTC]")
-    )
-    outcome_series = (
-        frame[outcome_column].astype(str).str.lower() if outcome_column else pd.Series(index=frame.index, dtype=object)
-    )
-    hit_tp_series = (
-        pd.to_numeric(frame[hit_tp_column], errors="coerce").fillna(0).astype(int)
-        if hit_tp_column
-        else (outcome_series == "hit_tp").astype(int)
-    )
-    trading_minutes_series = (
-        pd.to_numeric(frame[trading_minutes_column], errors="coerce")
-        if trading_minutes_column
-        else pd.Series(index=frame.index, dtype="float64")
-    )
-    bars_to_hit_series = (
-        pd.to_numeric(frame[bars_to_hit_column], errors="coerce")
-        if bars_to_hit_column
-        else pd.Series(index=frame.index, dtype="float64")
-    )
-    normalized = pd.DataFrame(
-        {
-            "event_id": event_series,
-            "entry_ts": ts_series,
-            "outcome": outcome_series,
-            "hit_tp_first": hit_tp_series,
-            "trading_minutes_to_hit": trading_minutes_series,
-            "bars_to_hit": bars_to_hit_series,
-        }
-    )
-    normalized = normalized.dropna(subset=["event_id", "entry_ts"])
-    normalized["event_id"] = normalized["event_id"].astype(str)
-    return normalized
-
-
-def _drop_no_snapshot_outcomes(dataframe: Any) -> tuple[Any, int]:
-    # The new Heber pipelines cleanly filter out invalid alerts
-    # and "no snapshot" is no longer a concept passed down to gold barriers.
-    # Therefore, no rows need dropping at this step anymore.
-    return dataframe, 0
-
-
-def _normalize_heber_features(frame: Any) -> Any:
-    import pandas as pd
-
-    if frame.empty:
-        return pd.DataFrame(columns=["event_id"])
-
-    event_column = _first_existing_column(frame, ["alert_id", "event_id", "watch_id", "instrument_key"])
-    if event_column is not None:
-        normalized = pd.DataFrame({"event_id": frame[event_column].astype(str)})
-    else:
-        logger.warning(
-            "No event_id column in features; generating deterministic IDs",
-            extra={"event": "pattern_miner_features_synthetic_event_id"},
-        )
-        normalized = pd.DataFrame({"event_id": _generate_deterministic_event_ids(frame)})
-
-    mapped_columns: dict[str, list[str]] = {
-        # Core
-        "put_call": ["put_call"],
-        "strike": ["strike"],
-        "days_to_expiry": ["days_to_expiry", "dte"],
-        "premium": ["premium"],
-        "volume": ["volume"],
-        "open_interest": ["open_interest"],
-        "volume_oi_ratio": ["volume_oi_ratio"],
-        "spot_price": ["spot_price", "underlying_price"],
-        "contract_price": ["contract_price"],
-        "moneyness": ["moneyness"],
-        "log_moneyness": ["log_moneyness"],
-        # Greeks
-        "delta": ["delta"],
-        "gamma": ["gamma"],
-        "theta": ["theta"],
-        "vega": ["vega"],
-        "iv": ["iv"],
-        # Returns and Volatility
-        "underlying_30d_return": ["underlying_30d_return"],
-        "underlying_5d_return": ["underlying_5d_return"],
-        "underlying_1d_return": ["underlying_1d_return"],
-        "realized_vol_20d": ["realized_vol_20d"],
-        "iv_rank": ["iv_rank"],
-        # Timing
-        "hour_of_day": ["hour_of_day"],
-        "minute_of_hour": ["minute_of_hour"],
-        "day_of_week": ["day_of_week"],
-        "minutes_since_open": ["minutes_since_open"],
-        "minutes_to_close": ["minutes_to_close"],
-        # Tags
-        "alert_type": ["alert_type"],
-        "side": ["side"],
-        "aggressor": ["aggressor"],
-        "is_bullish": ["is_bullish"],
-        "is_bearish": ["is_bearish"],
-        "is_sweep": ["is_sweep"],
-        "is_block": ["is_block"],
-        "is_unusual": ["is_unusual"],
-    }
-
-    for target, candidates in mapped_columns.items():
-        source = _first_existing_column(frame, candidates)
-        if source is None:
-            normalized[target] = pd.NA
-            continue
-        normalized[target] = frame[source]
-
-    # Clean boolean flags
-    for bool_col in ["is_bullish", "is_bearish", "is_sweep", "is_block", "is_unusual"]:
-        normalized[bool_col] = normalized[bool_col].fillna(0)
-        normalized[bool_col] = normalized[bool_col].map(
-            lambda value: str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
-        )
-
-    return normalized
-
-
-def _apply_trade_type_filter(dataframe: Any, trade_type_filter: str | None) -> Any:
-    import pandas as pd
-
-    if not trade_type_filter:
-        return dataframe
-
-    match = re.search(r"trade_type\s*=\s*'([^']+)'", trade_type_filter, flags=re.IGNORECASE)
-    if match is None:
-        return dataframe
-
-    bucket = match.group(1).upper()
-    days_to_expiry = pd.to_numeric(dataframe["days_to_expiry"], errors="coerce")
-    if bucket == "0DTE":
-        mask = days_to_expiry == 0
-    elif bucket == "SHORT_SWING":
-        mask = (days_to_expiry >= 1) & (days_to_expiry <= 2)
-    elif bucket == "SWING":
-        mask = (days_to_expiry >= 3) & (days_to_expiry <= 14)
-    elif bucket == "POSITION":
-        mask = days_to_expiry >= 15
-    else:
-        return dataframe
-
-    return dataframe[mask]
-
-
-def _extract_symbol_from_instrument_key(instrument_key_series: Any) -> Any:
-    """Extract bare ticker symbol from instrument_key (e.g. 'equity:AAPL' -> 'AAPL')."""
-    return instrument_key_series.astype(str).str.split(":").str[-1].str.upper()
-
-
-def _join_equity_features(
-    alert_df: Any,
-    equity_df: Any,
-    feature_cols: list[str],
-    alert_symbol_col: str = "symbol",
-    alert_ts_col: str = "entry_ts",
-) -> Any:
-    """Asof-join equity-level features to alert-level data.
-
-    Matches on (underlying symbol, timestamp) with 1-day backward tolerance.
-    Both DataFrames must have their timestamp columns as timezone-aware UTC.
-    """
-    import pandas as pd
-
-    if equity_df.empty or alert_df.empty:
-        return alert_df
-
-    # Normalize equity instrument_key to bare symbol for join
-    equity_df = equity_df.copy()
-    if "instrument_key" in equity_df.columns:
-        equity_df["_join_symbol"] = _extract_symbol_from_instrument_key(equity_df["instrument_key"])
-    elif "symbol" in equity_df.columns:
-        equity_df["_join_symbol"] = equity_df["symbol"].astype(str).str.upper()
-    else:
-        logger.warning("Equity features missing instrument_key and symbol columns, skipping join")
-        return alert_df
-
-    # Determine the equity timestamp column
-    equity_ts_col = "ts_event" if "ts_event" in equity_df.columns else None
-    if equity_ts_col is None:
-        for candidate in ["ts_available", "timestamp", "date"]:
-            if candidate in equity_df.columns:
-                equity_ts_col = candidate
-                break
-    if equity_ts_col is None:
-        logger.warning("Equity features missing timestamp column, skipping join")
-        return alert_df
-
-    # Only keep columns we need
-    available_feature_cols = [c for c in feature_cols if c in equity_df.columns]
-    if not available_feature_cols:
-        return alert_df
-
-    equity_subset = equity_df[["_join_symbol", equity_ts_col] + available_feature_cols].copy()
-    equity_subset[equity_ts_col] = pd.to_datetime(equity_subset[equity_ts_col], utc=True, errors="coerce")
-    equity_subset = equity_subset.dropna(subset=[equity_ts_col])
-    equity_subset = equity_subset.sort_values(equity_ts_col)
-
-    # Prepare alert side
-    alert_df = alert_df.copy()
-
-    # Derive join symbol from alert data — try ticker, symbol, or instrument_key
-    if alert_symbol_col in alert_df.columns:
-        alert_df["_join_symbol"] = alert_df[alert_symbol_col].astype(str).str.upper()
-    elif "ticker" in alert_df.columns:
-        alert_df["_join_symbol"] = alert_df["ticker"].astype(str).str.upper()
-    elif "instrument_key" in alert_df.columns:
-        alert_df["_join_symbol"] = _extract_symbol_from_instrument_key(alert_df["instrument_key"])
-    else:
-        logger.warning("Alert data missing symbol/ticker/instrument_key, skipping equity join")
-        return alert_df
-
-    alert_df["_join_ts"] = pd.to_datetime(alert_df[alert_ts_col], utc=True, errors="coerce")
-    alert_df = alert_df.sort_values("_join_ts")
-
-    # Rename equity timestamp to match for merge_asof
-    equity_subset = equity_subset.rename(columns={equity_ts_col: "_join_ts"})
-
-    merged = pd.merge_asof(
-        alert_df,
-        equity_subset,
-        on="_join_ts",
-        by="_join_symbol",
-        tolerance=pd.Timedelta("1D"),
-        direction="backward",
-    )
-
-    # Clean up temporary join columns
-    merged = merged.drop(columns=["_join_symbol", "_join_ts"], errors="ignore")
-
-    return merged
-
-
-async def _load_equity_gold_features(reader: Any, now: Any) -> dict[str, Any]:
-    """Load equity-level Gold datasets with graceful degradation.
-
-    Returns a dict mapping dataset name to DataFrame (or empty DataFrame on failure).
-    """
-    import pandas as pd
-
-    equity_datasets: dict[str, Any] = {}
-
-    for dataset_name in EQUITY_GOLD_DATASETS:
-        try:
-            payload = await asyncio.to_thread(
-                reader.read_gold_features,
-                dataset=dataset_name,
-                asof_time=now,
-            )
-            df = _coerce_dataframe(payload)
-            equity_datasets[dataset_name] = df
-            if not df.empty:
-                logger.info(
-                    f"Loaded equity Gold dataset {dataset_name}: {len(df)} rows",
-                    extra={
-                        "event": "equity_gold_loaded",
-                        "dataset": dataset_name,
-                        "row_count": len(df),
-                    },
-                )
-            else:
-                logger.info(
-                    f"Equity Gold dataset {dataset_name} is empty",
-                    extra={"event": "equity_gold_empty", "dataset": dataset_name},
-                )
-        except Exception as exc:
-            logger.warning(
-                f"Equity Gold dataset {dataset_name} unavailable: {exc}",
-                extra={
-                    "event": "equity_gold_unavailable",
-                    "dataset": dataset_name,
-                    "error": str(exc),
-                },
-            )
-            equity_datasets[dataset_name] = pd.DataFrame()
-
-    return equity_datasets
-
-
-async def _prefetch_heber_gold_data(
-    max_retries: int = 3,
-    retry_delay_seconds: float = 5.0,
-) -> tuple[Any, Any, dict[str, Any]] | None:
-    """Read labels_alert_barriers, meta_label_features, and equity Gold datasets once.
-
-    Retries on empty results to handle transient volume-mount or I/O failures.
-    Returns ``(outcomes_raw, features_raw, equity_gold)`` or ``None`` on failure.
-    """
-    reader = get_heber_reader()
-    now = datetime.now(UTC)
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            outcomes_payload = await asyncio.to_thread(
-                reader.read_gold_features,
-                dataset="labels_alert_barriers",
-                asof_time=now,
-            )
-            features_payload = await asyncio.to_thread(
-                reader.read_gold_features,
-                dataset="meta_label_features",
-                asof_time=now,
-            )
-        except Exception as exc:
-            logger.warning(
-                f"Failed to read Heber gold training datasets (attempt {attempt}/{max_retries}): {exc}",
-                extra={
-                    "event": "pattern_miner_heber_training_read_failed",
-                    "training_source": "heber_gold",
-                    "attempt": attempt,
-                    "max_retries": max_retries,
-                },
-            )
-            if attempt < max_retries:
-                await asyncio.sleep(retry_delay_seconds * attempt)
-                continue
-            return None
-
-        outcomes_raw = _coerce_dataframe(outcomes_payload)
-        features_raw = _coerce_dataframe(features_payload)
-
-        if not outcomes_raw.empty:
-            logger.info(
-                f"Prefetched Heber gold training data: {len(outcomes_raw)} outcomes, {len(features_raw)} features",
-                extra={
-                    "event": "pattern_miner_heber_prefetch_success",
-                    "outcomes_count": len(outcomes_raw),
-                    "features_count": len(features_raw),
-                    "attempt": attempt,
-                },
-            )
-            equity_gold = await _load_equity_gold_features(reader, now)
-            return outcomes_raw, features_raw, equity_gold
-
-        # Empty result -- may be a transient volume issue
-        logger.warning(
-            f"Heber gold data empty on attempt {attempt}/{max_retries}",
-            extra={
-                "event": "pattern_miner_heber_prefetch_empty",
-                "attempt": attempt,
-                "max_retries": max_retries,
-                "data_root": str(reader.data_root),
-                "data_root_exists": reader.data_root.exists(),
-                "gold_dir_exists": (reader.data_root / "gold").exists(),
-            },
-        )
-        if attempt < max_retries:
-            await asyncio.sleep(retry_delay_seconds * attempt)
-
-    logger.error(
-        "Heber gold data empty after all retries",
-        extra={
-            "event": "pattern_miner_heber_prefetch_exhausted",
-            "max_retries": max_retries,
-        },
-    )
-    return None
-
-
-async def _fetch_training_data_from_heber(
-    *,
-    cutoff: datetime,
-    min_samples: int,
-    trade_type_filter: str | None,
-    quick_winner_seconds: int,
-    prefetched: tuple[Any, Any, dict[str, Any]] | None = None,
-) -> tuple[Any, list[str]]:
-    import pandas as pd
-
-    if prefetched is not None:
-        outcomes_raw, features_raw, equity_gold = prefetched
-    else:
-        result = await _prefetch_heber_gold_data()
-        if result is None:
-            return None, []
-        outcomes_raw, features_raw, equity_gold = result
-
-    logger.info(f"Raw outcomes size: {len(outcomes_raw)}")
-    logger.info(f"Raw features size: {len(features_raw)}")
-
-    _validate_heber_training_contract(outcomes_raw, features_raw)
-    outcomes = _normalize_heber_outcomes(outcomes_raw)
-    features = _normalize_heber_features(features_raw)
-
-    logger.info(f"Normalized outcomes size: {len(outcomes)}")
-    logger.info(f"Normalized features size: {len(features)}")
-    outcomes, dropped_no_snapshot = _drop_no_snapshot_outcomes(outcomes)
-    if dropped_no_snapshot:
-        logger.warning(
-            f"Dropped {dropped_no_snapshot} no-snapshot outcomes from pattern-miner training set",
-            extra={
-                "event": "pattern_miner_drop_no_snapshot_outcomes",
-                "dropped_rows": dropped_no_snapshot,
-                "remaining_rows": len(outcomes),
-            },
-        )
-    if outcomes.empty:
-        logger.warning("No Heber outcomes available for pattern-miner training")
-        return None, []
-
-    merged = outcomes.merge(features, on="event_id", how="left")
-    merged = merged[pd.to_datetime(merged["entry_ts"], utc=True, errors="coerce") >= cutoff]
-    merged = _apply_trade_type_filter(merged, trade_type_filter)
-
-    if len(merged) < min_samples:
-        logger.warning(f"Insufficient Heber samples: {len(merged)} < {min_samples}")
-        return None, []
-
-    # Asof-join equity-level Gold features to alert-level training data
-    equity_joined_count = 0
-    for dataset_name, feature_cols in EQUITY_GOLD_DATASETS.items():
-        equity_df = equity_gold.get(dataset_name, pd.DataFrame())
-        if not equity_df.empty:
-            pre_cols = set(merged.columns)
-            merged = _join_equity_features(
-                alert_df=merged,
-                equity_df=equity_df,
-                feature_cols=feature_cols,
-                alert_symbol_col="symbol" if "symbol" in merged.columns else "ticker",
-                alert_ts_col="entry_ts",
-            )
-            new_cols = set(merged.columns) - pre_cols
-            if new_cols:
-                equity_joined_count += len(new_cols)
-                logger.info(
-                    f"Joined {len(new_cols)} features from {dataset_name}",
-                    extra={
-                        "event": "equity_features_joined",
-                        "dataset": dataset_name,
-                        "new_columns": sorted(new_cols),
-                    },
-                )
-
-    if equity_joined_count > 0:
-        logger.info(
-            f"Total equity features joined: {equity_joined_count}",
-            extra={"event": "equity_features_join_summary", "total_joined": equity_joined_count},
-        )
-    else:
-        logger.warning(
-            "No equity Gold features available; training with alert-level features only",
-            extra={"event": "equity_features_unavailable_training"},
-        )
-
-    # Compute derived features (iv_vs_realized, vega_theta_ratio, etc.)
-    from orion.ml.derived_features import compute_derived_features_batch
-
-    merged = compute_derived_features_batch(merged)
-
-    # Compute runtime-derived flow normalization ratios
-    for num_col, denom_col, out_col in [
-        ("premium", "adv_premium_20d", "premium_vs_adv"),
-        ("volume", "adv_volume_20d", "volume_vs_adoi"),
-        ("open_interest", "adv_oi_20d", "relative_oi_buildup"),
-    ]:
-        if num_col in merged.columns and denom_col in merged.columns:
-            num = pd.to_numeric(merged[num_col], errors="coerce")
-            denom = pd.to_numeric(merged[denom_col], errors="coerce")
-            with np.errstate(divide="ignore", invalid="ignore"):
-                ratio = num / denom
-            ratio[~np.isfinite(ratio)] = np.nan
-            merged[out_col] = ratio
-        else:
-            merged[out_col] = pd.NA
-
-    feature_names = FEATURE_COLUMNS + CATEGORICAL_COLUMNS
-    for feature_name in feature_names:
-        if feature_name not in merged.columns:
-            merged[feature_name] = pd.NA
-
-    hit_tp = pd.to_numeric(merged["hit_tp_first"], errors="coerce").fillna(0).astype(int) > 0
-    outcome = merged["outcome"].astype(str).str.lower()
-    hit_stop = outcome.isin({"hit_sl", "stop_loss", "stop"})
-
-    merged["target_hit_target_50"] = hit_tp.astype(int)
-    merged["target_avoid_stop"] = (~hit_stop).astype(int)
-    merged["target_hit_target_100"] = hit_tp.astype(int)
-    trading_minutes = pd.to_numeric(merged["trading_minutes_to_hit"], errors="coerce").fillna(float("inf"))
-    merged["target_quick_winner"] = (hit_tp & (trading_minutes * 60 <= quick_winner_seconds)).astype(int)
-
-    columns = (
-        ["event_id", "entry_ts"]
-        + FEATURE_COLUMNS
-        + CATEGORICAL_COLUMNS
-        + ["target_hit_target_50", "target_avoid_stop", "target_hit_target_100", "target_quick_winner"]
-    )
-    merged = merged.reindex(columns=columns)
-
-    logger.info(
-        f"Fetched {len(merged)} pattern-miner samples from Heber gold datasets",
-        extra={
-            "event": "pattern_miner_heber_training_loaded",
-            "sample_count": len(merged),
-            "training_source": "heber_gold",
-        },
-    )
-    return merged, feature_names
-
-
-def get_quick_winner_target(seconds_threshold: int) -> str:
-    """Generate quick_winner target SQL with bucket-specific time threshold."""
-    return f"""
-        CASE WHEN hit_50_pct_ts IS NOT NULL
-             AND time_to_50_pct_seconds IS NOT NULL
-             AND time_to_50_pct_seconds < {seconds_threshold}
-             AND (hit_stop_20_pct_ts IS NULL OR hit_50_pct_ts < hit_stop_20_pct_ts)
-        THEN 1 ELSE 0 END
-    """
+# ── Schema refresh config helpers ────────────────────────────────────────
 
 
 def _exit_classifier_schema_refresh_config_from_env() -> tuple[bool, bool]:
@@ -921,381 +134,11 @@ def _exit_classifier_schema_refresh_mode(force_schema_refresh: bool, refresh_eac
     return "prefetch_once"
 
 
-# Trade bucket configurations with bucket-specific lookback windows
-TRADE_BUCKET_CONFIGS = {
-    "0DTE": {
-        "filter": "trade_type = '0DTE'",
-        "window_days": 10,  # Short lookback - fast-changing dynamics
-        "min_samples": 50,
-        "quick_winner_seconds": 3600,  # 1 hour - fast moves expected
-        "description": "Same-day expiry options",
-    },
-    "SHORT_SWING": {
-        "filter": "trade_type = 'SHORT_SWING'",
-        "window_days": 20,  # 1-3 DTE trades
-        "min_samples": 50,
-        "quick_winner_seconds": 14400,  # 4 hours
-        "description": "1-3 day expiry options",
-    },
-    "SWING": {
-        "filter": "trade_type = 'SWING'",
-        "window_days": 45,  # 3-14 DTE trades
-        "min_samples": 30,
-        "quick_winner_seconds": 86400,  # 1 day
-        "description": "3-14 day expiry options",
-    },
-    "POSITION": {
-        "filter": "trade_type = 'POSITION'",
-        "window_days": 90,  # Long-term trades need more history
-        "min_samples": 20,
-        "quick_winner_seconds": 259200,  # 3 days
-        "description": "14+ day expiry options",
-    },
-}
-
-
-async def fetch_training_data(
-    window_days: int = 30,
-    min_samples: int = 100,
-    trade_type_filter: str | None = None,
-    quick_winner_seconds: int = 3600,
-    prefetched: tuple[Any, Any, dict[str, Any]] | None = None,
-) -> tuple[Any, list[str]]:
-    """
-    Fetch training data for pattern miner.
-
-    Args:
-        window_days: Number of days to look back
-        min_samples: Minimum samples required
-        trade_type_filter: Optional SQL filter for trade_type (e.g., "trade_type = '0DTE'")
-        quick_winner_seconds: Time threshold for quick_winner target (bucket-specific)
-        prefetched: Pre-loaded (outcomes_raw, features_raw, equity_gold) tuple to avoid
-            redundant disk reads when training multiple buckets.
-
-    Returns:
-        Tuple of (pandas DataFrame, list of feature names)
-    """
-    cutoff = datetime.now(UTC) - timedelta(days=window_days)
-    return await _fetch_training_data_from_heber(
-        cutoff=cutoff,
-        min_samples=min_samples,
-        trade_type_filter=trade_type_filter,
-        quick_winner_seconds=quick_winner_seconds,
-        prefetched=prefetched,
-    )
-
-
-def prepare_features(df: Any, feature_names: list[str]) -> tuple[Any, Any, dict[str, list[str]]]:
-    """
-    Prepare feature matrix X from dataframe.
-
-    Returns:
-        Tuple of (X feature matrix, feature_names used, categorical_mappings)
-    """
-    import pandas as pd
-
-    X = df[feature_names].copy()  # noqa: N806
-
-    # Cast numeric feature columns
-    for col in feature_names:
-        if col not in CATEGORICAL_COLUMNS:
-            X[col] = pd.to_numeric(X[col], errors="coerce")
-
-    # Encode categoricals and persist the category-to-code mapping
-    categorical_mappings: dict[str, list[str]] = {}
-    for col in CATEGORICAL_COLUMNS:
-        if col in X.columns:
-            cat = pd.Categorical(X[col])
-            categorical_mappings[col] = list(cat.categories.astype(str))
-            X[col] = cat.codes  # noqa: N806
-
-    # Fill missing with -999 (LightGBM handles this)
-    X = X.fillna(-999)  # noqa: N806
-
-    return X, feature_names, categorical_mappings
-
-
-def train_model(
-    X: Any,  # noqa: N803
-    y: Any,
-    test_size: float = 0.2,
-    use_walk_forward: bool = True,
-    n_splits: int = 5,
-    dates: Any = None,
-) -> tuple[Any, float, float]:
-    """
-    Train LightGBM classifier using walk-forward or random validation.
-
-    Args:
-        X: Feature matrix
-        y: Target labels
-        test_size: Holdout size (only used if walk_forward=False)
-        use_walk_forward: If True, use time-series walk-forward CV
-        n_splits: Number of walk-forward folds
-        dates: Timestamps for ordering (required if use_walk_forward=True)
-
-    Returns:
-        Tuple of (model, train_auc, holdout_auc)
-    """
-
-    # LightGBM parameters - fast and interpretable
-    params = {
-        "objective": "binary",
-        "metric": "auc",
-        "boosting_type": "gbdt",
-        "num_leaves": 16,  # Keep trees shallow for interpretability
-        "max_depth": 4,
-        "learning_rate": 0.1,
-        "n_estimators": 100,
-        "min_child_samples": 20,
-        "verbose": -1,
-    }
-
-    if use_walk_forward and dates is not None:
-        return _train_walk_forward(X, y, dates, params, n_splits)
-
-    return _train_random_split(X, y, params, test_size)
-
-
-def _train_random_split(X: Any, y: Any, params: dict, test_size: float) -> tuple[Any, float, float]:  # noqa: N803
-    """Train with random train/test split (legacy behavior)."""
-    import lightgbm as lgb
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import train_test_split
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)  # noqa: N806
-
-    model = lgb.LGBMClassifier(**params)
-    model.fit(X_train, y_train)
-
-    train_pred = model.predict_proba(X_train)[:, 1]
-    test_pred = model.predict_proba(X_test)[:, 1]
-
-    train_auc = roc_auc_score(y_train, train_pred)
-    holdout_auc = roc_auc_score(y_test, test_pred)
-
-    logger.info(
-        f"Model trained (random split): train_auc={train_auc:.3f}, holdout_auc={holdout_auc:.3f}",
-        extra={"event": "ml_model_train", "method": "random_split", "train_auc": train_auc, "holdout_auc": holdout_auc},
-    )
-
-    return model, train_auc, holdout_auc
-
-
-def _train_walk_forward(X: Any, y: Any, dates: Any, params: dict, n_splits: int = 5) -> tuple[Any, float, float]:  # noqa: N803
-    """
-    Train with walk-forward (expanding window) validation.
-
-    This prevents look-ahead bias by always training on past data
-    and testing on future data.
-    """
-    import lightgbm as lgb
-    import numpy as np
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import TimeSeriesSplit
-
-    # Sort by date to ensure temporal ordering
-    sort_idx = np.argsort(dates)
-    x_sorted = X.iloc[sort_idx] if hasattr(X, "iloc") else X[sort_idx]
-    y_sorted = y.iloc[sort_idx] if hasattr(y, "iloc") else y[sort_idx]
-
-    tscv = TimeSeriesSplit(n_splits=n_splits)
-
-    fold_aucs = []
-
-    for fold, (train_idx, test_idx) in enumerate(tscv.split(x_sorted)):
-        x_train, x_test = x_sorted.iloc[train_idx], x_sorted.iloc[test_idx]
-        y_train, y_test = y_sorted.iloc[train_idx], y_sorted.iloc[test_idx]
-
-        # Skip if either class is missing
-        if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
-            logger.warning(f"Fold {fold + 1}: Skipped due to single class")
-            continue
-
-        model = lgb.LGBMClassifier(**params)
-        model.fit(x_train, y_train)
-
-        test_pred = model.predict_proba(x_test)[:, 1]
-        fold_auc = roc_auc_score(y_test, test_pred)
-        fold_aucs.append(fold_auc)
-
-        logger.debug(f"Fold {fold + 1}/{n_splits}: AUC={fold_auc:.3f}")
-
-    if not fold_aucs:
-        logger.warning("Walk-forward CV failed: no valid folds")
-        return _train_random_split(X, y, params, 0.2)
-
-    avg_auc = np.mean(fold_aucs)
-    std_auc = np.std(fold_aucs)
-
-    # Final model: train on all data (for production use)
-    final_model = lgb.LGBMClassifier(**params)
-    final_model.fit(x_sorted, y_sorted)
-
-    # Use average CV AUC as holdout estimate
-    train_pred = final_model.predict_proba(x_sorted)[:, 1]
-    train_auc = roc_auc_score(y_sorted, train_pred)
-
-    logger.info(
-        f"Model trained (walk-forward): cv_auc={avg_auc:.3f}±{std_auc:.3f}, train_auc={train_auc:.3f}",
-        extra={
-            "event": "ml_model_train",
-            "method": "walk_forward",
-            "n_splits": n_splits,
-            "cv_auc": avg_auc,
-            "cv_std": std_auc,
-            "train_auc": train_auc,
-        },
-    )
-
-    # Return CV AUC as holdout estimate (more realistic than full-data train AUC)
-    return final_model, train_auc, avg_auc
-
-
-def save_model(
-    model: Any,
-    model_type: str,
-    feature_names: list[str],
-    categorical_mappings: dict[str, list[str]] | None = None,
-) -> Path | None:
-    """
-    Save trained model to disk for MLScorer to load.
-
-    Args:
-        model: Trained LightGBM model
-        model_type: Model identifier (e.g., "SWING_hit_target_50")
-        feature_names: List of feature names used for training
-        categorical_mappings: Column name to ordered category list used during encoding
-
-    Returns:
-        Path to saved model, or None if save failed
-    """
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-    model_path = MODEL_DIR / f"{model_type}.pkl"
-
-    try:
-        model_data = {
-            "model": model,
-            "feature_names": feature_names,
-            "model_type": model_type,
-            "created_at": datetime.now(UTC).isoformat(),
-            "categorical_mappings": categorical_mappings or {},
-        }
-        with open(model_path, "wb") as f:
-            pickle.dump(model_data, f)
-
-        logger.info(
-            f"Saved model to {model_path}",
-            extra={"event": "model_saved", "model_type": model_type, "path": str(model_path)},
-        )
-        return model_path
-    except Exception as e:
-        logger.error(f"Failed to save model {model_type}: {e}")
-        return None
-
-
-def extract_feature_importance(
-    model: Any,
-    feature_names: list[str],
-    top_k: int = 10,
-) -> list[FeatureImportance]:
-    """
-    Extract top feature importances from trained model.
-    """
-    importances = model.feature_importances_
-    indices = np.argsort(importances)[::-1][:top_k]
-
-    results = []
-    for rank, idx in enumerate(indices, 1):
-        results.append(
-            FeatureImportance(
-                feature=feature_names[idx],
-                importance=float(importances[idx]),
-                rank=rank,
-            )
-        )
-
-    return results
-
-
-def extract_tree_rules(
-    model: Any,
-    feature_names: list[str],
-    X: Any,  # noqa: N803
-    y: Any,
-    top_k: int = 5,
-) -> list[TreeRule]:
-    """
-    Extract human-readable rules from decision tree splits.
-
-    Uses the first tree and extracts the most predictive leaf nodes.
-    """
-    import pandas as pd
-
-    rules = []
-
-    # Get leaf assignments for each sample
-    leaf_indices = model.predict(X, pred_leaf=True)
-
-    if len(leaf_indices.shape) > 1:
-        # Use first tree only for interpretability
-        leaf_indices = leaf_indices[:, 0]
-
-    # Calculate hit rate per leaf
-    df_leaves = pd.DataFrame({"leaf": leaf_indices, "target": y.values})
-    leaf_stats = (
-        df_leaves.groupby("leaf")
-        .agg(
-            hit_rate=("target", "mean"),
-            sample_size=("target", "count"),
-        )
-        .reset_index()
-    )
-
-    # Filter to leaves with enough samples
-    leaf_stats = leaf_stats[leaf_stats["sample_size"] >= 10]
-
-    # Sort by hit rate deviation from base rate (most informative)
-    base_rate = y.mean()
-    leaf_stats["deviation"] = abs(leaf_stats["hit_rate"] - base_rate)
-    leaf_stats = leaf_stats.sort_values("deviation", ascending=False).head(top_k)
-
-    # Generate rule descriptions (simplified - would need tree structure for exact rules)
-    for _, row in leaf_stats.iterrows():
-        # Get samples in this leaf
-        mask = leaf_indices == row["leaf"]
-        leaf_X = X[mask]  # noqa: N806
-
-        # Find distinguishing features (simplified heuristic)
-        conditions = []
-        for feat in feature_names[:3]:  # Top 3 features
-            if feat in leaf_X.columns:
-                mean_val = leaf_X[feat].mean()
-                overall_mean = X[feat].mean()
-                if mean_val > overall_mean * 1.2:
-                    conditions.append(f"{feat} > avg")
-                elif mean_val < overall_mean * 0.8:
-                    conditions.append(f"{feat} < avg")
-
-        condition_str = " AND ".join(conditions) if conditions else f"Leaf {row['leaf']}"
-
-        rules.append(
-            TreeRule(
-                condition=condition_str,
-                hit_rate=float(row["hit_rate"]),
-                sample_size=int(row["sample_size"]),
-                confidence=min(1.0, row["sample_size"] / 50),  # Simple confidence metric
-            )
-        )
-
-    return rules
+# ── Persistence ──────────────────────────────────────────────────────────
 
 
 async def get_last_week_importance(model_type: str) -> dict[str, float]:
-    """
-    Fetch last week's feature importance for drift detection.
-    """
+    """Fetch last week's feature importance for drift detection."""
 
     cutoff = datetime.now(UTC) - timedelta(days=7)
 
@@ -1317,13 +160,10 @@ async def get_last_week_importance(model_type: str) -> dict[str, float]:
 
 
 async def persist_insight(insight: PatternInsight) -> None:
-    """
-    Persist pattern insight to database.
-    """
+    """Persist pattern insight to database."""
     from orion.storage.models_ml import MLFeatureImportanceHistory, MLPatternInsight
 
     async def write(session: Any) -> None:
-        # Save main insight
         session.add(
             MLPatternInsight(
                 insight_id=insight.insight_id,
@@ -1341,7 +181,6 @@ async def persist_insight(insight: PatternInsight) -> None:
             )
         )
 
-        # Save feature importance history
         for feat in insight.top_features:
             session.add(
                 MLFeatureImportanceHistory(
@@ -1356,29 +195,18 @@ async def persist_insight(insight: PatternInsight) -> None:
     await db_write(write)
 
 
+# ── Orchestration ────────────────────────────────────────────────────────
+
+
 async def run_pattern_mining(
     target_name: str = "hit_target_50",
     bucket_name: str | None = None,
     bucket_config: dict[str, Any] | None = None,
     prefetched: tuple[Any, Any, dict[str, Any]] | None = None,
 ) -> PatternInsight | None:
-    """
-    Run full pattern mining pipeline for a single target and optional bucket.
-
-    Args:
-        target_name: Target to predict (hit_target_50, avoid_stop)
-        bucket_name: Trade bucket name (0DTE, SHORT_SWING, SWING, POSITION)
-        bucket_config: Config dict with filter, window_days, min_samples
-        prefetched: Pre-loaded (outcomes_raw, features_raw, equity_gold) tuple to avoid
-            redundant disk reads when training multiple buckets.
-
-    Returns:
-        PatternInsight if successful, None otherwise.
-    """
-    # Determine model_type name (includes bucket if specified)
+    """Run full pattern mining pipeline for a single target and optional bucket."""
     model_type = f"{bucket_name}_{target_name}" if bucket_name else target_name
 
-    # Get config values
     window_days = bucket_config.get("window_days", 30) if bucket_config else 30
     min_samples = bucket_config.get("min_samples", 50) if bucket_config else 50
     trade_filter = bucket_config.get("filter") if bucket_config else None
@@ -1389,7 +217,7 @@ async def run_pattern_mining(
         extra={"bucket": bucket_name, "target": target_name, "window_days": window_days},
     )
 
-    # 1. Fetch data (filtered by bucket)
+    # 1. Fetch data
     df, feature_names = await fetch_training_data(
         window_days=window_days,
         min_samples=min_samples,
@@ -1405,12 +233,11 @@ async def run_pattern_mining(
     X, feature_names, categorical_mappings = prepare_features(df, feature_names)  # noqa: N806
     y = df[f"target_{target_name}"]
 
-    # Check for valid target distribution
     if y.nunique() < 2:
         logger.warning(f"Target has no variance for {model_type}, skipping")
         return None
 
-    # 3. Train model with walk-forward CV
+    # 3. Train model
     try:
         dates = df["entry_ts"] if "entry_ts" in df.columns else None
         model, train_auc, holdout_auc = train_model(X, y, dates=dates)
@@ -1418,7 +245,7 @@ async def run_pattern_mining(
         logger.error(f"Model training failed for {model_type}: {e}")
         return None
 
-    # 4. Save model to disk for MLScorer (only save if AUC is acceptable)
+    # 4. Save model
     if holdout_auc >= 0.55:
         save_model(model, model_type, feature_names, categorical_mappings)
     else:
@@ -1431,7 +258,7 @@ async def run_pattern_mining(
     top_features = extract_feature_importance(model, feature_names, top_k=10)
     top_rules = extract_tree_rules(model, feature_names, X, y, top_k=5)
 
-    # 5. Detect drift
+    # 6. Detect drift
     last_week = await get_last_week_importance(model_type)
     degraded = []
     for feat in top_features[:5]:
@@ -1439,10 +266,10 @@ async def run_pattern_mining(
             old_imp = last_week[feat.feature]
             delta = (feat.importance - old_imp) / max(old_imp, 0.01)
             feat.delta_vs_last_week = delta
-            if delta < -0.3:  # 30% drop
+            if delta < -0.3:
                 degraded.append(f"{feat.feature} (dropped {abs(delta):.0%})")
 
-    # 6. Build insight
+    # 7. Build insight
     insight = PatternInsight(
         insight_id=hashlib.sha256(f"{model_type}_{datetime.now(UTC).isoformat()}".encode()).hexdigest()[:16],
         created_at_utc=datetime.now(UTC),
@@ -1458,7 +285,7 @@ async def run_pattern_mining(
         metadata={"bucket": bucket_name, "target": target_name},
     )
 
-    # 7. Persist
+    # 8. Persist
     await persist_insight(insight)
 
     logger.info(
@@ -1476,19 +303,14 @@ async def run_pattern_mining(
 
 
 async def run_all_pattern_mining() -> MLInsightsSummary:
-    """
-    Run pattern mining for all bucket x target combinations.
+    """Run pattern mining for all bucket x target combinations.
 
     Produces 4 buckets x 4 targets = 16 entry models + 4 exit models.
     """
     insights: dict[str, PatternInsight] = {}
     alerts: list[str] = []
 
-    # Prefetch Heber Gold data ONCE for all bucket x target combinations.
-    # Previously each of the 16 iterations re-read the same parquet datasets
-    # from disk, which was both slow and fragile (a transient volume-mount
-    # failure during the read window would zero-out every bucket).
-    prefetched = await _prefetch_heber_gold_data()
+    prefetched = await prefetch_heber_gold_data()
     if prefetched is None:
         logger.error(
             "Cannot train any models: Heber gold data unavailable after retries",
@@ -1501,8 +323,6 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
             alerts=alerts,
         )
 
-    # Train entry models: Iterate over each bucket x target
-    # Include quick_winner which is dynamically generated per bucket
     all_target_names = list(TARGETS.keys()) + ["quick_winner"]
     for bucket_name, bucket_config in TRADE_BUCKET_CONFIGS.items():
         for target_name in all_target_names:
@@ -1516,7 +336,6 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
                 if insight:
                     insights[insight.model_type] = insight
 
-                    # Generate alerts
                     if insight.holdout_auc < 0.55:
                         alerts.append(f"{insight.model_type}: Model AUC very low ({insight.holdout_auc:.2f})")
                     if insight.degraded_features:
@@ -1529,7 +348,7 @@ async def run_all_pattern_mining() -> MLInsightsSummary:
                 logger.error(f"Pattern mining failed for {model_type}: {e}", exc_info=True)
                 alerts.append(f"{model_type}: Mining failed - {str(e)[:50]}")
 
-    # Train exit models: Retrain exit classifiers for each bucket
+    # Train exit models
     try:
         from orion.ml.exit_classifier import train_all_exit_classifiers
 
