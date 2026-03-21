@@ -49,7 +49,7 @@ async def test_fetch_silver_events_prefers_heber(monkeypatch: pytest.MonkeyPatch
         }
     )
 
-    monkeypatch.setattr("orion.agents.meta_search_agent.get_heber_reader", lambda: fake_reader)
+    monkeypatch.setattr("orion.agents.heber_event_mapper.get_heber_reader", lambda: fake_reader)
 
     bars, flows, price_data = await agent._fetch_silver_events(task)
 
@@ -77,7 +77,7 @@ async def test_fetch_silver_events_returns_empty_when_heber_unavailable(monkeypa
     fake_reader.read_bars.side_effect = RuntimeError("heber unavailable")
     fake_reader.read_flow.side_effect = RuntimeError("heber unavailable")
 
-    monkeypatch.setattr("orion.agents.meta_search_agent.get_heber_reader", lambda: fake_reader)
+    monkeypatch.setattr("orion.agents.heber_event_mapper.get_heber_reader", lambda: fake_reader)
     assert not hasattr(MetaSearchAgent, "_fetch_events_from_local_sql")
 
     bars, flows, price_data = await agent._fetch_silver_events(task)

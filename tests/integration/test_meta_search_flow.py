@@ -110,16 +110,14 @@ async def test_meta_search_flow():
         await session.commit()
 
     print("Starting Evolution...")
-    # 2. Run Evolution Cycle
-    # Patch _read_heber_frames so the test does not attempt live Parquet I/O against
+    # Patch fetch_events_from_heber so the test does not attempt live Parquet I/O against
     # /Volumes/heber.  The test verifies orchestration logic (experiment creation,
     # SolverEdit persistence, metrics storage) — not data ingestion.  Returning empty
-    # DataFrames causes evaluate_variant to take the fast "no_data" path, which still
+    # tuples causes evaluate_variant to take the fast "no_data" path, which still
     # produces a SolverRun + SolverMetrics row (sharpe=0, note="no_data").
-    with patch.object(
-        agent,
-        "_read_heber_frames",
-        new=AsyncMock(return_value=(pd.DataFrame(), pd.DataFrame())),
+    with patch(
+        "orion.agents.meta_search_agent.fetch_events_from_heber",
+        new=AsyncMock(return_value=([], [], {})),
     ):
         await agent.run_evolution_cycle(base_id, experiment_name="IntegrationTest")
     print("Evolution Complete.")

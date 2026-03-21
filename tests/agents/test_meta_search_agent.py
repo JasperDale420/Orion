@@ -780,9 +780,10 @@ class TestMaybeAddExpiryDte:
     """Test _maybe_add_expiry_dte helper."""
 
     def test_no_expiry_value(self):
-        agent = _make_agent()
+        from orion.agents.heber_event_mapper import _maybe_add_expiry_dte
+
         payload = {}
-        agent._maybe_add_expiry_dte(payload, None, MagicMock())
+        _maybe_add_expiry_dte(payload, None, MagicMock())
 
         assert "expiry" not in payload
         assert "dte" not in payload
@@ -790,12 +791,13 @@ class TestMaybeAddExpiryDte:
     def test_valid_expiry_adds_dte(self):
         import pandas as pd
 
-        agent = _make_agent()
+        from orion.agents.heber_event_mapper import _maybe_add_expiry_dte
+
         payload = {}
         flow_ts = pd.Timestamp("2026-01-10", tz="UTC")
         expiry_value = "2026-01-17"
 
-        agent._maybe_add_expiry_dte(payload, expiry_value, flow_ts)
+        _maybe_add_expiry_dte(payload, expiry_value, flow_ts)
 
         assert payload["expiry"] == "2026-01-17"
         assert payload["dte"] == 7
@@ -803,12 +805,13 @@ class TestMaybeAddExpiryDte:
     def test_invalid_expiry_no_dte(self):
         import pandas as pd
 
-        agent = _make_agent()
+        from orion.agents.heber_event_mapper import _maybe_add_expiry_dte
+
         payload = {}
         flow_ts = pd.Timestamp("2026-01-10", tz="UTC")
         expiry_value = "not_a_date"
 
-        agent._maybe_add_expiry_dte(payload, expiry_value, flow_ts)
+        _maybe_add_expiry_dte(payload, expiry_value, flow_ts)
 
         # Expiry is still set but dte is not computed
         assert payload["expiry"] == "not_a_date"
