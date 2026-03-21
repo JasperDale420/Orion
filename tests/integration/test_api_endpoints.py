@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 from orion.api.deps import get_db
 from orion.api.main import app
+from orion.config import system_settings
 from orion.storage.models_solvers import Solver
 
 
@@ -83,7 +84,7 @@ def _override_dependency():
 
 @pytest.mark.asyncio
 async def test_read_solvers(monkeypatch):
-    monkeypatch.setenv("ORION_API_KEY", "test_secret_key")
+    monkeypatch.setattr(system_settings, "api_key", "test_secret_key")
     headers = {"x-api-key": "test_secret_key"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -100,7 +101,7 @@ async def test_read_solvers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_read_solver_detail(monkeypatch):
-    monkeypatch.setenv("ORION_API_KEY", "test_secret_key")
+    monkeypatch.setattr(system_settings, "api_key", "test_secret_key")
     headers = {"x-api-key": "test_secret_key"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -115,7 +116,7 @@ async def test_read_solver_detail(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_health_check(monkeypatch):
-    monkeypatch.setenv("ORION_API_KEY", "test_secret_key")
+    monkeypatch.setattr(system_settings, "api_key", "test_secret_key")
     # Health might not need auth, but depends on global router.
     # Checking main.py: @app.get("/health") is open.
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

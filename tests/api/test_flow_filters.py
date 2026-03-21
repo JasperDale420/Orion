@@ -5,11 +5,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from orion.api.main import app
+from orion.config import system_settings
 
 
 @pytest.mark.asyncio
 async def test_flows_endpoint_supports_min_premium_filter_from_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_API_KEY", "testkey")
+    monkeypatch.setattr(system_settings, "api_key", "testkey")
 
     now = datetime.now(UTC).replace(microsecond=0)
     flow_df = pd.DataFrame(
@@ -68,7 +69,7 @@ async def test_flows_endpoint_supports_min_premium_filter_from_heber(monkeypatch
 
 @pytest.mark.asyncio
 async def test_flows_endpoint_returns_empty_when_heber_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_API_KEY", "testkey")
+    monkeypatch.setattr(system_settings, "api_key", "testkey")
 
     class _FakeReader:
         def read_flow(self, **_kwargs):  # type: ignore[no-untyped-def]

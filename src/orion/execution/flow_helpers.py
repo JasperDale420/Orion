@@ -7,7 +7,6 @@ and position-to-flow scoping for exit rule evaluation.
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -16,12 +15,11 @@ from typing import Any
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.config import system_settings
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.execution.flow_helpers")
-
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +136,7 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _prefer_heber_recent_flow_source() -> bool:
-    raw = os.getenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "1").strip().lower()
-    return raw not in _PREFER_HEBER_FALSE_VALUES
+    return system_settings.execution_prefer_heber_recent_flow
 
 
 async def _fetch_recent_flow_from_heber(ticker: str, minutes: int) -> list[Any] | None:

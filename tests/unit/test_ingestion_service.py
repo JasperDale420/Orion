@@ -71,8 +71,10 @@ class TestIngestionServiceInit:
 
     @pytest.mark.unit
     def test_constructor_with_explicit_run_id(self, monkeypatch):
-        """Verify ORION_RUN_ID env var is used when set."""
-        monkeypatch.setenv("ORION_RUN_ID", "test-run-42")
+        """Verify system_settings.run_id is used when set."""
+        from orion.config import system_settings
+
+        monkeypatch.setattr(system_settings, "run_id", "test-run-42")
 
         with (
             patch("orion.ingestion.service.HealthMonitor"),

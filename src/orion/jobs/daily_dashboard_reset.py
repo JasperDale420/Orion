@@ -12,7 +12,6 @@ Requires:
 
 import asyncio
 import logging
-import os
 import sys
 
 import httpx
@@ -23,8 +22,8 @@ from orion.config import system_settings
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-ORION_API_URL = os.getenv("ORION_API_URL", "http://localhost:8000")
-ORION_API_KEY = os.getenv("ORION_API_KEY") or system_settings.api_key
+ORION_API_URL = system_settings.orion_api_url
+ORION_API_KEY = system_settings.api_key
 
 
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))

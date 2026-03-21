@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from orion import main_feature_enrichment as feature_enrichment
+from orion.config import system_settings
 from orion.enrichment import heber_context
 
 
@@ -20,7 +21,7 @@ async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPa
         }
     )
 
-    monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
+    monkeypatch.setattr(system_settings, "feature_enrichment_prefer_heber_context", True)
     monkeypatch.setattr(heber_context._heber_reader, "read_market_tide", lambda **_kwargs: tide_df)
 
     async def _fail_db_query(_query_fn):
@@ -48,7 +49,7 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
         }
     )
 
-    monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
+    monkeypatch.setattr(system_settings, "feature_enrichment_prefer_heber_context", True)
     monkeypatch.setattr(heber_context._heber_reader, "read_bars", lambda **_kwargs: bars_df)
 
     async def _fail_db_query(_query_fn):
@@ -110,7 +111,7 @@ async def test_get_spy_cumulative_return_prefers_heber(monkeypatch: pytest.Monke
         }
     )
 
-    monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
+    monkeypatch.setattr(system_settings, "feature_enrichment_prefer_heber_context", True)
     monkeypatch.setattr(heber_context._heber_reader, "read_bars", lambda **_kwargs: bars_df)
 
     async def _fail_db_query(_query_fn):
@@ -143,7 +144,7 @@ async def test_get_spy_cumulative_return_returns_zero_when_heber_unavailable(mon
 
 @pytest.mark.asyncio
 async def test_context_reads_can_disable_heber(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", "false")
+    monkeypatch.setattr(system_settings, "feature_enrichment_prefer_heber_context", False)
     db_called = {"value": False}
     heber_called = {"value": False}
 

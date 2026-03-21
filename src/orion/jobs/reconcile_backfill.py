@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import logging
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,13 +9,13 @@ import pandas as pd
 from sqlalchemy import func, select
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.config import system_settings
 from orion.core.logging_config import setup_logging
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 
 logger = logging.getLogger(__name__)
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 
 @dataclass(frozen=True)
@@ -42,8 +41,7 @@ DATASET_SPECS: tuple[ReconciliationDataset, ...] = (
 
 
 def _prefer_heber_source() -> bool:
-    raw = os.getenv("ORION_RECONCILE_BACKFILL_PREFER_HEBER", "1").strip().lower()
-    return raw not in _PREFER_HEBER_FALSE_VALUES
+    return system_settings.reconcile_backfill_prefer_heber
 
 
 def _normalize_ticker(value: Any) -> str | None:

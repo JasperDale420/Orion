@@ -66,34 +66,29 @@ class TestGatewayFetchEnabled:
 # _prefer_heber_context_reads
 # ---------------------------------------------------------------------------
 class TestPreferHeberContextReads:
-    """Tests for _prefer_heber_context_reads() env var parsing."""
+    """Tests for _prefer_heber_context_reads() config-driven toggling."""
 
     @pytest.mark.unit
     @pytest.mark.parametrize(
-        "env_value,expected",
+        "config_value,expected",
         [
-            ("1", True),
-            ("true", True),
-            ("yes", True),
-            ("0", False),
-            ("false", False),
-            ("no", False),
-            ("off", False),
-            ("n", False),
+            (True, True),
+            (False, False),
         ],
     )
-    def test_truthy_and_falsy_values(self, env_value, expected, monkeypatch):
-        monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", env_value)
+    def test_truthy_and_falsy_values(self, config_value, expected, monkeypatch):
+        from orion.config import system_settings
+
+        monkeypatch.setattr(system_settings, "feature_enrichment_prefer_heber_context", config_value)
         from orion.main_feature_enrichment import _prefer_heber_context_reads
 
         assert _prefer_heber_context_reads() is expected
 
     @pytest.mark.unit
-    def test_default_is_true(self, monkeypatch):
-        monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
+    def test_default_is_true(self):
         from orion.main_feature_enrichment import _prefer_heber_context_reads
 
-        # Default env is "1" which is NOT in the false values set
+        # Default is True (field default in SystemSettings)
         assert _prefer_heber_context_reads() is True
 
 

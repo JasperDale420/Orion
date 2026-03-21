@@ -58,9 +58,7 @@ class HealthMonitor:
 
             # In dev/backfill scenarios, laggy events can be expected (e.g., when polling with overlap/backfill).
             # Only trip the global circuit breaker if explicitly enabled.
-            import os
-
-            if os.getenv("ORION_TRIP_CIRCUIT_BREAKER_ON_LAG", "false").lower() == "true":
+            if system_settings.trip_circuit_breaker_on_lag:
                 from orion.core.circuit_breaker import CircuitBreaker
 
                 cb = CircuitBreaker()

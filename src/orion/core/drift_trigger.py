@@ -10,6 +10,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.core.drift_trigger")
@@ -18,7 +19,7 @@ logger = setup_struct_logger("orion.core.drift_trigger")
 DRIFT_THRESHOLD = 0.25
 
 # Flag file location (in artifacts directory)
-DRIFT_FLAG_PATH = os.path.join(os.environ.get("ORION_ARTIFACTS_DIR", "artifacts"), ".drift_trigger")
+DRIFT_FLAG_PATH = os.path.join(system_settings.artifacts_dir, ".drift_trigger")
 
 
 def set_drift_flag(psi_values: dict[str, float], source: str = "eod_agent") -> bool:

@@ -7,20 +7,19 @@ no direct database or gateway I/O happens here.
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
 
 from orion.clients.heber_reader import HeberReader
+from orion.config import system_settings
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.enrichment.heber_context")
 
 STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 _heber_reader = HeberReader()
 _recent_regime_snapshots: list[dict[str, Any]] = []
@@ -32,8 +31,7 @@ _recent_regime_snapshots: list[dict[str, Any]] = []
 
 
 def _prefer_heber_context_reads() -> bool:
-    raw = os.getenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", "1").strip().lower()
-    return raw not in _PREFER_HEBER_FALSE_VALUES
+    return system_settings.feature_enrichment_prefer_heber_context
 
 
 def _coerce_time_series(df: pd.DataFrame) -> pd.Series:

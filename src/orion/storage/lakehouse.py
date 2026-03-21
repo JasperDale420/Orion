@@ -1,4 +1,3 @@
-import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -6,6 +5,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import s3fs
 
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
 
@@ -26,10 +26,10 @@ class LakehouseWriter:
         bucket: str | None = None,
         max_workers: int | None = None,
     ):
-        endpoint_url = endpoint_url or os.getenv("ORION_LAKEHOUSE_ENDPOINT_URL")
-        access_key = access_key or os.getenv("ORION_LAKEHOUSE_ACCESS_KEY")
-        secret_key = secret_key or os.getenv("ORION_LAKEHOUSE_SECRET_KEY")
-        bucket = bucket or os.getenv("ORION_LAKEHOUSE_BUCKET")
+        endpoint_url = endpoint_url or system_settings.lakehouse_endpoint_url
+        access_key = access_key or system_settings.lakehouse_access_key
+        secret_key = secret_key or system_settings.lakehouse_secret_key
+        bucket = bucket or system_settings.lakehouse_bucket
 
         self.enabled = bool(endpoint_url and access_key and secret_key and bucket)
         self.bucket = bucket or ""

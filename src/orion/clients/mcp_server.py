@@ -5,17 +5,17 @@ Client for the Shared-MCP-Server providing Alpaca and Unusual Whales tools.
 Uses HTTP to call MCP tools for trading, market data, and flow analysis.
 """
 
-import os
 from typing import Any
 
 import httpx
 
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.clients.mcp_server")
 
-# Configuration
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+# Configuration (from SystemSettings)
+MCP_SERVER_URL = system_settings.mcp_server_url
 
 
 class MCPServerClient:

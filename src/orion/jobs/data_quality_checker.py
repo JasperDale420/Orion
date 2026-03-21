@@ -15,13 +15,13 @@ Usage:
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.config import system_settings
 from orion.core.logging_config import setup_logging
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import init_db
@@ -34,7 +34,6 @@ CRITICAL_TICKERS = ["SPY", "QQQ", "IWM", "NVDA", "AAPL", "TSLA"]
 # Market hours (Eastern Time, simplified as UTC-5)
 MARKET_OPEN_HOUR = 14  # 9:30 ET = 14:30 UTC
 MARKET_CLOSE_HOUR = 21  # 4:00 PM ET = 21:00 UTC
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
 
 # =============================================================================
@@ -357,8 +356,7 @@ async def run_quality_checks():
 
 
 def _prefer_heber_source() -> bool:
-    raw = os.getenv("ORION_DATA_QUALITY_CHECKER_PREFER_HEBER", "1").strip().lower()
-    return raw not in _PREFER_HEBER_FALSE_VALUES
+    return system_settings.data_quality_checker_prefer_heber
 
 
 def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:

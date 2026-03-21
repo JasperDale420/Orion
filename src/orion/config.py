@@ -144,6 +144,34 @@ class SystemSettings(BaseSettings):
     data_quality_checker_prefer_heber: bool = Field(
         default=True, validation_alias="ORION_DATA_QUALITY_CHECKER_PREFER_HEBER"
     )
+    reconcile_backfill_prefer_heber: bool = Field(
+        default=True, validation_alias="ORION_RECONCILE_BACKFILL_PREFER_HEBER"
+    )
+    execution_prefer_heber_recent_flow: bool = Field(
+        default=True, validation_alias="ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW"
+    )
+    feature_enrichment_prefer_heber_context: bool = Field(
+        default=True, validation_alias="ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT"
+    )
+    feature_enrichment_enable_gateway_fetch: bool = Field(
+        default=False, validation_alias="ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH"
+    )
+
+    # Circuit breaker
+    reset_circuit_breaker_on_start: bool = Field(default=False, validation_alias="ORION_RESET_CIRCUIT_BREAKER_ON_START")
+    trip_circuit_breaker_on_lag: bool = Field(default=False, validation_alias="ORION_TRIP_CIRCUIT_BREAKER_ON_LAG")
+
+    # Client URLs
+    trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")
+    trading_rag_api_key: str | None = Field(default=None, validation_alias="TRADING_RAG_API_KEY")
+    mcp_server_url: str = Field(default="http://localhost:8001", validation_alias="MCP_SERVER_URL")
+    orion_api_url: str = Field(default="http://localhost:8000", validation_alias="ORION_API_URL")
+
+    # Lakehouse (S3-compatible object store)
+    lakehouse_endpoint_url: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_ENDPOINT_URL")
+    lakehouse_access_key: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_ACCESS_KEY")
+    lakehouse_secret_key: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_SECRET_KEY")
+    lakehouse_bucket: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_BUCKET")
 
     # System Monitor
     monitor_lag_threshold: int = Field(default=300, validation_alias="MONITOR_LAG_THRESHOLD")

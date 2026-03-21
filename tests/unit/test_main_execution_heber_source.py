@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from orion import main_execution
+from orion.config import system_settings
 from orion.execution import flow_helpers
 
 
@@ -27,7 +28,7 @@ async def test_fetch_recent_flow_for_ticker_prefers_heber(monkeypatch: pytest.Mo
     )
     mock_db_query = AsyncMock(return_value=[])
 
-    monkeypatch.delenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", raising=False)
+    monkeypatch.setattr(system_settings, "execution_prefer_heber_recent_flow", True)
     monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
     monkeypatch.setattr(main_execution, "db_query", mock_db_query, raising=False)
 
@@ -52,7 +53,7 @@ async def test_fetch_recent_flow_for_ticker_returns_empty_when_heber_unavailable
         db_calls["count"] += 1
         return []
 
-    monkeypatch.delenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", raising=False)
+    monkeypatch.setattr(system_settings, "execution_prefer_heber_recent_flow", True)
     monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
     monkeypatch.setattr(main_execution, "db_query", _db_query, raising=False)
 
@@ -63,7 +64,7 @@ async def test_fetch_recent_flow_for_ticker_returns_empty_when_heber_unavailable
 
 
 def test_prefer_heber_recent_flow_source_env_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "off")
+    monkeypatch.setattr(system_settings, "execution_prefer_heber_recent_flow", False)
     assert main_execution._prefer_heber_recent_flow_source() is False
 
 
@@ -103,7 +104,7 @@ async def test_fetch_recent_flow_for_ticker_skips_heber_when_disabled(monkeypatc
         db_calls["count"] += 1
         return []
 
-    monkeypatch.setenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "false")
+    monkeypatch.setattr(system_settings, "execution_prefer_heber_recent_flow", False)
     monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
     monkeypatch.setattr(main_execution, "db_query", _db_query, raising=False)
 

@@ -5,20 +5,21 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
+from orion.config import system_settings
 from orion.jobs import validate_features
 
 
 def test_prefer_heber_source_from_env_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ORION_VALIDATE_FEATURES_PREFER_HEBER", raising=False)
+    monkeypatch.setattr(system_settings, "validate_features_prefer_heber", True)
     assert validate_features._prefer_heber_source_from_env() is True
 
 
-@pytest.mark.parametrize("value", ["0", "false", "False", "no", "off", "n"])
+@pytest.mark.parametrize("value", [False])
 def test_prefer_heber_source_from_env_false_values(
     monkeypatch: pytest.MonkeyPatch,
-    value: str,
+    value: bool,
 ) -> None:
-    monkeypatch.setenv("ORION_VALIDATE_FEATURES_PREFER_HEBER", value)
+    monkeypatch.setattr(system_settings, "validate_features_prefer_heber", value)
     assert validate_features._prefer_heber_source_from_env() is False
 
 

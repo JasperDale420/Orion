@@ -13,13 +13,13 @@ Usage:
 
 import argparse
 import asyncio
-import os
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -622,14 +622,13 @@ _AUDIT_SOURCE_ORDER = [
     SOURCE_REGIME,
 ]
 
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
+
 _SOURCE_TIME_COLUMNS = ["ts_event", "ts_utc", "bar_start_ts", "flow_ts_utc", "dark_ts_utc", "date"]
 _SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "underlying", "instrument_key"]
 
 
 def _prefer_heber_source_from_env() -> bool:
-    raw = os.getenv("ORION_VALIDATE_FEATURES_PREFER_HEBER", "1").strip().lower()
-    return raw not in _PREFER_HEBER_FALSE_VALUES
+    return system_settings.validate_features_prefer_heber
 
 
 def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:

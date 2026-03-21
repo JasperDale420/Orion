@@ -40,7 +40,7 @@ logger = setup_struct_logger("orion.ingest")
 
 class IngestionService:
     def __init__(self) -> None:
-        self.run_id: str = os.getenv("ORION_RUN_ID") or str(uuid.uuid4())
+        self.run_id: str = system_settings.run_id
         os.environ["ORION_RUN_ID"] = self.run_id
 
         self.shutdown_event = asyncio.Event()
@@ -72,7 +72,7 @@ class IngestionService:
         """Initialize resources that require async execution."""
         logger.info("Initializing Ingestion Service...")
 
-        if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
+        if system_settings.reset_circuit_breaker_on_start:
             try:
                 from orion.core.circuit_breaker import CircuitBreaker
 

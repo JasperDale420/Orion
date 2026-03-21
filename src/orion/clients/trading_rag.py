@@ -5,18 +5,18 @@ Client for querying the TradingRAG service for trading strategy research.
 Provides access to indexed trading books for context-aware Q&A.
 """
 
-import os
 from typing import Any
 
 import httpx
 
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.clients.trading_rag")
 
-# Configuration
-TRADING_RAG_URL = os.getenv("TRADING_RAG_URL", "http://localhost:8005")
-TRADING_RAG_API_KEY = os.getenv("TRADING_RAG_API_KEY", "")
+# Configuration (from SystemSettings)
+TRADING_RAG_URL = system_settings.trading_rag_url
+TRADING_RAG_API_KEY = system_settings.trading_rag_api_key or ""
 
 
 class TradingRAGClient:
