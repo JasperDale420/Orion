@@ -1,5 +1,4 @@
-"""
-UW Feature Enrichment Service.
+"""UW Feature Enrichment Service.
 
 Periodically fetches GEX, Market Tide, Max Pain, IV Rank for tracked tickers.
 Runs as a background service to populate feature tables for ML.
@@ -10,22 +9,25 @@ import os
 import signal
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
 
-import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from orion.analysis.regime import MultiAxisRegimeDetector
-from orion.clients.heber_reader import HeberReader
 from orion.config import system_settings
 from orion.connectors.uw_greek_exposure_connector import UWGreekExposureConnector
 from orion.connectors.uw_iv_rank_connector import UWIVRankConnector
 from orion.connectors.uw_market_tide_connector import UWMarketTideConnector
 from orion.connectors.uw_max_pain_connector import UWMaxPainConnector
 from orion.connectors.vix_proxy_connector import VIXProxyConnector
-from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
+from orion.enrichment.heber_context import (
+    get_active_tickers_with_source,
+    get_latest_market_tide,
+    get_latest_vix_data,
+    get_spy_cumulative_return,
+    persist_regime_snapshot,
+)
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -42,11 +44,23 @@ DEFAULT_ZERO_WRITE_WARN_STREAK = 3
 DEFAULT_LOOP_SLEEP_SECONDS = 30.0
 DEFAULT_LOOP_ERROR_WARN_STREAK = 3
 DEFAULT_NON_HEBER_WARN_STREAK = 3
-STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
-_heber_reader = HeberReader()
-_recent_regime_snapshots: list[dict[str, Any]] = []
+
+# Re-export for backward compatibility (other modules and tests import from here)
+from orion.enrichment.heber_context import (  # noqa: E402, F401
+    STATIC_TICKER_FALLBACK,
+    _coerce_time_series,
+    _extract_tickers_from_bars,
+    _extract_top_tickers_from_flow_df,
+    _get_latest_market_tide_from_heber,
+    _get_latest_vix_data_from_heber,
+    _get_spy_cumulative_return_from_heber,
+    _map_vix_proxy_to_regime,
+    _prefer_heber_context_reads,
+    _try_vix_proxy_from_heber,
+    get_active_tickers,
+    get_active_tickers_with_source as _get_active_tickers_with_source_orig,
+)
 
 
 def _gateway_fetch_enabled() -> bool:
@@ -64,215 +78,6 @@ def _gateway_runtime_contract() -> tuple[str, str]:
         raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
 
     return gateway_url.rstrip("/"), gateway_api_key
-
-
-def _extract_top_tickers_from_flow_df(flow_df: pd.DataFrame, limit: int) -> list[str]:
-    if flow_df.empty:
-        return []
-
-    ticker_col = None
-    for candidate in ("ticker", "symbol", "underlying"):
-        if candidate in flow_df.columns:
-            ticker_col = candidate
-            break
-
-    if ticker_col is None:
-        return []
-
-    ts_col = None
-    for candidate in ("flow_ts_utc", "ts_event", "timestamp", "created_at"):
-        if candidate in flow_df.columns:
-            ts_col = candidate
-            break
-
-    if ts_col is not None:
-        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)
-        ts = pd.to_datetime(flow_df[ts_col], utc=True, errors="coerce")
-        flow_df = flow_df.loc[ts >= cutoff]
-
-    tickers = flow_df[ticker_col].dropna().astype(str).str.upper().str.strip().replace("", pd.NA).dropna()
-    if tickers.empty:
-        return []
-
-    counts = tickers.value_counts()
-    return counts.head(limit).index.tolist()
-
-
-def _prefer_heber_context_reads() -> bool:
-    raw = os.getenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", "1").strip().lower()
-    return raw not in _PREFER_HEBER_FALSE_VALUES
-
-
-def _coerce_time_series(df: pd.DataFrame) -> pd.Series:
-    ts_col = _first_existing_column(df, ["ts_event", "ts_utc", "bar_start_ts", "bar_start_ts_utc", "timestamp"])
-    if ts_col is None:
-        return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
-    return pd.Series(pd.to_datetime(df[ts_col], utc=True, errors="coerce"), index=df.index)
-
-
-def _get_latest_market_tide_from_heber() -> float | None:
-    try:
-        now = datetime.now(UTC)
-        tide_df = _heber_reader.read_market_tide(
-            asof_time=now,
-            start_time=now - pd.Timedelta(days=2),
-        )
-    except Exception:
-        logger.debug("Heber market tide read failed, falling back to local DB", exc_info=True)
-        return None
-
-    if tide_df.empty:
-        return None
-
-    tide_df = tide_df.copy()
-    tide_df["_ts"] = _coerce_time_series(tide_df)
-    if tide_df["_ts"].notna().any():
-        tide_df = tide_df.dropna(subset=["_ts"]).sort_values("_ts", ascending=False)
-    if tide_df.empty:
-        return None
-
-    latest = tide_df.iloc[0]
-    net_col = _first_existing_column(tide_df, ["net_premium", "market_tide_net"])
-    if net_col is not None:
-        value = pd.to_numeric(pd.Series([latest.get(net_col)]), errors="coerce").iloc[0]
-        if pd.notna(value):
-            return float(value)
-
-    call_col = _first_existing_column(tide_df, ["net_call_premium", "call_premium"])
-    put_col = _first_existing_column(tide_df, ["net_put_premium", "put_premium"])
-    if call_col is None or put_col is None:
-        return None
-
-    call_value = pd.to_numeric(pd.Series([latest.get(call_col)]), errors="coerce").iloc[0]
-    put_value = pd.to_numeric(pd.Series([latest.get(put_col)]), errors="coerce").iloc[0]
-    if pd.isna(call_value) or pd.isna(put_value):
-        return None
-    return float(call_value - put_value)
-
-
-def _map_vix_proxy_to_regime(vix_proxy: float) -> str:
-    if vix_proxy > 30:
-        return "EXTREME"
-    if vix_proxy > 20:
-        return "ELEVATED"
-    if vix_proxy > 12:
-        return "NORMAL"
-    return "LOW"
-
-
-def _get_latest_vix_data_from_heber() -> dict[str, float | str | None] | None:
-    # VIX proxy candidates: (symbol, multiplier_to_approximate_vix)
-    vix_proxy_candidates = [
-        ("VIXY", 2.0),
-        ("UVIX", 2.85),
-        ("VIXM", 1.25),
-    ]
-
-    for proxy_symbol, multiplier in vix_proxy_candidates:
-        result = _try_vix_proxy_from_heber(proxy_symbol, multiplier)
-        if result is not None:
-            return result
-
-    logger.debug("No VIX proxy data found in Heber (tried %s)", [c[0] for c in vix_proxy_candidates])
-    return None
-
-
-def _try_vix_proxy_from_heber(proxy_symbol: str, multiplier: float) -> dict[str, float | str | None] | None:
-    try:
-        now = datetime.now(UTC)
-        bars_df = _heber_reader.read_bars(
-            symbols=[proxy_symbol],
-            asof_time=now,
-            start_time=now - pd.Timedelta(days=10),
-        )
-    except Exception:
-        logger.debug("Heber %s bars read failed", proxy_symbol, exc_info=True)
-        return None
-
-    if bars_df.empty:
-        return None
-
-    bars_df = bars_df.copy()
-    symbol_col = _first_existing_column(bars_df, ["symbol", "ticker", "underlying", "instrument_key"])
-    if symbol_col is not None:
-        symbols = bars_df[symbol_col].astype(str).str.upper().str.split(":").str[-1]
-        bars_df = bars_df.loc[symbols == proxy_symbol.upper()]
-    if bars_df.empty:
-        return None
-
-    close_col = _first_existing_column(bars_df, ["close", "c"])
-    if close_col is None:
-        return None
-
-    bars_df["_ts"] = _coerce_time_series(bars_df)
-    bars_df["_close"] = pd.to_numeric(bars_df[close_col], errors="coerce")
-    bars_df = bars_df.dropna(subset=["_ts", "_close"]).sort_values("_ts")
-    if bars_df.empty:
-        return None
-
-    latest = bars_df.iloc[-1]
-    latest_close = float(latest["_close"])
-    vix_approx = latest_close * multiplier
-    target_prior_ts = latest["_ts"] - pd.Timedelta(days=1)
-    prior_rows = bars_df.loc[bars_df["_ts"] <= target_prior_ts]
-    if prior_rows.empty:
-        vix_1d_change = 0.0
-    else:
-        prior_close = float(prior_rows.iloc[-1]["_close"])
-        prior_vix = prior_close * multiplier
-        vix_1d_change = ((vix_approx - prior_vix) / prior_vix) * 100 if prior_vix > 0 else 0.0
-
-    return {
-        "vix": vix_approx,
-        "vvix": None,
-        "vix_1d_change": vix_1d_change,
-        "vix_regime": _map_vix_proxy_to_regime(vix_approx),
-    }
-
-
-def _get_spy_cumulative_return_from_heber() -> float | None:
-    try:
-        now = datetime.now(UTC)
-        bars_df = _heber_reader.read_bars(
-            symbols=["SPY"],
-            asof_time=now,
-            start_time=now - pd.Timedelta(days=2),
-        )
-    except Exception:
-        logger.debug("Heber SPY bars read failed, falling back to local DB", exc_info=True)
-        return None
-
-    if bars_df.empty:
-        return None
-
-    bars_df = bars_df.copy()
-    symbol_col = _first_existing_column(bars_df, ["symbol", "ticker", "underlying", "instrument_key"])
-    if symbol_col is not None:
-        symbols = bars_df[symbol_col].astype(str).str.upper().str.split(":").str[-1]
-        bars_df = bars_df.loc[symbols == "SPY"]
-    if bars_df.empty:
-        return None
-
-    close_col = _first_existing_column(bars_df, ["close", "c"])
-    if close_col is None:
-        return None
-
-    bars_df["_ts"] = _coerce_time_series(bars_df)
-    if bars_df["_ts"].notna().any():
-        bars_df = bars_df.dropna(subset=["_ts"]).sort_values("_ts", ascending=False)
-
-    bars_df["_close"] = pd.to_numeric(bars_df[close_col], errors="coerce")
-    bars_df = bars_df.dropna(subset=["_close"]).head(20)
-    if bars_df.empty:
-        return None
-    if len(bars_df) < 2:
-        return 0.0
-
-    latest_close = float(bars_df.iloc[0]["_close"])
-    oldest_close = float(bars_df.iloc[-1]["_close"])
-    if oldest_close == 0:
-        return 0.0
-    return (latest_close - oldest_close) / oldest_close
 
 
 def _zero_write_warn_streak_threshold() -> int:
@@ -450,120 +255,6 @@ def _log_ticker_source_transition(source: str, previous_source: str | None, tick
     return source
 
 
-def _extract_tickers_from_bars(limit: int) -> list[str]:
-    """Extract active tickers from Heber bars (equity instrument keys)."""
-    try:
-        now_utc = datetime.now(UTC)
-        return _heber_reader.read_recent_equity_symbols(
-            asof_time=now_utc,
-            start_time=now_utc - pd.Timedelta(days=1),
-            limit=limit,
-        )
-    except Exception:
-        logger.debug("Heber bars ticker discovery failed", exc_info=True)
-        return []
-
-
-async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], str]:
-    """Get tickers with recent flow activity and the source used.
-
-    Tries three sources in order:
-    1. Heber flow_alerts (options flow activity — best signal for active tickers)
-    2. Heber bars (equity bars — shows what instruments have recent data)
-    3. Static fallback list (safety net)
-    """
-    # Primary: flow alerts
-    try:
-        now_utc = datetime.now(UTC)
-        flow_df = _heber_reader.read_flow(
-            asof_time=now_utc,
-            start_time=now_utc - pd.Timedelta(days=2),
-        )
-        tickers = _extract_top_tickers_from_flow_df(flow_df, limit=limit)
-        if tickers:
-            return tickers, "heber"
-    except Exception:
-        logger.debug("Heber flow ticker discovery failed", exc_info=True)
-
-    # Secondary: bars instrument keys
-    bars_tickers = _extract_tickers_from_bars(limit=limit)
-    if bars_tickers:
-        logger.info(
-            "Ticker discovery fell back to Heber bars",
-            extra={
-                "event": "feature_enrichment_ticker_source_bars_fallback",
-                "tickers_count": len(bars_tickers),
-            },
-        )
-        return bars_tickers, "heber"
-
-    return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
-
-
-async def get_active_tickers(limit: int = 20) -> list[str]:
-    """Get tickers with recent flow activity (Heber first, DB fallback)."""
-    tickers, _source = await get_active_tickers_with_source(limit=limit)
-    return tickers
-
-
-async def get_latest_vix_data() -> dict[str, Any]:
-    """Get latest VIX context, preferring Heber VIXY proxy bars."""
-    if _prefer_heber_context_reads():
-        heber_vix = _get_latest_vix_data_from_heber()
-        if heber_vix is not None:
-            return heber_vix
-
-    return {}
-
-
-async def get_latest_market_tide() -> float | None:
-    """Get latest market tide net premium (calls - puts)."""
-    if _prefer_heber_context_reads():
-        heber_net = _get_latest_market_tide_from_heber()
-        if heber_net is not None:
-            return heber_net
-
-    return None
-
-
-async def get_spy_cumulative_return() -> float:
-    """Get SPY cumulative return over past 20 bars (approximate trend)."""
-    if _prefer_heber_context_reads():
-        heber_return = _get_spy_cumulative_return_from_heber()
-        if heber_return is not None:
-            return heber_return
-
-    return 0.0
-
-
-async def persist_regime_snapshot(
-    ts: datetime,
-    snapshot: Any,
-    ticker: str = "SPY",
-) -> None:
-    """Persist regime snapshot in memory while centralized sinks are externalized."""
-    import json
-
-    record = {
-        "ts_utc": ts,
-        "ticker": ticker,
-        "trend_regime": snapshot.trend.value if snapshot.trend else None,
-        "vol_regime": snapshot.vol.value if snapshot.vol else None,
-        "risk_regime": snapshot.risk.value if snapshot.risk else None,
-        "session_regime": snapshot.session.value if snapshot.session else None,
-        "vix_regime": snapshot.vix_regime.value if snapshot.vix_regime else None,
-        "vix_level": snapshot.vix_level,
-        "realized_vol": snapshot.realized_vol,
-        "trend_strength": snapshot.trend_strength,
-        "risk_score": snapshot.risk_score,
-        "confidence_json": json.dumps(snapshot.confidence) if snapshot.confidence else None,
-    }
-
-    _recent_regime_snapshots.append(record)
-    if len(_recent_regime_snapshots) > 2000:
-        del _recent_regime_snapshots[:1000]
-
-
 async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     """Main feature enrichment loop."""
     gateway_fetch_enabled = _gateway_fetch_enabled()
@@ -620,7 +311,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 tickers_count=len(tickers),
             )
 
-            # Market Tide - every minute
+            # Market Tide
             if (
                 gateway_fetch_enabled
                 and tide_connector is not None
@@ -631,7 +322,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 _note_fetch_count("market_tide", count, zero_write_streaks, zero_write_warn_streak)
                 last_tide = now
 
-            # Greek Exposure - every 5 minutes
+            # Greek Exposure
             if (
                 gateway_fetch_enabled
                 and greek_connector is not None
@@ -648,7 +339,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 )
                 last_greek = now
 
-            # Max Pain - every hour
+            # Max Pain
             if (
                 gateway_fetch_enabled
                 and max_pain_connector is not None
@@ -665,7 +356,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 )
                 last_max_pain = now
 
-            # IV Rank - every 15 minutes
+            # IV Rank
             if (
                 gateway_fetch_enabled
                 and iv_connector is not None
@@ -682,7 +373,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 )
                 last_iv = now
 
-            # VIX Data - every hour
+            # VIX Data
             if (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
                 try:
                     count = await vix_connector.fetch_and_store()
@@ -692,7 +383,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 except Exception as e:
                     logger.error(f"VIX proxy fetch error: {e}", exc_info=True)
 
-            # Regime Snapshot - every 5 minutes
+            # Regime Snapshot
             if (now - last_regime).total_seconds() >= REGIME_SNAPSHOT_INTERVAL:
                 try:
                     vix_data = await get_latest_vix_data()

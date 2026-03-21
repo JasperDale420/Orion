@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from orion import main_feature_enrichment as feature_enrichment
+from orion.enrichment import heber_context
 
 
 @pytest.mark.asyncio
@@ -20,7 +21,7 @@ async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPa
     )
 
     monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
-    monkeypatch.setattr(feature_enrichment._heber_reader, "read_market_tide", lambda **_kwargs: tide_df)
+    monkeypatch.setattr(heber_context._heber_reader, "read_market_tide", lambda **_kwargs: tide_df)
 
     async def _fail_db_query(_query_fn):
         raise AssertionError("db_query fallback should not be called")
@@ -35,8 +36,6 @@ async def test_get_latest_market_tide_prefers_heber(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(UTC)
-    # VIXY close=12.0 * multiplier 2.0 = VIX approx 24.0 (ELEVATED)
-    # Prior VIXY close=10.0 * 2.0 = 20.0 → change = (24-20)/20 * 100 = 20%
     bars_df = pd.DataFrame(
         {
             "bar_start_ts": [
@@ -50,7 +49,7 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
     )
 
     monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
-    monkeypatch.setattr(feature_enrichment._heber_reader, "read_bars", lambda **_kwargs: bars_df)
+    monkeypatch.setattr(heber_context._heber_reader, "read_bars", lambda **_kwargs: bars_df)
 
     async def _fail_db_query(_query_fn):
         raise AssertionError("db_query fallback should not be called")
@@ -59,7 +58,6 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
 
     vix_data = await feature_enrichment.get_latest_vix_data()
 
-    # VIXY close 12.0 * multiplier 2.0 = 24.0 VIX approx
     assert vix_data["vix"] == pytest.approx(24.0)
     assert vix_data["vix_1d_change"] == pytest.approx(20.0)
     assert vix_data["vix_regime"] == "ELEVATED"
@@ -68,7 +66,7 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_get_latest_market_tide_returns_none_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        feature_enrichment._heber_reader,
+        heber_context._heber_reader,
         "read_market_tide",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
@@ -86,7 +84,7 @@ async def test_get_latest_market_tide_returns_none_when_heber_unavailable(monkey
 @pytest.mark.asyncio
 async def test_get_latest_vix_data_returns_empty_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        feature_enrichment._heber_reader,
+        heber_context._heber_reader,
         "read_bars",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
@@ -113,7 +111,7 @@ async def test_get_spy_cumulative_return_prefers_heber(monkeypatch: pytest.Monke
     )
 
     monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT", raising=False)
-    monkeypatch.setattr(feature_enrichment._heber_reader, "read_bars", lambda **_kwargs: bars_df)
+    monkeypatch.setattr(heber_context._heber_reader, "read_bars", lambda **_kwargs: bars_df)
 
     async def _fail_db_query(_query_fn):
         raise AssertionError("db_query fallback should not be called")
@@ -128,7 +126,7 @@ async def test_get_spy_cumulative_return_prefers_heber(monkeypatch: pytest.Monke
 @pytest.mark.asyncio
 async def test_get_spy_cumulative_return_returns_zero_when_heber_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        feature_enrichment._heber_reader,
+        heber_context._heber_reader,
         "read_bars",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
@@ -157,7 +155,7 @@ async def test_context_reads_can_disable_heber(monkeypatch: pytest.MonkeyPatch) 
         db_called["value"] = True
         raise AssertionError("db_query fallback should not be called")
 
-    monkeypatch.setattr(feature_enrichment._heber_reader, "read_market_tide", _heber_market_tide)
+    monkeypatch.setattr(heber_context._heber_reader, "read_market_tide", _heber_market_tide)
     monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
 
     value = await feature_enrichment.get_latest_market_tide()

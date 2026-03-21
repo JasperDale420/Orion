@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from orion import main_feature_enrichment as feature_enrichment
+from orion.enrichment import heber_context
 
 
 @pytest.mark.asyncio
@@ -21,7 +22,7 @@ async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.
     )
 
     monkeypatch.setattr(
-        feature_enrichment._heber_reader,
+        heber_context._heber_reader,
         "read_flow",
         lambda **_kwargs: flow_df,
     )
@@ -40,12 +41,12 @@ async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_get_active_tickers_with_source_falls_back_to_static_without_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        feature_enrichment._heber_reader,
+        heber_context._heber_reader,
         "read_flow",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("heber unavailable")),
     )
     # Also fail the bars fallback so we reach static
-    monkeypatch.setattr(feature_enrichment, "_extract_tickers_from_bars", lambda limit: [])
+    monkeypatch.setattr(heber_context, "_extract_tickers_from_bars", lambda limit: [])
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
@@ -56,12 +57,12 @@ async def test_get_active_tickers_with_source_falls_back_to_static_without_db(mo
 @pytest.mark.asyncio
 async def test_get_active_tickers_with_source_falls_back_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        feature_enrichment._heber_reader,
+        heber_context._heber_reader,
         "read_flow",
         lambda **_kwargs: pd.DataFrame(),
     )
     # Also fail the bars fallback so we reach static
-    monkeypatch.setattr(feature_enrichment, "_extract_tickers_from_bars", lambda limit: [])
+    monkeypatch.setattr(heber_context, "_extract_tickers_from_bars", lambda limit: [])
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
@@ -318,8 +319,8 @@ async def test_persist_regime_snapshot_avoids_local_db_write(monkeypatch: pytest
     async def _fail_db_write(_fn):
         raise AssertionError("local db_write should not be used")
 
-    monkeypatch.setattr(feature_enrichment, "db_write", _fail_db_write, raising=False)
-    monkeypatch.setattr(feature_enrichment, "_recent_regime_snapshots", [], raising=False)
+    monkeypatch.setattr(heber_context, "db_write", _fail_db_write, raising=False)
+    monkeypatch.setattr(heber_context, "_recent_regime_snapshots", [], raising=False)
 
     snapshot = SimpleNamespace(
         trend=SimpleNamespace(value="bull"),
@@ -340,4 +341,4 @@ async def test_persist_regime_snapshot_avoids_local_db_write(monkeypatch: pytest
         ticker="SPY",
     )
 
-    assert feature_enrichment._recent_regime_snapshots
+    assert heber_context._recent_regime_snapshots

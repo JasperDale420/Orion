@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from orion import main_execution
+from orion.execution import flow_helpers
 
 
 @pytest.mark.asyncio
@@ -27,8 +28,8 @@ async def test_fetch_recent_flow_for_ticker_prefers_heber(monkeypatch: pytest.Mo
     mock_db_query = AsyncMock(return_value=[])
 
     monkeypatch.delenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", raising=False)
-    monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
-    monkeypatch.setattr(main_execution, "db_query", mock_db_query)
+    monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
+    monkeypatch.setattr(main_execution, "db_query", mock_db_query, raising=False)
 
     rows = await main_execution.fetch_recent_flow_for_ticker("AAPL", minutes=30)
 
@@ -52,8 +53,8 @@ async def test_fetch_recent_flow_for_ticker_returns_empty_when_heber_unavailable
         return []
 
     monkeypatch.delenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", raising=False)
-    monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
-    monkeypatch.setattr(main_execution, "db_query", _db_query)
+    monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
+    monkeypatch.setattr(main_execution, "db_query", _db_query, raising=False)
 
     rows = await main_execution.fetch_recent_flow_for_ticker("AAPL", minutes=30)
 
@@ -86,7 +87,7 @@ async def test_fetch_recent_flow_from_heber_returns_empty_on_missing_columns(
 ) -> None:
     fake_reader = MagicMock()
     fake_reader.read_flow.return_value = pd.DataFrame({"ticker": ["AAPL"]})
-    monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
+    monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
 
     rows = await main_execution._fetch_recent_flow_from_heber("AAPL", minutes=30)
 
@@ -103,8 +104,8 @@ async def test_fetch_recent_flow_for_ticker_skips_heber_when_disabled(monkeypatc
         return []
 
     monkeypatch.setenv("ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW", "false")
-    monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
-    monkeypatch.setattr(main_execution, "db_query", _db_query)
+    monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
+    monkeypatch.setattr(main_execution, "db_query", _db_query, raising=False)
 
     rows = await main_execution.fetch_recent_flow_for_ticker("AAPL", minutes=30)
 
@@ -129,7 +130,7 @@ async def test_fetch_recent_flow_from_heber_skips_invalid_and_non_matching_rows(
             "strike": ["bad", 190.0, "bad", 195.0],
         }
     )
-    monkeypatch.setattr(main_execution, "get_heber_reader", lambda: fake_reader)
+    monkeypatch.setattr(flow_helpers, "get_heber_reader", lambda: fake_reader)
 
     rows = await main_execution._fetch_recent_flow_from_heber("AAPL", minutes=30)
 

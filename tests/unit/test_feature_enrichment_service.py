@@ -718,7 +718,7 @@ class TestGetActiveTickersWithSource:
             }
         )
 
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_flow.return_value = mock_flow_df
             tickers, source = await get_active_tickers_with_source(limit=5)
 
@@ -731,8 +731,8 @@ class TestGetActiveTickersWithSource:
         from orion.main_feature_enrichment import STATIC_TICKER_FALLBACK, get_active_tickers_with_source
 
         with (
-            patch("orion.main_feature_enrichment._heber_reader") as mock_reader,
-            patch("orion.main_feature_enrichment._extract_tickers_from_bars", return_value=[]),
+            patch("orion.enrichment.heber_context._heber_reader") as mock_reader,
+            patch("orion.enrichment.heber_context._extract_tickers_from_bars", return_value=[]),
         ):
             mock_reader.read_flow.side_effect = RuntimeError("Heber down")
             tickers, source = await get_active_tickers_with_source(limit=5)
@@ -746,8 +746,8 @@ class TestGetActiveTickersWithSource:
         from orion.main_feature_enrichment import STATIC_TICKER_FALLBACK, get_active_tickers_with_source
 
         with (
-            patch("orion.main_feature_enrichment._heber_reader") as mock_reader,
-            patch("orion.main_feature_enrichment._extract_tickers_from_bars", return_value=[]),
+            patch("orion.enrichment.heber_context._heber_reader") as mock_reader,
+            patch("orion.enrichment.heber_context._extract_tickers_from_bars", return_value=[]),
         ):
             mock_reader.read_flow.return_value = pd.DataFrame()
             tickers, source = await get_active_tickers_with_source(limit=3)
@@ -768,7 +768,7 @@ class TestGetActiveTickers:
     async def test_returns_ticker_list_only(self):
         from orion.main_feature_enrichment import get_active_tickers
 
-        with patch("orion.main_feature_enrichment.get_active_tickers_with_source", new_callable=AsyncMock) as mock_fn:
+        with patch("orion.enrichment.heber_context.get_active_tickers_with_source", new_callable=AsyncMock) as mock_fn:
             mock_fn.return_value = (["SPY", "QQQ"], "heber")
             tickers = await get_active_tickers(limit=10)
 
@@ -789,8 +789,8 @@ class TestGetLatestVixData:
         vix_data = {"vix": 18.5, "vvix": None, "vix_1d_change": -1.2, "vix_regime": "NORMAL"}
 
         with (
-            patch("orion.main_feature_enrichment._prefer_heber_context_reads", return_value=True),
-            patch("orion.main_feature_enrichment._get_latest_vix_data_from_heber", return_value=vix_data),
+            patch("orion.enrichment.heber_context._prefer_heber_context_reads", return_value=True),
+            patch("orion.enrichment.heber_context._get_latest_vix_data_from_heber", return_value=vix_data),
         ):
             result = await get_latest_vix_data()
 
@@ -803,8 +803,8 @@ class TestGetLatestVixData:
         from orion.main_feature_enrichment import get_latest_vix_data
 
         with (
-            patch("orion.main_feature_enrichment._prefer_heber_context_reads", return_value=True),
-            patch("orion.main_feature_enrichment._get_latest_vix_data_from_heber", return_value=None),
+            patch("orion.enrichment.heber_context._prefer_heber_context_reads", return_value=True),
+            patch("orion.enrichment.heber_context._get_latest_vix_data_from_heber", return_value=None),
         ):
             result = await get_latest_vix_data()
 
@@ -815,7 +815,7 @@ class TestGetLatestVixData:
     async def test_returns_empty_dict_when_heber_not_preferred(self):
         from orion.main_feature_enrichment import get_latest_vix_data
 
-        with patch("orion.main_feature_enrichment._prefer_heber_context_reads", return_value=False):
+        with patch("orion.enrichment.heber_context._prefer_heber_context_reads", return_value=False):
             result = await get_latest_vix_data()
 
         assert result == {}
@@ -833,8 +833,8 @@ class TestGetLatestMarketTide:
         from orion.main_feature_enrichment import get_latest_market_tide
 
         with (
-            patch("orion.main_feature_enrichment._prefer_heber_context_reads", return_value=True),
-            patch("orion.main_feature_enrichment._get_latest_market_tide_from_heber", return_value=12345.67),
+            patch("orion.enrichment.heber_context._prefer_heber_context_reads", return_value=True),
+            patch("orion.enrichment.heber_context._get_latest_market_tide_from_heber", return_value=12345.67),
         ):
             result = await get_latest_market_tide()
 
@@ -845,7 +845,7 @@ class TestGetLatestMarketTide:
     async def test_returns_none_when_not_preferred(self):
         from orion.main_feature_enrichment import get_latest_market_tide
 
-        with patch("orion.main_feature_enrichment._prefer_heber_context_reads", return_value=False):
+        with patch("orion.enrichment.heber_context._prefer_heber_context_reads", return_value=False):
             result = await get_latest_market_tide()
 
         assert result is None
@@ -863,8 +863,8 @@ class TestGetSpyCumulativeReturn:
         from orion.main_feature_enrichment import get_spy_cumulative_return
 
         with (
-            patch("orion.main_feature_enrichment._prefer_heber_context_reads", return_value=True),
-            patch("orion.main_feature_enrichment._get_spy_cumulative_return_from_heber", return_value=0.025),
+            patch("orion.enrichment.heber_context._prefer_heber_context_reads", return_value=True),
+            patch("orion.enrichment.heber_context._get_spy_cumulative_return_from_heber", return_value=0.025),
         ):
             result = await get_spy_cumulative_return()
 
@@ -876,8 +876,8 @@ class TestGetSpyCumulativeReturn:
         from orion.main_feature_enrichment import get_spy_cumulative_return
 
         with (
-            patch("orion.main_feature_enrichment._prefer_heber_context_reads", return_value=True),
-            patch("orion.main_feature_enrichment._get_spy_cumulative_return_from_heber", return_value=None),
+            patch("orion.enrichment.heber_context._prefer_heber_context_reads", return_value=True),
+            patch("orion.enrichment.heber_context._get_spy_cumulative_return_from_heber", return_value=None),
         ):
             result = await get_spy_cumulative_return()
 
@@ -893,7 +893,8 @@ class TestPersistRegimeSnapshot:
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_appends_snapshot_to_in_memory_list(self):
-        from orion.main_feature_enrichment import _recent_regime_snapshots, persist_regime_snapshot
+        from orion.enrichment.heber_context import _recent_regime_snapshots
+        from orion.main_feature_enrichment import persist_regime_snapshot
 
         # Clear any existing state
         _recent_regime_snapshots.clear()
@@ -924,7 +925,8 @@ class TestPersistRegimeSnapshot:
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_trims_list_beyond_2000(self):
-        from orion.main_feature_enrichment import _recent_regime_snapshots, persist_regime_snapshot
+        from orion.enrichment.heber_context import _recent_regime_snapshots
+        from orion.main_feature_enrichment import persist_regime_snapshot
 
         _recent_regime_snapshots.clear()
 
@@ -963,7 +965,7 @@ class TestGetLatestMarketTideFromHeber:
     def test_returns_none_on_exception(self):
         from orion.main_feature_enrichment import _get_latest_market_tide_from_heber
 
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_market_tide.side_effect = RuntimeError("fail")
             result = _get_latest_market_tide_from_heber()
             assert result is None
@@ -972,7 +974,7 @@ class TestGetLatestMarketTideFromHeber:
     def test_returns_none_on_empty_df(self):
         from orion.main_feature_enrichment import _get_latest_market_tide_from_heber
 
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_market_tide.return_value = pd.DataFrame()
             result = _get_latest_market_tide_from_heber()
             assert result is None
@@ -988,7 +990,7 @@ class TestGetLatestMarketTideFromHeber:
                 "ts_event": [now.isoformat()],
             }
         )
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_market_tide.return_value = df
             result = _get_latest_market_tide_from_heber()
             assert result == 50000.0
@@ -1005,7 +1007,7 @@ class TestGetLatestMarketTideFromHeber:
                 "ts_event": [now.isoformat()],
             }
         )
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_market_tide.return_value = df
             result = _get_latest_market_tide_from_heber()
             assert result == 70000.0
@@ -1021,7 +1023,7 @@ class TestGetSpyCumulativeReturnFromHeber:
     def test_returns_none_on_exception(self):
         from orion.main_feature_enrichment import _get_spy_cumulative_return_from_heber
 
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_bars.side_effect = RuntimeError("fail")
             result = _get_spy_cumulative_return_from_heber()
             assert result is None
@@ -1030,7 +1032,7 @@ class TestGetSpyCumulativeReturnFromHeber:
     def test_returns_none_on_empty_df(self):
         from orion.main_feature_enrichment import _get_spy_cumulative_return_from_heber
 
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_bars.return_value = pd.DataFrame()
             result = _get_spy_cumulative_return_from_heber()
             assert result is None
@@ -1047,7 +1049,7 @@ class TestGetSpyCumulativeReturnFromHeber:
                 "ts_event": [now.isoformat()],
             }
         )
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_bars.return_value = df
             result = _get_spy_cumulative_return_from_heber()
             assert result == 0.0
@@ -1064,7 +1066,7 @@ class TestGetSpyCumulativeReturnFromHeber:
                 "ts_event": [(base - pd.Timedelta(hours=1)).isoformat(), (base - pd.Timedelta(hours=2)).isoformat()],
             }
         )
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_bars.return_value = df
             result = _get_spy_cumulative_return_from_heber()
             # latest=510 / oldest=500 -> (510-500)/500 = 0.02
@@ -1083,7 +1085,7 @@ class TestGetSpyCumulativeReturnFromHeber:
                 "ts_event": [(base - pd.Timedelta(hours=1)).isoformat(), (base - pd.Timedelta(hours=2)).isoformat()],
             }
         )
-        with patch("orion.main_feature_enrichment._heber_reader") as mock_reader:
+        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
             mock_reader.read_bars.return_value = df
             result = _get_spy_cumulative_return_from_heber()
             assert result == 0.0
