@@ -18,33 +18,27 @@ from typing import Any
 
 from sqlalchemy import text
 
-from orion.ml.feature_config import (
+from orion.ml.feature_config import (  # noqa: F401  (re-exported public API)
     ALERT_FLOW_CONTEXT_FEATURES,
     ALERT_SECTOR_FLOW_FEATURES,
     ALL_EQUITY_FEATURE_COLUMNS,
     CATEGORICAL_COLUMNS,
     EQUITY_DARKPOOL_FEATURES,
-    EQUITY_FLOW_FEATURES,
     EQUITY_FLOW_NORM_FEATURES,
     EQUITY_FLOW_TOXICITY_FEATURES,
     EQUITY_GEX_REGIME_FEATURES,
     EQUITY_GOLD_DATASETS,
     EQUITY_IV_SURFACE_FEATURES,
     EQUITY_MARKET_TIDE_FEATURES,
-    EQUITY_MOMENTUM_FEATURES,
     EQUITY_OI_MOMENTUM_FEATURES,
-    EQUITY_REGIME_FEATURES,
     EQUITY_STRADDLE_FEATURES,
     EQUITY_TICKER_RATES_FEATURES,
     EQUITY_TREND_SCAN_FEATURES,
-    EQUITY_VOLATILITY_FEATURES,
     FEATURE_COLUMNS,
     TARGETS,
     TRADE_BUCKET_CONFIGS,
-    get_quick_winner_target,
 )
 from orion.ml.model_training import (
-    MODEL_DIR,
     extract_feature_importance,
     extract_tree_rules,
     prepare_features,
@@ -52,10 +46,9 @@ from orion.ml.model_training import (
     train_model,
 )
 from orion.ml.schemas import (
-    FeatureImportance,
     MLInsightsSummary,
     PatternInsight,
-    TreeRule,
+    TreeRule,  # noqa: F401  (re-exported for feature_store)
 )
 from orion.ml.training_data import (
     fetch_training_data,

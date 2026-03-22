@@ -1,4 +1,5 @@
 import enum
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, Float, Index, String
@@ -84,7 +85,7 @@ class ExitDecision(Base):
 class StrategyDecision(Base):
     __tablename__ = "strategy_decisions"
 
-    decision_id = Column(String, primary_key=True)
+    decision_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     candidate_id = Column(String, index=True, nullable=False)
     timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 

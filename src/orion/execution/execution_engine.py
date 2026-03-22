@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from collections import deque
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -15,7 +15,6 @@ from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
-from orion.storage.db import async_session_factory  # legacy patch target for tests
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 logger = setup_struct_logger(__name__)
@@ -271,8 +270,20 @@ class ExecutionEngine:
             decision.reason = "Option Price Fetch Failed"
             return
 
+        # Solver-driven sizing: use risk_per_trade_bps × regime_size_multiplier
+        # when available, with max_option_premium_pct as safety ceiling.
+        ep = decision.execution_params or {}
+        risk_bps = float(ep.get("risk_per_trade_bps", 0))
+        regime_mult = float(ep.get("regime_size_multiplier", 1.0))
         max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
-        num_contracts = max(0, int(max_premium / (option_price * 100)))
+
+        if risk_bps > 0:
+            risk_dollars = (self.risk_manager.current_equity * risk_bps / 10000.0) * regime_mult
+            risk_dollars = min(risk_dollars, max_premium)
+        else:
+            risk_dollars = max_premium
+
+        num_contracts = max(0, int(risk_dollars / (option_price * 100)))
 
         if num_contracts <= 0:
             logger.warning(
@@ -452,6 +463,21 @@ class ExecutionEngine:
             decision.executed_successfully = DecisionStatus.TRUE
             self._record_result(True)
 
+            # Place bracket stop-loss / take-profit orders if enabled
+            ep = decision.execution_params or {}
+            if risk_settings.enable_bracket_orders:
+                sl_pct = float(ep.get("stop_loss_pct", risk_settings.default_stop_loss_pct))
+                tp_pct = float(ep.get("take_profit_pct", 0.50))
+                bracket_result = await self._place_bracket_orders(
+                    option_symbol=candidate.option_symbol,
+                    qty=num_contracts,
+                    entry_price=option_price,
+                    stop_loss_pct=sl_pct,
+                    take_profit_pct=tp_pct,
+                    side=side,
+                )
+                ep["bracket_orders"] = bracket_result
+
         except Exception as e:
             await self._remove_pending_order_compat(client_order_id)
 
@@ -475,7 +501,67 @@ class ExecutionEngine:
             decision.reason = f"Options Broker Error: {e}"
             self._record_result(False)
 
-    # ── Position closing ─────────────────────────────────────────────────
+    # ── Bracket orders (stop-loss / take-profit) ──────────────────────────
+
+    async def _place_bracket_orders(
+        self,
+        option_symbol: str,
+        qty: int,
+        entry_price: float,
+        stop_loss_pct: float,
+        take_profit_pct: float,
+        side: str,
+    ) -> dict:
+        """Place stop-loss and take-profit orders after a successful entry.
+
+        Non-fatal: logs errors but does not roll back the entry order.
+        """
+        exit_side = "sell" if side == "buy" else "buy"
+        sl_price = round(entry_price * (1 - stop_loss_pct), 2)
+        tp_price = round(entry_price * (1 + take_profit_pct), 2)
+        result: dict = {"stop_loss": None, "take_profit": None}
+
+        client = self._get_gateway_client()
+
+        try:
+            sl_order = await client.create_order(
+                symbol=option_symbol,
+                qty=qty,
+                side=exit_side,
+                order_type="stop",
+                stop_price=sl_price,
+                time_in_force="gtc",
+            )
+            result["stop_loss"] = {"order_id": sl_order.get("id"), "stop_price": sl_price}
+            logger.info(
+                "bracket_stop_loss_placed",
+                option_symbol=option_symbol,
+                stop_price=sl_price,
+                order_id=sl_order.get("id"),
+            )
+        except Exception as e:
+            logger.error("bracket_stop_loss_failed", error=str(e), option_symbol=option_symbol)
+
+        try:
+            tp_order = await client.create_order(
+                symbol=option_symbol,
+                qty=qty,
+                side=exit_side,
+                order_type="limit",
+                limit_price=tp_price,
+                time_in_force="gtc",
+            )
+            result["take_profit"] = {"order_id": tp_order.get("id"), "limit_price": tp_price}
+            logger.info(
+                "bracket_take_profit_placed",
+                option_symbol=option_symbol,
+                take_profit_price=tp_price,
+                order_id=tp_order.get("id"),
+            )
+        except Exception as e:
+            logger.error("bracket_take_profit_failed", error=str(e), option_symbol=option_symbol)
+
+        return result
 
     async def close_position(
         self,

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`NOT NULL constraint failed: trade_journal_entries.decision_id`** (2026-03-22):
+  - `StrategyDecision.decision_id` and `TradeJournalEntry.decision_id` now auto-generate a UUID when not explicitly set, preventing `IntegrityError` when tests or callers omit the primary key.
+  - Eliminates the `ORDER_PERSIST_ERROR` / `TRADE_JOURNAL_UPSERT_ERROR` entries flooding the error log.
+
+- **Lint: 27 unused imports removed from `execution_engine.py`, `signal_engine.py`, and `pattern_miner.py`** (2026-03-22):
+  - `timedelta` and `async_session_factory` removed from `execution_engine.py`.
+  - `system_settings` removed from `signal_engine.py`.
+  - Re-exported constants in `pattern_miner.py` annotated with `# noqa: F401` to preserve public API surface used by `feature_store.py` and integration tests.
+
 ### Removed
 
 - **Legacy feature flags, dead services, and vendored Alpaca deleted** (2026-03-20):
