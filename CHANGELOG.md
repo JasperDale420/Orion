@@ -8,10 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Seed initial paper-stage solvers**: The `solvers` table was empty since inception, causing every candidate trade to be safety-SKIPped by the SolverEnsemble. Added 5 conservative paper-stage solvers (BullishSweep, BearishPutPressure, RSI Mean Reversion, Swing Entry, Diversified Baseline) with companion `solver_metrics` rows. Available via `scripts/seed_solvers.py` or Alembic migration 0026.
+
 - **Circuit breaker admin API endpoints**: New `GET /admin/circuit-breaker` (view state), `POST /admin/circuit-breaker/reset` (close/resume trading), and `POST /admin/circuit-breaker/open` (halt trading) endpoints for managing the global circuit breaker without direct DB access.
 - **Circuit breaker reset script** (`scripts/reset_circuit_breaker.py`): Standalone script to reset a stuck circuit breaker directly in TimescaleDB. Supports `--dry-run` and custom `--db-url`.
 
 ### Fixed
+
+- **Stale ML models (56+ days old) blocked all trading**: The LightGBM scorer rejected all models exceeding the 14-day freshness limit, causing every candidate to fall back to the heuristic scorer (capped at 0.50 in live mode). Added `ORION_ML_STALE_MODEL_POLICY` config (`skip` | `warn` | `bypass`). Default changed to `warn` — stale models are loaded with a warning rather than silently discarded. The `bypass` option disables ML scoring entirely, letting candidates pass through to the solver ensemble without an ML gate.
 
 - **Global circuit breaker stuck OPEN since 2026-03-19**: Reset the breaker that was tripped by a stale heartbeat (61.38s > 60s threshold). Trading is now resumed.
 

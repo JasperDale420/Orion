@@ -75,13 +75,32 @@ class MLScorer:
         # Backward compatibility fields expected by older tests/callers.
         self.model: Any | None = None
         self.use_heuristic: bool = True
+        self._bypass_scoring: bool = False
 
         self._load_models()
         self.use_heuristic = len(self.models) == 0
         self.model = self.models.get("SWING", {}).get("model")
 
     def _load_models(self) -> None:
-        """Load all available bucket-specific models with freshness validation."""
+        """Load all available bucket-specific models with freshness validation.
+
+        Respects ``ORION_ML_STALE_MODEL_POLICY``:
+        - ``skip``: reject models older than max_model_age_days (original behaviour)
+        - ``warn``: load stale models but log a warning
+        - ``bypass``: do not load any models; ML scoring is skipped entirely
+        """
+        stale_policy = system_settings.ml_stale_model_policy
+
+        if stale_policy == "bypass":
+            logger.warning(
+                "ML stale model policy is 'bypass' — ML scoring disabled, candidates pass through",
+                extra={"event": "ml_scoring_bypassed", "policy": stale_policy},
+            )
+            self._bypass_scoring = True
+            return
+
+        self._bypass_scoring = False
+
         if not MODEL_DIR.exists():
             logger.info(
                 f"Model directory {MODEL_DIR} does not exist, using heuristic scorer",
@@ -94,6 +113,7 @@ class MLScorer:
 
         loaded_count = 0
         skipped_stale = 0
+        loaded_stale = 0
         for bucket in TRADE_BUCKETS:
             model_type = f"{bucket}_{self.target}"
             model_path = MODEL_DIR / f"{model_type}.pkl"
@@ -104,8 +124,9 @@ class MLScorer:
 
                 model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime, tz=UTC)
                 model_age_days = (datetime.now(UTC) - model_mtime).days
+                is_stale = model_age_days > max_age_days
 
-                if model_age_days > max_age_days:
+                if is_stale and stale_policy == "skip":
                     logger.warning(
                         f"Model {model_type} is {model_age_days} days old (limit: {max_age_days}), skipping",
                         extra={
@@ -118,21 +139,37 @@ class MLScorer:
                     skipped_stale += 1
                     continue
 
+                if is_stale and stale_policy == "warn":
+                    logger.warning(
+                        f"Model {model_type} is {model_age_days} days old (limit: {max_age_days}), "
+                        f"loading anyway per stale_model_policy='warn'",
+                        extra={
+                            "event": "stale_model_loaded_warn",
+                            "model_type": model_type,
+                            "age_days": model_age_days,
+                            "max_age_days": max_age_days,
+                            "policy": stale_policy,
+                        },
+                    )
+
                 try:
                     with open(model_path, "rb") as f:
-                        model_data = pickle.load(f)
+                        model_data = pickle.load(f)  # noqa: S301
 
                     self.models[bucket] = model_data
                     self.feature_names[bucket] = model_data.get("feature_names", [])
                     loaded_count += 1
+                    if is_stale:
+                        loaded_stale += 1
 
                     logger.info(
-                        f"Loaded model {model_type} (age: {model_age_days}d)",
+                        f"Loaded model {model_type} (age: {model_age_days}d{', STALE' if is_stale else ''})",
                         extra={
                             "event": "model_loaded",
                             "model_type": model_type,
                             "path": str(model_path),
                             "age_days": model_age_days,
+                            "is_stale": is_stale,
                         },
                     )
                 except Exception as e:
@@ -144,9 +181,16 @@ class MLScorer:
             summary = f"Loaded {loaded_count}/{len(TRADE_BUCKETS)} bucket models"
             if skipped_stale > 0:
                 summary += f" (skipped {skipped_stale} stale)"
+            if loaded_stale > 0:
+                summary += f" ({loaded_stale} stale, policy={stale_policy})"
             logger.info(
                 summary,
-                extra={"event": "models_loaded", "count": loaded_count, "stale_skipped": skipped_stale},
+                extra={
+                    "event": "models_loaded",
+                    "count": loaded_count,
+                    "stale_skipped": skipped_stale,
+                    "stale_loaded": loaded_stale,
+                },
             )
 
     @staticmethod
@@ -285,12 +329,20 @@ class MLScorer:
 
         return {feat: feature_map.get(feat, 0) for feat in feature_names}
 
+    @property
+    def bypass_scoring(self) -> bool:
+        """True when ML scoring is entirely bypassed (policy='bypass')."""
+        return self._bypass_scoring
+
     def score(self, flow: dict[str, Any]) -> float:
         """
         Score a flow event. Returns probability [0, 1].
 
         Higher score = more likely to be a profitable trade.
         """
+        if self._bypass_scoring:
+            return -1.0  # Sentinel: caller should skip ML gating
+
         # Determine trade bucket
         _, bucket = _parse_dte_and_bucket(flow)
 

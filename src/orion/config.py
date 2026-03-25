@@ -56,7 +56,32 @@ class RiskSettings(BaseSettings):
     correlation_penalty_factor: float = 0.30  # Size multiplier at max correlation
     min_bars_for_correlation: int = 20  # Skip adjustment if insufficient data
 
+    # Bracket orders (stop-loss / take-profit at broker level)
+    enable_bracket_orders: bool = False  # Off by default for safe paper rollout
+
     model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
+
+
+class HeuristicWeights(BaseSettings):
+    """Configurable weights for the heuristic scorer fallback.
+
+    Each weight represents the score increment applied when a specific
+    condition is met. The base score starts at ``base_score`` and weights
+    are added/subtracted according to flow characteristics.
+    """
+
+    base_score: float = 0.30  # Starting score for every flow
+    premium_500k_plus: float = 0.25  # Premium ≥ $500k
+    premium_100k_plus: float = 0.15  # Premium ≥ $100k
+    premium_50k_plus: float = 0.10  # Premium ≥ $50k
+    premium_25k_plus: float = 0.05  # Premium ≥ $25k
+    sweep_bonus: float = 0.15  # Flow is a sweep order
+    ask_side_bonus: float = 0.10  # Aggressor aligned with direction
+    vol_oi_high: float = 0.10  # Volume/OI > 2.0
+    vol_oi_moderate: float = 0.05  # Volume/OI > 1.0
+    low_premium_penalty: float = -0.20  # Premium < $10k (noise filter)
+
+    model_config = SettingsConfigDict(env_prefix="ORION_HEURISTIC_")
 
 
 class SystemSettings(BaseSettings):
@@ -128,6 +153,14 @@ class SystemSettings(BaseSettings):
     # ML / Models
     model_dir: Path = Field(default=Path("/app/models"), validation_alias="ORION_MODEL_DIR")
     max_model_age_days: int = Field(default=14, validation_alias="ORION_MAX_MODEL_AGE_DAYS")
+    ml_stale_model_policy: str = Field(
+        default="warn",
+        validation_alias="ORION_ML_STALE_MODEL_POLICY",
+        description="Policy when models exceed max_model_age_days: "
+        "'skip' = reject stale models (original behavior), "
+        "'warn' = load stale models with warning, "
+        "'bypass' = skip ML scoring entirely and pass candidates through",
+    )
     proposals_dir: str = Field(default="proposals", validation_alias="ORION_PROPOSALS_DIR")
 
     # SQLite tuning
@@ -202,6 +235,7 @@ risk_settings = RiskSettings()
 system_settings = SystemSettings()
 meta_settings = MetaSearchSettings()
 agent_settings = AgentSettings()
+heuristic_weights = HeuristicWeights()
 
 # Exports for compatibility
 STATIC_WATCHLIST = system_settings.static_watchlist
