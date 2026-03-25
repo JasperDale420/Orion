@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - **Temporal excursion fields in triple-barrier label engine**: Label output now includes `ts_mfe`, `ts_mae`, `time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, and `capture_efficiency` so ML models can learn timing patterns (e.g., fast time-to-MFE = high conviction). New columns added to `candidate_labels` and `labels_event` tables (migration 0025).
+- **Temporal excursion features in ML training pipeline**: The 5 temporal excursion fields (`time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, `capture_efficiency`) are now available as ML training features via `feature_config`, extracted from outcomes in `training_data`, and mapped in the scorer's `_build_feature_map` for inference.
 
 ### Fixed
 
