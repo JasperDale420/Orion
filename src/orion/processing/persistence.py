@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from orion.shared.utils import make_json_safe
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
@@ -31,8 +32,8 @@ async def persist_bronze_events(session: AsyncSession, events: list[BronzeEvent]
                 "schema_version": getattr(e, "schema_version", None) or "v1",
                 "event_ts_utc": e.event_ts_utc,
                 "received_ts_utc": e.received_ts_utc,
-                "payload": e.payload,
-                "ingest": getattr(e, "ingest", None) or {},
+                "payload": make_json_safe(e.payload),
+                "ingest": make_json_safe(getattr(e, "ingest", None) or {}),
             }
         )
 
@@ -62,7 +63,7 @@ async def persist_silver_signals(session: AsyncSession, signals: list[SilverSign
                 "ticker": s.ticker,
                 "signal_ts_utc": s.signal_ts_utc,
                 "signal_type": s.signal_type,
-                "features": s.features,
+                "features": make_json_safe(s.features),
                 "created_at_utc": datetime.now(UTC),
             }
         )
@@ -90,8 +91,8 @@ async def persist_candidates(session: AsyncSession, candidates: list[CandidateTr
                 "direction": c.direction,
                 "confidence": c.confidence,
                 "source": c.source,
-                "execution_params": c.execution_params,
-                "evidence": c.evidence,
+                "execution_params": make_json_safe(c.execution_params),
+                "evidence": make_json_safe(c.evidence),
                 "created_at_utc": c.created_at_utc or datetime.now(UTC),
             }
         )

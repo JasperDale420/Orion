@@ -195,9 +195,15 @@ class NormalizationEngine:
         """
         PRD 6.2 Silver Schema: Alpaca Bars 1m
         """
+        import pandas as pd
+
         ts_val = payload.get("t")
         bar_ts = None
-        if isinstance(ts_val, str):
+        if isinstance(ts_val, pd.Timestamp):
+            bar_ts = ts_val.to_pydatetime()
+        elif isinstance(ts_val, datetime):
+            bar_ts = ts_val
+        elif isinstance(ts_val, str):
             try:
                 bar_ts = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
             except Exception:

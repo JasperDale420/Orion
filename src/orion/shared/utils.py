@@ -1,9 +1,76 @@
 import logging
-from datetime import UTC, datetime
+import math
+from datetime import UTC, date, datetime
+from typing import Any
 
 import dateutil.parser
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+def make_json_safe(value: Any) -> Any:
+    """Convert non-JSON-serializable types to JSON-safe Python primitives.
+
+    Handles pandas Timestamps, numpy scalars, datetime objects, NaN/Inf floats,
+    and recurses into dicts and lists.  Intended as a universal sanitizer for
+    any dict that will be stored in a JSON/JSONB column.
+    """
+    if value is None:
+        return None
+
+    # pandas NaT — must be checked before Timestamp (NaT is a Timestamp subclass)
+    if isinstance(value, type(pd.NaT)) or value is pd.NaT:
+        return None
+
+    # pandas Timestamp
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        return value.isoformat()
+
+    # numpy datetime64
+    if isinstance(value, np.datetime64):
+        if np.isnat(value):
+            return None
+        return pd.Timestamp(value).isoformat()
+
+    # stdlib datetime / date
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    # float — guard against NaN / Inf
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+
+    # numpy numeric scalars
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
+    if isinstance(value, np.bool_):
+        return bool(value)
+
+    # numpy array
+    if isinstance(value, np.ndarray):
+        return [make_json_safe(item) for item in value.tolist()]
+
+    # Containers — recurse
+    if isinstance(value, dict):
+        return {k: make_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [make_json_safe(v) for v in value]
+
+    # Everything else (str, int, bool, etc.) passes through
+    return value
 
 
 def parse_timestamptz(ts_input: str | int | float | None, *, strict: bool = False) -> datetime:

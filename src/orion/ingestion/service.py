@@ -28,6 +28,7 @@ from orion.processing.persistence import (
 from orion.processing.rule_engine import RuleEngine
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
+from orion.shared.utils import make_json_safe
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.lakehouse import LakehouseWriter
 from orion.storage.models import BronzeEvent
@@ -280,37 +281,7 @@ class IngestionService:
     @staticmethod
     def _make_json_safe(value: Any) -> Any:
         """Convert Parquet-native types and NaN/Inf to JSON-serializable Python types."""
-        import math
-        import numpy as np
-        import pandas as pd
-
-        if value is None:
-            return None
-        if isinstance(value, float):
-            if math.isnan(value) or math.isinf(value):
-                return None
-            return value
-        if isinstance(value, pd.Timestamp):
-            if pd.isna(value):
-                return None
-            return value.isoformat()
-        if isinstance(value, datetime):
-            return value.isoformat()
-        if isinstance(value, (np.integer,)):
-            return int(value)
-        if isinstance(value, (np.floating,)):
-            if math.isnan(value) or math.isinf(value):
-                return None
-            return float(value)
-        if isinstance(value, np.bool_):
-            return bool(value)
-        if isinstance(value, np.ndarray):
-            return value.tolist()
-        if isinstance(value, dict):
-            return {k: IngestionService._make_json_safe(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [IngestionService._make_json_safe(v) for v in value]
-        return value
+        return make_json_safe(value)
 
     @staticmethod
     def _heber_row_to_event(row: Any, now: datetime) -> BronzeEvent | None:

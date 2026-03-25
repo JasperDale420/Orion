@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Timestamp serialization crash killed ingestion pipeline since Mar 18** (71+ DLQ entries):
+  Pandas `Timestamp`, numpy scalars, and stdlib `datetime` objects in JSON/JSONB columns caused `"Object of type Timestamp is not JSON serializable"` errors. Added a shared `make_json_safe()` utility that converts all non-JSON-native types (pd.Timestamp, np.datetime64, np.integer, np.floating, np.bool_, datetime, date, NaN/Inf) to JSON-safe primitives. Applied it as a safety net in `persist_bronze_events`, `persist_silver_signals`, and `persist_candidates`, and at all source sites: Heber event mapper, feature engine signal generation, and the Alpaca bar normalizer.
+
 - **Stale ML models (56+ days old) blocked all trading**: The LightGBM scorer rejected all models exceeding the 14-day freshness limit, causing every candidate to fall back to the heuristic scorer (capped at 0.50 in live mode). Added `ORION_ML_STALE_MODEL_POLICY` config (`skip` | `warn` | `bypass`). Default changed to `warn` — stale models are loaded with a warning rather than silently discarded. The `bypass` option disables ML scoring entirely, letting candidates pass through to the solver ensemble without an ML gate.
 
 - **Global circuit breaker stuck OPEN since 2026-03-19**: Reset the breaker that was tripped by a stale heartbeat (61.38s > 60s threshold). Trading is now resumed.

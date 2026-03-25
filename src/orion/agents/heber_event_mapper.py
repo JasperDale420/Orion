@@ -15,6 +15,7 @@ from orion.clients.heber_reader import get_heber_reader
 from orion.core.solver_schema import EvaluationTask
 from orion.shared.dataframe_utils import first_existing_column
 from orion.shared.logger import setup_struct_logger
+from orion.shared.utils import make_json_safe
 from orion.storage.models import BronzeEvent
 
 logger = setup_struct_logger(__name__)
@@ -68,9 +69,7 @@ async def fetch_events_from_heber(
     return alpaca_events, flow_events, price_data
 
 
-def map_heber_bar_events(
-    task: EvaluationTask, bars_frame: pd.DataFrame
-) -> tuple[list[Any], dict[str, Any]]:
+def map_heber_bar_events(task: EvaluationTask, bars_frame: pd.DataFrame) -> tuple[list[Any], dict[str, Any]]:
     if bars_frame.empty:
         return [], {}
 
@@ -135,18 +134,20 @@ def _map_single_bar_row(
     if pd.isna(bar_ts):
         return None
     ts_value = bar_ts.to_pydatetime()
-    payload = {
-        "symbol": ticker,
-        "ticker": ticker,
-        "o": row.get(open_col),
-        "h": row.get(high_col),
-        "l": row.get(low_col),
-        "c": row.get(close_col),
-        "v": row.get(volume_col),
-        "vw": row.get(vwap_col) if vwap_col else None,
-        "t": ts_value,
-        "n": row.get(trades_col) if trades_col else None,
-    }
+    payload = make_json_safe(
+        {
+            "symbol": ticker,
+            "ticker": ticker,
+            "o": row.get(open_col),
+            "h": row.get(high_col),
+            "l": row.get(low_col),
+            "c": row.get(close_col),
+            "v": row.get(volume_col),
+            "vw": row.get(vwap_col) if vwap_col else None,
+            "t": ts_value,
+            "n": row.get(trades_col) if trades_col else None,
+        }
+    )
     event = BronzeEvent(
         event_id=f"heber_bar_{ticker}_{int(ts_value.timestamp())}",
         event_type="ALPACA_BAR_1M",
@@ -251,6 +252,7 @@ def _map_single_flow_row(
         "underlying_price": row.get(underlying_col) if underlying_col else None,
     }
     _maybe_add_expiry_dte(payload, row.get(expiry_col) if expiry_col else None, flow_ts)
+    payload = make_json_safe(payload)
     event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
     return BronzeEvent(
         event_id=event_id,

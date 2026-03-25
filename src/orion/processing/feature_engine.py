@@ -15,7 +15,7 @@ import dateutil.parser
 from orion.clients.heber_reader import get_heber_reader
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column_func
 from orion.shared.db_utils import db_write
-from orion.shared.utils import parse_timestamptz
+from orion.shared.utils import make_json_safe, parse_timestamptz
 from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SignalType, SilverSignal
 
@@ -512,6 +512,9 @@ class FeatureEngine:
             ts_pydt = self._to_pydatetime(ts)
             flow_feats = self._compute_flow_features(ticker, ts_pydt)
             features.update(flow_feats)
+
+            # Sanitize numpy/pandas types for JSON column storage
+            features = make_json_safe(features)
 
             sig_id = self._generate_id(ticker, ts, SignalType.OHLCV_1M)
             signals.append(
