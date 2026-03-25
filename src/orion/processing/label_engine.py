@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 
 
@@ -116,6 +118,22 @@ class TripleBarrierLabeling:
             delta = hit_ts - start_ts
             time_to_hit_seconds = float(delta.total_seconds()) if hasattr(delta, "total_seconds") else None
 
+            # Temporal excursion tracking
+            if len(rets_to_hit) > 0:
+                ts_mfe = rets_to_hit.idxmax()
+                ts_mae = rets_to_hit.idxmin()
+                time_to_mfe_seconds = (ts_mfe - start_ts).total_seconds() if pd.notna(ts_mfe) else 0.0
+                time_to_mae_seconds = (ts_mae - start_ts).total_seconds() if pd.notna(ts_mae) else 0.0
+                mfe_mae_ratio = (
+                    mfe / abs(mae) if mae != 0 and not math.isnan(mae) else (float("inf") if mfe > 0 else 0.0)
+                )
+                excursion_velocity = mfe / time_to_mfe_seconds if time_to_mfe_seconds > 0 else 0.0
+                capture_efficiency = ret_at_hit / mfe if mfe > 0 and not math.isnan(mfe) else 0.0
+            else:
+                ts_mfe = ts_mae = None
+                time_to_mfe_seconds = time_to_mae_seconds = 0.0
+                mfe_mae_ratio = excursion_velocity = capture_efficiency = 0.0
+
             out.append(
                 {
                     "event_ts": start_ts,
@@ -125,6 +143,13 @@ class TripleBarrierLabeling:
                     "time_to_hit_seconds": time_to_hit_seconds,
                     "mfe": mfe,
                     "mae": mae,
+                    "ts_mfe": ts_mfe,
+                    "ts_mae": ts_mae,
+                    "time_to_mfe_seconds": time_to_mfe_seconds,
+                    "time_to_mae_seconds": time_to_mae_seconds,
+                    "mfe_mae_ratio": mfe_mae_ratio,
+                    "excursion_velocity": excursion_velocity,
+                    "capture_efficiency": capture_efficiency,
                 }
             )
 

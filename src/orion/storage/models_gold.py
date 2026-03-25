@@ -152,6 +152,15 @@ class CandidateLabel(Base):
     mfe = Column(Float, nullable=True)
     mae = Column(Float, nullable=True)
 
+    # Temporal excursion fields
+    ts_mfe = Column(DateTime(timezone=True), nullable=True)
+    ts_mae = Column(DateTime(timezone=True), nullable=True)
+    time_to_mfe_seconds = Column(Float, nullable=True)
+    time_to_mae_seconds = Column(Float, nullable=True)
+    mfe_mae_ratio = Column(Float, nullable=True)
+    excursion_velocity = Column(Float, nullable=True)
+    capture_efficiency = Column(Float, nullable=True)
+
 
 class LabelEvent(Base):
     """
@@ -177,6 +186,15 @@ class LabelEvent(Base):
     time_to_hit_seconds = Column(Float, nullable=True)
     mfe = Column(Float, nullable=True)
     mae = Column(Float, nullable=True)
+
+    # Temporal excursion fields
+    ts_mfe = Column(DateTime(timezone=True), nullable=True)
+    ts_mae = Column(DateTime(timezone=True), nullable=True)
+    time_to_mfe_seconds = Column(Float, nullable=True)
+    time_to_mae_seconds = Column(Float, nullable=True)
+    mfe_mae_ratio = Column(Float, nullable=True)
+    excursion_velocity = Column(Float, nullable=True)
+    capture_efficiency = Column(Float, nullable=True)
 
     # Auditability: labeling parameters + provenance
     label_config = Column(JSON, nullable=False, default=dict)

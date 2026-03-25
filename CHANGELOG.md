@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Temporal excursion fields in triple-barrier label engine**: Label output now includes `ts_mfe`, `ts_mae`, `time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, and `capture_efficiency` so ML models can learn timing patterns (e.g., fast time-to-MFE = high conviction). New columns added to `candidate_labels` and `labels_event` tables (migration 0025).
+
 ### Fixed
 
 - **`NOT NULL constraint failed: trade_journal_entries.decision_id`** (2026-03-22):
