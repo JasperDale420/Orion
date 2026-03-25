@@ -189,7 +189,9 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-    command: [ "python", "-m", "orion.main_meta", "--base-solver", "v1_legacy" ]
+      ORION_AI_GATEWAY_URL: http://host.docker.internal:8002/v1
+      ORION_AI_GATEWAY_KEY: ${ORION_AI_GATEWAY_KEY:-empire-ai-gateway-key}
+    command: [ "python", "-m", "orion.main_meta", "--base-solver", "${ORION_META_BASE_SOLVER:-v1_legacy}" ]
     logging:
       driver: json-file
       options:
@@ -210,6 +212,8 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ORION_AI_GATEWAY_URL: http://host.docker.internal:8002/v1
+      ORION_AI_GATEWAY_KEY: ${ORION_AI_GATEWAY_KEY:-empire-ai-gateway-key}
     command: [ "python", "-m", "orion.main_meta_weekly", "--scheduled" ]
     logging:
       driver: json-file
