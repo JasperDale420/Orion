@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Circuit breaker admin API endpoints**: New `GET /admin/circuit-breaker` (view state), `POST /admin/circuit-breaker/reset` (close/resume trading), and `POST /admin/circuit-breaker/open` (halt trading) endpoints for managing the global circuit breaker without direct DB access.
+- **Circuit breaker reset script** (`scripts/reset_circuit_breaker.py`): Standalone script to reset a stuck circuit breaker directly in TimescaleDB. Supports `--dry-run` and custom `--db-url`.
+
+### Fixed
+
+- **Global circuit breaker stuck OPEN since 2026-03-19**: Reset the breaker that was tripped by a stale heartbeat (61.38s > 60s threshold). Trading is now resumed.
+
+### Added
+
 - **Temporal excursion fields in triple-barrier label engine**: Label output now includes `ts_mfe`, `ts_mae`, `time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, and `capture_efficiency` so ML models can learn timing patterns (e.g., fast time-to-MFE = high conviction). New columns added to `candidate_labels` and `labels_event` tables (migration 0025).
 - **Temporal excursion features in ML training pipeline**: The 5 temporal excursion fields (`time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, `capture_efficiency`) are now available as ML training features via `feature_config`, extracted from outcomes in `training_data`, and mapped in the scorer's `_build_feature_map` for inference.
 

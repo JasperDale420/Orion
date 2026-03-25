@@ -16,6 +16,7 @@ from orion.api.deps import get_db
 from orion.api.schemas import ExperimentResponse, PromotionRecommendationResponse, SolverMetricsResponse, SolverResponse
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.core.circuit_breaker import CircuitBreaker
 from orion.core.errors import OrionError
 from orion.core.pnl_tracker import get_pnl_tracker
 from orion.rag.vector_store import VectorStore
@@ -721,6 +722,75 @@ async def get_flows(
         )
 
     return rows
+
+
+# --- Circuit Breaker ---
+
+
+@app.get("/admin/circuit-breaker", tags=["Admin"])
+async def get_circuit_breaker_state(
+    _: None = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Get current circuit breaker state."""
+    cb = CircuitBreaker()
+    return await cb.get_state()
+
+
+@app.post("/admin/circuit-breaker/reset", tags=["Admin"])
+async def reset_circuit_breaker(
+    reason: str = Query("Manual admin reset", description="Reason for resetting the circuit breaker"),
+    _: None = Depends(require_api_key),
+) -> dict[str, Any]:
+    """
+    Reset (close) the global circuit breaker to resume trading.
+
+    This should only be used after investigating why the breaker tripped
+    and confirming it is safe to resume.
+    """
+    cb = CircuitBreaker()
+    state_before = await cb.get_state()
+    if state_before["status"] != "OPEN":
+        return {
+            "status": "no_op",
+            "message": "Circuit breaker is already CLOSED",
+            "state": state_before,
+        }
+
+    await cb.close()
+    logger.info(
+        "Circuit breaker reset via admin API",
+        extra={"event_type": "CIRCUIT_BREAKER_ADMIN_RESET", "reason": reason, "previous_state": state_before},
+    )
+
+    state_after = await cb.get_state()
+    return {
+        "status": "ok",
+        "message": "Circuit breaker reset to CLOSED",
+        "reason": reason,
+        "previous_state": state_before,
+        "current_state": state_after,
+        "timestamp_utc": datetime.now(UTC).isoformat(),
+    }
+
+
+@app.post("/admin/circuit-breaker/open", tags=["Admin"])
+async def open_circuit_breaker(
+    reason: str = Query(..., min_length=1, description="Reason for opening (tripping) the circuit breaker"),
+    _: None = Depends(require_api_key),
+) -> dict[str, Any]:
+    """
+    Manually trip the global circuit breaker to halt trading.
+    """
+    cb = CircuitBreaker()
+    await cb.open(reason)
+    state = await cb.get_state()
+    return {
+        "status": "ok",
+        "message": "Circuit breaker OPENED (trading halted)",
+        "reason": reason,
+        "current_state": state,
+        "timestamp_utc": datetime.now(UTC).isoformat(),
+    }
 
 
 # --- Dashboard ---
