@@ -6,6 +6,7 @@ and persisting signals_live / trade journal entries.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from sqlalchemy import select
@@ -112,9 +113,10 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -
                 )
             )
             # PRDv2 §12.4 Linkage to Trade Journal
+            journal_decision_id = decision.decision_id or str(uuid.uuid4())
             session.add(
                 TradeJournalEntry(
-                    decision_id=decision.decision_id,
+                    decision_id=journal_decision_id,
                     signal_id=signal_id,
                     candidate_id=candidate.candidate_id,
                     solver_id=decision.strategy_version_id,

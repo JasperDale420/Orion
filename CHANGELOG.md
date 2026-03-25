@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **`NOT NULL constraint failed: trade_journal_entries.decision_id`** (2026-03-22):
   - `StrategyDecision.decision_id` and `TradeJournalEntry.decision_id` now auto-generate a UUID when not explicitly set, preventing `IntegrityError` when tests or callers omit the primary key.
+  - Added `server_default=gen_random_uuid()::text` to both PKs in TimescaleDB via Alembic migration 0027, so the database itself generates UUIDs as a safety net when the ORM default does not fire.
+  - Added defensive fallback in `persist_order_record` and `save_decision` to substitute a UUID if `decision.decision_id` is None at journal-write time.
   - Eliminates the `ORDER_PERSIST_ERROR` / `TRADE_JOURNAL_UPSERT_ERROR` entries flooding the error log.
 
 - **Lint: 27 unused imports removed from `execution_engine.py`, `signal_engine.py`, and `pattern_miner.py`** (2026-03-22):

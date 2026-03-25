@@ -110,9 +110,10 @@ async def persist_order_record(
         try:
             from orion.storage.models_trade_journal import TradeJournalEntry
 
+            journal_decision_id = decision.decision_id or str(uuid.uuid4())
             await session.merge(
                 TradeJournalEntry(
-                    decision_id=decision.decision_id,
+                    decision_id=journal_decision_id,
                     signal_id=f"sig_{candidate.candidate_id}",
                     candidate_id=candidate.candidate_id,
                     solver_id=decision.strategy_version_id,
