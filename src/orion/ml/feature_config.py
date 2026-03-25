@@ -116,6 +116,12 @@ FEATURE_COLUMNS = [
     # Sector flow context (from sector_flow_features Gold dataset — per-alert)
     "sector_flow_alignment",
     "sector_call_put_ratio",
+    # Temporal excursion (from temporal_excursion_features Gold dataset)
+    "time_to_mfe_seconds",
+    "time_to_mae_seconds",
+    "mfe_mae_ratio",
+    "excursion_velocity",
+    "capture_efficiency",
     # New runtime derived features
     "ask_side_dominance",
     "aggressor_conviction",
@@ -168,6 +174,13 @@ EQUITY_DARKPOOL_FEATURES = ["darkpool_notional_1d", "darkpool_premium_ratio", "d
 EQUITY_STRADDLE_FEATURES = ["straddle_return_1m", "straddle_return_3m"]
 EQUITY_TREND_SCAN_FEATURES = ["trend_scan_horizon", "trend_scan_t_value"]
 ALERT_SECTOR_FLOW_FEATURES = ["sector_flow_alignment", "sector_call_put_ratio"]
+EQUITY_TEMPORAL_EXCURSION_FEATURES = [
+    "time_to_mfe_seconds",
+    "time_to_mae_seconds",
+    "mfe_mae_ratio",
+    "excursion_velocity",
+    "capture_efficiency",
+]
 
 EQUITY_GOLD_DATASETS: dict[str, list[str]] = {
     "momentum_features": EQUITY_MOMENTUM_FEATURES,
@@ -184,6 +197,7 @@ EQUITY_GOLD_DATASETS: dict[str, list[str]] = {
     "darkpool_features": EQUITY_DARKPOOL_FEATURES,
     "straddle_momentum_features": EQUITY_STRADDLE_FEATURES,
     "trend_scan_features": EQUITY_TREND_SCAN_FEATURES,
+    "temporal_excursion_features": EQUITY_TEMPORAL_EXCURSION_FEATURES,
 }
 ALL_EQUITY_FEATURE_COLUMNS = (
     EQUITY_MOMENTUM_FEATURES
@@ -200,6 +214,7 @@ ALL_EQUITY_FEATURE_COLUMNS = (
     + EQUITY_DARKPOOL_FEATURES
     + EQUITY_STRADDLE_FEATURES
     + EQUITY_TREND_SCAN_FEATURES
+    + EQUITY_TEMPORAL_EXCURSION_FEATURES
 )
 
 CATEGORICAL_COLUMNS = [

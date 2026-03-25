@@ -90,6 +90,11 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
                 "bars_to_hit",
                 "snapshot_count",
                 "no_snapshot",
+                "time_to_mfe_seconds",
+                "time_to_mae_seconds",
+                "mfe_mae_ratio",
+                "excursion_velocity",
+                "capture_efficiency",
             ]
         )
 
@@ -123,6 +128,22 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
         if bars_to_hit_column
         else pd.Series(index=frame.index, dtype="float64")
     )
+
+    # Temporal excursion fields (soft — missing columns default to NaN)
+    excursion_fields = [
+        "time_to_mfe_seconds",
+        "time_to_mae_seconds",
+        "mfe_mae_ratio",
+        "excursion_velocity",
+        "capture_efficiency",
+    ]
+    excursion_series: dict[str, Any] = {}
+    for field in excursion_fields:
+        if field in frame.columns:
+            excursion_series[field] = pd.to_numeric(frame[field], errors="coerce")
+        else:
+            excursion_series[field] = pd.Series(index=frame.index, dtype="float64")
+
     normalized = pd.DataFrame(
         {
             "event_id": event_series,
@@ -131,6 +152,7 @@ def _normalize_heber_outcomes(frame: Any) -> Any:
             "hit_tp_first": hit_tp_series,
             "trading_minutes_to_hit": trading_minutes_series,
             "bars_to_hit": bars_to_hit_series,
+            **excursion_series,
         }
     )
     normalized = normalized.dropna(subset=["event_id", "entry_ts"])

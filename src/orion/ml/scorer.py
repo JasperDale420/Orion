@@ -261,6 +261,12 @@ class MLScorer:
             "sweep_count_24h": get("sweep_count_24h"),
             "net_bull_premium_lr": get("net_bull_premium_lr"),
             "sweep_volume_share": get("sweep_volume_share"),
+            # Temporal excursion features (from Gold temporal_excursion_features)
+            "time_to_mfe_seconds": get("time_to_mfe_seconds"),
+            "time_to_mae_seconds": get("time_to_mae_seconds"),
+            "mfe_mae_ratio": get("mfe_mae_ratio"),
+            "excursion_velocity": get("excursion_velocity"),
+            "capture_efficiency": get("capture_efficiency"),
         }
 
     def extract_features(self, flow: dict[str, Any], bucket: str | None = None) -> dict[str, float]:
@@ -322,43 +328,48 @@ class MLScorer:
         Signals with high premium, sweeps, and good aggressor alignment
         get higher scores. CAPPED at 0.50 to prevent heuristic from
         reaching live threshold (0.70) - models are required for live trading.
+
+        Weights are configurable via the HeuristicWeights config
+        (env prefix ORION_HEURISTIC_).
         """
-        score = 0.3  # Base score
+        from orion.config import heuristic_weights as hw
+
+        score = hw.base_score
 
         # Premium factor (log scale)
         premium = float(flow.get("premium_usd") or 0)
         if premium >= 500000:
-            score += 0.25
+            score += hw.premium_500k_plus
         elif premium >= 100000:
-            score += 0.15
+            score += hw.premium_100k_plus
         elif premium >= 50000:
-            score += 0.10
+            score += hw.premium_50k_plus
         elif premium >= 25000:
-            score += 0.05
+            score += hw.premium_25k_plus
 
         # Sweep bonus
         is_sweep = str(flow.get("is_sweep", "")).lower() == "true"
         if is_sweep:
-            score += 0.15
+            score += hw.sweep_bonus
 
         # Aggressor alignment (ASK = bullish intent for calls)
         aggressor = flow.get("aggressor", "")
         put_call = flow.get("put_call", "")
         if (put_call == "C" and aggressor == "ASK") or (put_call == "P" and aggressor == "BID"):
-            score += 0.10
+            score += hw.ask_side_bonus
 
         # Volume/OI ratio (unusual activity)
         volume = float(flow.get("volume_contract") or 0)
         oi = float(flow.get("open_interest") or 1)
         vol_oi = volume / oi if oi > 0 else 0
         if vol_oi > 2.0:
-            score += 0.10
+            score += hw.vol_oi_high
         elif vol_oi > 1.0:
-            score += 0.05
+            score += hw.vol_oi_moderate
 
         # Penalize very low premium (noise)
         if premium < 10000:
-            score -= 0.20
+            score += hw.low_premium_penalty
 
         # In live mode we cap heuristic output to avoid taking untrained-model signals.
         # In paper/backtest, keep uncapped behavior for compatibility/analysis.
