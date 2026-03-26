@@ -1351,6 +1351,4 @@ class MetaSearchAgent:
                 result = await session.execute(stmt)
                 return result.scalars().all()
 
-        return await generate_weekly_recommendations(
-            week_data, execution_analysis, drift_analysis, _fetch_active
-        )
+        return await generate_weekly_recommendations(week_data, execution_analysis, drift_analysis, _fetch_active)

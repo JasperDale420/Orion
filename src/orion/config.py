@@ -101,7 +101,46 @@ class SystemSettings(BaseSettings):
     )
     db_echo: bool = Field(default=False, validation_alias="ORION_DB_ECHO")
     orion_use_gateway: bool = Field(default=True, validation_alias="ORION_USE_GATEWAY")
-
+    legacy_label_pipelines_enabled: bool = Field(
+        default=True,
+        validation_alias="ORION_ENABLE_LEGACY_LABEL_PIPELINES",
+    )
+    legacy_option_quote_tracker_enabled: bool | None = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER",
+    )
+    legacy_price_target_labeler_enabled: bool | None = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER",
+    )
+    legacy_pattern_miner_enabled: bool | None = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER",
+    )
+    legacy_nightly_backfill_enabled: bool | None = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL",
+    )
+    legacy_quality_guardrails_enabled: bool | None = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS",
+    )
+    legacy_exit_classifier_training_enabled: bool | None = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING",
+    )
+    legacy_pattern_miner_training_enabled: bool | None = Field(
+        default=None,
+        validation_alias="ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING",
+    )
+    pattern_miner_training_source: str = Field(
+        default="heber_gold",
+        validation_alias="ORION_PATTERN_MINER_TRAINING_SOURCE",
+    )
+    exit_classifier_training_source: str = Field(
+        default="heber_gold",
+        validation_alias="ORION_EXIT_CLASSIFIER_TRAINING_SOURCE",
+    )
     ml_prefilter_threshold: float = Field(
         default=0.5,
         ge=0.0,

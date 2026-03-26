@@ -30,7 +30,31 @@ services:
         max-size: "50m"
         max-file: "5"
 
-
+  price_target_labeler:
+    <<: *orion-common
+    container_name: orion_price_target
+    profiles: [ "legacy-labels" ]
+    restart: on-failure
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ../empire-core:/empire-core:ro
+      - ${HEBER_HOST_DATA:-/Users/jacobmcmillan/.heber-cache/data}:/Volumes/heber/data:ro
+    environment:
+      <<: *orion-env
+      DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      ORION_RUN_ID: docker_persistent
+      GATEWAY_URL: http://host.docker.internal:8080
+      ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
+      ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER: ${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}
+    command: [ "python", "-m", "orion.main_price_target_labeler" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   ingestion:
     <<: *orion-common
@@ -94,7 +118,28 @@ services:
         max-size: "50m"
         max-file: "5"
 
-
+  option_quote_tracker:
+    <<: *orion-common
+    container_name: orion_option_quote_tracker
+    profiles: [ "legacy-labels" ]
+    restart: on-failure
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      <<: *orion-env
+      DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      ALPACA_API_KEY: ${ALPACA_API_KEY}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY}
+      ORION_RUN_ID: docker_persistent
+      ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
+      ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER: ${ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER:-false}
+    command: [ "python", "-m", "orion.main_option_quote_tracker" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   execution:
     <<: *orion-common
@@ -294,6 +339,12 @@ services:
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
+      ORION_ENABLE_LEGACY_PATTERN_MINER: ${ORION_ENABLE_LEGACY_PATTERN_MINER:-true}
+      ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING: ${ORION_ENABLE_LEGACY_PATTERN_MINER_TRAINING:-true}
+      ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING: ${ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING:-true}
+      ORION_PATTERN_MINER_TRAINING_SOURCE: ${ORION_PATTERN_MINER_TRAINING_SOURCE:-heber_gold}
+      ORION_EXIT_CLASSIFIER_TRAINING_SOURCE: ${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-heber_gold}
     command: [ "python", "-m", "orion.main_pattern_miner" ]
     logging:
       driver: json-file
@@ -301,7 +352,57 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  nightly-backfill:
+    <<: *orion-common
+    container_name: orion_nightly_backfill
+    profiles: [ "legacy-labels" ]
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      price_target_labeler:
+        condition: service_started
+    environment:
+      <<: *orion-env
+      DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      ORION_RUN_ID: docker_nightly_backfill
+      GATEWAY_URL: http://host.docker.internal:8080
+      ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
+      ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL: ${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}
+    command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
+  quality-guardrails:
+    <<: *orion-common
+    container_name: orion_quality_guardrails
+    profiles: [ "legacy-labels" ]
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      price_target_labeler:
+        condition: service_started
+    environment:
+      <<: *orion-env
+      DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      ORION_RUN_ID: docker_quality_guardrails
+      ORION_GUARDRAIL_LOOP_SECONDS: ${ORION_GUARDRAIL_LOOP_SECONDS:-60}
+      ORION_RECONCILE_INTERVAL_SECONDS: ${ORION_RECONCILE_INTERVAL_SECONDS:-3600}
+      ORION_RECONCILE_LOOKBACK_DAYS: ${ORION_RECONCILE_LOOKBACK_DAYS:-7}
+      ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
+      ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS: ${ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS:-false}
+      ORION_QUALITY_CHECK_INTERVAL_SECONDS: ${ORION_QUALITY_CHECK_INTERVAL_SECONDS:-1800}
+      ORION_FEATURE_VALIDATE_INTERVAL_SECONDS: ${ORION_FEATURE_VALIDATE_INTERVAL_SECONDS:-3600}
+    command: [ "python", "-m", "orion.jobs.quality_guardrails" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   indexer:
     <<: *orion-common
