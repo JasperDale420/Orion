@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Automated Heber cache sync sidecar** (`heber-sync` Docker service): Continuously rsyncs today's and yesterday's Heber Silver parquet partitions (flow_alerts, bars, darkpool, market_tide, greek_exposure, iv_rank) from external drive to local SSD cache every 60 seconds. Eliminates manual `scripts/sync-heber-cache.sh` runs — ingestion now picks up new UW flow data automatically within 60s of Heber writing it.
+
 ### Fixed
+
+- **Circuit breaker re-tripping on execution restart**: Peak equity in `risk_state` was stale ($53,458) while Alpaca account equity had dropped to $49,404, causing a 7.58% drawdown breach on every restart. Reset peak equity to current account value.
 
 - **ML pre-filter test bypassing scorer via truthy MagicMock**: `test_ml_prefilter_threshold_reads_centralized_config` was producing `strategy_version_id == 'SOLVER_ENSEMBLE'` instead of `'ML_PREFILTER'` because `MagicMock().bypass_scoring` evaluates truthy, causing the pre-filter to always bypass scoring. Fixed by explicitly setting `mock_scorer.bypass_scoring = False` in the test.
 
