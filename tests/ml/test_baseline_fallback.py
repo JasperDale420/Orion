@@ -69,4 +69,6 @@ async def test_baseline_solver_executes_when_selected(monkeypatch):
     assert decision.strategy_version_id == "baseline_solver"
     assert decision.p_take is not None and decision.p_take >= 0.5
     assert isinstance(decision.decision_trace_json, dict)
-    assert decision.decision_trace_json.get("primary_solver") == "baseline_solver"
+    # primary_solver is nested in the solver_ensemble subtrace after pipeline refactor
+    ensemble_trace = decision.decision_trace_json.get("solver_ensemble", {})
+    assert ensemble_trace.get("primary_solver") == "baseline_solver"

@@ -66,6 +66,7 @@ class ExecutionEngine:
             result = await client.get_clock()
             self._gateway_available = "error" not in result
         except Exception:
+            logger.error("Gateway availability check failed", exc_info=True)
             self._gateway_available = False
 
         self._gateway_check_ts = datetime.now(UTC)
@@ -187,6 +188,7 @@ class ExecutionEngine:
             logger.error(
                 "Failed to sync risk state from Gateway",
                 extra={"event_type": "GATEWAY_RISK_SYNC_ERROR", "error": str(e)},
+                exc_info=True,
             )
 
     # ── Order execution ──────────────────────────────────────────────────

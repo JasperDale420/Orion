@@ -74,10 +74,10 @@ class NormalizationEngine:
             first_char = raw_put_call_upper[:1] if raw_put_call_upper else ""
             if first_char in ("P", "C"):
                 put_call = first_char
-                logger.warning("put_call field had unexpected value %r, inferred %r", raw_put_call, put_call)
+                logger.error("put_call field had unexpected value %r, inferred %r", raw_put_call, put_call)
             else:
                 put_call = "UNKNOWN"
-                logger.warning("put_call field had unrecognizable value %r, setting UNKNOWN", raw_put_call)
+                logger.error("put_call field had unrecognizable value %r, setting UNKNOWN", raw_put_call)
 
         normalized = {
             "ticker": payload.get("ticker"),

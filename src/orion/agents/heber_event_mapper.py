@@ -53,7 +53,7 @@ async def read_heber_frames(task: EvaluationTask) -> tuple[pd.DataFrame, pd.Data
         )
         return bars_frame, flow_frame
     except Exception as exc:
-        logger.warning(f"Heber read failed for meta-search events: {exc}")
+        logger.warning(f"Heber read failed for meta-search events: {exc}", exc_info=True)
         return None
 
 

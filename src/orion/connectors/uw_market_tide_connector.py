@@ -91,6 +91,7 @@ class UWMarketTideConnector:
             try:
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             except Exception:
+                logger.warning(f"Failed to parse market tide timestamp: {ts_str}", exc_info=True)
                 continue
 
             record = {

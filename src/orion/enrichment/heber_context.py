@@ -2,20 +2,24 @@
 
 Provides ticker discovery, VIX proxy, market tide, SPY return, and
 regime snapshot persistence. All reads go through the Heber reader;
-no direct database or gateway I/O happens here.
+DB writes are best-effort for durability.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
+from sqlalchemy import select
 
 from orion.clients.heber_reader import HeberReader
 from orion.config import system_settings
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
+from orion.storage.db import async_session_factory
+from orion.storage.models import RegimeSnapshot
 
 logger = setup_struct_logger("orion.enrichment.heber_context")
 
@@ -23,6 +27,9 @@ STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "
 
 _heber_reader = HeberReader()
 _recent_regime_snapshots: list[dict[str, Any]] = []
+_latest_greek_exposure: list[dict] = []
+_latest_max_pain: list[dict] = []
+_latest_iv_rank: list[dict] = []
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +95,7 @@ def _extract_tickers_from_bars(limit: int) -> list[str]:
             limit=limit,
         )
     except Exception:
-        logger.debug("Heber bars ticker discovery failed", exc_info=True)
+        logger.warning("Heber bars ticker discovery failed; falling back to static list", exc_info=True)
         return []
 
 
@@ -111,7 +118,7 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], st
         if tickers:
             return tickers, "heber"
     except Exception:
-        logger.debug("Heber flow ticker discovery failed", exc_info=True)
+        logger.warning("Heber flow ticker discovery failed", exc_info=True)
 
     # Secondary: bars instrument keys
     bars_tickers = _extract_tickers_from_bars(limit=limit)
@@ -339,8 +346,103 @@ async def get_spy_cumulative_return() -> float:
 
 
 # ---------------------------------------------------------------------------
+# Greek exposure (Heber reads)
+# ---------------------------------------------------------------------------
+
+
+def get_latest_greek_exposure(tickers: list[str]) -> list[dict]:
+    """Get latest greek exposure data from Heber for the given tickers."""
+    global _latest_greek_exposure
+    try:
+        now_utc = datetime.now(UTC)
+        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        df = _heber_reader.read_greek_exposure(
+            symbols=tickers,
+            asof_time=now_utc,
+            start_time=today_start_utc,
+        )
+        if df.empty:
+            _latest_greek_exposure = []
+            return []
+        records = df.to_dict("records")
+        _latest_greek_exposure = records
+        logger.info("heber_greek_exposure_read", rows=len(records))
+        return records
+    except Exception:
+        logger.warning("Heber greek exposure read failed", exc_info=True)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Max pain (Heber reads)
+# ---------------------------------------------------------------------------
+
+
+def get_latest_max_pain(tickers: list[str]) -> list[dict]:
+    """Get latest max pain data from Heber for the given tickers."""
+    global _latest_max_pain
+    try:
+        now_utc = datetime.now(UTC)
+        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        df = _heber_reader.read_max_pain(
+            symbols=tickers,
+            asof_time=now_utc,
+            start_time=today_start_utc,
+        )
+        if df.empty:
+            _latest_max_pain = []
+            return []
+        records = df.to_dict("records")
+        _latest_max_pain = records
+        logger.info("heber_max_pain_read", rows=len(records))
+        return records
+    except Exception:
+        logger.warning("Heber max pain read failed", exc_info=True)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# IV rank (Heber reads)
+# ---------------------------------------------------------------------------
+
+
+def get_latest_iv_rank(tickers: list[str]) -> list[dict]:
+    """Get latest IV rank data from Heber for the given tickers."""
+    global _latest_iv_rank
+    try:
+        now_utc = datetime.now(UTC)
+        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        df = _heber_reader.read_iv_rank(
+            symbols=tickers,
+            asof_time=now_utc,
+            start_time=today_start_utc,
+        )
+        if df.empty:
+            _latest_iv_rank = []
+            return []
+        records = df.to_dict("records")
+        _latest_iv_rank = records
+        logger.info("heber_iv_rank_read", rows=len(records))
+        return records
+    except Exception:
+        logger.warning("Heber IV rank read failed", exc_info=True)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Regime snapshot persistence
 # ---------------------------------------------------------------------------
+
+
+async def _persist_regime_to_db(snapshot_dict: dict[str, Any]) -> None:
+    """Write regime snapshot to TimescaleDB for durability (best-effort)."""
+    try:
+        async with async_session_factory() as session:
+            row = RegimeSnapshot(**snapshot_dict)
+            session.add(row)
+            await session.commit()
+    except Exception:
+        logger.warning("regime_snapshot_db_write_failed", exc_info=True)
 
 
 async def persist_regime_snapshot(
@@ -348,7 +450,7 @@ async def persist_regime_snapshot(
     snapshot: Any,
     ticker: str = "SPY",
 ) -> None:
-    """Persist regime snapshot in memory while centralized sinks are externalized."""
+    """Persist regime snapshot in memory (hot path) and to DB (durable, fire-and-forget)."""
     import json
 
     record = {
@@ -366,6 +468,50 @@ async def persist_regime_snapshot(
         "confidence_json": json.dumps(snapshot.confidence) if snapshot.confidence else None,
     }
 
+    # Hot path: in-memory list for signal pipeline reads
     _recent_regime_snapshots.append(record)
     if len(_recent_regime_snapshots) > 2000:
         del _recent_regime_snapshots[:1000]
+
+    # Durable path: fire-and-forget DB write (don't block enrichment loop)
+    asyncio.create_task(_persist_regime_to_db(record))
+
+
+async def seed_regime_snapshots_from_db(limit: int = 500) -> None:
+    """Load recent regime snapshots from DB into in-memory list on startup.
+
+    Recovers state after a restart so the signal pipeline has immediate
+    access to recent regime history without waiting for new snapshots.
+    """
+    try:
+        async with async_session_factory() as session:
+            stmt = select(RegimeSnapshot).order_by(RegimeSnapshot.ts_utc.desc()).limit(limit)
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+
+        if not rows:
+            logger.info("regime_snapshot_seed_empty", msg="No regime snapshots in DB to seed")
+            return
+
+        # Reverse so oldest is first (append order)
+        for row in reversed(rows):
+            _recent_regime_snapshots.append(
+                {
+                    "ts_utc": row.ts_utc,
+                    "ticker": row.ticker,
+                    "trend_regime": row.trend_regime,
+                    "vol_regime": row.vol_regime,
+                    "risk_regime": row.risk_regime,
+                    "session_regime": row.session_regime,
+                    "vix_regime": row.vix_regime,
+                    "vix_level": row.vix_level,
+                    "realized_vol": row.realized_vol,
+                    "trend_strength": row.trend_strength,
+                    "risk_score": row.risk_score,
+                    "confidence_json": row.confidence_json,
+                }
+            )
+
+        logger.info("regime_snapshot_seed_complete", count=len(rows))
+    except Exception:
+        logger.warning("regime_snapshot_seed_failed", exc_info=True)

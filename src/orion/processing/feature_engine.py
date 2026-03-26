@@ -64,7 +64,7 @@ class FeatureEngine:
             self._hydrated = True
 
         except Exception as e:
-            logger.error(f"Failed to hydrate FeatureEngine: {e}")
+            logger.error(f"Failed to hydrate FeatureEngine: {e}", exc_info=True)
 
     async def _hydrate_single_ticker(self, ticker: str) -> None:
         try:
@@ -125,7 +125,7 @@ class FeatureEngine:
 
             self.history[ticker] = df
         except Exception as e:
-            logger.warning(f"Indicator hydration failed for {ticker}: {e}")
+            logger.error(f"Indicator hydration failed for {ticker}: {e}", exc_info=True)
 
     _first_existing_column = staticmethod(_first_existing_column_func)
 
@@ -215,7 +215,7 @@ class FeatureEngine:
                 await session.commit()
             logger.info(f"Persisted {total} feature events to Gold Store.")
         except Exception as e:
-            logger.error(f"Failed to batch persist features: {e}")
+            logger.error(f"Failed to batch persist features: {e}", exc_info=True)
 
     async def fetch_signal_batch(
         self, ticker: str, start_ts: datetime, end_ts: datetime, feature_set_id: str = "v1_legacy"

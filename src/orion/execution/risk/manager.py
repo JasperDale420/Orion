@@ -445,7 +445,7 @@ class RiskManager:
             await self._evaluate_drawdown_kill_switch()
 
         except Exception as e:
-            logger.error(f"Failed to load Risk State: {e}")
+            logger.error(f"Failed to load Risk State: {e}", exc_info=True)
 
     async def evaluate_drawdown_kill_switch(self) -> None:
         """Public wrapper for the drawdown kill switch evaluation."""

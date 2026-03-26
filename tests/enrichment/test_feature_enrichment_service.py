@@ -16,47 +16,27 @@ import pytest
 # _gateway_fetch_enabled
 # ---------------------------------------------------------------------------
 class TestGatewayFetchEnabled:
-    """Tests for _gateway_fetch_enabled() env var parsing."""
+    """Tests for _gateway_fetch_enabled() delegates to system_settings."""
 
     @pytest.mark.unit
-    @pytest.mark.parametrize(
-        "env_value,expected",
-        [
-            ("1", True),
-            ("true", True),
-            ("True", True),
-            ("TRUE", True),
-            ("yes", True),
-            ("YES", True),
-            ("on", True),
-            ("ON", True),
-            ("y", True),
-            ("Y", True),
-            ("0", False),
-            ("false", False),
-            ("no", False),
-            ("off", False),
-            ("n", False),
-            ("", False),
-            ("random", False),
-        ],
-    )
-    def test_truthy_and_falsy_values(self, env_value, expected, monkeypatch):
-        monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", env_value)
+    def test_returns_true_when_enabled(self):
         from orion.main_feature_enrichment import _gateway_fetch_enabled
 
-        assert _gateway_fetch_enabled() is expected
+        with patch("orion.main_feature_enrichment.system_settings") as mock_settings:
+            mock_settings.feature_enrichment_enable_gateway_fetch = True
+            assert _gateway_fetch_enabled() is True
 
     @pytest.mark.unit
-    def test_default_when_unset(self, monkeypatch):
-        monkeypatch.delenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", raising=False)
+    def test_returns_false_when_disabled(self):
         from orion.main_feature_enrichment import _gateway_fetch_enabled
 
-        assert _gateway_fetch_enabled() is False
+        with patch("orion.main_feature_enrichment.system_settings") as mock_settings:
+            mock_settings.feature_enrichment_enable_gateway_fetch = False
+            assert _gateway_fetch_enabled() is False
 
     @pytest.mark.unit
-    def test_strips_whitespace(self, monkeypatch):
-        monkeypatch.setenv("ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH", "  true  ")
+    def test_default_is_true(self):
+        """Gateway fetch is enabled by default for automatic data ingestion."""
         from orion.main_feature_enrichment import _gateway_fetch_enabled
 
         assert _gateway_fetch_enabled() is True

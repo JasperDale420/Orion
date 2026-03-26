@@ -2,6 +2,10 @@ import math
 
 import pandas as pd
 
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger("orion.processing.label_engine")
+
 
 class TripleBarrierLabeling:
     """
@@ -42,6 +46,7 @@ class TripleBarrierLabeling:
                 try:
                     start_ts = prices.index[prices.index.get_indexer([start_ts], method="bfill")[0]]
                 except Exception:
+                    logger.warning(f"Failed to map event timestamp {start_ts} to price index", exc_info=True)
                     continue
 
             # Entry Price

@@ -98,7 +98,7 @@ class FillProcessor:
             fill_id_str = (
                 str(fill.get("id", "unknown")) if isinstance(fill, dict) else str(getattr(fill, "id", "unknown"))
             )
-            logger.error(f"Failed to process fill {fill_id_str}: {e}")
+            logger.error(f"Failed to process fill {fill_id_str}: {e}", exc_info=True)
 
 
 @db_retry

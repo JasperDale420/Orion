@@ -79,7 +79,7 @@ class IngestionService:
 
                 await CircuitBreaker().close()
             except Exception as cb_err:
-                logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+                logger.error(f"Failed to reset circuit breaker on start: {cb_err}", exc_info=True)
 
         await init_db()
         await self.universe.hydrate_from_db()
@@ -95,7 +95,7 @@ class IngestionService:
             self._rollup_task = asyncio.create_task(rollup_job.run_forever())
             logger.info("Rollup job started as background task")
         except Exception as e:
-            logger.warning(f"Failed to start rollup job: {e}")
+            logger.error(f"Failed to start rollup job: {e}", exc_info=True)
 
         # Start Gateway WebSocket stream and subscribe to initial tickers
         try:
@@ -209,7 +209,7 @@ class IngestionService:
                 await self.gateway_stream.subscribe(list(new_tickers))
                 logger.info(f"Subscribed to {len(new_tickers)} new tickers via Gateway")
         except Exception as e:
-            logger.warning(f"Failed to sync Gateway subscriptions: {e}")
+            logger.error(f"Failed to sync Gateway subscriptions: {e}", exc_info=True)
 
     async def _check_overnight_sleep(self) -> None:
         from orion.core.market_schedule import MarketSchedule

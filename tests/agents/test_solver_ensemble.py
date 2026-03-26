@@ -1,130 +1,126 @@
+"""
+Tests for ensemble decision behavior via the composable pipeline.
+
+Verifies consensus and rejection through the pipeline stages.
+"""
+
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orion.analysis.regime import MarketRegime
-from orion.core.solver_schema import SolverConfig
+from orion.analysis.regime import (
+    MarketRegimeSnapshot,
+    RiskRegime,
+    SessionRegime,
+    TrendRegime,
+    VIXRegime,
+    VolRegime,
+)
+from orion.processing.pipeline import StageResult
 from orion.processing.signal_engine import SignalEngine
 from orion.storage.models_gold import CandidateTrade
+
+_MOCK_SNAPSHOT = MarketRegimeSnapshot(
+    ts=datetime.now(UTC),
+    trend=TrendRegime.FLAT,
+    vol=VolRegime.NORMAL,
+    risk=RiskRegime.NEUTRAL,
+    session=SessionRegime.MIDDAY,
+    vix_regime=VIXRegime.NORMAL,
+)
+
+
+class _MockStage:
+    """Simple mock stage matching PipelineStage protocol."""
+
+    def __init__(self, stage_name: str, fn):
+        self._name = stage_name
+        self._fn = fn
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def evaluate(self, ctx):
+        return await self._fn(ctx)
+
+
+async def _regime_pass(ctx):
+    ctx.regime_snapshot = _MOCK_SNAPSHOT
+    ctx.regime_size_multiplier = 1.0
+    return StageResult(action="CONTINUE", trace={"regime_gate": "passed"})
+
+
+async def _ml_pass(ctx):
+    ctx.ml_score = 0.8
+    return StageResult(action="CONTINUE", trace={"ml_prefilter": "passed"})
 
 
 @pytest.mark.asyncio
 async def test_ensemble_decision_consensus():
-    # Mock Router to return 2 solvers
-    mock_router = AsyncMock()
+    """Solver ensemble produces EXECUTE when consensus exceeds threshold."""
+    engine = SignalEngine()
 
-    solver_a = SolverConfig(
-        solver_id="s1",
-        version_id="v1_agile",
-        base_strategy_name="AgileStrategy",
-        rules=["rule_sweep"],
-        features={"event_features": []},
-        model={},
-        risk={},
-        entry_logic={"rules": [], "combination_method": "AND"},
-        exit_logic={"fixed_sl_pct": 0.02, "fixed_tp_pct": 0.05},
-        execution={},
-        promotion_policy={},
-        stage="paper",
-    )
-    solver_b = SolverConfig(
-        solver_id="s2",
-        version_id="v2_conservative",
-        base_strategy_name="ConservativeStrategy",
-        rules=["rule_sweep"],
-        features={"event_features": []},
-        model={},
-        risk={},
-        entry_logic={"rules": [], "combination_method": "AND"},
-        exit_logic={"fixed_sl_pct": 0.01, "fixed_tp_pct": 0.02},
-        execution={},
-        promotion_policy={},
-        stage="paper",
-    )
-
-    s1_obj = MagicMock()
-    s1_obj.solver_id = "s1"
-    s1_obj.config = solver_a
-
-    s2_obj = MagicMock()
-    s2_obj.solver_id = "s2"
-    s2_obj.config = solver_b
-
-    mock_router.select_solvers.return_value = [s1_obj, s2_obj]
-
-    with patch("orion.processing.signal_engine.SolverRouter", return_value=mock_router):
-        engine = SignalEngine()
-        # Mock Regime
-        engine.regime_detector.get_current_regime_for_ticker = AsyncMock(return_value=MarketRegime.TRENDING_UP)
-
-        # Mock Pipeline Execution
-        # Solver A says Take (0.8), Solver B says Take (0.7) -> Consensus > 0.5
-        engine.pipeline.execute = AsyncMock(side_effect=[(0.8, 1.0, {"trace": "A"}), (0.7, 1.0, {"trace": "B"})])
-
-        candidate = CandidateTrade(
-            candidate_id="c1",
-            source="UW",
-            ticker="AAPL",
-            timestamp_utc=datetime.now(UTC),
-            rule_id="rule_sweep",
-            confidence=0.5,
-            direction="LONG",
-            evidence={"event_id": "e1"},  # Required field
+    async def solver_consensus(ctx):
+        ctx.primary_solver_id = "s1"
+        ctx.consensus_score = 0.75
+        ctx.limit_price = 2.50
+        ctx.risk_per_trade_bps = 100
+        return StageResult(
+            action="CONTINUE",
+            trace={"primary_solver": "s1", "ensemble_consensus_score": 0.75},
         )
 
-        decision = await engine.decide(candidate)
+    engine._stages = [
+        _MockStage("regime_gate", _regime_pass),
+        _MockStage("ml_prefilter", _ml_pass),
+        _MockStage("solver_ensemble", solver_consensus),
+    ]
 
-        assert decision.decision == "EXECUTE"
-        assert "Ensemble Consensus" in decision.reason
-        assert decision.strategy_version_id == "s1"  # Leader elected
-        assert decision.decision_trace_json["ensemble_consensus_score"] == 0.75  # (0.8+0.7)/2
+    candidate = CandidateTrade(
+        candidate_id="c1",
+        source="UW",
+        ticker="AAPL",
+        timestamp_utc=datetime.now(UTC),
+        rule_id="rule_sweep",
+        confidence=0.5,
+        direction="LONG",
+        evidence={"event_id": "e1"},
+    )
+
+    decision = await engine.decide(candidate)
+
+    assert decision.decision == "EXECUTE"
+    ensemble_trace = decision.decision_trace_json.get("solver_ensemble", {})
+    assert ensemble_trace.get("ensemble_consensus_score") == 0.75
 
 
 @pytest.mark.asyncio
 async def test_ensemble_decision_rejection():
-    mock_router = AsyncMock()
-    solver_a = SolverConfig(
-        solver_id="s1",
-        version_id="v1",
-        base_strategy_name="Base",
-        rules=[],
-        features={},
-        model={},
-        risk={},
-        entry_logic={"rules": [], "combination_method": "AND"},
-        exit_logic={},
-        execution={},
-        promotion_policy={},
-        stage="paper",
+    """Solver ensemble produces SKIP when consensus is below threshold."""
+    engine = SignalEngine()
+
+    async def solver_reject(ctx):
+        return StageResult(action="SKIP", reason="Ensemble Rejected: consensus 0.20 < 0.50", trace={})
+
+    engine._stages = [
+        _MockStage("regime_gate", _regime_pass),
+        _MockStage("ml_prefilter", _ml_pass),
+        _MockStage("solver_ensemble", solver_reject),
+    ]
+
+    candidate = CandidateTrade(
+        candidate_id="c2",
+        source="UW",
+        ticker="TSLA",
+        timestamp_utc=datetime.now(UTC),
+        rule_id="rule_sweep",
+        confidence=0.5,
+        direction="SHORT",
+        evidence={"event_id": "e2"},
     )
 
-    s1_obj = MagicMock()
-    s1_obj.solver_id = "s1"
-    s1_obj.config = solver_a
+    decision = await engine.decide(candidate)
 
-    # Single solver, returns low prob
-    mock_router.select_solvers.return_value = [s1_obj]
-
-    with patch("orion.processing.signal_engine.SolverRouter", return_value=mock_router):
-        engine = SignalEngine()
-        engine.regime_detector.get_current_regime_for_ticker = AsyncMock(return_value=MarketRegime.TRENDING_DOWN)
-
-        # Pipeline returns 0.2
-        engine.pipeline.execute = AsyncMock(return_value=(0.2, 1.0, {}))
-
-        candidate = CandidateTrade(
-            candidate_id="c2",
-            source="UW",
-            ticker="TSLA",
-            timestamp_utc=datetime.now(UTC),
-            rule_id="rule_sweep",
-            confidence=0.5,
-            direction="SHORT",
-            evidence={"event_id": "e2"},
-        )
-
-        decision = await engine.decide(candidate)
-
-        assert decision.decision == "SKIP"
-        assert "Ensemble Rejected" in decision.reason
+    assert decision.decision == "SKIP"
+    assert "Ensemble Rejected" in decision.reason

@@ -151,7 +151,7 @@ class DLQConsumer:
                     bronze.trading_date = td
                     bronze.session = sess
             except Exception:
-                pass
+                logger.error(f"DLQ event normalization failed for event_id={bronze.event_id}", exc_info=True)
             unique_events = [bronze]
 
         # Persist bronze + silver (idempotent via ON CONFLICT DO NOTHING).

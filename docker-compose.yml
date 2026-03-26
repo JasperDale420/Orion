@@ -81,7 +81,7 @@ services:
       ORION_RUN_ID: docker_persistent
       GATEWAY_URL: http://host.docker.internal:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
-      ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH: ${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}
+      ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH: ${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-true}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
@@ -339,7 +339,7 @@ services:
         while true; do
           TODAY=$$(date -u +%Y-%m-%d)
           YESTERDAY=$$(date -u -d "@$$(( $$(date -u +%s) - 86400 ))" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
-          FEEDS="flow_alerts bars darkpool market_tide greek_exposure iv_rank"
+          FEEDS="flow_alerts bars darkpool market_tide greek_exposure iv_rank max_pain"
           SYNCED=0
           for feed in $$FEEDS; do
             SRC_BASE="/heber-source/silver/feed=$$feed"

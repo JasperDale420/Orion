@@ -104,6 +104,7 @@ class UWMaxPainConnector:
                 try:
                     expiry = datetime.strptime(expiry_str, "%Y-%m-%d").date()
                 except Exception:
+                    logger.warning(f"Failed to parse max pain expiry date: {expiry_str}", exc_info=True)
                     continue
 
                 distance_pct = None

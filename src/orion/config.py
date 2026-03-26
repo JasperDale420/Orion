@@ -187,7 +187,7 @@ class SystemSettings(BaseSettings):
         default=True, validation_alias="ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT"
     )
     feature_enrichment_enable_gateway_fetch: bool = Field(
-        default=False, validation_alias="ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH"
+        default=True, validation_alias="ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH"
     )
 
     # Circuit breaker

@@ -145,7 +145,7 @@ class MLPreFilter:
 
         except Exception as e:
             # Log but don't block on ML scorer failures — safety fallback
-            logger.warning(f"ML pre-filter failed: {e}, continuing with Solver evaluation")
+            logger.error(f"ML pre-filter failed for candidate: {e}, continuing with Solver evaluation", exc_info=True)
             return StageResult(
                 action="CONTINUE",
                 trace={"ml_prefilter_error": str(e)},

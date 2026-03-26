@@ -107,7 +107,7 @@ class GatewayStreamClient:
             try:
                 await self._websocket.close()
             except Exception:
-                logger.debug("Ignoring websocket close error during cleanup", exc_info=True)
+                logger.warning("Websocket close error during cleanup", exc_info=True)
         self._websocket = None
         self._authenticated = False
 

@@ -8,7 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Automated Heber cache sync sidecar** (`heber-sync` Docker service): Continuously rsyncs today's and yesterday's Heber Silver parquet partitions (flow_alerts, bars, darkpool, market_tide, greek_exposure, iv_rank) from external drive to local SSD cache every 60 seconds. Eliminates manual `scripts/sync-heber-cache.sh` runs — ingestion now picks up new UW flow data automatically within 60s of Heber writing it.
+- **Gateway fetch enabled by default**: Greek exposure, max pain, and IV rank connectors now poll Data-Gateway REST endpoints automatically (every 5min, 1hr, and 15min respectively). Previously gated behind `ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=false` — now defaults to `true` so per-ticker enrichment data flows into Orion every trading day without manual intervention.
+
+- **Max pain added to heber-sync feeds**: The `heber-sync` Docker sidecar and `scripts/sync-heber-cache.sh` now sync `max_pain` parquet partitions from Heber alongside existing feeds.
+
+- **Heber read functions for GEX, max pain, IV rank**: Added `get_latest_greek_exposure()`, `get_latest_max_pain()`, and `get_latest_iv_rank()` to `heber_context.py` as utility functions for direct parquet reads.
+
+- **Persist regime snapshots to TimescaleDB**: Regime snapshots are now durably written to a `regime_snapshots` table via fire-and-forget async DB writes, in addition to the existing in-memory list. On startup, `seed_regime_snapshots_from_db()` recovers the last 500 snapshots from the DB so the signal pipeline has immediate regime history.
 
 ### Fixed
 
