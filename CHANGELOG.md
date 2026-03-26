@@ -6,7 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **ML pre-filter test bypassing scorer via truthy MagicMock**: `test_ml_prefilter_threshold_reads_centralized_config` was producing `strategy_version_id == 'SOLVER_ENSEMBLE'` instead of `'ML_PREFILTER'` because `MagicMock().bypass_scoring` evaluates truthy, causing the pre-filter to always bypass scoring. Fixed by explicitly setting `mock_scorer.bypass_scoring = False` in the test.
+
+- **Heber data inaccessible from Docker containers**: External USB drive (`/Volumes/heber`) can't be bind-mounted by Docker Desktop's Linux VM. Replaced direct volume mounts with a local SSD cache (`~/.heber-cache/data`) synced via `scripts/sync-heber-cache.sh`. Feature enrichment now reads Heber data successfully (was falling back to static ticker list for 370+ consecutive cycles).
+
+- **Error logging across 15 files (28 issues)**: Comprehensive audit found 11 HIGH severity and 17 MEDIUM severity error handling issues. Fixed: added `exc_info=True` for traceback visibility, upgraded `WARNING→ERROR` on critical path failures (circuit breaker, risk sync, fill processing, feature engine, ML pre-filter), added missing log calls to silent `except: continue/pass` blocks (label engine, DLQ consumer, timestamp parsers).
+
+- **Circuit breaker stuck OPEN from stale peak equity**: Peak equity was 100,000 (hardcoded default) while current equity was 53,458.94, causing a permanent 46.5% drawdown breach. Reset `risk_state` and `system_status` to current equity.
+
+- **Meta-search agent base solver not found**: `.env` referenced `v1_legacy` but solvers table uses `diversified_baseline_v1`. Updated default to match seeded solver IDs.
+
 ### Added
+
+- **Heber cache sync script** (`scripts/sync-heber-cache.sh`): Syncs silver/gold parquet feeds from external Heber drive to local SSD cache for Docker Desktop compatibility. Docker compose now uses `HEBER_HOST_DATA` env var for the host-side mount path.
+
+- **Meta-search agent running**: Solver evolution service now active, using AI Gateway + `diversified_baseline_v1` as base solver for LLM-guided strategy mutation.
 
 - **Seed initial paper-stage solvers**: The `solvers` table was empty since inception, causing every candidate trade to be safety-SKIPped by the SolverEnsemble. Added 5 conservative paper-stage solvers (BullishSweep, BearishPutPressure, RSI Mean Reversion, Swing Entry, Diversified Baseline) with companion `solver_metrics` rows. Available via `scripts/seed_solvers.py` or Alembic migration 0026.
 
