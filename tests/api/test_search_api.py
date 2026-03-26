@@ -4,13 +4,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from orion.api.main import app
+from orion.config import system_settings
 from orion.storage.db import async_session_factory
 from orion.storage.models_rag import VectorDocument
 
 
 @pytest.mark.asyncio
 async def test_search_supports_tickers_premium_filters_and_pointers(monkeypatch):
-    monkeypatch.setenv("ORION_API_KEY", "testkey")
+    monkeypatch.setattr(system_settings, "api_key", "testkey")
 
     # Avoid network calls: stub embeddings to a deterministic vector.
     from orion.rag import vector_store as vs

@@ -8,16 +8,20 @@ Collects and summarizes weekly data for meta-agent analysis:
 """
 
 import json
-import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, func, select
+import aiofiles
+
+from sqlalchemy import Integer, and_, func, select
 
 from orion.shared.db_utils import db_query
+from orion.shared.logger import setup_struct_logger
+from orion.storage.models_gold import StrategyDecision
+from orion.storage.models_trade_journal import TradeJournalEntry
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class WeeklyDataAggregator:
@@ -80,9 +84,7 @@ class WeeklyDataAggregator:
         # Scan for EOD input files
         if self.artifacts_dir.exists():
             for f in self.artifacts_dir.iterdir():
-                if not f.name.startswith("eod_input_"):
-                    continue
-                if not f.name.endswith(".json"):
+                if not (f.name.startswith("eod_input_") and f.name.endswith(".json")):
                     continue
 
                 try:
@@ -93,8 +95,8 @@ class WeeklyDataAggregator:
                     if not (week_start <= file_date <= week_end):
                         continue
 
-                    with open(f) as fp:
-                        data = json.load(fp)
+                    async with aiofiles.open(f) as fp:
+                        data = json.loads(await fp.read())
 
                     reports.append(
                         {
@@ -126,9 +128,7 @@ class WeeklyDataAggregator:
             for bucket, insight in ml_insights.items():
                 auc = insight.get("holdout_auc")
                 if auc:
-                    if bucket not in summary["ml_auc_scores"]:
-                        summary["ml_auc_scores"][bucket] = []
-                    summary["ml_auc_scores"][bucket].append(
+                    summary["ml_auc_scores"].setdefault(bucket, []).append(
                         {
                             "date": report["date"],
                             "auc": auc,
@@ -139,9 +139,7 @@ class WeeklyDataAggregator:
                 for feat in insight.get("top_features", [])[:5]:
                     feat_name = feat.get("feature")
                     if feat_name:
-                        if feat_name not in summary["top_features"]:
-                            summary["top_features"][feat_name] = 0
-                        summary["top_features"][feat_name] += 1
+                        summary["top_features"][feat_name] = summary["top_features"].get(feat_name, 0) + 1
 
             # Track ingestion issues
             ingestion = data.get("errors_incidents", {}).get("ingestion", {})
@@ -165,8 +163,6 @@ class WeeklyDataAggregator:
         """
         Aggregate trade execution data from the database.
         """
-        from orion.storage.models_gold import StrategyDecision
-        from orion.storage.models_trade_journal import TradeJournalEntry
 
         async def fetch_trade_stats(session: Any) -> dict[str, Any]:
             # Count decisions
@@ -235,8 +231,6 @@ class WeeklyDataAggregator:
             }
 
         try:
-            from sqlalchemy import Integer
-
             return await db_query(fetch_trade_stats)
         except Exception as e:
             logger.error(f"Failed to aggregate trade data: {e}")

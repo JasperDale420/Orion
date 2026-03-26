@@ -56,6 +56,8 @@ async def test_execution_loop_flow():
         source="TEST",
         execution_params={"limit_price": 100.0},
         evidence={"test": True},
+        option_symbol="SPY260418C00500000",
+        premium=1.0,
     )
 
     # SYSTEM STATUS
@@ -176,32 +178,34 @@ async def test_execution_loop_flow():
         else:
             print("--- SYSTEM STATUS DEBUG: NONE FOUND ---")
 
-    # 6. Execution Engine (Mocked)
-    # Note: ExecutionEngine class typically imports connectors at top level.
-    # We need to patch them.
-    with (
-        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConnector,  # noqa: N806
-        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,  # noqa: N806
-    ):
-        mock_conn = MockConnector.return_value
-        mock_market = MockMarket.return_value
-        mock_market.get_latest_price.return_value = 100.0
+    # 6. Execution Engine (uses Gateway client for order submission)
+    execution = ExecutionEngine()
+    execution._gateway_available = True
+    execution._gateway_check_ts = datetime.now(UTC)
 
-        execution = ExecutionEngine()
-        execution.connector = mock_conn
-        execution.market_connector = mock_market
+    mock_client = AsyncMock()
+    mock_client.get_clock.return_value = {"is_open": True}
+    mock_client.get_option_chain.return_value = {
+        "contracts": [{"symbol": "SPY260418C00500000", "mid": 1.0, "ask": 1.05}]
+    }
+    mock_client.create_order.return_value = {"id": "order-123", "status": "accepted"}
+    execution._gateway_client = mock_client
+    execution._get_gateway_client = lambda: mock_client
 
-        # Bypass Risk checks for test
-        execution.risk_manager.check_order = MagicMock(return_value=True)
-        execution.risk_manager.calculate_size = MagicMock(return_value=10)
+    # Bypass Risk checks for test
+    execution.risk_manager.check_order = MagicMock(return_value=True)
+    execution.risk_manager.check_sector_exposure = MagicMock(return_value=True)
+    execution.risk_manager.current_equity = 100000.0
+    execution.risk_manager.update_post_trade = AsyncMock()
+    execution.risk_manager.remove_pending_order = AsyncMock()
 
-        # Execute
-        print("--- CALLING EXECUTE ---")
-        await execution.execute_order(decision, target_candidate)
-        print("--- EXECUTE CALLED ---")
+    # Execute
+    print("--- CALLING EXECUTE ---")
+    await execution.execute_order(decision, target_candidate)
+    print("--- EXECUTE CALLED ---")
 
-        mock_conn.submit_limit_order.assert_called_once()
-        print("--- ORDER SUBMITTED ---")
+    mock_client.create_order.assert_called_once()
+    print("--- ORDER SUBMITTED ---")
 
     # 7. Update Status
     await orion.main_execution.update_decision_status(decision.decision_id, "TRUE")

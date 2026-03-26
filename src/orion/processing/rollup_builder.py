@@ -1,6 +1,7 @@
 import logging
 from datetime import UTC, datetime
 
+import numpy as np
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -78,11 +79,7 @@ class RollupBuilder:
         # 3. Define Rollup Periods (5m, 1h, 1d, 1w - no 1m as per user preference)
         periods = {"5m": "5min", "1h": "1h", "1d": "1D", "1w": "1W"}
 
-        latest_ts: datetime | None = None
-        try:
-            latest_ts = df.index.max().to_pydatetime()
-        except Exception:
-            latest_ts = None
+        latest_ts: datetime = df.index.max().to_pydatetime()
 
         df["dollar_vol"] = df["vwap"] * df["volume"]
 
@@ -108,8 +105,6 @@ class RollupBuilder:
 
             if resampled.empty:
                 continue
-
-            import numpy as np
 
             # Avoid division by zero when volume is zero
             safe_volume = resampled["volume"].replace(0, np.nan)

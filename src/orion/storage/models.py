@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Date, DateTime, Index, String, func
+from sqlalchemy import JSON, BigInteger, Date, DateTime, Float, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -83,3 +83,26 @@ class RuntimeConfig(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class RegimeSnapshot(Base):
+    __tablename__ = "regime_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    trend_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    vol_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    risk_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    session_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    vix_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    vix_level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    realized_vol: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trend_strength: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("idx_regime_snapshots_ticker_ts", "ticker", "ts_utc"),)
+
+    def __repr__(self) -> str:
+        return f"<RegimeSnapshot(id={self.id}, ticker={self.ticker}, ts={self.ts_utc})>"

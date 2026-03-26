@@ -5,18 +5,17 @@ Client for the Shared-MCP-Server providing Alpaca and Unusual Whales tools.
 Uses HTTP to call MCP tools for trading, market data, and flow analysis.
 """
 
-import os
-from inspect import isawaitable
 from typing import Any
 
 import httpx
 
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.clients.mcp_server")
 
-# Configuration
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+# Configuration (from SystemSettings)
+MCP_SERVER_URL = system_settings.mcp_server_url
 
 
 class MCPServerClient:
@@ -60,15 +59,13 @@ class MCPServerClient:
                 "/call",
                 json={"tool": tool_name, "arguments": args},
             )
-            maybe_result = response.raise_for_status()
-            if isawaitable(maybe_result):
-                await maybe_result
+            response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            logger.error(f"MCP tool call failed: {e}")
+            logger.error("mcp_tool_call_failed", tool=tool_name, error=str(e))
             return {"error": str(e)}
         except Exception as e:
-            logger.warning(f"MCP server error: {e}")
+            logger.warning("mcp_server_error", tool=tool_name, error=str(e))
             return {"error": str(e)}
 
     # =========== Alpaca Trading ===========

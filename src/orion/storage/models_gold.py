@@ -1,4 +1,5 @@
 import enum
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, Float, Index, String
@@ -84,7 +85,7 @@ class ExitDecision(Base):
 class StrategyDecision(Base):
     __tablename__ = "strategy_decisions"
 
-    decision_id = Column(String, primary_key=True)
+    decision_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     candidate_id = Column(String, index=True, nullable=False)
     timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
@@ -151,6 +152,15 @@ class CandidateLabel(Base):
     mfe = Column(Float, nullable=True)
     mae = Column(Float, nullable=True)
 
+    # Temporal excursion fields
+    ts_mfe = Column(DateTime(timezone=True), nullable=True)
+    ts_mae = Column(DateTime(timezone=True), nullable=True)
+    time_to_mfe_seconds = Column(Float, nullable=True)
+    time_to_mae_seconds = Column(Float, nullable=True)
+    mfe_mae_ratio = Column(Float, nullable=True)
+    excursion_velocity = Column(Float, nullable=True)
+    capture_efficiency = Column(Float, nullable=True)
+
 
 class LabelEvent(Base):
     """
@@ -176,6 +186,15 @@ class LabelEvent(Base):
     time_to_hit_seconds = Column(Float, nullable=True)
     mfe = Column(Float, nullable=True)
     mae = Column(Float, nullable=True)
+
+    # Temporal excursion fields
+    ts_mfe = Column(DateTime(timezone=True), nullable=True)
+    ts_mae = Column(DateTime(timezone=True), nullable=True)
+    time_to_mfe_seconds = Column(Float, nullable=True)
+    time_to_mae_seconds = Column(Float, nullable=True)
+    mfe_mae_ratio = Column(Float, nullable=True)
+    excursion_velocity = Column(Float, nullable=True)
+    capture_efficiency = Column(Float, nullable=True)
 
     # Auditability: labeling parameters + provenance
     label_config = Column(JSON, nullable=False, default=dict)

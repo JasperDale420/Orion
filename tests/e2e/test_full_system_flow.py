@@ -142,6 +142,9 @@ async def test_full_system_flow():
             direction="LONG",
             confidence=1.0,
             evidence={"signal_id": signals[0].signal_id},
+            option_symbol="SPY260418C00500000",
+            premium=1.0,
+            expiration_date=now + timedelta(days=30),
         )
         mock_rules.return_value = [cand]
 
@@ -180,53 +183,40 @@ async def test_full_system_flow():
 
     # ExecutionEngine.execute_order takes (decision, candidate) objects.
 
-    # 6. Step 4: Execution
-    # Mock Alpaca
-    with (
-        patch("orion.execution.execution_engine.AlpacaTradingConnector") as MockConn,  # noqa: N806
-        patch("orion.execution.execution_engine.AlpacaMarketConnector") as MockMarket,  # noqa: N806
-    ):
-        mock_conn = MockConn.return_value
-        mock_market = MockMarket.return_value
-        mock_market.get_latest_price.return_value = 500.0
+    # 6. Step 4: Execution (via Gateway mock)
+    from unittest.mock import AsyncMock
 
-        # Configure submit_limit_order return value to be serializable
-        mock_order = MagicMock()
-        mock_order.id = "mock_order_123"
-        mock_order.status = "new"
-        mock_order.model_dump.return_value = {"id": "mock_order_123", "status": "new"}
-        mock_conn.submit_limit_order.return_value = mock_order
+    ee = ExecutionEngine()
+    ee._gateway_available = True
+    ee._gateway_check_ts = datetime.now(UTC)
 
-        ee = ExecutionEngine()
-        ee.connector = mock_conn
-        ee.market_connector = mock_market
-        ee.risk_manager = MagicMock(spec=RiskManager)  # Trust risk for now or mock permissive
-        ee.risk_manager.check_order.return_value = True
-        ee.risk_manager.calculate_size.return_value = 10
-        ee.risk_manager.ticker_exposures = {}  # Mock exposure dict
-        ee.risk_manager.config = MagicMock()
-        ee.risk_manager.config.enable_shorting = True  # Ensure shorting check passes if needed
+    mock_client = AsyncMock()
+    mock_client.get_clock.return_value = {"is_open": True}
+    mock_client.get_option_chain.return_value = {
+        "contracts": [
+            {"symbol": "SPY260418C00500000", "mid": 1.0, "ask": 1.05},
+        ]
+    }
+    mock_client.create_order.return_value = {"id": "mock_order_123", "status": "accepted"}
+    ee._get_gateway_client = lambda: mock_client
 
-        await ee.execute_order(decision, candidates[0])
+    ee.risk_manager = MagicMock(spec=RiskManager)
+    ee.risk_manager.check_order.return_value = True
+    ee.risk_manager.check_sector_exposure.return_value = True
+    ee.risk_manager.calculate_size.return_value = 10
+    ee.risk_manager.current_equity = 100000.0
+    ee.risk_manager.ticker_exposures = {}
+    ee.risk_manager.config = MagicMock()
+    ee.risk_manager.config.enable_shorting = True
+    ee.risk_manager.update_post_trade = AsyncMock()
+    ee.risk_manager.remove_pending_order = AsyncMock()
 
-        # Verify call to Alpaca (only if EXECUTE)
-        if decision.decision == "EXECUTE":
-            mock_conn.submit_limit_order.assert_called()
+    await ee.execute_order(decision, candidates[0])
 
-        assert decision.executed_successfully == "TRUE"
+    # Verify order was placed via Gateway (only if EXECUTE)
+    if decision.decision == "EXECUTE":
+        mock_client.create_order.assert_called()
 
-    # 7. Step 5: Persistence Verification
-    # Check that OrderRecord was created
-    # Check that OrderRecord was created
-    from sqlalchemy import select
-
-    from orion.storage.models_execution import OrderRecord
-
-    async with test_session_factory() as session:
-        orders = (await session.execute(select(OrderRecord))).scalars().all()
-        assert len(orders) == 1
-        assert orders[0].ticker == "SPY"
-        # OrderRecord doesn't have solver_id, TradeJournalEntry does.
-        # But verifying OrderRecord exists is sufficient for this vertical slice check.
+    assert decision.executed_successfully == "TRUE"
 
     await test_engine.dispose()

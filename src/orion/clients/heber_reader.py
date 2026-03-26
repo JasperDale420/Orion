@@ -153,13 +153,15 @@ class HeberReader:
         if df.empty:
             return df
 
-        if "bar_start_ts" in df.columns and "ts_event" not in df.columns:
-            df = df.copy()
-            df["ts_event"] = pd.to_datetime(df["bar_start_ts"], utc=True, errors="coerce")
+        needs_ts_event = "bar_start_ts" in df.columns and "ts_event" not in df.columns
+        needs_symbol = "instrument_key" in df.columns and "symbol" not in df.columns
 
-        if "instrument_key" in df.columns and "symbol" not in df.columns:
+        if needs_ts_event or needs_symbol:
             df = df.copy()
-            df["symbol"] = df["instrument_key"].astype(str).str.split(":").str[-1]
+            if needs_ts_event:
+                df["ts_event"] = pd.to_datetime(df["bar_start_ts"], utc=True, errors="coerce")
+            if needs_symbol:
+                df["symbol"] = df["instrument_key"].astype(str).str.split(":").str[-1]
 
         return df
 
@@ -275,6 +277,41 @@ class HeberReader:
             asof_time=asof_time,
         )
 
+    def read_recent_equity_symbols(
+        self,
+        asof_time: datetime,
+        start_time: datetime | None = None,
+        limit: int = 50,
+    ) -> list[str]:
+        """Extract unique equity ticker symbols from recent bars data.
+
+        Useful for discovering what instruments are actively being ingested
+        without requiring a specific symbol list.
+        """
+        df = self._read_silver_dataset(
+            dataset=_SILVER_BARS_DATASET,
+            instrument_keys=None,
+            start_time=start_time,
+            end_time=None,
+            asof_time=asof_time,
+        )
+        if df.empty:
+            return []
+
+        ik_col = self._pick_first_existing_column(df, ["instrument_key"])
+        if ik_col is None:
+            return []
+
+        keys = df[ik_col].dropna().astype(str)
+        equity_keys = keys[keys.str.startswith("equity:")]
+        symbols = equity_keys.str.split(":").str[-1].str.upper().str.strip()
+        symbols = symbols[symbols != ""]
+        if symbols.empty:
+            return []
+
+        counts = symbols.value_counts()
+        return counts.head(limit).index.tolist()
+
     def read_gold_features(
         self,
         dataset: str,
@@ -288,15 +325,27 @@ class HeberReader:
             filters.append(("instrument_key", "in", instrument_keys))
 
         frames: list[pd.DataFrame] = []
-        for gold_path in self._gold_dataset_candidate_paths(dataset):
+        candidate_paths = self._gold_dataset_candidate_paths(dataset)
+        paths_checked: list[str] = []
+        for gold_path in candidate_paths:
             if not gold_path.exists():
+                paths_checked.append(f"{gold_path} (missing)")
                 continue
+            paths_checked.append(f"{gold_path} (found)")
             frame = self._read_parquet(gold_path, filters=filters)
             if frame.empty:
                 continue
             frames.append(frame)
 
         if not frames:
+            logger.warning(
+                "gold_dataset_empty",
+                dataset=dataset,
+                paths_checked=paths_checked,
+                data_root=str(self.data_root),
+                data_root_exists=self.data_root.exists(),
+                gold_dir_exists=(self.data_root / "gold").exists(),
+            )
             return pd.DataFrame()
 
         if len(frames) == 1:

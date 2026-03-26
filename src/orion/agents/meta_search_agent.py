@@ -4,21 +4,24 @@ import asyncio
 import inspect
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pandas as pd
 import yaml
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from orion.clients.heber_reader import get_heber_reader
+from orion.agents.heber_event_mapper import fetch_events_from_heber, normalize_ticker
+from orion.agents.weekly_analysis import (
+    analyze_execution_quality,
+    analyze_ml_drift,
+    generate_weekly_recommendations,
+)
 from orion.config import meta_settings
 from orion.core.id_utils import deterministic_solver_id
 from orion.core.meta_logging import log_meta_event
 from orion.core.solver_schema import EditOp, EditOpType, EvaluationTask, SolverConfig, SolverEdit
 from orion.core.solver_validation import ensure_solver_definition_json, solver_dsl_error_extra
-from orion.shared.dataframe_utils import first_existing_column as _first_existing_column_func
-from orion.shared.db_utils import db_query, db_write
+from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage import db
 from orion.storage.db import async_session_factory as _ORIGINAL_ASYNC_SESSION_FACTORY  # noqa: N812
@@ -260,8 +263,6 @@ class MetaSearchAgent:
     async def _run_evolution_generation(
         self, session: Any, base_solver: Any, base_score: float, experiment: Any
     ) -> None:
-        from sqlalchemy import update
-
         base_config = SolverConfig(**base_solver.config)
         perf_ctx = await self._build_performance_context(base_solver, base_score)
         edits_list = await self._generate_edit_candidates(base_config, base_solver, perf_ctx)
@@ -454,26 +455,6 @@ class MetaSearchAgent:
                 os.rename(prop["path"], os.path.join(processed_dir, prop["filename"]))
             except Exception as e:
                 logger.error(f"Failed to move {prop['filename']}: {e}")
-
-    async def _load_context(self, query: str, top_k: int = 5) -> dict[str, Any]:
-        """
-        Searches the RAG index and DB for relevant context.
-        Returns a dict with 'docs' and 'recent_metrics'.
-        """
-        # Vector search
-        docs = await self.vector_store.search(query, top_k=top_k)
-
-        # Fetch recent solver metrics
-        async def fetch_recent_metrics(session: Any) -> list[Any]:
-            from orion.storage.models_solvers import SolverMetrics
-
-            stmt = select(SolverMetrics).order_by(SolverMetrics.evaluated_at_utc.desc()).limit(10)
-            result = await session.execute(stmt)
-            return result.scalars().all()
-
-        metrics = await db_query(fetch_recent_metrics)
-
-        return {"docs": docs, "recent_metrics": metrics}
 
     async def process_pending_edits(self) -> None:
         """
@@ -842,17 +823,6 @@ class MetaSearchAgent:
         for op in edit.ops:
             self._apply_edit_op(new_config, op)
 
-        # VALIDATION
-        # Pydantic will auto-validate assignments if Config.validate_assignment is True.
-        # However, deep modifications might bypass it if not careful?
-        # Actually SolverConfig has validate_assignment=True.
-        # But let's trigger a full validation just in case by re-instantiating if needed,
-        # or relying on the fact that we assigned fields above.
-
-        # If we just return new_config, it's already a Pydantic model.
-        # Let's wrap in a try-except block at the CALLER site (run_evolution_cycle) to catch ValidationError.
-        # Here we just return. Implicitly validity is checked on assignment.
-
         return new_config
 
     def _apply_edit_op(self, new_config: SolverConfig, op: EditOp) -> None:
@@ -937,10 +907,6 @@ class MetaSearchAgent:
         new_config.rules = [rule for rule in new_config.rules if not self._rule_matches(rule, rule_id)]
 
     def _create_default_task(self) -> EvaluationTask:
-        from datetime import datetime, timedelta
-
-        from orion.core.solver_schema import EvaluationTask
-
         end = datetime.now(UTC)
         start = end - timedelta(days=30)
         return EvaluationTask(
@@ -993,37 +959,21 @@ class MetaSearchAgent:
         feature_engine = FeatureEngine()
         rule_engine = RuleEngine(config=rules_cfg)
 
-        # 1. OPTIMIZATION: Try to fetch pre-computed features from Gold Store
-        # For simplicity in V1, we check if we can fetch *all* required signals.
-        # But signals are by ticker. We need to iterate tickers in the task.
-        # Or just fetch all for the time range and see what we get.
-        # If we get nothing, we compute.
-
         bar_signals = []
-        # Get unique tickers from events or task
         tickers = list(price_data.keys())
 
-        # Try fetch first
-        fetches = []
-        for t in tickers:
-            fetches.append(
-                feature_engine.fetch_signal_batch(
-                    t, task.start_time_utc, task.end_time_utc, config.features.feature_set_id
-                )
-            )
+        fetches = [
+            feature_engine.fetch_signal_batch(t, task.start_time_utc, task.end_time_utc, config.features.feature_set_id)
+            for t in tickers
+        ]
 
         fetched_lists = await asyncio.gather(*fetches)
         for lst in fetched_lists:
             bar_signals.extend(lst)
 
         if not bar_signals:
-            # Compute from Bronze
             bar_signals = feature_engine.process_alpaca_bars(alpaca_events)
-
-            # Persist for next time
             if bar_signals:
-                # Fire and forget or await?
-                # Let's await to ensure data integrity for tests
                 await feature_engine.persist_signal_batch(bar_signals, config.features.feature_set_id)
 
         flow_signals = feature_engine.process_uw_flow_events(flow_events)
@@ -1114,269 +1064,17 @@ class MetaSearchAgent:
 
         return solver_run, metrics
 
-    _first_existing_column = staticmethod(_first_existing_column_func)
-
     @staticmethod
     def _normalize_ticker(value: Any) -> str | None:
-        if value is None:
-            return None
-        ticker = str(value).strip().upper()
-        if not ticker:
-            return None
-        if ":" in ticker:
-            ticker = ticker.split(":")[-1]
-        return ticker or None
+        return normalize_ticker(value)
 
     @staticmethod
     def _load_yaml_artifact(path: str) -> dict[str, Any]:
         with open(path) as handle:
             return yaml.safe_load(handle) or {}
 
-    async def _fetch_events_from_heber(
-        self, task: EvaluationTask
-    ) -> tuple[list[Any], list[Any], dict[str, Any]] | None:
-        frames = await self._read_heber_frames(task)
-        if frames is None:
-            return None
-        bars_frame, flow_frame = frames
-        alpaca_events, price_data = self._map_heber_bar_events(task, bars_frame)
-        flow_events = self._map_heber_flow_events(task, flow_frame)
-        return alpaca_events, flow_events, price_data
-
-    async def _read_heber_frames(self, task: EvaluationTask) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-        reader = get_heber_reader()
-        symbols = task.ticker_filter or []
-        asof_time = task.end_time_utc
-        try:
-            bars_frame = await asyncio.to_thread(
-                reader.read_bars,
-                symbols=symbols,
-                asof_time=asof_time,
-                start_time=task.start_time_utc,
-                end_time=task.end_time_utc,
-            )
-            flow_frame = await asyncio.to_thread(
-                reader.read_flow,
-                symbols=symbols or None,
-                asof_time=asof_time,
-                start_time=task.start_time_utc,
-                min_premium=1000,
-            )
-            return bars_frame, flow_frame
-        except Exception as exc:
-            logger.warning(f"Heber read failed for meta-search events: {exc}")
-            return None
-
-    def _map_heber_bar_events(self, task: EvaluationTask, bars_frame: pd.DataFrame) -> tuple[list[Any], dict[str, Any]]:
-        from orion.storage.models import BronzeEvent
-
-        if bars_frame.empty:
-            return [], {}
-
-        alpaca_events: list[Any] = []
-        data_by_ticker: dict[str, list[dict[str, Any]]] = {}
-        ticker_col = self._first_existing_column(bars_frame, ("ticker", "symbol", "instrument_key"))
-        ts_col = self._first_existing_column(bars_frame, ("bar_start_ts", "bar_start_ts_utc", "ts_event"))
-        open_col = self._first_existing_column(bars_frame, ("open", "o"))
-        high_col = self._first_existing_column(bars_frame, ("high", "h"))
-        low_col = self._first_existing_column(bars_frame, ("low", "l"))
-        close_col = self._first_existing_column(bars_frame, ("close", "c"))
-        volume_col = self._first_existing_column(bars_frame, ("volume", "v"))
-        vwap_col = self._first_existing_column(bars_frame, ("vwap", "vw"))
-        trades_col = self._first_existing_column(bars_frame, ("trade_count", "n"))
-        required_cols = (ticker_col, ts_col, open_col, high_col, low_col, close_col, volume_col)
-        if any(col is None for col in required_cols):
-            return [], {}
-
-        tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
-        for _, row in bars_frame.iterrows():
-            mapped = self._map_single_heber_bar_row(
-                row=row,
-                tickers_filter=tickers_filter,
-                ticker_col=ticker_col,
-                ts_col=ts_col,
-                open_col=open_col,
-                high_col=high_col,
-                low_col=low_col,
-                close_col=close_col,
-                volume_col=volume_col,
-                vwap_col=vwap_col,
-                trades_col=trades_col,
-                event_factory=BronzeEvent,
-            )
-            if mapped is None:
-                continue
-            event, series_row = mapped
-            ticker = event.ticker
-            alpaca_events.append(event)
-            data_by_ticker.setdefault(ticker, []).append(series_row)
-        return alpaca_events, self._price_data_from_rows(data_by_ticker)
-
-    def _map_single_heber_bar_row(
-        self,
-        row: Any,
-        tickers_filter: set[str],
-        ticker_col: str,
-        ts_col: str,
-        open_col: str,
-        high_col: str,
-        low_col: str,
-        close_col: str,
-        volume_col: str,
-        vwap_col: str | None,
-        trades_col: str | None,
-        event_factory: Any,
-    ) -> tuple[Any, dict[str, Any]] | None:
-        ticker = self._normalize_ticker(row.get(ticker_col))
-        if ticker is None:
-            return None
-        if tickers_filter and ticker not in tickers_filter:
-            return None
-        bar_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
-        if pd.isna(bar_ts):
-            return None
-        ts_value = bar_ts.to_pydatetime()
-        payload = {
-            "symbol": ticker,
-            "ticker": ticker,
-            "o": row.get(open_col),
-            "h": row.get(high_col),
-            "l": row.get(low_col),
-            "c": row.get(close_col),
-            "v": row.get(volume_col),
-            "vw": row.get(vwap_col) if vwap_col else None,
-            "t": ts_value,
-            "n": row.get(trades_col) if trades_col else None,
-        }
-        event = event_factory(
-            event_id=f"heber_bar_{ticker}_{int(ts_value.timestamp())}",
-            event_type="ALPACA_BAR_1M",
-            source="BACKTEST",
-            event_ts_utc=ts_value,
-            payload=payload,
-            ticker=ticker,
-        )
-        series_row = {
-            "timestamp": ts_value,
-            "open": row.get(open_col),
-            "high": row.get(high_col),
-            "low": row.get(low_col),
-            "close": row.get(close_col),
-            "volume": row.get(volume_col),
-        }
-        return event, series_row
-
-    def _price_data_from_rows(self, data_by_ticker: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-        price_data: dict[str, Any] = {}
-        for ticker, bar_list in data_by_ticker.items():
-            if not bar_list:
-                continue
-            df = pd.DataFrame(bar_list)
-            price_data[ticker] = df.set_index("timestamp").sort_index()
-        return price_data
-
-    def _map_heber_flow_events(self, task: EvaluationTask, flow_frame: pd.DataFrame) -> list[Any]:
-        from orion.storage.models import BronzeEvent
-
-        if flow_frame.empty:
-            return []
-
-        ticker_col = self._first_existing_column(flow_frame, ("ticker", "symbol", "instrument_key"))
-        ts_col = self._first_existing_column(flow_frame, ("flow_ts_utc", "ts_event", "timestamp"))
-        premium_col = self._first_existing_column(flow_frame, ("premium_usd", "premium"))
-        put_call_col = self._first_existing_column(flow_frame, ("put_call", "call_put"))
-        sweep_col = self._first_existing_column(flow_frame, ("is_sweep", "sweep"))
-        aggressor_col = self._first_existing_column(flow_frame, ("aggressor", "aggressor_ind", "side"))
-        underlying_col = self._first_existing_column(flow_frame, ("underlying_price", "underlying"))
-        expiry_col = self._first_existing_column(flow_frame, ("expiry",))
-        event_id_col = self._first_existing_column(flow_frame, ("event_id", "id"))
-        if not (ticker_col and ts_col and premium_col):
-            return []
-
-        flow_events: list[Any] = []
-        tickers_filter = {t.upper() for t in (task.ticker_filter or [])}
-        for idx, row in flow_frame.iterrows():
-            event = self._map_single_heber_flow_row(
-                row=row,
-                idx=idx,
-                tickers_filter=tickers_filter,
-                ticker_col=ticker_col,
-                ts_col=ts_col,
-                premium_col=premium_col,
-                put_call_col=put_call_col,
-                sweep_col=sweep_col,
-                aggressor_col=aggressor_col,
-                underlying_col=underlying_col,
-                expiry_col=expiry_col,
-                event_id_col=event_id_col,
-                event_factory=BronzeEvent,
-            )
-            if event is not None:
-                flow_events.append(event)
-        return flow_events
-
-    def _map_single_heber_flow_row(
-        self,
-        row: Any,
-        idx: Any,
-        tickers_filter: set[str],
-        ticker_col: str,
-        ts_col: str,
-        premium_col: str,
-        put_call_col: str | None,
-        sweep_col: str | None,
-        aggressor_col: str | None,
-        underlying_col: str | None,
-        expiry_col: str | None,
-        event_id_col: str | None,
-        event_factory: Any,
-    ) -> Any | None:
-        ticker = self._normalize_ticker(row.get(ticker_col))
-        if ticker is None:
-            return None
-        if tickers_filter and ticker not in tickers_filter:
-            return None
-        flow_ts = pd.to_datetime(row.get(ts_col), utc=True, errors="coerce")
-        if pd.isna(flow_ts):
-            return None
-        premium = pd.to_numeric(row.get(premium_col), errors="coerce")
-        if pd.isna(premium):
-            return None
-
-        payload: dict[str, Any] = {
-            "ticker": ticker,
-            "premium": float(premium),
-            "put_call": str(row.get(put_call_col)).strip().upper() if put_call_col and row.get(put_call_col) else "",
-            "is_sweep": bool(row.get(sweep_col)) if sweep_col else False,
-            "aggressor_ind": str(row.get(aggressor_col)).strip().upper()
-            if aggressor_col and row.get(aggressor_col)
-            else "",
-            "underlying_price": row.get(underlying_col) if underlying_col else None,
-        }
-        self._maybe_add_expiry_dte(payload, row.get(expiry_col) if expiry_col else None, flow_ts)
-        event_id = str(row.get(event_id_col)).strip() if event_id_col and row.get(event_id_col) else f"heber_flow_{idx}"
-        return event_factory(
-            event_id=event_id,
-            event_type="UW_FLOW",
-            source="BACKTEST",
-            event_ts_utc=flow_ts.to_pydatetime(),
-            payload=payload,
-            ticker=ticker,
-        )
-
-    def _maybe_add_expiry_dte(self, payload: dict[str, Any], expiry_value: Any, flow_ts: Any) -> None:
-        if not expiry_value:
-            return
-        payload["expiry"] = expiry_value
-        try:
-            exp_date = pd.to_datetime(expiry_value, errors="coerce")
-            if not pd.isna(exp_date):
-                payload["dte"] = (exp_date.date() - flow_ts.date()).days
-        except Exception:
-            return
-
     async def _fetch_silver_events(self, task: EvaluationTask) -> tuple[list[Any], list[Any], dict[str, Any]]:
-        heber_data = await self._fetch_events_from_heber(task)
+        heber_data = await fetch_events_from_heber(task)
         if heber_data is None:
             return [], [], {}
         return heber_data
@@ -1635,104 +1333,10 @@ class MetaSearchAgent:
             return None
 
     def _analyze_execution_quality(self, week_data: dict[str, Any]) -> dict[str, Any]:
-        """
-        Analyze trade execution quality vs expectations.
-        """
-        trade_data = week_data.get("trade_execution", {}).get("trades", {})
-
-        analysis = {
-            "total_orders": trade_data.get("total_orders", 0),
-            "fill_rate": trade_data.get("fill_rate", 0.0),
-            "rejection_rate": 0.0,
-            "unique_tickers": len(trade_data.get("tickers", [])),
-            "execution_health": "unknown",
-        }
-
-        total = trade_data.get("total_orders", 0)
-        if total > 0:
-            rejected = trade_data.get("rejected", 0)
-            analysis["rejection_rate"] = rejected / total
-
-            # Health classification
-            if analysis["fill_rate"] >= 0.9 and analysis["rejection_rate"] < 0.05:
-                analysis["execution_health"] = "excellent"
-            elif analysis["fill_rate"] >= 0.7:
-                analysis["execution_health"] = "good"
-            elif analysis["fill_rate"] >= 0.5:
-                analysis["execution_health"] = "degraded"
-            else:
-                analysis["execution_health"] = "poor"
-
-        return analysis
+        return analyze_execution_quality(week_data)
 
     def _analyze_ml_drift(self, week_data: dict[str, Any]) -> dict[str, Any]:
-        """
-        Analyze ML model drift from pattern miner insights.
-
-        Uses drift_analysis computed by WeeklyDataAggregator from per-bucket AUC
-        scores collected in EOD reports.  Falls back gracefully when data is sparse:
-        - No AUC data at all -> "no_data"
-        - Some buckets exist but all have < 2 data-points -> "insufficient_data"
-        - Otherwise compute health from degrading / total ratio
-        """
-        eod_data = week_data.get("eod_reports", {})
-        ml_insights = week_data.get("ml_insights", {})
-
-        drift_analysis: dict[str, Any] = {
-            "buckets_analyzed": [],
-            "degrading_buckets": [],
-            "improving_buckets": [],
-            "stable_buckets": [],
-            "insufficient_buckets": [],
-            "top_features": eod_data.get("top_features", {}),
-            "overall_health": "unknown",
-        }
-
-        # Analyze drift from aggregated ML insights
-        drift_info = ml_insights.get("drift_analysis", {})
-        for bucket, info in drift_info.items():
-            drift_analysis["buckets_analyzed"].append(bucket)
-            trend = info.get("trend", "stable")
-
-            if trend == "degrading":
-                drift_analysis["degrading_buckets"].append(
-                    {
-                        "bucket": bucket,
-                        "auc_drop": info.get("drift", 0),
-                        "current_auc": info.get("current_auc"),
-                    }
-                )
-            elif trend == "improving":
-                drift_analysis["improving_buckets"].append(bucket)
-            elif trend == "insufficient":
-                drift_analysis["insufficient_buckets"].append(bucket)
-            else:
-                drift_analysis["stable_buckets"].append(bucket)
-
-        # Overall health
-        n_total = len(drift_analysis["buckets_analyzed"])
-        n_degrading = len(drift_analysis["degrading_buckets"])
-        n_insufficient = len(drift_analysis["insufficient_buckets"])
-
-        if n_total == 0:
-            # No ML AUC scores found in any EOD report this week
-            drift_analysis["overall_health"] = "no_data"
-            drift_analysis["message"] = "No ML AUC scores found in this week's EOD reports."
-        elif n_insufficient == n_total:
-            # All buckets have < 2 data points -- not enough to compare
-            drift_analysis["overall_health"] = "insufficient_data"
-            drift_analysis["message"] = (
-                f"{n_total} bucket(s) found but each has fewer than 2 data points. "
-                f"Need at least 2 trading days with ML scores to compute drift."
-            )
-        elif n_degrading == 0:
-            drift_analysis["overall_health"] = "healthy"
-        elif n_degrading / max(n_total - n_insufficient, 1) < 0.3:
-            drift_analysis["overall_health"] = "minor_drift"
-        else:
-            drift_analysis["overall_health"] = "significant_drift"
-
-        return drift_analysis
+        return analyze_ml_drift(week_data)
 
     async def _generate_weekly_recommendations(
         self,
@@ -1740,75 +1344,11 @@ class MetaSearchAgent:
         execution_analysis: dict[str, Any],
         drift_analysis: dict[str, Any],
     ) -> dict[str, Any]:
-        """
-        Generate evolution recommendations based on weekly analysis.
-        """
-        recommendations = {
-            "proposed_edits": [],
-            "alerts": [],
-            "insights": [],
-        }
-
-        # Check execution quality issues
-        if execution_analysis.get("execution_health") in ["degraded", "poor"]:
-            recommendations["alerts"].append(
-                {
-                    "type": "execution_degradation",
-                    "severity": "high",
-                    "message": f"Execution fill rate at {execution_analysis['fill_rate']:.1%}",
-                    "action": "Review order parameters and market conditions",
-                }
-            )
-
-        # Check ML drift
-        if drift_analysis.get("overall_health") == "significant_drift":
-            for bucket_info in drift_analysis.get("degrading_buckets", []):
-                recommendations["alerts"].append(
-                    {
-                        "type": "ml_drift",
-                        "severity": "medium",
-                        "message": f"Model {bucket_info['bucket']} AUC dropped by {abs(bucket_info.get('auc_drop', 0)):.3f}",
-                        "action": "Consider retraining or feature engineering",
-                    }
-                )
-
-        # Generate solver edit proposals based on top features
-        top_features = drift_analysis.get("top_features", {})
-        if top_features:
-            # Fetch active solvers to propose edits for
+        async def _fetch_active() -> list[Any]:
             session_factory = self._resolve_session_factory()
             async with session_factory() as session:
                 stmt = select(Solver).where((Solver.status == "active") | (Solver.is_active.is_(True))).limit(5)
                 result = await session.execute(stmt)
-                active_solvers = result.scalars().all()
+                return result.scalars().all()
 
-                for solver in active_solvers:
-                    # Propose feature-based edits
-                    feature_list = list(top_features.keys())[:3]
-                    if feature_list:
-                        recommendations["proposed_edits"].append(
-                            {
-                                "base_solver_id": solver.solver_id,
-                                "reason": f"Incorporate top-performing features: {', '.join(feature_list)}",
-                                "context": (
-                                    f"Weekly analysis shows top features: {feature_list}. "
-                                    f"Execution health: {execution_analysis.get('execution_health')}. "
-                                    f"ML drift: {drift_analysis.get('overall_health')}. "
-                                    f"Propose parameter adjustments to align with these signals."
-                                ),
-                            }
-                        )
-
-        # Add insights
-        eod_summary = week_data.get("eod_reports", {})
-        if eod_summary.get("trading_days", 0) > 0:
-            win_rate = eod_summary.get("executed_count", 0) / max(eod_summary.get("total_decisions", 1), 1)
-            recommendations["insights"].append(
-                {
-                    "metric": "decision_execution_rate",
-                    "value": win_rate,
-                    "interpretation": f"{win_rate:.1%} of decisions resulted in execution",
-                }
-            )
-
-        return recommendations
+        return await generate_weekly_recommendations(week_data, execution_analysis, drift_analysis, _fetch_active)

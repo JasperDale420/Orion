@@ -71,7 +71,7 @@ class CircuitBreaker:
         Returns True if OPEN (Halted).
         """
 
-        async def check_status(session: Any) -> None:
+        async def check_status(session: Any) -> bool:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
             result = await session.execute(stmt)
             status_record = result.scalars().first()

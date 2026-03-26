@@ -4,9 +4,7 @@ Provides `setup_logging()` for modules that configure the root logger at startup
 Delegates to the shared structlog configuration in `orion.shared.logger`.
 """
 
-import logging
-
-from orion.shared.logger import _configure
+from orion.shared.logger import setup_struct_logger
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -14,5 +12,5 @@ def setup_logging(level: str = "INFO") -> None:
 
     Modules that call this at startup get consistent JSON output.
     """
-    numeric_level = getattr(logging, level.upper(), logging.INFO)
-    _configure(numeric_level)
+    # Calling setup_struct_logger triggers empire_core setup once
+    setup_struct_logger("orion", level=None)

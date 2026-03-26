@@ -6,6 +6,7 @@ Supports bucket-specific models (0DTE, SHORT_SWING, SWING, POSITION).
 """
 
 import pickle
+import time
 from datetime import UTC
 from typing import Any
 
@@ -40,15 +41,24 @@ ALL_TARGETS = ["hit_target_50", "avoid_stop", "hit_target_100", "quick_winner"]
 def get_trade_bucket(dte: int | None) -> str:
     """Classify a flow into trade bucket based on DTE."""
     if dte is None:
-        return "SWING"  # Default bucket
+        return "SWING"
     if dte <= 0:
         return "0DTE"
-    elif dte <= 3:
+    if dte <= 3:
         return "SHORT_SWING"
-    elif dte <= 14:
+    if dte <= 14:
         return "SWING"
-    else:
-        return "POSITION"
+    return "POSITION"
+
+
+def _parse_dte_and_bucket(flow: dict[str, Any]) -> tuple[int | None, str]:
+    dte = flow.get("dte")
+    if isinstance(dte, str):
+        try:
+            dte = int(dte)
+        except ValueError:
+            dte = None
+    return dte, get_trade_bucket(dte)
 
 
 class MLScorer:
@@ -59,20 +69,44 @@ class MLScorer:
     by pattern_miner.py. Falls back to heuristic scorer when no model exists.
     """
 
+    # How often to check disk for updated model files (seconds)
+    _RELOAD_CHECK_INTERVAL: float = 60.0
+
     def __init__(self, target: str = DEFAULT_TARGET) -> None:
         self.target = target
         self.models: dict[str, Any] = {}  # bucket -> model_data
         self.feature_names: dict[str, list[str]] = {}  # bucket -> feature names
+        self._model_mtimes: dict[str, float] = {}  # bucket -> last loaded mtime
+        self._last_reload_check: float = time.monotonic()
         # Backward compatibility fields expected by older tests/callers.
         self.model: Any | None = None
         self.use_heuristic: bool = True
+        self._bypass_scoring: bool = False
 
         self._load_models()
         self.use_heuristic = len(self.models) == 0
         self.model = self.models.get("SWING", {}).get("model")
 
     def _load_models(self) -> None:
-        """Load all available bucket-specific models with freshness validation."""
+        """Load all available bucket-specific models with freshness validation.
+
+        Respects ``ORION_ML_STALE_MODEL_POLICY``:
+        - ``skip``: reject models older than max_model_age_days (original behaviour)
+        - ``warn``: load stale models but log a warning
+        - ``bypass``: do not load any models; ML scoring is skipped entirely
+        """
+        stale_policy = system_settings.ml_stale_model_policy
+
+        if stale_policy == "bypass":
+            logger.warning(
+                "ML stale model policy is 'bypass' — ML scoring disabled, candidates pass through",
+                extra={"event": "ml_scoring_bypassed", "policy": stale_policy},
+            )
+            self._bypass_scoring = True
+            return
+
+        self._bypass_scoring = False
+
         if not MODEL_DIR.exists():
             logger.info(
                 f"Model directory {MODEL_DIR} does not exist, using heuristic scorer",
@@ -85,6 +119,7 @@ class MLScorer:
 
         loaded_count = 0
         skipped_stale = 0
+        loaded_stale = 0
         for bucket in TRADE_BUCKETS:
             model_type = f"{bucket}_{self.target}"
             model_path = MODEL_DIR / f"{model_type}.pkl"
@@ -95,8 +130,9 @@ class MLScorer:
 
                 model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime, tz=UTC)
                 model_age_days = (datetime.now(UTC) - model_mtime).days
+                is_stale = model_age_days > max_age_days
 
-                if model_age_days > max_age_days:
+                if is_stale and stale_policy == "skip":
                     logger.warning(
                         f"Model {model_type} is {model_age_days} days old (limit: {max_age_days}), skipping",
                         extra={
@@ -109,21 +145,38 @@ class MLScorer:
                     skipped_stale += 1
                     continue
 
+                if is_stale and stale_policy == "warn":
+                    logger.warning(
+                        f"Model {model_type} is {model_age_days} days old (limit: {max_age_days}), "
+                        f"loading anyway per stale_model_policy='warn'",
+                        extra={
+                            "event": "stale_model_loaded_warn",
+                            "model_type": model_type,
+                            "age_days": model_age_days,
+                            "max_age_days": max_age_days,
+                            "policy": stale_policy,
+                        },
+                    )
+
                 try:
                     with open(model_path, "rb") as f:
-                        model_data = pickle.load(f)
+                        model_data = pickle.load(f)  # noqa: S301
 
                     self.models[bucket] = model_data
                     self.feature_names[bucket] = model_data.get("feature_names", [])
+                    self._model_mtimes[bucket] = model_path.stat().st_mtime
                     loaded_count += 1
+                    if is_stale:
+                        loaded_stale += 1
 
                     logger.info(
-                        f"Loaded model {model_type} (age: {model_age_days}d)",
+                        f"Loaded model {model_type} (age: {model_age_days}d{', STALE' if is_stale else ''})",
                         extra={
                             "event": "model_loaded",
                             "model_type": model_type,
                             "path": str(model_path),
                             "age_days": model_age_days,
+                            "is_stale": is_stale,
                         },
                     )
                 except Exception as e:
@@ -135,20 +188,41 @@ class MLScorer:
             summary = f"Loaded {loaded_count}/{len(TRADE_BUCKETS)} bucket models"
             if skipped_stale > 0:
                 summary += f" (skipped {skipped_stale} stale)"
+            if loaded_stale > 0:
+                summary += f" ({loaded_stale} stale, policy={stale_policy})"
             logger.info(
                 summary,
-                extra={"event": "models_loaded", "count": loaded_count, "stale_skipped": skipped_stale},
+                extra={
+                    "event": "models_loaded",
+                    "count": loaded_count,
+                    "stale_skipped": skipped_stale,
+                    "stale_loaded": loaded_stale,
+                },
             )
 
-    @staticmethod
-    def _safe_div(numerator: float, denominator: float, default: float = 0) -> float:
-        """Safe division that returns default when denominator is zero."""
-        return numerator / denominator if denominator > 0 else default
+    def check_and_reload(self) -> bool:
+        """Reload models if any .pkl file on disk is newer than what we loaded."""
+        if not MODEL_DIR.exists():
+            return False
+        for bucket in TRADE_BUCKETS:
+            model_path = MODEL_DIR / f"{bucket}_{self.target}.pkl"
+            if model_path.exists():
+                disk_mtime = model_path.stat().st_mtime
+                loaded_mtime = self._model_mtimes.get(bucket, 0)
+                if disk_mtime > loaded_mtime:
+                    logger.info("model_files_changed_reloading", bucket=bucket, target=self.target)
+                    self._load_models()
+                    self.use_heuristic = len(self.models) == 0
+                    self.model = self.models.get("SWING", {}).get("model")
+                    return True
+        return False
 
-    @staticmethod
-    def _flow_float(flow: dict[str, Any], key: str) -> float:
-        """Extract a float value from flow data, defaulting to 0."""
-        return float(flow.get(key) or 0)
+    def _maybe_reload(self) -> None:
+        """Check for updated model files at most once every _RELOAD_CHECK_INTERVAL seconds."""
+        now = time.monotonic()
+        if now - self._last_reload_check >= self._RELOAD_CHECK_INTERVAL:
+            self._last_reload_check = now
+            self.check_and_reload()
 
     @staticmethod
     def _build_feature_map(flow: dict[str, Any]) -> dict[str, float]:
@@ -238,6 +312,36 @@ class MLScorer:
             "trend_regime_at_entry": 0,
             "vix_regime_at_entry": 0,
             "market_tide_direction": 0,
+            # Equity-level Gold features (populated by feature_store)
+            # Momentum features
+            "momentum_1d": get("momentum_1d"),
+            "momentum_5d": get("momentum_5d"),
+            "momentum_10d": get("momentum_10d"),
+            "momentum_20d": get("momentum_20d"),
+            "rsi_14": get("rsi_14"),
+            "rsi_28": get("rsi_28"),
+            "macd": get("macd"),
+            "macd_signal": get("macd_signal"),
+            # Volatility features
+            "vol_5d": get("vol_5d"),
+            "vol_20d": get("vol_20d"),
+            "vol_ratio_5_20": get("vol_ratio_5_20"),
+            "atr_14": get("atr_14"),
+            "bb_width_20": get("bb_width_20"),
+            "price_zscore_20d": get("price_zscore_20d"),
+            # Flow features
+            "total_premium_24h": get("total_premium_24h"),
+            "call_put_premium_ratio": get("call_put_premium_ratio"),
+            "net_premium_24h": get("net_premium_24h"),
+            "sweep_count_24h": get("sweep_count_24h"),
+            "net_bull_premium_lr": get("net_bull_premium_lr"),
+            "sweep_volume_share": get("sweep_volume_share"),
+            # Temporal excursion features (from Gold temporal_excursion_features)
+            "time_to_mfe_seconds": get("time_to_mfe_seconds"),
+            "time_to_mae_seconds": get("time_to_mae_seconds"),
+            "mfe_mae_ratio": get("mfe_mae_ratio"),
+            "excursion_velocity": get("excursion_velocity"),
+            "capture_efficiency": get("capture_efficiency"),
         }
 
     def extract_features(self, flow: dict[str, Any], bucket: str | None = None) -> dict[str, float]:
@@ -246,13 +350,7 @@ class MLScorer:
         Uses feature names from the model if available.
         """
         if bucket is None:
-            dte = flow.get("dte")
-            if isinstance(dte, str):
-                try:
-                    dte = int(dte)
-                except ValueError:
-                    dte = None
-            bucket = get_trade_bucket(dte)
+            _, bucket = _parse_dte_and_bucket(flow)
 
         feature_names = self.feature_names.get(bucket, [])
         feature_map = self._build_feature_map(flow)
@@ -262,20 +360,24 @@ class MLScorer:
 
         return {feat: feature_map.get(feat, 0) for feat in feature_names}
 
+    @property
+    def bypass_scoring(self) -> bool:
+        """True when ML scoring is entirely bypassed (policy='bypass')."""
+        return self._bypass_scoring
+
     def score(self, flow: dict[str, Any]) -> float:
         """
         Score a flow event. Returns probability [0, 1].
 
         Higher score = more likely to be a profitable trade.
         """
+        self._maybe_reload()
+
+        if self._bypass_scoring:
+            return -1.0  # Sentinel: caller should skip ML gating
+
         # Determine trade bucket
-        dte = flow.get("dte")
-        if isinstance(dte, str):
-            try:
-                dte = int(dte)
-            except ValueError:
-                dte = None
-        bucket = get_trade_bucket(dte)
+        _, bucket = _parse_dte_and_bucket(flow)
 
         # Check if we have a model for this bucket
         if bucket not in self.models:
@@ -311,43 +413,48 @@ class MLScorer:
         Signals with high premium, sweeps, and good aggressor alignment
         get higher scores. CAPPED at 0.50 to prevent heuristic from
         reaching live threshold (0.70) - models are required for live trading.
+
+        Weights are configurable via the HeuristicWeights config
+        (env prefix ORION_HEURISTIC_).
         """
-        score = 0.3  # Base score
+        from orion.config import heuristic_weights as hw
+
+        score = hw.base_score
 
         # Premium factor (log scale)
         premium = float(flow.get("premium_usd") or 0)
         if premium >= 500000:
-            score += 0.25
+            score += hw.premium_500k_plus
         elif premium >= 100000:
-            score += 0.15
+            score += hw.premium_100k_plus
         elif premium >= 50000:
-            score += 0.10
+            score += hw.premium_50k_plus
         elif premium >= 25000:
-            score += 0.05
+            score += hw.premium_25k_plus
 
         # Sweep bonus
         is_sweep = str(flow.get("is_sweep", "")).lower() == "true"
         if is_sweep:
-            score += 0.15
+            score += hw.sweep_bonus
 
         # Aggressor alignment (ASK = bullish intent for calls)
         aggressor = flow.get("aggressor", "")
         put_call = flow.get("put_call", "")
         if (put_call == "C" and aggressor == "ASK") or (put_call == "P" and aggressor == "BID"):
-            score += 0.10
+            score += hw.ask_side_bonus
 
         # Volume/OI ratio (unusual activity)
         volume = float(flow.get("volume_contract") or 0)
         oi = float(flow.get("open_interest") or 1)
         vol_oi = volume / oi if oi > 0 else 0
         if vol_oi > 2.0:
-            score += 0.10
+            score += hw.vol_oi_high
         elif vol_oi > 1.0:
-            score += 0.05
+            score += hw.vol_oi_moderate
 
         # Penalize very low premium (noise)
         if premium < 10000:
-            score -= 0.20
+            score += hw.low_premium_penalty
 
         # In live mode we cap heuristic output to avoid taking untrained-model signals.
         # In paper/backtest, keep uncapped behavior for compatibility/analysis.
@@ -414,20 +521,19 @@ class MLScorer:
         return self.score(flow) >= threshold
 
     async def score_enriched(self, flow: dict[str, Any]) -> float:
-        """
-        Score a flow with full feature enrichment.
+        """Score a flow using pre-computed features from Heber Gold.
 
-        This method enriches the flow with all features from the database
-        (GEX, market tide, regimes, Greeks, etc.) before scoring.
-        This ensures feature parity between training and inference.
+        Reads the same Gold datasets used for training (meta_label_features +
+        equity Gold), ensuring zero train/inference skew by construction.
 
-        Use this for real-time scoring where flow data is incomplete.
+        Falls back to raw flow fields if Gold lookup fails.
         """
+        self._maybe_reload()
+
         from datetime import datetime
 
-        from orion.ml.flow_enricher import enrich_flow_for_scoring
+        from orion.ml.feature_store import get_scoring_features
 
-        # Extract basic flow info
         ticker = flow.get("ticker", "")
         entry_ts = flow.get("timestamp_utc") or flow.get("flow_ts_utc") or datetime.now(UTC)
         if isinstance(entry_ts, str):
@@ -435,43 +541,30 @@ class MLScorer:
 
             entry_ts = parse(entry_ts)
 
-        put_call = flow.get("put_call", "C")
-        strike = flow.get("strike") or flow.get("strike_price")
-        underlying = flow.get("underlying_price")
-        dte = flow.get("dte")
-        premium = flow.get("premium_usd")
-        event_id = flow.get("event_id")
-        option_chain = flow.get("option_chain") or flow.get("option_symbol")
-        aggressor = flow.get("aggressor")
-        is_sweep = flow.get("is_sweep") or flow.get("is_sweep") == "true"
-        expiry = flow.get("expiry")  # Pass expiry for DTE calculation
+        event_id = flow.get("event_id") or ""
 
         try:
-            # Enrich with all database features
-            enriched = await enrich_flow_for_scoring(
+            gold_features = await get_scoring_features(
+                event_id=event_id,
                 ticker=ticker,
                 entry_ts=entry_ts,
-                put_call=put_call,
-                strike=strike,
-                underlying_price=underlying,
-                dte=dte,
-                premium_usd=premium,
-                event_id=event_id,
-                option_chain=option_chain,
-                aggressor=aggressor,
-                is_sweep=is_sweep,
-                expiry=expiry,  # Pass expiry for DTE calculation
             )
 
+            # Merge: flow's own fields as base, Gold features overlay
+            merged = dict(flow)
+            for key, val in gold_features.items():
+                if val is not None:
+                    merged[key] = val
+
+            non_null = sum(1 for v in gold_features.values() if v is not None)
             logger.debug(
-                f"Enriched flow for {ticker}: {sum(1 for v in enriched.values() if v is not None)} non-null features",
-                extra={"event": "flow_enriched", "ticker": ticker},
+                f"Loaded {non_null} Gold features for {ticker}",
+                extra={"event": "feature_store_loaded", "ticker": ticker, "feature_count": non_null},
             )
 
-            # Score with enriched features
-            return self.score(enriched)
+            return self.score(merged)
         except Exception as e:
-            logger.warning(f"Flow enrichment failed for {ticker}: {e}, using raw features")
+            logger.warning(f"Feature store lookup failed for {ticker}: {e}, using raw features")
             return self.score(flow)
 
     def score_batch(self, flows: list[dict[str, Any]]) -> list[float]:

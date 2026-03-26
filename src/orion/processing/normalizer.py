@@ -19,7 +19,7 @@ class NormalizationEngine:
         """
         Routes to specific normalization logic based on source and type.
         """
-        if source == "UW":
+        if source in ("UW", "HEBER"):
             if event_type == "UW_FLOW":
                 return NormalizationEngine._normalize_uw_flow(payload)
             elif event_type == "UW_DARKPOOL":
@@ -74,10 +74,10 @@ class NormalizationEngine:
             first_char = raw_put_call_upper[:1] if raw_put_call_upper else ""
             if first_char in ("P", "C"):
                 put_call = first_char
-                logger.warning("put_call field had unexpected value %r, inferred %r", raw_put_call, put_call)
+                logger.error("put_call field had unexpected value %r, inferred %r", raw_put_call, put_call)
             else:
                 put_call = "UNKNOWN"
-                logger.warning("put_call field had unrecognizable value %r, setting UNKNOWN", raw_put_call)
+                logger.error("put_call field had unrecognizable value %r, setting UNKNOWN", raw_put_call)
 
         normalized = {
             "ticker": payload.get("ticker"),
@@ -195,9 +195,15 @@ class NormalizationEngine:
         """
         PRD 6.2 Silver Schema: Alpaca Bars 1m
         """
+        import pandas as pd
+
         ts_val = payload.get("t")
         bar_ts = None
-        if isinstance(ts_val, str):
+        if isinstance(ts_val, pd.Timestamp):
+            bar_ts = ts_val.to_pydatetime()
+        elif isinstance(ts_val, datetime):
+            bar_ts = ts_val
+        elif isinstance(ts_val, str):
             try:
                 bar_ts = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
             except Exception:

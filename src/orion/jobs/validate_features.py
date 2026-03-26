@@ -13,13 +13,13 @@ Usage:
 
 import argparse
 import asyncio
-import os
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -622,14 +622,13 @@ _AUDIT_SOURCE_ORDER = [
     SOURCE_REGIME,
 ]
 
-_PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
+
 _SOURCE_TIME_COLUMNS = ["ts_event", "ts_utc", "bar_start_ts", "flow_ts_utc", "dark_ts_utc", "date"]
 _SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "underlying", "instrument_key"]
 
 
 def _prefer_heber_source_from_env() -> bool:
-    raw = os.getenv("ORION_VALIDATE_FEATURES_PREFER_HEBER", "1").strip().lower()
-    return raw not in _PREFER_HEBER_FALSE_VALUES
+    return system_settings.validate_features_prefer_heber
 
 
 def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
@@ -637,10 +636,6 @@ def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | N
         if column in df.columns:
             return column
     return None
-
-
-def _normalize_source_id(source: str) -> str:
-    return source
 
 
 def _label_date_bounds(
@@ -688,20 +683,14 @@ def _heber_read_kwargs(
     label_start_ts: datetime | None,
     label_end_ts: datetime | None,
 ) -> dict[str, Any]:
-    source_id = _normalize_source_id(source)
     asof_time = datetime.now(UTC)
-    if source_id == SOURCE_BARS:
+    if source == SOURCE_BARS:
         return {
             "symbols": [],
             "asof_time": asof_time,
             "start_time": label_start_ts,
             "end_time": label_end_ts,
             "timeframe": "1m",
-        }
-    if source_id == SOURCE_MARKET_TIDE:
-        return {
-            "asof_time": asof_time,
-            "start_time": label_start_ts,
         }
     return {
         "asof_time": asof_time,
@@ -715,8 +704,7 @@ async def _fetch_source_summary_from_heber(
     label_start_ts: datetime | None,
     label_end_ts: datetime | None,
 ) -> dict[str, Any] | None:
-    source_id = _normalize_source_id(source)
-    spec = _AUDIT_SOURCE_SPECS[source_id]
+    spec = _AUDIT_SOURCE_SPECS[source]
     method_name = spec.get("heber_method")
     if not method_name:
         return None
@@ -726,13 +714,13 @@ async def _fetch_source_summary_from_heber(
     if method is None:
         return None
 
-    kwargs = _heber_read_kwargs(source_id, label_start_ts, label_end_ts)
+    kwargs = _heber_read_kwargs(source, label_start_ts, label_end_ts)
     try:
         df = await asyncio.to_thread(method, **kwargs)
     except Exception as exc:
         logger.warning(
             "audit_source_heber_read_failed",
-            source=source_id,
+            source=source,
             method=method_name,
             error=str(exc),
         )
@@ -747,7 +735,6 @@ async def _fetch_source_summary_from_heber(
 
 
 async def _fetch_source_summary_from_local_db(*, source: str) -> dict[str, Any]:
-    _ = _normalize_source_id(source)
     return {"min_date": None, "max_date": None, "tickers": 0, "backend": "local_db_disabled"}
 
 
@@ -758,14 +745,13 @@ async def _fetch_source_summary(
     label_end_ts: datetime | None,
     prefer_heber: bool,
 ) -> dict[str, Any]:
-    source_id = _normalize_source_id(source)
-    if source_id not in _AUDIT_SOURCE_SPECS:
-        logger.warning("audit_source_unknown_source_id", source=source_id)
+    if source not in _AUDIT_SOURCE_SPECS:
+        logger.warning("audit_source_unknown_source_id", source=source)
         return {"min_date": None, "max_date": None, "tickers": 0, "backend": "source_unavailable"}
 
     if prefer_heber:
         heber_summary = await _fetch_source_summary_from_heber(
-            source=source_id,
+            source=source,
             label_start_ts=label_start_ts,
             label_end_ts=label_end_ts,
         )

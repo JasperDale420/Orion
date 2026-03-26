@@ -78,7 +78,7 @@ class ExitLogic(BaseModel):
 
 class RuleConfig(BaseModel):
     id: str
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class SolverConfig(BaseModel):

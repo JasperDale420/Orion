@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,7 +17,7 @@ class TradeJournalEntry(Base):
 
     __tablename__ = "trade_journal_entries"
 
-    decision_id: Mapped[str] = mapped_column(String, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     signal_id: Mapped[str] = mapped_column(String, nullable=False, index=True)

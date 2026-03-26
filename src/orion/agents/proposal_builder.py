@@ -1,11 +1,12 @@
-import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
 
 import yaml
 
-logger = logging.getLogger(__name__)
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 
 class ProposalBuilder:
@@ -16,8 +17,7 @@ class ProposalBuilder:
 
     def __init__(self, output_dir: str = "proposals"):
         self.output_dir = output_dir
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+        os.makedirs(self.output_dir, exist_ok=True)
 
     def _validate_proposal(self, proposal: dict[str, Any]) -> tuple[bool, list[str]]:
         """
@@ -47,7 +47,7 @@ class ProposalBuilder:
             if "recommendation" not in proposal:
                 missing.append("recommendation")
 
-        return (len(missing) == 0), missing
+        return (not missing), missing
 
     def save_proposal(
         self,
@@ -67,11 +67,9 @@ class ProposalBuilder:
             if not ok:
                 logger.error(
                     "Invalid proposal; refusing to save",
-                    extra={
-                        "event_type": "EOD_PROPOSAL_INVALID",
-                        "missing": missing,
-                        "proposal_type": proposal.get("type"),
-                    },
+                    event_type="EOD_PROPOSAL_INVALID",
+                    missing=missing,
+                    proposal_type=proposal.get("type"),
                 )
                 return None
 

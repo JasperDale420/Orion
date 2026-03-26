@@ -22,7 +22,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-    op.add_column("vector_documents", sa.Column("embedding_vec", Vector(1536), nullable=True))
+    op.add_column("vector_documents", sa.Column("embedding_vec", Vector(768), nullable=True))
     op.create_index("ix_vector_documents_source_type", "vector_documents", ["source_type"], unique=False)
 
 

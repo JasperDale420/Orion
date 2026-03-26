@@ -14,6 +14,9 @@ from orion.storage.models_rag import RagDocument
 
 logger = logging.getLogger(__name__)
 
+# Must match the pgvector column dimension in RagDocument.embedding_vec
+_EMBEDDING_DIM = 768
+
 
 class VectorStore:
     def __init__(self) -> None:
@@ -35,7 +38,7 @@ class VectorStore:
         embedding_vec = None
         try:
             embedding = await self._resolve_embedding(content)
-            embedding_vec = embedding if len(embedding) == 1536 else None
+            embedding_vec = embedding if len(embedding) == _EMBEDDING_DIM else None
         except Exception as e:
             logger.warning(f"Embedding unavailable; storing document without vector. doc_id={doc_id} err={e}")
 
@@ -136,8 +139,10 @@ class VectorStore:
             try:
                 if not query_embedding:
                     raise ValueError("No query embedding available")
-                if len(query_embedding) != 1536:
-                    raise ValueError(f"Unexpected embedding dimension {len(query_embedding)} (expected 1536)")
+                if len(query_embedding) != _EMBEDDING_DIM:
+                    raise ValueError(
+                        f"Unexpected embedding dimension {len(query_embedding)} (expected {_EMBEDDING_DIM})"
+                    )
                 stmt_vec = (
                     stmt_base.where(RagDocument.embedding_vec.is_not(None))
                     .order_by(RagDocument.embedding_vec.l2_distance(query_embedding))

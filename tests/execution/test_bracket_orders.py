@@ -1,0 +1,173 @@
+"""
+Tests for bracket order placement (stop-loss / take-profit) after entry.
+
+Verifies:
+- Bracket orders placed when enable_bracket_orders=True
+- Bracket orders NOT placed when enable_bracket_orders=False (default)
+- Stop/take-profit prices calculated correctly from entry price and percentages
+- Bracket order failures don't block the entry
+"""
+
+import os
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from orion.storage.models_gold import CandidateTrade, StrategyDecision
+
+
+@pytest.fixture
+def mock_env():
+    with patch.dict(
+        os.environ,
+        {
+            "ALPACA_API_KEY": "test_key",  # pragma: allowlist secret
+            "ALPACA_SECRET_KEY": "test_secret",  # pragma: allowlist secret
+            "ALPACA_PAPER": "True",
+        },
+    ):
+        yield
+
+
+def _make_gateway_mock():
+    mock = AsyncMock()
+    mock.get_clock.return_value = {"is_open": True}
+    mock.get_option_chain.return_value = {"contracts": [{"symbol": "AAPL260418C00150000", "mid": 2.0, "ask": 2.10}]}
+    mock.create_order.return_value = {"id": "order-123", "status": "accepted"}
+    return mock
+
+
+def _make_engine(equity: float = 100_000.0):
+    from orion.execution.execution_engine import ExecutionEngine
+
+    engine = ExecutionEngine()
+    engine._check_system_health = AsyncMock(return_value=True)
+    engine._gateway_available = True
+    engine._gateway_check_ts = datetime.now(UTC)
+
+    mock_client = _make_gateway_mock()
+    engine._gateway_client = mock_client
+    engine._get_gateway_client = lambda: mock_client
+
+    engine.risk_manager = MagicMock()
+    engine.risk_manager.config.enable_shorting = False
+    engine.risk_manager.ticker_exposures = {}
+    engine.risk_manager.current_equity = equity
+    engine.risk_manager.check_order.return_value = True
+    engine.risk_manager.update_post_trade = AsyncMock()
+    engine.risk_manager.remove_pending_order = AsyncMock()
+
+    return engine, mock_client
+
+
+def _make_candidate_and_decision(execution_params=None):
+    now = datetime.now(UTC)
+    candidate = CandidateTrade(
+        candidate_id="test_bracket",
+        ticker="AAPL",
+        timestamp_utc=now,
+        rule_id="test_rule",
+        direction="LONG",
+        evidence={},
+        option_symbol="AAPL260418C00150000",
+        premium=2.0,
+        expiration_date=now + timedelta(days=30),
+    )
+    decision = StrategyDecision(
+        decision="EXECUTE",
+        timestamp_utc=now,
+        strategy_version_id="test",
+        ticker="AAPL",
+        candidate_id="test_bracket",
+        execution_params=execution_params or {},
+    )
+    return candidate, decision
+
+
+@pytest.mark.asyncio
+async def test_bracket_orders_placed_when_enabled(mock_env, monkeypatch):
+    """When enable_bracket_orders=True, stop-loss and take-profit orders are submitted."""
+    monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
+
+    engine, mock_client = _make_engine()
+
+    candidate, decision = _make_candidate_and_decision(
+        execution_params={"stop_loss_pct": 0.05, "take_profit_pct": 0.10}
+    )
+
+    await engine.execute_order(decision, candidate)
+
+    # Entry order + 2 bracket orders = 3 create_order calls
+    assert mock_client.create_order.call_count == 3
+
+    bracket_calls = mock_client.create_order.call_args_list[1:]
+
+    # Stop-loss order
+    sl_call = bracket_calls[0]
+    assert sl_call[1]["order_type"] == "stop"
+    assert sl_call[1]["side"] == "sell"
+    assert sl_call[1]["stop_price"] == round(2.0 * (1 - 0.05), 2)
+
+    # Take-profit order
+    tp_call = bracket_calls[1]
+    assert tp_call[1]["order_type"] == "limit"
+    assert tp_call[1]["side"] == "sell"
+    assert tp_call[1]["limit_price"] == round(2.0 * (1 + 0.10), 2)
+
+
+@pytest.mark.asyncio
+async def test_no_bracket_orders_when_disabled(mock_env):
+    """Default (enable_bracket_orders=False): no stop/take-profit orders placed."""
+    engine, mock_client = _make_engine()
+
+    candidate, decision = _make_candidate_and_decision()
+
+    await engine.execute_order(decision, candidate)
+
+    # Only the entry order
+    assert mock_client.create_order.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bracket_order_failure_does_not_block_entry(mock_env, monkeypatch):
+    """If bracket orders fail, the entry still succeeds."""
+    monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
+
+    engine, mock_client = _make_engine()
+
+    # First call succeeds (entry), subsequent calls fail (brackets)
+    mock_client.create_order.side_effect = [
+        {"id": "order-123", "status": "accepted"},  # Entry
+        RuntimeError("Stop-loss failed"),  # SL bracket
+        RuntimeError("Take-profit failed"),  # TP bracket
+    ]
+
+    candidate, decision = _make_candidate_and_decision(
+        execution_params={"stop_loss_pct": 0.03, "take_profit_pct": 0.06}
+    )
+
+    await engine.execute_order(decision, candidate)
+
+    # Entry should still be marked successful
+    from orion.core.enums import DecisionStatus
+
+    assert decision.executed_successfully == DecisionStatus.TRUE
+
+
+@pytest.mark.asyncio
+async def test_bracket_uses_default_stop_loss_when_not_in_params(mock_env, monkeypatch):
+    """Falls back to risk_settings.default_stop_loss_pct when not in execution_params."""
+    monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
+
+    engine, mock_client = _make_engine()
+
+    # No stop_loss_pct in execution_params
+    candidate, decision = _make_candidate_and_decision(execution_params={})
+
+    await engine.execute_order(decision, candidate)
+
+    # Should use default_stop_loss_pct = 0.02
+    bracket_calls = mock_client.create_order.call_args_list[1:]
+    sl_call = bracket_calls[0]
+    assert sl_call[1]["stop_price"] == round(2.0 * (1 - 0.02), 2)

@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo
 import exchange_calendars as xcals
 
 from orion.config import system_settings
-from orion.connectors.alpaca_market_connector import AlpacaMarketConnector
-from orion.connectors.alpaca_stream_connector import AlpacaStreamConnector
+from orion.clients.heber_reader import get_heber_reader
+from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.core.universe_manager import UniverseManager
@@ -28,6 +28,7 @@ from orion.processing.persistence import (
 from orion.processing.rule_engine import RuleEngine
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
+from orion.shared.utils import make_json_safe
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.lakehouse import LakehouseWriter
 from orion.storage.models import BronzeEvent
@@ -40,7 +41,7 @@ logger = setup_struct_logger("orion.ingest")
 
 class IngestionService:
     def __init__(self) -> None:
-        self.run_id: str = os.getenv("ORION_RUN_ID") or str(uuid.uuid4())
+        self.run_id: str = system_settings.run_id
         os.environ["ORION_RUN_ID"] = self.run_id
 
         self.shutdown_event = asyncio.Event()
@@ -50,29 +51,13 @@ class IngestionService:
         self.rule_engine = RuleEngine()
         self.lakehouse = LakehouseWriter()
 
-        # Alpaca connectors (still used for market data until fully migrated)
-        alpaca_key = system_settings.alpaca_api_key or ""
-        alpaca_secret = system_settings.alpaca_secret_key or ""
-
-        self.alpaca = AlpacaMarketConnector(
-            api_key=alpaca_key,
-            secret_key=alpaca_secret,
-            paper=system_settings.alpaca_paper,
-        )
-
-        # Real-time streaming connector (preferred over polling for lower latency)
-        self.alpaca_stream: AlpacaStreamConnector | None = None
-        self._use_streaming = os.getenv("ORION_USE_ALPACA_STREAMING", "true").lower() == "true"
-        if self._use_streaming:
-            try:
-                self.alpaca_stream = AlpacaStreamConnector(
-                    api_key=alpaca_key,
-                    secret_key=alpaca_secret,
-                    feed="sip",
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create streaming connector, falling back to polling: {e}")
-                self.alpaca_stream = None
+        # Gateway stream client for real-time bar data from Data-Gateway
+        try:
+            self.gateway_stream = create_gateway_stream_client()
+            logger.info("GatewayStreamClient created; market data sourced from Data-Gateway")
+        except ValueError as e:
+            logger.error(f"Failed to create GatewayStreamClient: {e}")
+            raise
 
         # Timezone settings
         self.eastern = ZoneInfo("America/New_York")
@@ -80,6 +65,7 @@ class IngestionService:
 
         # State
         self.eod_trigger_last_run: str | None = None
+        self._last_flow_poll_ts: datetime = datetime.now(UTC) - timedelta(minutes=15)
         self._eod_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
 
@@ -87,13 +73,13 @@ class IngestionService:
         """Initialize resources that require async execution."""
         logger.info("Initializing Ingestion Service...")
 
-        if os.getenv("ORION_RESET_CIRCUIT_BREAKER_ON_START", "false").lower() == "true":
+        if system_settings.reset_circuit_breaker_on_start:
             try:
                 from orion.core.circuit_breaker import CircuitBreaker
 
                 await CircuitBreaker().close()
             except Exception as cb_err:
-                logger.warning(f"Failed to reset circuit breaker on start: {cb_err}")
+                logger.error(f"Failed to reset circuit breaker on start: {cb_err}", exc_info=True)
 
         await init_db()
         await self.universe.hydrate_from_db()
@@ -109,19 +95,20 @@ class IngestionService:
             self._rollup_task = asyncio.create_task(rollup_job.run_forever())
             logger.info("Rollup job started as background task")
         except Exception as e:
-            logger.warning(f"Failed to start rollup job: {e}")
+            logger.error(f"Failed to start rollup job: {e}", exc_info=True)
 
-        # Start Alpaca WebSocket streaming (preferred for low-latency bars)
-        if self.alpaca_stream:
-            try:
-                active_tickers = self.universe.get_active_universe()
-                if active_tickers:
-                    await self.alpaca_stream.subscribe(active_tickers)
-                await self.alpaca_stream.start()
-                logger.info(f"Alpaca WebSocket streaming started for {len(active_tickers or [])} tickers")
-            except Exception as e:
-                logger.warning(f"Failed to start Alpaca streaming, falling back to polling: {e}")
-                self.alpaca_stream = None
+        # Start Gateway WebSocket stream and subscribe to initial tickers
+        try:
+            await self.gateway_stream.start()
+            initial_tickers = list(system_settings.static_watchlist)
+            await self.gateway_stream.subscribe(initial_tickers)
+            logger.info(
+                "Gateway stream started and subscribed to initial tickers",
+                extra={"ticker_count": len(initial_tickers), "tickers": initial_tickers},
+            )
+        except Exception as e:
+            logger.error(f"Failed to start Gateway stream: {e}", exc_info=True)
+            raise
 
         logger.info("Ingestion source profile", extra={"context": self._active_event_source_profile()})
         logger.info("Ingestion Service Initialized.")
@@ -164,8 +151,9 @@ class IngestionService:
         await self.stop()
 
     async def stop(self) -> None:
-        if self.alpaca_stream:
-            await self.alpaca_stream.stop()
+        if self.gateway_stream and self.gateway_stream.is_running:
+            await self.gateway_stream.stop()
+            logger.info("Gateway stream client stopped")
         logger.info("Ingestion Service Stopped.")
 
     async def _run_cycle(self) -> None:
@@ -173,16 +161,23 @@ class IngestionService:
         self.health_monitor.update_heartbeat()
 
         trace_id = str(uuid.uuid4())
-        all_events: list[BronzeEvent] = []
 
-        # UW flow/darkpool ingestion is externalized to Gateway/Heber pipelines.
-        # This service currently emits Alpaca market bars only.
+        # Sync subscriptions: subscribe to any new tickers discovered by the universe
+        await self._sync_gateway_subscriptions()
 
-        # 2. Get Alpaca bars (streaming preferred, polling as fallback)
-        alpaca_events = await self._poll_alpaca_events(trace_id)
-        all_events.extend(alpaca_events)
+        # Drain buffered bar events from the Gateway WebSocket stream
+        all_events = self.gateway_stream.drain_events()
+        for event in all_events:
+            self._tag_ingest_metadata(event, trace_id, "gateway_stream")
 
-        # 3. Process & Persist
+        # Poll Heber for new UW flow alerts
+        flow_events = self._poll_heber_flow(trace_id)
+        all_events.extend(flow_events)
+
+        # Universe updates are deferred to _run_pipeline — only tickers
+        # that generate candidates get Gateway bar subscriptions.
+
+        # Process & Persist
         if all_events:
             all_events = await self._normalize_and_dedupe(all_events, trace_id)
             if all_events:
@@ -190,41 +185,31 @@ class IngestionService:
                 await self._process_features_and_rules(all_events)
                 await self._write_to_lakehouse(all_events, trace_id)
 
-        # 4. Process EOD Trigger
+        # Process EOD Trigger
         self._check_eod_trigger()
 
         logger.info(
-            "Ingestion heartbeat", extra={"trace_id": trace_id, "context": {"processed_events": len(all_events)}}
+            "Ingestion heartbeat",
+            extra={
+                "trace_id": trace_id,
+                "context": {
+                    "processed_events": len(all_events),
+                    "flow_events": len(flow_events),
+                },
+            },
         )
 
-    async def _poll_alpaca_events(self, trace_id: str) -> list[BronzeEvent]:
-        """Poll Alpaca for market data events via streaming or REST fallback."""
-        active_tickers = self.universe.get_active_universe()
-        if not active_tickers:
-            return []
-
-        # Use streaming if available (real-time, sub-second latency)
-        if self.alpaca_stream and self.alpaca_stream.is_running:
-            return await self._drain_alpaca_stream(active_tickers, trace_id)
-
-        # Fallback to polling (higher latency)
-        return await self._poll_alpaca(active_tickers, trace_id)
-
-    async def _drain_alpaca_stream(self, active_tickers: list[str], trace_id: str) -> list[BronzeEvent]:
-        """Drain events from Alpaca WebSocket stream."""
-        # Ensure newly added tickers are subscribed
-        new_tickers = set(active_tickers) - self.alpaca_stream.subscribed_tickers
-        if new_tickers:
-            await self.alpaca_stream.subscribe(list(new_tickers))
-
-        # Drain any buffered streaming events
-        streaming_events = await self.alpaca_stream.drain_events()
-        if streaming_events:
-            for e in streaming_events:
-                self._tag_ingest_metadata(e, trace_id, "alpaca_stream")
-            logger.debug(f"Drained {len(streaming_events)} streaming events")
-
-        return streaming_events
+    async def _sync_gateway_subscriptions(self) -> None:
+        """Subscribe to any tickers the universe knows about that the Gateway doesn't."""
+        try:
+            universe_tickers = set(self.universe.get_active_universe())
+            currently_subscribed = self.gateway_stream.subscribed_symbols
+            new_tickers = universe_tickers - currently_subscribed
+            if new_tickers:
+                await self.gateway_stream.subscribe(list(new_tickers))
+                logger.info(f"Subscribed to {len(new_tickers)} new tickers via Gateway")
+        except Exception as e:
+            logger.error(f"Failed to sync Gateway subscriptions: {e}", exc_info=True)
 
     async def _check_overnight_sleep(self) -> None:
         from orion.core.market_schedule import MarketSchedule
@@ -251,34 +236,138 @@ class IngestionService:
 
     def _active_event_source_profile(self) -> dict[str, str | bool | list[str]]:
         return {
-            "alpaca_streaming_enabled": self._use_streaming,
-            "alpaca_mode": "streaming" if self.alpaca_stream is not None else "polling",
-            "produced_event_types": ["ALPACA_BAR_1M"],
-            "uw_flow_darkpool_ingestion": "external_gateway_heber_pipeline",
+            "data_source": "gateway_stream+heber_flow",
+            "gateway_connected": self.gateway_stream.is_running,
+            "subscribed_symbols": sorted(self.gateway_stream.subscribed_symbols),
+            "produced_event_types": ["ALPACA_BAR_1M", "UW_FLOW"],
+            "flow_source": "heber_silver",
         }
 
-    async def _poll_alpaca(self, tickers: list[str], trace_id: str) -> list[BronzeEvent]:
+    def _poll_heber_flow(self, trace_id: str) -> list[BronzeEvent]:
+        """Poll Heber Silver for new UW flow alerts since last poll."""
         try:
-            events = await asyncio.to_thread(
-                self.alpaca.poll, tickers, default_lookback_minutes=system_settings.alpaca_lookback_minutes
+            reader = get_heber_reader()
+            now = datetime.now(UTC)
+            df = reader.read_flow(
+                symbols=None,
+                asof_time=now,
+                start_time=self._last_flow_poll_ts,
             )
-            if events:
-                newest = max((e.event_ts_utc for e in events if e.event_ts_utc), default=None)
-                if newest:
-                    await self.health_monitor.check_lag(newest)
 
-            for e in events:
-                self._tag_ingest_metadata(e, trace_id, "alpaca_market")
+            if df.empty:
+                return []
+
+            self._last_flow_poll_ts = now
+            events: list[BronzeEvent] = []
+
+            for _, row in df.iterrows():
+                event = self._heber_row_to_event(row, now)
+                if event:
+                    self._tag_ingest_metadata(event, trace_id, "heber_flow")
+                    events.append(event)
+
+            if events:
+                logger.info(
+                    f"Polled {len(events)} UW flow alerts from Heber",
+                    extra={"flow_count": len(events)},
+                )
+
             return events
+
         except Exception as e:
-            logger.error(f"Error polling Alpaca: {e}", extra={"trace_id": trace_id})
+            logger.error(f"Heber flow poll failed: {e}", exc_info=True)
             return []
+
+    @staticmethod
+    def _make_json_safe(value: Any) -> Any:
+        """Convert Parquet-native types and NaN/Inf to JSON-serializable Python types."""
+        return make_json_safe(value)
+
+    @staticmethod
+    def _heber_row_to_event(row: Any, now: datetime) -> BronzeEvent | None:
+        """Convert a Heber Silver flow_alerts row to a BronzeEvent.
+
+        Source is set to "UW" because the data originates from Unusual Whales.
+        Heber is the storage layer; provenance is tracked via ingest.connector.
+        """
+        raw = row.to_dict()
+        # Convert Parquet-native types (Timestamp, numpy int/float, NaT) to JSON-safe values
+        payload = {
+            k: IngestionService._make_json_safe(v)
+            for k, v in raw.items()
+            if v is not None and not (hasattr(v, "__class__") and v.__class__.__name__ == "NaTType")
+        }
+
+        ticker = str(payload.get("underlying") or payload.get("symbol") or "")
+        if not ticker:
+            return None
+
+        payload["ticker"] = ticker
+        if "put_call" in payload:
+            pc = str(payload["put_call"]).upper()
+            payload["put_call"] = pc[0] if pc else ""
+        if "premium" in payload:
+            payload["premium_usd"] = float(payload["premium"])
+        if "expiry" in payload:
+            payload["expiry"] = str(payload["expiry"])
+            dte = IngestionService._compute_dte(payload["expiry"], now)
+            if dte is not None:
+                payload["dte"] = dte
+        payload["aggressor_ind"] = IngestionService._infer_aggressor(payload)
+
+        event_id = str(payload.get("event_id") or uuid.uuid4())
+
+        # Extract event timestamp before it was converted to ISO string
+        ts_event_raw = raw.get("ts_event")
+        if hasattr(ts_event_raw, "to_pydatetime"):
+            ts_event = ts_event_raw.to_pydatetime()
+        elif isinstance(ts_event_raw, datetime):
+            ts_event = ts_event_raw
+        else:
+            ts_event = now
+
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            event_type="UW_FLOW",
+            event_ts_utc=ts_event,
+            received_ts_utc=now,
+            ticker=ticker,
+            payload=payload,
+        )
+
+    @staticmethod
+    def _compute_dte(expiry_str: str, now: datetime) -> int | None:
+        """Compute days-to-expiry from expiry string."""
+        try:
+            from datetime import date as _date
+
+            exp = _date.fromisoformat(expiry_str[:10])
+            return max(0, (exp - now.date()).days)
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _infer_aggressor(payload: dict) -> str:
+        """Infer aggressor from raw field or ask/bid side premium."""
+        raw = payload.get("aggressor")
+        if raw:
+            return str(raw).upper()
+        ask = float(payload.get("total_ask_side_prem") or 0)
+        bid = float(payload.get("total_bid_side_prem") or 0)
+        if ask > bid and ask > 0:
+            return "ASK"
+        if bid > ask and bid > 0:
+            return "BID"
+        return "MID"
 
     async def _normalize_and_dedupe(self, events: list[BronzeEvent], trace_id: str) -> list[BronzeEvent]:
         normalized = []
         for e in events:
             try:
                 e.payload = NormalizationEngine.normalize_event(e.source, e.event_type, e.payload)
+                # Scrub NaN/Inf values introduced by normalizer float() casts
+                e.payload = IngestionService._make_json_safe(e.payload)
                 self._enrich_temporal_data(e)
                 if not e.ticker:
                     payload_ticker = e.payload.get("ticker")
@@ -322,6 +411,9 @@ class IngestionService:
                 candidates = self.rule_engine.process_signals(signals)
                 if candidates:
                     await self._save_candidates(candidates)
+                    # Subscribe to bar data only for tickers that generated candidates
+                    for c in candidates:
+                        self.universe.add_ticker(c.ticker)
         except Exception as e:
             logger.error(f"{label} Pipeline Error: {e}")
 

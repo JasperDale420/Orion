@@ -1,5 +1,7 @@
 from datetime import datetime
+from unittest.mock import AsyncMock, patch
 
+import pandas as pd
 import pytest
 
 
@@ -48,8 +50,6 @@ async def test_meta_search_flow():
     agent = MetaSearchAgent()
 
     # Mock MetaAgent response
-    from unittest.mock import AsyncMock
-
     mock_edits = [
         SolverEdit(
             base_solver_id="base_v1_test",
@@ -110,8 +110,16 @@ async def test_meta_search_flow():
         await session.commit()
 
     print("Starting Evolution...")
-    # 2. Run Evolution Cycle
-    await agent.run_evolution_cycle(base_id, experiment_name="IntegrationTest")
+    # Patch fetch_events_from_heber so the test does not attempt live Parquet I/O against
+    # /Volumes/heber.  The test verifies orchestration logic (experiment creation,
+    # SolverEdit persistence, metrics storage) — not data ingestion.  Returning empty
+    # tuples causes evaluate_variant to take the fast "no_data" path, which still
+    # produces a SolverRun + SolverMetrics row (sharpe=0, note="no_data").
+    with patch(
+        "orion.agents.meta_search_agent.fetch_events_from_heber",
+        new=AsyncMock(return_value=([], [], {})),
+    ):
+        await agent.run_evolution_cycle(base_id, experiment_name="IntegrationTest")
     print("Evolution Complete.")
 
     # 3. Verify Results

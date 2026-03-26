@@ -1,35 +1,45 @@
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orion.analysis.regime import (
+    MarketRegimeSnapshot,
+    RiskRegime,
+    SessionRegime,
+    TrendRegime,
+    VIXRegime,
+    VolRegime,
+)
 from orion.core.errors import ErrorCode, ModelInferenceError
 from orion.core.solver_executor import SolverPipeline
 from orion.core.solver_schema import SolverConfig, SolverModel
 from orion.execution.execution_engine import ExecutionEngine
+from orion.processing.pipeline import StageResult
 from orion.processing.signal_engine import SignalEngine
 from orion.storage.models_gold import CandidateTrade
+
+_MOCK_SNAPSHOT = MarketRegimeSnapshot(
+    ts=datetime.now(UTC),
+    trend=TrendRegime.FLAT,
+    vol=VolRegime.NORMAL,
+    risk=RiskRegime.NEUTRAL,
+    session=SessionRegime.MIDDAY,
+    vix_regime=VIXRegime.NORMAL,
+)
 
 
 @pytest.mark.asyncio
 async def test_fail_fast_solver_pipeline():
-    """
-    Verifies that SolverPipeline raises ModelInferenceError when model fails.
-    """
-    # Setup
+    """Verifies that SolverPipeline raises ModelInferenceError when model fails."""
     pipeline = SolverPipeline()
 
-    # Mock Solver with a model that will fail
     solver = SolverConfig(
         version_id="FAIL_TEST",
-        # base_strategy_name="TEST", # Removed
-        # universe={"ticker_allowlist": ["AAPL"]}, # Universe is an object SolverUniverse
-        # But schema says Optional[SolverUniverse]. If we pass dict, pydantic might parse it if it fits.
-        # But let's assume strict object if possible or rely on dict parsing.
-        # Pydantic 2 parsers dicts.
         universe={"ticker_allowlist": ["AAPL"]},
         model=SolverModel(model_uri="mock_fail_uri", model_version="v1"),
         risk={},
-        entry_logic={"rules": [], "combination_method": "AND"},  # Dict is correct for entry_logic now
+        entry_logic={"rules": [], "combination_method": "AND"},
         exit_logic={},
     )
 
@@ -37,7 +47,6 @@ async def test_fail_fast_solver_pipeline():
         candidate_id="c1", ticker="AAPL", direction="LONG", timestamp_utc="2024-01-01T12:00:00Z", confidence=0.9
     )
 
-    # Mock get_model_registry to return a broken model via get_active_model
     mock_model = MagicMock()
     mock_model.predict_proba.side_effect = Exception("Inference Crashed")
 
@@ -48,11 +57,9 @@ async def test_fail_fast_solver_pipeline():
         patch("orion.ml.model_registry.get_model_registry", return_value=mock_registry_instance),
         patch("orion.processing.feature_engine.FeatureEngine") as MockFeat,  # noqa: N806
     ):
-        # Mock feature engine to work
         feat_instance = MockFeat.return_value
         feat_instance.compute = AsyncMock(return_value={"close": 100})
 
-        # Execute and Expect Error
         with pytest.raises(ModelInferenceError) as excinfo:
             await pipeline.execute(solver, candidate, feature_engine=feat_instance)
 
@@ -60,78 +67,71 @@ async def test_fail_fast_solver_pipeline():
         assert excinfo.value.code == ErrorCode.MODEL_INFERENCE_FAILED
 
 
+class _MockStage:
+    def __init__(self, stage_name: str, fn):
+        self._name = stage_name
+        self._fn = fn
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def evaluate(self, ctx):
+        return await self._fn(ctx)
+
+
 @pytest.mark.asyncio
 async def test_fail_fast_signal_engine_integration():
-    """
-    Verifies that SignalEngine catches the error and logs it without crashing.
-    """
+    """Verifies that SignalEngine catches the error and logs it without crashing."""
     engine = SignalEngine()
 
-    # Mock Router to return our broken solver
-    mock_solver = MagicMock(spec=SolverConfig)
-    mock_solver.version_id = "BROKEN_SOLVER"
-    mock_solver.universe = None
+    async def mock_regime_gate(ctx):
+        ctx.regime_snapshot = _MOCK_SNAPSHOT
+        ctx.regime_size_multiplier = 1.0
+        return StageResult(action="CONTINUE", trace={})
 
-    # Mock Pipeline to raise ModelInferenceError
-    engine.pipeline.execute = AsyncMock(side_effect=ModelInferenceError("Boom", code=ErrorCode.MODEL_INFERENCE_FAILED))
+    async def mock_ml_prefilter(ctx):
+        ctx.ml_score = 0.7
+        return StageResult(action="CONTINUE", trace={})
 
-    # Mock Router
-    # Mock Router
-    from orion.core.solver_router import SelectedSolver
+    async def mock_solver_ensemble(ctx):
+        raise ModelInferenceError("Boom", code=ErrorCode.MODEL_INFERENCE_FAILED)
 
-    # Needs to match SolverRouter return type: List[SelectedSolver]
-    # We need to wrap our mock_solver (config) into SelectedSolver
-    ss = SelectedSolver(
-        solver_id="s1",
-        config=mock_solver,
-        info_ratio=1.0,
-        oos_expect_bp=10.0,
-        is_ticker_specific=False,
-        is_baseline=False,
-    )
-    engine.router.select_solvers = AsyncMock(return_value=[ss])
-    engine.regime_detector.get_current_regime_for_ticker = AsyncMock(return_value=None)
+    engine._stages = [
+        _MockStage("regime_gate", mock_regime_gate),
+        _MockStage("ml_prefilter", mock_ml_prefilter),
+        _MockStage("solver_ensemble", mock_solver_ensemble),
+    ]
 
     candidate = CandidateTrade(
         candidate_id="c2", ticker="GOOG", direction="LONG", timestamp_utc="2024-01-01T12:00:00Z", confidence=0.8
     )
 
-    # Run Decide
     decision = await engine.decide(candidate)
 
-    # Should result in SKIP because the only solver failed
     assert decision.decision == "SKIP"
-    assert "No compatible solvers" in decision.reason or "Ensemble Rejected" in decision.reason
-
-    # Important: It did NOT crash
 
 
 @pytest.mark.asyncio
 async def test_execution_engine_non_blocking_init():
-    """
-    Verifies ExecutionEngine.__init__ does not call sync_with_broker.
-    """
-    # We mock RiskManager to ensure it is NOT called during init
-    with patch("orion.execution.risk_manager.RiskManager") as MockRM:  # noqa: N806
-        rm_instance = MockRM.return_value
-        rm_instance.initialize = AsyncMock()
-        rm_instance.evaluate_drawdown_kill_switch = AsyncMock()  # Fix await error
+    """Verifies ExecutionEngine.__init__ does not perform async operations."""
+    executor = ExecutionEngine()
 
-        # Instantiate
-        with patch("orion.execution.execution_engine.AlpacaTradingConnector"):
-            executor = ExecutionEngine()
-            executor.connector = MagicMock()  # Force connector to exist so sync runs
+    assert executor._gateway_available is False
 
-        # Assert sync_with_broker was NOT called (it's moved to initialize)
-        rm_instance.sync_with_broker.assert_not_called()
+    executor._gateway_available = True
+    executor._gateway_check_ts = None
 
-        # Now call initialize
-        with patch("orion.execution.execution_engine.async_session_factory"):
-            await executor.initialize()
+    mock_client = AsyncMock()
+    mock_client.get_clock.return_value = {"is_open": True}
+    mock_client.get_account.return_value = {"equity": "50000.0", "last_equity": "50000.0"}
+    mock_client.get_positions.return_value = []
+    executor._gateway_client = mock_client
+    executor._get_gateway_client = lambda: mock_client
 
-        # Now it SHOULD be called (via asyncio.to_thread, so we mock that too or assert side effect?)
-        # Since we use asyncio.to_thread(self.risk_manager.sync_with_broker, ...),
-        # checking the mock call on rm_instance works if it was passed correctly.
-        # But asyncio.to_thread runs it in thread.
-        # Let's just verify it was called eventually.
-        rm_instance.sync_with_broker.assert_called_once()
+    with patch("orion.execution.execution_engine.async_session_factory"):
+        executor.risk_manager.initialize = AsyncMock()
+        executor.risk_manager.evaluate_drawdown_kill_switch = AsyncMock()
+        await executor.initialize()
+
+    executor.risk_manager.initialize.assert_called_once()

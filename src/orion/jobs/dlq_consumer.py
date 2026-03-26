@@ -33,19 +33,6 @@ class DLQConsumer:
         self.feature_engine = FeatureEngine()
         self.rule_engine = RuleEngine()
 
-    async def _mark_succeeded(self, msg_id: str) -> None:
-        """Mark the DLQ message as succeeded."""
-
-        async def update_status(session: Any) -> None:
-            stmt = select(DeadLetterQueue).where(DeadLetterQueue.id == msg_id)
-            result = await session.execute(stmt)
-            msg = result.scalars().first()
-            if msg:
-                msg.status = "REPLAYED"
-                msg.error_message = f"Replayed successfully at {datetime.now(UTC)}"
-
-        await db_write(update_status)
-
     async def run_once(self) -> None:
         """
         Process one batch of DLQ items.
@@ -92,6 +79,16 @@ class DLQConsumer:
                     logger.error(f"DLQ {task.id} Crash: {e}")
 
         await db_write(process_and_update_dlq_items)
+
+    async def _persist_signals_and_candidates(self, session: Any, sigs: list[Any]) -> None:
+        if not sigs:
+            return
+        await self.feature_engine.persist_signal_batch(sigs, "v1_legacy")
+        if all(hasattr(s, "signal_id") and hasattr(s, "ticker") for s in sigs):
+            await persist_silver_signals(session, sigs)
+            candidates = self.rule_engine.process_signals(sigs)
+            if candidates:
+                await persist_candidates(session, candidates)
 
     async def _replay_event(self, session: Any, task: DeadLetterQueue) -> bool:
         """
@@ -154,7 +151,7 @@ class DLQConsumer:
                     bronze.trading_date = td
                     bronze.session = sess
             except Exception:
-                pass
+                logger.error(f"DLQ event normalization failed for event_id={bronze.event_id}", exc_info=True)
             unique_events = [bronze]
 
         # Persist bronze + silver (idempotent via ON CONFLICT DO NOTHING).
@@ -168,26 +165,12 @@ class DLQConsumer:
         uw_flow_events = [e for e in unique_events if e.event_type == "UW_FLOW"]
         if uw_flow_events:
             sigs = self.feature_engine.process_uw_flow_events(uw_flow_events)
-            if sigs:
-                # Preserve legacy behavior: persist feature rows to gold_feature_events (used by existing tests/pipeline).
-                await self.feature_engine.persist_signal_batch(sigs, "v1_legacy")
-                # If these are real SilverSignal objects, persist them + candidates.
-                if all(hasattr(s, "signal_id") and hasattr(s, "ticker") for s in sigs):
-                    await persist_silver_signals(session, sigs)
-                    candidates = self.rule_engine.process_signals(sigs)
-                    if candidates:
-                        await persist_candidates(session, candidates)
+            await self._persist_signals_and_candidates(session, sigs)
 
         alpaca_events = [e for e in unique_events if e.event_type == "ALPACA_BAR_1M"]
         if alpaca_events:
             sigs = self.feature_engine.process_alpaca_bars(alpaca_events)
-            if sigs:
-                await self.feature_engine.persist_signal_batch(sigs, "v1_legacy")
-                if all(hasattr(s, "signal_id") and hasattr(s, "ticker") for s in sigs):
-                    await persist_silver_signals(session, sigs)
-                    candidates = self.rule_engine.process_signals(sigs)
-                    if candidates:
-                        await persist_candidates(session, candidates)
+            await self._persist_signals_and_candidates(session, sigs)
 
         # For other event types, bronze/silver persistence is still useful even if we skip downstream steps.
         await session.commit()
@@ -196,6 +179,4 @@ class DLQConsumer:
 
 if __name__ == "__main__":
     # Standalone run
-    loop = asyncio.get_event_loop()
-    consumer = DLQConsumer()
-    loop.run_until_complete(consumer.run_once())
+    asyncio.run(DLQConsumer().run_once())

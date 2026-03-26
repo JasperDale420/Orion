@@ -16,7 +16,10 @@ import json
 import sys
 from datetime import datetime
 
+import aiofiles
+
 from orion.agents.meta_search_agent import MetaSearchAgent
+from orion.jobs.solver_promoter import run_solver_promotions
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.meta_weekly")
@@ -66,6 +69,19 @@ async def run_once(dry_run: bool, output_path: str | None) -> None:
             f"Mutations: {len(summary.get('mutations_applied', []))}"
         )
 
+        # Process pending solver promotions after evolution
+        try:
+            promo_result = await run_solver_promotions()
+            logger.info(
+                "Solver promotion sweep completed",
+                promoted=promo_result["promoted"],
+                rejected=promo_result["rejected"],
+                manual_required=promo_result["manual_required"],
+            )
+            summary["promotion_result"] = promo_result
+        except Exception as e:
+            logger.error(f"Solver promotion sweep failed: {e}", exc_info=True)
+
         # Print summary
         print("\n=== Weekly Evolution Summary ===")
         print(f"Period: {summary['period']['start'][:10]} to {summary['period']['end'][:10]}")
@@ -84,8 +100,8 @@ async def run_once(dry_run: bool, output_path: str | None) -> None:
 
         # Save to file if requested
         if output_path:
-            with open(output_path, "w") as f:
-                json.dump(summary, f, indent=2, default=str)
+            async with aiofiles.open(output_path, "w") as f:
+                await f.write(json.dumps(summary, indent=2, default=str))
             logger.info(f"Summary saved to {output_path}")
 
     except Exception as e:
@@ -119,10 +135,22 @@ async def run_scheduled() -> None:
 
                 # Save summary
                 output_path = f"artifacts/reports/weekly_evolution_{now.strftime('%Y-%m-%d')}.json"
-                with open(output_path, "w") as f:
-                    json.dump(summary, f, indent=2, default=str)
+                async with aiofiles.open(output_path, "w") as f:
+                    await f.write(json.dumps(summary, indent=2, default=str))
 
                 logger.info(f"Weekly evolution completed. Summary saved to {output_path}")
+
+                # Process pending solver promotions after evolution
+                try:
+                    promo_result = await run_solver_promotions()
+                    logger.info(
+                        "Solver promotion sweep completed",
+                        promoted=promo_result["promoted"],
+                        rejected=promo_result["rejected"],
+                        manual_required=promo_result["manual_required"],
+                    )
+                except Exception as promo_err:
+                    logger.error(f"Solver promotion sweep failed: {promo_err}", exc_info=True)
 
             except Exception as e:
                 logger.error(f"Weekly evolution failed: {e}", exc_info=True)

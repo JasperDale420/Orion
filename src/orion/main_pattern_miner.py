@@ -1,14 +1,13 @@
 """
 Pattern Mining Service Entry Point.
 
-Runs twice weekly (Monday and Friday) after market close to train ML models and extract trading patterns.
+Runs every weekday after market close to train ML models and extract trading patterns.
 """
 
 import asyncio
 import signal
 from datetime import UTC, datetime, timedelta
 
-from orion.config import SystemSettings
 from orion.core.logging_config import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.ml.pattern_miner import run_all_pattern_mining
@@ -17,48 +16,15 @@ from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.main_pattern_miner")
 
-# Run 1 hour after market close on Monday and Friday
-RUN_DAYS = [0, 4]  # Monday=0, Friday=4
+# Run 1 hour after market close every weekday
+RUN_DAYS = [0, 1, 2, 3, 4]  # Every weekday (Mon-Fri)
 POST_CLOSE_DELAY_MINUTES = 60
-
-
-def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
-    settings = SystemSettings()
-
-    specific_key = "ORION_ENABLE_LEGACY_PATTERN_MINER"
-    if settings.legacy_pattern_miner_enabled is not None:
-        enabled = settings.legacy_pattern_miner_enabled
-        raw = "true" if enabled else "false"
-        return enabled, specific_key, raw
-
-    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    enabled = settings.legacy_label_pipelines_enabled
-    raw = "true" if enabled else "false"
-    return enabled, global_key, raw
-
-
-def _legacy_label_pipelines_enabled() -> bool:
-    enabled, _, _ = _legacy_label_pipeline_control()
-    return enabled
 
 
 async def run_mining_job() -> None:
     """
     Run the pattern mining job once.
     """
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Legacy local pattern miner disabled by config",
-            extra={
-                "event": "legacy_label_pipeline_disabled",
-                "pipeline": "orion.main_pattern_miner",
-                "control_key": control_key,
-                "control_raw": control_raw,
-            },
-        )
-        return
-
     await init_db()
 
     logger.info(
@@ -93,7 +59,7 @@ async def run_mining_job() -> None:
 
 def get_next_run_close() -> datetime | None:
     """
-    Calculate the next Monday or Friday market close time.
+    Calculate the next weekday market close time.
     """
     schedule = MarketSchedule()
     now = datetime.now(UTC)
@@ -124,11 +90,11 @@ def get_next_run_close() -> datetime | None:
 
 async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
     """
-    Wait until next Monday or Friday market close + delay, or check for drift more frequently.
+    Wait until next weekday market close + delay, or check for drift more frequently.
 
     Returns:
         Tuple of (should_run_scheduled, check_drift):
-        - (True, False) if scheduled Mon/Fri time reached
+        - (True, False) if scheduled weekday time reached
         - (False, True) if timeout reached for drift check
         - (False, False) if shutdown requested
     """
@@ -182,19 +148,6 @@ async def main() -> None:
     - Monday and Friday after market close (scheduled)
     - Any day when drift flag is set by EOD agent (triggered)
     """
-    enabled, control_key, control_raw = _legacy_label_pipeline_control()
-    if not enabled:
-        logger.warning(
-            "Legacy local pattern miner disabled by config",
-            extra={
-                "event": "legacy_label_pipeline_disabled",
-                "pipeline": "orion.main_pattern_miner",
-                "control_key": control_key,
-                "control_raw": control_raw,
-            },
-        )
-        return
-
     await init_db()
 
     shutdown_event = asyncio.Event()
@@ -207,7 +160,7 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
 
-    logger.info("Pattern mining service started. Running Monday/Friday + on drift trigger.")
+    logger.info("Pattern mining service started. Running every weekday + on drift trigger.")
 
     while not shutdown_event.is_set():
         run_scheduled, check_drift = await wait_for_next_run(shutdown_event)
@@ -225,7 +178,7 @@ async def main() -> None:
             try:
                 from orion.core.drift_trigger import check_and_clear_drift_flag
 
-                flag_data = check_and_clear_drift_flag()
+                flag_data = await check_and_clear_drift_flag()
                 if flag_data:
                     logger.info(
                         f"Drift trigger detected (max_psi={flag_data.get('max_psi', 'N/A')}), running mining",

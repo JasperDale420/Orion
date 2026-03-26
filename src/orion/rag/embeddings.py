@@ -92,5 +92,6 @@ class EmbeddingClient:
         response = await self.openai_client.embeddings.create(
             input=[text],
             model="text-embedding-3-small",
+            dimensions=768,  # Must match pgvector column and nomic-embed-text output
         )
         return response.data[0].embedding

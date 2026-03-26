@@ -5,19 +5,18 @@ Client for querying the TradingRAG service for trading strategy research.
 Provides access to indexed trading books for context-aware Q&A.
 """
 
-import os
-from inspect import isawaitable
 from typing import Any
 
 import httpx
 
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.clients.trading_rag")
 
-# Configuration
-TRADING_RAG_URL = os.getenv("TRADING_RAG_URL", "http://localhost:8005")
-TRADING_RAG_API_KEY = os.getenv("TRADING_RAG_API_KEY", "")
+# Configuration (from SystemSettings)
+TRADING_RAG_URL = system_settings.trading_rag_url
+TRADING_RAG_API_KEY = system_settings.trading_rag_api_key or ""
 
 
 class TradingRAGClient:
@@ -73,18 +72,18 @@ class TradingRAGClient:
                 "/retrieve",
                 json={"query": query, "top_k": top_k},
             )
-            maybe_result = response.raise_for_status()
-            if isawaitable(maybe_result):
-                await maybe_result
+            response.raise_for_status()
             data = response.json()
+            results = data.get("results", [])
 
             logger.info(
-                f"Retrieved {len(data.get('results', []))} chunks for query",
-                extra={"event": "rag_retrieve", "query": query[:50]},
+                "rag_retrieve",
+                query=query[:50],
+                chunk_count=len(results),
             )
-            return data.get("results", [])
+            return results
         except Exception as e:
-            logger.warning(f"TradingRAG retrieve failed: {e}")
+            logger.warning("rag_retrieve_failed", error=str(e))
             return []
 
     async def answer(
@@ -109,21 +108,19 @@ class TradingRAGClient:
                 "/answer",
                 json={"query": query, "top_k": top_k},
             )
-            maybe_result = response.raise_for_status()
-            if isawaitable(maybe_result):
-                await maybe_result
+            response.raise_for_status()
             data = response.json()
 
             logger.info(
-                "Got answer for query",
-                extra={"event": "rag_answer", "query": query[:50]},
+                "rag_answer",
+                query=query[:50],
             )
             return {
                 "answer": data.get("answer", ""),
                 "sources": data.get("sources", []),
             }
         except Exception as e:
-            logger.warning(f"TradingRAG answer failed: {e}")
+            logger.warning("rag_answer_failed", error=str(e))
             return {"answer": "", "sources": []}
 
     async def ask_strategy_question(self, question: str) -> str:

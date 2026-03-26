@@ -3,15 +3,25 @@ import json
 import math
 import os
 import uuid
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 
+from orion.agents.eod_metrics import (
+    adverse_slippage_bps,
+    aggregate_performance,
+    classify_session,
+    compute_baseline_slippage_rows,
+    compute_volatility_regimes,
+    index_orders_by_broker,
+    percentile,
+    psi,
+    summarize_slippage,
+)
 from orion.clients.heber_reader import get_heber_reader
 from orion.core.logging_config import setup_logging
 
@@ -28,9 +38,13 @@ from orion.rag.vector_store import VectorStore
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
+from orion.storage.models_dlq import DeadLetterQueue
+from orion.storage.models_execution import FillRecord, OrderRecord
 from orion.storage.models_gold import StrategyDecision
+from orion.storage.models_signals import SignalLive
 from orion.storage.models_silver import SilverSignal
-from orion.storage.models_solvers import SolverEdits
+from orion.storage.models_solvers import Solver, SolverEdits
+from orion.storage.models_trade_journal import TradeJournalEntry
 
 logger = setup_struct_logger("orion.agents.eod_review_agent")
 
@@ -76,8 +90,7 @@ class EODReviewAgent(BaseAgent):
         from orion.config import system_settings
 
         reports_dir = os.path.join(system_settings.artifacts_dir, "reports")
-        if not os.path.exists(reports_dir):
-            os.makedirs(reports_dir, exist_ok=True)
+        os.makedirs(reports_dir, exist_ok=True)
 
         # 1. Gather Data
         data, input_snapshot_path = await self._gather_data(target_date, run_id=run_id, reports_dir=reports_dir)
@@ -108,12 +121,6 @@ class EODReviewAgent(BaseAgent):
         # PRDv2 §5.7.2: EOD agent writes proposals into solver_edits with generated_by='llm_eod_agent' and reward=NULL.
         await self._persist_solver_edits(proposals, run_id)
 
-        # Proposal Builder should ideally also check config, but for now we pass paths?
-        # Actually ProposalBuilder uses a default 'proposals' dir.
-        # Ideally we update ProposalBuilder too, but scope is 'EODReviewAgent'.
-        # Let's leave ProposalBuilder as is for now or update it?
-        # Compliance Requirement: "EOD Report Location".
-
         for p in proposals:
             # We persist them as YAML artifacts for the Meta-Search or Human Review
             path = self.proposal_builder.save_proposal(
@@ -140,10 +147,6 @@ class EODReviewAgent(BaseAgent):
     async def _persist_solver_edits(self, proposals: list[dict[str, Any]], run_id: str) -> None:
         if not proposals:
             return
-
-        from sqlalchemy import select
-
-        from orion.storage.models_solvers import Solver
 
         async def save_edits(session: Any) -> None:
             for p in proposals:
@@ -197,87 +200,28 @@ class EODReviewAgent(BaseAgent):
         return start_ts, end_ts
 
     def _classify_session(self, ts_utc: datetime | None) -> str:
-        if ts_utc is None:
-            return "UNKNOWN"
-        try:
-            et = ts_utc.astimezone(ZoneInfo("America/New_York"))
-        except Exception:
-            return "UNKNOWN"
-
-        t = et.timetz().replace(tzinfo=None)
-        if time(4, 0) <= t < time(9, 30):
-            return "PRE"
-        if time(9, 30) <= t < time(16, 0):
-            return "REG"
-        if time(16, 0) <= t < time(20, 0):
-            return "POST"
-        return "OFF"
+        return classify_session(ts_utc)
 
     def _psi(self, baseline: list[float], current: list[float], *, bins: int = 10) -> float | None:
-        """
-        Population Stability Index between baseline and current.
-        Uses baseline quantiles to form bins (common PSI approach).
-        Returns None if not computable.
-        """
-        b = [x for x in baseline if x is not None and math.isfinite(x)]
-        c = [x for x in current if x is not None and math.isfinite(x)]
-        if len(b) < 20 or len(c) < 20:
-            return None
-        b_sorted = sorted(b)
-        edges: list[float] = []
-        for i in range(1, bins):
-            q = i / bins
-            idx = int(q * (len(b_sorted) - 1))
-            edges.append(b_sorted[idx])
-        # Deduplicate edges (constant series)
-        edges = sorted(set(edges))
-        if not edges:
-            return None
-
-        def bin_idx(x: float) -> int:
-            # returns 0..len(edges)
-            lo = 0
-            hi = len(edges)
-            while lo < hi:
-                mid = (lo + hi) // 2
-                if x <= edges[mid]:
-                    hi = mid
-                else:
-                    lo = mid + 1
-            return lo
-
-        b_counts = [0] * (len(edges) + 1)
-        c_counts = [0] * (len(edges) + 1)
-        for x in b:
-            b_counts[bin_idx(x)] += 1
-        for x in c:
-            c_counts[bin_idx(x)] += 1
-
-        eps = 1e-6
-        b_total = float(len(b))
-        c_total = float(len(c))
-        psi = 0.0
-        for bc, cc in zip(b_counts, c_counts, strict=False):
-            bp = max(bc / b_total, eps)
-            cp = max(cc / c_total, eps)
-            psi += (cp - bp) * math.log(cp / bp)
-        return float(psi)
+        return psi(baseline, current, bins=bins)
 
     def _adverse_slippage_bps(
         self, *, side: str | None, limit_price: float | None, fill_price: float | None
     ) -> float | None:
-        if limit_price is None or fill_price is None:
-            return None
-        if limit_price <= 0:
-            return None
-        if not side:
-            return None
-        s = side.lower()
-        if s in {"buy", "long"}:
-            return (fill_price - limit_price) / limit_price * 10000.0
-        if s in {"sell", "short"}:
-            return (limit_price - fill_price) / limit_price * 10000.0
-        return None
+        return adverse_slippage_bps(side=side, limit_price=limit_price, fill_price=fill_price)
+
+    @staticmethod
+    def _index_orders_by_broker(orders: list[Any]) -> dict[str, Any]:
+        return index_orders_by_broker(orders)
+
+    def _compute_baseline_slippage_rows(
+        self, fills: list[Any], orders_by_broker: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        return compute_baseline_slippage_rows(fills, orders_by_broker)
+
+    @staticmethod
+    def _summarize_slippage(slippage_rows: list[dict[str, Any]], fills_count: int) -> dict[str, Any]:
+        return summarize_slippage(slippage_rows, fills_count)
 
     async def _load_regime_bars_from_heber(self, tickers: list[str], start_ts: datetime, end_ts: datetime) -> list[Any]:
         if not tickers:
@@ -327,11 +271,6 @@ class EODReviewAgent(BaseAgent):
         """
         Gather metrics, decisions, and outcomes for the day.
         """
-        from orion.storage.models_dlq import DeadLetterQueue
-        from orion.storage.models_execution import FillRecord, OrderRecord
-        from orion.storage.models_signals import SignalLive
-        from orion.storage.models_trade_journal import TradeJournalEntry
-
         start_ts, end_ts = self._day_bounds_utc(date)
 
         async def fetch_all_data(session: Any) -> dict[str, Any]:
@@ -411,9 +350,7 @@ class EODReviewAgent(BaseAgent):
             bronze_rows = (await session.execute(bronze_stmt)).scalars().all()
 
             # Feature drift data: pull sampled daily OHLCV signals and a rolling baseline window (previous 20d)
-            # IMPORTANT: Limit to 5000 rows each to prevent OOM (full baseline can be 500K+ rows)
-            from sqlalchemy import func
-
+            # Limit to 5000 rows each to prevent OOM (full baseline can be 500K+ rows)
             silver_today_stmt = (
                 select(SilverSignal)
                 .where(
@@ -466,7 +403,6 @@ class EODReviewAgent(BaseAgent):
 
         data = await db_query(fetch_all_data)
 
-        # Extract data from the returned dictionary
         decisions = data["decisions"]
         sigs = data["sigs"]
         trade_journal = data["trade_journal"]
@@ -483,20 +419,12 @@ class EODReviewAgent(BaseAgent):
         baseline_start = data["baseline_start"]
 
         total_decisions = len(decisions)
-        # Naive execution count
-        executed_decisions = [d for d in decisions if d.decision == "EXECUTE"]
-        skipped_count = len([d for d in decisions if d.decision == "SKIP"])
+        executed_count = sum(1 for d in decisions if d.decision == "EXECUTE")
+        skipped_count = sum(1 for d in decisions if d.decision == "SKIP")
 
         # --- slippage joins ---
-        baseline_orders_by_broker: dict[str, OrderRecord] = {}
-        for o in baseline_orders:
-            if o.broker_order_id:
-                baseline_orders_by_broker[o.broker_order_id] = o
-
-        orders_by_broker: dict[str, OrderRecord] = {}
-        for o in orders:
-            if o.broker_order_id:
-                orders_by_broker[o.broker_order_id] = o
+        baseline_orders_by_broker = self._index_orders_by_broker(baseline_orders)
+        orders_by_broker = self._index_orders_by_broker(orders)
 
         slippage_rows: list[dict[str, Any]] = []
         for f in fills:
@@ -521,86 +449,13 @@ class EODReviewAgent(BaseAgent):
                 }
             )
 
-        slippage_bps_vals = [
-            r["adverse_slippage_bps"] for r in slippage_rows if r.get("adverse_slippage_bps") is not None
-        ]
-        slippage_summary = {
-            "fills_count": len(fills),
-            "linked_fills_count": len([r for r in slippage_rows if r["linked_order"]]),
-            "unlinked_fills_count": len([r for r in slippage_rows if not r["linked_order"]]),
-            "mean_adverse_slippage_bps": (
-                (sum(slippage_bps_vals) / len(slippage_bps_vals)) if slippage_bps_vals else None
-            ),
-            "worst_adverse_slippage_bps": max(slippage_bps_vals) if slippage_bps_vals else None,
-        }
+        slippage_summary = self._summarize_slippage(slippage_rows, len(fills))
 
-        baseline_slippage_rows: list[dict[str, Any]] = []
-        for f in baseline_fills:
-            order = baseline_orders_by_broker.get(f.broker_order_id)
-            limit_price = order.limit_price if order is not None else None
-            adverse_bps = self._adverse_slippage_bps(
-                side=f.side, limit_price=limit_price, fill_price=f.filled_avg_price
-            )
-            baseline_slippage_rows.append(
-                {
-                    "adverse_slippage_bps": adverse_bps,
-                    "linked_order": order is not None,
-                }
-            )
-        baseline_bps_vals = [
-            r["adverse_slippage_bps"] for r in baseline_slippage_rows if r.get("adverse_slippage_bps") is not None
-        ]
-        baseline_slippage_summary = {
-            "window_utc": {"start": baseline_start.isoformat(), "end": start_ts.isoformat()},
-            "fills_count": len(baseline_fills),
-            "linked_fills_count": len([r for r in baseline_slippage_rows if r["linked_order"]]),
-            "unlinked_fills_count": len([r for r in baseline_slippage_rows if not r["linked_order"]]),
-            "mean_adverse_slippage_bps": (
-                (sum(baseline_bps_vals) / len(baseline_bps_vals)) if baseline_bps_vals else None
-            ),
-            "worst_adverse_slippage_bps": max(baseline_bps_vals) if baseline_bps_vals else None,
-        }
+        baseline_slippage_rows = self._compute_baseline_slippage_rows(baseline_fills, baseline_orders_by_broker)
+        baseline_slippage_summary = self._summarize_slippage(baseline_slippage_rows, len(baseline_fills))
+        baseline_slippage_summary["window_utc"] = {"start": baseline_start.isoformat(), "end": start_ts.isoformat()}
 
-        # --- volatility regimes ---
-        # Compute intraday realized vol per ticker using 1m closes.
-        vol_by_ticker: dict[str, float] = {}
-        closes_by_ticker: dict[str, list[float]] = {}
-        regime_map: dict[str, str] = {}
-        regime_stats: dict[str, Any] = {}
-        for b in bars:
-            if b.ticker and b.close is not None:
-                closes_by_ticker.setdefault(b.ticker, []).append(float(b.close))
-        for tkr, closes in closes_by_ticker.items():
-            if len(closes) < 30:
-                continue
-            rets = []
-            prev = None
-            for cpx in closes:
-                if prev is not None and prev > 0 and cpx > 0:
-                    rets.append(math.log(cpx / prev))
-                prev = cpx
-            if len(rets) < 20:
-                continue
-            mean = sum(rets) / len(rets)
-            var = sum((x - mean) ** 2 for x in rets) / max(len(rets) - 1, 1)
-            vol_by_ticker[tkr] = math.sqrt(var) * math.sqrt(390.0)  # annualized-ish per trading day
-
-        if vol_by_ticker:
-            vols = sorted(vol_by_ticker.values())
-            q1 = vols[int(0.33 * (len(vols) - 1))] if len(vols) > 1 else vols[0]
-            q2 = vols[int(0.66 * (len(vols) - 1))] if len(vols) > 1 else vols[0]
-            for tkr, v in vol_by_ticker.items():
-                if v <= q1:
-                    regime_map[tkr] = "LOW_VOL"
-                elif v <= q2:
-                    regime_map[tkr] = "MID_VOL"
-                else:
-                    regime_map[tkr] = "HIGH_VOL"
-            regime_stats.update(
-                {"available": True, "bucket_quantiles": {"q33": q1, "q66": q2}, "computed": len(regime_map)}
-            )
-        else:
-            regime_stats.update({"available": False, "computed": 0})
+        _, regime_map, regime_stats = compute_volatility_regimes(bars)
 
         # --- ingestion lag/gap stats ---
         lag_by_key: dict[str, list[float]] = {}
@@ -619,19 +474,12 @@ class EODReviewAgent(BaseAgent):
             if ev.received_ts_utc:
                 last_recv_by_key[key] = ev.received_ts_utc
 
-        def _pct(vals: list[float], p: float) -> float | None:
-            if not vals:
-                return None
-            s = sorted(vals)
-            idx = int(p * (len(s) - 1))
-            return float(s[idx])
-
         ingestion_stats: dict[str, Any] = {"sources": {}}
         for key, vals in lag_by_key.items():
             ingestion_stats["sources"][key] = {
                 "count": len(vals),
-                "lag_p50_s": _pct(vals, 0.50),
-                "lag_p95_s": _pct(vals, 0.95),
+                "lag_p50_s": percentile(vals, 0.50),
+                "lag_p95_s": percentile(vals, 0.95),
                 "lag_max_s": max(vals) if vals else None,
                 "max_gap_s": gaps_by_key.get(key),
             }
@@ -656,34 +504,15 @@ class EODReviewAgent(BaseAgent):
                 }
             )
 
-        def _agg(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
-            out: dict[str, Any] = {}
-            groups: dict[str, list[dict[str, Any]]] = {}
-            for r in rows:
-                k = r.get(key) or "UNKNOWN"
-                groups.setdefault(str(k), []).append(r)
-            for k, rs in groups.items():
-                pnls = [x["realized_pnl"] for x in rs if x.get("realized_pnl") is not None]
-                out[k] = {
-                    "trades": len(rs),
-                    "pnl_count": len(pnls),
-                    "pnl_sum": float(sum(pnls)) if pnls else None,
-                    "pnl_mean": float(sum(pnls) / len(pnls)) if pnls else None,
-                }
-            return out
-
         performance_metrics = {
-            "by_rule": _agg(trade_rows, "rule_id"),
-            "by_model": _agg(trade_rows, "model_version"),
-            "by_ticker": _agg(trade_rows, "ticker"),
-            "by_session": _agg(trade_rows, "session"),
-            "by_regime": _agg(trade_rows, "regime"),
+            "by_rule": aggregate_performance(trade_rows, "rule_id"),
+            "by_model": aggregate_performance(trade_rows, "model_version"),
+            "by_ticker": aggregate_performance(trade_rows, "ticker"),
+            "by_session": aggregate_performance(trade_rows, "session"),
+            "by_regime": aggregate_performance(trade_rows, "regime"),
         }
 
-        baseline_trade_rows = []
-        for t in baseline_trade_journal:
-            baseline_trade_rows.append({"realized_pnl": t.realized_pnl})
-        baseline_pnls = [r["realized_pnl"] for r in baseline_trade_rows if r.get("realized_pnl") is not None]
+        baseline_pnls = [t.realized_pnl for t in baseline_trade_journal if t.realized_pnl is not None]
         today_pnls = [r["realized_pnl"] for r in trade_rows if r.get("realized_pnl") is not None]
 
         # --- drift metrics (feature PSI + slippage drift) ---
@@ -713,7 +542,7 @@ class EODReviewAgent(BaseAgent):
             from orion.core.drift_trigger import set_drift_flag
 
             psi_values = {k: v.get("psi") for k, v in feature_shift.items() if v.get("psi") is not None}
-            if set_drift_flag(psi_values, source="eod_agent"):
+            if await set_drift_flag(psi_values, source="eod_agent"):
                 logger.info(
                     "High drift detected, pattern mining will be triggered",
                     extra={"event": "drift_trigger_set", "psi_values": psi_values},
@@ -762,7 +591,7 @@ class EODReviewAgent(BaseAgent):
             "window_utc": {"start": start_ts.isoformat(), "end": end_ts.isoformat()},
             "decisions": {
                 "total": total_decisions,
-                "executed_count": len(executed_decisions),
+                "executed_count": executed_count,
                 "skipped_count": skipped_count,
                 "sample": [
                     {
@@ -909,9 +738,6 @@ class EODReviewAgent(BaseAgent):
     async def _fetch_ml_insights(self) -> dict[str, Any] | None:
         """Fetch latest ML pattern insights for LLM context."""
         try:
-            from sqlalchemy import text
-
-            from orion.shared.db_utils import db_query
 
             async def query(session: Any) -> list[Any]:
                 # Get most recent insight per model type

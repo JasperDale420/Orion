@@ -12,6 +12,8 @@ from orion.storage.models_solvers import PromotionRecommendation, Solver, Solver
 
 logger = setup_struct_logger("orion.gatekeeper")
 
+_STAGE_ORDER = ["research", "shadow", "paper", "limited_live", "scaled_live"]
+
 
 class Gatekeeper:
     """
@@ -91,6 +93,27 @@ class Gatekeeper:
                 logger.error(f"Gatekeeper Run Failed: {e}")
                 await session.rollback()
 
+    @staticmethod
+    def _build_metrics_snapshot(metrics: SolverMetrics) -> dict[str, Any]:
+        return {
+            "dataset_tag": metrics.dataset_tag,
+            "num_trades": metrics.num_trades,
+            "profit_factor": metrics.profit_factor,
+            "max_dd_pct": metrics.max_dd_pct,
+            "evaluated_at_utc": metrics.evaluated_at_utc.isoformat() if metrics.evaluated_at_utc else None,
+            "metrics_json": metrics.metrics_json,
+        }
+
+    @staticmethod
+    async def _has_pending_recommendation(session: Any, solver_id: str, target_stage: str) -> bool:
+        stmt = select(PromotionRecommendation).where(
+            PromotionRecommendation.solver_id == solver_id,
+            PromotionRecommendation.status == "PENDING",
+            PromotionRecommendation.recommended_stage == target_stage,
+        )
+        existing = (await session.execute(stmt)).scalars().first()
+        return existing is not None
+
     async def _handle_demotion(self, session: Any, solver: Solver, metrics: SolverMetrics) -> None:
         old_stage = solver.stage
 
@@ -104,21 +127,14 @@ class Gatekeeper:
         solver.is_active = False
         solver.status = "deprecated"
 
-        stage_order = ["research", "shadow", "paper", "limited_live", "scaled_live"]
+        stage_order = _STAGE_ORDER
         try:
             current_idx = stage_order.index(old_stage)
             recommended_stage = stage_order[current_idx - 1] if current_idx > 0 else old_stage
         except ValueError:
             recommended_stage = old_stage
 
-        # Avoid duplicating pending recommendations for the same solver+target.
-        existing_stmt = select(PromotionRecommendation).where(
-            PromotionRecommendation.solver_id == solver.solver_id,
-            PromotionRecommendation.status == "PENDING",
-            PromotionRecommendation.recommended_stage == recommended_stage,
-        )
-        existing = (await session.execute(existing_stmt)).scalars().first()
-        if not existing:
+        if not await self._has_pending_recommendation(session, solver.solver_id, recommended_stage):
             session.add(
                 PromotionRecommendation(
                     id=str(uuid.uuid4()),
@@ -126,14 +142,7 @@ class Gatekeeper:
                     current_stage=old_stage,
                     recommended_stage=recommended_stage,
                     reason="Demotion criteria breached (automated health monitor).",
-                    metrics_snapshot={
-                        "dataset_tag": metrics.dataset_tag,
-                        "num_trades": metrics.num_trades,
-                        "profit_factor": metrics.profit_factor,
-                        "max_dd_pct": metrics.max_dd_pct,
-                        "evaluated_at_utc": metrics.evaluated_at_utc.isoformat() if metrics.evaluated_at_utc else None,
-                        "metrics_json": metrics.metrics_json,
-                    },
+                    metrics_snapshot=self._build_metrics_snapshot(metrics),
                     status="PENDING",
                     created_at_utc=datetime.now(UTC),
                 )
@@ -143,11 +152,10 @@ class Gatekeeper:
             f"DEMOTING Solver {solver.family_name} ({solver.solver_id}). "
             f"Stage: {old_stage}. Validating Metrics: DD={metrics.max_dd_pct}%, PF={metrics.profit_factor}."
         )
-        # We could notify here (e.g. valid 'incident')
 
     async def _handle_promotion(self, session: Any, solver: Solver, metrics: SolverMetrics) -> None:
         old_stage = solver.stage
-        stage_order = ["research", "shadow", "paper", "limited_live", "scaled_live"]
+        stage_order = _STAGE_ORDER
 
         try:
             current_idx = stage_order.index(old_stage)
@@ -157,13 +165,7 @@ class Gatekeeper:
             new_stage = stage_order[current_idx + 1]
 
             # PRDv2 FR 5.5.2: recommendation vs decision. Create a recommendation, don't mutate stage here.
-            existing_stmt = select(PromotionRecommendation).where(
-                PromotionRecommendation.solver_id == solver.solver_id,
-                PromotionRecommendation.status == "PENDING",
-                PromotionRecommendation.recommended_stage == new_stage,
-            )
-            existing = (await session.execute(existing_stmt)).scalars().first()
-            if not existing:
+            if not await self._has_pending_recommendation(session, solver.solver_id, new_stage):
                 session.add(
                     PromotionRecommendation(
                         id=str(uuid.uuid4()),
@@ -171,16 +173,7 @@ class Gatekeeper:
                         current_stage=old_stage,
                         recommended_stage=new_stage,
                         reason="Metrics met promotion criteria (automated gatekeeper).",
-                        metrics_snapshot={
-                            "dataset_tag": metrics.dataset_tag,
-                            "num_trades": metrics.num_trades,
-                            "profit_factor": metrics.profit_factor,
-                            "max_dd_pct": metrics.max_dd_pct,
-                            "evaluated_at_utc": (
-                                metrics.evaluated_at_utc.isoformat() if metrics.evaluated_at_utc else None
-                            ),
-                            "metrics_json": metrics.metrics_json,
-                        },
+                        metrics_snapshot=self._build_metrics_snapshot(metrics),
                         status="PENDING",
                         created_at_utc=datetime.now(UTC),
                     )

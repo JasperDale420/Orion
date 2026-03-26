@@ -4,6 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from orion.api.main import app
+from orion.config import system_settings
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
 from orion.storage.models_gold import CandidateTrade, GoldTickerRollup
@@ -11,7 +12,7 @@ from orion.storage.models_gold import CandidateTrade, GoldTickerRollup
 
 @pytest.mark.asyncio
 async def test_pointer_endpoints_return_raw_entities(monkeypatch):
-    monkeypatch.setenv("ORION_API_KEY", "testkey")
+    monkeypatch.setattr(system_settings, "api_key", "testkey")
 
     now = datetime.now(UTC)
 

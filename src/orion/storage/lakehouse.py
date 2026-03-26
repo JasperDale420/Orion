@@ -1,5 +1,3 @@
-import logging
-import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -7,9 +5,11 @@ from datetime import UTC, datetime
 import pandas as pd
 import s3fs
 
+from orion.config import system_settings
+from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger(__name__)
 
 
 class LakehouseWriter:
@@ -26,10 +26,10 @@ class LakehouseWriter:
         bucket: str | None = None,
         max_workers: int | None = None,
     ):
-        endpoint_url = endpoint_url or os.getenv("ORION_LAKEHOUSE_ENDPOINT_URL")
-        access_key = access_key or os.getenv("ORION_LAKEHOUSE_ACCESS_KEY")
-        secret_key = secret_key or os.getenv("ORION_LAKEHOUSE_SECRET_KEY")
-        bucket = bucket or os.getenv("ORION_LAKEHOUSE_BUCKET")
+        endpoint_url = endpoint_url or system_settings.lakehouse_endpoint_url
+        access_key = access_key or system_settings.lakehouse_access_key
+        secret_key = secret_key or system_settings.lakehouse_secret_key
+        bucket = bucket or system_settings.lakehouse_bucket
 
         self.enabled = bool(endpoint_url and access_key and secret_key and bucket)
         self.bucket = bucket or ""
@@ -56,8 +56,6 @@ class LakehouseWriter:
         if not events:
             return
 
-        # Convert to DataFrame
-        # OPTIMIZATION: Use list comprehension for faster dictionary creation
         data = [
             {
                 "event_id": e.event_id,
@@ -77,13 +75,8 @@ class LakehouseWriter:
         ]
 
         df = pd.DataFrame(data)
-
-        # Determine partition date
-        # OPTIMIZATION: Use vectorized .dt.date.astype(str)
         df["date"] = df["event_ts_utc"].dt.date.astype(str)
 
-        # OPTIMIZATION: Use ThreadPoolExecutor to write partitions in parallel
-        # This significantly speeds up writing when there are multiple partitions/groups
         tasks = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for date_str, group_df in df.groupby("date"):
@@ -107,7 +100,7 @@ class LakehouseWriter:
         try:
             with self.fs.open(path, "wb") as f:
                 content_df.to_parquet(f, engine="pyarrow", index=False)
-            logger.info(f"Wrote {len(sub_group)} events to {path}")
+            logger.info("lakehouse_write_ok", path=path, event_count=len(sub_group))
         except Exception as e:
-            logger.error(f"Failed to write to {path}: {e}")
-            raise e
+            logger.error("lakehouse_write_failed", path=path, error=str(e))
+            raise

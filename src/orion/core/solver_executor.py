@@ -1,5 +1,6 @@
 from typing import Any
 
+from orion.core.errors import ErrorCode, FeatureComputationError, ModelInferenceError
 from orion.core.solver_schema import SolverConfig
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade
@@ -34,18 +35,14 @@ class SolverPipeline:
         """
 
         # 1. Rule Compatibility Check
-        solver_rules = solver.rules if hasattr(solver, "rules") else []
-        # Support both string list or object list if schema differs
-        rule_ids = [r if isinstance(r, str) else r.id for r in solver_rules]
+        rule_ids = [r if isinstance(r, str) else r.id for r in solver.rules]
 
-        if rule_ids and "*" not in rule_ids:
-            if candidate.rule_id not in rule_ids:
-                # Solver ignores this rule
-                return (
-                    0.0,
-                    0.0,
-                    {"reason": "Rule Mismatch", "solver_rules": rule_ids, "candidate_rule": candidate.rule_id},
-                )
+        if rule_ids and "*" not in rule_ids and candidate.rule_id not in rule_ids:
+            return (
+                0.0,
+                0.0,
+                {"reason": "Rule Mismatch", "solver_rules": rule_ids, "candidate_rule": candidate.rule_id},
+            )
 
         # 2. Feature Generation
         # Use the injected engine or fallback
@@ -59,8 +56,6 @@ class SolverPipeline:
         try:
             features = await feature_engine.compute(candidate, solver.universe)
         except Exception as e:
-            from orion.core.errors import ErrorCode, FeatureComputationError
-
             logger.error(f"Feature computation failed for solver {solver.version_id}: {e}")
             raise FeatureComputationError(
                 f"Feature Key Generation Failed: {e}", code=ErrorCode.FEATURE_COMPUTATION_FAILED
@@ -110,20 +105,13 @@ class SolverPipeline:
                     elif hasattr(model, "predict"):
                         p_take = float(model.predict(df_feats)[0])
                     else:
-                        from orion.core.errors import ErrorCode, ModelInferenceError
-
                         raise ModelInferenceError(
                             f"Model {uri} has no predict method", code=ErrorCode.MODEL_INFERENCE_FAILED
                         )
                 except Exception as e:
-                    from orion.core.errors import ErrorCode, ModelInferenceError
-
-                    # CRITICAL FIX: Fail Fast. Do not fallback.
                     logger.error(f"Model inference failed for {uri}: {e}")
                     raise ModelInferenceError(f"Inference Failed: {e}", code=ErrorCode.MODEL_INFERENCE_FAILED) from e
             else:
-                from orion.core.errors import ErrorCode, ModelInferenceError
-
                 raise ModelInferenceError(f"Model {uri} not found in registry", code=ErrorCode.MODEL_INFERENCE_FAILED)
         else:
             # Rule-only solver: Trust the candidate confidence
@@ -135,19 +123,11 @@ class SolverPipeline:
             p_take *= 0.8
 
         # 4. Weighting
-        # Check if solver has specific weight for this rule
         weight = 1.0
-        if hasattr(solver, "entry_logic") and solver.entry_logic:
-            # Basic logic to find weight?
-            pass
 
         trace = {
             "stage": "model_inference_deterministic",
-            "model_version": (
-                solver.model.model_version
-                if (solver.model and hasattr(solver.model, "model_version"))
-                else "rules_only"
-            ),
+            "model_version": solver.model.model_version if solver.model else "rules_only",
             "p_take_raw": p_take,
             "features_used_count": len(features),
             "feature_keys": list(features.keys()),

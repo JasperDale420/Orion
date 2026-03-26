@@ -32,7 +32,14 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy dependency manifest
-COPY pyproject.toml ./
+COPY pyproject.toml poetry.lock ./
+
+# Create minimal empire-core stub so the path dependency resolves at build time.
+# The real empire-core package is mounted at runtime via docker-compose volumes.
+RUN mkdir -p /empire-core/empire_core \
+    && echo '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n\n[project]\nname = "empire-core"\nversion = "1.0.0"\nrequires-python = ">=3.12"\ndependencies = ["structlog>=24.1.0","httpx>=0.27","tenacity>=8.2","pydantic-settings>=2.0"]' \
+       > /empire-core/pyproject.toml \
+    && touch /empire-core/empire_core/__init__.py
 
 # Install dependencies (no devdeps)
 RUN poetry config virtualenvs.create false \

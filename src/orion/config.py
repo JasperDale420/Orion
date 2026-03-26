@@ -56,7 +56,32 @@ class RiskSettings(BaseSettings):
     correlation_penalty_factor: float = 0.30  # Size multiplier at max correlation
     min_bars_for_correlation: int = 20  # Skip adjustment if insufficient data
 
+    # Bracket orders (stop-loss / take-profit at broker level)
+    enable_bracket_orders: bool = False  # Off by default for safe paper rollout
+
     model_config = SettingsConfigDict(env_prefix="ORION_RISK_")
+
+
+class HeuristicWeights(BaseSettings):
+    """Configurable weights for the heuristic scorer fallback.
+
+    Each weight represents the score increment applied when a specific
+    condition is met. The base score starts at ``base_score`` and weights
+    are added/subtracted according to flow characteristics.
+    """
+
+    base_score: float = 0.30  # Starting score for every flow
+    premium_500k_plus: float = 0.25  # Premium ≥ $500k
+    premium_100k_plus: float = 0.15  # Premium ≥ $100k
+    premium_50k_plus: float = 0.10  # Premium ≥ $50k
+    premium_25k_plus: float = 0.05  # Premium ≥ $25k
+    sweep_bonus: float = 0.15  # Flow is a sweep order
+    ask_side_bonus: float = 0.10  # Aggressor aligned with direction
+    vol_oi_high: float = 0.10  # Volume/OI > 2.0
+    vol_oi_moderate: float = 0.05  # Volume/OI > 1.0
+    low_premium_penalty: float = -0.20  # Premium < $10k (noise filter)
+
+    model_config = SettingsConfigDict(env_prefix="ORION_HEURISTIC_")
 
 
 class SystemSettings(BaseSettings):
@@ -167,6 +192,14 @@ class SystemSettings(BaseSettings):
     # ML / Models
     model_dir: Path = Field(default=Path("/app/models"), validation_alias="ORION_MODEL_DIR")
     max_model_age_days: int = Field(default=14, validation_alias="ORION_MAX_MODEL_AGE_DAYS")
+    ml_stale_model_policy: str = Field(
+        default="warn",
+        validation_alias="ORION_ML_STALE_MODEL_POLICY",
+        description="Policy when models exceed max_model_age_days: "
+        "'skip' = reject stale models (original behavior), "
+        "'warn' = load stale models with warning, "
+        "'bypass' = skip ML scoring entirely and pass candidates through",
+    )
     proposals_dir: str = Field(default="proposals", validation_alias="ORION_PROPOSALS_DIR")
 
     # SQLite tuning
@@ -183,6 +216,34 @@ class SystemSettings(BaseSettings):
     data_quality_checker_prefer_heber: bool = Field(
         default=True, validation_alias="ORION_DATA_QUALITY_CHECKER_PREFER_HEBER"
     )
+    reconcile_backfill_prefer_heber: bool = Field(
+        default=True, validation_alias="ORION_RECONCILE_BACKFILL_PREFER_HEBER"
+    )
+    execution_prefer_heber_recent_flow: bool = Field(
+        default=True, validation_alias="ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW"
+    )
+    feature_enrichment_prefer_heber_context: bool = Field(
+        default=True, validation_alias="ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT"
+    )
+    feature_enrichment_enable_gateway_fetch: bool = Field(
+        default=True, validation_alias="ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH"
+    )
+
+    # Circuit breaker
+    reset_circuit_breaker_on_start: bool = Field(default=False, validation_alias="ORION_RESET_CIRCUIT_BREAKER_ON_START")
+    trip_circuit_breaker_on_lag: bool = Field(default=False, validation_alias="ORION_TRIP_CIRCUIT_BREAKER_ON_LAG")
+
+    # Client URLs
+    trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")
+    trading_rag_api_key: str | None = Field(default=None, validation_alias="TRADING_RAG_API_KEY")
+    mcp_server_url: str = Field(default="http://localhost:8001", validation_alias="MCP_SERVER_URL")
+    orion_api_url: str = Field(default="http://localhost:8000", validation_alias="ORION_API_URL")
+
+    # Lakehouse (S3-compatible object store)
+    lakehouse_endpoint_url: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_ENDPOINT_URL")
+    lakehouse_access_key: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_ACCESS_KEY")
+    lakehouse_secret_key: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_SECRET_KEY")
+    lakehouse_bucket: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_BUCKET")
 
     # System Monitor
     monitor_lag_threshold: int = Field(default=300, validation_alias="MONITOR_LAG_THRESHOLD")
@@ -213,6 +274,7 @@ risk_settings = RiskSettings()
 system_settings = SystemSettings()
 meta_settings = MetaSearchSettings()
 agent_settings = AgentSettings()
+heuristic_weights = HeuristicWeights()
 
 # Exports for compatibility
 STATIC_WATCHLIST = system_settings.static_watchlist

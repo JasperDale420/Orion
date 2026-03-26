@@ -18,12 +18,13 @@ from datetime import UTC, datetime
 from math import isnan
 from typing import Any
 
+import aiofiles
 import numpy as np
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from orion.clients.heber_reader import get_heber_reader
-from orion.config import SystemSettings, system_settings
+from orion.config import system_settings
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.exit_classifier")
@@ -62,54 +63,6 @@ EXIT_FEATURE_NAMES: tuple[str, ...] = (
     "window_sweep_ratio_1w",
     "window_call_put_ratio_1w",
 )
-
-
-def _legacy_exit_training_control() -> tuple[bool, str, str]:
-    settings = SystemSettings()
-
-    specific_key = "ORION_ENABLE_LEGACY_EXIT_CLASSIFIER_TRAINING"
-    if settings.legacy_exit_classifier_training_enabled is not None:
-        enabled = settings.legacy_exit_classifier_training_enabled
-        raw = "true" if enabled else "false"
-        return enabled, specific_key, raw
-
-    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    enabled = settings.legacy_label_pipelines_enabled
-    raw = "true" if enabled else "false"
-    return enabled, global_key, raw
-
-
-def _legacy_exit_training_enabled() -> bool:
-    enabled, _, _ = _legacy_exit_training_control()
-    return enabled
-
-
-def _exit_classifier_training_source() -> str:
-    settings = SystemSettings()
-    raw_source = (settings.exit_classifier_training_source or "heber_gold").strip().lower()
-
-    if raw_source in {"heber", "heber_gold", "gold"}:
-        return "heber_gold"
-    if raw_source in {"legacy", "legacy_sql", "local", "local_sql"}:
-        logger.warning(
-            "Legacy exit-classifier SQL training source is decommissioned; falling back to heber_gold",
-            extra={
-                "event": "exit_classifier_training_source_legacy_decommissioned",
-                "training_source": raw_source,
-                "fallback_training_source": "heber_gold",
-            },
-        )
-        return "heber_gold"
-
-    logger.warning(
-        f"Invalid exit-classifier training source '{raw_source}', falling back to heber_gold",
-        extra={
-            "event": "exit_classifier_training_source_invalid",
-            "training_source": raw_source,
-            "fallback_training_source": "heber_gold",
-        },
-    )
-    return "heber_gold"
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -157,140 +110,10 @@ def _empty_training_arrays(feature_count: int) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-def _clear_price_target_label_schema_cache() -> None:
-    """Compatibility no-op: legacy local schema cache is decommissioned."""
-    return None
-
-
-def _required_price_target_columns_for_bucket(checkpoints: list[tuple[str, float, str]]) -> set[str]:
-    """Build the required column set for a bucket training query."""
-    required = {
-        "ticker",
-        "entry_ts",
-        "premium_usd",
-        "dte",
-        "is_sweep",
-        "iv_rank_at_entry",
-        "vix_at_entry",
-        "trend_regime_at_entry",
-        "vol_regime_at_entry",
-        "gex_at_entry",
-        "market_tide_30m",
-        "delta_at_entry",
-        "gamma_at_entry",
-        "theta_at_entry",
-        "iv_at_entry",
-        "ask_side_ratio",
-        "max_return_pct",
-        "max_drawdown_pct",
-        "trade_type",
-    }
-    for suffix, _hours, _desc in checkpoints:
-        required.add(f"return_at_{suffix}")
-        required.add(f"delta_at_{suffix}")
-        required.add(f"gamma_at_{suffix}")
-        required.add(f"theta_at_{suffix}")
-        required.add(f"iv_at_{suffix}")
-        required.add(f"dte_at_{suffix}")
-        required.add(f"time_value_pct_at_{suffix}")
-        required.add(f"theta_decay_pct_at_{suffix}")
-    return required
-
-
 async def _load_price_target_label_columns(force_refresh: bool = False) -> set[str]:
     """Compatibility no-op: local label-table schema preflight is decommissioned."""
     _ = force_refresh
     return set()
-
-
-def _group_missing_columns_by_family(
-    missing_columns: set[str], checkpoints: list[tuple[str, float, str]]
-) -> dict[str, list[str]]:
-    """Group missing columns into actionable diagnostics families."""
-    grouped: dict[str, set[str]] = {
-        "entry_context": set(),
-        "outcome": set(),
-        "checkpoint_returns": set(),
-        "checkpoint_greeks": set(),
-        "checkpoint_time_decay": set(),
-        "other": set(),
-    }
-    checkpoint_suffixes = {suffix for suffix, _hours, _desc in checkpoints}
-
-    for column in missing_columns:
-        if column in {"max_return_pct", "max_drawdown_pct"}:
-            grouped["outcome"].add(column)
-            continue
-        if column in {
-            "ticker",
-            "entry_ts",
-            "premium_usd",
-            "dte",
-            "is_sweep",
-            "iv_rank_at_entry",
-            "vix_at_entry",
-            "trend_regime_at_entry",
-            "vol_regime_at_entry",
-            "gex_at_entry",
-            "market_tide_30m",
-            "delta_at_entry",
-            "gamma_at_entry",
-            "theta_at_entry",
-            "iv_at_entry",
-            "ask_side_ratio",
-            "trade_type",
-        }:
-            grouped["entry_context"].add(column)
-            continue
-        if any(column == f"return_at_{suffix}" for suffix in checkpoint_suffixes):
-            grouped["checkpoint_returns"].add(column)
-            continue
-        if any(
-            column == f"{prefix}_at_{suffix}"
-            for suffix in checkpoint_suffixes
-            for prefix in ("delta", "gamma", "theta", "iv", "dte")
-        ):
-            grouped["checkpoint_greeks"].add(column)
-            continue
-        if any(
-            column == f"{prefix}_at_{suffix}"
-            for suffix in checkpoint_suffixes
-            for prefix in ("time_value_pct", "theta_decay_pct")
-        ):
-            grouped["checkpoint_time_decay"].add(column)
-            continue
-        grouped["other"].add(column)
-
-    return {key: sorted(values) for key, values in grouped.items() if values}
-
-
-def _group_count_map(grouped_columns: dict[str, list[str]]) -> dict[str, int]:
-    """Return grouped missing-column counts for lightweight metrics/alerts."""
-    return {group: len(columns) for group, columns in grouped_columns.items()}
-
-
-_WINDOW_FEATURE_COLUMNS: tuple[str, ...] = (
-    "window_call_put_imbalance_1h",
-    "window_sweep_ratio_1h",
-    "window_flow_count_1h",
-    "window_call_put_imbalance_1d",
-    "window_sweep_ratio_1d",
-    "window_dp_volume_1d",
-    "window_call_put_ratio_1d",
-    "window_call_put_imbalance_1w",
-    "window_sweep_ratio_1w",
-    "window_call_put_ratio_1w",
-)
-
-
-def _window_feature_select_expressions(available_columns: set[str]) -> str:
-    expressions: list[str] = []
-    for column in _WINDOW_FEATURE_COLUMNS:
-        if column in available_columns:
-            expressions.append(f"COALESCE(p.{column}, 0.0) as {column}")
-        else:
-            expressions.append(f"0.0 as {column}")
-    return ",\n            ".join(expressions)
 
 
 from orion.ml.heber_utils import coerce_dataframe as _coerce_dataframe
@@ -782,8 +605,7 @@ class BucketExitClassifier:
 
         if bucket in self.models:
             return self._ml_predict(features, bucket)
-        else:
-            return self._heuristic_predict(features)
+        return self._heuristic_predict(features)
 
     def _ml_predict(self, features: ExitFeatures, bucket: str) -> ExitPrediction:
         """ML-based prediction."""
@@ -936,13 +758,13 @@ class BucketExitClassifier:
         if features.bucket == "0DTE":
             if time_pct >= 0.8:  # Last 20% of allowed hold time
                 return 0.5
-            elif time_pct >= 0.6:
+            if time_pct >= 0.6:
                 return 0.3
         else:
             # Other buckets: gentle time pressure
             if time_pct >= 0.9:
                 return 0.3
-            elif time_pct >= 0.75:
+            if time_pct >= 0.75:
                 return 0.1
 
         return 0.0
@@ -962,19 +784,6 @@ async def build_bucket_training_data(
     Uses bucket-appropriate checkpoints from the configured training source.
     """
     feature_names = list(EXIT_FEATURE_NAMES)
-    enabled, control_key, control_raw = _legacy_exit_training_control()
-    if not enabled:
-        logger.warning(
-            "Legacy exit-classifier training disabled by config",
-            extra={
-                "event": "legacy_label_pipeline_disabled",
-                "pipeline": "orion.ml.exit_classifier",
-                "control_key": control_key,
-                "control_raw": control_raw,
-            },
-        )
-        X_empty, y_empty = _empty_training_arrays(len(feature_names))  # noqa: N806
-        return X_empty, y_empty, feature_names
 
     checkpoints = BUCKET_CHECKPOINTS.get(bucket, [])
     if not checkpoints:
@@ -983,7 +792,6 @@ async def build_bucket_training_data(
         return X_empty, y_empty, feature_names
 
     _ = force_schema_refresh
-    _ = _exit_classifier_training_source()
     return await _build_bucket_training_data_from_heber(bucket, feature_names)
 
 
@@ -1057,8 +865,8 @@ async def train_bucket_exit_classifier(
     if auc >= 0.55:  # Only save if better than random
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         model_path = MODEL_DIR / f"{bucket}_exit.pkl"
-        with open(model_path, "wb") as f:
-            pickle.dump(model_data, f)
+        async with aiofiles.open(model_path, "wb") as f:
+            await f.write(pickle.dumps(model_data))
         logger.info(f"Saved exit model to {model_path}")
     else:
         logger.warning(f"Exit model AUC too low ({auc:.3f}), not saving {bucket}")

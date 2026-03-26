@@ -16,9 +16,13 @@ from orion.api.deps import get_db
 from orion.api.schemas import ExperimentResponse, PromotionRecommendationResponse, SolverMetricsResponse, SolverResponse
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.core.circuit_breaker import CircuitBreaker
+from orion.core.errors import OrionError
+from orion.core.pnl_tracker import get_pnl_tracker
 from orion.rag.vector_store import VectorStore
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.db_utils import db_write
+from orion.shared.utils import parse_timestamptz
 
 # Setup logger (FastAPI usually handles its own, but we can hook in ours)
 from orion.shared.logger import setup_struct_logger
@@ -48,9 +52,6 @@ async def custom_404_handler(request: Request, exc: HTTPException) -> JSONRespon
             "suggestion": "Check the URL for typos.",
         },
     )
-
-
-from orion.core.errors import OrionError
 
 
 @app.exception_handler(OrionError)
@@ -512,8 +513,6 @@ async def get_rollups(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
 ) -> list[dict[str, Any]]:
-    from orion.shared.utils import parse_timestamptz
-
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
@@ -563,8 +562,6 @@ async def get_rollup(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_api_key),
 ) -> dict[str, Any]:
-    from orion.shared.utils import parse_timestamptz
-
     ts = parse_timestamptz(timestamp_utc, strict=True)
     stmt = select(GoldTickerRollup).where(
         GoldTickerRollup.ticker == ticker,
@@ -598,8 +595,6 @@ async def get_flows(
     limit: int = Query(200, ge=1, le=5000),
     _: None = Depends(require_api_key),
 ) -> list[dict[str, Any]]:
-    from orion.shared.utils import parse_timestamptz
-
     start_dt = parse_timestamptz(start, strict=False) if start else None
     end_dt = parse_timestamptz(end, strict=False) if end else None
 
@@ -729,6 +724,75 @@ async def get_flows(
     return rows
 
 
+# --- Circuit Breaker ---
+
+
+@app.get("/admin/circuit-breaker", tags=["Admin"])
+async def get_circuit_breaker_state(
+    _: None = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Get current circuit breaker state."""
+    cb = CircuitBreaker()
+    return await cb.get_state()
+
+
+@app.post("/admin/circuit-breaker/reset", tags=["Admin"])
+async def reset_circuit_breaker(
+    reason: str = Query("Manual admin reset", description="Reason for resetting the circuit breaker"),
+    _: None = Depends(require_api_key),
+) -> dict[str, Any]:
+    """
+    Reset (close) the global circuit breaker to resume trading.
+
+    This should only be used after investigating why the breaker tripped
+    and confirming it is safe to resume.
+    """
+    cb = CircuitBreaker()
+    state_before = await cb.get_state()
+    if state_before["status"] != "OPEN":
+        return {
+            "status": "no_op",
+            "message": "Circuit breaker is already CLOSED",
+            "state": state_before,
+        }
+
+    await cb.close()
+    logger.info(
+        "Circuit breaker reset via admin API",
+        extra={"event_type": "CIRCUIT_BREAKER_ADMIN_RESET", "reason": reason, "previous_state": state_before},
+    )
+
+    state_after = await cb.get_state()
+    return {
+        "status": "ok",
+        "message": "Circuit breaker reset to CLOSED",
+        "reason": reason,
+        "previous_state": state_before,
+        "current_state": state_after,
+        "timestamp_utc": datetime.now(UTC).isoformat(),
+    }
+
+
+@app.post("/admin/circuit-breaker/open", tags=["Admin"])
+async def open_circuit_breaker(
+    reason: str = Query(..., min_length=1, description="Reason for opening (tripping) the circuit breaker"),
+    _: None = Depends(require_api_key),
+) -> dict[str, Any]:
+    """
+    Manually trip the global circuit breaker to halt trading.
+    """
+    cb = CircuitBreaker()
+    await cb.open(reason)
+    state = await cb.get_state()
+    return {
+        "status": "ok",
+        "message": "Circuit breaker OPENED (trading halted)",
+        "reason": reason,
+        "current_state": state,
+        "timestamp_utc": datetime.now(UTC).isoformat(),
+    }
+
+
 # --- Dashboard ---
 
 
@@ -742,7 +806,6 @@ async def get_dashboard_summary(
     Returns current unrealized/realized P&L, drawdown, trade stats,
     and equity curve data.
     """
-    from orion.core.pnl_tracker import get_pnl_tracker
 
     tracker = get_pnl_tracker()
     return tracker.get_portfolio_summary()
@@ -757,7 +820,6 @@ async def get_dashboard_positions(
 
     Returns positions sorted by absolute unrealized P&L.
     """
-    from orion.core.pnl_tracker import get_pnl_tracker
 
     tracker = get_pnl_tracker()
     return tracker.get_position_details()
@@ -772,7 +834,6 @@ async def get_dashboard_sectors(
 
     Returns market value and unrealized P&L per sector.
     """
-    from orion.core.pnl_tracker import get_pnl_tracker
 
     tracker = get_pnl_tracker()
     return tracker.get_sector_breakdown()
@@ -787,7 +848,6 @@ async def get_dashboard_alerts(
 
     Checks risk thresholds and returns any breaches or warnings.
     """
-    from orion.core.pnl_tracker import get_pnl_tracker
 
     tracker = get_pnl_tracker()
     alerts = tracker.check_risk_alerts()
@@ -814,7 +874,6 @@ async def set_dashboard_equity(
 
     Should be called at market open with account equity.
     """
-    from orion.core.pnl_tracker import get_pnl_tracker
 
     tracker = get_pnl_tracker()
     tracker.set_starting_equity(equity)
@@ -834,7 +893,6 @@ async def reset_dashboard_daily(
 
     Call at start of trading day to reset realized P&L and trade counts.
     """
-    from orion.core.pnl_tracker import get_pnl_tracker
 
     tracker = get_pnl_tracker()
     tracker.reset_daily()
