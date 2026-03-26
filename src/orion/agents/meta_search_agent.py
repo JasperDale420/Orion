@@ -285,30 +285,19 @@ class MetaSearchAgent:
         end_ts = datetime.now(timezone.utc)
         best_solver_id = best_variant.solver_id if best_variant else None
         summary = f"best_score={best_score:.4f}"
-        if "unittest.mock" in getattr(type(session), "__module__", ""):
-            experiment.trial_count = current_trial_count
-            experiment.status = "completed"
-            experiment.end_time_utc = end_ts
-            experiment.completed_at = end_ts
-            experiment.best_solver_id = best_solver_id
-            experiment.summary = summary
-        else:
-
-            async def finalize(session_for_update: Any) -> None:
-                await session_for_update.execute(
-                    update(MetaExperiment)
-                    .where(MetaExperiment.experiment_id == experiment_id)
-                    .values(
-                        trial_count=current_trial_count,
-                        status="completed",
-                        end_time_utc=end_ts,
-                        completed_at=end_ts,
-                        best_solver_id=best_solver_id,
-                        summary=summary,
-                    )
-                )
-
-            await self._db_write_local(finalize)
+        # Update experiment in the same session to ensure the Solver FK is visible
+        await session.execute(
+            update(MetaExperiment)
+            .where(MetaExperiment.experiment_id == experiment_id)
+            .values(
+                trial_count=current_trial_count,
+                status="completed",
+                end_time_utc=end_ts,
+                completed_at=end_ts,
+                best_solver_id=best_solver_id,
+                summary=summary,
+            )
+        )
 
         if best_variant:
             logger.info(f"Best Variant Found: {best_variant.solver_id} (Score: {best_score:.4f})")

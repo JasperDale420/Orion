@@ -25,14 +25,16 @@ async def test_meta_search_cycle():
     mock_base_solver.config = get_base_config().model_dump(mode="json")
     mock_base_solver.sharpe_ratio = 0.0
 
-    # Setup Select Results: base solver, then no base metrics
+    # Setup Select Results: base solver, then no base metrics, then update result
     mock_result_base = MagicMock()
     mock_result_base.scalars.return_value.first.return_value = mock_base_solver
 
     mock_result_metrics = MagicMock()
     mock_result_metrics.scalars.return_value.first.return_value = None
 
-    mock_session.execute.side_effect = [mock_result_base, mock_result_metrics]
+    mock_result_update = MagicMock()  # For the UPDATE statement
+
+    mock_session.execute.side_effect = [mock_result_base, mock_result_metrics, mock_result_update]
 
     mock_factory = MagicMock()
     mock_factory.return_value.__aenter__.return_value = mock_session
