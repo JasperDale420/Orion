@@ -145,7 +145,7 @@ async def run_codex_completion(
 
     async with aiohttp.ClientSession() as session:
         # Agent execution loop to process tool calls
-        for _ in range(10):  # Max 10 tool iterations
+        for _ in range(30):  # Max 30 tool iterations
             pay_json = {
                 "model": model,
                 "messages": messages,

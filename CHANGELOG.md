@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Daily meta-search evolution**: Meta-search agent moved from `tools` (manual) to `scheduled` profile. Runs daily at 6 PM ET on weekdays for continuous solver evolution.
 
+### Fixed
+
+- **LLM agent iteration limit too low**: Bumped `codex_client.py` max tool iterations from 10 to 30. EOD agent was hitting the cap mid-analysis, producing empty reports with "Max tool iterations exceeded."
+
+### Added
+
 - **Gateway fetch enabled by default**: Greek exposure, max pain, and IV rank connectors now poll Data-Gateway REST endpoints automatically (every 5min, 1hr, and 15min respectively). Previously gated behind `ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=false` — now defaults to `true` so per-ticker enrichment data flows into Orion every trading day without manual intervention.
 
 - **Max pain added to heber-sync feeds**: The `heber-sync` Docker sidecar and `scripts/sync-heber-cache.sh` now sync `max_pain` parquet partitions from Heber alongside existing feeds.
