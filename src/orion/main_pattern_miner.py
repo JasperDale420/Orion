@@ -1,7 +1,7 @@
 """
 Pattern Mining Service Entry Point.
 
-Runs twice weekly (Monday and Friday) after market close to train ML models and extract trading patterns.
+Runs every weekday after market close to train ML models and extract trading patterns.
 """
 
 import asyncio
@@ -16,8 +16,8 @@ from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.main_pattern_miner")
 
-# Run 1 hour after market close on Monday and Friday
-RUN_DAYS = [0, 4]  # Monday=0, Friday=4
+# Run 1 hour after market close every weekday
+RUN_DAYS = [0, 1, 2, 3, 4]  # Every weekday (Mon-Fri)
 POST_CLOSE_DELAY_MINUTES = 60
 
 
@@ -59,7 +59,7 @@ async def run_mining_job() -> None:
 
 def get_next_run_close() -> datetime | None:
     """
-    Calculate the next Monday or Friday market close time.
+    Calculate the next weekday market close time.
     """
     schedule = MarketSchedule()
     now = datetime.now(UTC)
@@ -90,11 +90,11 @@ def get_next_run_close() -> datetime | None:
 
 async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
     """
-    Wait until next Monday or Friday market close + delay, or check for drift more frequently.
+    Wait until next weekday market close + delay, or check for drift more frequently.
 
     Returns:
         Tuple of (should_run_scheduled, check_drift):
-        - (True, False) if scheduled Mon/Fri time reached
+        - (True, False) if scheduled weekday time reached
         - (False, True) if timeout reached for drift check
         - (False, False) if shutdown requested
     """
@@ -160,7 +160,7 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
 
-    logger.info("Pattern mining service started. Running Monday/Friday + on drift trigger.")
+    logger.info("Pattern mining service started. Running every weekday + on drift trigger.")
 
     while not shutdown_event.is_set():
         run_scheduled, check_drift = await wait_for_next_run(shutdown_event)
@@ -178,7 +178,7 @@ async def main() -> None:
             try:
                 from orion.core.drift_trigger import check_and_clear_drift_flag
 
-                flag_data = check_and_clear_drift_flag()
+                flag_data = await check_and_clear_drift_flag()
                 if flag_data:
                     logger.info(
                         f"Drift trigger detected (max_psi={flag_data.get('max_psi', 'N/A')}), running mining",

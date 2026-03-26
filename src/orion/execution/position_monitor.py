@@ -8,6 +8,7 @@ and rule-based exit signals.
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from orion.ml.exit_classifier import (
@@ -20,6 +21,39 @@ from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.execution.position_monitor")
+
+
+class GatewayPositionAdapter:
+    """Adapts GatewayTradingClient.get_positions() dicts to the attribute-based
+    interface expected by PositionMonitor.sync_positions().
+
+    sync_positions expects a connector with ``get_all_positions()`` returning
+    objects that have ``.symbol``, ``.current_price``, ``.avg_entry_price``,
+    ``.qty``, and ``.unrealized_plpc`` attributes.
+    """
+
+    def __init__(self, gateway_client: Any) -> None:
+        self._client = gateway_client
+
+    def get_all_positions(self) -> list[SimpleNamespace]:
+        """Synchronous wrapper — the actual fetch happens in _fetch_async, which
+        the monitor loop awaits before calling sync_positions."""
+        return self._cached_positions
+
+    async def refresh(self) -> None:
+        """Fetch positions from Gateway and cache as SimpleNamespace objects."""
+        raw = await self._client.get_positions()
+        self._cached_positions: list[SimpleNamespace] = []
+        for p in raw:
+            self._cached_positions.append(
+                SimpleNamespace(
+                    symbol=p.get("symbol", ""),
+                    current_price=p.get("current_price", 0),
+                    avg_entry_price=p.get("avg_entry_price", 0),
+                    qty=p.get("qty", 0),
+                    unrealized_plpc=p.get("unrealized_plpc", 0),
+                )
+            )
 
 
 @dataclass
@@ -465,31 +499,52 @@ async def run_position_monitor_loop(
     dry_run: bool = False,
     execution_engine: Any | None = None,
     position_manager: Any | None = None,
+    gateway_client: Any | None = None,
 ) -> None:
     """
     Run continuous position monitoring loop.
+
+    Syncs positions via GatewayTradingClient and routes exits through
+    ExecutionEngine.close_position() for full safety-guard coverage
+    (circuit breaker, rate limiter, risk manager, order persistence).
 
     Args:
         check_interval_seconds: Seconds between position checks
         dry_run: If True, log but don't execute exits
         execution_engine: ExecutionEngine instance for safe order routing
         position_manager: PositionManager instance for closing-guard coordination
+        gateway_client: GatewayTradingClient for position sync
     """
-    # Position monitoring requires a trading connector.
-    # Direct Alpaca connectors archived — Data Gateway integration pending.
-    logger.warning(
-        "Position monitor started in no-op mode: trading connectors archived, "
-        "awaiting Data Gateway trading proxy integration",
-        extra={"event": "monitor_noop"},
+    if gateway_client is None:
+        from orion.clients.gateway_trading_client import get_gateway_trading_client
+
+        gateway_client = get_gateway_trading_client()
+
+    adapter = GatewayPositionAdapter(gateway_client)
+    monitor = get_position_monitor(
+        execution_engine=execution_engine,
+        position_manager=position_manager,
     )
 
-    # Without a connector, we cannot sync with broker or evaluate positions.
-    # The monitor will be instantiated when Data Gateway trading proxy is ready.
+    logger.info(
+        "Position monitor loop started",
+        extra={
+            "event": "monitor_started",
+            "interval_seconds": check_interval_seconds,
+            "dry_run": dry_run,
+            "has_execution_engine": execution_engine is not None,
+        },
+    )
 
     while True:
         try:
-            # Skip broker sync since no connector is available
-            logger.debug("Position monitor cycle skipped — no trading connector available")
+            # Refresh positions from Gateway before each check
+            await adapter.refresh()
+            summary = await monitor.run_check(adapter, dry_run=dry_run)
+            logger.debug(
+                "Position monitor cycle complete",
+                extra={"event": "monitor_cycle", **summary},
+            )
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)
 

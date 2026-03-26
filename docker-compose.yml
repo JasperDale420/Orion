@@ -192,17 +192,46 @@ services:
   meta-search:
     <<: *orion-common
     container_name: orion_meta_search
-    profiles: [ "tools" ]
+    profiles: [ "scheduled" ]
+    restart: unless-stopped
     depends_on:
       timescaledb:
         condition: service_healthy
+      pattern-miner:
+        condition: service_started
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ORION_AI_GATEWAY_URL: http://host.docker.internal:8002/v1
       ORION_AI_GATEWAY_KEY: ${ORION_AI_GATEWAY_KEY:-empire-ai-gateway-key}
-    command: [ "python", "-m", "orion.main_meta", "--base-solver", "${ORION_META_BASE_SOLVER:-diversified_baseline_v1}" ]
+    command: [ "python", "-m", "orion.main_meta", "--base-solver", "${ORION_META_BASE_SOLVER:-diversified_baseline_v1}", "--scheduled" ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  data-quality:
+    <<: *orion-common
+    container_name: orion_data_quality
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ../empire-core:/empire-core:ro
+      - ${HEBER_HOST_DATA:-/Users/jacobmcmillan/.heber-cache/data}:/Volumes/heber/data:ro
+    environment:
+      <<: *orion-env
+      DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+    command: [ "python", "-m", "orion.main_data_quality", "--scheduled" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "kill -0 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     logging:
       driver: json-file
       options:

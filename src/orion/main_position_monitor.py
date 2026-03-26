@@ -9,10 +9,25 @@ import argparse
 import asyncio
 import sys
 
-from orion.execution.position_monitor import run_position_monitor_loop
+from orion.clients.gateway_trading_client import get_gateway_trading_client
+from orion.config import system_settings
+from orion.execution.position_monitor import (
+    GatewayPositionAdapter,
+    get_position_monitor,
+    run_position_monitor_loop,
+)
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.main_position_monitor")
+
+
+async def _build_execution_engine():
+    """Initialize ExecutionEngine with risk state synced from Gateway."""
+    from orion.execution.execution_engine import ExecutionEngine
+
+    engine = ExecutionEngine()
+    await engine.initialize()
+    return engine
 
 
 async def main() -> None:
@@ -37,21 +52,31 @@ async def main() -> None:
     args = parser.parse_args()
 
     logger.info(
-        f"Position Monitor starting (interval={args.interval}s, dry_run={args.dry_run})",
-        extra={"event": "monitor_cli_start"},
+        f"Position Monitor starting (interval={args.interval}s, dry_run={args.dry_run}, stage={system_settings.orion_stage})",
+        extra={"event": "monitor_cli_start", "stage": system_settings.orion_stage},
     )
 
+    # Initialize Gateway trading client and ExecutionEngine
+    gateway_client = get_gateway_trading_client()
+    execution_engine = await _build_execution_engine()
+
     if args.once:
-        # Single check mode — trading connectors archived, Data Gateway pending
-        logger.warning(
-            "Single-check mode skipped: trading connectors archived, awaiting Data Gateway trading proxy integration",
-            extra={"event": "monitor_single_check_noop"},
+        # Single check mode via GatewayTradingClient
+        adapter = GatewayPositionAdapter(gateway_client)
+        await adapter.refresh()
+        monitor = get_position_monitor(execution_engine=execution_engine)
+        summary = await monitor.run_check(adapter, dry_run=args.dry_run)
+        logger.info(
+            "Single check complete",
+            extra={"event": "monitor_single_check_done", **summary},
         )
     else:
         # Continuous monitoring mode
         await run_position_monitor_loop(
             check_interval_seconds=args.interval,
             dry_run=args.dry_run,
+            execution_engine=execution_engine,
+            gateway_client=gateway_client,
         )
 
 

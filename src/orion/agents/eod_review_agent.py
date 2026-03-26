@@ -542,7 +542,7 @@ class EODReviewAgent(BaseAgent):
             from orion.core.drift_trigger import set_drift_flag
 
             psi_values = {k: v.get("psi") for k, v in feature_shift.items() if v.get("psi") is not None}
-            if set_drift_flag(psi_values, source="eod_agent"):
+            if await set_drift_flag(psi_values, source="eod_agent"):
                 logger.info(
                     "High drift detected, pattern mining will be triggered",
                     extra={"event": "drift_trigger_set", "psi_values": psi_values},

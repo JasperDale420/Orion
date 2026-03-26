@@ -6,6 +6,7 @@ Supports bucket-specific models (0DTE, SHORT_SWING, SWING, POSITION).
 """
 
 import pickle
+import time
 from datetime import UTC
 from typing import Any
 
@@ -68,10 +69,15 @@ class MLScorer:
     by pattern_miner.py. Falls back to heuristic scorer when no model exists.
     """
 
+    # How often to check disk for updated model files (seconds)
+    _RELOAD_CHECK_INTERVAL: float = 60.0
+
     def __init__(self, target: str = DEFAULT_TARGET) -> None:
         self.target = target
         self.models: dict[str, Any] = {}  # bucket -> model_data
         self.feature_names: dict[str, list[str]] = {}  # bucket -> feature names
+        self._model_mtimes: dict[str, float] = {}  # bucket -> last loaded mtime
+        self._last_reload_check: float = time.monotonic()
         # Backward compatibility fields expected by older tests/callers.
         self.model: Any | None = None
         self.use_heuristic: bool = True
@@ -158,6 +164,7 @@ class MLScorer:
 
                     self.models[bucket] = model_data
                     self.feature_names[bucket] = model_data.get("feature_names", [])
+                    self._model_mtimes[bucket] = model_path.stat().st_mtime
                     loaded_count += 1
                     if is_stale:
                         loaded_stale += 1
@@ -192,6 +199,30 @@ class MLScorer:
                     "stale_loaded": loaded_stale,
                 },
             )
+
+    def check_and_reload(self) -> bool:
+        """Reload models if any .pkl file on disk is newer than what we loaded."""
+        if not MODEL_DIR.exists():
+            return False
+        for bucket in TRADE_BUCKETS:
+            model_path = MODEL_DIR / f"{bucket}_{self.target}.pkl"
+            if model_path.exists():
+                disk_mtime = model_path.stat().st_mtime
+                loaded_mtime = self._model_mtimes.get(bucket, 0)
+                if disk_mtime > loaded_mtime:
+                    logger.info("model_files_changed_reloading", bucket=bucket, target=self.target)
+                    self._load_models()
+                    self.use_heuristic = len(self.models) == 0
+                    self.model = self.models.get("SWING", {}).get("model")
+                    return True
+        return False
+
+    def _maybe_reload(self) -> None:
+        """Check for updated model files at most once every _RELOAD_CHECK_INTERVAL seconds."""
+        now = time.monotonic()
+        if now - self._last_reload_check >= self._RELOAD_CHECK_INTERVAL:
+            self._last_reload_check = now
+            self.check_and_reload()
 
     @staticmethod
     def _build_feature_map(flow: dict[str, Any]) -> dict[str, float]:
@@ -340,6 +371,8 @@ class MLScorer:
 
         Higher score = more likely to be a profitable trade.
         """
+        self._maybe_reload()
+
         if self._bypass_scoring:
             return -1.0  # Sentinel: caller should skip ML gating
 
@@ -495,6 +528,8 @@ class MLScorer:
 
         Falls back to raw flow fields if Gold lookup fails.
         """
+        self._maybe_reload()
+
         from datetime import datetime
 
         from orion.ml.feature_store import get_scoring_features

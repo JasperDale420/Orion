@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **ML model hot-reload**: MLScorer now checks for updated model files every 60 seconds and auto-reloads when the pattern miner produces new `.pkl` files. No service restart required.
+
+- **Daily model training**: Pattern miner now trains every weekday after market close (was Mon/Fri only). Models stay fresh with daily retraining on the latest trade data.
+
+- **Drift trigger moved to database**: Feature drift flag now stored in `RuntimeConfig` table instead of ephemeral filesystem. Survives container restarts so EOD agent → pattern miner drift-triggered retraining works reliably.
+
+- **Automated solver promotion job**: New `solver_promoter.py` job processes pending `PromotionRecommendation` rows and auto-approves eligible solvers up to the `paper` stage. Promotions to `limited_live` or `scaled_live` are skipped and require manual approval. Gate checks enforce minimum trades (10), positive Sharpe ratio, and max drawdown under 25%. Runs automatically after the weekly meta-search evolution and can also be executed standalone.
+
+- **Position monitor exit execution**: Position monitor now submits close orders via GatewayTradingClient when exit signals trigger, instead of logging "trading connectors archived." Respects circuit breaker and paper mode.
+
+- **Scheduled data quality checker**: New `data-quality` Docker service runs hourly during market hours to detect stale data, bar gaps, and ML feature population issues.
+
+- **Daily meta-search evolution**: Meta-search agent moved from `tools` (manual) to `scheduled` profile. Runs daily at 6 PM ET on weekdays for continuous solver evolution.
+
 - **Gateway fetch enabled by default**: Greek exposure, max pain, and IV rank connectors now poll Data-Gateway REST endpoints automatically (every 5min, 1hr, and 15min respectively). Previously gated behind `ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=false` — now defaults to `true` so per-ticker enrichment data flows into Orion every trading day without manual intervention.
 
 - **Max pain added to heber-sync feeds**: The `heber-sync` Docker sidecar and `scripts/sync-heber-cache.sh` now sync `max_pain` parquet partitions from Heber alongside existing feeds.
