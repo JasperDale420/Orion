@@ -391,13 +391,13 @@ async def main() -> None:
     position_manager = PositionManager()
     exit_rules = get_default_exit_rules()
 
+    # Ensure tables exist (if running standalone)
+    await init_db()
+
     # Initialize history for execution error tracking
     await execution_engine.initialize()
     await signal_engine.initialize()
     await position_manager.initialize()
-
-    # Ensure tables exist (if running standalone)
-    await init_db()
 
     logger.info("Engines Initialized. Entering Service Loop.")
 
