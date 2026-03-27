@@ -217,6 +217,7 @@ _CONFIGS: dict[str, dict] = {
 
 _DEFINITION_JSONS: dict[str, dict] = {
     "bullish_sweep_paper_v1": {
+        "version_id": "bullish_sweep_paper_v1",
         "rules": ["rule_bullish_sweep_v1"],
         "features": {
             "feature_set_id": "v2_intraday",
@@ -235,6 +236,7 @@ _DEFINITION_JSONS: dict[str, dict] = {
         "promotion_policy": {"target_stage": "paper", "min_trades_for_eval": 50, "gates_profile": "default"},
     },
     "bearish_put_paper_v1": {
+        "version_id": "bearish_put_paper_v1",
         "rules": ["rule_bearish_put_pressure_v1"],
         "features": {
             "feature_set_id": "v2_intraday",
@@ -253,6 +255,7 @@ _DEFINITION_JSONS: dict[str, dict] = {
         "promotion_policy": {"target_stage": "paper", "min_trades_for_eval": 50, "gates_profile": "default"},
     },
     "rsi_mean_revert_paper_v1": {
+        "version_id": "rsi_mean_revert_paper_v1",
         "rules": ["rsi_oversold_v1"],
         "features": {
             "feature_set_id": "v2_intraday",
@@ -271,6 +274,7 @@ _DEFINITION_JSONS: dict[str, dict] = {
         "promotion_policy": {"target_stage": "paper", "min_trades_for_eval": 50, "gates_profile": "default"},
     },
     "swing_entry_paper_v1": {
+        "version_id": "swing_entry_paper_v1",
         "rules": ["rule_bullish_sweep_v1"],
         "features": {
             "feature_set_id": "v2_swing",
@@ -284,6 +288,7 @@ _DEFINITION_JSONS: dict[str, dict] = {
         "promotion_policy": {"target_stage": "paper", "min_trades_for_eval": 30, "gates_profile": "default"},
     },
     "diversified_baseline_v1": {
+        "version_id": "diversified_baseline_v1",
         "rules": ["rule_bullish_sweep_v1", "rule_bearish_put_pressure_v1", "rsi_oversold_v1"],
         "features": {
             "feature_set_id": "v1_legacy",
