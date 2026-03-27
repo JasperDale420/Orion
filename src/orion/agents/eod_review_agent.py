@@ -167,12 +167,16 @@ class EODReviewAgent(BaseAgent):
                 # Check if solver already exists
                 existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
                 if existing.scalars().first() is None:
+                    # Validate parent solver exists before setting parent_solver_id (FK constraint)
+                    parent_exists = await session.execute(select(Solver).where(Solver.solver_id == str(base_id)))
+                    parent_solver_id = str(base_id) if parent_exists.scalars().first() is not None else None
+
                     # Create solver stub in research stage
                     session.add(
                         Solver(
                             solver_id=new_solver_id,
                             family_name="eod_derived",
-                            parent_solver_id=str(base_id),
+                            parent_solver_id=parent_solver_id,
                             created_by="llm_eod_agent",
                             stage="research",
                             config={"derived_from": str(base_id), "ops": ops_data},
