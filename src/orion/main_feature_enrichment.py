@@ -63,8 +63,15 @@ from orion.enrichment.heber_context import (  # noqa: E402, F401
 )
 
 
+_GATEWAY_FETCH_ENV = "ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH"
+_GATEWAY_FETCH_FALSE_VALUES = {"0", "false", "no", "off", "n"}
+
+
 def _gateway_fetch_enabled() -> bool:
-    return system_settings.feature_enrichment_enable_gateway_fetch
+    raw = os.getenv(_GATEWAY_FETCH_ENV)
+    if raw is None:
+        return system_settings.feature_enrichment_enable_gateway_fetch
+    return raw.lower() not in _GATEWAY_FETCH_FALSE_VALUES
 
 
 def _gateway_runtime_contract() -> tuple[str, str]:

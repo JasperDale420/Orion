@@ -24,7 +24,8 @@ _configured = False
 def setup_struct_logger(name: str, level: int | None = None) -> structlog.stdlib.BoundLogger:
     """Return a structlog logger. Backward-compatible with existing Orion code."""
     global _configured
-    if not _configured:
+    in_pytest = "PYTEST_CURRENT_TEST" in os.environ
+    if not _configured or in_pytest:
         # Map Orion-specific env vars to empire standard
         if os.getenv("ORION_LOG_FORMAT") and not os.getenv("EMPIRE_LOG_FORMAT"):
             os.environ["EMPIRE_LOG_FORMAT"] = os.getenv("ORION_LOG_FORMAT", "json")

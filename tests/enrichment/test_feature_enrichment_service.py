@@ -35,11 +35,11 @@ class TestGatewayFetchEnabled:
             assert _gateway_fetch_enabled() is False
 
     @pytest.mark.unit
-    def test_default_is_true(self):
-        """Gateway fetch is enabled by default for automatic data ingestion."""
+    def test_default_is_false(self):
+        """Gateway fetch is disabled by default; must be explicitly opted in via env var."""
         from orion.main_feature_enrichment import _gateway_fetch_enabled
 
-        assert _gateway_fetch_enabled() is True
+        assert _gateway_fetch_enabled() is False
 
 
 # ---------------------------------------------------------------------------

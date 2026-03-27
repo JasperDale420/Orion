@@ -20,8 +20,9 @@ def test_json_output_structure():
     logger.info("Test message", extra_field="extra_value")
 
     out = stream.getvalue().strip().splitlines()
-    assert len(out) >= 1
-    data = json.loads(out[-1])
+    json_lines = [line for line in out if line.strip().startswith("{")]
+    assert len(json_lines) >= 1
+    data = json.loads(json_lines[-1])
 
     assert data.get("message") == "Test message" or data.get("event") == "Test message"
     assert data.get("level") == "INFO"
@@ -43,8 +44,9 @@ def test_json_output_with_exception():
         logger.exception("Error occurred")
 
     out = stream.getvalue().strip().splitlines()
-    assert len(out) >= 1
-    data = json.loads(out[-1])
+    json_lines = [line for line in out if line.strip().startswith("{")]
+    assert len(json_lines) >= 1
+    data = json.loads(json_lines[-1])
 
     assert data.get("message") == "Error occurred" or data.get("event") == "Error occurred"
     assert "exception" in data or "exc_info" in data

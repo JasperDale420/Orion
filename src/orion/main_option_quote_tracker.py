@@ -15,7 +15,6 @@ from typing import Any
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
-from orion.config import SystemSettings
 from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
@@ -49,18 +48,16 @@ _quote_checkpoint_cache: dict[str, set[str]] = {}
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
-    settings = SystemSettings()
-
     specific_key = "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER"
-    if settings.legacy_option_quote_tracker_enabled is not None:
-        enabled = settings.legacy_option_quote_tracker_enabled
-        raw = "true" if enabled else "false"
-        return enabled, specific_key, raw
+    specific_raw = os.getenv(specific_key)
+    if specific_raw is not None:
+        enabled = specific_raw.lower() not in {"0", "false", "no", "off", "n"}
+        return enabled, specific_key, specific_raw
 
     global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    enabled = settings.legacy_label_pipelines_enabled
-    raw = "true" if enabled else "false"
-    return enabled, global_key, raw
+    global_raw = os.getenv(global_key, "true")
+    enabled = global_raw.lower() not in {"0", "false", "no", "off", "n"}
+    return enabled, global_key, global_raw
 
 
 def _legacy_label_pipelines_enabled() -> bool:

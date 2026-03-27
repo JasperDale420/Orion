@@ -22,7 +22,6 @@ load_dotenv()
 
 
 from orion.clients.heber_reader import HeberReader
-from orion.config import SystemSettings
 from orion.labeler import (
     BATCH_SIZE,
     RISK_FREE_RATE,
@@ -39,18 +38,16 @@ _PRICE_TARGET_FALLBACK_COUNTS: dict[str, int] = defaultdict(int)
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
-    settings = SystemSettings()
-
     specific_key = "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER"
-    if settings.legacy_price_target_labeler_enabled is not None:
-        enabled = settings.legacy_price_target_labeler_enabled
-        raw = "true" if enabled else "false"
-        return enabled, specific_key, raw
+    specific_raw = os.getenv(specific_key)
+    if specific_raw is not None:
+        enabled = specific_raw.lower() not in {"0", "false", "no", "off", "n"}
+        return enabled, specific_key, specific_raw
 
     global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    enabled = settings.legacy_label_pipelines_enabled
-    raw = "true" if enabled else "false"
-    return enabled, global_key, raw
+    global_raw = os.getenv(global_key, "true")
+    enabled = global_raw.lower() not in {"0", "false", "no", "off", "n"}
+    return enabled, global_key, global_raw
 
 
 def _legacy_label_pipelines_enabled() -> bool:

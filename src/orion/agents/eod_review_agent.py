@@ -741,15 +741,18 @@ class EODReviewAgent(BaseAgent):
 
             async def query(session: Any) -> list[Any]:
                 # Get most recent insight per model type
+                # Use ROW_NUMBER() for PostgreSQL+SQLite compatibility
                 stmt = text(
                     """
-                    SELECT DISTINCT ON (model_type)
-                        insight_id, model_type, created_at_utc,
-                        sample_size, positive_rate, holdout_auc,
-                        top_rules_json, top_features_json,
-                        degraded_features_json, emerging_patterns_json
-                    FROM ml_pattern_insights
-                    ORDER BY model_type, created_at_utc DESC
+                    SELECT * FROM (
+                        SELECT
+                            insight_id, model_type, created_at_utc,
+                            sample_size, positive_rate, holdout_auc,
+                            top_rules_json, top_features_json,
+                            degraded_features_json, emerging_patterns_json,
+                            ROW_NUMBER() OVER (PARTITION BY model_type ORDER BY created_at_utc DESC) as rn
+                        FROM ml_pattern_insights
+                    ) WHERE rn = 1
                 """
                 )
                 result = await session.execute(stmt)

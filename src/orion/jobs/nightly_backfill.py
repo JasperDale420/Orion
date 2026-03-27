@@ -10,9 +10,9 @@ Usage:
 """
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 
-from orion.config import SystemSettings
 from orion.core.market_schedule import MarketSchedule
 from orion.jobs.backfill_ml_features import run_backfill as run_ml_backfill
 from orion.shared.logger import setup_struct_logger
@@ -25,18 +25,16 @@ _MARKET_SCHEDULE = MarketSchedule()
 
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
-    settings = SystemSettings()
-
     specific_key = "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL"
-    if settings.legacy_nightly_backfill_enabled is not None:
-        enabled = settings.legacy_nightly_backfill_enabled
-        raw = "true" if enabled else "false"
-        return enabled, specific_key, raw
+    specific_raw = os.getenv(specific_key)
+    if specific_raw is not None:
+        enabled = specific_raw.lower() not in {"0", "false", "no", "off", "n"}
+        return enabled, specific_key, specific_raw
 
     global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    enabled = settings.legacy_label_pipelines_enabled
-    raw = "true" if enabled else "false"
-    return enabled, global_key, raw
+    global_raw = os.getenv(global_key, "true")
+    enabled = global_raw.lower() not in {"0", "false", "no", "off", "n"}
+    return enabled, global_key, global_raw
 
 
 def _legacy_label_pipelines_enabled() -> bool:

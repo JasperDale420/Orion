@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Removed legacy gate fields from SystemSettings**: `legacy_label_pipelines_enabled`, `legacy_option_quote_tracker_enabled`, `legacy_pattern_miner_enabled`, `pattern_miner_training_source`, and `exit_classifier_training_source` have been removed from `SystemSettings`. Legacy services now read their feature-gate env vars directly via `os.getenv`, removing the coupling to the central settings object.
+
+- **Gateway fetch disabled by default**: `feature_enrichment_enable_gateway_fetch` now defaults to `False`. Set `ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=true` to enable gateway-backed feature ingestion. This is a safer default that prevents unintended gateway traffic.
+
+- **Logging test isolation**: `setup_struct_logger` now re-runs logging configuration in pytest environments (detected via `PYTEST_CURRENT_TEST`), fixing test order-dependent failures where later tests saw an unconfigured root logger. Log test assertions now correctly find the JSON line in multi-line output containing both the structured log entry and the exception traceback.
+
+- **EOD review agent SQL trailing whitespace**: Removed trailing whitespace from SQL query in `eod_review_agent.py` to fix ruff lint warning.
+
+- **Healthcheck for scheduled services**: `meta-search`, `meta-weekly`, `dashboard-reset`, and `pattern-miner` containers were permanently unhealthy because they inherited the Dockerfile's `curl /health` check but don't serve HTTP during their scheduled wait periods. Added `kill -0 1` healthcheck override to each service in docker-compose.yml so health reflects process liveness, not HTTP availability.
+
 ### Added
 
 - **ML model hot-reload**: MLScorer now checks for updated model files every 60 seconds and auto-reloads when the pattern miner produces new `.pkl` files. No service restart required.
