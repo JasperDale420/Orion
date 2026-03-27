@@ -5,6 +5,7 @@ Logs ML predictions and outcomes for performance evaluation.
 """
 
 import uuid
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -126,6 +127,7 @@ async def log_outcome(
     Returns:
         True if updated successfully
     """
+    outcome_ts = datetime.now(UTC)
 
     def write(session: Any) -> None:
         # Determine if prediction was correct
@@ -133,7 +135,7 @@ async def log_outcome(
         session.execute(
             text("""
                 UPDATE ml_predictions
-                SET outcome_ts = NOW(),
+                SET outcome_ts = :outcome_ts,
                     actual_return_pct = :return_pct,
                     hit_target = :hit_target,
                     hit_stop = :hit_stop,
@@ -150,6 +152,7 @@ async def log_outcome(
             """),
             {
                 "position_id": position_id,
+                "outcome_ts": outcome_ts,
                 "return_pct": actual_return_pct,
                 "hit_target": hit_target,
                 "hit_stop": hit_stop,
@@ -173,6 +176,8 @@ async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
     """
     from orion.shared.db_utils import db_query
 
+    today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=UTC)
+
     async def query(session: Any) -> Any:
         bucket_filter = "AND bucket = :bucket" if bucket else ""
         result = await session.execute(
@@ -188,10 +193,10 @@ async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
                     AVG(actual_return_pct) FILTER (WHERE prediction_class = 1) as avg_return_high_score,
                     AVG(actual_return_pct) FILTER (WHERE prediction_class = 0) as avg_return_low_score
                 FROM ml_predictions
-                WHERE prediction_ts >= CURRENT_DATE
+                WHERE prediction_ts >= :today_start
                 {bucket_filter}
             """),
-            {"bucket": bucket} if bucket else {},
+            {"today_start": today_start, "bucket": bucket} if bucket else {"today_start": today_start},
         )
         return result.fetchone()
 
@@ -220,6 +225,8 @@ async def get_weekly_performance() -> dict[str, Any]:
     """
     from orion.shared.db_utils import db_query
 
+    week_start = datetime.now(UTC) - timedelta(days=7)
+
     async def query(session: Any) -> Any:
         result = await session.execute(
             text("""
@@ -234,11 +241,12 @@ async def get_weekly_performance() -> dict[str, Any]:
                     2) as accuracy_pct,
                     AVG(actual_return_pct) as avg_return
                 FROM ml_predictions
-                WHERE prediction_ts >= CURRENT_DATE - INTERVAL '7 days'
+                WHERE prediction_ts >= :week_start
                 AND outcome_ts IS NOT NULL
                 GROUP BY bucket, model_type
                 ORDER BY bucket, model_type
-            """)
+            """),
+            {"week_start": week_start},
         )
         return result.fetchall()
 
