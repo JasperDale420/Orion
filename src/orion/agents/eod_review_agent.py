@@ -851,7 +851,7 @@ Analyze today's performance and identify:
       "rationale": "Brief reason with data reference",
       "evidence_pointers": {"ml_insight": "AUC=0.85 for iv_rank feature", "drift_psi": 0.02},
       "test_plan": ["Backtest with 30-day window", "Verify win_rate improvement"],
-      "target_solver_id": "paper_v1",
+      "target_solver_id": "diversified_baseline_v1",
       "ops": [
         {"op": "modify_param", "param_name": "exit_logic.take_profit_atr_multiple", "new_value": 2.5, "reasoning": "..."},
         {"op": "add_rule", "new_value": "rule_iv_rank_v1", "reasoning": "ML shows IV rank is predictive"},
@@ -881,7 +881,7 @@ Analyze today's performance and identify:
 - When a pattern works well for specific bucket (e.g., 0DTE) but current solver doesn't exploit it
 - When win rate could improve with tighter/looser exit logic based on today's data
 - Edits start in 'research' stage - they gather data but don't trade live until promoted
-- Use target_solver_id='paper_v1' to mutate the active paper solver
+- Use target_solver_id='diversified_baseline_v1' to mutate the active paper solver
 
 ## Rules
 - Ground ALL proposals in data from the input - no speculation
