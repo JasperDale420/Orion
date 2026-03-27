@@ -43,8 +43,10 @@ def test_json_output_with_exception():
         logger.exception("Error occurred")
 
     out = stream.getvalue().strip().splitlines()
-    assert len(out) >= 1
-    data = json.loads(out[-1])
+    # Filter to only JSON lines (skip traceback printed to stderr)
+    json_lines = [line for line in out if line.startswith("{")]
+    assert len(json_lines) >= 1
+    data = json.loads(json_lines[-1])
 
     assert data.get("message") == "Error occurred" or data.get("event") == "Error occurred"
     assert "exception" in data or "exc_info" in data
