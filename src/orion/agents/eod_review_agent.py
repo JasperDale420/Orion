@@ -167,18 +167,27 @@ class EODReviewAgent(BaseAgent):
                 # Check if solver already exists
                 existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
                 if existing.scalars().first() is None:
-                    # Create solver stub in research stage
-                    session.add(
-                        Solver(
-                            solver_id=new_solver_id,
-                            family_name="eod_derived",
-                            parent_solver_id=str(base_id),
-                            created_by="llm_eod_agent",
-                            stage="research",
-                            config={"derived_from": str(base_id), "ops": ops_data},
-                            notes=f"Auto-generated from EOD review run {run_id}",
+                    # Verify parent solver exists before creating derived solver
+                    parent_solver = await session.get(Solver, str(base_id))
+                    if parent_solver is None:
+                        logger.warning(
+                            f"Parent solver {base_id} does not exist, skipping solver creation",
+                            base_solver_id=base_id,
+                            new_solver_id=new_solver_id,
                         )
-                    )
+                    else:
+                        # Create solver stub in research stage
+                        session.add(
+                            Solver(
+                                solver_id=new_solver_id,
+                                family_name="eod_derived",
+                                parent_solver_id=str(base_id),
+                                created_by="llm_eod_agent",
+                                stage="research",
+                                config={"derived_from": str(base_id), "ops": ops_data},
+                                notes=f"Auto-generated from EOD review run {run_id}",
+                            )
+                        )
 
                 session.add(
                     SolverEdits(
