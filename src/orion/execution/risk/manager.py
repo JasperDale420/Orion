@@ -206,16 +206,25 @@ class RiskManager:
             return True
 
         try:
-            date = timestamp.date()
-            schedule = self.calendar.schedule(start_date=date, end_date=date)
+            import pandas as pd
 
-            if schedule.empty:
+            date = timestamp.date()
+            date_ts = pd.Timestamp(date)
+            schedule = self.calendar.schedule
+
+            if date_ts not in schedule.index:
                 logger.warning(f"RISK REJECT: No market schedule found for {date} (Holiday/Closed).")
                 return False
 
-            row = schedule.iloc[0]
-            market_open = row.market_open
-            market_close = row.market_close
+            row = schedule.loc[date_ts]
+
+            # Handle both old and new column naming conventions
+            if "market_open" in schedule.columns:
+                market_open = row.market_open
+                market_close = row.market_close
+            else:
+                market_open = row.open
+                market_close = row.close
 
             for ban in cfg.time_of_day_bans:
                 if ban == "FIRST_5_MIN":
