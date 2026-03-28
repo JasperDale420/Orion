@@ -4,7 +4,7 @@ Tests for MCPServerClient.
 Tests the MCP Server client with mocked HTTP responses.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,7 +24,7 @@ class TestMCPServerClient:
         """Test successful tool call."""
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = MagicMock()
         mock_response.json = lambda: {"result": "success"}
 
         with patch.object(client, "_get_client") as mock_get_client:

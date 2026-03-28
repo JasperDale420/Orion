@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Test collection hang resolved**: `tests/integration/test_e2e_flow_pipeline.py` is a standalone script (no `test_*` functions) that runs blocking I/O at import time; added it to `collect_ignore` in `conftest.py` so pytest no longer hangs when collecting the full test suite.
+- **RuntimeWarning: coroutine never awaited in client tests**: `raise_for_status` in `test_mcp_server.py` and `test_trading_rag.py` was incorrectly mocked as `AsyncMock`; changed to `MagicMock` since `httpx.raise_for_status()` is a synchronous method.
+- **RuntimeWarning from ingestion test `_run_eod_task` mock**: `test_triggers_eod_at_correct_time` used `AsyncMock` for `_run_eod_task` but `asyncio.create_task` was also mocked, leaving a coroutine unawaited; replaced with a plain `MagicMock` return value.
+- **Datetime format inference warning in heber_context**: `pd.to_datetime` in `_coerce_time_series` now specifies `format="mixed"` to avoid the per-element fallback to `dateutil` and suppress the `UserWarning` about inferred formats.
+- **SQLAlchemy RuntimeWarning filter added**: Added `ignore::RuntimeWarning:sqlalchemy.*:` to `pytest.filterwarnings` to suppress framework-level async mock interaction noise from SQLAlchemy internals during teardown.
+
 - **Removed legacy gate fields from SystemSettings**: `legacy_label_pipelines_enabled`, `legacy_option_quote_tracker_enabled`, `legacy_pattern_miner_enabled`, `pattern_miner_training_source`, and `exit_classifier_training_source` have been removed from `SystemSettings`. Legacy services now read their feature-gate env vars directly via `os.getenv`, removing the coupling to the central settings object.
 
 - **Gateway fetch disabled by default**: `feature_enrichment_enable_gateway_fetch` now defaults to `False`. Set `ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH=true` to enable gateway-backed feature ingestion. This is a safer default that prevents unintended gateway traffic.

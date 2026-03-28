@@ -45,7 +45,9 @@ def _coerce_time_series(df: pd.DataFrame) -> pd.Series:
     ts_col = _first_existing_column(df, ["ts_event", "ts_utc", "bar_start_ts", "bar_start_ts_utc", "timestamp"])
     if ts_col is None:
         return pd.Series(index=df.index, dtype="datetime64[ns, UTC]")
-    return pd.Series(pd.to_datetime(df[ts_col], utc=True, errors="coerce"), index=df.index)
+    return pd.Series(
+        pd.to_datetime(df[ts_col], utc=True, errors="coerce", format="mixed", dayfirst=False), index=df.index
+    )
 
 
 # ---------------------------------------------------------------------------

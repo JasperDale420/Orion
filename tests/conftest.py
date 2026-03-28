@@ -3,6 +3,13 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
+# --- 0. Exclude script files that are not proper test modules ---
+# test_e2e_flow_pipeline.py runs blocking I/O at module import time and has no
+# test functions — it must not be collected by pytest.
+collect_ignore = [
+    "integration/test_e2e_flow_pipeline.py",
+]
+
 # --- 1. Global Environment Setup (Pre-Import) ---
 # Must happen before any orion modules are imported to ensure Settings pick these up.
 os.environ["ORION_STAGE"] = "test"

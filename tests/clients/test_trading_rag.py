@@ -4,7 +4,7 @@ Tests for TradingRAGClient.
 Tests the TradingRAG client with mocked HTTP responses.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,7 +27,7 @@ class TestTradingRAGClient:
         """Test successful document retrieval."""
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = MagicMock()
         # json() returns a dict, not a coroutine in httpx
         mock_response.json = lambda: {
             "results": [
@@ -63,7 +63,7 @@ class TestTradingRAGClient:
         """Test successful answer generation."""
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = MagicMock()
         mock_response.json = lambda: {
             "answer": "Use 2x ATR for stop losses in trend following.",
             "sources": [{"title": "Trend Following Book", "page": 42}],
