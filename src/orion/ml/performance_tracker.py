@@ -171,24 +171,37 @@ async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
     Returns:
         Dict with accuracy metrics
     """
-    from orion.shared.db_utils import db_query
+    from orion.shared.db_utils import _is_sqlite_session, db_query
 
     async def query(session: Any) -> Any:
         bucket_filter = "AND bucket = :bucket" if bucket else ""
+        is_sqlite = _is_sqlite_session(session)
+
+        # Use database-appropriate syntax
+        if is_sqlite:
+            date_filter = "prediction_ts >= date('now')"
+            cast_numeric = ""
+            avg_high = "AVG(CASE WHEN prediction_class = 1 THEN actual_return_pct END)"
+            avg_low = "AVG(CASE WHEN prediction_class = 0 THEN actual_return_pct END)"
+            round_fn = "ROUND(CAST(COUNT(CASE WHEN prediction_correct THEN 1 END) AS REAL) / NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100, 2)"
+        else:
+            date_filter = "prediction_ts >= CURRENT_DATE"
+            cast_numeric = "::numeric"
+            avg_high = "AVG(actual_return_pct) FILTER (WHERE prediction_class = 1)"
+            avg_low = "AVG(actual_return_pct) FILTER (WHERE prediction_class = 0)"
+            round_fn = f"ROUND(COUNT(CASE WHEN prediction_correct THEN 1 END){cast_numeric} / NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100, 2)"
+
         result = await session.execute(
             text(f"""
                 SELECT
                     COUNT(*) as total_predictions,
                     COUNT(CASE WHEN prediction_correct THEN 1 END) as correct,
                     COUNT(CASE WHEN prediction_correct = false THEN 1 END) as incorrect,
-                    ROUND(
-                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric /
-                        NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100,
-                    2) as accuracy_pct,
-                    AVG(actual_return_pct) FILTER (WHERE prediction_class = 1) as avg_return_high_score,
-                    AVG(actual_return_pct) FILTER (WHERE prediction_class = 0) as avg_return_low_score
+                    {round_fn} as accuracy_pct,
+                    {avg_high} as avg_return_high_score,
+                    {avg_low} as avg_return_low_score
                 FROM ml_predictions
-                WHERE prediction_ts >= CURRENT_DATE
+                WHERE {date_filter}
                 {bucket_filter}
             """),
             {"bucket": bucket} if bucket else {},
@@ -218,23 +231,30 @@ async def get_weekly_performance() -> dict[str, Any]:
     Returns:
         Dict with per-bucket performance metrics
     """
-    from orion.shared.db_utils import db_query
+    from orion.shared.db_utils import _is_sqlite_session, db_query
 
     async def query(session: Any) -> Any:
+        is_sqlite = _is_sqlite_session(session)
+
+        # Use database-appropriate syntax
+        if is_sqlite:
+            date_filter = "prediction_ts >= date('now', '-7 days')"
+            round_fn = "ROUND(CAST(COUNT(CASE WHEN prediction_correct THEN 1 END) AS REAL) / NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100, 2)"
+        else:
+            date_filter = "prediction_ts >= CURRENT_DATE - INTERVAL '7 days'"
+            round_fn = "ROUND(COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric / NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100, 2)"
+
         result = await session.execute(
-            text("""
+            text(f"""
                 SELECT
                     bucket,
                     model_type,
                     COUNT(*) as predictions,
                     COUNT(CASE WHEN prediction_correct THEN 1 END) as correct,
-                    ROUND(
-                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric /
-                        NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100,
-                    2) as accuracy_pct,
+                    {round_fn} as accuracy_pct,
                     AVG(actual_return_pct) as avg_return
                 FROM ml_predictions
-                WHERE prediction_ts >= CURRENT_DATE - INTERVAL '7 days'
+                WHERE {date_filter}
                 AND outcome_ts IS NOT NULL
                 GROUP BY bucket, model_type
                 ORDER BY bucket, model_type
