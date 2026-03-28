@@ -175,6 +175,24 @@ async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
 
     async def query(session: Any) -> Any:
         bucket_filter = "AND bucket = :bucket" if bucket else ""
+
+        # Detect dialect and use appropriate SQL syntax
+        dialect_name = getattr(getattr(session.get_bind(), "dialect", None), "name", "")
+        is_sqlite = str(dialect_name).lower() == "sqlite"
+
+        if is_sqlite:
+            # SQLite-compatible syntax
+            date_filter = "date('now')"
+            cast_numeric = "CAST(COUNT(CASE WHEN prediction_correct THEN 1 END) AS REAL)"
+            filter_high_score = "AVG(CASE WHEN prediction_class = 1 THEN actual_return_pct END)"
+            filter_low_score = "AVG(CASE WHEN prediction_class = 0 THEN actual_return_pct END)"
+        else:
+            # PostgreSQL syntax
+            date_filter = "CURRENT_DATE"
+            cast_numeric = "COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric"
+            filter_high_score = "AVG(actual_return_pct) FILTER (WHERE prediction_class = 1)"
+            filter_low_score = "AVG(actual_return_pct) FILTER (WHERE prediction_class = 0)"
+
         result = await session.execute(
             text(f"""
                 SELECT
@@ -182,13 +200,13 @@ async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
                     COUNT(CASE WHEN prediction_correct THEN 1 END) as correct,
                     COUNT(CASE WHEN prediction_correct = false THEN 1 END) as incorrect,
                     ROUND(
-                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric /
+                        {cast_numeric} /
                         NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100,
                     2) as accuracy_pct,
-                    AVG(actual_return_pct) FILTER (WHERE prediction_class = 1) as avg_return_high_score,
-                    AVG(actual_return_pct) FILTER (WHERE prediction_class = 0) as avg_return_low_score
+                    {filter_high_score} as avg_return_high_score,
+                    {filter_low_score} as avg_return_low_score
                 FROM ml_predictions
-                WHERE prediction_ts >= CURRENT_DATE
+                WHERE prediction_ts >= {date_filter}
                 {bucket_filter}
             """),
             {"bucket": bucket} if bucket else {},
@@ -221,20 +239,33 @@ async def get_weekly_performance() -> dict[str, Any]:
     from orion.shared.db_utils import db_query
 
     async def query(session: Any) -> Any:
+        # Detect dialect and use appropriate SQL syntax
+        dialect_name = getattr(getattr(session.get_bind(), "dialect", None), "name", "")
+        is_sqlite = str(dialect_name).lower() == "sqlite"
+
+        if is_sqlite:
+            # SQLite-compatible syntax
+            date_filter = "date('now', '-7 days')"
+            cast_numeric = "CAST(COUNT(CASE WHEN prediction_correct THEN 1 END) AS REAL)"
+        else:
+            # PostgreSQL syntax
+            date_filter = "CURRENT_DATE - INTERVAL '7 days'"
+            cast_numeric = "COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric"
+
         result = await session.execute(
-            text("""
+            text(f"""
                 SELECT
                     bucket,
                     model_type,
                     COUNT(*) as predictions,
                     COUNT(CASE WHEN prediction_correct THEN 1 END) as correct,
                     ROUND(
-                        COUNT(CASE WHEN prediction_correct THEN 1 END)::numeric /
+                        {cast_numeric} /
                         NULLIF(COUNT(CASE WHEN prediction_correct IS NOT NULL THEN 1 END), 0) * 100,
                     2) as accuracy_pct,
                     AVG(actual_return_pct) as avg_return
                 FROM ml_predictions
-                WHERE prediction_ts >= CURRENT_DATE - INTERVAL '7 days'
+                WHERE prediction_ts >= {date_filter}
                 AND outcome_ts IS NOT NULL
                 GROUP BY bucket, model_type
                 ORDER BY bucket, model_type
