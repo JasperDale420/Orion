@@ -196,7 +196,11 @@ class SystemSettings(BaseSettings):
     # Client URLs
     trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")
     trading_rag_api_key: str | None = Field(default=None, validation_alias="TRADING_RAG_API_KEY")
-    mcp_server_url: str = Field(default="http://localhost:8001", validation_alias="MCP_SERVER_URL")
+    mcp_server_url: str = Field(
+        default="",
+        validation_alias="MCP_SERVER_URL",
+        description="MCP server URL (deprecated — Alpaca/UW now use official MCP servers via .mcp.json)",
+    )
     orion_api_url: str = Field(default="http://localhost:8000", validation_alias="ORION_API_URL")
 
     # Lakehouse (S3-compatible object store)
@@ -222,7 +226,7 @@ class MetaSearchSettings(BaseSettings):
 
 
 class AgentSettings(BaseSettings):
-    model_name: str = "glm-5"
+    model_name: str = "glm-5.1"
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     ai_gateway_url: str = Field(default="http://localhost:8002/v1", validation_alias="ORION_AI_GATEWAY_URL")
     ai_gateway_key: str = Field(default="empire-ai-gateway-key", validation_alias="ORION_AI_GATEWAY_KEY")

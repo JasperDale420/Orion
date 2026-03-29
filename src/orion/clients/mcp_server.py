@@ -1,8 +1,10 @@
 """
-Shared MCP Server Client.
+Shared MCP Server Client (DEPRECATED).
 
-Client for the Shared-MCP-Server providing Alpaca and Unusual Whales tools.
-Uses HTTP to call MCP tools for trading, market data, and flow analysis.
+This client was designed for the custom Shared-MCP-Server HTTP /call endpoint.
+Alpaca and Unusual Whales tools now use the official MCP servers
+(alpaca-mcp-server, @unusualwhales/mcp) configured in Empire/.mcp.json.
+This module is unused and retained for reference only.
 """
 
 from typing import Any
