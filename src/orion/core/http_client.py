@@ -44,7 +44,11 @@ def _log_request(request: httpx.Request) -> None:
 
 def _log_response(response: httpx.Response) -> None:
     """Event hook: log incoming HTTP responses at DEBUG level."""
-    elapsed = response.elapsed.total_seconds() if response.elapsed else 0.0
+    try:
+        elapsed = response.elapsed.total_seconds() if response.elapsed else 0.0
+    except RuntimeError:
+        # elapsed is not available until response is read/closed (e.g., during redirects)
+        elapsed = 0.0
     logger.debug(
         "http_response",
         method=str(response.request.method),
