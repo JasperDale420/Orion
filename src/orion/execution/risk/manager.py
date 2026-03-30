@@ -675,8 +675,10 @@ class RiskManager:
                 logger.error(f"Failed to sync pending orders: {e}")
 
             account = connector.client.get_account()
-            equity = float(account.equity)
-            last_equity = float(account.last_equity)
+            # Cap equity to $100K — each bot gets a virtual slice of the shared $1M account
+            _ALLOCATED_EQUITY = 100_000.0
+            equity = min(float(account.equity), _ALLOCATED_EQUITY)
+            last_equity = min(float(account.last_equity), _ALLOCATED_EQUITY)
 
             self.current_equity = equity
             self.starting_equity = last_equity
