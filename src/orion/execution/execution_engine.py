@@ -19,6 +19,10 @@ from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 logger = setup_struct_logger(__name__)
 
+# Prefix for all Orion order IDs — used to identify Orion's positions
+# in the shared Alpaca paper account.
+ORDER_ID_PREFIX = "orion_"
+
 
 class ExecutionEngine:
     """
@@ -43,8 +47,20 @@ class ExecutionEngine:
         self.last_positions_snapshot_ts: datetime | None = None
         self._last_fill_poll_ts: datetime | None = None
 
+        # Empire-core ledger for EmpireUI trade recording
+        self._ledger = None
+        try:
+            from empire_core.ledger import LedgerWriter
+            from orion.core.ledger_adapter import OrionLedgerAdapter
+
+            writer = LedgerWriter(db_path="ledger.db", system="orion")
+            self._ledger = OrionLedgerAdapter(writer)
+            logger.info("Ledger adapter initialized")
+        except Exception as exc:
+            logger.warning("Ledger adapter init failed (non-fatal)", error=str(exc))
+
         # Fill processor (handles partial fills, persistence)
-        self._fill_processor = FillProcessor()
+        self._fill_processor = FillProcessor(ledger=self._ledger)
 
     def _get_gateway_client(self) -> Any:
         """Lazy-initialize Gateway trading client singleton."""
@@ -127,8 +143,28 @@ class ExecutionEngine:
                 },
             )
 
+    async def _fetch_orion_tickers(self) -> set[str]:
+        """Return the set of tickers that Orion has active orders for."""
+        from orion.storage.models_execution import OrderRecord
+
+        async def query_tickers(session: Any) -> set[str]:
+            stmt = select(OrderRecord.ticker).where(OrderRecord.client_order_id.like(f"{ORDER_ID_PREFIX}%")).distinct()
+            result = await session.execute(stmt)
+            return {row[0] for row in result.all()}
+
+        try:
+            return await db_query(query_tickers)
+        except Exception:
+            return set()
+
     async def _sync_risk_from_gateway(self) -> None:
-        """Sync risk manager state from Data Gateway (account + positions)."""
+        """Sync risk manager state from Data Gateway (account + positions).
+
+        Only positions for tickers that Orion has traded are loaded into the
+        risk manager.  The Alpaca paper account is shared by multiple systems
+        via Data-Gateway, so we must filter to avoid counting other systems'
+        positions in Orion's risk calculations.
+        """
         if not await self._check_gateway_available():
             logger.info(
                 "Skipping Gateway risk sync; server unavailable. Using persisted risk state.",
@@ -148,21 +184,39 @@ class ExecutionEngine:
                     self.risk_manager.current_equity = equity
                     self.risk_manager.starting_equity = last_equity
                     self.risk_manager.current_daily_loss = max(0.0, last_equity - equity)
+
+                    # If peak_equity is still the hardcoded default (no persisted
+                    # state loaded), seed it from the actual account balance so the
+                    # drawdown kill-switch is measured from the real starting point
+                    # instead of an arbitrary $100K.
+                    if self.risk_manager.peak_equity == 100000.0:
+                        self.risk_manager.peak_equity = max(equity, last_equity)
+
                     logger.info(
                         "Risk state synced from Gateway account",
                         extra={
                             "event_type": "GATEWAY_RISK_SYNC",
                             "equity": equity,
+                            "peak_equity": self.risk_manager.peak_equity,
                             "daily_loss": self.risk_manager.current_daily_loss,
                         },
                     )
+
+            # Filter positions to Orion-owned tickers only
+            orion_tickers = await self._fetch_orion_tickers()
 
             positions = await client.get_positions()
             if positions:
                 self.risk_manager.positions = {}
                 self.risk_manager.ticker_exposures = {}
+                skipped = 0
                 for p in positions:
                     symbol = p.get("symbol", "")
+                    # Only load positions that Orion has traded
+                    if orion_tickers and symbol not in orion_tickers:
+                        skipped += 1
+                        continue
+
                     qty = float(p.get("qty", 0) or 0)
                     avg_entry = float(p.get("avg_entry_price", 0) or 0)
                     market_value = float(p.get("market_value", 0) or 0)
@@ -174,10 +228,12 @@ class ExecutionEngine:
                     [p for p in self.risk_manager.positions.values() if abs(p["qty"]) > 1e-9]
                 )
                 logger.info(
-                    "Positions synced from Gateway",
+                    "Positions synced from Gateway (Orion-only)",
                     extra={
                         "event_type": "GATEWAY_POSITIONS_SYNC",
                         "open_positions": self.risk_manager.open_positions,
+                        "skipped_non_orion": skipped,
+                        "total_account_positions": len(positions),
                     },
                 )
 
@@ -400,7 +456,7 @@ class ExecutionEngine:
             ticker=candidate.ticker,
         )
 
-        client_order_id = str(uuid.uuid4())
+        client_order_id = f"{ORDER_ID_PREFIX}{uuid.uuid4()}"
         decision.execution_params = decision.execution_params or {}
         decision.execution_params["client_order_id"] = client_order_id
         decision.execution_params["order_type"] = "OPTIONS"
@@ -454,6 +510,20 @@ class ExecutionEngine:
                 broker_order=result,
                 error_message=None,
             )
+
+            # Record in empire-core ledger for EmpireUI
+            if self._ledger is not None:
+                try:
+                    self._ledger.on_order_placed(
+                        decision_id=str(getattr(decision, "decision_id", client_order_id)),
+                        ticker=candidate.option_symbol,
+                        side=side,
+                        qty=num_contracts,
+                        client_order_id=client_order_id,
+                        limit_price=option_price,
+                    )
+                except Exception as exc:
+                    logger.warning("ledger_order_write_failed", error=str(exc))
 
             premium_paid = num_contracts * option_price * 100
             logger.info(
@@ -583,7 +653,7 @@ class ExecutionEngine:
 
         try:
             client = self._get_gateway_client()
-            client_order_id = str(uuid.uuid4())
+            client_order_id = f"{ORDER_ID_PREFIX}{uuid.uuid4()}"
 
             if use_market_order or exit_signal.urgency == "IMMEDIATE":
                 result = await client.close_position(ticker, qty=qty)
@@ -727,16 +797,16 @@ class ExecutionEngine:
     # ── Fill polling (delegates to FillProcessor) ────────────────────────
 
     async def poll_fills(self) -> None:
-        """Polls Data Gateway for positions/account and updates RiskManager."""
+        """Polls Data Gateway for account equity and updates RiskManager.
+
+        Only account-level equity is synced (shared across all systems).
+        Position-level data is filtered to Orion-only in _sync_risk_from_gateway.
+        """
         if not self._gateway_available:
             return
 
         try:
             client = self._get_gateway_client()
-
-            positions = await client.get_positions()
-            if not positions:
-                return
 
             account = await client.get_account()
             if "error" not in account:

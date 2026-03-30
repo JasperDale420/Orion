@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from empire_core.ledger import LedgerWriter
+
+logger = logging.getLogger(__name__)
 
 
 STRATEGY = "orion_signal"
 
 
 def _symbol(ticker: str) -> str:
-    """Convert a ticker to the canonical instrument key format."""
+    """Convert a ticker to the canonical instrument key format.
+
+    Options symbols (containing digits or OCC format) get the option prefix;
+    plain tickers get the equity prefix.
+    """
+    # OCC option symbols contain digits and are typically 15+ chars
+    if any(c.isdigit() for c in ticker) and len(ticker) > 6:
+        return f"option:OCC:{ticker}"
     return f"equity:{ticker}"
 
 
@@ -34,6 +44,25 @@ class OrionLedgerAdapter:
         self._order_sides: dict[str, str] = {}
         # symbol -> (trade_id, entry_price, qty)
         self._open_trades: dict[str, tuple[str, float, float]] = {}
+        self._hydrate_open_trades()
+
+    def _hydrate_open_trades(self) -> None:
+        """Load open trades from DB so exits work across process restarts."""
+        try:
+            trades = self._writer.get_trades(limit=500)
+            for t in trades:
+                if t.get("exit_time") is not None:
+                    continue
+                symbol = t.get("symbol", "")
+                self._open_trades[symbol] = (
+                    t["id"],
+                    float(t.get("entry_price", 0)),
+                    float(t.get("qty", 0)),
+                )
+            if self._open_trades:
+                logger.info("ledger_open_trades_hydrated count=%d", len(self._open_trades))
+        except Exception:
+            logger.warning("ledger_hydration_failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Public hooks

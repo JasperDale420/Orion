@@ -24,20 +24,31 @@ class FillProcessor:
     persistence to the execution.persistence module.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, ledger: Any = None) -> None:
         self._partial_fill_tracker: dict[str, float] = {}
+        self._ledger = ledger
 
     async def process_single_fill(self, fill: Any, risk_manager: Any, remove_pending_fn: Any) -> None:
         """Process a single fill event, updating risk state and persisting.
 
         Handles partial fills by tracking cumulative filled quantity and only
         processing the incremental amount since last update.
+
+        Only processes fills for orders placed by Orion (client_order_id
+        starts with the Orion prefix).
         """
         try:
+            from orion.execution.execution_engine import ORDER_ID_PREFIX
+
             order_id = str(fill.get("id", "")) if isinstance(fill, dict) else str(fill.id)
             client_oid = (
                 fill.get("client_order_id") if isinstance(fill, dict) else getattr(fill, "client_order_id", None)
             ) or order_id
+
+            # Skip fills that don't belong to Orion
+            if client_oid and not client_oid.startswith(ORDER_ID_PREFIX):
+                return
+
             if await is_fill_processed(order_id):
                 return
 
@@ -93,6 +104,19 @@ class FillProcessor:
 
             await persist_fill_record(fill)
             await mark_fill_processed(order_id, client_oid=client_oid, ticker=ticker, qty=incremental_qty)
+
+            # Write to empire-core ledger for EmpireUI
+            if self._ledger is not None and not is_partial:
+                try:
+                    self._ledger.on_fill(
+                        ticker=ticker,
+                        client_order_id=client_oid,
+                        filled_qty=filled_qty,
+                        filled_avg_price=filled_avg_price,
+                        broker_order_id=order_id,
+                    )
+                except Exception as ledger_exc:
+                    logger.warning("ledger_fill_write_failed", error=str(ledger_exc))
 
         except Exception as e:
             fill_id_str = (
