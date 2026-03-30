@@ -8,6 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **HTTP client `elapsed` RuntimeError**: `_log_response` accessed `response.elapsed` inside an httpx response event hook before the response body was read or closed. This caused a `RuntimeError` on every max-pain connector request, exhausting retry budgets and flooding the error log. The access is now wrapped in a try/except so elapsed falls back to 0.0 when unavailable.
+
+- **Lint: unused `timedelta` import** in `processing/rules/base.py`: removed unused `timedelta` import.
+
+- **Lint: bare f-strings** in e2e tests: removed extraneous `f` prefix from string literals with no placeholders.
+
+- **ML scorer categorical encoding**: `_build_feature_map` was passing string categorical fields (`aggressor`, `is_sweep`, `alert_type`, `side`, etc.) through `float()`, crashing with `ValueError: could not convert string to float: 'ASK'`. The scorer silently fell back to heuristic scoring (~0.65) instead of using trained LightGBM models. Now applies the `categorical_mappings` saved during training to encode strings as integer category codes, matching the training-time encoding.
+
+- **Circuit breaker false trigger on shared account**: `peak_equity` defaulted to $100,000 (hardcoded) but the Alpaca paper account had ~$46K equity from other systems' losses. The drawdown kill switch calculated 54% drawdown vs 5% limit and permanently locked out execution. `_sync_risk_from_gateway` now seeds `peak_equity` from actual account balance on first sync when no persisted risk state exists.
+
+- **Rule engine missing option fields**: `CandidateTrade` objects from the rule engine had no `option_symbol`, `strike_price`, `underlying_price`, `premium`, `option_type`, or `expiration_date` set. The execution engine rejected every candidate with `"Options only — no option_symbol on candidate"`. The rule engine base class now populates these fields from signal features and generates OCC-format option symbols (e.g., `SPY260408C00560000`).
+
+- **Flow rule evidence incomplete**: `BullishSweepRule` and other flow rules did not include `is_sweep`, `aggressor`, `premium_usd`, or `put_call` in candidate evidence. The ML pre-filter's `_build_payload` could not reconstruct the flow context for scoring, leading to missing features and incorrect scores.
+
+### Added
+
+- **E2E smoke test** (`tests/e2e/test_smoke_e2e.py`): Nine-stage pipeline verification against real TimescaleDB. Injects simulated SPY data (bar + UW flow) and asserts every stage: bronze ingest → silver signals → feature extraction → rollups → rule engine → candidate persistence → ML model loading/scoring → signal engine decision → execution (mocked broker). Runnable via `uv run pytest tests/e2e/test_smoke_e2e.py -v -s` or standalone.
+
+- **Live data flow health check** (`tests/e2e/test_live_data_flow.py`): Diagnostic that queries real TimescaleDB for the most recent row at each pipeline stage (bronze, silver, rollups, candidates, decisions, orders, signals_live) plus system status, regime, and risk state. Reports stage-by-stage freshness with `FRESH`/`STALE`/`EMPTY` indicators. Fails during market hours if pipeline stages are stale; passes outside market hours with informational output.
+
+- **Position attribution for shared Alpaca account**: The Alpaca paper account is shared by multiple trading systems via Data-Gateway. Orion now identifies its own positions:
+  - Order IDs prefixed with `orion_` (e.g., `orion_a1b2c3d4-...`) for all entry and exit orders
+  - `_sync_risk_from_gateway` filters positions to only tickers Orion has traded (via `OrderRecord` lookup)
+  - `FillProcessor` skips fills whose `client_order_id` doesn't start with `orion_`
+  - `OrderRecord` schema includes `system` column (default `"orion"`) for persistent attribution
+
 - **Test collection hang resolved**: `tests/integration/test_e2e_flow_pipeline.py` is a standalone script (no `test_*` functions) that runs blocking I/O at import time; added it to `collect_ignore` in `conftest.py` so pytest no longer hangs when collecting the full test suite.
 - **RuntimeWarning: coroutine never awaited in client tests**: `raise_for_status` in `test_mcp_server.py` and `test_trading_rag.py` was incorrectly mocked as `AsyncMock`; changed to `MagicMock` since `httpx.raise_for_status()` is a synchronous method.
 - **RuntimeWarning from ingestion test `_run_eod_task` mock**: `test_triggers_eod_at_correct_time` used `AsyncMock` for `_run_eod_task` but `asyncio.create_task` was also mocked, leaving a coroutine unawaited; replaced with a plain `MagicMock` return value.
