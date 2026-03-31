@@ -49,9 +49,6 @@ class FillProcessor:
             if client_oid and not client_oid.startswith(ORDER_ID_PREFIX):
                 return
 
-            if await is_fill_processed(order_id):
-                return
-
             if isinstance(fill, dict):
                 filled_qty = float(fill.get("filled_qty", 0) or 0)
                 total_qty = float(fill.get("qty", 0) or filled_qty)
@@ -64,6 +61,11 @@ class FillProcessor:
                 filled_avg_price = float(fill.filled_avg_price) if fill.filled_avg_price else 0.0
                 ticker = fill.symbol
                 side = str(fill.side)
+
+            fill_marker = f"{order_id}:{filled_qty}"
+
+            if await is_fill_processed(fill_marker):
+                return
 
             last_filled = self._partial_fill_tracker.get(order_id, 0.0)
             incremental_qty = filled_qty - last_filled
@@ -88,8 +90,7 @@ class FillProcessor:
                 },
             )
 
-            fill_id = order_id if last_filled == 0 else f"{order_id}_{filled_qty}"
-            await risk_manager.process_fill(ticker, incremental_qty, filled_avg_price, side, fill_id=fill_id)
+            await risk_manager.process_fill(ticker, incremental_qty, filled_avg_price, side, fill_id=fill_marker)
 
             # Update sector exposure tracking
             sector = SECTOR_MAPPING.get(ticker)
@@ -103,7 +104,7 @@ class FillProcessor:
                 self._partial_fill_tracker.pop(order_id, None)
 
             await persist_fill_record(fill)
-            await mark_fill_processed(order_id, client_oid=client_oid, ticker=ticker, qty=incremental_qty)
+            await mark_fill_processed(fill_marker, client_oid=client_oid, ticker=ticker, qty=incremental_qty)
 
             # Write to empire-core ledger for EmpireUI
             if self._ledger is not None and not is_partial:

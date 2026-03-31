@@ -79,7 +79,16 @@ def get_next_run_close() -> datetime | None:
                 )
                 if close_time:
                     return close_time
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to resolve market close for scheduled mining run; trying next session",
+                    extra={
+                        "event": "pattern_miner_schedule_resolution_failed",
+                        "date": check_date.isoformat(),
+                        "error": str(exc),
+                    },
+                    exc_info=True,
+                )
                 continue
 
     # Fallback: next Monday at 21:00 UTC

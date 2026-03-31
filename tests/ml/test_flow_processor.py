@@ -178,3 +178,42 @@ class TestMLFlowProcessor:
         candidates = process_flows_with_ml([high_score_flow], threshold=0.5)
 
         assert len(candidates) >= 1
+
+    def test_process_flows_bypass_mode_passes_through_candidates(
+        self, low_score_flow: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bypass mode should keep all flows eligible for candidate generation."""
+
+        class _BypassScorer:
+            bypass_scoring = True
+
+            def score_batch(self, flows: list[dict]) -> list[float]:
+                return [-1.0] * len(flows)
+
+        monkeypatch.setattr("orion.ml.flow_processor.get_scorer", lambda: _BypassScorer())
+
+        processor = MLFlowProcessor(score_threshold=0.5)
+        candidates = processor.process_flows([low_score_flow])
+
+        assert len(candidates) == 1
+        assert candidates[0].evidence["ml_score"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_process_flows_enriched_bypass_mode_passes_through_candidates(
+        self, low_score_flow: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bypass mode should also skip scoring in the enriched path."""
+
+        class _BypassScorer:
+            bypass_scoring = True
+
+            async def score_enriched(self, flow: dict) -> float:
+                return -1.0
+
+        monkeypatch.setattr("orion.ml.flow_processor.get_scorer", lambda: _BypassScorer())
+
+        processor = MLFlowProcessor(score_threshold=0.5)
+        candidates = await processor.process_flows_enriched([low_score_flow])
+
+        assert len(candidates) == 1
+        assert candidates[0].evidence["ml_score"] == 1.0

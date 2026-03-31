@@ -15,6 +15,7 @@ import asyncio
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import aiofiles
 
@@ -23,6 +24,13 @@ from orion.jobs.solver_promoter import run_solver_promotions
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.meta_weekly")
+
+
+async def _save_summary(output_path: str, summary: dict[str, object]) -> None:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    async with aiofiles.open(path, "w") as f:
+        await f.write(json.dumps(summary, indent=2, default=str))
 
 
 async def main() -> None:
@@ -100,8 +108,7 @@ async def run_once(dry_run: bool, output_path: str | None) -> None:
 
         # Save to file if requested
         if output_path:
-            async with aiofiles.open(output_path, "w") as f:
-                await f.write(json.dumps(summary, indent=2, default=str))
+            await _save_summary(output_path, summary)
             logger.info(f"Summary saved to {output_path}")
 
     except Exception as e:
@@ -135,8 +142,7 @@ async def run_scheduled() -> None:
 
                 # Save summary
                 output_path = f"artifacts/reports/weekly_evolution_{now.strftime('%Y-%m-%d')}.json"
-                async with aiofiles.open(output_path, "w") as f:
-                    await f.write(json.dumps(summary, indent=2, default=str))
+                await _save_summary(output_path, summary)
 
                 logger.info(f"Weekly evolution completed. Summary saved to {output_path}")
 

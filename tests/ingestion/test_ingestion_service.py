@@ -309,12 +309,13 @@ class TestCheckEodTrigger:
         with patch("orion.ingestion.service.datetime") as mock_dt:
             mock_dt.now.return_value = mock_now
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            with patch.object(svc, "_run_eod_task", return_value=MagicMock()) as mock_eod:
+            with patch.object(svc, "_run_eod_task", new=MagicMock(return_value=None)) as mock_eod:
                 # We need to mock asyncio.create_task since it requires a coroutine
                 with patch("orion.ingestion.service.asyncio") as mock_asyncio:
                     mock_asyncio.create_task.return_value = MagicMock()
                     svc._check_eod_trigger()
                     mock_asyncio.create_task.assert_called_once()
+                    mock_eod.assert_called_once()
 
         assert svc.eod_trigger_last_run == "2025-03-10"
 

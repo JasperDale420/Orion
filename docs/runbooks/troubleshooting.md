@@ -40,7 +40,7 @@ docker stats
 
 **Check**:
 ```bash
-docker-compose logs -f orion-ingestion | grep -i "rate\|429"
+docker compose logs -f ingestion | rg -i "rate|429"
 ```
 
 **Fix**:
@@ -82,9 +82,9 @@ GROUP BY ticker;
 
 | Service | Log Command |
 |---------|-------------|
-| All | `docker-compose logs -f` |
-| Ingestion | `docker-compose logs -f orion-ingestion` |
-| API | `docker-compose logs -f orion-api` |
+| All | `docker compose logs -f` |
+| Ingestion | `docker compose logs -f ingestion` |
+| Admin API | `Use the local uvicorn/ASGI process logs` |
 
 ## Escalation
 

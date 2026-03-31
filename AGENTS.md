@@ -32,7 +32,7 @@ mypy .
 docker compose up -d --build
 
 # Run a specific service locally
-python -m orion.main_ingest
+python -m orion.ingestion
 python -m orion.main_execution
 
 # Database migrations
@@ -52,7 +52,7 @@ alembic downgrade -1
 
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py` — environment-driven system/risk/agent settings
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/api/main.py` — FastAPI endpoints
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/main_ingest.py` — ingestion entry point
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/ingestion/__main__.py` — ingestion entry point
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_execution.py` — execution entry point
 - `/Users/jacobmcmillan/Empire/Orion/docker-compose.yml` — multi-service local deployment
 

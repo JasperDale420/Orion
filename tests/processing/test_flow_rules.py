@@ -37,6 +37,21 @@ def test_bullish_sweep_match(mock_signal):
     assert (candidate.evidence or {}).get("segments") == ["UW_FLOW"]
 
 
+def test_bullish_sweep_accepts_single_letter_put_call(mock_signal):
+    rule = BullishSweepRule(min_premium=5000.0)
+    mock_signal.features = {
+        "is_sweep": True,
+        "put_call": "C",
+        "premium": 6000.0,
+        "aggressor_ind": "ASK",
+        "dte": 15,
+        "delta": 0.5,
+        "underlying_price": 400.0,
+    }
+
+    assert rule.evaluate(mock_signal) is not None
+
+
 def test_bullish_sweep_no_match_premium(mock_signal):
     rule = BullishSweepRule(min_premium=10000.0)
     mock_signal.features = {
@@ -67,3 +82,16 @@ def test_bearish_put_pressure_match(mock_signal):
     assert candidate.source == "UW"
     assert (candidate.execution_params or {}).get("limit_price") == 400.0
     assert (candidate.evidence or {}).get("event_ids") == ["evt_2"]
+
+
+def test_bearish_put_pressure_accepts_single_letter_put_call(mock_signal):
+    rule = BearishPutPressureRule(min_premium=5000.0)
+    mock_signal.features = {
+        "put_call": "P",
+        "premium": 8000.0,
+        "aggressor_ind": "ASK",
+        "dte": 5,
+        "underlying_price": 400.0,
+    }
+
+    assert rule.evaluate(mock_signal) is not None

@@ -44,12 +44,20 @@ class PositionSizer:
         qty = math.floor(risk_amt / stop_distance)
 
         # Cap by Max Order Size (% of equity)
-        max_order_value = current_equity * cfg.max_order_size_pct
+        max_order_value = (
+            float(cfg.max_order_size_usd)
+            if cfg.max_order_size_usd is not None
+            else current_equity * cfg.max_order_size_pct
+        )
         max_order_qty = math.floor(max_order_value / entry_price)
         qty = min(qty, max_order_qty)
 
         # Cap by Max Ticker Exposure (% of equity)
-        max_exposure = current_equity * cfg.max_ticker_exposure_pct
+        max_exposure = (
+            float(cfg.max_ticker_exposure_usd)
+            if cfg.max_ticker_exposure_usd is not None
+            else current_equity * cfg.max_ticker_exposure_pct
+        )
         exposure_cap_qty = math.floor(max_exposure / entry_price)
         qty = min(qty, exposure_cap_qty)
 

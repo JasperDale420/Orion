@@ -9,7 +9,7 @@ It is currently being aligned to a migration where:
 
 ## System Components
 
-- `src/orion/ingestion/` and `src/orion/main_ingest.py`
+- `src/orion/ingestion/` and `src/orion/ingestion/__main__.py`
   - Pulls market/provider events and normalizes payloads.
 - `src/orion/processing/`
   - Feature computation and rule/signal transformations.

@@ -87,6 +87,7 @@ Parameters:
 #### `GET /search`
 
 Description: RAG/hybrid search endpoint with metadata filters.
+Returns `503` when the vector store or embedding backend is unavailable.
 
 #### `GET /events/{event_id}`
 
@@ -107,6 +108,7 @@ Description: Fetch one rollup row.
 #### `GET /flows`
 
 Description: Query options flow rows with filters.
+Returns `503` when Heber flow reads fail or the backing data source is unavailable.
 
 ### Dashboard
 

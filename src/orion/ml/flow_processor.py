@@ -52,9 +52,19 @@ class MLFlowProcessor:
             return []
 
         candidates = []
+        bypass_scoring = self.scorer.bypass_scoring
 
-        # Batch score all flows
-        scores = self.scorer.score_batch(flows)
+        # Bypass mode keeps every flow eligible so the processor really does
+        # "pass candidates through" when ML scoring is disabled.
+        if bypass_scoring:
+            logger.warning(
+                "ML scoring bypassed; passing flows through candidate generation",
+                extra={"event": "ml_flow_processor_bypass", "flow_count": len(flows)},
+            )
+            scores = [1.0] * len(flows)
+        else:
+            # Batch score all flows
+            scores = self.scorer.score_batch(flows)
 
         for flow, score in zip(flows, scores, strict=True):
             if score >= self.score_threshold:
@@ -99,10 +109,11 @@ class MLFlowProcessor:
             return []
 
         candidates = []
+        bypass_scoring = self.scorer.bypass_scoring
 
         # Score each flow with enrichment (async)
         async def score_flow(flow: dict[str, Any]) -> tuple:
-            score = await self.scorer.score_enriched(flow)
+            score = 1.0 if bypass_scoring else await self.scorer.score_enriched(flow)
             return flow, score
 
         # Run enrichment in parallel

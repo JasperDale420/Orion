@@ -20,14 +20,14 @@ All Docker images are tagged with:
 docker images | grep orion
 
 # 2. Stop current containers
-docker-compose down
+docker compose down
 
-# 3. Update docker-compose.yml image tag to previous version
+# 3. Update the compose image tag to previous version
 # Or set via environment variable:
 export ORION_VERSION=<previous-sha-or-tag>
 
 # 4. Start with previous version
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Rolling Back to Specific Commit
@@ -40,8 +40,8 @@ git log --oneline -10
 git checkout <commit-sha>
 
 # Rebuild and deploy
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
 ## Database Migrations
@@ -79,7 +79,7 @@ export ORION_FF_ENABLE_LIVE_TRADING=false
 export ORION_FF_ENABLE_AGENT_ANALYSIS=false
 
 # Restart services
-docker-compose restart
+docker compose restart
 ```
 
 See `src/orion/core/feature_flags.py` for available flags.

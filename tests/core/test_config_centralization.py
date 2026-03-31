@@ -28,13 +28,24 @@ def test_agent_settings_env_mapping():
         assert s.openai_api_key == "sk-test-123"
 
 
+def test_system_settings_api_key_env_mapping():
+    """Verify ORION_API_KEY maps to system_settings.api_key."""
+    fake_orion_api_key = "sk-orion-123"  # pragma: allowlist secret
+    with patch.dict(os.environ, {"ORION_API_KEY": fake_orion_api_key}, clear=True):
+        from orion.config import SystemSettings
+
+        s = SystemSettings()
+        assert s.api_key == fake_orion_api_key
+
+
 def test_gateway_settings_env_mapping_primary_names():
     """Verify DATA_GATEWAY_* env vars map into centralized system settings."""
+    fake_gateway_api_key = "gw-key-123"  # pragma: allowlist secret
     with patch.dict(
         os.environ,
         {
             "DATA_GATEWAY_URL": "http://gateway.internal:8080",
-            "DATA_GATEWAY_API_KEY": "gw-key-123",
+            "DATA_GATEWAY_API_KEY": fake_gateway_api_key,
             "ORION_USE_GATEWAY": "false",
         },
         clear=True,
@@ -43,7 +54,7 @@ def test_gateway_settings_env_mapping_primary_names():
 
         s = SystemSettings()
         assert s.data_gateway_url == "http://gateway.internal:8080"
-        assert s.data_gateway_api_key == "gw-key-123"
+        assert s.data_gateway_api_key == fake_gateway_api_key
         assert s.orion_use_gateway is False
 
 

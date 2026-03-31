@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Execution safety and fill tracking**: partial fills are no longer dropped after the first broker update, fill persistence now refreshes existing rows instead of freezing stale audit data, and risk-reducing close orders can bypass the size ceiling only when they actually shrink absolute exposure. Preflight sizing also honors legacy USD order/ticker caps again.
+
+- **ML bypass and agent reliability**: ML bypass mode now truly passes flows through candidate generation instead of filtering everything out, `MetaAgent.run()` now fails fast with a clear `NotImplementedError` instead of silently returning `None`, and weekly meta summaries create their output directories before writing files.
+
+- **Flow normalization and rule matching**: provider payloads now normalize boolean-like strings and `PUT`/`CALL` tokens consistently, feature/rule processing accepts both compact and verbose put/call encodings, and DTE parse failures are logged instead of being silently swallowed.
+
+- **API outage visibility**: `/search` and `/flows` now return `503` when their backends fail instead of pretending there were simply no results, preserving the traceback in logs and making operator failures visible to clients.
+
+- **Fallback and tooling cleanup**: `SolverRouter` no longer hides failures inside its synthetic-baseline fallback path, repo docs and local agent instructions now point to `python -m orion.ingestion` instead of the removed `main_ingest.py` entrypoint, and the root helper scripts now satisfy `mypy`.
+
 - **HTTP client `elapsed` RuntimeError**: `_log_response` accessed `response.elapsed` inside an httpx response event hook before the response body was read or closed. This caused a `RuntimeError` on every max-pain connector request, exhausting retry budgets and flooding the error log. The access is now wrapped in a try/except so elapsed falls back to 0.0 when unavailable.
 
 - **Lint: unused `timedelta` import** in `processing/rules/base.py`: removed unused `timedelta` import.

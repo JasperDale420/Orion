@@ -6,15 +6,15 @@ This repository uses `pytest` for testing, with a focus on **Vertical Slice** ar
 
 ```bash
 # Install dependencies
-pip install .[dev]
+poetry install
 
 # Run the full suite
-make test
+poetry run make test
 
 # Run specific layers
-make test-unit         # Fast, isolated component tests
-make test-integration  # SLOW. Tests DB, Queue, and Contracts.
-make test-eod          # End-to-End user journeys.
+poetry run make test-unit         # Fast, isolated component tests
+poetry run make test-integration  # SLOW. Tests DB, Queue, and Contracts.
+poetry run make test-eod          # End-to-End user journeys.
 ```
 
 ## 🏗️ Test Architecture
@@ -25,7 +25,7 @@ make test-eod          # End-to-End user journeys.
 - **Rules**:
     - **NO** Network calls.
     - **NO** Database I/O (use in-memory mocks if needed, but prefer pure logic tests).
-    - **MOCK** all external dependencies (`AlpacaClient`, `RedpandaProducer`).
+    - **MOCK** all external dependencies (`AlpacaClient`, gateway readers, broker clients).
 
 ### 2. Integration Tests (`tests/integration/`)
 - **Goal**: Verify infrastructure wiring and contracts.
@@ -37,7 +37,7 @@ make test-eod          # End-to-End user journeys.
 
 ### 3. End-to-End Tests (`tests/e2e/`)
 - **Goal**: Verify system boot and critical paths.
-- **Tactics**: Simulate a full run of the `main_ingest` or `main_execution` loop.
+- **Tactics**: Simulate a full run of the `orion.ingestion` or `main_execution` loop.
 
 ## 🧰 Tools & Conventions
 
@@ -59,10 +59,10 @@ def mock_alpaca():
 def test_signal_generation(mock_alpaca):
     # Setup
     mock_alpaca.get_bars.return_value = [...]
-    
+
     # Act
     result = generate_signals(...)
-    
+
     # Assert
     assert result.action == "BUY"
 ```
@@ -72,4 +72,3 @@ Tests run automatically on GitHub Actions for every PR.
 - **Hygiene**: `pre-commit` (ruff, black, mypy).
 - **Tests**: Full `pytest` suite.
 - **Sonar**: Quality gate analysis.
-

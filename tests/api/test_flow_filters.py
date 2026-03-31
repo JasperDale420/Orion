@@ -68,7 +68,7 @@ async def test_flows_endpoint_supports_min_premium_filter_from_heber(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_flows_endpoint_returns_empty_when_heber_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flows_endpoint_returns_503_when_heber_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(system_settings, "api_key", "testkey")
 
     class _FakeReader:
@@ -79,6 +79,7 @@ async def test_flows_endpoint_returns_empty_when_heber_read_fails(monkeypatch: p
 
     headers = {"x-api-key": "testkey"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        rows = (await client.get("/flows", headers=headers, params={"ticker": "SPY"})).json()
+        res = await client.get("/flows", headers=headers, params={"ticker": "SPY"})
 
-    assert rows == []
+    assert res.status_code == 503
+    assert res.json()["detail"] == "Flow data unavailable"

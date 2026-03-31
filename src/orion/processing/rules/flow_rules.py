@@ -3,6 +3,25 @@ from orion.storage.models_gold import CandidateTrade, TradeDirection
 from orion.storage.models_silver import SilverSignal
 
 
+def _normalize_put_call_token(value: object) -> str | None:
+    token = str(value or "").strip().upper()
+    if token in {"C", "CALL", "CALLS"}:
+        return "CALL"
+    if token in {"P", "PUT", "PUTS"}:
+        return "PUT"
+    return token or None
+
+
+def _coerce_boolish(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 class BullishSweepRule(TradingRule):
     """
     PRD 9.1 Step 1: Bullish Sweep + Confirming Dark
@@ -37,12 +56,13 @@ class BullishSweepRule(TradingRule):
 
         # Check basic criteria
         # "sweep" flag usually passed
-        is_sweep = feat.get("is_sweep", False)
+        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
         if not is_sweep:
             return None
 
         # Call vs Put
-        if feat.get("put_call") != "CALL":
+        put_call = _normalize_put_call_token(feat.get("put_call"))
+        if put_call != "CALL":
             return None
 
         # Premium Size
@@ -75,7 +95,11 @@ class BullishSweepRule(TradingRule):
                 "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
                 "source_event_id": feat.get("source_event_id"),
                 "premium": premium,
+                "premium_usd": premium,
                 "dte": dte,
+                "is_sweep": True,
+                "aggressor": aggressor,
+                "put_call": "C",
                 "reason": "Bullish Sweep confirmed",
             },
         )
@@ -105,7 +129,8 @@ class BearishPutPressureRule(TradingRule):
             return None
 
         # Call vs Put
-        if feat.get("put_call") != "PUT":
+        put_call = _normalize_put_call_token(feat.get("put_call"))
+        if put_call != "PUT":
             return None
 
         # Premium
@@ -131,7 +156,11 @@ class BearishPutPressureRule(TradingRule):
                 "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
                 "source_event_id": feat.get("source_event_id"),
                 "premium": premium,
+                "premium_usd": premium,
                 "dte": dte,
+                "is_sweep": feat.get("is_sweep", False),
+                "aggressor": aggressor,
+                "put_call": "P",
             },
         )
         candidate.source = "UW"
@@ -177,7 +206,7 @@ class ZeroDTESweepRule(TradingRule):
             return None
 
         # Must be a sweep
-        is_sweep = feat.get("is_sweep", False)
+        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
         if not is_sweep:
             return None
 
@@ -205,7 +234,7 @@ class ZeroDTESweepRule(TradingRule):
             pass
 
         # Direction preference
-        put_call = feat.get("put_call", "")
+        put_call = _normalize_put_call_token(feat.get("put_call"))
         is_put = put_call == "PUT"
 
         # Calculate confidence based on criteria matching
@@ -226,10 +255,13 @@ class ZeroDTESweepRule(TradingRule):
                 "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
                 "source_event_id": feat.get("source_event_id"),
                 "premium": premium,
+                "premium_usd": premium,
                 "dte": dte,
-                "put_call": put_call,
+                "is_sweep": True,
+                "aggressor": aggressor,
+                "put_call": put_call or feat.get("put_call"),
                 "hour_utc": signal_hour,
-                "reason": f"0DTE {put_call} sweep at market open",
+                "reason": f"0DTE {put_call or feat.get('put_call', '')} sweep at market open",
             },
         )
         candidate.source = "UW"
@@ -276,7 +308,7 @@ class SwingEntryRule(TradingRule):
             return None
 
         # Must be a sweep
-        is_sweep = feat.get("is_sweep", False)
+        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
         if not is_sweep:
             return None
 
@@ -286,7 +318,7 @@ class SwingEntryRule(TradingRule):
             return None
 
         # PUTS ONLY - 2.5x better win rate than calls
-        put_call = feat.get("put_call", "")
+        put_call = _normalize_put_call_token(feat.get("put_call"))
         if put_call != "PUT":
             return None
 
@@ -319,8 +351,11 @@ class SwingEntryRule(TradingRule):
                 "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
                 "source_event_id": feat.get("source_event_id"),
                 "premium": premium,
+                "premium_usd": premium,
                 "dte": dte,
-                "put_call": put_call,
+                "is_sweep": True,
+                "aggressor": aggressor,
+                "put_call": put_call or feat.get("put_call"),
                 "hour_utc": signal_hour,
                 "reason": f"SWING put sweep ${premium / 1000:.0f}K DTE={dte}",
             },
@@ -368,7 +403,7 @@ class ShortSwingEntryRule(TradingRule):
         if not feat:
             return None
 
-        is_sweep = feat.get("is_sweep", False)
+        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
         if not is_sweep:
             return None
 
@@ -376,7 +411,7 @@ class ShortSwingEntryRule(TradingRule):
         if dte < 1 or dte > 3:
             return None
 
-        put_call = feat.get("put_call", "")
+        put_call = _normalize_put_call_token(feat.get("put_call"))
         if put_call != "CALL":
             return None
 
@@ -401,8 +436,11 @@ class ShortSwingEntryRule(TradingRule):
                 "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
                 "source_event_id": feat.get("source_event_id"),
                 "premium": premium,
+                "premium_usd": premium,
                 "dte": dte,
-                "put_call": put_call,
+                "is_sweep": True,
+                "aggressor": aggressor,
+                "put_call": put_call or feat.get("put_call"),
                 "hour_utc": signal_hour,
                 "reason": f"SHORT_SWING call sweep ${premium / 1000:.0f}K DTE={dte}",
             },

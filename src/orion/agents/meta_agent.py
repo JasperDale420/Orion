@@ -32,7 +32,7 @@ class MetaAgent(BaseAgent):
         """
         BaseAgent run method support (optional generic entry point).
         """
-        pass
+        raise NotImplementedError("MetaAgent.run is not a generic entry point; call propose_edits() instead")
 
     async def _fetch_strategy_research(
         self,

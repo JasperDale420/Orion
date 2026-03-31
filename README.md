@@ -46,7 +46,7 @@ poetry run pytest -q
 Run a single service locally:
 
 ```bash
-poetry run python -m orion.main_ingest
+poetry run python -m orion.ingestion
 poetry run python -m orion.main_execution
 ```
 

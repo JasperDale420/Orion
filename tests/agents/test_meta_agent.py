@@ -48,7 +48,7 @@ async def test_propose_edits(mock_solver_config):
             "orion.agents.meta_agent.run_codex_completion",
             new_callable=AsyncMock,
         ) as mock_codex,
-        patch("orion.config.agent_settings.model_name", "glm-5"),
+        patch("orion.config.agent_settings.model_name", "glm-5.1"),
     ):
         mock_codex.return_value = mock_response
 
@@ -58,8 +58,16 @@ async def test_propose_edits(mock_solver_config):
         # Verify codex was called
         mock_codex.assert_called_once()
         call_kwargs = mock_codex.call_args.kwargs
-        assert call_kwargs["model"] == "glm-5"
+        assert call_kwargs["model"] == "glm-5.1"
 
         # Verify output
         assert len(edits) == 1
         assert edits[0].ops[0].param_name == "exit_logic.take_profit_atr_multiple"
+
+
+@pytest.mark.asyncio
+async def test_run_is_not_generic_entry_point() -> None:
+    agent = MetaAgent()
+
+    with pytest.raises(NotImplementedError, match="propose_edits"):
+        await agent.run({})

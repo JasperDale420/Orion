@@ -30,6 +30,45 @@ def test_normalize_uw_flow():
     assert normalized["flags"]["is_block"] is True
 
 
+def test_normalize_uw_flow_handles_string_booleans():
+    payload = {
+        "ticker": "AAPL",
+        "timestamp": "2023-10-27T10:00:00Z",
+        "put_call": "put",
+        "expiry": "2023-10-27",
+        "strike_price": "180.0",
+        "price": "1.50",
+        "size": "100",
+        "has_sweep": "yes",
+        "has_floor": "false",
+        "has_multileg": "1",
+    }
+
+    normalized = NormalizationEngine.normalize_event("UW", "UW_FLOW", payload)
+
+    assert normalized["put_call"] == "P"
+    assert normalized["call_put"] == "P"
+    assert normalized["flags"]["is_sweep"] is True
+    assert normalized["flags"]["is_block"] is False
+    assert normalized["flags"]["is_multi_leg"] is True
+
+
+def test_normalize_uw_alert_shortens_put_call_to_single_letter():
+    payload = {
+        "ticker": "AAPL",
+        "timestamp": "2023-10-27T10:00:00Z",
+        "put_call": "CALL",
+        "expiry": "2023-10-27",
+        "strike_price": "180.0",
+        "price": "1.50",
+        "size": "100",
+    }
+
+    normalized = NormalizationEngine.normalize_event("UW", "UW_ALERT", payload)
+
+    assert normalized["put_call"] == "C"
+
+
 def test_normalize_alpaca_bar():
     payload = {
         "S": "SPY",  # Alpaca sometimes uses S or symbol

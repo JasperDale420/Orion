@@ -22,6 +22,16 @@ from orion.storage.models_silver import SignalType, SilverSignal
 logger = logging.getLogger(__name__)
 
 
+def _normalize_put_call_token(value: Any) -> str | None:
+    """Normalize put/call values to CALL/PUT when possible."""
+    token = str(value or "").strip().upper()
+    if token in {"C", "CALL", "CALLS"}:
+        return "CALL"
+    if token in {"P", "PUT", "PUTS"}:
+        return "PUT"
+    return token or None
+
+
 class FeatureEngine:
     """
     Processes BronzeEvents into SilverSignals (Features).
@@ -281,7 +291,8 @@ class FeatureEngine:
 
             # Extract relevant fields for aggregation
             # We normalize crudely here for the V1 slice
-            is_put = e.payload.get("put_call") == "P"
+            put_call = _normalize_put_call_token(e.payload.get("put_call"))
+            is_put = put_call == "PUT"
             premium = float(e.payload.get("premium_usd") or 0.0)
 
             self.flow_history.setdefault(ticker, []).append(
@@ -324,11 +335,11 @@ class FeatureEngine:
         features["source_event_id"] = getattr(event, "source_event_id", None)
 
         # Normalize put_call
-        pc = p.get("put_call")
-        if pc == "C":
-            features["put_call"] = "CALL"
-        elif pc == "P":
-            features["put_call"] = "PUT"
+        pc = _normalize_put_call_token(p.get("put_call"))
+        if pc in {"CALL", "PUT"}:
+            features["put_call"] = pc
+        elif pc:
+            features["put_call"] = pc
 
         # Normalize is_sweep
         is_sweep = features.get("is_sweep")
@@ -367,8 +378,12 @@ class FeatureEngine:
             exp_date = exp_dt.date()
             flow_dt = current_ts.astimezone(UTC)
             features["dte"] = max(0, (exp_date - flow_dt.date()).days)
-        except Exception:
-            pass
+        except (ValueError, TypeError, OverflowError):
+            logger.debug(
+                "DTE calculation failed",
+                extra={"ticker": features.get("ticker"), "expiry": expiry_raw},
+                exc_info=True,
+            )
 
     def _compute_flow_features(self, ticker: str, ref_ts: datetime) -> dict[str, float]:
         """

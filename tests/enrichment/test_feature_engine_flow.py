@@ -70,3 +70,15 @@ def test_feature_engine_expires_old_flow_simple():
 
     features = signals[0].features
     assert features.get("call_premium_15m", 0.0) == pytest.approx(0.0)
+
+
+def test_feature_engine_tracks_put_flows_when_put_call_is_expanded():
+    fe = FeatureEngine()
+    now = datetime.now(UTC)
+
+    put_flow = create_mock_flow_event("AAPL", 75000.0, datetime.fromtimestamp(now.timestamp() - 60, UTC))
+    put_flow.payload["put_call"] = "PUT"
+
+    fe.process_uw_flow([put_flow])
+
+    assert fe.flow_history["AAPL"][0]["is_put"] is True

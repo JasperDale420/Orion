@@ -383,7 +383,7 @@ async def search(
             extra={"event_type": "RAG_SEARCH_ERROR", "trace_id": trace_id, "error": str(e)},
             exc_info=True,
         )
-        return []
+        raise HTTPException(status_code=503, detail="Search unavailable") from e
 
 
 def _dt_iso(dt: datetime | None) -> str | None:
@@ -619,8 +619,9 @@ async def get_flows(
                 "end": end,
                 "error": str(exc),
             },
+            exc_info=True,
         )
-        return []
+        raise HTTPException(status_code=503, detail="Flow data unavailable") from exc
 
     if frame.empty:
         return []

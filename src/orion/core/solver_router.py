@@ -333,26 +333,23 @@ class SolverRouter:
                     err_text = str(e).lower()
                     if "no such table" in err_text:
                         logger.warning("Solver table unavailable; using synthetic baseline fallback")
-                        try:
-                            fallback_cfg = SolverConfig(
-                                version_id=baseline_id,
-                                rules=[],
-                                entry_logic={"rules": []},
-                                exit_logic={},
-                                risk={"risk_per_trade_bps": 100, "max_open_positions": 1},
+                        fallback_cfg = SolverConfig(
+                            version_id=baseline_id,
+                            rules=[],
+                            entry_logic={"rules": []},
+                            exit_logic={},
+                            risk={"risk_per_trade_bps": 100, "max_open_positions": 1},
+                        )
+                        return [
+                            SelectedSolver(
+                                solver_id=baseline_id,
+                                config=fallback_cfg,
+                                info_ratio=0.0,
+                                oos_expect_bp=0.0,
+                                is_ticker_specific=False,
+                                is_baseline=True,
                             )
-                            return [
-                                SelectedSolver(
-                                    solver_id=baseline_id,
-                                    config=fallback_cfg,
-                                    info_ratio=0.0,
-                                    oos_expect_bp=0.0,
-                                    is_ticker_specific=False,
-                                    is_baseline=True,
-                                )
-                            ]
-                        except Exception:
-                            pass
+                        ]
 
                 logger.error(
                     f"Error selecting solvers: {e}", extra={"error_code": ErrorCode.SOLVER_SELECTION_FAILED.value}

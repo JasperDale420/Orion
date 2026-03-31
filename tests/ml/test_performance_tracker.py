@@ -380,7 +380,18 @@ class TestGetDailyAccuracy:
         mock_row = (10, 8, 2, 80.0, None, None)
 
         async def _side_effect(query_fn):
-            return mock_row
+            mock_session = MagicMock()
+            mock_result = MagicMock()
+            mock_result.fetchone.return_value = mock_row
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            result = await query_fn(mock_session)
+
+            sql_text = str(mock_session.execute.call_args.args[0])
+            params = mock_session.execute.call_args.args[1]
+            assert "AND bucket = :bucket" in sql_text
+            assert params == {"bucket": "0DTE"}
+            return result
 
         mock_db_query.side_effect = _side_effect
 

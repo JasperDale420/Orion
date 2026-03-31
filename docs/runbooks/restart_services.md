@@ -8,31 +8,31 @@
 
 ```bash
 cd /path/to/Orion
-docker-compose down
-docker-compose up -d --build
+docker compose down
+docker compose up -d --build
 ```
 
 ## Restart Specific Service
 
 ```bash
 # List running services
-docker-compose ps
+docker compose ps
 
 # Restart a specific service
-docker-compose restart <service-name>
+docker compose restart <service-name>
 
 # Example: restart ingestion
-docker-compose restart orion-ingestion
+docker compose restart ingestion
 ```
 
 ## Verify Services Running
 
 ```bash
 # Check container status
-docker-compose ps
+docker compose ps
 
 # Check logs for a service
-docker-compose logs -f --tail=100 <service-name>
+docker compose logs -f --tail=100 <service-name>
 ```
 
 ## Health Check Endpoints
@@ -47,6 +47,6 @@ docker-compose logs -f --tail=100 <service-name>
 ```bash
 # Pull specific tag
 git checkout <tag-or-commit>
-docker-compose down
-docker-compose up -d --build
+docker compose down
+docker compose up -d --build
 ```

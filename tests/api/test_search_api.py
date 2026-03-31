@@ -104,3 +104,21 @@ async def test_search_supports_tickers_premium_filters_and_pointers(monkeypatch)
         assert row["pointers"]["source_type"] == "TEST"
         assert row["pointers"]["source_id"] == "row_1"
         assert row["pointers"]["event_ids"] == ["evt_1"]
+
+
+@pytest.mark.asyncio
+async def test_search_returns_503_when_vector_store_fails(monkeypatch):
+    monkeypatch.setattr(system_settings, "api_key", "testkey")
+
+    async def failing_search(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("vector store down")
+
+    monkeypatch.setattr("orion.api.main.VectorStore.search", failing_search)
+
+    headers = {"x-api-key": "testkey"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/search", headers=headers, params={"q": "sweep"})
+
+    assert res.status_code == 503
+    assert res.json()["detail"] == "Search unavailable"

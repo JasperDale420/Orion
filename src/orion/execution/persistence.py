@@ -145,8 +145,6 @@ async def persist_fill_record(fill: Any) -> None:
     """Persist a fill record and update the trade journal."""
 
     async def save_fill_and_update_journal(session: Any) -> None:
-        from sqlalchemy.dialects.postgresql import insert
-
         from orion.storage.models_execution import FillRecord
 
         if isinstance(fill, dict):
@@ -168,21 +166,30 @@ async def persist_fill_record(fill: Any) -> None:
             filled_at = getattr(fill, "filled_at", None) or getattr(fill, "filled_at_utc", None)
             raw = fill.model_dump(mode="json") if hasattr(fill, "model_dump") else {}
 
-        values = {
-            "id": str(uuid.uuid4()),
-            "ticker": ticker,
-            "broker_order_id": broker_order_id,
-            "client_order_id": str(client_oid) if client_oid else None,
-            "filled_qty": qty,
-            "filled_avg_price": price or None,
-            "side": side,
-            "filled_at_utc": filled_at,
-            "raw_json": raw,
-        }
-
-        stmt = insert(FillRecord).values(values)
-        stmt = stmt.on_conflict_do_nothing(index_elements=["broker_order_id"])
-        await session.execute(stmt)
+        stmt = select(FillRecord).where(FillRecord.broker_order_id == broker_order_id)
+        existing = (await session.execute(stmt)).scalars().first()
+        if existing:
+            existing.ticker = ticker
+            existing.client_order_id = str(client_oid) if client_oid else None
+            existing.filled_qty = qty
+            existing.filled_avg_price = price or None
+            existing.side = side
+            existing.filled_at_utc = filled_at
+            existing.raw_json = raw
+        else:
+            session.add(
+                FillRecord(
+                    id=str(uuid.uuid4()),
+                    ticker=ticker,
+                    broker_order_id=broker_order_id,
+                    client_order_id=str(client_oid) if client_oid else None,
+                    filled_qty=qty,
+                    filled_avg_price=price or None,
+                    side=side,
+                    filled_at_utc=filled_at,
+                    raw_json=raw,
+                )
+            )
 
         # PRD SS12.4: Update trade journal fill pointers by broker_order_id.
         try:

@@ -174,9 +174,7 @@ async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
     from orion.shared.db_utils import db_query
 
     async def query(session: Any) -> Any:
-        bucket_filter = "AND bucket = :bucket" if bucket else ""
-        result = await session.execute(
-            text(f"""
+        sql = """
                 SELECT
                     COUNT(*) as total_predictions,
                     COUNT(CASE WHEN prediction_correct THEN 1 END) as correct,
@@ -189,9 +187,14 @@ async def get_daily_accuracy(bucket: str | None = None) -> dict[str, Any]:
                     AVG(actual_return_pct) FILTER (WHERE prediction_class = 0) as avg_return_low_score
                 FROM ml_predictions
                 WHERE prediction_ts >= CURRENT_DATE
-                {bucket_filter}
-            """),
-            {"bucket": bucket} if bucket else {},
+            """
+        params: dict[str, Any] = {}
+        if bucket:
+            sql += "\n                AND bucket = :bucket"
+            params["bucket"] = bucket
+        result = await session.execute(
+            text(sql),
+            params,
         )
         return result.fetchone()
 

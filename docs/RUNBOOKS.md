@@ -11,26 +11,38 @@ Canonical runbook:
 
 ```bash
 # Check all containers
-docker-compose ps
+docker compose ps
 
 # Check API health
 curl -s http://localhost:8000/health | jq
 
 # Check database connection
-docker-compose exec orion python -c "from orion.storage.db import async_session_factory; print('DB OK')"
+docker compose exec execution python - <<'PY'
+import asyncio
+from sqlalchemy import text
+from orion.storage.db import async_session_factory
+
+
+async def main() -> None:
+    async with async_session_factory() as session:
+        await session.execute(text("select 1"))
+        print("DB OK")
+
+
+asyncio.run(main())
+PY
 ```
 
 ### Log Inspection
 
 ```bash
-# API logs
-docker-compose logs -f orion-api --tail=100
+# Admin API logs live in the terminal running the local API process.
 
 # Ingestion logs
-docker-compose logs -f orion-ingestion --tail=100
+docker compose logs -f ingestion --tail=100
 
 # Filter for errors
-docker-compose logs orion-api 2>&1 | grep -i error | tail -50
+docker compose logs execution 2>&1 | rg -i error | tail -50
 ```
 
 ---
@@ -47,7 +59,7 @@ docker-compose logs orion-api 2>&1 | grep -i error | tail -50
 curl -s http://localhost:8000/health | jq '.circuit_breaker'
 
 # Close circuit breaker (requires investigation first!)
-docker-compose exec orion python -c "
+docker compose exec execution python -c "
 from orion.core.circuit_breaker import CircuitBreaker
 import asyncio
 asyncio.run(CircuitBreaker().close())
@@ -70,7 +82,7 @@ asyncio.run(CircuitBreaker().close())
 **Resolution:**
 ```bash
 # Restart to reset pool
-docker-compose restart orion-api
+echo "Restart the local API process if it is running outside compose"
 
 # Long-term: increase pool size in config
 # DATABASE_POOL_SIZE=10

@@ -150,11 +150,17 @@ class RiskManager:
             if cfg.max_order_size_usd is not None
             else self.current_equity * cfg.max_order_size_pct
         )
-        if estimated_cost > max_order_size:
+        projected_signed, effective_signed = self._calculate_projected_exposure(ticker, estimated_cost, side, price)
+
+        if estimated_cost > max_order_size and not self._is_risk_reducing_trade(projected_signed, effective_signed):
             logger.warning(f"RISK REJECT: Order Size ${estimated_cost:.2f} > Limit ${max_order_size:.2f}")
             return False
 
-        projected_signed, effective_signed = self._calculate_projected_exposure(ticker, estimated_cost, side, price)
+        if estimated_cost > max_order_size:
+            logger.info(
+                f"RISK BYPASS: Order Size ${estimated_cost:.2f} exceeds limit ${max_order_size:.2f} "
+                f"but reduces {ticker} exposure"
+            )
 
         if not self._check_shorting(cfg, projected_signed, effective_signed):
             return False
@@ -261,6 +267,10 @@ class RiskManager:
         projected_signed = effective_signed + cost_impact
 
         return projected_signed, effective_signed
+
+    @staticmethod
+    def _is_risk_reducing_trade(projected_signed: float, effective_signed: float) -> bool:
+        return abs(projected_signed) < abs(effective_signed) - 1e-9
 
     def _check_shorting(self, cfg: RiskSettings, projected_signed: float, effective_signed: float) -> bool:
         is_moving_short = projected_signed < effective_signed

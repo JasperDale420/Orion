@@ -9,6 +9,27 @@ from orion.shared.utils import parse_timestamptz
 logger = setup_struct_logger(__name__)
 
 
+def _coerce_boolish(value: Any) -> bool:
+    """Return a stable boolean for common provider encodings."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _normalize_put_call_short(value: Any) -> str | None:
+    """Normalize a put/call token to the one-character Silver contract."""
+    token = str(value or "").strip().upper()
+    if token in {"C", "CALL", "CALLS"}:
+        return "C"
+    if token in {"P", "PUT", "PUTS"}:
+        return "P"
+    return None
+
+
 class NormalizationEngine:
     """
     Normalizes raw provider payloads into canonical Silver schemas (PRD 6.2).
@@ -43,11 +64,13 @@ class NormalizationEngine:
         flow_ts = parse_timestamptz(ts_str, strict=True)
 
         # Normalize sweep flag - support both has_sweep and sweep.
-        is_sweep = payload.get("has_sweep", payload.get("sweep", False))
-        if isinstance(is_sweep, str):
-            is_sweep = is_sweep.lower() == "true"
-        is_block = payload.get("has_floor", False) or payload.get("trade_type") == "BLOCK"
-        is_multi_leg = payload.get("has_multileg", False) or payload.get("multi_leg", False)
+        is_sweep = _coerce_boolish(payload.get("has_sweep", payload.get("sweep", False)))
+        is_block = (
+            _coerce_boolish(payload.get("has_floor", False)) or str(payload.get("trade_type") or "").upper() == "BLOCK"
+        )
+        is_multi_leg = _coerce_boolish(payload.get("has_multileg", False)) or _coerce_boolish(
+            payload.get("multi_leg", False)
+        )
 
         # Derive aggressor from total_ask_side_prem vs total_bid_side_prem
         # If ask_prem > bid_prem, buyers are initiating (ASK aggressor = bullish)
@@ -65,12 +88,9 @@ class NormalizationEngine:
 
         # Normalize put/call - UW uses 'type' (C/P/call/put) or 'put_call'
         raw_put_call = payload.get("put_call") or payload.get("type") or ""
-        raw_put_call_upper = str(raw_put_call).upper()
-        if raw_put_call_upper in ("C", "CALL"):
-            put_call = "C"
-        elif raw_put_call_upper in ("P", "PUT"):
-            put_call = "P"
-        else:
+        put_call = _normalize_put_call_short(raw_put_call)
+        if put_call is None:
+            raw_put_call_upper = str(raw_put_call).upper()
             first_char = raw_put_call_upper[:1] if raw_put_call_upper else ""
             if first_char in ("P", "C"):
                 put_call = first_char
@@ -169,11 +189,15 @@ class NormalizationEngine:
         # Use parsed underlying if available, else use raw ticker
         underlying = occ_data.get("underlying") if occ_data else raw_ticker
 
+        normalized_put_call = _normalize_put_call_short(
+            occ_data.get("put_call") or payload.get("put_call") or payload.get("call_put")
+        )
+
         normalized: dict[str, Any] = {
             "ticker": underlying,  # Use underlying stock ticker
             "option_symbol": raw_ticker if occ_data else None,  # Store full OCC symbol
             "alert_ts_utc": alert_ts.isoformat(),
-            "put_call": occ_data.get("put_call") or payload.get("put_call") or payload.get("call_put"),
+            "put_call": normalized_put_call,
             "expiry": occ_data.get("expiry") or payload.get("expiry"),
             "strike": occ_data.get("strike") or float(payload.get("strike") or payload.get("strike_price") or 0),
             "option_price": float(payload.get("price") or payload.get("option_price") or 0),
