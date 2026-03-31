@@ -1,0 +1,53 @@
+meta:
+  run_id: 6a7e99c3-ef67-4479-af0e-49fe384affb4
+  created_at: '2026-03-31T21:30:00.000000+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-03-31_6a7e99c3-ef67-4479-af0e-49fe384affb4.json
+  report_path: artifacts/reports/eod_report_2026-03-31.md
+proposal:
+  type: solver_edit
+  priority: 2
+  rationale: |
+    SWING_hit_target_50 model shows AUC=0.727 with iv_rank as the #1 most important feature
+    (importance=170). The theta_premium_ratio feature is also top-7 (importance=71-78).
+    Top rule: "strike > avg AND premium > avg" has 99.98% hit rate (n=5,493) for hitting
+    profit targets. The current seeded solvers do not incorporate iv_rank or theta_premium_ratio
+    in their feature sets. Creating a SWING-optimized solver with these features should
+    improve signal quality for the SWING bucket (30.7% positive rate, 34,605 sample).
+  evidence_pointers:
+    ml_insight: "SWING_hit_target_50 AUC=0.727, SWING_quick_winner AUC=0.700"
+    top_feature: "iv_rank importance=170 (rank #1 across all SWING models)"
+    secondary_feature: "theta_premium_ratio importance=71-78 (rank #6-7)"
+    high_confidence_rule: "strike > avg AND premium > avg → 99.98% hit_rate (n=5,493)"
+    positive_rate_swing: 0.307
+    sample_size: 34605
+  test_plan:
+    - Backtest with 30-day window using SWING bucket signals
+    - Verify iv_rank feature is correctly computed in feature engine
+    - Compare win rate vs existing diversified_baseline_v1 solver
+    - Start in research stage, promote to paper after 50 trades with positive edge
+  target_solver_id: diversified_baseline_v1
+  ops:
+    - op: add_rule
+      new_value: rule_swing_iv_rank_v1
+      reasoning: "ML shows iv_rank is the strongest predictor for SWING target hits. Rule should
+        filter for iv_rank above average (confirming elevated IV for premium selling or
+        momentum entry). Top rule 'strike > avg AND premium > avg' achieves 99.98% hit rate."
+    - op: toggle_feature
+      feature_name: theta_premium_ratio
+      new_value: true
+      reasoning: "theta_premium_ratio is rank #6-7 in SWING models (importance 71-78). Currently
+        not in the v1_legacy feature set used by diversified_baseline_v1. Enabling it allows
+        the solver to use theta decay dynamics for better timing."
+    - op: modify_param
+      param_name: exit_logic.take_profit_atr_multiple
+      new_value: 2.5
+      reasoning: "SWING targets have 30.7% positive rate with current config. The ML hit_target_100
+        model (AUC 0.678) suggests using a slightly wider target to capture more of the
+        predicted move. Increasing from default to 2.5x ATR."
+    - op: toggle_feature
+      feature_name: volume_oi_ratio
+      new_value: true
+      reasoning: "volume_oi_ratio appears as top-8 feature in SHORT_SWING (importance 42) and
+        is available in the normalizer. Useful for confirming unusual activity before entry."

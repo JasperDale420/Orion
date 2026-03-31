@@ -426,8 +426,10 @@ class GatewayStreamClient:
 
         self._running = True
 
-        if not await self.connect():
-            raise ConnectionError("Failed to connect to Gateway WebSocket")
+        # Use reconnection logic for initial connection to handle transient failures
+        if not await self._reconnect_with_backoff():
+            self._running = False
+            raise ConnectionError("Failed to connect to Gateway WebSocket after retries")
 
         # Flush queued subscriptions that were requested before startup.
         if self._subscribed_symbols:

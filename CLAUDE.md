@@ -17,6 +17,13 @@ ruff format .                    # format
 mypy .                           # type check (strict, excludes archive/qlib-main/scripts/tests/alpaca)
 ```
 
+E2E pipeline verification (requires TimescaleDB running on port 5440):
+```bash
+uv run pytest tests/e2e/test_smoke_e2e.py -v -s          # 9-stage pipeline smoke test
+uv run pytest tests/e2e/test_live_data_flow.py -v -s      # live data flow health check
+uv run python tests/e2e/test_live_data_flow.py             # standalone diagnostic
+```
+
 Docker (TimescaleDB + all services):
 ```bash
 docker compose up timescaledb -d                          # DB only
@@ -179,6 +186,15 @@ Tests use in-memory SQLite (`sqlite+aiosqlite:///:memory:`) via `conftest.py` wh
 - `e2e` — full system flow
 - `slow` — tests >1s
 
+### E2E Tests (Real TimescaleDB)
+
+Two E2E tests connect to the real TimescaleDB (port 5440) instead of in-memory SQLite:
+
+- **`test_smoke_e2e.py`** — Injects simulated data and verifies all 9 pipeline stages produce output: bronze → silver → features → rollups → rules → candidates → ML scoring → signal engine → execution (mocked broker). Always runs; proves pipeline logic works.
+- **`test_live_data_flow.py`** — Queries the DB for the most recent row at each stage and reports freshness. During market hours, fails if any stage is stale/empty. Outside market hours, passes with diagnostic output.
+
+Both tests override the conftest SQLite binding via `db.configure_db()` and restore it before yielding to prevent the autouse teardown from dropping real tables.
+
 ## Logging
 
 `shared/logger.py` delegates to `empire_core.logger`. Maps `ORION_LOG_FORMAT` → `EMPIRE_LOG_FORMAT` and `ORION_LOG_DIR` → `EMPIRE_LOG_DIR`. Injects `run_id` into context on first call. Use `setup_struct_logger(name)` throughout.
@@ -186,6 +202,17 @@ Tests use in-memory SQLite (`sqlite+aiosqlite:///:memory:`) via `conftest.py` wh
 ## Error Handling
 
 `OrionError` extends `EmpireError`. Subclasses: `ProviderError`, `StorageError`, `ExecutionError`, `ModelInferenceError`, `FeatureComputationError`. Error codes in `ErrorCode` enum. API returns standard Empire error envelope.
+
+## Position Attribution (Shared Alpaca Account)
+
+The Alpaca paper account is shared by multiple trading systems via Data-Gateway. Orion identifies its own orders and positions:
+
+- **Order ID prefix**: All Orion orders use `client_order_id = "orion_" + uuid`. Defined as `ORDER_ID_PREFIX` in `execution/execution_engine.py`.
+- **Position filtering**: `_sync_risk_from_gateway` queries the `orders` table for tickers with `orion_`-prefixed orders, then only loads those positions into the risk manager.
+- **Fill validation**: `FillProcessor` skips any fill whose `client_order_id` doesn't start with `orion_`.
+- **Schema**: `OrderRecord.system` column (default `"orion"`) for persistent attribution.
+
+When modifying order submission or risk sync, preserve the `ORDER_ID_PREFIX` filtering to avoid counting other systems' positions.
 
 ## Safety-Critical Code
 

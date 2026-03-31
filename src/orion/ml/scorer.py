@@ -297,15 +297,15 @@ class MLScorer:
             "max_pain_distance_pct": get("max_pain_distance"),
             "vix_at_entry": get("vix"),
             "darkpool_volume_1h": get("darkpool_volume"),
-            "put_call": 1 if flow.get("put_call") == "C" else 0,
-            "alert_type": get("alert_type"),
-            "side": get("side"),
-            "aggressor": get("aggressor"),
-            "is_bullish": get("is_bullish"),
-            "is_bearish": get("is_bearish"),
-            "is_sweep": get("is_sweep"),
-            "is_block": get("is_block"),
-            "is_unusual": get("is_unusual"),
+            "put_call": flow.get("put_call", ""),
+            "alert_type": flow.get("alert_type", ""),
+            "side": flow.get("side", ""),
+            "aggressor": flow.get("aggressor", ""),
+            "is_bullish": str(flow.get("is_bullish", False)),
+            "is_bearish": str(flow.get("is_bearish", False)),
+            "is_sweep": str(flow.get("is_sweep", False)),
+            "is_block": str(flow.get("is_block", False)),
+            "is_unusual": str(flow.get("is_unusual", False)),
             "vol_regime_at_entry": 0,
             "risk_regime_at_entry": 0,
             "session_regime_at_entry": 0,
@@ -393,8 +393,18 @@ class MLScorer:
             features = self.extract_features(flow, bucket)
             feature_names = self.feature_names[bucket]
 
+            # Encode categorical features using mappings saved during training
+            cat_mappings = model_data.get("categorical_mappings", {})
+            for col, categories in cat_mappings.items():
+                if col in features:
+                    raw_val = str(features[col]) if features[col] is not None else ""
+                    if raw_val in categories:
+                        features[col] = categories.index(raw_val)
+                    else:
+                        features[col] = -1  # unseen category
+
             # Build feature vector in correct order
-            feature_vector = np.array([[features.get(f, 0) for f in feature_names]])
+            feature_vector = np.array([[features.get(f, 0) for f in feature_names]], dtype=float)
 
             # Predict probability
             prob = model.predict_proba(feature_vector)[0][1]

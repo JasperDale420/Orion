@@ -28,6 +28,10 @@ class OrderRecord(Base):
     broker_order_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     status: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # System attribution — identifies which trading system placed this order.
+    # Used to filter positions in the shared Alpaca paper account.
+    system: Mapped[str] = mapped_column(String, nullable=False, default="orion")
+
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 

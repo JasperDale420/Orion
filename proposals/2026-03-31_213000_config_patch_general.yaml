@@ -1,0 +1,34 @@
+meta:
+  run_id: 6a7e99c3-ef67-4479-af0e-49fe384affb4
+  created_at: '2026-03-31T21:30:00.000000+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-03-31_6a7e99c3-ef67-4479-af0e-49fe384affb4.json
+  report_path: artifacts/reports/eod_report_2026-03-31.md
+proposal:
+  type: config_patch
+  priority: 1
+  rationale: |
+    CRITICAL SYSTEM FAILURE: ORION_BASELINE_SOLVER_ID is not set (defaults to None).
+    This causes the SolverRouter to return an empty list, triggering safety SKIP for ALL candidates.
+    Historical analysis confirms the system has NEVER executed a trade — every day from March 18-31
+    shows 100% SKIP rate. The alembic migration 0026_seed_initial_solvers.py already seeds a
+    'diversified_baseline_v1' solver with status='active', stage='paper', and valid metrics.
+    Setting this env var will activate the fallback path in SolverRouter.select_solvers() and
+    allow the ensemble to produce EXECUTE decisions.
+  evidence_pointers:
+    baseline_solver_id: "None (not configured)"
+    historical_skip_rate: "100% across all trading days (73+431+577+327+3 decisions)"
+    skip_reason: "Fallback: Router empty and no baseline solver applied; defaulting to safety SKIP"
+    ml_score_today: 0.953
+    ml_threshold: 0.5
+    regime: "flat/normal/neutral — benign, should not block"
+    migration_0026_solver: "diversified_baseline_v1 with status=active, stage=paper, oos_expect_bp=10.0"
+  test_plan:
+    - Set ORION_BASELINE_SOLVER_ID=diversified_baseline_v1 in environment
+    - Verify alembic migration 0026 has been applied (SELECT count(*) FROM solvers WHERE status='active')
+    - If migration not applied, run: alembic upgrade head
+    - Restart signal engine and verify next session produces EXECUTE decisions
+    - Monitor first 10 decisions for correct routing to baseline solver
+  changes:
+    ORION_BASELINE_SOLVER_ID: diversified_baseline_v1

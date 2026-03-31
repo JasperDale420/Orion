@@ -1,0 +1,38 @@
+meta:
+  run_id: 6a7e99c3-ef67-4479-af0e-49fe384affb4
+  created_at: '2026-03-31T21:30:00.000000+00:00'
+  agent: EODReviewAgent
+  status: PROPOSED
+  input_snapshot_path: artifacts/reports/eod_input_2026-03-31_6a7e99c3-ef67-4479-af0e-49fe384affb4.json
+  report_path: artifacts/reports/eod_report_2026-03-31.md
+proposal:
+  type: investigation_request
+  priority: 2
+  rationale: |
+    UW_FLOW ingestion shows concerning lag: p50=287s (4.8 min), p95=1439s (24 min),
+    max_gap=3773s (63 min). With a 15-minute lookback window for Alpaca data, flow signals
+    could be based on data that is 4-24 minutes stale. This may explain the huge ML score
+    variance between days (0.10 on March 30 vs 0.95 on March 31 from RAG context).
+    Additionally, the ML prefilter rejection rate is extremely high (100% on March 30 with
+    327 candidates all scoring 0.10), suggesting the flow data arriving late may be getting
+    scored against already-moved prices, producing low-quality features.
+  evidence_pointers:
+    uw_flow_p50_lag_s: 286.86
+    uw_flow_p95_lag_s: 1439.06
+    uw_flow_max_gap_s: 3772.78
+    alpaca_lookback_minutes: 15
+    mar30_ml_score: 0.10
+    mar31_ml_score_rag: 0.953
+    mar30_skip_count: 327
+    mar30_skip_reason: "ML pre-filter: score 0.10 below threshold (0.5)"
+  test_plan:
+    - Check UW_FLOW ingestion pipeline for bottlenecks (network, API rate limits, parsing)
+    - Compare flow event timestamps vs database insert timestamps for a sample of 100 events
+    - Determine if the 63-min max gap represents a real outage or a systematic issue
+    - If lag is inherent to the data source, consider widening Alpaca lookback or adding
+      a "staleness score" to ML features
+    - Monitor lag trends over the next 5 trading days after any fixes
+  investigation_areas:
+    - UW_FLOW ingestion latency root cause
+    - Impact of stale data on ML feature computation
+    - Whether March 30's 0.10 ML scores correlate with high ingestion lag periods

@@ -7,7 +7,7 @@ class BaseAgent(ABC):
     Abstract Base Class for Orion AI Agents.
     """
 
-    def __init__(self, name: str, model: str = "glm-5"):
+    def __init__(self, name: str, model: str = "glm-5.1"):
         self.name = name
         self.model = model
 
