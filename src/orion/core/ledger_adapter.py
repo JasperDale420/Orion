@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 
 from empire_core.ledger import LedgerWriter
 
+from orion.core.enums import OrderSide
+
 logger = logging.getLogger(__name__)
 
 
@@ -125,12 +127,12 @@ class OrionLedgerAdapter:
 
         side = self._order_sides[client_order_id]
 
-        if side == "buy":
+        if side == OrderSide.BUY:
             # Open a new trade and track a position
             trade_id = self._writer.open_trade(
                 correlation_id=self._get_correlation_id(client_order_id),
                 symbol=symbol,
-                side="buy",
+                side=OrderSide.BUY,
                 qty=filled_qty,
                 entry_price=filled_avg_price,
                 entry_time=now,
@@ -140,13 +142,13 @@ class OrionLedgerAdapter:
 
             self._writer.upsert_position(
                 symbol=symbol,
-                side="buy",
+                side=OrderSide.BUY,
                 qty=filled_qty,
                 avg_entry_price=filled_avg_price,
                 strategy=STRATEGY,
             )
 
-        elif side == "sell":
+        elif side == OrderSide.SELL:
             # Close the open trade if one exists
             open_trade = self._open_trades.pop(symbol, None)
             if open_trade is not None:

@@ -104,7 +104,7 @@ async def setup_test_db(monkeypatch):
 @pytest.fixture
 def risk_manager_factory():
     """Factory fixture to create RiskManager instances with custom config."""
-    from orion.execution.risk_manager import RiskManager
+    from orion.execution.risk.manager import RiskManager
 
     def _create(config=None):
         return RiskManager(config=config)

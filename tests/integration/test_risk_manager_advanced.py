@@ -8,7 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from orion.config import RiskSettings
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 
 
 class TestGreeksLimits:

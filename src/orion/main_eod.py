@@ -1,9 +1,12 @@
 """
 EOD Agent Service - Daily End-of-Day Review Agent.
 
-Runs automatically after market close on trading days.
-Uses MarketSchedule to detect trading sessions and runs EODReviewAgent
-30 minutes after market close.
+Convenience entry point for manual/standalone EOD runs. The primary automated
+trigger lives in ``ingestion/service.py`` (``_check_eod_trigger``, ~line 426),
+which fires EODReviewAgent from within the ingestion loop at 01:05 UTC daily.
+This standalone service provides an independent scheduling mechanism using
+MarketSchedule (30 min after market close) and can be run as a separate Docker
+service (``eod-agent``) or invoked manually.
 """
 
 import asyncio
@@ -12,7 +15,7 @@ import signal
 from datetime import UTC, datetime, timedelta
 
 from orion.agents.eod_review_agent import EODReviewAgent
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.shared.logger import setup_struct_logger
 

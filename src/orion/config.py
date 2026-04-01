@@ -150,7 +150,13 @@ class SystemSettings(BaseSettings):
     metrics_port: int = Field(default=8000, validation_alias="ORION_METRICS_PORT")
 
     # ML / Models
-    model_dir: Path = Field(default=Path("/app/models"), validation_alias="ORION_MODEL_DIR")
+    # /app/models exists inside Docker (volume mount); outside Docker fall back
+    # to <project-root>/models so that locally-trained models are picked up
+    # without requiring ORION_MODEL_DIR to be set in every env.
+    model_dir: Path = Field(
+        default=Path("/app/models") if Path("/app/models").exists() else Path(__file__).resolve().parents[2] / "models",
+        validation_alias="ORION_MODEL_DIR",
+    )
     max_model_age_days: int = Field(default=14, validation_alias="ORION_MAX_MODEL_AGE_DAYS")
     ml_stale_model_policy: str = Field(
         default="warn",
@@ -196,18 +202,7 @@ class SystemSettings(BaseSettings):
     # Client URLs
     trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")
     trading_rag_api_key: str | None = Field(default=None, validation_alias="TRADING_RAG_API_KEY")
-    mcp_server_url: str = Field(
-        default="",
-        validation_alias="MCP_SERVER_URL",
-        description="MCP server URL (deprecated — Alpaca/UW now use official MCP servers via .mcp.json)",
-    )
     orion_api_url: str = Field(default="http://localhost:8000", validation_alias="ORION_API_URL")
-
-    # Lakehouse (S3-compatible object store)
-    lakehouse_endpoint_url: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_ENDPOINT_URL")
-    lakehouse_access_key: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_ACCESS_KEY")
-    lakehouse_secret_key: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_SECRET_KEY")
-    lakehouse_bucket: str | None = Field(default=None, validation_alias="ORION_LAKEHOUSE_BUCKET")
 
     # System Monitor
     monitor_lag_threshold: int = Field(default=300, validation_alias="MONITOR_LAG_THRESHOLD")

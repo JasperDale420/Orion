@@ -7,7 +7,6 @@ UVIX (2x leveraged short-term VIX futures), VIXM (mid-term VIX futures).
 """
 
 import asyncio
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -15,8 +14,9 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
+from orion.shared.logger import setup_struct_logger
 
-logger = logging.getLogger(__name__)
+logger = setup_struct_logger("orion.connectors.vix_proxy")
 
 
 # VIX proxy candidates in priority order: (symbol, multiplier_to_approximate_vix)

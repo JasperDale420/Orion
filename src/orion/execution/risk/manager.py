@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from orion.config import RiskSettings, risk_settings
+from orion.core.enums import OrderSide
 from orion.execution.risk.greeks import GreeksTracker
 from orion.execution.risk.sector import SectorTracker
 from orion.execution.risk.sizing import PositionSizer
@@ -263,7 +264,7 @@ class RiskManager:
             signed_current_exposure = pos["qty"] * price
 
         effective_signed = signed_current_exposure + pending_exposure
-        cost_impact = estimated_cost if side.lower() == "buy" else -estimated_cost
+        cost_impact = estimated_cost if side.lower() == OrderSide.BUY else -estimated_cost
         projected_signed = effective_signed + cost_impact
 
         return projected_signed, effective_signed
@@ -548,7 +549,7 @@ class RiskManager:
             if _metrics and hasattr(_metrics, "slippage_bps"):
                 _metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
 
-        sign = 1 if side.lower() == "buy" else -1
+        sign = 1 if side.lower() == OrderSide.BUY else -1
         signed_fill_qty = abs(qty) * sign
 
         current_pos = self.positions.get(ticker, {"qty": 0.0, "avg_entry": 0.0})
@@ -616,7 +617,7 @@ class RiskManager:
             order_id = f"pending_{datetime.now(UTC).timestamp()}"
 
         cost = qty * price
-        signed_cost = cost if side.lower() == "buy" else -cost
+        signed_cost = cost if side.lower() == OrderSide.BUY else -cost
         self.pending_orders[order_id] = (ticker, signed_cost)
 
     def remove_pending_order(self, order_id: str) -> None:
@@ -678,7 +679,7 @@ class RiskManager:
                         continue
 
                     cost = qty * limit_price
-                    signed_cost = cost if side_str.lower() == "buy" else -cost
+                    signed_cost = cost if side_str.lower() == OrderSide.BUY else -cost
                     self.pending_orders[order_id] = (symbol, signed_cost)
 
             except Exception as e:

@@ -1,14 +1,14 @@
 import logging
 import time
 from collections.abc import Iterable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
 from orion.config import STATIC_WATCHLIST, UNIVERSE_TTL_SECONDS
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent
-from orion.storage.models_silver import SilverUWAlert
+from orion.storage.models_gold import CandidateTrade
 
 logger = logging.getLogger(__name__)
 
@@ -38,50 +38,33 @@ class UniverseManager:
         self.expiry_tickers: dict[str, date] = {}
 
     async def hydrate_from_db(self) -> None:
-        """
-        Hydrates the universe from the database, specifically looking for
-        active alerts with future expiration dates.
-        """
-        logger.info("Hydrating Universe from DB for active option contexts...")
-        today_str = datetime.now(UTC).strftime("%Y-%m-%d")
-
-        count = 0
+        """Hydrate universe from recent candidate trades so midday restarts retain active tickers."""
         try:
+            cutoff = datetime.now(UTC) - timedelta(days=1)
             async with async_session_factory() as session:
-                # Query distinct tickers with future expiry from Alerts
-                stmt = (
-                    select(SilverUWAlert.ticker, SilverUWAlert.expiry)
-                    .where(SilverUWAlert.expiry >= today_str)
-                    .group_by(SilverUWAlert.ticker, SilverUWAlert.expiry)
+                rows = await session.execute(
+                    select(CandidateTrade.ticker, CandidateTrade.expiry)
+                    .where(CandidateTrade.created_at >= cutoff)
+                    .distinct()
                 )
-
-                result = await session.execute(stmt)
-                for row in result:
+                now_ts = time.time()
+                count = 0
+                for row in rows:
                     ticker = row.ticker
-                    expiry_str = row.expiry
-
-                    if not ticker or not expiry_str:
-                        continue
-
-                    try:
-                        exp_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
-
-                        # Add to expiry tracking
-                        current_exp = self.expiry_tickers.get(ticker)
-                        if not current_exp or exp_date > current_exp:
-                            self.expiry_tickers[ticker] = exp_date
-
-                        # Ensure it's marked as active so Alpaca picks it up immediately
-                        self.active_tickers[ticker] = time.time()
-                        self.alert_tickers[ticker] = time.time()
+                    if ticker:
+                        self.active_tickers[ticker] = now_ts
                         count += 1
-                    except ValueError:
-                        continue
-
-            logger.info(f"Hydrated {count} active contexts from DB with future options expiry.")
-
+                    expiry_str = row.expiry
+                    if ticker and expiry_str:
+                        try:
+                            exp_date = date.fromisoformat(str(expiry_str))
+                            if exp_date >= datetime.now(UTC).date():
+                                self.expiry_tickers[ticker] = exp_date
+                        except (ValueError, TypeError):
+                            pass
+                logger.info(f"Universe hydrated from candidate_trades: {count} tickers")
         except Exception as e:
-            logger.error(f"Failed to hydrate universe from DB: {e}")
+            logger.warning(f"Universe hydrate_from_db failed (non-fatal): {e}")
 
     def update_from_config(self, tickers: list[str]) -> None:
         """

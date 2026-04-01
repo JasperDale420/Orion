@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from orion.core.enums import DecisionAction
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
@@ -41,14 +42,14 @@ async def fetch_pending_candidates(limit: int = 100) -> list[CandidateTrade]:
 async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -> None:
     """Persist a strategy decision and associated signal/journal records."""
     # PRDv2 §11.2: EXECUTE decisions must carry expected_return, p_take, risk_score.
-    if decision.decision == "EXECUTE":
+    if decision.decision == DecisionAction.EXECUTE:
         expected_return = None
         risk_score = None
         if isinstance(decision.decision_trace_json, dict):
             expected_return = decision.decision_trace_json.get("expected_return_bp")
             risk_score = decision.decision_trace_json.get("risk_score")
         if expected_return is None or risk_score is None or decision.p_take is None:
-            decision.decision = "SKIP"
+            decision.decision = DecisionAction.SKIP
             decision.reason = "Missing required signal fields (expected_return/risk_score/p_take)"
 
     async def persist_decision(session: Any) -> None:

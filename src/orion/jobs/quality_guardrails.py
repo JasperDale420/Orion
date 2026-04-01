@@ -18,7 +18,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orion.core.logging_config import setup_logging
+from orion.shared.legacy_flags import is_legacy_pipeline_enabled, legacy_pipeline_control
+from orion.shared.logger import setup_logging
 from orion.jobs.data_quality_checker import run_quality_checks
 from orion.jobs.reconcile_backfill import run_reconciliation
 from orion.jobs.validate_features import run_sanity_checks
@@ -31,23 +32,15 @@ logger = logging.getLogger(__name__)
 JOB_BACKOFF_ENV = "ORION_GUARDRAIL_FAILURE_BACKOFF_SECONDS_JOBS"
 RUNTIME_BACKOFF_CONFIG_KEY = "quality_guardrails.backoff_seconds_jobs"
 
+_LEGACY_KEY = "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS"
+
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
-    specific_key = "ORION_ENABLE_LEGACY_QUALITY_GUARDRAILS"
-    specific_raw = os.getenv(specific_key)
-    if specific_raw is not None:
-        enabled = specific_raw.lower() not in {"0", "false", "no", "off", "n"}
-        return enabled, specific_key, specific_raw
-
-    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    global_raw = os.getenv(global_key, "true")
-    enabled = global_raw.lower() not in {"0", "false", "no", "off", "n"}
-    return enabled, global_key, global_raw
+    return legacy_pipeline_control(_LEGACY_KEY)
 
 
 def _legacy_label_pipelines_enabled() -> bool:
-    enabled, _, _ = _legacy_label_pipeline_control()
-    return enabled
+    return is_legacy_pipeline_enabled(_LEGACY_KEY)
 
 
 def _env_int(name: str, default: int) -> int:

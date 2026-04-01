@@ -5,75 +5,39 @@ Fetches market-wide options flow sentiment (net call/put premium) via Data Gatew
 """
 
 import asyncio
-import logging
 from datetime import date, datetime
 from typing import Any
 
-import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from orion.connectors.base_gateway import BaseGatewayConnector
+from orion.shared.logger import setup_struct_logger
 
-from orion.config import system_settings
-
-logger = logging.getLogger(__name__)
-RETRYABLE_GATEWAY_STATUS_CODES = {429, 500, 502, 503, 504}
+logger = setup_struct_logger("orion.connectors.uw_market_tide")
 
 
-def _is_retryable_gateway_status(status_code: int | None) -> bool:
-    return status_code in RETRYABLE_GATEWAY_STATUS_CODES
-
-
-class UWMarketTideConnector:
+class UWMarketTideConnector(BaseGatewayConnector):
     """Fetches market tide (net premium intraday) via Data Gateway."""
 
     def __init__(self, gateway_url: str | None = None, gateway_key: str | None = None):
-        self.gateway_url = (gateway_url or system_settings.data_gateway_url or "").strip().rstrip("/")
-        if not self.gateway_url:
-            raise ValueError("DATA_GATEWAY_URL/GATEWAY_URL setting not configured")
-        self.gateway_key = (gateway_key or system_settings.data_gateway_api_key or "").strip()
-        if not self.gateway_key:
-            raise ValueError("DATA_GATEWAY_API_KEY/GATEWAY_API_KEY setting not configured")
-        self.headers = {"X-Gateway-Key": self.gateway_key}
+        super().__init__(gateway_url=gateway_url, gateway_key=gateway_key)
         self._latest_ticks: list[dict[str, Any]] = []
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _fetch_market_tide(self, market_date: date | None = None) -> dict[str, Any] | None:
         """Fetch market tide for a date via Data Gateway."""
-        url = f"{self.gateway_url}/api/v1/uw/market/tide"
-        params = {}
+        params: dict[str, str] = {}
         if market_date:
             params["date"] = market_date.isoformat()
-
-        try:
-            resp = httpx.get(url, headers=self.headers, params=params, timeout=30)
-            if resp.status_code >= 400:
-                if _is_retryable_gateway_status(resp.status_code):
-                    resp.raise_for_status()
-                logger.warning("Non-retryable market tide status=%s", resp.status_code)
-                return None
-            return resp.json()
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code
-            if _is_retryable_gateway_status(status):
-                logger.warning("Retryable market tide HTTP error status=%s", status)
-                raise
-            logger.warning("Non-retryable market tide HTTP error status=%s", status)
-            return None
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
-            logger.warning(f"Transient network error fetching market tide: {e}")
-            raise
-        except httpx.HTTPError as e:
-            logger.error("Failed to fetch market tide: %s", e, exc_info=True)
-            raise
-        except Exception as e:
-            logger.error("Unexpected error fetching market tide: %s", e, exc_info=True)
-            raise
+        return self._gateway_get(
+            "/api/v1/uw/market/tide",
+            params=params,
+            label="market_tide",
+        )
 
     async def fetch_and_store(self, market_date: date | None = None) -> int:
         """Fetch market tide and store all ticks."""
         try:
             data = await asyncio.to_thread(self._fetch_market_tide, market_date)
         except Exception as e:
-            logger.warning(f"Market tide fetch exhausted retry budget: {e}")
+            logger.warning("market_tide_retry_exhausted", error=str(e))
             return 0
         if not data or "data" not in data:
             return 0
@@ -91,7 +55,7 @@ class UWMarketTideConnector:
             try:
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             except Exception:
-                logger.warning(f"Failed to parse market tide timestamp: {ts_str}", exc_info=True)
+                logger.warning("market_tide_timestamp_parse_failed", timestamp=ts_str, exc_info=True)
                 continue
 
             record = {
@@ -110,5 +74,4 @@ class UWMarketTideConnector:
     async def _persist_tick(self, record: dict[str, Any]) -> None:
         """Persist market tide tick in memory while centralized sinks are externalized."""
         self._latest_ticks.append(dict(record))
-        if len(self._latest_ticks) > 2000:
-            self._latest_ticks = self._latest_ticks[-1000:]
+        self._latest_ticks = self._trim_buffer(self._latest_ticks)

@@ -6,7 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Vendored UnusualWhales SDK** (228 files, 31K LOC) — only used by legacy labeler; UW imports made lazy with ImportError fallback
+- **LakehouseWriter** (S3 Parquet export) — duplicated Heber's lakehouse; deleted module, config fields, and ingestion integration
+- **Dead modules**: `clients/mcp_server.py`, `reconciliation/bar_gap_scan.py`, `core/logging_config.py`, `connectors/base.py` (unused protocols), `agents/base.py` (unnecessary ABC), `execution/risk_manager.py` (re-export shim), `main_rollups.py` (superseded by ingestion service)
+- **Orphaned DB models**: `SilverEarningsCalendar`, `SilverUWAlert`, dead `_save_silver_data` method
+- **Duplicate `core/http_client.py`** — switched all callers to `empire_core.http_client`
+
+### Added
+
+- **`BaseGatewayConnector`** base class for UW connectors — consolidates shared retry, auth, and buffer logic
+- **`shared/legacy_flags.py`** — centralized legacy pipeline env-var control (was copy-pasted 4 times)
+- **`DecisionAction`, `TradeDirection`, `OrderSide` enums** — replaced raw string comparisons across 12 files
+- **Health check TTL cache** in `ExecutionEngine` — caches system health for 10s, eliminating N-1 redundant DB queries per execution cycle
+- **Parallel UW connector fetching** — `asyncio.gather` in feature enrichment loop + `Semaphore(3)` bounded concurrency per connector
+
+### Changed
+
+- Standalone diagnostic scripts moved to `src/orion/scripts/`
+- All 5 connectors now use structured logging (structlog) instead of raw `logging.getLogger`
+- Env-var parsing in feature enrichment uses generic `_parse_env_threshold()` helper
+- Universe hydration on restart now reads from `candidate_trades` (last 24h) instead of removed `SilverUWAlert` table
+- UW connector poll timestamps only advance on successful fetch (not on failure)
+
 ### Fixed
+
+- **ML scoring dead pipeline — model directory, threshold deadlock, silent fallback**: ML scoring was completely non-functional in production due to three compounding issues: (1) `ORION_MODEL_DIR` defaulted to `/app/models` (Docker path) which doesn't exist outside Docker, causing all candidates to silently fall back to heuristic scoring; the default now auto-detects the environment and falls back to `<project-root>/models/` when not in Docker. (2) The heuristic scorer capped output at 0.50 in live mode while `ml_prefilter_threshold` was also 0.50, creating a deadlock where heuristic-scored candidates could never pass; the MLPreFilter now uses a lower threshold (0.40) when the scorer is running in heuristic mode, while preserving the 0.50 threshold for model-backed scoring. The heuristic cap was raised to 0.55 to create a viable gap. (3) Missing-model and no-models-found conditions logged at INFO level, making the root cause invisible in production logs; these are now WARNING level with actionable messages including the env var to set.
 
 - **Silent-failure hardening across execution, monitoring, and data feeds**: Orion now fails louder when shared-account position filtering breaks, Gateway trading endpoints stop pretending outages mean “no positions/orders,” the option quote tracker distinguishes “no checkpoints” from broken Heber reads or schema drift, `/flows` returns `503` when flow data is structurally invalid, and the data-quality job warns when flow freshness is unknown instead of logging a fake healthy status. Market-hours checks now use the real trading calendar with a logged fallback, malformed earnings payloads raise instead of looking like empty calendars, naive heartbeat timestamps emit warnings, correlation math failures keep their traceback, and `ExecutionEngine` restores its module-level `async_session_factory` patch point for integration/remediation tooling.
 

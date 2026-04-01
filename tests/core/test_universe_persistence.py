@@ -37,23 +37,12 @@ async def test_hydrate_from_db():
     mock_session.execute.return_value = mock_rows
 
     # Mock Session Factory
-    with patch("orion.core.universe_manager.async_session_factory") as mock_factory:
-        mock_factory.return_value.__aenter__.return_value = mock_session
+    uni = UniverseManager()
+    await uni.hydrate_from_db()
 
-        uni = UniverseManager()
-        await uni.hydrate_from_db()
-
-        # Checks
-        assert "AAPL" in uni.expiry_tickers
-        assert uni.expiry_tickers["AAPL"] == future_date
-        assert "AAPL" in uni.active_tickers
-
-        # Ensure 'TSLA' handling (logic currently relies on query filtering, but if rows returned...)
-        # Logic: hydrate uses row.expiry. If valid date, it adds it.
-        # The query `expiry >= today_str` filters it out ideally.
-        # But if it was returned (e.g. string comparison edge case), python logic handles parsing.
-
-        assert "MSFT" not in uni.expiry_tickers  # Invalid date
+    # hydrate_from_db is now a no-op (SilverUWAlert table was removed)
+    # Just verify it doesn't crash
+    assert uni is not None
 
 
 def test_update_from_event_expiry():

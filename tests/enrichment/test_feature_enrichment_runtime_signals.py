@@ -169,7 +169,7 @@ def test_loop_sleep_seconds_invalid_env_uses_default(monkeypatch: pytest.MonkeyP
     value = feature_enrichment._loop_sleep_seconds()
 
     assert value == feature_enrichment.DEFAULT_LOOP_SLEEP_SECONDS
-    assert warnings[-1]["event"] == "feature_enrichment_loop_sleep_seconds_invalid"
+    assert warnings[-1]["event"] == "orion_feature_enrichment_loop_sleep_seconds_invalid"
 
 
 def test_note_loop_error_warns_at_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,7 +216,7 @@ def test_non_heber_warn_streak_threshold_invalid_env_uses_default(monkeypatch: p
     value = feature_enrichment._non_heber_warn_streak_threshold()
 
     assert value == feature_enrichment.DEFAULT_NON_HEBER_WARN_STREAK
-    assert warnings[-1]["event"] == "feature_enrichment_non_heber_warn_streak_invalid"
+    assert warnings[-1]["event"] == "orion_feature_enrichment_non_heber_warn_streak_invalid"
 
 
 def test_gateway_fetch_enabled_defaults_disabled(monkeypatch: pytest.MonkeyPatch) -> None:

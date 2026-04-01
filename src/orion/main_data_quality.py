@@ -12,7 +12,7 @@ from datetime import datetime
 from functools import partial
 from zoneinfo import ZoneInfo
 
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_logging
 from orion.jobs.data_quality_checker import run_quality_checks
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db

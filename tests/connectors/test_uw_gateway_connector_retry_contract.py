@@ -43,46 +43,25 @@ _FETCH_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    "module, connector_cls",
-    [
-        (tide_module, UWMarketTideConnector),
-        (greek_module, UWGreekExposureConnector),
-        (max_pain_module, UWMaxPainConnector),
-        (iv_module, UWIVRankConnector),
-    ],
-)
-def test_connector_requires_gateway_key(
-    monkeypatch: pytest.MonkeyPatch,
-    module: Any,
-    connector_cls: Any,
-) -> None:
-    monkeypatch.setattr(module.system_settings, "data_gateway_url", "http://gateway:8080")
-    monkeypatch.setattr(module.system_settings, "data_gateway_api_key", "")
+import orion.connectors.base_gateway as base_gw_module
 
+
+@pytest.mark.parametrize(
+    "connector_cls",
+    [UWMarketTideConnector, UWGreekExposureConnector, UWMaxPainConnector, UWIVRankConnector],
+)
+def test_connector_requires_gateway_key(connector_cls: Any) -> None:
     with pytest.raises(ValueError, match="DATA_GATEWAY_API_KEY/GATEWAY_API_KEY"):
-        connector_cls()
+        connector_cls(gateway_url="http://gateway:8080", gateway_key="")
 
 
 @pytest.mark.parametrize(
-    "module, connector_cls",
-    [
-        (tide_module, UWMarketTideConnector),
-        (greek_module, UWGreekExposureConnector),
-        (max_pain_module, UWMaxPainConnector),
-        (iv_module, UWIVRankConnector),
-    ],
+    "connector_cls",
+    [UWMarketTideConnector, UWGreekExposureConnector, UWMaxPainConnector, UWIVRankConnector],
 )
-def test_connector_requires_gateway_url(
-    monkeypatch: pytest.MonkeyPatch,
-    module: Any,
-    connector_cls: Any,
-) -> None:
-    monkeypatch.setattr(module.system_settings, "data_gateway_url", "")
-    monkeypatch.setattr(module.system_settings, "data_gateway_api_key", "gw-key")
-
+def test_connector_requires_gateway_url(connector_cls: Any) -> None:
     with pytest.raises(ValueError, match="DATA_GATEWAY_URL/GATEWAY_URL"):
-        connector_cls()
+        connector_cls(gateway_url="", gateway_key="gw-key")
 
 
 @pytest.mark.parametrize("module, connector_cls, method_name, call_args", _FETCH_CASES)
@@ -94,8 +73,8 @@ def test_fetch_retries_transient_503_then_succeeds(
     call_args: tuple[Any, ...],
 ) -> None:
     connector = connector_cls(gateway_url="http://gateway:8080", gateway_key="gw-key")
-    fetch = getattr(connector, method_name)
-    fetch.retry.wait = wait_none()
+    # Retry is on the base class _gateway_get, not on individual _fetch_* methods
+    connector._gateway_get.retry.wait = wait_none()
 
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     responses = [
@@ -107,11 +86,9 @@ def test_fetch_retries_transient_503_then_succeeds(
         calls.append((args, kwargs))
         return responses.pop(0)
 
-    if hasattr(connector, "_client"):
-        monkeypatch.setattr(connector._client, "get", _fake_get)
-    else:
-        monkeypatch.setattr(module.httpx, "get", _fake_get)
+    monkeypatch.setattr(base_gw_module.httpx, "get", _fake_get)
 
+    fetch = getattr(connector, method_name)
     result = fetch(*call_args)
 
     assert result == {"data": [{"ok": True}]}
@@ -127,8 +104,7 @@ def test_fetch_does_not_retry_non_retryable_404(
     call_args: tuple[Any, ...],
 ) -> None:
     connector = connector_cls(gateway_url="http://gateway:8080", gateway_key="gw-key")
-    fetch = getattr(connector, method_name)
-    fetch.retry.wait = wait_none()
+    connector._gateway_get.retry.wait = wait_none()
 
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
@@ -136,11 +112,9 @@ def test_fetch_does_not_retry_non_retryable_404(
         calls.append((args, kwargs))
         return _FakeResponse(404)
 
-    if hasattr(connector, "_client"):
-        monkeypatch.setattr(connector._client, "get", _fake_get)
-    else:
-        monkeypatch.setattr(module.httpx, "get", _fake_get)
+    monkeypatch.setattr(base_gw_module.httpx, "get", _fake_get)
 
+    fetch = getattr(connector, method_name)
     result = fetch(*call_args)
 
     assert result is None

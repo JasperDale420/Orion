@@ -162,7 +162,7 @@ class TestRiskManagerIntegration:
     @pytest.mark.asyncio
     async def test_correlation_sizing_disabled_uses_base(self):
         """Should use base size when correlation scaling disabled."""
-        from orion.execution.risk_manager import RiskManager
+        from orion.execution.risk.manager import RiskManager
 
         cfg = RiskSettings(correlation_size_scaling=False)
         rm = RiskManager(config=cfg)
@@ -176,7 +176,7 @@ class TestRiskManagerIntegration:
     @pytest.mark.asyncio
     async def test_no_adjuster_uses_base(self):
         """Should use base size when no adjuster set."""
-        from orion.execution.risk_manager import RiskManager
+        from orion.execution.risk.manager import RiskManager
 
         cfg = RiskSettings(correlation_size_scaling=True)
         rm = RiskManager(config=cfg)
@@ -190,7 +190,7 @@ class TestRiskManagerIntegration:
     @pytest.mark.asyncio
     async def test_with_adjuster_applies_multiplier(self):
         """Should apply correlation multiplier when adjuster is set."""
-        from orion.execution.risk_manager import RiskManager
+        from orion.execution.risk.manager import RiskManager
 
         cfg = RiskSettings(correlation_size_scaling=True)
         rm = RiskManager(config=cfg)

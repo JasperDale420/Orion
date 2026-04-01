@@ -22,7 +22,6 @@ from orion.processing.normalizer import NormalizationEngine
 from orion.processing.persistence import (
     persist_bronze_events,
     persist_candidates,
-    persist_silver_from_bronze,
     persist_silver_signals,
 )
 from orion.processing.rule_engine import RuleEngine
@@ -30,7 +29,6 @@ from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import make_json_safe
 from orion.storage.db import async_session_factory, init_db
-from orion.storage.lakehouse import LakehouseWriter
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
 from orion.storage.models_gold import CandidateTrade
@@ -49,8 +47,6 @@ class IngestionService:
         self.universe = UniverseManager()
         self.feature_engine = FeatureEngine()
         self.rule_engine = RuleEngine()
-        self.lakehouse = LakehouseWriter()
-
         # Gateway stream client for real-time bar data from Data-Gateway
         try:
             self.gateway_stream = create_gateway_stream_client()
@@ -183,7 +179,6 @@ class IngestionService:
             if all_events:
                 await self._persist_events(all_events)
                 await self._process_features_and_rules(all_events)
-                await self._write_to_lakehouse(all_events, trace_id)
 
         # Process EOD Trigger
         self._check_eod_trigger()
@@ -417,13 +412,6 @@ class IngestionService:
         except Exception as e:
             logger.error(f"{label} Pipeline Error: {e}")
 
-    async def _write_to_lakehouse(self, events: list[BronzeEvent], trace_id: str) -> None:
-        try:
-            self.lakehouse.write_events(events)
-        except Exception as e:
-            logger.error(f"Lakehouse Write Error: {e}")
-            await self._send_to_dlq(e, "LAKE_WRITE_FAILED", payload={"count": len(events)}, trace_id=trace_id)
-
     def _check_eod_trigger(self) -> None:
         now_utc = datetime.now(UTC)
         if now_utc.hour == 1 and now_utc.minute >= 5:
@@ -504,16 +492,6 @@ class IngestionService:
                 raise
 
         await db_write(persist_bronze)
-
-    async def _save_silver_data(self, events: list[BronzeEvent]) -> None:
-        async def persist_silver(session: Any) -> None:
-            try:
-                await persist_silver_from_bronze(session, events)
-            except Exception as e:
-                logger.error(f"Silver Write Error: {e}")
-                raise
-
-        await db_write(persist_silver)
 
     async def _save_signals(self, signals: list[SilverSignal]) -> None:
         async def persist_signals_op(session: Any) -> None:

@@ -7,7 +7,7 @@ os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 import pytest
 from sqlalchemy import text
 
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 from orion.storage.db import async_session_factory, init_db
 
 

@@ -16,6 +16,7 @@ import aiofiles
 
 from sqlalchemy import Integer, and_, func, select
 
+from orion.core.enums import DecisionAction
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import StrategyDecision
@@ -168,7 +169,7 @@ class WeeklyDataAggregator:
             # Count decisions
             stmt_decisions = select(
                 func.count(StrategyDecision.decision_id).label("total"),
-                func.sum(func.cast(StrategyDecision.decision == "EXECUTE", Integer)).label("executed"),
+                func.sum(func.cast(StrategyDecision.decision == DecisionAction.EXECUTE, Integer)).label("executed"),
             ).where(
                 and_(
                     StrategyDecision.timestamp_utc >= week_start,

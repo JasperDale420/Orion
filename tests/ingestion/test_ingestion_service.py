@@ -11,7 +11,6 @@ GATEWAY_PATCHES = [
     "orion.ingestion.service.UniverseManager",
     "orion.ingestion.service.FeatureEngine",
     "orion.ingestion.service.RuleEngine",
-    "orion.ingestion.service.LakehouseWriter",
     "orion.ingestion.service.xcals",
     "orion.ingestion.service.create_gateway_stream_client",
 ]
@@ -54,7 +53,6 @@ class TestIngestionServiceInit:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -81,7 +79,6 @@ class TestIngestionServiceInit:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -99,7 +96,6 @@ class TestIngestionServiceInit:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -124,7 +120,6 @@ class TestEnrichTemporalData:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -188,7 +183,6 @@ class TestTagIngestMetadata:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -248,7 +242,6 @@ class TestActiveEventSourceProfile:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -290,7 +283,6 @@ class TestCheckEodTrigger:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -359,7 +351,6 @@ class TestSendToDlq:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -461,7 +452,6 @@ class TestPersistLoopCrash:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -495,7 +485,6 @@ class TestStop:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -539,7 +528,6 @@ class TestGatewayStreamDrain:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -572,7 +560,6 @@ class TestProcessFeaturesAndRules:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -622,51 +609,6 @@ class TestProcessFeaturesAndRules:
 
 
 # ---------------------------------------------------------------------------
-# _write_to_lakehouse (async)
-# ---------------------------------------------------------------------------
-class TestWriteToLakehouse:
-    """Tests for IngestionService._write_to_lakehouse()."""
-
-    def _make_service(self):
-        with (
-            patch("orion.ingestion.service.HealthMonitor"),
-            patch("orion.ingestion.service.UniverseManager"),
-            patch("orion.ingestion.service.FeatureEngine"),
-            patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
-            patch("orion.ingestion.service.xcals"),
-            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
-        ):
-            mock_factory.return_value = MagicMock()
-            from orion.ingestion.service import IngestionService
-
-            return IngestionService()
-
-    @pytest.mark.unit
-    @pytest.mark.asyncio
-    async def test_writes_events_successfully(self):
-        svc = self._make_service()
-        svc.lakehouse = MagicMock()
-        svc.lakehouse.write_events = MagicMock()
-
-        events = [_make_bronze_event(), _make_bronze_event()]
-        await svc._write_to_lakehouse(events, "trace-1")
-
-        svc.lakehouse.write_events.assert_called_once_with(events)
-
-    @pytest.mark.unit
-    @pytest.mark.asyncio
-    async def test_lakehouse_error_sends_to_dlq(self):
-        svc = self._make_service()
-        svc.lakehouse = MagicMock()
-        svc.lakehouse.write_events = MagicMock(side_effect=RuntimeError("write failed"))
-
-        with patch.object(svc, "_send_to_dlq", new_callable=AsyncMock) as mock_dlq:
-            await svc._write_to_lakehouse([_make_bronze_event()], "trace-2")
-            mock_dlq.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
 # _run_pipeline (async)
 # ---------------------------------------------------------------------------
 class TestRunPipeline:
@@ -678,7 +620,6 @@ class TestRunPipeline:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -743,7 +684,6 @@ class TestUpdateHealthStatus:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):
@@ -794,7 +734,6 @@ class TestHeberFlowPoll:
             patch("orion.ingestion.service.UniverseManager"),
             patch("orion.ingestion.service.FeatureEngine"),
             patch("orion.ingestion.service.RuleEngine"),
-            patch("orion.ingestion.service.LakehouseWriter"),
             patch("orion.ingestion.service.xcals"),
             patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
         ):

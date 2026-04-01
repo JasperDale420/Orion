@@ -1,5 +1,5 @@
 from orion.config import RiskSettings
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 
 
 def test_risk_manager_shorting_disabled():

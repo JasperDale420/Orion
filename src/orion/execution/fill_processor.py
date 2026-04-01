@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from orion.core.enums import OrderSide
 from orion.execution.persistence import (
     is_fill_processed,
     mark_fill_processed,
@@ -96,7 +97,7 @@ class FillProcessor:
             sector = SECTOR_MAPPING.get(ticker)
             if sector:
                 fill_cost = incremental_qty * filled_avg_price
-                exposure_change = fill_cost if side.lower() == "buy" else -fill_cost
+                exposure_change = fill_cost if side.lower() == OrderSide.BUY else -fill_cost
                 risk_manager.update_sector_exposure(sector, exposure_change)
 
             if not is_partial:

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from orion.config import risk_settings, system_settings
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 from orion.execution.signal_preflight import preflight_live_signal
 from orion.processing.feature_engine import FeatureEngine
 from orion.processing.ingest_pipeline import ingest_bronze_events

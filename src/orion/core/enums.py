@@ -13,3 +13,24 @@ class DecisionStatus(StrEnum):
     FALSE = "FALSE"
     SKIPPED = "SKIPPED"
     PENDING = "PENDING"
+
+
+class DecisionAction(StrEnum):
+    """Action determined by the signal engine for a candidate trade."""
+
+    EXECUTE = "EXECUTE"
+    SKIP = "SKIP"
+
+
+class TradeDirection(StrEnum):
+    """Direction of a trade (long or short)."""
+
+    LONG = "LONG"
+    SHORT = "SHORT"
+
+
+class OrderSide(StrEnum):
+    """Side of an order sent to the broker."""
+
+    BUY = "buy"
+    SELL = "sell"

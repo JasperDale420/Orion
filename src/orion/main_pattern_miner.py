@@ -8,7 +8,7 @@ import asyncio
 import signal
 from datetime import UTC, datetime, timedelta
 
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.ml.pattern_miner import run_all_pattern_mining
 from orion.shared.logger import setup_struct_logger

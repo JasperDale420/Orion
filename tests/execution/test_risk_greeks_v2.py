@@ -6,7 +6,7 @@ Tests the fixes for:
 """
 
 from orion.config import RiskSettings
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 
 
 class TestProjectedGamma:

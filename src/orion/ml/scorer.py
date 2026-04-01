@@ -108,9 +108,10 @@ class MLScorer:
         self._bypass_scoring = False
 
         if not MODEL_DIR.exists():
-            logger.info(
-                f"Model directory {MODEL_DIR} does not exist, using heuristic scorer",
-                extra={"event": "using_heuristic"},
+            logger.warning(
+                f"Model directory {MODEL_DIR} does not exist — all candidates will use heuristic scorer "
+                f"(set ORION_MODEL_DIR to the directory containing trained .pkl models)",
+                extra={"event": "model_dir_missing", "model_dir": str(MODEL_DIR)},
             )
             return
 
@@ -183,7 +184,10 @@ class MLScorer:
                     logger.warning(f"Failed to load model {model_type}: {e}")
 
         if loaded_count == 0:
-            logger.info("No bucket models found, using heuristic scorer")
+            logger.warning(
+                f"No bucket models found in {MODEL_DIR} — all candidates will use heuristic scorer",
+                extra={"event": "no_models_found", "model_dir": str(MODEL_DIR)},
+            )
         else:
             summary = f"Loaded {loaded_count}/{len(TRADE_BUCKETS)} bucket models"
             if skipped_stale > 0:
@@ -421,8 +425,10 @@ class MLScorer:
         Heuristic baseline scorer when no trained model is available.
 
         Signals with high premium, sweeps, and good aggressor alignment
-        get higher scores. CAPPED at 0.50 to prevent heuristic from
-        reaching live threshold (0.70) - models are required for live trading.
+        get higher scores. CAPPED at 0.55 in live mode to limit heuristic
+        signals while still allowing high-conviction flows through the
+        ML prefilter (heuristic threshold 0.40). Models are required for
+        full scoring.
 
         Weights are configurable via the HeuristicWeights config
         (env prefix ORION_HEURISTIC_).
@@ -467,12 +473,15 @@ class MLScorer:
             score += hw.low_premium_penalty
 
         # In live mode we cap heuristic output to avoid taking untrained-model signals.
+        # Cap must be above the heuristic threshold (0.40 in MLPreFilter) to allow
+        # high-conviction heuristic candidates through while still requiring models
+        # for full scoring.
         # In paper/backtest, keep uncapped behavior for compatibility/analysis.
         raw_score = min(max(score, 0.0), 1.0)
         cap_enabled = system_settings.orion_stage == "live"
-        capped_score = min(raw_score, 0.50) if cap_enabled else raw_score
+        capped_score = min(raw_score, 0.55) if cap_enabled else raw_score
 
-        if cap_enabled and raw_score > 0.50:
+        if cap_enabled and raw_score > 0.55:
             logger.warning(
                 f"Heuristic scorer used (no model) - score capped from {raw_score:.2f} to {capped_score:.2f}",
                 extra={"event": "heuristic_scorer_capped", "raw_score": raw_score, "capped_score": capped_score},

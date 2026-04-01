@@ -65,9 +65,8 @@ async def test_propose_edits(mock_solver_config):
         assert edits[0].ops[0].param_name == "exit_logic.take_profit_atr_multiple"
 
 
-@pytest.mark.asyncio
-async def test_run_is_not_generic_entry_point() -> None:
+def test_meta_agent_has_no_run_method() -> None:
+    """MetaAgent does not expose a generic run() -- callers use propose_edits()."""
     agent = MetaAgent()
-
-    with pytest.raises(NotImplementedError, match="propose_edits"):
-        await agent.run({})
+    assert not hasattr(agent, "run")
+    assert hasattr(agent, "propose_edits")

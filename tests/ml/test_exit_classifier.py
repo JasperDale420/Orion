@@ -4,6 +4,8 @@ Tests for ExitClassifier.
 Tests exit prediction logic and training data builder.
 """
 
+from typing import Any
+
 import pytest
 
 from orion.ml.exit_classifier import (
@@ -41,9 +43,17 @@ class TestExitClassifier:
     """Tests for ExitClassifier class."""
 
     @pytest.fixture
-    def classifier(self) -> ExitClassifier:
-        """Create classifier instance."""
-        return ExitClassifier()
+    def classifier(self, tmp_path: Any) -> ExitClassifier:
+        """Create classifier instance with empty model dir (heuristic mode)."""
+        import orion.ml.exit_classifier as ec_mod
+
+        orig_dir = ec_mod.MODEL_DIR
+        orig_singleton = ec_mod._exit_classifier
+        ec_mod.MODEL_DIR = tmp_path / "empty_models"
+        ec_mod._exit_classifier = None
+        yield ExitClassifier()
+        ec_mod.MODEL_DIR = orig_dir
+        ec_mod._exit_classifier = orig_singleton
 
     @pytest.fixture
     def profitable_position(self) -> ExitFeatures:

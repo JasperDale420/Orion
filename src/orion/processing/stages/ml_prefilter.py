@@ -116,7 +116,12 @@ class MLPreFilter:
 
             ml_score = scorer.score(flow_dict)
             ctx.ml_score = ml_score
-            ml_threshold = system_settings.ml_prefilter_threshold
+            # Use a lower threshold when running heuristic scoring (no trained
+            # models loaded) so that high-conviction heuristic flows can still
+            # reach the solver ensemble.  The heuristic cap (0.55 in live mode)
+            # bounds the upside, so this doesn't open the floodgates.
+            HEURISTIC_THRESHOLD = 0.40
+            ml_threshold = HEURISTIC_THRESHOLD if scorer.use_heuristic else system_settings.ml_prefilter_threshold
 
             if ml_score < ml_threshold:
                 logger.info(

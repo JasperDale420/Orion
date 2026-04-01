@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orion.config import RiskSettings
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 
 # --- Test Risk Manager Fill Processing ---
 

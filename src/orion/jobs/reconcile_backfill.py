@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_logging
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import async_session_factory
 from orion.storage.models import BronzeEvent

@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from orion.core.solver_schema import SolverConfig
 from orion.execution.execution_engine import ExecutionEngine
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 from orion.processing.feature_engine import FeatureEngine
 from orion.processing.ingest_pipeline import ingest_bronze_events
 from orion.processing.persistence import persist_bronze_events, persist_silver_from_bronze

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 from orion.config import system_settings
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_logging
 from orion.processing.rollup_builder import RollupBuilder
 from orion.storage.db import async_session_factory
 from orion.storage.watermarks import get_watermark, upsert_watermark

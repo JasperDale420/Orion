@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from orion.core.enums import DecisionStatus
+from orion.core.enums import DecisionAction, DecisionStatus
 from orion.execution.execution_engine import ExecutionEngine
 from orion.execution.flow_helpers import (
     _scope_recent_flow_for_position,
@@ -107,7 +107,7 @@ async def main() -> None:
                 decision = await signal_engine.decide(candidate)
 
                 # 3.5 Pre-signal portfolio/risk/rollup filters (PRD §11.2)
-                if decision.decision == "EXECUTE":
+                if decision.decision == DecisionAction.EXECUTE:
                     from orion.execution.signal_preflight import preflight_live_signal
 
                     async def run_preflight(session: Any, candidate: Any = candidate, decision: Any = decision) -> Any:
@@ -120,7 +120,7 @@ async def main() -> None:
 
                     pre = await db_query(run_preflight)
                     if not pre.ok:
-                        decision.decision = "SKIP"
+                        decision.decision = DecisionAction.SKIP
                         decision.executed_successfully = DecisionStatus.SKIPPED
                         decision.reason = f"Preflight reject: {pre.reason}"
                         decision.decision_trace_json = decision.decision_trace_json or {}
@@ -137,7 +137,7 @@ async def main() -> None:
 
                 # 5. Execute (if EXECUTE)
                 exec_status = DecisionStatus.SKIPPED
-                if decision.decision == "EXECUTE":
+                if decision.decision == DecisionAction.EXECUTE:
                     try:
                         await execution_engine.execute_order(decision, candidate)
 

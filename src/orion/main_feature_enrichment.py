@@ -45,6 +45,24 @@ DEFAULT_LOOP_SLEEP_SECONDS = 30.0
 DEFAULT_LOOP_ERROR_WARN_STREAK = 3
 DEFAULT_NON_HEBER_WARN_STREAK = 3
 
+_T = int | float
+
+
+def _parse_env_threshold(env_key: str, default: _T, type_fn: type[_T], *, min_val: _T | None = None) -> _T:
+    """Parse a numeric env var with bounds checking, logging a warning on failure."""
+    raw = os.getenv(env_key, str(default)).strip()
+    try:
+        value = type_fn(raw)
+        if min_val is not None and value < min_val:
+            raise ValueError(f"must be >= {min_val}")
+        return value
+    except Exception:
+        logger.warning(
+            f"Invalid {env_key}; using default",
+            extra={"event": f"{env_key.lower()}_invalid", "value": raw, "default": default},
+        )
+        return default
+
 
 # Re-export for backward compatibility (other modules and tests import from here)
 from orion.enrichment.heber_context import (  # noqa: E402, F401
@@ -87,69 +105,21 @@ def _gateway_runtime_contract() -> tuple[str, str]:
 
 
 def _zero_write_warn_streak_threshold() -> int:
-    raw = os.getenv(
-        "ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK",
-        str(DEFAULT_ZERO_WRITE_WARN_STREAK),
-    ).strip()
-    try:
-        value = int(raw)
-        if value < 1:
-            raise ValueError("must be >= 1")
-        return value
-    except Exception:
-        logger.warning(
-            "Invalid ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK; using default",
-            extra={
-                "event": "feature_enrichment_zero_write_warn_streak_invalid",
-                "value": raw,
-                "default": DEFAULT_ZERO_WRITE_WARN_STREAK,
-            },
-        )
-        return DEFAULT_ZERO_WRITE_WARN_STREAK
+    return _parse_env_threshold(
+        "ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK", DEFAULT_ZERO_WRITE_WARN_STREAK, int, min_val=1
+    )
 
 
 def _loop_sleep_seconds() -> float:
-    raw = os.getenv(
-        "ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS",
-        str(DEFAULT_LOOP_SLEEP_SECONDS),
-    ).strip()
-    try:
-        value = float(raw)
-        if value <= 0:
-            raise ValueError("must be > 0")
-        return value
-    except Exception:
-        logger.warning(
-            "Invalid ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS; using default",
-            extra={
-                "event": "feature_enrichment_loop_sleep_seconds_invalid",
-                "value": raw,
-                "default": DEFAULT_LOOP_SLEEP_SECONDS,
-            },
-        )
-        return DEFAULT_LOOP_SLEEP_SECONDS
+    return _parse_env_threshold(
+        "ORION_FEATURE_ENRICHMENT_LOOP_SLEEP_SECONDS", DEFAULT_LOOP_SLEEP_SECONDS, float, min_val=0.01
+    )
 
 
 def _loop_error_warn_streak_threshold() -> int:
-    raw = os.getenv(
-        "ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK",
-        str(DEFAULT_LOOP_ERROR_WARN_STREAK),
-    ).strip()
-    try:
-        value = int(raw)
-        if value < 1:
-            raise ValueError("must be >= 1")
-        return value
-    except Exception:
-        logger.warning(
-            "Invalid ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK; using default",
-            extra={
-                "event": "feature_enrichment_loop_error_warn_streak_invalid",
-                "value": raw,
-                "default": DEFAULT_LOOP_ERROR_WARN_STREAK,
-            },
-        )
-        return DEFAULT_LOOP_ERROR_WARN_STREAK
+    return _parse_env_threshold(
+        "ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK", DEFAULT_LOOP_ERROR_WARN_STREAK, int, min_val=1
+    )
 
 
 def _note_loop_error(
@@ -172,25 +142,9 @@ def _note_loop_error(
 
 
 def _non_heber_warn_streak_threshold() -> int:
-    raw = os.getenv(
-        "ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK",
-        str(DEFAULT_NON_HEBER_WARN_STREAK),
-    ).strip()
-    try:
-        value = int(raw)
-        if value < 1:
-            raise ValueError("must be >= 1")
-        return value
-    except Exception:
-        logger.warning(
-            "Invalid ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK; using default",
-            extra={
-                "event": "feature_enrichment_non_heber_warn_streak_invalid",
-                "value": raw,
-                "default": DEFAULT_NON_HEBER_WARN_STREAK,
-            },
-        )
-        return DEFAULT_NON_HEBER_WARN_STREAK
+    return _parse_env_threshold(
+        "ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK", DEFAULT_NON_HEBER_WARN_STREAK, int, min_val=1
+    )
 
 
 def _note_ticker_source_streak(
@@ -317,67 +271,68 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 tickers_count=len(tickers),
             )
 
-            # Market Tide
-            if (
-                gateway_fetch_enabled
-                and tide_connector is not None
-                and (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL
-            ):
-                count = await tide_connector.fetch_and_store()
-                logger.info(f"Market Tide: stored {count} ticks")
-                _note_fetch_count("market_tide", count, zero_write_streaks, zero_write_warn_streak)
-                last_tide = now
+            # --- UW Connector fetches (parallelized via asyncio.gather) ---
+            if gateway_fetch_enabled:
+                uw_tasks: list = []  # list of coroutines for asyncio.gather
+                uw_task_meta: list[dict] = []  # name, feed_name, has_tickers
 
-            # Greek Exposure
-            if (
-                gateway_fetch_enabled
-                and greek_connector is not None
-                and (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL
-            ):
-                count = await greek_connector.fetch_and_store(tickers)
-                logger.info(f"Greek Exposure: stored {count} records for {len(tickers)} tickers")
-                _note_fetch_count(
-                    "greek_exposure",
-                    count,
-                    zero_write_streaks,
-                    zero_write_warn_streak,
-                    tickers_count=len(tickers),
-                )
-                last_greek = now
+                if tide_connector is not None and (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL:
+                    uw_tasks.append(tide_connector.fetch_and_store())
+                    uw_task_meta.append({"name": "Market Tide", "feed": "market_tide", "has_tickers": False})
 
-            # Max Pain
-            if (
-                gateway_fetch_enabled
-                and max_pain_connector is not None
-                and (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL
-            ):
-                count = await max_pain_connector.fetch_and_store(tickers)
-                logger.info(f"Max Pain: stored {count} records")
-                _note_fetch_count(
-                    "max_pain",
-                    count,
-                    zero_write_streaks,
-                    zero_write_warn_streak,
-                    tickers_count=len(tickers),
-                )
-                last_max_pain = now
+                if greek_connector is not None and (now - last_greek).total_seconds() >= GREEK_EXPOSURE_INTERVAL:
+                    uw_tasks.append(greek_connector.fetch_and_store(tickers))
+                    uw_task_meta.append({"name": "Greek Exposure", "feed": "greek_exposure", "has_tickers": True})
 
-            # IV Rank
-            if (
-                gateway_fetch_enabled
-                and iv_connector is not None
-                and (now - last_iv).total_seconds() >= IV_RANK_INTERVAL
-            ):
-                count = await iv_connector.fetch_and_store(tickers)
-                logger.info(f"IV Rank: stored {count} records")
-                _note_fetch_count(
-                    "iv_rank",
-                    count,
-                    zero_write_streaks,
-                    zero_write_warn_streak,
-                    tickers_count=len(tickers),
-                )
-                last_iv = now
+                if max_pain_connector is not None and (now - last_max_pain).total_seconds() >= MAX_PAIN_INTERVAL:
+                    uw_tasks.append(max_pain_connector.fetch_and_store(tickers))
+                    uw_task_meta.append({"name": "Max Pain", "feed": "max_pain", "has_tickers": True})
+
+                if iv_connector is not None and (now - last_iv).total_seconds() >= IV_RANK_INTERVAL:
+                    uw_tasks.append(iv_connector.fetch_and_store(tickers))
+                    uw_task_meta.append({"name": "IV Rank", "feed": "iv_rank", "has_tickers": True})
+
+                if uw_tasks:
+                    results = await asyncio.gather(*uw_tasks, return_exceptions=True)
+
+                    succeeded_feeds: set[str] = set()
+                    for i, result in enumerate(results):
+                        meta = uw_task_meta[i]
+                        if isinstance(result, Exception):
+                            logger.error(
+                                "uw_connector_failed",
+                                connector=meta["name"],
+                                feed=meta["feed"],
+                                error=str(result),
+                                exc_info=result,
+                            )
+                            continue
+
+                        succeeded_feeds.add(meta["feed"])
+                        count = result
+                        if meta["has_tickers"]:
+                            logger.info(f"{meta['name']}: stored {count} records for {len(tickers)} tickers")
+                            _note_fetch_count(
+                                meta["feed"],
+                                count,
+                                zero_write_streaks,
+                                zero_write_warn_streak,
+                                tickers_count=len(tickers),
+                            )
+                        else:
+                            logger.info(f"{meta['name']}: stored {count} ticks")
+                            _note_fetch_count(meta["feed"], count, zero_write_streaks, zero_write_warn_streak)
+
+                    # Only advance timestamps for connectors that succeeded —
+                    # failed connectors should retry on the next loop iteration
+                    if "market_tide" in succeeded_feeds:
+                        last_tide = now
+                    if "greek_exposure" in succeeded_feeds:
+                        last_greek = now
+                    if "max_pain" in succeeded_feeds:
+                        last_max_pain = now
+                    if "iv_rank" in succeeded_feeds:
+                        last_iv = now
 
             # VIX Data
             if (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:

@@ -16,7 +16,7 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_logging
 
 logger = logging.getLogger("orion.jobs.sync_earnings")
 

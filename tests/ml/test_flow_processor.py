@@ -14,6 +14,19 @@ from orion.ml.flow_processor import MLFlowProcessor, process_flows_with_ml
 class TestMLFlowProcessor:
     """Tests for MLFlowProcessor class."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_models(self, tmp_path):
+        """Force heuristic scoring so tests don't depend on trained model files."""
+        import orion.ml.scorer as scorer_mod
+
+        orig = scorer_mod.MODEL_DIR
+        scorer_mod.MODEL_DIR = tmp_path / "empty_models"
+        # Reset singleton so next MLFlowProcessor gets a fresh scorer
+        scorer_mod._scorer = None
+        yield
+        scorer_mod.MODEL_DIR = orig
+        scorer_mod._scorer = None
+
     @pytest.fixture
     def processor(self) -> MLFlowProcessor:
         """Create a processor with default threshold."""

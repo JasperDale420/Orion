@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from orion.core.enums import TradeDirection
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,7 +148,7 @@ class SentimentReversalExitRule(ExitRule):
             return None
 
         # Determine what "opposing" means based on position direction
-        is_long = position.direction == "LONG"
+        is_long = position.direction == TradeDirection.LONG
 
         # Get position's DTE bucket for filtering
         position_bucket = get_position_dte_bucket(position)
@@ -209,7 +211,7 @@ class NetPremiumDeclineExitRule(ExitRule):
         if not recent_flow or position.entry_premium_window <= 0:
             return None
 
-        is_long = position.direction == "LONG"
+        is_long = position.direction == TradeDirection.LONG
 
         # Calculate current net premium (bullish - bearish for long)
         bullish_premium = 0.0
@@ -422,7 +424,7 @@ class OpposingClusterExitRule(ExitRule):
         if not recent_flow:
             return None
 
-        is_long = position.direction == "LONG"
+        is_long = position.direction == TradeDirection.LONG
 
         opposing_count = 0
         opposing_premium = 0.0

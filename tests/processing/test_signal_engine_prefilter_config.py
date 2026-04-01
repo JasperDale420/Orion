@@ -59,6 +59,7 @@ async def test_ml_prefilter_threshold_reads_centralized_config(monkeypatch: pyte
     mock_scorer = MagicMock()
     mock_scorer.score.return_value = 0.6
     mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False  # model-backed scoring uses the configured threshold
 
     with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
         decision = await engine.decide(candidate)

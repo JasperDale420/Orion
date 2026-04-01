@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from orion.config import system_settings
 from orion.core.circuit_breaker import CircuitBreaker
+from orion.core.enums import OrderSide, TradeDirection
 from orion.shared.utils import ensure_utc as _ensure_utc
 from orion.storage.models_gold import CandidateTrade, GoldTickerRollup, StrategyDecision
 
@@ -94,7 +95,7 @@ async def preflight_live_signal(
     if qty <= 0:
         return PreflightResult(ok=False, reason="Size 0", extra={"limit_price": price})
 
-    side = "buy" if str(candidate.direction).upper() == "LONG" else "sell"
+    side = OrderSide.BUY if str(candidate.direction).upper() == TradeDirection.LONG else OrderSide.SELL
     if not risk_manager.check_order(candidate.ticker, qty, price, side, timestamp=cand_ts):
         return PreflightResult(
             ok=False,

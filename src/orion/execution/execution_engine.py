@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from collections import deque
 from datetime import UTC, datetime
@@ -7,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 
 from orion.config import risk_settings, system_settings
-from orion.core.enums import DecisionStatus
+from orion.core.enums import DecisionAction, DecisionStatus, OrderSide, TradeDirection
 from orion.core.errors import ErrorCode
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import persist_exit_decision, persist_order_record
@@ -38,7 +39,7 @@ class ExecutionEngine:
     """
 
     def __init__(self) -> None:
-        from orion.execution.risk_manager import RiskManager
+        from orion.execution.risk.manager import RiskManager
 
         self.risk_manager = RiskManager()
 
@@ -49,6 +50,10 @@ class ExecutionEngine:
         self.order_history: deque[bool] = deque(maxlen=20)
         self.last_positions_snapshot_ts: datetime | None = None
         self._last_fill_poll_ts: datetime | None = None
+
+        # TTL cache for _check_system_health (avoids N identical DB queries per cycle)
+        self._health_cache: tuple[bool, float] | None = None
+        self._health_cache_ttl: float = 10.0
 
         # Empire-core ledger for EmpireUI trade recording
         self._ledger = None
@@ -117,7 +122,7 @@ class ExecutionEngine:
             async def fetch_recent_decisions(session: Any) -> list[Any]:
                 stmt = (
                     select(StrategyDecision)
-                    .where(StrategyDecision.decision == "EXECUTE")
+                    .where(StrategyDecision.decision == DecisionAction.EXECUTE)
                     .order_by(StrategyDecision.timestamp_utc.desc())
                     .limit(20)
                 )
@@ -323,9 +328,12 @@ class ExecutionEngine:
                 decision.reason = f"DTE Too Low ({dte} days)"
                 return
 
+        # Always fetch live option chain for current pricing — candidate.premium
+        # is signal-time data and may be stale. Live mid/ask is needed for
+        # accurate order sizing, risk checks, and limit price.
+        option_price = None
         client = self._get_gateway_client()
         chain_result = await client.get_option_chain(candidate.ticker)
-        option_price = candidate.premium
 
         if "error" not in chain_result and candidate.option_symbol:
             contracts = chain_result.get("contracts", [])
@@ -335,6 +343,11 @@ class ExecutionEngine:
                     if mid and float(mid) > 0:
                         option_price = float(mid)
                     break
+
+        # Fall back to signal-time premium only if chain fetch fails
+        if not option_price and candidate.premium and candidate.premium > 0:
+            option_price = candidate.premium
+            logger.warning("using_stale_premium_fallback", ticker=candidate.ticker, premium=option_price)
 
         if not option_price or option_price <= 0:
             logger.error("options_price_fetch_failed", option_symbol=candidate.option_symbol, ticker=candidate.ticker)
@@ -393,7 +406,7 @@ class ExecutionEngine:
                     multiplier=multiplier,
                 )
 
-        side_value = "buy" if candidate.direction == "LONG" else "sell"
+        side_value = OrderSide.BUY if candidate.direction == TradeDirection.LONG else OrderSide.SELL
         if not self.risk_manager.check_order(candidate.ticker, num_contracts, option_price * 100, side_value):
             logger.error(
                 "options_execution_blocked_by_risk",
@@ -423,8 +436,8 @@ class ExecutionEngine:
             return False
 
         exposure = self.risk_manager.ticker_exposures.get(candidate.ticker, 0.0)
-        side = "buy" if candidate.direction == "LONG" else "sell"
-        is_short_opening = side == "sell" and exposure <= 0
+        side = OrderSide.BUY if candidate.direction == TradeDirection.LONG else OrderSide.SELL
+        is_short_opening = side == OrderSide.SELL and exposure <= 0
 
         if is_short_opening and not self.risk_manager.config.enable_shorting:
             logger.warning("Execution BLOCKED: Shorting is disabled")
@@ -476,7 +489,7 @@ class ExecutionEngine:
         decision.execution_params["order_type"] = "OPTIONS"
         decision.execution_params["contracts"] = num_contracts
 
-        side = "buy" if candidate.direction == "LONG" else "sell"
+        side = OrderSide.BUY if candidate.direction == TradeDirection.LONG else OrderSide.SELL
 
         rate_limiter = get_order_rate_limiter()
         if not await rate_limiter.acquire(timeout=10.0):
@@ -602,7 +615,7 @@ class ExecutionEngine:
 
         Non-fatal: logs errors but does not roll back the entry order.
         """
-        exit_side = "sell" if side == "buy" else "buy"
+        exit_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
         sl_price = round(entry_price * (1 - stop_loss_pct), 2)
         tp_price = round(entry_price * (1 + take_profit_pct), 2)
         result: dict = {"stop_loss": None, "take_profit": None}
@@ -701,7 +714,7 @@ class ExecutionEngine:
                 exit_buffer_bps = 5
                 limit_price = round(current_price * (1 - exit_buffer_bps / 10000.0), 2)
 
-                close_side = "buy" if str(direction).upper() == "SHORT" else "sell"
+                close_side = OrderSide.BUY if str(direction).upper() == TradeDirection.SHORT else OrderSide.SELL
 
                 result = await client.create_order(
                     symbol=ticker,
@@ -744,7 +757,15 @@ class ExecutionEngine:
     # ── System health ────────────────────────────────────────────────────
 
     async def _check_system_health(self) -> bool:
-        """Queries SystemStatus table to ensure Global Health is OK and circuit breaker is not open."""
+        """Queries SystemStatus table to ensure Global Health is OK and circuit breaker is not open.
+
+        Results are cached for ``_health_cache_ttl`` seconds (default 10s) to
+        avoid redundant DB queries when multiple candidates are evaluated in
+        the same execution cycle.
+        """
+        if self._health_cache and (time.monotonic() - self._health_cache[1]) < self._health_cache_ttl:
+            return self._health_cache[0]
+
         from orion.core.circuit_breaker import CircuitBreaker
         from orion.storage.models import SystemStatus
 
@@ -768,6 +789,7 @@ class ExecutionEngine:
                         "details": cb_record.details,
                     },
                 )
+                self._health_cache = (False, time.monotonic())
                 return False
 
             if not status_record:
@@ -775,6 +797,7 @@ class ExecutionEngine:
                     "System Health Record missing. Execution BLOCKED until health record is created.",
                     extra={"event_type": "HEALTH_CHECK_FAILED", "details": "Record Missing"},
                 )
+                self._health_cache = (False, time.monotonic())
                 return False
 
             if status_record.status != "HEALTHY":
@@ -786,6 +809,7 @@ class ExecutionEngine:
                         "details": status_record.details,
                     },
                 )
+                self._health_cache = (False, time.monotonic())
                 return False
 
             now = datetime.now(UTC)
@@ -798,14 +822,17 @@ class ExecutionEngine:
                         f"System Health Record STALE ({age:.1f}s). Ingestion likely dead.",
                         extra={"event_type": "HEALTH_CHECK_FAILED", "reason": "Stale", "age_seconds": age},
                     )
+                    self._health_cache = (False, time.monotonic())
                     return False
 
+            self._health_cache = (True, time.monotonic())
             return True
         except Exception as e:
             logger.error(
                 f"Failed to check System Health: {e}",
                 extra={"event_type": "HEALTH_CHECK_ERROR", "error_details": str(e)},
             )
+            self._health_cache = (False, time.monotonic())
             return False
 
     # ── Fill polling (delegates to FillProcessor) ────────────────────────

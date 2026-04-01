@@ -26,33 +26,23 @@ from orion.labeler import (
     BATCH_SIZE,
     RISK_FREE_RATE,
 )
+from orion.shared.legacy_flags import is_legacy_pipeline_enabled, legacy_pipeline_control
 from orion.shared.logger import setup_struct_logger
-from orion.unusualwhales.api.stock import get_info
-from orion.unusualwhales.client import UnusualWhalesClient
-from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
 
 logger = setup_struct_logger("orion.price_target")
 _heber_reader = HeberReader()
 
 _PRICE_TARGET_FALLBACK_COUNTS: dict[str, int] = defaultdict(int)
 
+_LEGACY_KEY = "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER"
+
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
-    specific_key = "ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER"
-    specific_raw = os.getenv(specific_key)
-    if specific_raw is not None:
-        enabled = specific_raw.lower() not in {"0", "false", "no", "off", "n"}
-        return enabled, specific_key, specific_raw
-
-    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    global_raw = os.getenv(global_key, "true")
-    enabled = global_raw.lower() not in {"0", "false", "no", "off", "n"}
-    return enabled, global_key, global_raw
+    return legacy_pipeline_control(_LEGACY_KEY)
 
 
 def _legacy_label_pipelines_enabled() -> bool:
-    enabled, _, _ = _legacy_label_pipeline_control()
-    return enabled
+    return is_legacy_pipeline_enabled(_LEGACY_KEY)
 
 
 def _record_price_target_fallback(feature_name: str, error: Exception | None = None, **context: Any) -> None:
@@ -2558,18 +2548,23 @@ def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime)
 
 # Ticker info cache to avoid repeated API calls
 _ticker_info_cache: dict[str, dict[str, Any]] = {}
-_uw_client: UnusualWhalesClient | None = None
+_uw_client: Any = None
 
 
-def _get_uw_client() -> UnusualWhalesClient:
-    """Get or create UW client."""
+def _get_uw_client() -> Any:
+    """Get or create UW client. Returns None if SDK is unavailable."""
     global _uw_client
     if _uw_client is None:
+        try:
+            from orion.unusualwhales.client import UnusualWhalesClient
+        except ImportError:
+            logger.info("unusualwhales SDK not installed, ticker info lookups disabled")
+            return None
         api_key = os.getenv("UW_API_KEY")
         base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com")
         if not api_key:
             logger.warning("UW_API_KEY not set, ticker info lookups will fail")
-            return None  # type: ignore
+            return None
         _uw_client = UnusualWhalesClient(base_url=base_url, token=api_key)
     return _uw_client
 
@@ -2597,7 +2592,14 @@ async def get_ticker_info(ticker: str) -> dict[str, Any]:
         _ticker_info_cache[ticker] = cache_entry
         return cache_entry
 
-    from orion.unusualwhales.types import UNSET
+    try:
+        from orion.unusualwhales.api.stock import get_info
+        from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
+        from orion.unusualwhales.types import UNSET
+    except ImportError:
+        logger.debug("unusualwhales SDK unavailable, skipping UW ticker info")
+        _ticker_info_cache[ticker] = cache_entry
+        return cache_entry
 
     # Try /api/stock/{ticker}/info first
     try:

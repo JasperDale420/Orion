@@ -6,7 +6,8 @@ import scipy.stats as stats
 
 from orion.analysis.cross_validation import PurgedKFold
 from orion.analysis.metrics import compute_bootstrap_p_value, compute_deflated_sharpe_ratio, compute_sharpe_ratio
-from orion.execution.risk_manager import RiskManager
+from orion.core.enums import OrderSide, TradeDirection
+from orion.execution.risk.manager import RiskManager
 from orion.processing.label_engine import TripleBarrierLabeling
 from orion.storage.models_gold import CandidateTrade
 
@@ -21,7 +22,7 @@ class BacktestEngine:
         self.initial_capital = initial_capital
         self.transaction_cost_pct = transaction_cost_bps / 10000.0
         # Initialize Risk Manager
-        from orion.execution.risk_manager import RiskManager
+        from orion.execution.risk.manager import RiskManager
 
         self.risk_manager = RiskManager()
 
@@ -238,7 +239,10 @@ class BacktestEngine:
             qty = local_risk_manager.calculate_size(entry_price=entry_price, account_equity=current_equity)
 
             check_passed = local_risk_manager.check_order(
-                ticker=ticker, quantity=qty, price=entry_price, side="buy" if cand.direction == "LONG" else "sell"
+                ticker=ticker,
+                quantity=qty,
+                price=entry_price,
+                side=OrderSide.BUY if cand.direction == TradeDirection.LONG else OrderSide.SELL,
             )
 
             if not check_passed or qty <= 0:
@@ -252,7 +256,7 @@ class BacktestEngine:
 
             row = outcome_df.iloc[0]
             ret = row["ret"]
-            trade_side_mult = 1 if cand.direction == "LONG" else -1
+            trade_side_mult = 1 if cand.direction == TradeDirection.LONG else -1
             costs = self.transaction_cost_pct * 2
 
             trade_ret = ret * trade_side_mult

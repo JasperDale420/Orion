@@ -10,11 +10,11 @@ Usage:
 """
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 
 from orion.core.market_schedule import MarketSchedule
 from orion.jobs.backfill_ml_features import run_backfill as run_ml_backfill
+from orion.shared.legacy_flags import is_legacy_pipeline_enabled, legacy_pipeline_control
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -23,23 +23,15 @@ logger = setup_struct_logger("orion.nightly_backfill")
 BACKFILL_DELAY_MINUTES = 30
 _MARKET_SCHEDULE = MarketSchedule()
 
+_LEGACY_KEY = "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL"
+
 
 def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
-    specific_key = "ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL"
-    specific_raw = os.getenv(specific_key)
-    if specific_raw is not None:
-        enabled = specific_raw.lower() not in {"0", "false", "no", "off", "n"}
-        return enabled, specific_key, specific_raw
-
-    global_key = "ORION_ENABLE_LEGACY_LABEL_PIPELINES"
-    global_raw = os.getenv(global_key, "true")
-    enabled = global_raw.lower() not in {"0", "false", "no", "off", "n"}
-    return enabled, global_key, global_raw
+    return legacy_pipeline_control(_LEGACY_KEY)
 
 
 def _legacy_label_pipelines_enabled() -> bool:
-    enabled, _, _ = _legacy_label_pipeline_control()
-    return enabled
+    return is_legacy_pipeline_enabled(_LEGACY_KEY)
 
 
 def is_trading_day(dt: datetime) -> bool:

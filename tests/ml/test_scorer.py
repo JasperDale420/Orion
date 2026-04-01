@@ -12,6 +12,18 @@ from orion.ml.scorer import MLScorer, get_scorer
 class TestMLScorer:
     """Tests for MLScorer class."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_models(self, tmp_path):
+        """Force heuristic scoring so tests don't depend on trained model files."""
+        import orion.ml.scorer as scorer_mod
+
+        orig = scorer_mod.MODEL_DIR
+        scorer_mod.MODEL_DIR = tmp_path / "empty_models"
+        scorer_mod._scorer = None
+        yield
+        scorer_mod.MODEL_DIR = orig
+        scorer_mod._scorer = None
+
     @pytest.fixture
     def scorer(self) -> MLScorer:
         """Create a fresh scorer instance."""

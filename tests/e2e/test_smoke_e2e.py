@@ -424,7 +424,7 @@ async def run_smoke_test() -> dict[str, bool]:
     print("[Stage 9] Execution Engine (mock broker)...", end=" ")
     try:
         from orion.execution.execution_engine import ExecutionEngine
-        from orion.execution.risk_manager import RiskManager
+        from orion.execution.risk.manager import RiskManager
 
         if decision and decision.decision == "EXECUTE":
             # Reset system health, circuit breaker, and risk state

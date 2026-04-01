@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from orion.config import RiskSettings
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 
 
 def test_dst_time_handling():

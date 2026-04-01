@@ -563,7 +563,11 @@ class BucketExitClassifier:
     def _load_models(self) -> None:
         """Load all bucket-specific exit models."""
         if not MODEL_DIR.exists():
-            logger.info("Model directory does not exist, using heuristic")
+            logger.warning(
+                f"Exit model directory {MODEL_DIR} does not exist — using heuristic exit classifier "
+                f"(set ORION_MODEL_DIR to the directory containing trained .pkl models)",
+                extra={"event": "exit_model_dir_missing", "model_dir": str(MODEL_DIR)},
+            )
             return
 
         loaded_count = 0
@@ -584,9 +588,9 @@ class BucketExitClassifier:
                     logger.warning(f"Failed to load exit model {bucket}: {e}")
 
         if loaded_count == 0:
-            logger.info(
-                "No exit models found, using heuristic classifiers",
-                extra={"event": "using_exit_heuristic"},
+            logger.warning(
+                f"No exit models found in {MODEL_DIR} — using heuristic exit classifiers",
+                extra={"event": "no_exit_models_found", "model_dir": str(MODEL_DIR)},
             )
         else:
             logger.info(

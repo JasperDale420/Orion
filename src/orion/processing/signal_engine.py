@@ -2,7 +2,7 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
-from orion.core.enums import DecisionStatus
+from orion.core.enums import DecisionAction, DecisionStatus
 from orion.processing.feature_engine import FeatureEngine
 from orion.processing.pipeline import PipelineContext, PipelineStage, StageResult
 from orion.processing.stages.ml_prefilter import MLPreFilter
@@ -111,7 +111,7 @@ class SignalEngine:
                 )
             decision_trace[stage.name] = result.trace
 
-            if result.action == "SKIP":
+            if result.action == DecisionAction.SKIP:
                 return self._build_skip_decision(candidate, result.reason, stage.name, decision_trace)
 
         # Feature cache invalidation on regime transition

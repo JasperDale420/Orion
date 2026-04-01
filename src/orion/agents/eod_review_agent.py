@@ -23,16 +23,16 @@ from orion.agents.eod_metrics import (
     summarize_slippage,
 )
 from orion.clients.heber_reader import get_heber_reader
-from orion.core.logging_config import setup_logging
+from orion.shared.logger import setup_logging
 
 load_dotenv()
 
-from orion.agents.base import BaseAgent
 from orion.agents.codex_client import (
     extract_json_from_response,
     run_codex_completion,
 )
 from orion.agents.proposal_builder import ProposalBuilder
+from orion.core.enums import DecisionAction
 from orion.core.id_utils import deterministic_solver_id
 from orion.rag.vector_store import VectorStore
 from orion.shared.db_utils import db_query, db_write
@@ -49,7 +49,7 @@ from orion.storage.models_trade_journal import TradeJournalEntry
 logger = setup_struct_logger("orion.agents.eod_review_agent")
 
 
-class EODReviewAgent(BaseAgent):
+class EODReviewAgent:
     """
     PRD 17: Daily EOD Review Agent.
     - Inspects trades/outcomes
@@ -64,9 +64,6 @@ class EODReviewAgent(BaseAgent):
         vector_store: Any | None = None,
         proposal_builder: ProposalBuilder | None = None,
     ):
-        from orion.config import agent_settings
-
-        super().__init__(name="EODReview", model=agent_settings.model_name)
         self.llm_client = llm_client
         self.vector_store = vector_store or VectorStore()
         self.proposal_builder = proposal_builder or ProposalBuilder()
@@ -419,8 +416,8 @@ class EODReviewAgent(BaseAgent):
         baseline_start = data["baseline_start"]
 
         total_decisions = len(decisions)
-        executed_count = sum(1 for d in decisions if d.decision == "EXECUTE")
-        skipped_count = sum(1 for d in decisions if d.decision == "SKIP")
+        executed_count = sum(1 for d in decisions if d.decision == DecisionAction.EXECUTE)
+        skipped_count = sum(1 for d in decisions if d.decision == DecisionAction.SKIP)
 
         # --- slippage joins ---
         baseline_orders_by_broker = self._index_orders_by_broker(baseline_orders)

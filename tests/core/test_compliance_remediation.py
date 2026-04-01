@@ -8,7 +8,7 @@ from orion.agents.meta_search_agent import EditOpType, MetaSearchAgent
 from orion.config import RiskSettings
 from orion.core.solver_router import SolverRouter
 from orion.core.solver_schema import LiveContext, SolverConfig, SolverRiskConfig
-from orion.execution.risk_manager import RiskManager
+from orion.execution.risk.manager import RiskManager
 
 
 # 1. Test Risk Injection

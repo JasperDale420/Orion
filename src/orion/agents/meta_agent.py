@@ -1,8 +1,5 @@
-from typing import Any
-
 from dotenv import load_dotenv
 
-from orion.agents.base import BaseAgent
 from orion.agents.codex_client import (
     extract_json_from_response,
     run_codex_completion,
@@ -16,7 +13,7 @@ load_dotenv()
 logger = setup_struct_logger(__name__)
 
 
-class MetaAgent(BaseAgent):
+class MetaAgent:
     """
     PRD Addendum 5.3: MetaAgent (Poetiq-style).
     Uses LLM to propose evolutionary mutations (Edits) to Solvers.
@@ -24,15 +21,7 @@ class MetaAgent(BaseAgent):
     """
 
     def __init__(self) -> None:
-        from orion.config import agent_settings
-
-        super().__init__(name="MetaAgent", model=agent_settings.model_name)
-
-    async def run(self, context: dict[str, Any]) -> dict[str, Any]:
-        """
-        BaseAgent run method support (optional generic entry point).
-        """
-        raise NotImplementedError("MetaAgent.run is not a generic entry point; call propose_edits() instead")
+        pass
 
     async def _fetch_strategy_research(
         self,
