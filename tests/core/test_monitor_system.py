@@ -5,6 +5,7 @@ os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 
 import logging
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -52,3 +53,21 @@ async def test_monitor_logic(caplog, capsys):
     assert "ALERT: Stale Heartbeat for stale_service" in out
     assert "Heartbeat OK: healthy_service" in out
     assert "ALERT: 1 new Failures in DLQ" in out
+
+
+@pytest.mark.asyncio
+async def test_check_heartbeats_warns_when_timestamp_is_naive(caplog) -> None:
+    status = SystemStatus(
+        key="naive_service",
+        status="HEALTHY",
+        last_updated_utc=datetime.utcnow(),
+    )
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [status]
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=result)
+
+    with caplog.at_level(logging.WARNING):
+        await check_heartbeats(session)
+
+    assert "naive" in caplog.text.lower()

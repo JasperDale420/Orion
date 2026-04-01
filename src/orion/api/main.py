@@ -630,7 +630,20 @@ async def get_flows(
     ts_col = _first_existing_column(frame, ("flow_ts_utc", "ts_event", "timestamp", "ts_utc"))
     premium_col = _first_existing_column(frame, ("premium_usd", "premium"))
     if ticker_col is None or ts_col is None or premium_col is None:
-        return []
+        logger.error(
+            "Heber flow dataset is missing required columns",
+            extra={
+                "event_type": "FLOW_SCHEMA_INVALID",
+                "ticker": ticker,
+                "available_columns": list(frame.columns),
+                "required_any_of": {
+                    "ticker": ["ticker", "symbol", "instrument_key", "underlying"],
+                    "timestamp": ["flow_ts_utc", "ts_event", "timestamp", "ts_utc"],
+                    "premium": ["premium_usd", "premium"],
+                },
+            },
+        )
+        raise HTTPException(status_code=503, detail="Flow data invalid")
 
     work = frame.copy()
     work["_event_ts"] = pd.to_datetime(work[ts_col], utc=True, errors="coerce")

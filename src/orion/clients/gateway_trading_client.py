@@ -18,6 +18,10 @@ logger = structlog.get_logger("orion.clients.gateway_trading")
 _RESPONSE_DATA_KEY = "data"
 
 
+class GatewayTradingClientError(RuntimeError):
+    """Raised when the Gateway returns an error payload or invalid shape."""
+
+
 class GatewayTradingClient:
     """
     Async client for Data Gateway trading endpoints.
@@ -104,8 +108,20 @@ class GatewayTradingClient:
         if isinstance(result, list):
             return result
         if isinstance(result, dict) and "error" in result:
-            return []
-        return [result] if result else []
+            logger.error(
+                "gateway_trading_positions_request_failed",
+                event_type="GATEWAY_POSITIONS_REQUEST_FAILED",
+                error=result["error"],
+            )
+            raise GatewayTradingClientError(f"Gateway positions request failed: {result['error']}")
+
+        logger.error(
+            "gateway_trading_positions_malformed_response",
+            event_type="GATEWAY_POSITIONS_MALFORMED_RESPONSE",
+            response_type=type(result).__name__,
+            response_preview=repr(result)[:500],
+        )
+        raise GatewayTradingClientError("Gateway positions response was not a list")
 
     async def get_position(self, symbol: str) -> dict[str, Any]:
         """Get position for a specific symbol."""
@@ -153,7 +169,21 @@ class GatewayTradingClient:
         )
         if isinstance(result, list):
             return result
-        return []
+        if isinstance(result, dict) and "error" in result:
+            logger.error(
+                "gateway_trading_orders_request_failed",
+                event_type="GATEWAY_ORDERS_REQUEST_FAILED",
+                error=result["error"],
+            )
+            raise GatewayTradingClientError(f"Gateway orders request failed: {result['error']}")
+
+        logger.error(
+            "gateway_trading_orders_malformed_response",
+            event_type="GATEWAY_ORDERS_MALFORMED_RESPONSE",
+            response_type=type(result).__name__,
+            response_preview=repr(result)[:500],
+        )
+        raise GatewayTradingClientError("Gateway orders response was not a list")
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         """Get a specific order by ID."""

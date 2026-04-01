@@ -22,6 +22,7 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.core.market_schedule import MarketSchedule
 from orion.core.logging_config import setup_logging
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import init_db
@@ -34,6 +35,27 @@ CRITICAL_TICKERS = ["SPY", "QQQ", "IWM", "NVDA", "AAPL", "TSLA"]
 # Market hours (Eastern Time, simplified as UTC-5)
 MARKET_OPEN_HOUR = 14  # 9:30 ET = 14:30 UTC
 MARKET_CLOSE_HOUR = 21  # 4:00 PM ET = 21:00 UTC
+
+
+def _is_market_hours(now: datetime | None = None) -> bool:
+    """Return whether the NYSE session is open, with a logged UTC-hour fallback."""
+    ts = now or datetime.now(UTC)
+    try:
+        return MarketSchedule().is_market_open(ts)
+    except Exception as exc:
+        in_hours = MARKET_OPEN_HOUR <= ts.hour < MARKET_CLOSE_HOUR
+        logger.warning(
+            "Market calendar unavailable during data-quality check; falling back to UTC hour gate",
+            extra={
+                "event_type": "DATA_QUALITY_MARKET_HOURS_FALLBACK",
+                "timestamp_utc": ts.isoformat(),
+                "fallback_open_hour": MARKET_OPEN_HOUR,
+                "fallback_close_hour": MARKET_CLOSE_HOUR,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
+        return in_hours
 
 
 # =============================================================================
@@ -52,10 +74,9 @@ async def check_zero_valued_bars(lookback_hours: int = 24) -> list[dict]:
 async def check_data_staleness(stale_minutes: int = 15) -> list[dict]:
     """Check for tickers with stale data during market hours."""
     now = datetime.now(UTC)
-    current_hour = now.hour
 
     # Only check during market hours
-    if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
+    if not _is_market_hours(now):
         return []
 
     if not _prefer_heber_source():
@@ -133,18 +154,17 @@ async def get_flow_summary() -> dict:
     }
 
 
-async def check_flow_staleness(stale_minutes: int = 30) -> bool:
+async def check_flow_staleness(stale_minutes: int = 30) -> bool | None:
     """Check if flow data is stale during market hours."""
     now = datetime.now(UTC)
-    current_hour = now.hour
 
-    if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
+    if not _is_market_hours(now):
         return False  # Outside market hours, no alert
 
     if not _prefer_heber_source():
         return False
     heber_stale = await _check_flow_staleness_from_heber(stale_minutes=stale_minutes)
-    return bool(heber_stale) if heber_stale is not None else False
+    return heber_stale
 
 
 # =============================================================================
@@ -183,9 +203,8 @@ async def get_darkpool_summary() -> dict:
 async def check_darkpool_staleness(stale_minutes: int = 60) -> bool:
     """Check if darkpool data is stale during market hours."""
     now = datetime.now(UTC)
-    current_hour = now.hour
 
-    if current_hour < MARKET_OPEN_HOUR or current_hour >= MARKET_CLOSE_HOUR:
+    if not _is_market_hours(now):
         return False
 
     if not _prefer_heber_source():
@@ -272,14 +291,27 @@ async def run_quality_checks():
     # 5. UW Flow Summary
     flow_summary = await get_flow_summary()
     results["flow"] = flow_summary
-    logger.info(
+    flow_backend = str(flow_summary.get("backend") or "unknown")
+    flow_summary_message = (
         f"[FLOW] 24h: {flow_summary['total_flows_24h']} flows, "
         f"{flow_summary['validity_pct']}% valid premium, "
         f"{flow_summary['unique_tickers']} tickers"
     )
+    if flow_backend == "heber":
+        logger.info(flow_summary_message)
+    else:
+        logger.warning(
+            f"[FLOW] Source unavailable ({flow_backend}); zero counts do not mean the market was quiet",
+            extra={"event_type": "FLOW_SOURCE_UNAVAILABLE", "backend": flow_backend},
+        )
 
     flow_stale = await check_flow_staleness(stale_minutes=30)
-    if flow_stale:
+    if flow_stale is None:
+        logger.warning(
+            "[FLOW] Flow freshness unknown because the source could not be read",
+            extra={"event_type": "FLOW_FRESHNESS_UNKNOWN", "backend": flow_backend},
+        )
+    elif flow_stale:
         logger.warning("[FLOW] ALERT: Flow data is stale (>30 min)")
     else:
         logger.info("[FLOW] Flow data fresh ✓")
@@ -627,7 +659,11 @@ async def _read_heber_flow_24h() -> pd.DataFrame | None:
     try:
         return await asyncio.to_thread(reader.read_flow, start_time=start, asof_time=now)
     except Exception as exc:
-        logger.warning("flow_heber_read_failed", extra={"event_type": "FLOW_HEBER_READ_FAILED", "error": str(exc)})
+        logger.warning(
+            "flow_heber_read_failed",
+            extra={"event_type": "FLOW_HEBER_READ_FAILED", "error": str(exc)},
+            exc_info=True,
+        )
         return None
 
 
@@ -891,8 +927,9 @@ async def _check_bar_gaps_from_heber(ticker: str, gap_minutes: int) -> list[dict
         return []
 
     bars = bars.sort_values("bar_ts")
-    bars["hour_utc"] = bars["bar_ts"].dt.hour
-    bars = bars[(bars["hour_utc"] >= MARKET_OPEN_HOUR) & (bars["hour_utc"] < MARKET_CLOSE_HOUR)]
+    bars = bars[
+        bars["bar_ts"].map(lambda ts: _is_market_hours(ts.to_pydatetime() if isinstance(ts, pd.Timestamp) else ts))
+    ]
     if bars.empty:
         return []
 

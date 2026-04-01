@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -74,9 +75,8 @@ async def test_check_flow_staleness_uses_heber(monkeypatch: pytest.MonkeyPatch) 
         def read_flow(self, **_kwargs):
             return flow_df
 
+    monkeypatch.setattr(dqc, "_is_market_hours", lambda *_args, **_kwargs: True, raising=False)
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(dqc, "MARKET_OPEN_HOUR", 0)
-    monkeypatch.setattr(dqc, "MARKET_CLOSE_HOUR", 24)
 
     stale = await dqc.check_flow_staleness(stale_minutes=30)
     assert stale is True
@@ -161,9 +161,8 @@ async def test_check_data_staleness_prefers_heber(monkeypatch: pytest.MonkeyPatc
         def read_bars(self, **_kwargs):
             return bars_df
 
+    monkeypatch.setattr(dqc, "_is_market_hours", lambda *_args, **_kwargs: True, raising=False)
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(dqc, "MARKET_OPEN_HOUR", 0)
-    monkeypatch.setattr(dqc, "MARKET_CLOSE_HOUR", 24)
     monkeypatch.setattr(dqc, "CRITICAL_TICKERS", ["SPY", "QQQ"])
 
     stale = await dqc.check_data_staleness(stale_minutes=15)
@@ -187,14 +186,138 @@ async def test_check_bar_gaps_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> 
         def read_bars(self, **_kwargs):
             return bars_df
 
+    monkeypatch.setattr(dqc, "_is_market_hours", lambda *_args, **_kwargs: True, raising=False)
     monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
-    monkeypatch.setattr(dqc, "MARKET_OPEN_HOUR", 0)
-    monkeypatch.setattr(dqc, "MARKET_CLOSE_HOUR", 24)
 
     gaps = await dqc.check_bar_gaps(ticker="SPY", gap_minutes=5)
 
     assert gaps
     assert gaps[0]["gap_minutes"] > 5
+
+
+@pytest.mark.asyncio
+async def test_check_flow_staleness_uses_market_schedule_when_dst_opens_before_14_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_now = datetime(2026, 6, 1, 13, 45, tzinfo=UTC)
+    flow_df = pd.DataFrame(
+        {
+            "instrument_key": ["equity:SPY"],
+            "ts_event": [fixed_now - timedelta(minutes=40)],
+            "premium_usd": [100.0],
+        }
+    )
+
+    class _FakeReader:
+        def read_flow(self, **_kwargs):
+            return flow_df
+
+    class _Schedule:
+        def is_market_open(self, timestamp):
+            assert timestamp == fixed_now
+            return True
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            _ = tz
+            return fixed_now
+
+    monkeypatch.setattr(dqc, "datetime", _FrozenDateTime)
+    monkeypatch.setattr(dqc, "MarketSchedule", lambda: _Schedule(), raising=False)
+    monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
+
+    stale = await dqc.check_flow_staleness(stale_minutes=30)
+
+    assert stale is True
+
+
+@pytest.mark.asyncio
+async def test_check_flow_staleness_returns_none_when_heber_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeReader:
+        def read_flow(self, **_kwargs):
+            raise RuntimeError("heber unavailable")
+
+    monkeypatch.setattr(dqc, "_is_market_hours", lambda *_args, **_kwargs: True, raising=False)
+    monkeypatch.setattr(dqc, "get_heber_reader", lambda: _FakeReader())
+
+    stale = await dqc.check_flow_staleness(stale_minutes=30)
+
+    assert stale is None
+
+
+@pytest.mark.asyncio
+async def test_run_quality_checks_warns_when_flow_backend_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _fake_init_db() -> None:
+        return None
+
+    async def _fake_get_bars_summary() -> dict:
+        return {
+            "total_bars_24h": 0,
+            "validity_pct": 100,
+            "unique_tickers": 0,
+            "backend": "heber",
+        }
+
+    async def _fake_check_zero_valued_bars(*_args, **_kwargs) -> list[dict]:
+        return []
+
+    async def _fake_check_data_staleness(*_args, **_kwargs) -> list[dict]:
+        return []
+
+    async def _fake_check_bar_gaps(*_args, **_kwargs) -> list[dict]:
+        return []
+
+    async def _fake_get_flow_summary() -> dict:
+        return {
+            "total_flows_24h": 0,
+            "validity_pct": 0,
+            "unique_tickers": 0,
+            "backend": "heber_unavailable",
+        }
+
+    async def _fake_check_flow_staleness(*_args, **_kwargs):
+        return None
+
+    async def _fake_get_darkpool_summary() -> dict:
+        return {
+            "total_trades_24h": 0,
+            "validity_pct": 100,
+            "unique_tickers": 0,
+            "backend": "heber",
+        }
+
+    async def _fake_check_darkpool_staleness(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _fake_get_ml_features_summary() -> dict:
+        return dqc._empty_ml_features_summary(backend="heber")
+
+    async def _fake_check_recent_labels_features() -> dict:
+        return dqc._empty_recent_labels_summary(backend="heber")
+
+    monkeypatch.setattr(dqc, "init_db", _fake_init_db)
+    monkeypatch.setattr(dqc, "get_bars_summary", _fake_get_bars_summary)
+    monkeypatch.setattr(dqc, "check_zero_valued_bars", _fake_check_zero_valued_bars)
+    monkeypatch.setattr(dqc, "check_data_staleness", _fake_check_data_staleness)
+    monkeypatch.setattr(dqc, "check_bar_gaps", _fake_check_bar_gaps)
+    monkeypatch.setattr(dqc, "get_flow_summary", _fake_get_flow_summary)
+    monkeypatch.setattr(dqc, "check_flow_staleness", _fake_check_flow_staleness)
+    monkeypatch.setattr(dqc, "get_darkpool_summary", _fake_get_darkpool_summary)
+    monkeypatch.setattr(dqc, "check_darkpool_staleness", _fake_check_darkpool_staleness)
+    monkeypatch.setattr(dqc, "get_ml_features_summary", _fake_get_ml_features_summary)
+    monkeypatch.setattr(dqc, "check_recent_labels_features", _fake_check_recent_labels_features)
+
+    with caplog.at_level(logging.WARNING):
+        await dqc.run_quality_checks()
+
+    assert "flow data fresh" not in caplog.text.lower()
+    assert "unavailable" in caplog.text.lower()
 
 
 @pytest.mark.asyncio

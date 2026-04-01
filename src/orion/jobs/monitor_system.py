@@ -34,6 +34,10 @@ async def check_heartbeats(session: Any) -> None:
         # Ensure timezone awareness
         last_update = s.last_updated_utc
         if last_update.tzinfo is None:
+            logger.warning(
+                f"Naive heartbeat timestamp detected for {s.key}; assuming UTC",
+                extra={"event_type": "HEARTBEAT_NAIVE_TIMESTAMP", "key": s.key},
+            )
             last_update = last_update.replace(tzinfo=UTC)
 
         lag_seconds = (now - last_update).total_seconds()

@@ -83,3 +83,30 @@ async def test_flows_endpoint_returns_503_when_heber_read_fails(monkeypatch: pyt
 
     assert res.status_code == 503
     assert res.json()["detail"] == "Flow data unavailable"
+
+
+@pytest.mark.asyncio
+async def test_flows_endpoint_returns_503_when_heber_frame_is_missing_required_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(system_settings, "api_key", "testkey")
+
+    class _FakeReader:
+        def read_flow(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return pd.DataFrame(
+                [
+                    {
+                        "foo": "SPY",
+                        "bar": datetime.now(UTC),
+                    }
+                ]
+            )
+
+    monkeypatch.setattr("orion.api.main.get_heber_reader", lambda: _FakeReader())
+
+    headers = {"x-api-key": "testkey"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        res = await client.get("/flows", headers=headers, params={"ticker": "SPY"})
+
+    assert res.status_code == 503
+    assert "invalid" in res.json()["detail"].lower()

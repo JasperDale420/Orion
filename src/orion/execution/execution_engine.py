@@ -15,6 +15,7 @@ from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
+from orion.storage.db import async_session_factory
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 logger = setup_struct_logger(__name__)
@@ -22,6 +23,8 @@ logger = setup_struct_logger(__name__)
 # Prefix for all Orion order IDs — used to identify Orion's positions
 # in the shared Alpaca paper account.
 ORDER_ID_PREFIX = "orion_"
+
+__all__ = ["ExecutionEngine", "ORDER_ID_PREFIX", "async_session_factory"]
 
 
 class ExecutionEngine:
@@ -143,7 +146,7 @@ class ExecutionEngine:
                 },
             )
 
-    async def _fetch_orion_tickers(self) -> set[str]:
+    async def _fetch_orion_tickers(self) -> set[str] | None:
         """Return the set of tickers that Orion has active orders for."""
         from orion.storage.models_execution import OrderRecord
 
@@ -154,8 +157,13 @@ class ExecutionEngine:
 
         try:
             return await db_query(query_tickers)
-        except Exception:
-            return set()
+        except Exception as exc:
+            logger.error(
+                "Failed to fetch Orion-owned tickers for shared-account position filtering",
+                extra={"event_type": "ORION_TICKER_LOOKUP_FAILED", "error": str(exc)},
+                exc_info=True,
+            )
+            return None
 
     async def _sync_risk_from_gateway(self) -> None:
         """Sync risk manager state from Data Gateway (account + positions).
@@ -204,6 +212,12 @@ class ExecutionEngine:
 
             # Filter positions to Orion-owned tickers only
             orion_tickers = await self._fetch_orion_tickers()
+            if orion_tickers is None:
+                logger.error(
+                    "Skipping Gateway position sync because Orion-owned tickers could not be determined",
+                    extra={"event_type": "GATEWAY_POSITIONS_SYNC_ABORTED"},
+                )
+                return
 
             positions = await client.get_positions()
             if positions:

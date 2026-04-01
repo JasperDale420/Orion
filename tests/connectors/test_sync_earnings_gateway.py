@@ -82,6 +82,86 @@ async def test_fetch_gateway_earnings_uses_x_gateway_key(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_fetch_gateway_earnings_raises_when_payload_is_not_a_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[str]:
+            return ["not", "a", "mapping"]
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, url, params=None, headers=None):
+            _ = (url, params, headers)
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "orion.jobs.sync_earnings.system_settings.data_gateway_url",
+        "http://gateway:8080",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "orion.jobs.sync_earnings.system_settings.data_gateway_api_key",
+        "test-key",
+        raising=False,
+    )
+    monkeypatch.setattr(sync_earnings.httpx, "AsyncClient", _FakeAsyncClient)
+
+    with pytest.raises(ValueError, match="unexpected earnings payload"):
+        await sync_earnings._fetch_gateway_earnings("/api/v1/uw/earnings/premarket")
+
+
+@pytest.mark.asyncio
+async def test_fetch_gateway_earnings_raises_when_data_field_has_unexpected_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"success": True, "data": "wrong-shape"}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        async def __aenter__(self) -> _FakeAsyncClient:
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, url, params=None, headers=None):
+            _ = (url, params, headers)
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "orion.jobs.sync_earnings.system_settings.data_gateway_url",
+        "http://gateway:8080",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "orion.jobs.sync_earnings.system_settings.data_gateway_api_key",
+        "test-key",
+        raising=False,
+    )
+    monkeypatch.setattr(sync_earnings.httpx, "AsyncClient", _FakeAsyncClient)
+
+    with pytest.raises(ValueError, match="unexpected earnings data shape"):
+        await sync_earnings._fetch_gateway_earnings("/api/v1/uw/earnings/premarket")
+
+
+@pytest.mark.asyncio
 async def test_sync_todays_earnings_uses_gateway_row_date(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_fetch(endpoint: str, params=None):
         if endpoint.endswith("/premarket"):

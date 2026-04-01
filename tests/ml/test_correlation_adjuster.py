@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
+import orion.execution.correlation_adjuster as correlation_adjuster_module
 from orion.config import RiskSettings
 from orion.execution.correlation_adjuster import CorrelationAdjuster, clear_correlation_cache
 
@@ -134,6 +135,25 @@ class TestCorrelationCalculation:
 
         corr = await adjuster._calculate_correlation("AAPL", "MSFT", 30, cfg)
         assert corr is None
+
+    @pytest.mark.asyncio
+    async def test_logs_when_correlation_math_fails(self, monkeypatch: pytest.MonkeyPatch):
+        """Should log correlation math failures instead of silently swallowing them."""
+        adjuster = CorrelationAdjuster()
+        cfg = RiskSettings(correlation_size_scaling=True, min_bars_for_correlation=3)
+        mock_logger = MagicMock()
+
+        async def mock_returns(ticker, days, cfg):
+            return np.array([0.01, -0.02, 0.015])
+
+        monkeypatch.setattr(correlation_adjuster_module, "logger", mock_logger)
+        monkeypatch.setattr(correlation_adjuster_module.np, "corrcoef", MagicMock(side_effect=ValueError("bad corr")))
+        adjuster._get_daily_returns = mock_returns
+
+        corr = await adjuster._calculate_correlation("AAPL", "MSFT", 30, cfg)
+
+        assert corr is None
+        mock_logger.warning.assert_called_once()
 
 
 class TestRiskManagerIntegration:

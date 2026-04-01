@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Silent-failure hardening across execution, monitoring, and data feeds**: Orion now fails louder when shared-account position filtering breaks, Gateway trading endpoints stop pretending outages mean “no positions/orders,” the option quote tracker distinguishes “no checkpoints” from broken Heber reads or schema drift, `/flows` returns `503` when flow data is structurally invalid, and the data-quality job warns when flow freshness is unknown instead of logging a fake healthy status. Market-hours checks now use the real trading calendar with a logged fallback, malformed earnings payloads raise instead of looking like empty calendars, naive heartbeat timestamps emit warnings, correlation math failures keep their traceback, and `ExecutionEngine` restores its module-level `async_session_factory` patch point for integration/remediation tooling.
+
 - **Execution safety and fill tracking**: partial fills are no longer dropped after the first broker update, fill persistence now refreshes existing rows instead of freezing stale audit data, and risk-reducing close orders can bypass the size ceiling only when they actually shrink absolute exposure. Preflight sizing also honors legacy USD order/ticker caps again.
 
 - **ML bypass and agent reliability**: ML bypass mode now truly passes flows through candidate generation instead of filtering everything out, `MetaAgent.run()` now fails fast with a clear `NotImplementedError` instead of silently returning `None`, and weekly meta summaries create their output directories before writing files.

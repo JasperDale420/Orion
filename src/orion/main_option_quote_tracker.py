@@ -80,13 +80,12 @@ def extract_underlying_ticker(option_symbol: str) -> str:
     return match.group(1) if match else option_symbol
 
 
-async def get_pending_checkpoints() -> list[dict[str, Any]]:
+async def get_pending_checkpoints() -> list[dict[str, Any]] | None:
     """Get flow events that need checkpoint quotes fetched."""
     if not _prefer_heber_flow_source():
         return []
 
-    heber_pending = await _get_pending_checkpoints_from_heber()
-    return heber_pending or []
+    return await _get_pending_checkpoints_from_heber()
 
 
 def _prefer_heber_flow_source() -> bool:
@@ -150,8 +149,14 @@ async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> list[dict[st
         flow_df = await asyncio.to_thread(reader.read_flow, asof_time=now_utc, start_time=start)
     except Exception as exc:
         logger.warning(
-            "option_quote_tracker_heber_read_failed",
-            extra={"event_type": "OPTION_QUOTE_TRACKER_HEBER_READ_FAILED", "error": str(exc)},
+            "Failed to read Heber flow data for option quote tracking",
+            extra={
+                "event_type": "OPTION_QUOTE_TRACKER_HEBER_READ_FAILED",
+                "error": str(exc),
+                "start_time_utc": start.isoformat(),
+                "asof_time_utc": now_utc.isoformat(),
+            },
+            exc_info=True,
         )
         return None
 
@@ -166,7 +171,26 @@ async def _get_pending_checkpoints_from_heber(limit: int = 1000) -> list[dict[st
     strike_col = _first_existing_column(flow_df, ["strike", "strike_price"])
 
     if ts_col is None or event_col is None or expiry_col is None or put_call_col is None or strike_col is None:
-        return []
+        missing_columns = [
+            name
+            for name, column in {
+                "flow_ts_utc": ts_col,
+                "event_id": event_col,
+                "expiry": expiry_col,
+                "put_call": put_call_col,
+                "strike": strike_col,
+            }.items()
+            if column is None
+        ]
+        logger.warning(
+            "Heber flow data for option quote tracking is missing required columns",
+            extra={
+                "event_type": "OPTION_QUOTE_TRACKER_HEBER_SCHEMA_MISMATCH",
+                "missing_columns": missing_columns,
+                "available_columns": list(flow_df.columns),
+            },
+        )
+        return None
 
     pending: list[dict[str, Any]] = []
     for _, row in flow_df.iterrows():
@@ -260,6 +284,13 @@ async def run_quote_tracker() -> None:
         try:
             # Get pending flow events
             flow_events = await get_pending_checkpoints()
+            if flow_events is None:
+                logger.error(
+                    "Heber pending checkpoints could not be loaded for option quote tracking",
+                    extra={"event_type": "OPTION_QUOTE_TRACKER_PENDING_CHECKPOINTS_FAILED"},
+                )
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                continue
             if not flow_events:
                 logger.debug("No pending flow events to track")
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)

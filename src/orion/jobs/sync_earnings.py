@@ -69,14 +69,14 @@ async def _fetch_gateway_earnings(endpoint: str, params: dict[str, Any] | None =
         payload = response.json()
 
     if not isinstance(payload, dict):
-        return []
+        raise ValueError(f"unexpected earnings payload type: {type(payload).__name__}")
 
     data = payload.get("data", [])
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
         return [data]
-    return []
+    raise ValueError(f"unexpected earnings data shape: {type(data).__name__}")
 
 
 async def sync_todays_earnings() -> dict[str, int]:
@@ -109,7 +109,7 @@ async def _fetch_and_sync_earnings(
                 logger.debug(f"Failed to upsert earnings row: {ex}")
                 results["errors"] += 1
     except Exception as e:
-        logger.error(f"Failed to fetch earnings from {endpoint}: {e}")
+        logger.error(f"Failed to fetch earnings from {endpoint}: {e}", exc_info=True)
         results["errors"] += 1
 
 
@@ -124,7 +124,7 @@ async def backfill_ticker_earnings(ticker: str) -> int:
         for row in rows:
             count += await _process_single_earnings_record(ticker=ticker, row=row)
     except Exception as e:
-        logger.debug(f"Failed to fetch earnings for {ticker}: {e}")
+        logger.warning(f"Failed to fetch earnings for {ticker}: {e}", exc_info=True)
 
     return count
 
