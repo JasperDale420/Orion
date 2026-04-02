@@ -24,17 +24,19 @@ from orion.storage.models_solvers import Solver, SolverMetrics
 
 
 @pytest.mark.asyncio
-async def test_pipeline_ingest_to_signal_live_row():
+async def test_pipeline_ingest_to_signal_live_row(monkeypatch: pytest.MonkeyPatch):
     # Make risk permissive so preflight + sizing doesn't reject in tests.
-    risk_settings.max_order_size_usd = 1e9
-    risk_settings.max_ticker_exposure_usd = 1e9
-    risk_settings.max_positions = 50
-    risk_settings.max_daily_loss = 1e9
+    monkeypatch.setattr(risk_settings, "max_order_size_usd", 1e9)
+    monkeypatch.setattr(risk_settings, "max_ticker_exposure_usd", 1e9)
+    monkeypatch.setattr(risk_settings, "max_positions", 50)
+    monkeypatch.setattr(risk_settings, "max_daily_loss", 1e9)
 
-    system_settings.orion_stage = "paper"
-    system_settings.baseline_solver_id = "baseline_solver"
-    system_settings.require_rollups_for_signals_live = True
-    system_settings.max_data_lag_seconds = 10_000
+    monkeypatch.setattr(system_settings, "orion_stage", "paper")
+    monkeypatch.setattr(system_settings, "baseline_solver_id", "baseline_solver")
+    monkeypatch.setattr(system_settings, "require_rollups_for_signals_live", True)
+    monkeypatch.setattr(system_settings, "max_data_lag_seconds", 10_000)
+    monkeypatch.setattr(system_settings, "ml_prefilter_threshold", 0.0)
+    monkeypatch.setattr(system_settings, "ml_stale_model_policy", "warn")
 
     now = datetime.now(UTC).replace(second=0, microsecond=0)
 

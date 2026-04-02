@@ -21,6 +21,10 @@ RUN_DAYS = [0, 1, 2, 3, 4]  # Every weekday (Mon-Fri)
 POST_CLOSE_DELAY_MINUTES = 60
 
 
+def configure_logging() -> None:
+    setup_logging("orion")
+
+
 async def run_mining_job() -> None:
     """
     Run the pattern mining job once.
@@ -206,5 +210,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    setup_logging()
+    configure_logging()
     asyncio.run(main())

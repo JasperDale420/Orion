@@ -3,6 +3,7 @@
 import json
 import logging
 
+from orion.shared import logger as logger_module
 from orion.shared.logger import setup_struct_logger
 
 
@@ -67,3 +68,17 @@ def test_json_output_with_exception(caplog, capsys):
 
     assert data.get("message") == "Error occurred" or data.get("event") == "Error occurred"
     assert "exception" in data or "exc_info" in data
+
+
+def test_setup_logging_defaults_service_name(monkeypatch):
+    """Legacy zero-arg callers should default to the Orion service name."""
+    captured: dict[str, str] = {}
+
+    def fake_setup_logging(service_name: str, **_kwargs):
+        captured["service_name"] = service_name
+
+    monkeypatch.setattr(logger_module, "_setup_logging_impl", fake_setup_logging)
+
+    logger_module.setup_logging()
+
+    assert captured["service_name"] == "orion"

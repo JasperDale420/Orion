@@ -12,13 +12,35 @@ from typing import TYPE_CHECKING
 from empire_core.logger import (
     bind_context,
     get_logger,
-    setup_logging,
+    setup_logging as _setup_logging_impl,
 )
 
 if TYPE_CHECKING:
     import structlog
 
 _configured = False
+
+
+def setup_logging(
+    service_name: str = "orion",
+    level: str = "INFO",
+    *,
+    log_file: bool = True,
+    error_log: bool = True,
+    log_dir: str | None = None,
+    backup_count: int = 14,
+    force: bool = False,
+) -> None:
+    """Backward-compatible wrapper around empire_core logging setup."""
+    _setup_logging_impl(
+        service_name,
+        level=level,
+        log_file=log_file,
+        error_log=error_log,
+        log_dir=log_dir,
+        backup_count=backup_count,
+        force=force,
+    )
 
 
 def setup_struct_logger(name: str, level: int | None = None) -> structlog.stdlib.BoundLogger:

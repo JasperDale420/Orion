@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Pattern miner startup and smoke-test safety hardening**: `main_pattern_miner.py` now configures logging explicitly on startup, Orion's shared logger preserves the zero-argument `setup_logging()` behavior older entrypoints still rely on, the live DB smoke test now requires explicit opt-in in both `pytest` and standalone script mode, and smoke cleanup always runs in a `finally` block using exact inserted IDs instead of broad ticker deletes. The pipeline integration test now pins its ML settings so local model file drift does not cause false red builds.
 - **Execution startup now heals empty paper solver inventory and fails loud in live stages**: Orion now seeds a canonical set of 5 paper solvers with companion metrics when the active solver inventory is empty in `paper`/`test`, auto-assigns `diversified_baseline_v1` as the fallback baseline when none is configured, and refuses to start execution in higher stages when no active solvers exist. This prevents the silent “all alerts become SKIP because no solver exists” failure mode we hit on April 2, 2026. The CLI seeding script now reuses the same canonical definitions so seeded solvers are router-valid.
 - **Feature enrichment typing cleanup**: fixed stale type annotations in `main_feature_enrichment.py` so `mypy .` returns clean again.
 
