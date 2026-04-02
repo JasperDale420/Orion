@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`pyproject.toml` migrated from Poetry to uv-native format** — added PEP 621 `[project]` table and `[dependency-groups]` so `uv sync` now installs all runtime and dev dependencies correctly; previously `uv sync` was a no-op (0 packages installed) because uv does not read `[tool.poetry.dependencies]`
+- `orion_data_quality` container crash-loop: `setup_logging()` call in `main_data_quality.py` was missing required `service_name` argument; fixed to pass `"orion-data-quality"`
+
 ### Removed
 
 - **Vendored UnusualWhales SDK** (228 files, 31K LOC) — only used by legacy labeler; UW imports made lazy with ImportError fallback
