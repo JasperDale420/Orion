@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from orion.config import system_settings
 from orion.core.enums import DecisionAction, DecisionStatus
 from orion.execution.execution_engine import ExecutionEngine
 from orion.execution.flow_helpers import (
@@ -22,6 +23,7 @@ from orion.execution.decision_persistence import (
 from orion.processing.signal_engine import SignalEngine
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
+from orion.jobs.seed_solvers import ensure_active_solvers_ready
 from orion.storage.db import init_db
 
 # Configure Logger
@@ -54,6 +56,16 @@ async def main() -> None:
 
     logger.info("Starting Orion Execution Service (V1 Deterministic)...")
 
+    # Ensure DB and solver inventory exist before the execution loop starts.
+    await init_db()
+    solver_inventory = await ensure_active_solvers_ready(system_settings.orion_stage)
+    logger.info(
+        "Solver inventory ready",
+        active_solver_count=solver_inventory.active_solver_count,
+        seeded=solver_inventory.seeded,
+        baseline_solver_id=solver_inventory.baseline_solver_id,
+    )
+
     # 1. Initialize Engines
     signal_engine = SignalEngine()
     execution_engine = ExecutionEngine()
@@ -69,9 +81,6 @@ async def main() -> None:
     await execution_engine.initialize()
     await signal_engine.initialize()
     await position_manager.initialize()
-
-    # Ensure tables exist (if running standalone)
-    await init_db()
 
     logger.info("Engines Initialized. Entering Service Loop.")
 

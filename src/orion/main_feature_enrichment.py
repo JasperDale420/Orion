@@ -9,6 +9,7 @@ import os
 import signal
 from datetime import UTC, datetime
 from functools import partial
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
@@ -105,8 +106,11 @@ def _gateway_runtime_contract() -> tuple[str, str]:
 
 
 def _zero_write_warn_streak_threshold() -> int:
-    return _parse_env_threshold(
-        "ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK", DEFAULT_ZERO_WRITE_WARN_STREAK, int, min_val=1
+    return cast(
+        int,
+        _parse_env_threshold(
+            "ORION_FEATURE_ENRICHMENT_ZERO_WRITE_WARN_STREAK", DEFAULT_ZERO_WRITE_WARN_STREAK, int, min_val=1
+        ),
     )
 
 
@@ -117,8 +121,11 @@ def _loop_sleep_seconds() -> float:
 
 
 def _loop_error_warn_streak_threshold() -> int:
-    return _parse_env_threshold(
-        "ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK", DEFAULT_LOOP_ERROR_WARN_STREAK, int, min_val=1
+    return cast(
+        int,
+        _parse_env_threshold(
+            "ORION_FEATURE_ENRICHMENT_LOOP_ERROR_WARN_STREAK", DEFAULT_LOOP_ERROR_WARN_STREAK, int, min_val=1
+        ),
     )
 
 
@@ -142,8 +149,11 @@ def _note_loop_error(
 
 
 def _non_heber_warn_streak_threshold() -> int:
-    return _parse_env_threshold(
-        "ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK", DEFAULT_NON_HEBER_WARN_STREAK, int, min_val=1
+    return cast(
+        int,
+        _parse_env_threshold(
+            "ORION_FEATURE_ENRICHMENT_NON_HEBER_WARN_STREAK", DEFAULT_NON_HEBER_WARN_STREAK, int, min_val=1
+        ),
     )
 
 
@@ -273,8 +283,8 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
 
             # --- UW Connector fetches (parallelized via asyncio.gather) ---
             if gateway_fetch_enabled:
-                uw_tasks: list = []  # list of coroutines for asyncio.gather
-                uw_task_meta: list[dict] = []  # name, feed_name, has_tickers
+                uw_tasks: list[Any] = []  # list of coroutines for asyncio.gather
+                uw_task_meta: list[dict[str, Any]] = []  # name, feed_name, has_tickers
 
                 if tide_connector is not None and (now - last_tide).total_seconds() >= MARKET_TIDE_INTERVAL:
                     uw_tasks.append(tide_connector.fetch_and_store())
@@ -298,7 +308,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     succeeded_feeds: set[str] = set()
                     for i, result in enumerate(results):
                         meta = uw_task_meta[i]
-                        if isinstance(result, Exception):
+                        if isinstance(result, BaseException):
                             logger.error(
                                 "uw_connector_failed",
                                 connector=meta["name"],
@@ -309,7 +319,7 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                             continue
 
                         succeeded_feeds.add(meta["feed"])
-                        count = result
+                        count = cast(int, result)
                         if meta["has_tickers"]:
                             logger.info(f"{meta['name']}: stored {count} records for {len(tickers)} tickers")
                             _note_fetch_count(
