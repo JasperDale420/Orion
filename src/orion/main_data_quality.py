@@ -27,6 +27,10 @@ MARKET_START_HOUR = 7
 MARKET_END_HOUR = 20
 
 
+def configure_logging() -> None:
+    setup_logging("orion-data-quality")
+
+
 def _is_market_hours() -> bool:
     """Check if we're in extended market hours (7 AM - 8 PM ET, weekdays)."""
     now = datetime.now(EST)
@@ -93,5 +97,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    setup_logging()
+    configure_logging()
     asyncio.run(main())

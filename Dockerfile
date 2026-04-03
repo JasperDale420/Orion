@@ -8,17 +8,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=off \
     PIP_DISABLE_PIP_VERSION_CHECK=on \
     PIP_DEFAULT_TIMEOUT=100 \
-    POETRY_VERSION=2.3.2 \
-    POETRY_HOME="/opt/poetry" \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
-    POETRY_NO_INTERACTION=1 \
-    PYSETUP_PATH="/opt/pysetup" \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT="/opt/pysetup/.venv" \
     VENV_PATH="/opt/pysetup/.venv"
 
-# Prepend poetry and venv to path
-ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
+# Prepend venv to path
+ENV PATH="$VENV_PATH/bin:$PATH"
 
-# Install system dependencies and Poetry
+# Install system dependencies and uv
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
     curl \
@@ -26,13 +24,13 @@ RUN apt-get update \
     libpq-dev \
     git \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -sSL https://install.python-poetry.org | python3 -
+    && python -m pip install --no-cache-dir uv
 
 # Setup work directory
 WORKDIR /app
 
 # Copy dependency manifest
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml uv.lock ./
 
 # Create minimal empire-core stub so the path dependency resolves at build time.
 # The real empire-core package is mounted at runtime via docker-compose volumes.
@@ -42,8 +40,7 @@ RUN mkdir -p /empire-core/empire_core \
     && touch /empire-core/empire_core/__init__.py
 
 # Install dependencies (no devdeps)
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-root --only main
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy Source Code
 COPY src/ ./src/

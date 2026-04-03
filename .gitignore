@@ -51,6 +51,9 @@ build/
 
 # Artifacts (generated reports)
 artifacts/
+index.scip
+ledger.db
+proposals/*.yaml
 
 # SonarQube
 .scannerwork/
