@@ -34,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Refreshed tracked `POSITION_*` and `SWING_*` LightGBM model artifacts with the latest locally trained binaries so the checked-in model set matches the current Orion workspace state.
 - Local machine artifacts are now treated as local: future `proposals/*.yaml` outputs are ignored, and `index.scip` plus `ledger.db` are no longer intended to be tracked in Git.
 - Standalone diagnostic scripts moved to `src/orion/scripts/`
 - All 5 connectors now use structured logging (structlog) instead of raw `logging.getLogger`
