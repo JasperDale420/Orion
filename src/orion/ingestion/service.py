@@ -222,7 +222,7 @@ class IngestionService:
             next_wake = datetime.now(UTC) + timedelta(seconds=sleep_seconds)
             logger.info(f"Market closed. Sleeping until {next_wake} UTC.", extra={"sleep_seconds": sleep_seconds})
 
-            chunk = 60.0
+            chunk = 45.0  # Must be < health_monitor.HEARTBEAT_THRESHOLD_SEC (60s)
             while sleep_seconds > 0 and not self.shutdown_event.is_set():
                 wait = min(chunk, sleep_seconds)
                 await asyncio.sleep(wait)
