@@ -139,10 +139,12 @@ class IngestionService:
             elapsed = asyncio.get_running_loop().time() - start_time
             sleep_time = max(0.1, loop_interval - elapsed)
 
-            await self._update_health_status()
-
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
+
+            # Update heartbeat after sleep so check_health sees a fresh timestamp
+            self.health_monitor.update_heartbeat()
+            await self._update_health_status()
 
         await self.stop()
 
@@ -222,7 +224,7 @@ class IngestionService:
             next_wake = datetime.now(UTC) + timedelta(seconds=sleep_seconds)
             logger.info(f"Market closed. Sleeping until {next_wake} UTC.", extra={"sleep_seconds": sleep_seconds})
 
-            chunk = 60.0
+            chunk = 45.0  # Must be < HEARTBEAT_THRESHOLD_SEC (60s) to avoid false alerts
             while sleep_seconds > 0 and not self.shutdown_event.is_set():
                 wait = min(chunk, sleep_seconds)
                 await asyncio.sleep(wait)
