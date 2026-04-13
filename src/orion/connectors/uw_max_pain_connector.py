@@ -34,7 +34,7 @@ class UWMaxPainConnector(BaseGatewayConnector):
     def _fetch_max_pain(self, ticker: str) -> dict[str, Any] | None:
         """Fetch max pain for a ticker via Data Gateway."""
         return self._gateway_get(
-            f"/api/v1/uw/{ticker}/max-pain",
+            f"/api/v1/uw/options/{ticker}/max-pain",
             label=f"max_pain:{ticker}",
         )
 
