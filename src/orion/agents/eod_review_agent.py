@@ -164,6 +164,16 @@ class EODReviewAgent:
                 # Check if solver already exists
                 existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
                 if existing.scalars().first() is None:
+                    # Verify the parent solver actually exists before referencing it
+                    parent = await session.execute(select(Solver).where(Solver.solver_id == str(base_id)))
+                    if parent.scalars().first() is None:
+                        logger.warning(
+                            "skipping_solver_creation_parent_missing",
+                            base_solver_id=str(base_id),
+                            new_solver_id=new_solver_id,
+                        )
+                        continue
+
                     # Create solver stub in research stage
                     session.add(
                         Solver(
