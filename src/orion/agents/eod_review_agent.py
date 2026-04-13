@@ -155,6 +155,15 @@ class EODReviewAgent:
                 if not base_id or not isinstance(ops_data, list) or not ops_data:
                     continue
 
+                # Verify the parent solver exists before inserting (FK constraint)
+                parent = await session.get(Solver, str(base_id))
+                if parent is None:
+                    logger.warning(
+                        "Skipping solver_edit proposal: parent_solver_id not found",
+                        extra={"parent_solver_id": str(base_id), "run_id": run_id},
+                    )
+                    continue
+
                 new_solver_id = deterministic_solver_id(
                     base_solver_id=str(base_id),
                     edit_ops={"ops": ops_data},
