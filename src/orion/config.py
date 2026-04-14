@@ -134,7 +134,7 @@ class SystemSettings(BaseSettings):
 
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
-    ingestion_heartbeat_max_age: int = 70
+    ingestion_heartbeat_max_age: int = 90  # Must exceed 60s loop interval + processing overhead
     max_data_lag_seconds: int = 600  # Pre-market/post-market data can lag 300s+
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
