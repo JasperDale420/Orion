@@ -25,7 +25,10 @@ class HealthMonitor:
         self.max_lag_seconds: float = 0.0
 
         # Thresholds (PRD 9.1)
-        self.HEARTBEAT_THRESHOLD_SEC = 60.0
+        # Use configurable max age (default 70s) to provide headroom over the
+        # 60s ingestion loop interval; a hardcoded 60s threshold races with the
+        # loop and causes spurious circuit-breaker trips.
+        self.HEARTBEAT_THRESHOLD_SEC = float(system_settings.ingestion_heartbeat_max_age)
         self.LAG_THRESHOLD_SEC = float(system_settings.max_data_lag_seconds)
 
         # Metrics
