@@ -25,7 +25,9 @@ class HealthMonitor:
         self.max_lag_seconds: float = 0.0
 
         # Thresholds (PRD 9.1)
-        self.HEARTBEAT_THRESHOLD_SEC = 60.0
+        # Must be strictly greater than the ingestion loop interval (60s)
+        # to avoid false trips from cycle processing overhead.
+        self.HEARTBEAT_THRESHOLD_SEC = 90.0
         self.LAG_THRESHOLD_SEC = float(system_settings.max_data_lag_seconds)
 
         # Metrics
