@@ -180,6 +180,17 @@ class TestModelRegistry:
         assert reg._models["entry"][0].version == 1
 
     @pytest.mark.unit
+    def test_load_empty_registry_file(self, tmp_path: Path) -> None:
+        """Empty registry file should result in an empty registry, not a crash."""
+        model_dir = tmp_path / "models"
+        model_dir.mkdir(parents=True)
+        registry_path = model_dir / "registry.json"
+        registry_path.write_text("")
+
+        reg = ModelRegistry(model_dir=model_dir)
+        assert reg._models == {}
+
+    @pytest.mark.unit
     def test_load_corrupt_registry_falls_back_empty(self, tmp_path: Path) -> None:
         """Corrupt JSON should result in an empty registry, not a crash."""
         model_dir = tmp_path / "models"

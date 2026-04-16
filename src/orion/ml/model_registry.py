@@ -99,13 +99,17 @@ class ModelRegistry:
         """Load registry from disk."""
         if self._registry_path.exists():
             try:
-                with open(self._registry_path) as f:
-                    data = json.load(f)
+                raw = self._registry_path.read_text().strip()
+                if not raw:
+                    logger.warning("Registry file is empty, starting with no models")
+                    self._models = {}
+                    return
+                data = json.loads(raw)
                 for model_type, versions in data.get("models", {}).items():
                     self._models[model_type] = [ModelMetadata.from_dict(v) for v in versions]
                 logger.info(f"Loaded {sum(len(v) for v in self._models.values())} model versions from registry")
-            except Exception as e:
-                logger.error(f"Failed to load registry: {e}")
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                logger.warning(f"Registry file corrupt ({e}), starting with no models")
                 self._models = {}
         else:
             self._models = {}
