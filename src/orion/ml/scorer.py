@@ -79,6 +79,10 @@ class MLScorer:
         self.feature_names: dict[str, list[str]] = {}  # bucket -> feature names
         self._model_mtimes: dict[str, float] = {}  # bucket -> last loaded mtime
         self._last_reload_check: float = time.monotonic()
+        # Tracks (bucket, model_mtime) pairs for which we've already emitted a
+        # legacy-fallback warning, so we log once per stale model instead of
+        # spamming on every scoring call.
+        self._warned_legacy: set[tuple[str, float]] = set()
         # Backward compatibility fields expected by older tests/callers.
         self.model: Any | None = None
         self.use_heuristic: bool = True
@@ -219,6 +223,9 @@ class MLScorer:
                     self._load_models()
                     self.use_heuristic = len(self.models) == 0
                     self.model = self.models.get("SWING", {}).get("model")
+                    # New models on disk: re-arm the legacy-fallback warning so
+                    # any still-stale model gets one fresh warning.
+                    self._warned_legacy.clear()
                     return True
         return False
 
@@ -432,7 +439,27 @@ class MLScorer:
             adjusted_prob = self._apply_confidence_rules(float(prob), flow, bucket)
             return adjusted_prob
         except Exception as e:
-            logger.warning(f"Model scoring failed for bucket {bucket}: {e}")
+            # Only warn once per (bucket, model_mtime). If the model is
+            # rebuilt on disk, check_and_reload() clears _warned_legacy so
+            # the next failure (if any) surfaces a fresh warning.
+            model_mtime = self._model_mtimes.get(bucket, 0.0)
+            warn_key = (bucket, model_mtime)
+            if warn_key not in self._warned_legacy:
+                self._warned_legacy.add(warn_key)
+                created_at = model_data.get("created_at")
+                logger.warning(
+                    f"Model scoring failed for bucket {bucket} (created_at={created_at}); "
+                    f"falling back to heuristic. error={e}",
+                    extra={
+                        "event": "ml_legacy_fallback",
+                        "bucket": bucket,
+                        "target": self.target,
+                        "model_created_at": str(created_at) if created_at is not None else None,
+                        "model_mtime": model_mtime,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
             return self._heuristic_score(flow)
 
     def _heuristic_score(self, flow: dict[str, Any]) -> float:

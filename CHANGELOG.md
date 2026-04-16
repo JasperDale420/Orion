@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **0DTE LightGBM scorer crash on string categoricals** — Legacy 0DTE models (trained Jan 2026) lack `categorical_mappings` in their serialized model data, so string features like `put_call="P"` passed through to `np.array(..., dtype=float)` and raised `ValueError`. The scorer now applies fallback hash-based encoding for any categorical column not covered by the model's mappings.
 
+- **ML scorer silent-failure for stale 0DTE models** — the legacy 53-feature 0DTE artifacts (created 2026-01-20) were incompatible with today's 106-feature pipeline, throwing `ValueError` on every scoring call and falling back to heuristic — but the error was logged on every call, drowning logs without making the root cause obvious. The scorer now logs the fallback exactly **once per (bucket, model-mtime)** with structured fields (`event=ml_legacy_fallback`, `bucket`, `target`, `model_created_at`, `error_type`), and re-arms on the next reload so freshly-stale models surface a fresh warning.
+
 - **Gateway WebSocket disconnect during machine idle** — `GatewayStreamClient` ping interval/timeout (20s/10s) was shorter than Data-Gateway's uvicorn config (30s/90s), causing spurious disconnects; both values now match the server settings.
 
 - **Health monitor trips circuit breaker after machine sleep** — Heartbeat gaps larger than 10 minutes are now treated as host suspension rather than genuine stalls; the monitor resets the heartbeat timestamp and logs a warning instead of opening the circuit breaker.
@@ -54,6 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **Stale 0DTE model artifacts** — the 5 `models/0DTE_*.pkl` files trained 2026-01-20 against an old 53-feature schema with no `categorical_mappings` were deleted. They always crashed the scorer's feature-vector build and silently no-op'd into the heuristic path, so removing them makes the missing-model path explicit (`if bucket not in self.models: return self._heuristic_score(flow)`). Cannot be retrained until the upstream Heber 0DTE labeling bug is fixed (tracked separately).
 - **Vendored UnusualWhales SDK** (228 files, 31K LOC) — only used by legacy labeler; UW imports made lazy with ImportError fallback
 - **LakehouseWriter** (S3 Parquet export) — duplicated Heber's lakehouse; deleted module, config fields, and ingestion integration
 - **Dead modules**: `clients/mcp_server.py`, `reconciliation/bar_gap_scan.py`, `core/logging_config.py`, `connectors/base.py` (unused protocols), `agents/base.py` (unnecessary ABC), `execution/risk_manager.py` (re-export shim), `main_rollups.py` (superseded by ingestion service)
@@ -62,6 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`scripts/retrain_0dte.py`** — one-off 0DTE retrain script with a widened 90-day window (vs. the default 10-day window in `TRADE_BUCKET_CONFIGS`). Reuses the full pattern-miner pipeline so output artifacts are byte-compatible with the current SWING/POSITION 106-feature schema. Will produce real models once upstream 0DTE label variance is restored.
 - **`BaseGatewayConnector`** base class for UW connectors — consolidates shared retry, auth, and buffer logic
 - **`shared/legacy_flags.py`** — centralized legacy pipeline env-var control (was copy-pasted 4 times)
 - **`DecisionAction`, `TradeDirection`, `OrderSide` enums** — replaced raw string comparisons across 12 files
