@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **0DTE LightGBM scorer crash on string categoricals** — Legacy 0DTE models (trained Jan 2026) lack `categorical_mappings` in their serialized model data, so string features like `put_call="P"` passed through to `np.array(..., dtype=float)` and raised `ValueError`. The scorer now applies fallback hash-based encoding for any categorical column not covered by the model's mappings.
+
+- **Gateway WebSocket disconnect during machine idle** — `GatewayStreamClient` ping interval/timeout (20s/10s) was shorter than Data-Gateway's uvicorn config (30s/90s), causing spurious disconnects; both values now match the server settings.
+
+- **Health monitor trips circuit breaker after machine sleep** — Heartbeat gaps larger than 10 minutes are now treated as host suspension rather than genuine stalls; the monitor resets the heartbeat timestamp and logs a warning instead of opening the circuit breaker.
+
+- **UW flow signals dropped due to missing `limit_price`** — `signal_preflight` rejected any candidate where `underlying_price` was zero (common for UW flow events). The preflight and all flow rules now fall back through `strike_price → option_price → premium` before giving up, matching the execution engine's own live-price fetch strategy.
+
+- **`is_sweep` field not recognized from Heber Silver payloads** — Normalizer was only checking `has_sweep` and `sweep`; now also checks `is_sweep` (the field name used in Heber Silver option-flow events).
+
+- **Candidate persistence missing option contract fields** — `persist_candidates` was not writing `option_symbol`, `strike_price`, `option_type`, `underlying_price`, `premium`, or `expiration_date` to the DB, so the execution engine had to re-fetch them from the signal; all six fields are now persisted.
+
+- **ML prefilter calling synchronous `scorer.score()` in async context** — `MLPreFilter` now calls `scorer.score_enriched()` (async) instead of the sync `score()` method, eliminating event-loop blocking during scoring.
+
 - **UW max-pain connector returning 404s** — Data-Gateway moved the max-pain endpoint from `/api/v1/uw/{symbol}/max-pain` to `/api/v1/uw/options/{symbol}/max-pain` (options router prefix added); updated `UWMaxPainConnector` to use the correct path
 
 - **Docker builds are aligned with the repo’s real dependency manager**: the shared Docker image now installs dependencies from `uv.lock` with `uv sync --frozen --no-dev --no-install-project` instead of the stale Poetry workflow that had been failing builds after the project moved to the modern `[project]` layout. The `data-quality` service entrypoint now also configures logging explicitly via `configure_logging()` so it cannot crash on a missing `service_name` argument at startup.
@@ -33,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`DecisionAction`, `TradeDirection`, `OrderSide` enums** — replaced raw string comparisons across 12 files
 - **Health check TTL cache** in `ExecutionEngine` — caches system health for 10s, eliminating N-1 redundant DB queries per execution cycle
 - **Parallel UW connector fetching** — `asyncio.gather` in feature enrichment loop + `Semaphore(3)` bounded concurrency per connector
+- **`ORION_HEURISTIC_CAP_LIVE` config knob** — heuristic scorer cap in live mode is now configurable via `ORION_HEURISTIC_CAP_LIVE` (default 0.65) instead of a hard-coded 0.55
+- **`IngestionService` heartbeat update** — ingestion loop now calls `health_monitor.update_heartbeat()` on each cycle so the health monitor has an accurate last-seen timestamp
 
 ### Changed
 

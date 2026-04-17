@@ -114,7 +114,7 @@ async def test_ml_prefilter_continues_above_threshold():
 
     mock_scorer = MagicMock()
     mock_scorer.bypass_scoring = False
-    mock_scorer.score.return_value = 0.8
+    mock_scorer.score_enriched = AsyncMock(return_value=0.8)
 
     ctx = PipelineContext(
         candidate=_make_candidate(
@@ -138,7 +138,7 @@ async def test_ml_prefilter_skips_below_threshold():
 
     mock_scorer = MagicMock()
     mock_scorer.bypass_scoring = False
-    mock_scorer.score.return_value = 0.3
+    mock_scorer.score_enriched = AsyncMock(return_value=0.3)
 
     ctx = PipelineContext(
         candidate=_make_candidate(

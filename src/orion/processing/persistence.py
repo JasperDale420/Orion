@@ -94,6 +94,12 @@ async def persist_candidates(session: AsyncSession, candidates: list[CandidateTr
                 "execution_params": make_json_safe(c.execution_params),
                 "evidence": make_json_safe(c.evidence),
                 "created_at_utc": c.created_at_utc or datetime.now(UTC),
+                "option_symbol": c.option_symbol,
+                "strike_price": c.strike_price,
+                "option_type": c.option_type,
+                "underlying_price": c.underlying_price,
+                "premium": c.premium,
+                "expiration_date": c.expiration_date,
             }
         )
 

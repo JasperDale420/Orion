@@ -114,7 +114,7 @@ class MLPreFilter:
                     trace={"ml_prefilter": "bypassed_stale_model_policy"},
                 )
 
-            ml_score = scorer.score(flow_dict)
+            ml_score = await scorer.score_enriched(flow_dict)
             ctx.ml_score = ml_score
             # Use a lower threshold when running heuristic scoring (no trained
             # models loaded) so that high-conviction heuristic flows can still

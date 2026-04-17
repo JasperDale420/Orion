@@ -77,13 +77,24 @@ async def preflight_live_signal(
     if limit_price is None:
         limit_price = candidate_params.get("limit_price", None)
 
-    if limit_price is None:
-        return PreflightResult(ok=False, reason="Missing limit_price", extra={})
-
     try:
-        price = float(limit_price)
+        price = float(limit_price) if limit_price is not None else 0.0
     except Exception:
-        return PreflightResult(ok=False, reason="Invalid limit_price", extra={"limit_price": limit_price})
+        price = 0.0
+
+    # When limit_price is missing/zero (common for UW flow where underlying_price
+    # isn't populated), fall back to candidate fields that carry price information.
+    # The execution engine fetches live option chain prices anyway — this is just
+    # so the preflight sizing sanity check has a reasonable value to work with.
+    if price <= 0:
+        price = float(getattr(candidate, "strike_price", 0) or 0)
+    if price <= 0:
+        price = float(getattr(candidate, "underlying_price", 0) or 0)
+    if price <= 0:
+        price = float(getattr(candidate, "premium", 0) or 0)
+
+    if price <= 0:
+        return PreflightResult(ok=False, reason="Missing limit_price", extra={})
 
     sl_pct = exec_params.get("stop_loss_pct", None)
     try:

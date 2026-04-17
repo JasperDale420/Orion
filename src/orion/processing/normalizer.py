@@ -63,8 +63,8 @@ class NormalizationEngine:
         ts_str = payload.get("timestamp") or payload.get("created_at")
         flow_ts = parse_timestamptz(ts_str, strict=True)
 
-        # Normalize sweep flag - support both has_sweep and sweep.
-        is_sweep = _coerce_boolish(payload.get("has_sweep", payload.get("sweep", False)))
+        # Normalize sweep flag - support is_sweep (Heber Silver), has_sweep (Data-Gateway), sweep (legacy).
+        is_sweep = _coerce_boolish(payload.get("is_sweep", payload.get("has_sweep", payload.get("sweep", False))))
         is_block = (
             _coerce_boolish(payload.get("has_floor", False)) or str(payload.get("trade_type") or "").upper() == "BLOCK"
         )

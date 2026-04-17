@@ -75,16 +75,28 @@ class HealthMonitor:
         time_since_hb = now - self.last_heartbeat_ts
 
         if time_since_hb > self.HEARTBEAT_THRESHOLD_SEC:
-            msg = f"CRITICAL: Heartbeat missing for {time_since_hb:.2f}s > {self.HEARTBEAT_THRESHOLD_SEC}s"
-            logger.error(msg)
+            # Distinguish genuine stalls from machine sleep / long GC pauses.
+            # A gap > 10 minutes almost certainly means the host suspended;
+            # tripping the circuit breaker for that is counter-productive.
+            MACHINE_SLEEP_THRESHOLD = 600.0  # 10 minutes
+            if time_since_hb > MACHINE_SLEEP_THRESHOLD:
+                logger.warning(
+                    f"Heartbeat gap {time_since_hb:.0f}s likely caused by machine sleep; "
+                    "resetting heartbeat instead of tripping circuit breaker",
+                    extra={"event_type": "HEARTBEAT_SLEEP_SKIP", "gap_seconds": time_since_hb},
+                )
+                self.last_heartbeat_ts = now
+            else:
+                msg = f"CRITICAL: Heartbeat missing for {time_since_hb:.2f}s > {self.HEARTBEAT_THRESHOLD_SEC}s"
+                logger.error(msg)
 
-            # Trigger Circuit Breaker
-            from orion.core.circuit_breaker import CircuitBreaker
+                # Trigger Circuit Breaker
+                from orion.core.circuit_breaker import CircuitBreaker
 
-            cb = CircuitBreaker()
-            await cb.open(msg)
+                cb = CircuitBreaker()
+                await cb.open(msg)
 
-            raise CriticalHealthError(msg)
+                raise CriticalHealthError(msg)
 
         self.max_lag_seconds = 0.0  # Reset for next batch
 

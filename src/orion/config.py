@@ -107,6 +107,12 @@ class SystemSettings(BaseSettings):
         le=1.0,
         validation_alias="ORION_ML_PREFILTER_THRESHOLD",
     )
+    heuristic_cap_live: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=1.0,
+        validation_alias="ORION_HEURISTIC_CAP_LIVE",
+    )
     ensemble_consensus_threshold: float = Field(
         default=0.5,
         ge=0.0,

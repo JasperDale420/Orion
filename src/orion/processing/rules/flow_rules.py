@@ -12,6 +12,26 @@ def _normalize_put_call_token(value: object) -> str | None:
     return token or None
 
 
+def _resolve_limit_price(feat: dict) -> float:
+    """Resolve the best available price for limit_price.
+
+    UW flow data often has underlying_price=0.  Fall back through
+    strike → option_price so the preflight sizing check has a
+    usable number.  The execution engine fetches live option chain
+    prices anyway; this is a best-effort signal-time estimate.
+    """
+    for key in ("underlying_price", "strike", "strike_price", "option_price"):
+        val = feat.get(key)
+        if val is not None:
+            try:
+                fval = float(val)
+                if fval > 0:
+                    return fval
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
 def _coerce_boolish(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -104,7 +124,7 @@ class BullishSweepRule(TradingRule):
             },
         )
         candidate.source = "UW"
-        candidate.execution_params = {"limit_price": feat.get("underlying_price")}
+        candidate.execution_params = {"limit_price": _resolve_limit_price(feat)}
         return candidate
 
 
@@ -164,7 +184,7 @@ class BearishPutPressureRule(TradingRule):
             },
         )
         candidate.source = "UW"
-        candidate.execution_params = {"limit_price": feat.get("underlying_price")}
+        candidate.execution_params = {"limit_price": _resolve_limit_price(feat)}
         return candidate
 
 
@@ -266,7 +286,7 @@ class ZeroDTESweepRule(TradingRule):
         )
         candidate.source = "UW"
         candidate.execution_params = {
-            "limit_price": feat.get("underlying_price"),
+            "limit_price": _resolve_limit_price(feat),
             "profit_target_pct": 50.0,  # Based on analysis: +80% avg when hit
             "stop_loss_pct": 20.0,  # Based on analysis
         }
@@ -362,7 +382,7 @@ class SwingEntryRule(TradingRule):
         )
         candidate.source = "UW"
         candidate.execution_params = {
-            "limit_price": feat.get("underlying_price"),
+            "limit_price": _resolve_limit_price(feat),
             "exit_strategy": "FLOW_BASED",  # Use sentiment reversal
             "profit_target_pct": 50.0,  # Backup if flow doesn't trigger
             "stop_loss_pct": 20.0,
@@ -447,7 +467,7 @@ class ShortSwingEntryRule(TradingRule):
         )
         candidate.source = "UW"
         candidate.execution_params = {
-            "limit_price": feat.get("underlying_price"),
+            "limit_price": _resolve_limit_price(feat),
             "exit_strategy": "FLOW_BASED",
             "profit_target_pct": 50.0,
             "stop_loss_pct": 20.0,

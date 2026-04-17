@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from orion.config import system_settings
+from orion.ml.feature_config import CATEGORICAL_COLUMNS
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.scorer")
@@ -397,7 +398,10 @@ class MLScorer:
             features = self.extract_features(flow, bucket)
             feature_names = self.feature_names[bucket]
 
-            # Encode categorical features using mappings saved during training
+            # Encode categorical features using mappings saved during training.
+            # Legacy models (pre-Apr 2026) may lack the categorical_mappings key
+            # entirely; for those we fall back to a simple hash-based encoding so
+            # string values like put_call="P" don't reach np.array(..., dtype=float).
             cat_mappings = model_data.get("categorical_mappings", {})
             for col, categories in cat_mappings.items():
                 if col in features:
@@ -406,6 +410,17 @@ class MLScorer:
                         features[col] = categories.index(raw_val)
                     else:
                         features[col] = -1  # unseen category
+
+            # Fallback: encode any categorical columns present in the feature
+            # vector that were NOT covered by categorical_mappings (legacy models).
+            for col in CATEGORICAL_COLUMNS:
+                if col in features and col not in cat_mappings:
+                    raw_val = features[col]
+                    if raw_val is None or raw_val == "":
+                        features[col] = -1
+                    elif isinstance(raw_val, str):
+                        # Deterministic numeric encoding: hash to a stable int
+                        features[col] = hash(raw_val) % (2**16)
 
             # Build feature vector in correct order
             feature_vector = np.array([[features.get(f, 0) for f in feature_names]], dtype=float)
@@ -479,9 +494,10 @@ class MLScorer:
         # In paper/backtest, keep uncapped behavior for compatibility/analysis.
         raw_score = min(max(score, 0.0), 1.0)
         cap_enabled = system_settings.orion_stage == "live"
-        capped_score = min(raw_score, 0.55) if cap_enabled else raw_score
+        cap_value = system_settings.heuristic_cap_live
+        capped_score = min(raw_score, cap_value) if cap_enabled else raw_score
 
-        if cap_enabled and raw_score > 0.55:
+        if cap_enabled and raw_score > cap_value:
             logger.warning(
                 f"Heuristic scorer used (no model) - score capped from {raw_score:.2f} to {capped_score:.2f}",
                 extra={"event": "heuristic_scorer_capped", "raw_score": raw_score, "capped_score": capped_score},

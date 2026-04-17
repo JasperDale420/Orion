@@ -126,8 +126,8 @@ class GatewayStreamClient:
             logger.info(f"Connecting to Gateway WebSocket: {self.ws_url}")
             self._websocket = await websockets.connect(
                 self.ws_url,
-                ping_interval=20,
-                ping_timeout=10,
+                ping_interval=30,  # Match Data Gateway's uvicorn --ws-ping-interval
+                ping_timeout=90,  # Match Data Gateway's uvicorn --ws-ping-timeout
             )
 
             # Send authentication

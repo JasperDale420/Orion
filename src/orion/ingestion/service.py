@@ -139,6 +139,7 @@ class IngestionService:
             elapsed = asyncio.get_running_loop().time() - start_time
             sleep_time = max(0.1, loop_interval - elapsed)
 
+            self.health_monitor.update_heartbeat()
             await self._update_health_status()
 
             with contextlib.suppress(TimeoutError):
