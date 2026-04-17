@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Risk manager blocking all BUY orders after first trade** — `_submit_options_order` was passing `candidate.direction` ("LONG"/"SHORT") as the `side` argument to `update_post_trade` instead of the `OrderSide` enum value ("buy"/"sell"). Because `"long" != "buy"`, every pending order was stored with a **negative** signed cost, making subsequent `check_order` calls see a negative projected exposure and reject the order as "Shorting Disabled". Fixed by passing `side` (the `OrderSide.BUY`/`SELL` computed at order submission time) instead.
+
 - **0DTE LightGBM scorer crash on string categoricals** — Legacy 0DTE models (trained Jan 2026) lack `categorical_mappings` in their serialized model data, so string features like `put_call="P"` passed through to `np.array(..., dtype=float)` and raised `ValueError`. The scorer now applies fallback hash-based encoding for any categorical column not covered by the model's mappings.
 
 - **Gateway WebSocket disconnect during machine idle** — `GatewayStreamClient` ping interval/timeout (20s/10s) was shorter than Data-Gateway's uvicorn config (30s/90s), causing spurious disconnects; both values now match the server settings.

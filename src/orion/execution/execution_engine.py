@@ -508,7 +508,7 @@ class ExecutionEngine:
                 ticker=candidate.ticker,
                 qty=num_contracts,
                 price=option_price,
-                side=candidate.direction,
+                side=side,
                 order_id=client_order_id,
             )
 
