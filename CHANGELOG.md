@@ -3646,3 +3646,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Removed unused `_persist_trade_journal()` method from `ExecutionService` in `service.py`
 - Removed obsolete comments and unused imports (`datetime`, `timezone`)
 - Removed duplicate execution logic from `main_execution.py` (~250 lines of code eliminated)
+
+## [Unreleased]
+
+### Fixed
+- `UniverseManager.hydrate_from_db` now uses `CandidateTrade.expiration_date` instead of the removed `expiry` attribute, eliminating a recurring non-fatal error on every service startup.
