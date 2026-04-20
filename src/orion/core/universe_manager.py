@@ -43,7 +43,7 @@ class UniverseManager:
             cutoff = datetime.now(UTC) - timedelta(days=1)
             async with async_session_factory() as session:
                 rows = await session.execute(
-                    select(CandidateTrade.ticker, CandidateTrade.expiry)
+                    select(CandidateTrade.ticker, CandidateTrade.expiration_date)
                     .where(CandidateTrade.created_at >= cutoff)
                     .distinct()
                 )
@@ -54,7 +54,7 @@ class UniverseManager:
                     if ticker:
                         self.active_tickers[ticker] = now_ts
                         count += 1
-                    expiry_str = row.expiry
+                    expiry_str = row.expiration_date
                     if ticker and expiry_str:
                         try:
                             exp_date = date.fromisoformat(str(expiry_str))
