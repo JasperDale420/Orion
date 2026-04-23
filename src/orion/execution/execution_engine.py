@@ -346,17 +346,35 @@ class ExecutionEngine:
         if "error" not in chain_result and candidate.option_symbol:
             contracts = chain_result.get("contracts", [])
             for contract in contracts:
-                if contract.get("symbol") == candidate.option_symbol:
-                    mid = contract.get("mid") or contract.get("ask")
-                    if mid and float(mid) > 0:
-                        option_price = float(mid)
+                # Gateway returns `contract_symbol`; `symbol` is for the underlying.
+                if contract.get("contract_symbol") == candidate.option_symbol:
+                    bid = contract.get("bid")
+                    ask = contract.get("ask")
+                    try:
+                        bid_f = float(bid) if bid not in (None, "") else 0.0
+                        ask_f = float(ask) if ask not in (None, "") else 0.0
+                    except (TypeError, ValueError):
+                        bid_f = ask_f = 0.0
+                    if bid_f > 0 and ask_f > 0:
+                        option_price = (bid_f + ask_f) / 2
+                    elif ask_f > 0:
+                        option_price = ask_f
+                    elif bid_f > 0:
+                        option_price = bid_f
+                    else:
+                        last = contract.get("last")
+                        try:
+                            last_f = float(last) if last not in (None, "") else 0.0
+                        except (TypeError, ValueError):
+                            last_f = 0.0
+                        if last_f > 0:
+                            option_price = last_f
                     break
 
-        # Fall back to signal-time premium only if chain fetch fails
-        if not option_price and candidate.premium and candidate.premium > 0:
-            option_price = candidate.premium
-            logger.warning("using_stale_premium_fallback", ticker=candidate.ticker, premium=option_price)
-
+        # NOTE: `candidate.premium` is the UW-flow event's aggregate premium
+        # (sum of all contracts in the sweep) — NOT a per-contract price. Using
+        # it as option_price produced `options_calculated_0_contracts` because
+        # risk_dollars / (34075 * 100) rounds to 0. We now fail closed instead.
         if not option_price or option_price <= 0:
             logger.error("options_price_fetch_failed", option_symbol=candidate.option_symbol, ticker=candidate.ticker)
             decision.executed_successfully = DecisionStatus.FALSE
@@ -414,7 +432,10 @@ class ExecutionEngine:
                     multiplier=multiplier,
                 )
 
-        side_value = OrderSide.BUY if candidate.direction == TradeDirection.LONG else OrderSide.SELL
+        # Options-open is always BUY (calls on LONG bet, puts on SHORT bet);
+        # SHORT does not mean shorting the contract. Exit uses the inverted
+        # side in the position_monitor close path.
+        side_value = OrderSide.BUY
         if not self.risk_manager.check_order(candidate.ticker, num_contracts, option_price * 100, side_value):
             logger.error(
                 "options_execution_blocked_by_risk",
@@ -443,8 +464,12 @@ class ExecutionEngine:
             decision.execution_log = msg
             return False
 
+        # Options-open is always BUY (see _execute_options_candidate comment);
+        # the shorting-disabled gate therefore never fires on the open path.
+        # Leave it in place so anyone wiring a future equity short-sale flow
+        # through this check gets blocked by default.
+        side = OrderSide.BUY
         exposure = self.risk_manager.ticker_exposures.get(candidate.ticker, 0.0)
-        side = OrderSide.BUY if candidate.direction == TradeDirection.LONG else OrderSide.SELL
         is_short_opening = side == OrderSide.SELL and exposure <= 0
 
         if is_short_opening and not self.risk_manager.config.enable_shorting:
@@ -497,7 +522,12 @@ class ExecutionEngine:
         decision.execution_params["order_type"] = "OPTIONS"
         decision.execution_params["contracts"] = num_contracts
 
-        side = OrderSide.BUY if candidate.direction == TradeDirection.LONG else OrderSide.SELL
+        # Orion only opens options positions from candidates — it buys calls on
+        # a LONG bet and buys puts on a SHORT bet. Both are BUYs at the broker.
+        # The SHORT direction reflects a bearish view on the underlying, not a
+        # short-sale of the contract. Exit/close flows (see position_monitor)
+        # own the OrderSide.SELL path.
+        side = OrderSide.BUY
 
         rate_limiter = get_order_rate_limiter()
         if not await rate_limiter.acquire(timeout=10.0):
