@@ -196,7 +196,13 @@ class ExecutionEngine:
                 if equity > 0:
                     self.risk_manager.current_equity = equity
                     self.risk_manager.starting_equity = last_equity
-                    self.risk_manager.current_daily_loss = max(0.0, last_equity - equity)
+
+                    # Daily loss is Orion-attributed only: driven by update_post_fill
+                    # from Orion-owned fills (client_order_id prefix "orion_"), not
+                    # by account-wide equity delta. The paper account is shared with
+                    # 3Roses/Cerberus/Kairos/Orbit/WhaleHunter, so last_equity-equity
+                    # would include their P&L and falsely trip Orion's kill switch.
+                    # We DO NOT overwrite self.risk_manager.current_daily_loss here.
 
                     # If peak_equity is still the hardcoded default (no persisted
                     # state loaded), seed it from the actual account balance so the
@@ -231,8 +237,10 @@ class ExecutionEngine:
                 skipped = 0
                 for p in positions:
                     symbol = p.get("symbol", "")
-                    # Only load positions that Orion has traded
-                    if orion_tickers and symbol not in orion_tickers:
+                    # Only load positions Orion has ever placed an order for.
+                    # Empty orion_tickers means Orion owns no positions at all —
+                    # skip everything (None is the error sentinel, handled above).
+                    if symbol not in orion_tickers:
                         skipped += 1
                         continue
 
@@ -854,8 +862,10 @@ class ExecutionEngine:
                 equity = float(account.get("equity", 0) or 0)
                 if equity > 0:
                     self.risk_manager.current_equity = equity
-                    last_equity = float(account.get("last_equity", 0) or account.get("equity", 0) or 0)
-                    self.risk_manager.current_daily_loss = max(0.0, last_equity - equity)
+                    # Do not overwrite current_daily_loss with account-wide delta;
+                    # shared Alpaca account means other systems' P&L would false-trip
+                    # Orion's kill switch. Orion-only daily loss is maintained by
+                    # update_post_fill from orion_-prefixed fills.
 
             self._last_fill_poll_ts = datetime.now(UTC)
 

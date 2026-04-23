@@ -105,8 +105,21 @@ services:
       ORION_RUN_ID: docker_persistent
       GATEWAY_URL: http://host.docker.internal:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
-      ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH: ${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-true}
+      # TEMPORARILY disabled while diagnosing OOM — re-enable after root cause
+      # of memory spike is isolated. Even with PREFER_HEBER_CONTEXT=false, the
+      # container OOMs ~45s after startup.
+      ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH: ${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}
+      # Disabled by default: HeberReader.read_bars does not push time filters
+      # down to parquet, so a 1-day SPY bars read materializes the full silver
+      # bars dataset in memory and OOMs this container. Re-enable once Heber
+      # reads are partition-pruned. Ticker discovery uses bronze_events (DB).
+      ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT: ${ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT:-false}
     command: [ "python", "-m", "orion.main_feature_enrichment" ]
+    # Explicit memory cap: pyarrow Heber scans can balloon. With this cap a
+    # runaway read produces an OOMKilled=true + exit 137 signal we can see,
+    # instead of Docker Desktop VM-level silent killing.
+    mem_limit: 3g
+    memswap_limit: 3g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -160,6 +173,7 @@ services:
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_persistent_exec
       ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE: "false"
+      ORION_RISK_MAX_DAILY_LOSS: ${ORION_RISK_MAX_DAILY_LOSS:-20000}
       GATEWAY_URL: http://host.docker.internal:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.main_execution" ]

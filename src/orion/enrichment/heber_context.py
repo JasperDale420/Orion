@@ -8,18 +8,18 @@ DB writes are best-effort for durability.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from orion.clients.heber_reader import HeberReader
 from orion.config import system_settings
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory
-from orion.storage.models import RegimeSnapshot
+from orion.storage.models import BronzeEvent, RegimeSnapshot
 
 logger = setup_struct_logger("orion.enrichment.heber_context")
 
@@ -101,38 +101,75 @@ def _extract_tickers_from_bars(limit: int) -> list[str]:
         return []
 
 
+async def _get_active_tickers_from_bronze(limit: int, lookback_hours: int = 24) -> list[str]:
+    """Primary ticker-discovery source: TimescaleDB bronze_events.
+
+    Orders of magnitude cheaper than the Heber parquet scan — uses the
+    (ticker, event_ts_utc) index and materializes only the top-N ticker
+    names. Runs on every refresh cycle of feature_enrichment, so must be
+    fast and bounded in memory.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
+    stmt = (
+        select(BronzeEvent.ticker, func.count(BronzeEvent.event_id).label("n"))
+        .where(BronzeEvent.ticker.isnot(None))
+        .where(BronzeEvent.received_ts_utc >= cutoff)
+        .group_by(BronzeEvent.ticker)
+        .order_by(func.count(BronzeEvent.event_id).desc())
+        .limit(limit)
+    )
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        return [row[0] for row in result.all() if row[0]]
+
+
 async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], str]:
     """Get tickers with recent flow activity and the source used.
 
-    Tries three sources in order:
-    1. Heber flow_alerts (options flow activity)
-    2. Heber bars (equity bars)
-    3. Static fallback list
+    Tries sources in order, cheapest first:
+    1. TimescaleDB bronze_events (indexed, milliseconds)
+    2. Heber flow_alerts (parquet scan — fallback only; historically OOM-prone)
+    3. Heber bars (equity bars)
+    4. Static fallback list
     """
-    # Primary: flow alerts
+    # Primary: DB-backed, indexed, bounded. This is the ONLY hot-path source —
+    # all Heber parquet scanning was removed from the discovery hot path after
+    # the 2026-04-22 OOM crash-loop incident (see docs/rca/feature_enrichment_crash_loop.md).
+    bronze_failed = False
     try:
-        now_utc = datetime.now(UTC)
-        flow_df = _heber_reader.read_flow(
-            asof_time=now_utc,
-            start_time=now_utc - pd.Timedelta(days=2),
-        )
-        tickers = _extract_top_tickers_from_flow_df(flow_df, limit=limit)
+        tickers = await _get_active_tickers_from_bronze(limit)
         if tickers:
-            return tickers, "heber"
+            return tickers, "bronze_db"
     except Exception:
-        logger.warning("Heber flow ticker discovery failed", exc_info=True)
+        bronze_failed = True
+        logger.warning("bronze_events ticker discovery failed", exc_info=True)
 
-    # Secondary: bars instrument keys
-    bars_tickers = _extract_tickers_from_bars(limit=limit)
-    if bars_tickers:
-        logger.info(
-            "Ticker discovery fell back to Heber bars",
-            extra={
-                "event": "feature_enrichment_ticker_source_bars_fallback",
-                "tickers_count": len(bars_tickers),
-            },
-        )
-        return bars_tickers, "heber"
+    # Heber fallbacks only run when the DB path is unavailable (not just empty) —
+    # an empty bronze result in post-market hours is normal and should not
+    # trigger a multi-GB parquet scan.
+    if bronze_failed:
+        try:
+            now_utc = datetime.now(UTC)
+            flow_df = _heber_reader.read_flow(
+                asof_time=now_utc,
+                start_time=now_utc - pd.Timedelta(hours=2),
+            )
+            tickers = _extract_top_tickers_from_flow_df(flow_df, limit=limit)
+            if tickers:
+                return tickers, "heber"
+        except Exception:
+            logger.warning("Heber flow ticker discovery failed", exc_info=True)
+
+        bars_tickers = _extract_tickers_from_bars(limit=limit)
+        if bars_tickers:
+            logger.info(
+                "Ticker discovery fell back to Heber bars",
+                extra={
+                    "event": "feature_enrichment_ticker_source_bars_fallback",
+                    "tickers_count": len(bars_tickers),
+                },
+            )
+            return bars_tickers, "heber"
 
     return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
 
@@ -215,10 +252,12 @@ def _map_vix_proxy_to_regime(vix_proxy: float) -> str:
 def _try_vix_proxy_from_heber(proxy_symbol: str, multiplier: float) -> dict[str, float | str | None] | None:
     try:
         now = datetime.now(UTC)
+        # 3-day window is enough for latest-close + 1-day-change; a wider
+        # window adds memory pressure without adding signal.
         bars_df = _heber_reader.read_bars(
             symbols=[proxy_symbol],
             asof_time=now,
-            start_time=now - pd.Timedelta(days=10),
+            start_time=now - pd.Timedelta(days=3),
         )
     except Exception:
         logger.debug("Heber %s bars read failed", proxy_symbol, exc_info=True)
@@ -296,10 +335,11 @@ async def get_latest_vix_data() -> dict[str, Any]:
 def _get_spy_cumulative_return_from_heber() -> float | None:
     try:
         now = datetime.now(UTC)
+        # Only need the last ~20 bars for intraday cumulative return.
         bars_df = _heber_reader.read_bars(
             symbols=["SPY"],
             asof_time=now,
-            start_time=now - pd.Timedelta(days=2),
+            start_time=now - pd.Timedelta(days=1),
         )
     except Exception:
         logger.debug("Heber SPY bars read failed, falling back to local DB", exc_info=True)

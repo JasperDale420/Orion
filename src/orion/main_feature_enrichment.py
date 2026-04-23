@@ -41,6 +41,9 @@ MAX_PAIN_INTERVAL = 3600  # Every hour
 IV_RANK_INTERVAL = 900  # Every 15 minutes
 REGIME_SNAPSHOT_INTERVAL = 300  # Every 5 minutes
 VIX_DATA_INTERVAL = 3600  # Every hour (VIX is daily-level data)
+TICKER_DISCOVERY_INTERVAL = 300  # Refresh ticker list every 5 minutes
+# Note: ticker discovery scans 2 days of UW flow parquet (~GB range); running it
+# every loop iteration causes OOM crash-loops.
 DEFAULT_ZERO_WRITE_WARN_STREAK = 3
 DEFAULT_LOOP_SLEEP_SECONDS = 30.0
 DEFAULT_LOOP_ERROR_WARN_STREAK = 3
@@ -258,7 +261,10 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     last_iv = datetime.min.replace(tzinfo=UTC)
     last_regime = datetime.min.replace(tzinfo=UTC)
     last_vix = datetime.min.replace(tzinfo=UTC)
+    last_ticker_refresh = datetime.min.replace(tzinfo=UTC)
     last_ticker_source: str | None = None
+    tickers: list[str] = []
+    ticker_source: str = "unset"
     zero_write_streaks: dict[str, int] = {}
     loop_error_streak = 0
     non_heber_streak = 0
@@ -268,18 +274,23 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     while not shutdown_event.is_set():
         try:
             now = datetime.now(UTC)
-            tickers, ticker_source = await get_active_tickers_with_source()
-            last_ticker_source = _log_ticker_source_transition(
-                source=ticker_source,
-                previous_source=last_ticker_source,
-                tickers_count=len(tickers),
-            )
-            non_heber_streak = _note_ticker_source_streak(
-                source=ticker_source,
-                non_heber_streak=non_heber_streak,
-                warn_streak=non_heber_warn_streak,
-                tickers_count=len(tickers),
-            )
+
+            # Ticker discovery scans 2 days of flow parquet (~GB-scale reads).
+            # Refresh only every TICKER_DISCOVERY_INTERVAL instead of every loop.
+            if (now - last_ticker_refresh).total_seconds() >= TICKER_DISCOVERY_INTERVAL:
+                tickers, ticker_source = await get_active_tickers_with_source()
+                last_ticker_source = _log_ticker_source_transition(
+                    source=ticker_source,
+                    previous_source=last_ticker_source,
+                    tickers_count=len(tickers),
+                )
+                non_heber_streak = _note_ticker_source_streak(
+                    source=ticker_source,
+                    non_heber_streak=non_heber_streak,
+                    warn_streak=non_heber_warn_streak,
+                    tickers_count=len(tickers),
+                )
+                last_ticker_refresh = now
 
             # --- UW Connector fetches (parallelized via asyncio.gather) ---
             if gateway_fetch_enabled:
@@ -411,7 +422,18 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, partial(handle_signal, sig))
 
-    await run_feature_loop(shutdown_event)
+    # Log any unhandled exit so silent crash-loops (e.g. OOM killing child
+    # processes that raise past the inner try/except) leave a traceable line
+    # before the process dies. Re-raise so the container still exits non-zero.
+    try:
+        await run_feature_loop(shutdown_event)
+    except BaseException as exc:
+        logger.error(
+            "Feature enrichment service terminated unexpectedly",
+            exc_info=True,
+            extra={"event": "feature_enrichment_unexpected_exit", "error": repr(exc)},
+        )
+        raise
 
 
 if __name__ == "__main__":
