@@ -7,7 +7,7 @@ Runs as a background service to populate feature tables for ML.
 import asyncio
 import os
 import signal
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, cast
 
@@ -255,12 +255,19 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     regime_detector = MultiAxisRegimeDetector()
     vix_connector = VIXProxyConnector()  # Uses VIXY bars from Heber bars feed
 
-    last_tide = datetime.min.replace(tzinfo=UTC)
-    last_greek = datetime.min.replace(tzinfo=UTC)
-    last_max_pain = datetime.min.replace(tzinfo=UTC)
-    last_iv = datetime.min.replace(tzinfo=UTC)
-    last_regime = datetime.min.replace(tzinfo=UTC)
-    last_vix = datetime.min.replace(tzinfo=UTC)
+    # Stagger initial-fire timing so the UW connectors don't fan out in one
+    # asyncio.gather at startup (200+ concurrent HTTP calls = memory spike that
+    # previously OOM-killed this container). Lighter HTTP-backed connectors
+    # (tide/greek/iv) fire first. Heavy Heber-backed connectors (max_pain,
+    # vix_proxy — both read parquet bars) wait for their natural interval so
+    # they don't compound memory pressure while Python is still warming up.
+    _now_init = datetime.now(UTC)
+    last_tide = _now_init - timedelta(seconds=MARKET_TIDE_INTERVAL - 5)
+    last_greek = _now_init - timedelta(seconds=GREEK_EXPOSURE_INTERVAL - 75)
+    last_iv = _now_init - timedelta(seconds=IV_RANK_INTERVAL - 145)
+    last_regime = _now_init - timedelta(seconds=REGIME_SNAPSHOT_INTERVAL - 45)
+    last_max_pain = _now_init  # fires at +MAX_PAIN_INTERVAL (1h)
+    last_vix = _now_init  # fires at +VIX_DATA_INTERVAL (1h)
     last_ticker_refresh = datetime.min.replace(tzinfo=UTC)
     last_ticker_source: str | None = None
     tickers: list[str] = []

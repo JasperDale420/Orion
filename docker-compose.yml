@@ -105,10 +105,11 @@ services:
       ORION_RUN_ID: docker_persistent
       GATEWAY_URL: http://host.docker.internal:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
-      # TEMPORARILY disabled while diagnosing OOM — re-enable after root cause
-      # of memory spike is isolated. Even with PREFER_HEBER_CONTEXT=false, the
-      # container OOMs ~45s after startup.
-      ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH: ${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-false}
+      # Re-enabled with staggered-init connector startup in
+      # main_feature_enrichment.py (t=5/75/145/215s offsets). Without UW
+      # connector writes, the ML scorer sees null features and rejects every
+      # candidate with score 0.00.
+      ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH: ${ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH:-true}
       # Disabled by default: HeberReader.read_bars does not push time filters
       # down to parquet, so a 1-day SPY bars read materializes the full silver
       # bars dataset in memory and OOMs this container. Re-enable once Heber
