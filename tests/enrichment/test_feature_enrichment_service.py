@@ -693,7 +693,13 @@ class TestGetActiveTickersWithSource:
             }
         )
 
-        with patch("orion.enrichment.heber_context._heber_reader") as mock_reader:
+        with (
+            patch(
+                "orion.enrichment.heber_context._get_active_tickers_from_bronze",
+                side_effect=RuntimeError("DB unavailable"),
+            ),
+            patch("orion.enrichment.heber_context._heber_reader") as mock_reader,
+        ):
             mock_reader.read_flow.return_value = mock_flow_df
             tickers, source = await get_active_tickers_with_source(limit=5)
 
