@@ -44,7 +44,7 @@ class UniverseManager:
             async with async_session_factory() as session:
                 rows = await session.execute(
                     select(CandidateTrade.ticker, CandidateTrade.expiration_date)
-                    .where(CandidateTrade.created_at >= cutoff)
+                    .where(CandidateTrade.created_at_utc >= cutoff)
                     .distinct()
                 )
                 now_ts = time.time()

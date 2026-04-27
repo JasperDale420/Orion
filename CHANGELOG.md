@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`UniverseManager.hydrate_from_db` fails with `'CandidateTrade' has no attribute 'created_at'`** — column is named `created_at_utc` in the model. The wrong attribute name caused a non-fatal exception on every hydration attempt, preventing the universe from being seeded from the DB on service restart.
+
 - **`test_returns_heber_tickers_when_available` broke after 2026-04-22 OOM fix** (2026-04-24): The 2026-04-22 refactor moved Heber parquet scanning to a DB-failure fallback path. The test was not updated and got `static_fallback` because the in-memory test DB returned empty without raising. Fixed by patching `_get_active_tickers_from_bronze` to raise `RuntimeError` so the Heber branch is reachable.
 
 - **Options-open orders falsely tripping `Shorting Disabled`** — `signal_preflight` and `execution_engine._submit_options_order` / `_execute_options_candidate` / `_pre_flight_checks` all mapped `candidate.direction == SHORT` to `OrderSide.SELL` under the assumption that SHORT means a short-sale. For an options-only system, SHORT is a *bearish view on the underlying* (buy a put), which is still a BUY at the broker. The risk manager saw a pending sell, computed `projected_signed < 0`, and rejected with `RISK REJECT: Shorting Disabled. Cannot move to -48960.0` — exactly 5 EXECUTE-quality candidates on 2026-04-23 (IONQ, VFC, INTU, CRWV, SNAP). All four open-path callsites now use `OrderSide.BUY` unconditionally. The shorting kill switch remains in place (intent: catch a future equity short-sale flow). Close/exit paths in `position_monitor` still compute side from direction correctly (SHORT close = BUY, LONG close = SELL).
