@@ -175,7 +175,7 @@ _CONFIGS: dict[str, dict] = {
     },
     "swing_entry_paper_v1": {
         "version_id": "swing_entry_paper_v1",
-        "rules": ["rule_bullish_sweep_v1"],
+        "rules": ["rule_swing_entry_v1"],
         "features": {
             "feature_set_id": "v2_swing",
             "event_features": [],

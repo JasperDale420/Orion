@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`swing_entry_paper_v1` solver wired to `rule_swing_entry_v1`** — was previously routing through `rule_bullish_sweep_v1`, which is a same-day options-flow rule, not the multi-day swing entry path. The diversified baseline solver also gains `rule_swing_entry_v1` so the swing rule has a paper-routing fallback. SWING_* model artifacts refreshed from the latest training run.
+
 ### Fixed
 
 - **`UniverseManager.hydrate_from_db` fails with `'CandidateTrade' has no attribute 'created_at'`** — column is named `created_at_utc` in the model. The wrong attribute name caused a non-fatal exception on every hydration attempt, preventing the universe from being seeded from the DB on service restart.
