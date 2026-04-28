@@ -478,11 +478,16 @@ services:
     command:
       - -c
       - |
-        apk add --no-cache rsync >/dev/null 2>&1
+        apk add --no-cache rsync coreutils >/dev/null 2>&1
         echo "heber-sync: starting continuous sync (60s interval)"
         while true; do
           TODAY=$$(date -u +%Y-%m-%d)
           YESTERDAY=$$(date -u -d "@$$(( $$(date -u +%s) - 86400 ))" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
+          # Gold cutoff: 30 days back. Orion ML rolling windows are <=30d, so a
+          # tighter window is enough; without it the EOD pollers Heber writes
+          # to gold/dataset=*/project=*/version=*/dt=*/ remain invisible to
+          # Orion's container (which only sees /heber-cache).
+          GOLD_CUTOFF=$$(date -u -d "@$$(( $$(date -u +%s) - 30*86400 ))" +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)
           FEEDS="flow_alerts bars darkpool market_tide greek_exposure iv_rank max_pain"
           SYNCED=0
           for feed in $$FEEDS; do
@@ -503,7 +508,42 @@ services:
               done
             fi
           done
-          echo "$$(date -u +%H:%M:%S) synced $$SYNCED partitions"
+
+          # Gold sync: walk every dataset/project/version, mirror dt= partitions
+          # newer than GOLD_CUTOFF. Use --delete so renamed/removed parquet
+          # files in source (e.g. quarantined legacy schemas) don't linger
+          # in the cache and pollute downstream pyarrow merges.
+          GOLD_SRC="/heber-source/gold"
+          GOLD_DST="/heber-cache/gold"
+          GOLD_SYNCED=0
+          if [ -d "$$GOLD_SRC" ]; then
+            for ds_dir in "$$GOLD_SRC"/dataset=*; do
+              [ -d "$$ds_dir" ] || continue
+              ds=$$(basename "$$ds_dir")
+              for proj_dir in "$$ds_dir"/project=*; do
+                [ -d "$$proj_dir" ] || continue
+                proj=$$(basename "$$proj_dir")
+                for ver_dir in "$$proj_dir"/version=*; do
+                  [ -d "$$ver_dir" ] || continue
+                  ver=$$(basename "$$ver_dir")
+                  for dt_dir in "$$ver_dir"/dt=*; do
+                    [ -d "$$dt_dir" ] || continue
+                    dt_part=$$(basename "$$dt_dir")
+                    dt_value=$${dt_part#dt=}
+                    if [ "$$dt_value" \< "$$GOLD_CUTOFF" ]; then
+                      continue
+                    fi
+                    DEST_DIR="$$GOLD_DST/$$ds/$$proj/$$ver/$$dt_part"
+                    mkdir -p "$$DEST_DIR"
+                    rsync -a --delete "$$dt_dir/" "$$DEST_DIR/" >/dev/null 2>&1
+                    GOLD_SYNCED=$$((GOLD_SYNCED + 1))
+                  done
+                done
+              done
+            done
+          fi
+
+          echo "$$(date -u +%H:%M:%S) synced silver=$$SYNCED gold=$$GOLD_SYNCED partitions"
           sleep 60
         done
     volumes:
