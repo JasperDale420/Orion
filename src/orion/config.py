@@ -28,7 +28,7 @@ class RiskSettings(BaseSettings):
 
     # Options-specific settings
     max_option_premium_pct: float = 0.02  # Max 2% of equity per option trade
-    min_dte: int = 3  # Minimum days to expiration
+    min_dte: int = 1  # Minimum days to expiration (0-DTE blocked; 1-DTE+ allowed)
     max_option_positions: int = 3  # Max simultaneous option positions
 
     # Portfolio-level Greeks limits (options risk)
