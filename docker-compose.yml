@@ -5,6 +5,14 @@ x-orion-common: &orion-common
     - ../empire-core:/empire-core:ro
   environment: &orion-env
     PYTHONPATH: /app/src:/empire-core
+  networks:
+    - default
+    - data-gateway
+
+networks:
+  data-gateway:
+    external: true
+    name: data-gateway_default
 
 services:
   timescaledb:
@@ -46,7 +54,7 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       ORION_RUN_ID: docker_persistent
-      GATEWAY_URL: http://host.docker.internal:8080
+      GATEWAY_URL: http://data-gateway:8080
       ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
       ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER: ${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}
     command: [ "python", "-m", "orion.main_price_target_labeler" ]
@@ -74,7 +82,7 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_persistent_ingest
-      GATEWAY_URL: http://host.docker.internal:8080
+      GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.ingestion" ]
     healthcheck:
@@ -103,7 +111,7 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       ORION_RUN_ID: docker_persistent
-      GATEWAY_URL: http://host.docker.internal:8080
+      GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
       # Re-enabled with staggered-init connector startup in
       # main_feature_enrichment.py (t=5/75/145/215s offsets). Without UW
@@ -175,7 +183,7 @@ services:
       ORION_RUN_ID: docker_persistent_exec
       ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE: "false"
       ORION_RISK_MAX_DAILY_LOSS: ${ORION_RISK_MAX_DAILY_LOSS:-20000}
-      GATEWAY_URL: http://host.docker.internal:8080
+      GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.main_execution" ]
     healthcheck:
@@ -206,7 +214,7 @@ services:
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_position_monitor
       ORION_MODEL_DIR: /app/models
-      GATEWAY_URL: http://host.docker.internal:8080
+      GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
     healthcheck:
@@ -401,7 +409,7 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       ORION_RUN_ID: docker_nightly_backfill
-      GATEWAY_URL: http://host.docker.internal:8080
+      GATEWAY_URL: http://data-gateway:8080
       ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
       ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL: ${ORION_ENABLE_LEGACY_NIGHTLY_BACKFILL:-false}
     command: [ "python", "-m", "orion.jobs.nightly_backfill" ]
