@@ -53,7 +53,12 @@ build/
 artifacts/
 index.scip
 ledger.db
+ledger.db-shm
+ledger.db-wal
 proposals/*.yaml
+
+# Claude Code session state
+.claude/
 
 # SonarQube
 .scannerwork/
