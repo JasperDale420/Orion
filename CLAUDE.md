@@ -144,17 +144,33 @@ Async engine via SQLAlchemy `create_async_engine` with `pool_pre_ping=True`, `po
 
 Orion depends on Data-Gateway for all external data and order routing:
 
-- **Market data**: `GatewayStreamClient` connects to Gateway WebSocket (`ws://localhost:8080/ws`) for real-time bars
+- **Market data**: `GatewayStreamClient` connects to Gateway WebSocket
+  (`ws://data-gateway:8080/ws` inside containers, `ws://localhost:8080/ws`
+  from the host) for real-time bars. Containers reach Gateway via the
+  external `data-gateway_default` network attached in `docker-compose.yml` —
+  do not revert to `host.docker.internal:8080` (Docker Desktop DNS is flaky
+  enough that we historically saw thousands of `[Errno -3] Temporary failure
+  in name resolution` events).
 - **UW connectors**: Greek exposure, IV rank, market tide, max pain, VIX proxy — all fetch via Gateway REST
 - **Order execution**: `ExecutionEngine` routes through `GatewayTradingClient` which proxies to Alpaca
 - **Earnings sync**: `sync_earnings` job fetches via Gateway
 
 ### Heber Dependency
 
-Orion reads Silver/Gold parquet data directly from Heber's disk layout (`/Volumes/heber/data`):
-- Bars (1m), flow alerts, darkpool, market tide, greek exposure, max pain, IV rank
-- `HeberReader` uses `pyarrow.parquet` for direct dataset reads
-- Catalog health checked via HTTP (`http://localhost:8085/api/v1`)
+Orion reads Silver/Gold parquet from a **host-side cache** at `~/.heber-cache/data`,
+bind-mounted into containers as `/Volumes/heber/data` (read-only). The cache is
+populated by the `heber-sync` sidecar in `docker-compose.yml`, which rsyncs:
+- Silver (today + yesterday) for: flow_alerts, bars, darkpool, market_tide,
+  greek_exposure, iv_rank, max_pain
+- Gold (last 30 days, all `dataset=*/project=*/version=*/dt=*`)
+
+`HeberReader` uses `pyarrow.parquet` for direct dataset reads; catalog health
+is checked via HTTP (`http://localhost:8085/api/v1`).
+
+If Orion's ML scorer or feature_enrichment is missing recent Gold data, check
+`docker logs orion_heber_sync` — Gold partitions older than the cutoff or
+missing entirely from `~/.heber-cache/data/gold/` mean the sync isn't running
+or hasn't caught up.
 
 ## Configuration
 
