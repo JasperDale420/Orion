@@ -10,6 +10,7 @@ import signal
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -48,6 +49,29 @@ DEFAULT_ZERO_WRITE_WARN_STREAK = 3
 DEFAULT_LOOP_SLEEP_SECONDS = 30.0
 DEFAULT_LOOP_ERROR_WARN_STREAK = 3
 DEFAULT_NON_HEBER_WARN_STREAK = 3
+
+# Market-hours gate for UW connector polls. UW's spot-exposures /
+# market-tide / max-pain endpoints return empty payloads outside
+# regular+extended trading hours, and the VIX-proxy bars only stream
+# when VIXY is trading. Polling outside this window burns API budget
+# and triggers `feature_enrichment_zero_write_streak` warnings on
+# expected-empty data. Matches the gate already used in
+# main_data_quality.py.
+ET_TZ = ZoneInfo("America/New_York")
+MARKET_HOURS_GATE_FEEDS = ("market_tide", "greek_exposure", "max_pain", "iv_rank", "vix_proxy")
+MARKET_HOURS_START_HOUR = 7  # 7 AM ET — pre-market open
+MARKET_HOURS_END_HOUR = 20  # 8 PM ET — post-market close
+
+
+def _is_extended_market_hours(now_utc: datetime | None = None) -> bool:
+    """Return True if `now_utc` falls in extended trading hours (Mon-Fri,
+    07:00-20:00 ET). Outside this window UW endpoints return empty.
+    """
+    now = (now_utc or datetime.now(UTC)).astimezone(ET_TZ)
+    if now.weekday() >= 5:  # Saturday/Sunday
+        return False
+    return MARKET_HOURS_START_HOUR <= now.hour < MARKET_HOURS_END_HOUR
+
 
 _T = int | float
 
@@ -305,7 +329,30 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 last_ticker_refresh = now
 
             # --- UW Connector fetches (parallelized via asyncio.gather) ---
-            if gateway_fetch_enabled:
+            # Skip outside extended trading hours (Mon-Fri 07:00-20:00 ET).
+            # UW endpoints return empty payloads at all other times, which
+            # otherwise trigger feature_enrichment_zero_write_streak warnings
+            # and burn API budget. Reset gated-feed streaks on entry to off-
+            # hours so the streak doesn't carry over to the next session.
+            in_market_hours = _is_extended_market_hours(now)
+            if not in_market_hours:
+                for feed in MARKET_HOURS_GATE_FEEDS:
+                    zero_write_streaks[feed] = 0
+                if not getattr(run_feature_loop, "_off_hours_logged", False):
+                    logger.info(
+                        "Skipping UW connector polls outside extended market hours",
+                        extra={
+                            "event": "feature_enrichment_off_hours_skip",
+                            "feeds": list(MARKET_HOURS_GATE_FEEDS),
+                            "et_hour": datetime.now(ET_TZ).hour,
+                            "weekday": datetime.now(ET_TZ).weekday(),
+                        },
+                    )
+                    run_feature_loop._off_hours_logged = True  # type: ignore[attr-defined]
+            else:
+                run_feature_loop._off_hours_logged = False  # type: ignore[attr-defined]
+
+            if gateway_fetch_enabled and in_market_hours:
                 uw_tasks: list[Any] = []  # list of coroutines for asyncio.gather
                 uw_task_meta: list[dict[str, Any]] = []  # name, feed_name, has_tickers
 
@@ -367,8 +414,9 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     if "iv_rank" in succeeded_feeds:
                         last_iv = now
 
-            # VIX Data
-            if (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
+            # VIX Data — gated on extended market hours (VIXY only streams
+            # bars when the underlying ETF is trading).
+            if in_market_hours and (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
                 try:
                     count = await vix_connector.fetch_and_store()
                     logger.info(f"VIX Proxy: stored {count} records")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -312,6 +312,31 @@ def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pyt
         tickers_count=5,
     )
     assert streak == 0
+
+
+@pytest.mark.parametrize(
+    "et_hour,weekday,expected",
+    [
+        (4, 1, False),  # 4 AM ET Tuesday — pre pre-market
+        (6, 1, False),  # 6 AM ET Tuesday — pre 7 AM gate
+        (7, 1, True),  # 7 AM ET Tuesday — gate opens
+        (10, 1, True),  # 10 AM ET Tuesday — regular hours
+        (16, 4, True),  # 4 PM ET Friday — regular close
+        (19, 4, True),  # 7 PM ET Friday — within post-market window
+        (20, 4, False),  # 8 PM ET Friday — gate closes
+        (10, 5, False),  # 10 AM ET Saturday — weekend
+        (10, 6, False),  # 10 AM ET Sunday — weekend
+    ],
+)
+def test_is_extended_market_hours(et_hour: int, weekday: int, expected: bool) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    # Pick a date with the desired weekday (2026-04-27 is a Monday).
+    base = datetime(2026, 4, 27, et_hour, 30, tzinfo=et)
+    test_dt = base + timedelta(days=weekday)
+    assert feature_enrichment._is_extended_market_hours(test_dt.astimezone(UTC)) is expected
 
 
 def test_note_ticker_source_streak_resets_on_bronze_db(monkeypatch: pytest.MonkeyPatch) -> None:
