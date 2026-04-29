@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Permanent false-positive `feature_enrichment_non_heber_streak` warning** — the streak counter in `_note_ticker_source_streak` reset only when `source == "heber"`, but the post-Apr-22 OOM redesign made `bronze_db` (TimescaleDB `bronze_events`) the canonical primary ticker-discovery source and demoted Heber to a fallback that only runs when bronze fails. As a result the warning fired on every cycle in production (observed `streak: 71` against `source: "bronze_db"`) — alerting on the architecture's intended healthy state. Updated the function to reset the streak on either `bronze_db` or `heber` (both are recognized data-backed sources) and renamed the warning event to `feature_enrichment_static_fallback_streak` with message "Ticker discovery fell back to static list" so it correctly fires only when discovery has truly degraded to the hardcoded static ticker list. Tests added.
+
 - **`UniverseManager.hydrate_from_db` fails with `'CandidateTrade' has no attribute 'created_at'`** — column is named `created_at_utc` in the model. The wrong attribute name caused a non-fatal exception on every hydration attempt, preventing the universe from being seeded from the DB on service restart.
 
 - **`test_returns_heber_tickers_when_available` broke after 2026-04-22 OOM fix** (2026-04-24): The 2026-04-22 refactor moved Heber parquet scanning to a DB-failure fallback path. The test was not updated and got `static_fallback` because the in-memory test DB returned empty without raising. Fixed by patching `_get_active_tickers_from_bronze` to raise `RuntimeError` so the Heber branch is reachable.

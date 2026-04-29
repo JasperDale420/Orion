@@ -298,7 +298,7 @@ def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pyt
     )
     assert streak == 2
     assert warnings[-1] == {
-        "event": "feature_enrichment_non_heber_streak",
+        "event": "feature_enrichment_static_fallback_streak",
         "source": "local_db",
         "streak": 2,
         "warn_streak": 2,
@@ -312,6 +312,29 @@ def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pyt
         tickers_count=5,
     )
     assert streak == 0
+
+
+def test_note_ticker_source_streak_resets_on_bronze_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """bronze_db is the canonical primary source post-Apr-22 OOM redesign;
+    it must reset the non-heber streak so the warning doesn't fire on every
+    cycle in the new architecture.
+    """
+    warnings: list[dict[str, object]] = []
+
+    def _fake_warning(_msg: str, *args: object, extra: dict[str, object] | None = None, **_kw: object) -> None:
+        if extra:
+            warnings.append(extra)
+
+    monkeypatch.setattr(feature_enrichment.logger, "warning", _fake_warning, raising=False)
+
+    streak = feature_enrichment._note_ticker_source_streak(
+        source="bronze_db",
+        non_heber_streak=42,
+        warn_streak=2,
+        tickers_count=20,
+    )
+    assert streak == 0
+    assert warnings == []
 
 
 @pytest.mark.asyncio

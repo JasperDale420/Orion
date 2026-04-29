@@ -166,15 +166,20 @@ def _note_ticker_source_streak(
     warn_streak: int,
     tickers_count: int,
 ) -> int:
-    if source == "heber":
+    # Per docs/rca/feature_enrichment_crash_loop.md (2026-04-22), bronze_db
+    # is the canonical primary ticker-discovery source; "heber" is now a
+    # fallback. Both are healthy outcomes — only "static_fallback" or an
+    # unknown source indicates real degradation, so reset the streak for
+    # the recognized data-backed sources.
+    if source in ("bronze_db", "heber"):
         return 0
 
     streak = non_heber_streak + 1
     if streak >= warn_streak:
         logger.warning(
-            "Ticker discovery has consecutive non-Heber source cycles",
+            "Ticker discovery fell back to static list",
             extra={
-                "event": "feature_enrichment_non_heber_streak",
+                "event": "feature_enrichment_static_fallback_streak",
                 "source": source,
                 "streak": streak,
                 "warn_streak": warn_streak,
