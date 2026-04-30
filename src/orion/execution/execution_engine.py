@@ -8,8 +8,7 @@ from typing import Any
 from sqlalchemy import select
 
 from orion.config import risk_settings, system_settings
-from orion.core.enums import DecisionAction, DecisionStatus, OrderSide, TradeDirection
-from orion.core.errors import ErrorCode
+from orion.core.enums import DecisionStatus, OrderSide, TradeDirection
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import persist_exit_decision, persist_order_record
 from orion.execution.rate_limiter import get_order_rate_limiter
@@ -117,39 +116,24 @@ class ExecutionEngine:
 
         await self._sync_risk_from_gateway()
 
-        try:
-
-            async def fetch_recent_decisions(session: Any) -> list[Any]:
-                stmt = (
-                    select(StrategyDecision)
-                    .where(StrategyDecision.decision == DecisionAction.EXECUTE)
-                    .order_by(StrategyDecision.timestamp_utc.desc())
-                    .limit(20)
-                )
-                result = await session.execute(stmt)
-                return result.scalars().all()
-
-            recent_decisions = await db_query(fetch_recent_decisions)
-
-            for d in reversed(recent_decisions):
-                if d.executed_successfully == DecisionStatus.TRUE:
-                    self.order_history.append(True)
-                elif d.executed_successfully == DecisionStatus.FALSE:
-                    self.order_history.append(False)
-
-            logger.info(
-                "ExecutionEngine initialized",
-                extra={"event_type": "EXECUTION_INIT", "loaded_history_count": len(self.order_history)},
-            )
-        except Exception as e:
-            logger.error(
-                "Failed to initialize ExecutionEngine history",
-                extra={
-                    "event_type": "EXECUTION_INIT_ERROR",
-                    "error_code": ErrorCode.UNKNOWN_ERROR.value,
-                    "error_details": str(e),
-                },
-            )
+        # NOTE: We deliberately do NOT seed `order_history` from past
+        # `strategy_decisions` rows. `executed_successfully=FALSE` in that
+        # table covers every pre-flight rejection (DTE gate, data-lag gate,
+        # health gate, risk rejection, shorting disabled, etc.) — not just
+        # broker-submission failures, which is what `_check_circuit_breaker`
+        # actually wants to monitor. Backfilling created a self-reinforcing
+        # poison pill: yesterday's session had 104 EXECUTEs all rejected at
+        # pre-flight (system-status STALE bug), which on restart filled the
+        # 20-slot deque with [False]*20, immediately tripped the 3% error-
+        # rate breaker, and prevented any new orders from being attempted —
+        # which then prevented any True from landing to clear the history.
+        # The runtime tracking at _record_result() (lines 601 / 639 / 784 /
+        # 792) only logs *actual* broker round-trips, which is what the
+        # breaker is meant to measure. Start the deque empty.
+        logger.info(
+            "ExecutionEngine initialized",
+            extra={"event_type": "EXECUTION_INIT", "loaded_history_count": 0},
+        )
 
     async def _fetch_orion_tickers(self) -> set[str] | None:
         """Return the set of tickers that Orion has active orders for."""
