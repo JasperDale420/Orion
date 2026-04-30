@@ -140,7 +140,10 @@ class SystemSettings(BaseSettings):
 
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
-    ingestion_heartbeat_max_age: int = 70
+    # Belt-and-suspenders alongside the overnight DB-heartbeat update in
+    # ingestion.service._check_overnight_sleep. 600s tolerates the longer
+    # cycle times we see in practice (rollups can run 30-60s on busy days).
+    ingestion_heartbeat_max_age: int = 600
     max_data_lag_seconds: int = 600  # Pre-market/post-market data can lag 300s+
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000

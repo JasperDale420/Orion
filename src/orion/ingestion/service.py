@@ -229,6 +229,15 @@ class IngestionService:
                 await asyncio.sleep(wait)
                 sleep_seconds -= wait
                 self.health_monitor.update_heartbeat()
+                # Also refresh the DB-side heartbeat. Without this, the
+                # `system_status.global_health` row stays at whatever it was
+                # at last market close, and ExecutionEngine._check_system_health
+                # treats that staleness as ingestion-dead and blocks every
+                # order with "System Status is UNHEALTHY" — even when the
+                # in-memory heartbeat above is fine. Refreshing once per
+                # 60s sleep chunk keeps the DB row well within
+                # ingestion_heartbeat_max_age.
+                await self._update_health_status()
 
     def _active_event_source_profile(self) -> dict[str, str | bool | list[str]]:
         return {
