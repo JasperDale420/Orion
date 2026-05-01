@@ -30,7 +30,9 @@ def mock_env():
 def _make_gateway_client_mock():
     mock = AsyncMock()
     mock.get_clock.return_value = {"is_open": True}
-    mock.get_option_chain.return_value = {"contracts": [{"symbol": "AAPL260418C00150000", "mid": 2.0, "ask": 2.10}]}
+    mock.get_option_chain.return_value = {
+        "contracts": [{"contract_symbol": "AAPL260418C00150000", "bid": 1.90, "ask": 2.10}]
+    }
     mock.create_order.return_value = {"id": "order-123", "status": "accepted"}
     return mock
 
