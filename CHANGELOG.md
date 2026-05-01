@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Regression coverage pinning that `check_order` directly catches drawdown breaches without relying on the CircuitBreaker DB read** — predict finding H-11 hypothesized a 10s gap window between drawdown breach and rejection, claiming `check_order` only consults the CB via 10s-cached `_check_system_health`. Code reading shows the claim was wrong: `check_order` → `_check_loss_limits` → `_drawdown_breached(cfg)` already reads `self.peak_equity` and `self.current_equity` from in-memory state that `process_fill` mutates. The same-process gap does not exist. Added 5 regression tests in `tests/execution/test_check_order_drawdown_direct.py` so a future refactor cannot silently remove the direct check and re-introduce the imagined gap. Predict findings.md updated with empirical evidence.
+
 - **`PositionMonitor.sync_positions` no longer resets every legacy position's `entry_time` to `now()` after restart** — when the monitor saw a broker position for the first time, it set `entry_time = datetime.now(UTC)  # Approximate`. The ML exit classifier feature `time_held_hours` derives from this, so every restart biased exit predictions toward "hold longer" for positions that had been open for hours. The `_fetch_entry_context` query already loaded the matching `strategy_decisions` row; it now also returns `sd.timestamp_utc` as `entry_time` and the sync path threads it through. Falls back to `now()` only when no decision row matches the broker symbol (e.g. an externally-opened position with no Orion-attribution). Predict finding H-07.
 
 ### Added
