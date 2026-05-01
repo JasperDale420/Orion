@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Bracket-order protection state surfaced on every executed decision** — when stop-loss or take-profit placement fails after a successful entry, `_place_bracket_orders` now returns `unprotected: bool` and `partial_protection: bool` flags (`unprotected=True` means no automatic downside exit was placed, the position depends entirely on PositionMonitor's ML/rule exits). The flags are hoisted onto `decision.execution_params["position_unprotected"]` / `["position_partial_protection"]` so a DB query can find unprotected positions without parsing the nested `bracket_orders` dict, and a `position_unprotected` CRITICAL log fires when SL placement fails. Previously SL/TP failures only logged at ERROR level; the entry was already marked TRUE and no metric, status flag, or operator-visible signal recorded the protection gap. Tests cover both-fail, SL-only-fail, TP-only-fail, and both-succeed paths.
+
 ### Changed
 
 - **`heber-sync` now mirrors Heber Gold partitions, not just Silver feeds** — Orion's container reads Heber data from a host-mounted cache at `/Users/jacobmcmillan/.heber-cache/data` (mounted read-only as `/Volumes/heber/data`), and `heber-sync` was only rsync'ing Silver feeds for today + yesterday. Result: every Gold dataset Orion's ML scorer relies on (`darkpool_features`, `momentum_features`, `oi_momentum_features`, etc.) was over a month stale (latest cached partition `dt=2026-03-24` while the source had data through `dt=2026-04-27`). The sync loop now also walks `/heber-source/gold/dataset=*/project=*/version=*/dt=*` and mirrors any partition newer than 30 days back, with `--delete` so renamed/quarantined parquet files in the source don't linger in the cache and pollute downstream pyarrow merges. Verified: post-sync, `heber_reader.read_gold_features("darkpool_features", symbols=["COIN","AAPL","SPY","NVDA"])` returns 242 rows with all three expected columns (`darkpool_notional_1d`, `darkpool_premium_ratio`, `darkpool_activity_zscore`) populated.

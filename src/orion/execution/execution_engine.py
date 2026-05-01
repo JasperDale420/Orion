@@ -598,6 +598,13 @@ class ExecutionEngine:
                     side=side,
                 )
                 ep["bracket_orders"] = bracket_result
+                # Hoist protection state to top-level execution_params so a DB
+                # query can find unprotected positions without parsing the
+                # nested bracket_orders dict.
+                if bracket_result.get("unprotected"):
+                    ep["position_unprotected"] = True
+                if bracket_result.get("partial_protection"):
+                    ep["position_partial_protection"] = True
 
         except Exception as e:
             await self._remove_pending_order_compat(client_order_id)
@@ -635,11 +642,16 @@ class ExecutionEngine:
     ) -> dict:
         """Place stop-loss and take-profit orders after a successful entry.
 
-        Non-fatal: logs errors but does not roll back the entry order.
+        Non-fatal at the broker level: bracket failures don't roll back the entry.
+        But protection-state is tracked in the return dict so the caller can
+        surface unprotected positions to operators (otherwise they're invisible
+        outside the log stream).
         """
         exit_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
         sl_price = round(entry_price * (1 - stop_loss_pct), 2)
         tp_price = round(entry_price * (1 + take_profit_pct), 2)
+        sl_failure_reason: str | None = None
+        tp_failure_reason: str | None = None
         result: dict = {"stop_loss": None, "take_profit": None}
 
         client = self._get_gateway_client()
@@ -661,7 +673,8 @@ class ExecutionEngine:
                 order_id=sl_order.get("id"),
             )
         except Exception as e:
-            logger.error("bracket_stop_loss_failed", error=str(e), option_symbol=option_symbol)
+            sl_failure_reason = str(e)
+            logger.error("bracket_stop_loss_failed", error=sl_failure_reason, option_symbol=option_symbol)
 
         try:
             tp_order = await client.create_order(
@@ -680,7 +693,44 @@ class ExecutionEngine:
                 order_id=tp_order.get("id"),
             )
         except Exception as e:
-            logger.error("bracket_take_profit_failed", error=str(e), option_symbol=option_symbol)
+            tp_failure_reason = str(e)
+            logger.error("bracket_take_profit_failed", error=tp_failure_reason, option_symbol=option_symbol)
+
+        # Surface protection state. `unprotected` means no automatic downside
+        # exit was placed — the position depends entirely on PositionMonitor's
+        # ML/rule exits to avoid full premium decay.
+        sl_placed = result["stop_loss"] is not None
+        tp_placed = result["take_profit"] is not None
+        result["unprotected"] = not sl_placed
+        result["partial_protection"] = sl_placed != tp_placed
+        result["failure_reasons"] = [
+            r
+            for r in (
+                sl_failure_reason and f"stop_loss: {sl_failure_reason}",
+                tp_failure_reason and f"take_profit: {tp_failure_reason}",
+            )
+            if r
+        ]
+
+        if result["unprotected"]:
+            logger.critical(
+                "position_unprotected",
+                event_type="POSITION_UNPROTECTED",
+                option_symbol=option_symbol,
+                qty=qty,
+                entry_price=entry_price,
+                stop_loss_failed=sl_failure_reason,
+                take_profit_placed=tp_placed,
+            )
+        elif result["partial_protection"]:
+            logger.warning(
+                "position_partial_protection",
+                event_type="POSITION_PARTIAL_PROTECTION",
+                option_symbol=option_symbol,
+                qty=qty,
+                stop_loss_placed=sl_placed,
+                take_profit_failed=tp_failure_reason,
+            )
 
         return result
 

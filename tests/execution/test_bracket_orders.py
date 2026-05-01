@@ -133,7 +133,7 @@ async def test_no_bracket_orders_when_disabled(mock_env):
 
 @pytest.mark.asyncio
 async def test_bracket_order_failure_does_not_block_entry(mock_env, monkeypatch):
-    """If bracket orders fail, the entry still succeeds."""
+    """If bracket orders fail, the entry still succeeds and protection state is surfaced."""
     monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
 
     engine, mock_client = _make_engine()
@@ -155,6 +155,97 @@ async def test_bracket_order_failure_does_not_block_entry(mock_env, monkeypatch)
     from orion.core.enums import DecisionStatus
 
     assert decision.executed_successfully == DecisionStatus.TRUE
+
+    # Protection state must be surfaced on the decision so operators / DB queries
+    # can find unprotected positions instead of having to parse logs.
+    ep = decision.execution_params
+    assert ep.get("position_unprotected") is True
+    bracket = ep["bracket_orders"]
+    assert bracket["unprotected"] is True
+    assert bracket["partial_protection"] is False
+    assert bracket["stop_loss"] is None
+    assert bracket["take_profit"] is None
+    assert any("Stop-loss failed" in r for r in bracket["failure_reasons"])
+    assert any("Take-profit failed" in r for r in bracket["failure_reasons"])
+
+
+@pytest.mark.asyncio
+async def test_bracket_stop_loss_only_failure_marks_unprotected(mock_env, monkeypatch):
+    """SL fails, TP succeeds → still 'unprotected' (no auto downside exit)."""
+    monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
+
+    engine, mock_client = _make_engine()
+    mock_client.create_order.side_effect = [
+        {"id": "entry-1", "status": "accepted"},
+        RuntimeError("Stop-loss failed"),
+        {"id": "tp-1", "status": "accepted"},
+    ]
+
+    candidate, decision = _make_candidate_and_decision(
+        execution_params={"stop_loss_pct": 0.03, "take_profit_pct": 0.06}
+    )
+
+    await engine.execute_order(decision, candidate)
+
+    ep = decision.execution_params
+    assert ep.get("position_unprotected") is True
+    assert ep.get("position_partial_protection") is True
+    bracket = ep["bracket_orders"]
+    assert bracket["unprotected"] is True
+    assert bracket["partial_protection"] is True
+    assert bracket["stop_loss"] is None
+    assert bracket["take_profit"] is not None
+
+
+@pytest.mark.asyncio
+async def test_bracket_take_profit_only_failure_marks_partial_only(mock_env, monkeypatch):
+    """TP fails, SL succeeds → partial protection but not 'unprotected'."""
+    monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
+
+    engine, mock_client = _make_engine()
+    mock_client.create_order.side_effect = [
+        {"id": "entry-1", "status": "accepted"},
+        {"id": "sl-1", "status": "accepted"},
+        RuntimeError("Take-profit failed"),
+    ]
+
+    candidate, decision = _make_candidate_and_decision(
+        execution_params={"stop_loss_pct": 0.03, "take_profit_pct": 0.06}
+    )
+
+    await engine.execute_order(decision, candidate)
+
+    ep = decision.execution_params
+    assert ep.get("position_unprotected") is None  # downside-protected
+    assert ep.get("position_partial_protection") is True
+    bracket = ep["bracket_orders"]
+    assert bracket["unprotected"] is False
+    assert bracket["partial_protection"] is True
+    assert bracket["stop_loss"] is not None
+    assert bracket["take_profit"] is None
+
+
+@pytest.mark.asyncio
+async def test_bracket_both_legs_succeed_no_protection_flags(mock_env, monkeypatch):
+    """Both legs succeed → no protection-warning flags set."""
+    monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
+
+    engine, mock_client = _make_engine()
+    # Default mock returns success for every call
+
+    candidate, decision = _make_candidate_and_decision(
+        execution_params={"stop_loss_pct": 0.03, "take_profit_pct": 0.06}
+    )
+
+    await engine.execute_order(decision, candidate)
+
+    ep = decision.execution_params
+    assert ep.get("position_unprotected") is None
+    assert ep.get("position_partial_protection") is None
+    bracket = ep["bracket_orders"]
+    assert bracket["unprotected"] is False
+    assert bracket["partial_protection"] is False
+    assert bracket["failure_reasons"] == []
 
 
 @pytest.mark.asyncio
