@@ -39,7 +39,7 @@ class FillProcessor:
         starts with the Orion prefix).
         """
         try:
-            from orion.execution.execution_engine import ORDER_ID_PREFIX
+            from orion.execution.attribution import is_orion_owned
 
             order_id = str(fill.get("id", "")) if isinstance(fill, dict) else str(fill.id)
             client_oid = (
@@ -47,7 +47,7 @@ class FillProcessor:
             ) or order_id
 
             # Skip fills that don't belong to Orion
-            if client_oid and not client_oid.startswith(ORDER_ID_PREFIX):
+            if not is_orion_owned(client_oid):
                 return
 
             if isinstance(fill, dict):

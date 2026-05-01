@@ -1,6 +1,5 @@
 import asyncio
 import time
-import uuid
 from collections import deque
 from datetime import UTC, datetime
 from typing import Any
@@ -9,6 +8,11 @@ from sqlalchemy import select
 
 from orion.config import risk_settings, system_settings
 from orion.core.enums import DecisionStatus, OrderSide, TradeDirection
+from orion.execution.attribution import (
+    ORDER_ID_PREFIX,
+    mint_orion_order_id,
+    orion_order_id_sql_pattern,
+)
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import persist_exit_decision, persist_order_record
 from orion.execution.rate_limiter import get_order_rate_limiter
@@ -20,10 +24,9 @@ from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 logger = setup_struct_logger(__name__)
 
-# Prefix for all Orion order IDs — used to identify Orion's positions
-# in the shared Alpaca paper account.
-ORDER_ID_PREFIX = "orion_"
-
+# `ORDER_ID_PREFIX` is re-exported from orion.execution.attribution so
+# existing imports (`from orion.execution.execution_engine import ORDER_ID_PREFIX`)
+# continue to work. New code should import directly from `attribution`.
 __all__ = ["ExecutionEngine", "ORDER_ID_PREFIX", "async_session_factory"]
 
 
@@ -140,7 +143,11 @@ class ExecutionEngine:
         from orion.storage.models_execution import OrderRecord
 
         async def query_tickers(session: Any) -> set[str]:
-            stmt = select(OrderRecord.ticker).where(OrderRecord.client_order_id.like(f"{ORDER_ID_PREFIX}%")).distinct()
+            stmt = (
+                select(OrderRecord.ticker)
+                .where(OrderRecord.client_order_id.like(orion_order_id_sql_pattern()))
+                .distinct()
+            )
             result = await session.execute(stmt)
             return {row[0] for row in result.all()}
 
@@ -500,7 +507,7 @@ class ExecutionEngine:
             ticker=candidate.ticker,
         )
 
-        client_order_id = f"{ORDER_ID_PREFIX}{uuid.uuid4()}"
+        client_order_id = mint_orion_order_id()
         decision.execution_params = decision.execution_params or {}
         decision.execution_params["client_order_id"] = client_order_id
         decision.execution_params["order_type"] = "OPTIONS"
@@ -752,7 +759,7 @@ class ExecutionEngine:
 
         try:
             client = self._get_gateway_client()
-            client_order_id = f"{ORDER_ID_PREFIX}{uuid.uuid4()}"
+            client_order_id = mint_orion_order_id()
 
             if use_market_order or exit_signal.urgency == "IMMEDIATE":
                 result = await client.close_position(ticker, qty=qty)
