@@ -310,7 +310,7 @@ class HeberReader:
             return []
 
         counts = symbols.value_counts()
-        return counts.head(limit).index.tolist()
+        return [str(symbol) for symbol in counts.head(limit).index.tolist()]
 
     def read_gold_features(
         self,
