@@ -37,3 +37,25 @@ class ProcessedFill(Base):
 
     ticker = Column(String, nullable=True)
     qty = Column(Float, nullable=True)
+
+
+class PendingOrder(Base):
+    """Persists in-flight orders so a restart doesn't lose pending exposure.
+
+    Previously `RiskManager.pending_orders` was an in-memory dict only; the
+    first ~30s after restart calculated projected exposure from positions
+    only, ignoring orders submitted just before the crash. Each row mirrors
+    the in-memory tuple `(ticker, signed_cost)` for a given client_order_id.
+
+    On RiskManager.initialize, rows older than the configured TTL are
+    discarded — most orders fill or fail within minutes; a row that
+    survives an hour is almost certainly a stale write from a crashed-
+    between-DB-write-and-broker-call edge case.
+    """
+
+    __tablename__ = "pending_orders"
+
+    order_id = Column(String, primary_key=True)
+    ticker = Column(String, nullable=False, index=True)
+    signed_cost = Column(Float, nullable=False)  # +cost on BUY, -cost on SELL
+    created_at_utc = Column(DateTime, default=lambda: datetime.now(UTC))

@@ -463,6 +463,11 @@ class RiskManager:
                 else:
                     logger.info("No persisted Risk State found.")
 
+            # Restore in-flight orders so the first cycle after restart
+            # doesn't under-count exposure for orders submitted just before
+            # the crash. Stale rows (>TTL) are dropped on load.
+            await self._load_pending_orders()
+
             await self._evaluate_drawdown_kill_switch()
 
         except Exception as e:
@@ -619,21 +624,147 @@ class RiskManager:
 
     # ── Post-trade & pending order tracking ──────────────────────────────
 
+    # Pending-order rows older than this on `_load_pending_orders` are
+    # discarded as stale (almost certainly leftovers from a process that
+    # crashed between the DB write and the broker call). 1h is generous —
+    # most orders fill or fail within minutes.
+    PENDING_ORDER_LOAD_TTL_SECONDS = 3600
+
     async def update_post_trade(
         self, ticker: str, qty: float, price: float, side: str, order_id: str | None = None
     ) -> None:
-        """Updates internal risk state immediately after an order is sent (Optimistic)."""
+        """Updates internal risk state immediately after an order is sent (Optimistic).
+
+        Also persists the pending order to TimescaleDB so a restart between
+        submission and fill doesn't lose the in-flight exposure tracking
+        until the next Gateway sync.
+        """
         if not order_id:
             order_id = f"pending_{datetime.now(UTC).timestamp()}"
 
         cost = qty * price
         signed_cost = cost if side.lower() == OrderSide.BUY else -cost
         self.pending_orders[order_id] = (ticker, signed_cost)
+        await self._persist_pending_order(order_id, ticker, signed_cost)
 
-    def remove_pending_order(self, order_id: str) -> None:
-        """Removes a pending order from risk tracking."""
-        if order_id in self.pending_orders:
-            del self.pending_orders[order_id]
+    async def remove_pending_order(self, order_id: str) -> None:
+        """Removes a pending order from risk tracking (memory + DB).
+
+        `_remove_pending_order_compat` in execution_engine awaits coroutines
+        returned from this method, so making it async is safe even though
+        callers used to invoke it synchronously.
+        """
+        self.pending_orders.pop(order_id, None)
+        await self._remove_persisted_pending_order(order_id)
+
+    @db_retry
+    async def _persist_pending_order(self, order_id: str, ticker: str, signed_cost: float) -> None:
+        """Upsert a pending-order row keyed on order_id."""
+
+        async def _upsert(session: Any) -> None:
+            from sqlalchemy import select
+
+            from orion.storage.models_risk import PendingOrder
+
+            stmt = select(PendingOrder).where(PendingOrder.order_id == order_id)
+            existing = (await session.execute(stmt)).scalars().first()
+            if existing is not None:
+                existing.ticker = ticker
+                existing.signed_cost = signed_cost
+            else:
+                session.add(
+                    PendingOrder(
+                        order_id=order_id,
+                        ticker=ticker,
+                        signed_cost=signed_cost,
+                        created_at_utc=datetime.now(UTC),
+                    )
+                )
+
+        try:
+            await db_write(_upsert)
+        except Exception as exc:
+            logger.warning(
+                "pending_order_persist_failed",
+                extra={"event_type": "PENDING_ORDER_PERSIST_FAILED", "order_id": order_id, "error": str(exc)},
+            )
+
+    @db_retry
+    async def _remove_persisted_pending_order(self, order_id: str) -> None:
+        """Delete the persisted pending-order row, if it exists."""
+
+        async def _delete(session: Any) -> None:
+            from sqlalchemy import select
+
+            from orion.storage.models_risk import PendingOrder
+
+            stmt = select(PendingOrder).where(PendingOrder.order_id == order_id)
+            existing = (await session.execute(stmt)).scalars().first()
+            if existing is not None:
+                await session.delete(existing)
+
+        try:
+            await db_write(_delete)
+        except Exception as exc:
+            logger.warning(
+                "pending_order_delete_failed",
+                extra={"event_type": "PENDING_ORDER_DELETE_FAILED", "order_id": order_id, "error": str(exc)},
+            )
+
+    async def _load_pending_orders(self) -> None:
+        """Restore the in-memory `pending_orders` dict from the DB.
+
+        Called from `initialize` so a restart picks up where the prior run
+        left off. Rows older than `PENDING_ORDER_LOAD_TTL_SECONDS` are
+        discarded — they are almost certainly stale (orphaned by an earlier
+        crash) and counting them would over-state pending exposure
+        indefinitely.
+        """
+        try:
+            from sqlalchemy import select
+
+            from orion.shared.utils import ensure_utc as _ensure_utc
+            from orion.storage.db import async_session_factory
+            from orion.storage.models_risk import PendingOrder
+
+            cutoff = datetime.now(UTC) - timedelta(seconds=self.PENDING_ORDER_LOAD_TTL_SECONDS)
+
+            async with async_session_factory() as session:
+                stmt = select(PendingOrder)
+                rows = list((await session.execute(stmt)).scalars().all())
+
+                fresh = 0
+                stale_ids: list[str] = []
+                for row in rows:
+                    created = row.created_at_utc
+                    if created is None or _ensure_utc(created) < cutoff:
+                        stale_ids.append(row.order_id)
+                        continue
+                    self.pending_orders[row.order_id] = (row.ticker, row.signed_cost)
+                    fresh += 1
+
+                # Clean up stale rows so they don't accumulate
+                if stale_ids:
+                    for sid in stale_ids:
+                        stale = await session.get(PendingOrder, sid)
+                        if stale is not None:
+                            await session.delete(stale)
+                    await session.commit()
+
+            logger.info(
+                "pending_orders_loaded",
+                extra={
+                    "event_type": "PENDING_ORDERS_LOADED",
+                    "fresh": fresh,
+                    "stale_dropped": len(stale_ids),
+                    "ttl_seconds": self.PENDING_ORDER_LOAD_TTL_SECONDS,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "pending_orders_load_failed",
+                extra={"event_type": "PENDING_ORDERS_LOAD_FAILED", "error": str(exc)},
+            )
 
     def update_metrics(
         self, realized_pnl: float = 0.0, open_positions_count: int | None = None, open_pnl: float = 0.0
