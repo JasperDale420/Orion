@@ -207,6 +207,17 @@ class SystemSettings(BaseSettings):
     # Circuit breaker
     reset_circuit_breaker_on_start: bool = Field(default=False, validation_alias="ORION_RESET_CIRCUIT_BREAKER_ON_START")
     trip_circuit_breaker_on_lag: bool = Field(default=False, validation_alias="ORION_TRIP_CIRCUIT_BREAKER_ON_LAG")
+    # Per-process broker-result error-rate breaker (in ExecutionEngine).
+    # The previous deque[bool] with maxlen=20 had no time component: a single
+    # failure stayed in the deque all day during low-volume periods. The
+    # time-windowed version (failures within last N seconds) plus a minimum
+    # sample count avoids both the "stuck breaker" and the "first-failure
+    # after restart trips it" failure modes.
+    circuit_breaker_error_rate: float = Field(default=0.03, validation_alias="ORION_CIRCUIT_BREAKER_ERROR_RATE")
+    circuit_breaker_window_seconds: float = Field(
+        default=300.0, validation_alias="ORION_CIRCUIT_BREAKER_WINDOW_SECONDS"
+    )
+    circuit_breaker_min_samples: int = Field(default=5, validation_alias="ORION_CIRCUIT_BREAKER_MIN_SAMPLES")
 
     # Client URLs
     trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")

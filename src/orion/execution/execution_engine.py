@@ -49,7 +49,11 @@ class ExecutionEngine:
         self._gateway_client = None
         self._gateway_available = False
 
-        self.order_history: deque[bool] = deque(maxlen=20)
+        # Time-windowed broker-result history for the per-process circuit
+        # breaker. Each entry is (monotonic_ts, success). Bounded by the
+        # configured window, not by entry count — see _check_circuit_breaker
+        # and _prune_order_history.
+        self.order_history: deque[tuple[float, bool]] = deque()
         self.last_positions_snapshot_ts: datetime | None = None
         self._last_fill_poll_ts: datetime | None = None
 
@@ -490,14 +494,41 @@ class ExecutionEngine:
         return True
 
     def _check_circuit_breaker(self) -> bool:
-        if not self.order_history:
+        """Trip when the broker-error rate exceeds threshold within the
+        configured time window AND we've seen at least min_samples broker
+        round-trips.
+
+        Returns True iff trading should be blocked.
+        """
+        self._prune_order_history()
+        total = len(self.order_history)
+        min_samples = system_settings.circuit_breaker_min_samples
+        if total < min_samples:
+            # Avoid tripping on a single failure right after restart — the
+            # deliberate "do not seed history" decision means the deque is
+            # always empty post-restart, so the first ~min_samples broker
+            # calls run without breaker pressure.
             return False
-        failures = self.order_history.count(False)
-        rate = failures / len(self.order_history)
-        if rate > 0.03:
-            logger.critical("execution_blocked_error_rate", error_rate=rate, limit=0.03)
+        failures = sum(1 for _, success in self.order_history if not success)
+        rate = failures / total
+        threshold = system_settings.circuit_breaker_error_rate
+        if rate > threshold:
+            logger.critical(
+                "execution_blocked_error_rate",
+                error_rate=rate,
+                limit=threshold,
+                window_seconds=system_settings.circuit_breaker_window_seconds,
+                samples=total,
+                failures=failures,
+            )
             return True
         return False
+
+    def _prune_order_history(self) -> None:
+        """Drop history entries older than the configured window."""
+        cutoff = time.monotonic() - system_settings.circuit_breaker_window_seconds
+        while self.order_history and self.order_history[0][0] < cutoff:
+            self.order_history.popleft()
 
     async def _submit_options_order(
         self, decision: Any, candidate: Any, num_contracts: int, option_price: float
@@ -990,4 +1021,10 @@ class ExecutionEngine:
             self.last_positions_snapshot_ts = result
 
     def _record_result(self, success: bool) -> None:
-        self.order_history.append(success)
+        """Record a broker round-trip outcome with its monotonic timestamp.
+
+        The breaker uses a time window, so the timestamp determines whether a
+        past failure is still counted. Pruning runs lazily on read in
+        `_check_circuit_breaker` / `_prune_order_history`.
+        """
+        self.order_history.append((time.monotonic(), success))
