@@ -81,8 +81,16 @@ async def test_execution_submits_options_order(mock_env):
 
 
 @pytest.mark.asyncio
-async def test_execution_blocks_shorting(mock_env):
-    """Shorting guard blocks execution even for options."""
+async def test_short_direction_options_open_submits_buy(mock_env):
+    """Direction=SHORT on an options-open candidate buys a put (BUY side).
+
+    Orion is options-only. Per the 'Options-open orders falsely tripping
+    Shorting Disabled' fix, the SHORT direction reflects a bearish view on
+    the underlying, not a short-sale of the contract — so open-path
+    callsites use OrderSide.BUY unconditionally. The shorting kill switch
+    stays in place for any future equity short-sale flow but does not gate
+    options opens.
+    """
     from orion.execution.execution_engine import ExecutionEngine
 
     engine = ExecutionEngine()
@@ -97,6 +105,10 @@ async def test_execution_blocks_shorting(mock_env):
     engine.risk_manager = MagicMock()
     engine.risk_manager.config.enable_shorting = False
     engine.risk_manager.ticker_exposures = {"AAPL": 0.0}
+    engine.risk_manager.current_equity = 100000.0
+    engine.risk_manager.check_order.return_value = True
+    engine.risk_manager.update_post_trade = AsyncMock()
+    engine.risk_manager.remove_pending_order = AsyncMock()
 
     now = datetime.now(UTC)
     candidate = CandidateTrade(
@@ -120,7 +132,9 @@ async def test_execution_blocks_shorting(mock_env):
 
     await engine.execute_order(decision, candidate)
 
-    mock_client.create_order.assert_not_called()
+    mock_client.create_order.assert_called_once()
+    call_kwargs = mock_client.create_order.call_args[1]
+    assert str(call_kwargs.get("side")).lower().endswith("buy")
 
 
 @pytest.mark.asyncio
