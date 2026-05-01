@@ -143,24 +143,28 @@ Four memory-only data structures coordinate cross-cycle behavior: `_closing_symb
 
 ---
 
-## Finding 6: `peak_equity` resets to $100K on restart unless DB has a `RiskState` row — drawdown kill switch measures from wrong baseline
+## Finding 6: `peak_equity` magic-default seed check is fragile — legitimately-loaded $100K peak gets silently overwritten
 
 **Severity:** HIGH
-**Confidence:** HIGH
-**Location:** [`risk/manager.py:53`](src/orion/execution/risk/manager.py:53), [`execution_engine.py:195-196`](src/orion/execution/execution_engine.py:195), [`risk/manager.py:444-450`](src/orion/execution/risk/manager.py:444)
+**Confidence:** HIGH (revised after empirical fix 2026-05-01)
+**Location:** [`risk/manager.py:53`](src/orion/execution/risk/manager.py:53), [`execution_engine.py:198-204`](src/orion/execution/execution_engine.py:198), [`risk/manager.py:444-456`](src/orion/execution/risk/manager.py:444)
 **Consensus:** 3/5 (PE/SA abstain — outside domain)
 **Priority Score:** 1.64
-**Original ID:** RE-3
+**Original ID:** RE-3 — partial empirical correction below
+**Status:** FIXED in commit `<H-06 commit hash>` via `_peak_equity_seeded` boolean flag.
 
-**Evidence:**
+**Evidence (corrected):**
+The original predict description was partially off. Empirical reading:
 - `RiskManager.__init__` sets `peak_equity = 100000.0` (hardcoded default).
-- `_sync_risk_from_gateway` only re-seeds peak_equity from Gateway IF the current value still equals the magic default $100K (line 195).
-- `RiskManager.initialize` loads from DB with `getattr(state, "peak_equity", 0.0) or max(...)`.
+- `_sync_risk_from_gateway` was checking `if peak_equity == 100000.0: peak = max(equity, last_equity)`.
+- For the specific scenario predict described (no DB row, account at $95K), the OLD code DID re-seed correctly: $100K default matches the magic check, so `max($95K, $95K) = $95K` is set. **Predict's described scenario was not actually broken.**
 
-If the DB row is missing AND Gateway returns equity already <$100K (which it should during normal account drawdown — a $95K account is the case worth catching), `peak_equity` stays at $100K and the drawdown calc is broken from a fictional peak.
+The real failure mode is the inverse: a legitimately-loaded `peak_equity` that happens to equal $100K (e.g., yesterday's account state at exactly $100K, then today's account is $95K) gets silently OVERWRITTEN by the next Gateway sync. The magic-default check has no way to distinguish "default $100K" from "real $100K" — both trigger the seed-from-account branch, replacing the real $110K-or-whatever historical peak with the current depressed account value, hiding a real drawdown.
 
-**Recommendation:**
-Replace the magic-default detection with a `peak_equity_seeded: bool` flag. On first init, seed from `max(account.last_equity, account.equity)` unconditionally; on subsequent syncs, only update if `current_equity > peak_equity`.
+There's also the architectural fragility: anyone changing the `__init__` default from $100K (e.g., to $50K) silently breaks the seed logic without changing the magic check.
+
+**Recommendation (implemented):**
+Replace the magic-default detection with a `_peak_equity_seeded: bool` flag set to True whenever peak_equity comes from a real source (DB load OR first Gateway sync). Subsequent syncs do not touch peak_equity; the high-water mark is owned by `_evaluate_drawdown_kill_switch` (which already grows it on `current_equity > peak_equity`).
 
 **Persona Votes:**
 | Persona | Vote | Note |

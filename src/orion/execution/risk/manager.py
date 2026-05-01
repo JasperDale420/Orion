@@ -51,6 +51,12 @@ class RiskManager:
         self.current_equity = 100000.0
         self.starting_equity = self.current_equity
         self.peak_equity = self.current_equity
+        # Tracks whether peak_equity has been seeded from a real source (DB
+        # state on init, or the first Gateway-sync seed). Replaces the older
+        # `peak_equity == 100000.0` magic-default check, which broke when a
+        # legitimately-loaded peak just happened to equal the hardcoded
+        # default and got silently overwritten on next sync.
+        self._peak_equity_seeded = False
 
         # Track full position details (qty, avg_entry)
         self.positions: dict[str, dict[str, float]] = {}
@@ -449,6 +455,10 @@ class RiskManager:
                         self.current_equity, self.starting_equity
                     )
                     self.open_positions = state.open_positions_count
+                    # Loaded peak from a real source — even if it happens to
+                    # numerically equal the $100K default, downstream syncs
+                    # must not overwrite it.
+                    self._peak_equity_seeded = True
                     logger.info(f"Risk State Loaded: DailyLoss={self.current_daily_loss}")
                 else:
                     logger.info("No persisted Risk State found.")

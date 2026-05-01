@@ -195,12 +195,16 @@ class ExecutionEngine:
                     # would include their P&L and falsely trip Orion's kill switch.
                     # We DO NOT overwrite self.risk_manager.current_daily_loss here.
 
-                    # If peak_equity is still the hardcoded default (no persisted
-                    # state loaded), seed it from the actual account balance so the
-                    # drawdown kill-switch is measured from the real starting point
-                    # instead of an arbitrary $100K.
-                    if self.risk_manager.peak_equity == 100000.0:
+                    # Seed peak_equity from the real Gateway account on first
+                    # run only — replacing the older magic-default check
+                    # (`peak_equity == 100000.0`) that overwrote a legitimately-
+                    # loaded peak which happened to equal the hardcoded default.
+                    # Subsequent syncs must not reset peak_equity; the high-
+                    # water mark is updated by `_evaluate_drawdown_kill_switch`
+                    # whenever current_equity > peak_equity.
+                    if not getattr(self.risk_manager, "_peak_equity_seeded", False):
                         self.risk_manager.peak_equity = max(equity, last_equity)
+                        self.risk_manager._peak_equity_seeded = True
 
                     logger.info(
                         "Risk state synced from Gateway account",
