@@ -77,6 +77,13 @@ async def main() -> None:
     position_manager = PositionManager()
     exit_rules = get_default_exit_rules()
 
+    # Refuse to start if another `execution` instance is already running —
+    # the architecture's in-memory state (pending_orders, processed_fill_ids,
+    # _partial_fill_tracker, _closing_symbols) assumes a single process per
+    # service. A stale lease (>120s without renewal) is treated as a crashed
+    # prior run and overwritten.
+    await execution_engine.acquire_service_lease("execution")
+
     # Initialize history for execution error tracking
     await execution_engine.initialize()
     await signal_engine.initialize()

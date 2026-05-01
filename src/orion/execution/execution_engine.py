@@ -1,5 +1,8 @@
 import asyncio
+import os
+import socket
 import time
+import uuid
 from collections import deque
 from datetime import UTC, datetime
 from typing import Any
@@ -28,6 +31,16 @@ logger = setup_struct_logger(__name__)
 # existing imports (`from orion.execution.execution_engine import ORDER_ID_PREFIX`)
 # continue to work. New code should import directly from `attribution`.
 __all__ = ["ExecutionEngine", "ORDER_ID_PREFIX", "async_session_factory"]
+
+# Per-service lease — a soft single-process guard backed by SystemStatus.
+# Each service that creates an ExecutionEngine and wants single-instance
+# enforcement calls `engine.acquire_service_lease("<service-id>")` before
+# `engine.initialize()`. Two concurrent instances of the same service then
+# refuse to start (the second sees a fresh lease owned by another run_id and
+# raises). Stale leases (no renewal for SERVICE_LEASE_STALE_SECONDS) are
+# treated as crashed-prior-runs and overwritten.
+SERVICE_LEASE_KEY_PREFIX = "service_lease_"
+SERVICE_LEASE_STALE_SECONDS = 120
 
 
 class ExecutionEngine:
@@ -61,6 +74,10 @@ class ExecutionEngine:
         self._health_cache: tuple[bool, float] | None = None
         self._health_cache_ttl: float = 10.0
 
+        # Per-service single-instance lease (None until acquire_service_lease is called).
+        self._lease_service_id: str | None = None
+        self._lease_run_id: str | None = None
+
         # Empire-core ledger for EmpireUI trade recording
         self._ledger = None
         try:
@@ -75,6 +92,131 @@ class ExecutionEngine:
 
         # Fill processor (handles partial fills, persistence)
         self._fill_processor = FillProcessor(ledger=self._ledger)
+
+    # ── Service lease (single-process enforcement) ───────────────────────
+
+    @staticmethod
+    def _service_lease_key(service_id: str) -> str:
+        return f"{SERVICE_LEASE_KEY_PREFIX}{service_id}"
+
+    async def acquire_service_lease(self, service_id: str) -> None:
+        """Refuse to start if another instance of `service_id` holds a fresh lease.
+
+        Backed by a SystemStatus row at `service_lease_<service_id>`. A row is
+        considered "fresh" if its `last_updated_utc` is within the last
+        SERVICE_LEASE_STALE_SECONDS — anything older is presumed to be a
+        prior crashed instance and overwritten.
+
+        Soft guard, not a distributed lock: a check-then-write race between
+        two simultaneous starts can let both through. Acceptable for Orion's
+        single-Docker-process deployment; the goal is to catch the common
+        accidental cases (forgotten canary, local-while-prod, double-deploy).
+
+        Raises RuntimeError if a fresh lease is owned by a different run_id.
+        Caller (typically a `main_*.py`) should propagate the failure so the
+        process exits non-zero.
+        """
+        from orion.storage.models import SystemStatus
+
+        run_id = str(uuid.uuid4())
+        host = socket.gethostname()
+        pid = os.getpid()
+        details = f"run_id={run_id} host={host} pid={pid}"
+        key = self._service_lease_key(service_id)
+
+        async def _claim(session: Any) -> None:
+            stmt = select(SystemStatus).where(SystemStatus.key == key)
+            existing = (await session.execute(stmt)).scalars().first()
+
+            now = datetime.now(UTC)
+            if existing is not None:
+                last = existing.last_updated_utc
+                if last is not None:
+                    age = (now - ensure_utc(last)).total_seconds()
+                    is_fresh = age < SERVICE_LEASE_STALE_SECONDS
+                    is_other = f"run_id={run_id}" not in (existing.details or "")
+                    if is_fresh and is_other:
+                        raise RuntimeError(
+                            f"Another '{service_id}' instance holds a fresh lease "
+                            f"(age={age:.1f}s, details={existing.details!r}). "
+                            f"Refusing to start to preserve the single-process invariant."
+                        )
+                existing.status = "RUNNING"
+                existing.details = details
+                existing.last_updated_utc = now
+            else:
+                session.add(
+                    SystemStatus(
+                        key=key,
+                        status="RUNNING",
+                        details=details,
+                        last_updated_utc=now,
+                    )
+                )
+
+        async with async_session_factory() as session:
+            await _claim(session)
+            await session.commit()
+
+        self._lease_service_id = service_id
+        self._lease_run_id = run_id
+        logger.info(
+            "service_lease_acquired",
+            extra={"event_type": "SERVICE_LEASE_ACQUIRED", "service_id": service_id, "run_id": run_id},
+        )
+
+    async def renew_service_lease(self) -> None:
+        """Refresh the lease's `last_updated_utc` so other processes treat it as live.
+
+        No-op if `acquire_service_lease` was never called. Errors are logged
+        but do not propagate — a transient DB blip should not abort the main
+        execution loop. The next renewal cycle retries. If renewal fails
+        repeatedly, the lease eventually goes stale and another process can
+        legitimately take over (defensive correctness, not perfect liveness).
+        """
+        if not self._lease_service_id or not self._lease_run_id:
+            return
+
+        from orion.storage.models import SystemStatus
+
+        details = f"run_id={self._lease_run_id} host={socket.gethostname()} pid={os.getpid()}"
+        key = self._service_lease_key(self._lease_service_id)
+
+        try:
+            async with async_session_factory() as session:
+                stmt = select(SystemStatus).where(SystemStatus.key == key)
+                existing = (await session.execute(stmt)).scalars().first()
+                if existing is not None:
+                    # Defensive: only renew if the row still belongs to us.
+                    # If another process has taken over (we crashed and
+                    # restarted with a new run_id), don't fight them.
+                    if f"run_id={self._lease_run_id}" not in (existing.details or ""):
+                        logger.warning(
+                            "service_lease_lost",
+                            extra={
+                                "event_type": "SERVICE_LEASE_LOST",
+                                "service_id": self._lease_service_id,
+                                "current_details": existing.details,
+                            },
+                        )
+                        return
+                    existing.last_updated_utc = datetime.now(UTC)
+                    existing.details = details
+                else:
+                    session.add(
+                        SystemStatus(
+                            key=key,
+                            status="RUNNING",
+                            details=details,
+                            last_updated_utc=datetime.now(UTC),
+                        )
+                    )
+                await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "service_lease_renew_failed",
+                extra={"event_type": "SERVICE_LEASE_RENEW_FAILED", "error": str(exc)},
+            )
 
     def _get_gateway_client(self) -> Any:
         """Lazy-initialize Gateway trading client singleton."""
@@ -979,7 +1121,12 @@ class ExecutionEngine:
 
         Only account-level equity is synced (shared across all systems).
         Position-level data is filtered to Orion-only in _sync_risk_from_gateway.
+
+        Also renews the service lease (no-op if `acquire_service_lease` was
+        never called). Renewal is best-effort and never blocks fill polling.
         """
+        await self.renew_service_lease()
+
         if not self._gateway_available:
             return
 
