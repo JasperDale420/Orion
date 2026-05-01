@@ -28,6 +28,7 @@ from orion.enrichment.heber_context import (
     get_latest_market_tide,
     get_latest_vix_data,
     get_spy_cumulative_return,
+    persist_discovery_status,
     persist_regime_snapshot,
 )
 from orion.shared.logger import setup_struct_logger
@@ -325,6 +326,15 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     non_heber_streak=non_heber_streak,
                     warn_streak=non_heber_warn_streak,
                     tickers_count=len(tickers),
+                )
+                # Surface degradation to ExecutionEngine via SystemStatus so a
+                # stale-discovery state hard-blocks new trades; persisted every
+                # cycle (including healthy ones) so last_updated_utc doubles
+                # as a liveness signal.
+                await persist_discovery_status(
+                    source=ticker_source,
+                    streak=non_heber_streak,
+                    warn_streak=non_heber_warn_streak,
                 )
                 last_ticker_refresh = now
 

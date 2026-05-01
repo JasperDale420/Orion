@@ -850,18 +850,25 @@ class ExecutionEngine:
             return self._health_cache[0]
 
         from orion.core.circuit_breaker import CircuitBreaker
+        from orion.enrichment.heber_context import DEGRADED_DISCOVERY_KEY, DISCOVERY_STATUS_DEGRADED
         from orion.storage.models import SystemStatus
 
         try:
 
-            async def fetch_health_and_cb(session: Any) -> tuple[Any, Any]:
+            async def fetch_health_records(session: Any) -> tuple[Any, Any, Any]:
                 cb_stmt = select(SystemStatus).where(SystemStatus.key == CircuitBreaker.KEY)
                 health_stmt = select(SystemStatus).where(SystemStatus.key == "global_health")
+                discovery_stmt = select(SystemStatus).where(SystemStatus.key == DEGRADED_DISCOVERY_KEY)
                 cb_result = await session.execute(cb_stmt)
                 health_result = await session.execute(health_stmt)
-                return cb_result.scalars().first(), health_result.scalars().first()
+                discovery_result = await session.execute(discovery_stmt)
+                return (
+                    cb_result.scalars().first(),
+                    health_result.scalars().first(),
+                    discovery_result.scalars().first(),
+                )
 
-            cb_record, status_record = await db_query(fetch_health_and_cb)
+            cb_record, status_record, discovery_record = await db_query(fetch_health_records)
 
             if cb_record and cb_record.status == "OPEN":
                 logger.critical(
@@ -870,6 +877,22 @@ class ExecutionEngine:
                         "event_type": "HEALTH_CHECK_FAILED",
                         "reason": "Circuit Breaker Open",
                         "details": cb_record.details,
+                    },
+                )
+                self._health_cache = (False, time.monotonic())
+                return False
+
+            # Discovery degradation: feature_enrichment writes DEGRADED when
+            # ticker discovery has been falling back to the static SPY/QQQ/...
+            # list past the warn-streak threshold. Block new trades — the
+            # universe may be stale and emitting against the wrong tickers.
+            if discovery_record and discovery_record.status == DISCOVERY_STATUS_DEGRADED:
+                logger.critical(
+                    "EXECUTION BLOCKED: Ticker discovery is DEGRADED",
+                    extra={
+                        "event_type": "HEALTH_CHECK_FAILED",
+                        "reason": "Discovery Degraded",
+                        "details": discovery_record.details,
                     },
                 )
                 self._health_cache = (False, time.monotonic())

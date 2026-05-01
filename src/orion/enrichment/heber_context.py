@@ -19,11 +19,21 @@ from orion.config import system_settings
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory
-from orion.storage.models import BronzeEvent, RegimeSnapshot
+from orion.storage.models import BronzeEvent, RegimeSnapshot, SystemStatus
 
 logger = setup_struct_logger("orion.enrichment.heber_context")
 
 STATIC_TICKER_FALLBACK = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL", "AMD", "META", "AMZN", "GOOG", "MSFT"]
+
+# SystemStatus key written by feature_enrichment when ticker-discovery
+# falls back to the hardcoded static list past the warn-streak threshold.
+# ExecutionEngine consumes this key in _check_system_health and rejects
+# trades while the flag is DEGRADED. Defined here so the producer
+# (feature_enrichment) and consumer (execution_engine) share a single
+# constant.
+DEGRADED_DISCOVERY_KEY = "degraded_discovery"
+DISCOVERY_STATUS_OK = "OK"
+DISCOVERY_STATUS_DEGRADED = "DEGRADED"
 
 _heber_reader = HeberReader()
 _recent_regime_snapshots: list[dict[str, Any]] = []
@@ -557,3 +567,81 @@ async def seed_regime_snapshots_from_db(limit: int = 500) -> None:
         logger.info("regime_snapshot_seed_complete", count=len(rows))
     except Exception:
         logger.warning("regime_snapshot_seed_failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Discovery-degradation status flag (consumed by ExecutionEngine.
+# _check_system_health to hard-block trading when ticker discovery has fallen
+# back to the hardcoded static list)
+# ---------------------------------------------------------------------------
+
+
+def _is_discovery_degraded(source: str, streak: int, warn_streak: int) -> bool:
+    """Pure logic: is discovery in a degraded state?
+
+    Healthy sources (`bronze_db`, `heber`) are never degraded. Static
+    fallback is degraded only after the streak crosses the warn threshold —
+    matching the existing warn-log semantics so we don't block trading on
+    transient single-cycle blips.
+    """
+    if source in ("bronze_db", "heber"):
+        return False
+    return streak >= warn_streak
+
+
+async def persist_discovery_status(source: str, streak: int, warn_streak: int) -> None:
+    """Upsert the `degraded_discovery` SystemStatus row.
+
+    Called every cycle by feature_enrichment so `last_updated_utc` doubles
+    as a liveness signal — if feature_enrichment crashes, downstream
+    consumers can detect staleness against this key. Best-effort: a write
+    failure does not block the enrichment loop.
+    """
+    is_degraded = _is_discovery_degraded(source, streak, warn_streak)
+    new_status = DISCOVERY_STATUS_DEGRADED if is_degraded else DISCOVERY_STATUS_OK
+    details = f"source={source} streak={streak} warn_streak={warn_streak}"
+
+    try:
+        async with async_session_factory() as session:
+            stmt = select(SystemStatus).where(SystemStatus.key == DEGRADED_DISCOVERY_KEY)
+            result = await session.execute(stmt)
+            existing = result.scalars().first()
+
+            now = datetime.now(UTC)
+            if existing:
+                status_changed = existing.status != new_status
+                existing.status = new_status
+                existing.details = details
+                existing.last_updated_utc = now
+                if status_changed:
+                    if is_degraded:
+                        logger.critical(
+                            "ticker_discovery_degraded",
+                            extra={
+                                "event": "ticker_discovery_degraded",
+                                "source": source,
+                                "streak": streak,
+                                "warn_streak": warn_streak,
+                            },
+                        )
+                    else:
+                        logger.info(
+                            "ticker_discovery_recovered",
+                            extra={
+                                "event": "ticker_discovery_recovered",
+                                "source": source,
+                                "streak": streak,
+                            },
+                        )
+            else:
+                session.add(
+                    SystemStatus(
+                        key=DEGRADED_DISCOVERY_KEY,
+                        status=new_status,
+                        details=details,
+                        last_updated_utc=now,
+                    )
+                )
+            await session.commit()
+    except Exception:
+        logger.warning("discovery_status_persist_failed", exc_info=True)
