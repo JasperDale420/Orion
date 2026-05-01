@@ -12,7 +12,13 @@ from orion.enrichment import heber_context
 
 
 @pytest.mark.asyncio
-async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_active_tickers_with_source_falls_back_to_heber_when_bronze_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bronze (TimescaleDB) is the primary discovery source after the
+    2026-04-22 OOM redesign; Heber flow is now a fallback that runs only
+    when the bronze path raises. See docs/rca/feature_enrichment_crash_loop.md.
+    """
     now = pd.Timestamp.now(tz="UTC")
     flow_df = pd.DataFrame(
         {
@@ -27,10 +33,10 @@ async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.
         lambda **_kwargs: flow_df,
     )
 
-    async def _fail_db_query(_query_fn):
-        raise AssertionError("db_query fallback should not be called when Heber returns tickers")
+    async def _bronze_fails(_limit: int, lookback_hours: int = 24) -> list[str]:
+        raise RuntimeError("bronze ticker discovery unavailable")
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
+    monkeypatch.setattr(heber_context, "_get_active_tickers_from_bronze", _bronze_fails)
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
