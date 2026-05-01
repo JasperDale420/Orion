@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`PositionMonitor.sync_positions` no longer resets every legacy position's `entry_time` to `now()` after restart** — when the monitor saw a broker position for the first time, it set `entry_time = datetime.now(UTC)  # Approximate`. The ML exit classifier feature `time_held_hours` derives from this, so every restart biased exit predictions toward "hold longer" for positions that had been open for hours. The `_fetch_entry_context` query already loaded the matching `strategy_decisions` row; it now also returns `sd.timestamp_utc` as `entry_time` and the sync path threads it through. Falls back to `now()` only when no decision row matches the broker symbol (e.g. an externally-opened position with no Orion-attribution). Predict finding H-07.
+
 ### Added
 
 - **Bracket-order protection state surfaced on every executed decision** — when stop-loss or take-profit placement fails after a successful entry, `_place_bracket_orders` now returns `unprotected: bool` and `partial_protection: bool` flags (`unprotected=True` means no automatic downside exit was placed, the position depends entirely on PositionMonitor's ML/rule exits). The flags are hoisted onto `decision.execution_params["position_unprotected"]` / `["position_partial_protection"]` so a DB query can find unprotected positions without parsing the nested `bracket_orders` dict, and a `position_unprotected` CRITICAL log fires when SL placement fails. Previously SL/TP failures only logged at ERROR level; the entry was already marked TRUE and no metric, status flag, or operator-visible signal recorded the protection gap. Tests cover both-fail, SL-only-fail, TP-only-fail, and both-succeed paths.

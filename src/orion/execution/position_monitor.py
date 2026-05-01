@@ -155,13 +155,19 @@ class PositionMonitor:
                 # New position - need to fetch entry context from DB
                 entry_context = await self._fetch_entry_context(symbol)
 
+                # Use the real entry timestamp from the decision row when
+                # available — falling back to now() approximated entry_time
+                # for every legacy position after restart, biasing the ML
+                # `time_held_hours` feature toward "hold longer".
+                entry_time = entry_context.get("entry_time") or datetime.now(UTC)
+
                 pos = TrackedPosition(
                     symbol=symbol,
                     qty=qty,
                     entry_price=entry_price,
                     current_price=current_price,
                     unrealized_pnl_pct=unrealized_pnl_pct,
-                    entry_time=datetime.now(UTC),  # Approximate
+                    entry_time=entry_time,
                     bucket=entry_context.get("bucket", "SWING"),
                     direction=entry_context.get("direction", "LONG"),
                     max_return_pct=max(0, unrealized_pnl_pct),
@@ -196,6 +202,7 @@ class PositionMonitor:
         query = """
             SELECT
                 sd.decision_id,
+                sd.timestamp_utc as decision_ts,
                 ct.option_symbol,
                 ct.premium,
                 ct.option_type,
@@ -237,6 +244,14 @@ class PositionMonitor:
                 else:
                     bucket = "POSITION"
 
+                # The decision row has the real entry timestamp; use it instead of
+                # now() so ML exit features (time_held_hours) are correct after a
+                # restart. Fall back to None so the caller can decide.
+                decision_ts = row.get("decision_ts")
+                from orion.shared.utils import ensure_utc as _ensure_utc
+
+                entry_time = _ensure_utc(decision_ts) if decision_ts is not None else None
+
                 return {
                     "decision_id": row.get("decision_id"),
                     "option_symbol": row.get("option_symbol"),
@@ -244,6 +259,7 @@ class PositionMonitor:
                     "dte": dte,
                     "bucket": bucket,
                     "direction": row.get("direction", "LONG"),
+                    "entry_time": entry_time,
                 }
         except Exception as e:
             logger.warning(f"Failed to fetch entry context for {symbol}: {e}")
