@@ -107,6 +107,16 @@ class ExecutionEngine:
         SERVICE_LEASE_STALE_SECONDS — anything older is presumed to be a
         prior crashed instance and overwritten.
 
+        Lease identity uses `ORION_RUN_ID` when set (typically a stable
+        deployment identifier like ``docker_persistent_exec``) so a container
+        restart re-acquires its own lease without waiting out the stale
+        window. Falls back to a per-process uuid4 when unset, preserving the
+        original "two simultaneous starts both new" guard for ad-hoc CLI
+        invocations. Two concurrent instances with the same ORION_RUN_ID will
+        both think they own the lease — acceptable under docker-compose
+        which serializes container start/stop; not safe for hand-rolled
+        multi-process deployments.
+
         Soft guard, not a distributed lock: a check-then-write race between
         two simultaneous starts can let both through. Acceptable for Orion's
         single-Docker-process deployment; the goal is to catch the common
@@ -118,7 +128,16 @@ class ExecutionEngine:
         """
         from orion.storage.models import SystemStatus
 
-        run_id = str(uuid.uuid4())
+        # Use a stable owner id when the deployment supplies one via
+        # ``ORION_LEASE_OWNER_ID``. This lets a container with a fixed
+        # owner id (e.g. ``docker_persistent_exec``) reclaim its own lease
+        # across restarts within the stale window — without this, a fresh
+        # uuid4 per process incarnation made docker-compose `up -d` cycles
+        # dead-loop the container for ~120s waiting out the previous
+        # instance's stale window. Two different deployments with distinct
+        # owner ids still mutually exclude (the original guard).
+        env_owner = os.environ.get("ORION_LEASE_OWNER_ID", "").strip()
+        run_id = env_owner or str(uuid.uuid4())
         host = socket.gethostname()
         pid = os.getpid()
         details = f"run_id={run_id} host={host} pid={pid}"
@@ -655,6 +674,16 @@ class ExecutionEngine:
         rate = failures / total
         threshold = system_settings.circuit_breaker_error_rate
         if rate > threshold:
+            if not system_settings.circuit_breaker_enabled:
+                logger.warning(
+                    "execution_circuit_breaker_would_trip_but_disabled",
+                    error_rate=rate,
+                    limit=threshold,
+                    window_seconds=system_settings.circuit_breaker_window_seconds,
+                    samples=total,
+                    failures=failures,
+                )
+                return False
             logger.critical(
                 "execution_blocked_error_rate",
                 error_rate=rate,

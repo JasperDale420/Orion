@@ -85,6 +85,12 @@ services:
       GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.ingestion" ]
+    # Bound memory: turns a runaway pyarrow/Heber scan into a visible
+    # OOMKilled=true exit 137 instead of Docker Desktop VM-level silent
+    # killing of whichever container has highest RSS. Sized for
+    # FeatureEngine hydration peak (~1.3GB) + headroom.
+    mem_limit: 2500m
+    memswap_limit: 2500m
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -181,11 +187,25 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_persistent_exec
+      # Stable lease owner id so a container restart reclaims its own
+      # service lease within the stale window. Without this, a fresh uuid
+      # per incarnation deadlocks restart-loops at the lease check.
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_execution_compose}
       ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE: "false"
       ORION_RISK_MAX_DAILY_LOSS: ${ORION_RISK_MAX_DAILY_LOSS:-20000}
+      # Forward-testing knobs — disable both circuit breakers and lower the
+      # ML prefilter threshold so we can see end-to-end pipeline behavior.
+      # Override per env at deploy time once we want strict guards back.
+      ORION_CIRCUIT_BREAKER_ENABLED: ${ORION_CIRCUIT_BREAKER_ENABLED:-false}
+      ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED: ${ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED:-false}
+      ORION_ML_PREFILTER_THRESHOLD: ${ORION_ML_PREFILTER_THRESHOLD:-0.05}
       GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.main_execution" ]
+    # Sized for FeatureEngine hydration + ML model RSS (~1.6GB observed)
+    # plus headroom for candidate processing batches.
+    mem_limit: 3g
+    memswap_limit: 3g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -217,6 +237,8 @@ services:
       GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
+    mem_limit: 1500m
+    memswap_limit: 1500m
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -300,6 +322,11 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
     command: [ "python", "-m", "orion.main_data_quality", "--scheduled" ]
+    # data_quality has shown OOM cycles (exit 137) — give it headroom and
+    # bound it explicitly so a leak shows up here instead of taking down
+    # whichever VM-level container is the largest at the moment.
+    mem_limit: 2500m
+    memswap_limit: 2500m
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -384,6 +411,8 @@ services:
       ORION_PATTERN_MINER_TRAINING_SOURCE: ${ORION_PATTERN_MINER_TRAINING_SOURCE:-heber_gold}
       ORION_EXIT_CLASSIFIER_TRAINING_SOURCE: ${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-heber_gold}
     command: [ "python", "-m", "orion.main_pattern_miner" ]
+    mem_limit: 1500m
+    memswap_limit: 1500m
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s

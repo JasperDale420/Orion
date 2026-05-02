@@ -9,6 +9,7 @@ It intentionally avoids unsupported endpoints like `/silver/read` and `/gold/rea
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -33,9 +34,17 @@ _SILVER_MAX_PAIN_DATASET = "max_pain"
 _SILVER_IV_RANK_DATASET = "iv_rank"
 _SUPPORTED_BAR_TIMEFRAMES = {"1m"}
 
+_GOLD_EMPTY_DATASET_TTL_SECONDS = 300.0
+
 
 class HeberReader:
     """Read-only client for Heber datasets used by Orion."""
+
+    # Process-wide negative cache for gold datasets that returned empty.
+    # Keyed by dataset name → monotonic-clock expiry. Entry skips the
+    # full path walk + ParquetDataset open for ~3-second savings per
+    # call when the dataset is genuinely empty upstream.
+    _gold_empty_dataset_cache: dict[str, float] = {}
 
     def __init__(
         self,
@@ -319,6 +328,15 @@ class HeberReader:
         symbols: list[str] | None = None,
     ) -> pd.DataFrame:
         """Read Gold features/labels from Heber parquet layout."""
+        # Negative cache: skip the full path walk and ParquetDataset open
+        # for datasets we just confirmed are empty. Empty source data
+        # (Gold-builder upstream gap) was costing ~3s per call across 6
+        # known-empty datasets per ML prefilter pass — sufficient to
+        # produce 'Data Lag' SKIPs by aging candidates past 600s.
+        cache_expiry = self._gold_empty_dataset_cache.get(dataset)
+        if cache_expiry is not None and cache_expiry > time.monotonic():
+            return pd.DataFrame()
+
         instrument_keys = self._to_instrument_keys(symbols) if symbols else None
         filters: list[tuple[str, str, Any]] = []
         if instrument_keys:
@@ -338,6 +356,7 @@ class HeberReader:
             frames.append(frame)
 
         if not frames:
+            self._gold_empty_dataset_cache[dataset] = time.monotonic() + _GOLD_EMPTY_DATASET_TTL_SECONDS
             logger.warning(
                 "gold_dataset_empty",
                 dataset=dataset,
@@ -345,6 +364,7 @@ class HeberReader:
                 data_root=str(self.data_root),
                 data_root_exists=self.data_root.exists(),
                 gold_dir_exists=(self.data_root / "gold").exists(),
+                negative_cache_ttl_seconds=_GOLD_EMPTY_DATASET_TTL_SECONDS,
             )
             return pd.DataFrame()
 

@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import signal
 from typing import Any
 
@@ -231,9 +230,36 @@ async def main() -> None:
         except TimeoutError:
             pass  # Sleep done, continue loop
 
-    logger.info("Execution Service Stopped.")
+    if shutdown_event.is_set():
+        logger.info("Execution Service Stopped.")
+    else:
+        # Defensive: while-loop should only exit via shutdown_event. If we
+        # land here without that flag set, something silently broke the
+        # loop condition — surface it as CRITICAL so the operator sees a
+        # signal instead of a "clean" exit code masquerading as healthy.
+        logger.critical(
+            "execution_main_loop_exited_without_shutdown_signal",
+            extra={"event_type": "MAIN_LOOP_UNEXPECTED_EXIT"},
+        )
 
 
 if __name__ == "__main__":
-    with contextlib.suppress(KeyboardInterrupt):
+    try:
         asyncio.run(main())
+    except KeyboardInterrupt:
+        # Ctrl-C path — silent exit is fine, operator initiated.
+        pass
+    except BaseException:
+        # Anything else escaping main() is a silent crash. Without this
+        # logger.critical the process exits with a traceback printed to
+        # stderr but no structured event, which is invisible to log
+        # aggregation. Re-raise so the exit code remains non-zero so
+        # docker restart_policy correctly reports failure (was previously
+        # ec=0 in some restart-loop incidents because main() returned
+        # silently rather than propagating the error).
+        logger.critical(
+            "execution_process_crashed",
+            extra={"event_type": "EXECUTION_PROCESS_CRASHED"},
+            exc_info=True,
+        )
+        raise
