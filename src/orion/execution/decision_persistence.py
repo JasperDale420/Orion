@@ -7,10 +7,12 @@ and persisting signals_live / trade journal entries.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 
+from orion.config import system_settings
 from orion.core.enums import DecisionAction
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
@@ -22,14 +24,26 @@ logger = setup_struct_logger("orion.execution.decision_persistence")
 
 
 async def fetch_pending_candidates(limit: int = 100) -> list[CandidateTrade]:
-    """Fetches CandidateTrades that have NOT been processed (no matching StrategyDecision)."""
+    """Fetches CandidateTrades that have NOT been processed (no matching StrategyDecision).
+
+    Candidates older than `max_data_lag_seconds` are excluded — they would be
+    rejected by the preflight Data-Lag gate anyway, and processing them
+    burns full ML-scoring cycles on doomed work, starving fresh candidates
+    of execution time. With 60s ingestion cycles and ~20-30s per candidate
+    in the ML+preflight chain, even a small backlog of stale candidates
+    pushes fresh ones out of reach forever — observed live as 21
+    consecutive Data-Lag SKIPs with growing lag (1957s → 3414s) and a
+    pending pool of 115/157.
+    """
+    freshness_cutoff = datetime.now(UTC) - timedelta(seconds=float(system_settings.max_data_lag_seconds))
 
     async def query_candidates(session: Any) -> None:
         stmt = (
             select(CandidateTrade)
             .outerjoin(StrategyDecision, CandidateTrade.candidate_id == StrategyDecision.candidate_id)
             .where(StrategyDecision.candidate_id.is_(None))
-            .order_by(CandidateTrade.timestamp_utc.asc())  # FIFO
+            .where(CandidateTrade.timestamp_utc > freshness_cutoff)
+            .order_by(CandidateTrade.timestamp_utc.asc())  # FIFO over the fresh set
             .limit(limit)
         )
 
