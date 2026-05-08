@@ -289,7 +289,16 @@ class GatewayStreamClient:
         if msg_type in ("alpaca_bar_1m", "bar"):
             return True
 
-        return bool(msg_type == "data" and feed in ("bars", "stock_bars", "bar", "alpaca_bar_1m"))
+        if msg_type == "data" and feed in ("bars", "stock_bars", "bar", "alpaca_bar_1m"):
+            return True
+
+        # Current Gateway shape: bare EventEnvelope on the wire — no top-level
+        # `type`, identified by `feed` plus envelope fields. `feeds` (plural,
+        # used by subscription_ack) intentionally does not match.
+        if not msg_type and feed in ("bars", "stock_bars") and ("instrument_key" in data or "symbol" in data):
+            return True
+
+        return False
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:

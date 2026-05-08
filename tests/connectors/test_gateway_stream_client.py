@@ -96,3 +96,27 @@ def test_bar_message_detection_handles_gateway_shape() -> None:
     assert GatewayStreamClient._is_bar_message({"type": "data", "feed": "bars"}) is True
     assert GatewayStreamClient._is_bar_message({"type": "ALPACA_BAR_1M"}) is True
     assert GatewayStreamClient._is_bar_message({"type": "data", "feed": "quotes"}) is False
+
+    # Current Gateway WS pushes bars as bare EventEnvelopes — no top-level
+    # `type`, only `feed` and envelope fields. Regression for the silent-drop
+    # that left bronze_events without a single ALPACA_BAR_1M for 60+ hours.
+    bare_envelope = {
+        "event_id": "abc",
+        "provider": "alpaca",
+        "feed": "bars",
+        "source": "websocket",
+        "instrument_type": "equity",
+        "instrument_key": "equity:AAPL",
+        "symbol": "AAPL",
+        "ts_event": "2026-05-08T13:30:00+00:00",
+        "payload": {"o": 1.0, "h": 1.0, "l": 1.0, "c": 1.0, "v": 100, "t": "2026-05-08T13:30:00+00:00"},
+    }
+    assert GatewayStreamClient._is_bar_message(bare_envelope) is True
+
+    # subscription_ack uses `feeds` (plural) and must NOT match.
+    assert (
+        GatewayStreamClient._is_bar_message(
+            {"type": "subscription_ack", "status": "ok", "feeds": ["bars"], "subscribed": ["AAPL"]}
+        )
+        is False
+    )

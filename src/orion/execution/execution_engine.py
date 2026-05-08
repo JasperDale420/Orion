@@ -1145,6 +1145,12 @@ class ExecutionEngine:
 
     # ── Fill polling (delegates to FillProcessor) ────────────────────────
 
+    # Minimum interval between Gateway /alpaca/account polls. The execution
+    # loop calls poll_fills every iteration (~1s when idle), but account
+    # equity does not need second-by-second resolution. Throttling here
+    # cuts ~3,600 redundant Gateway calls/hour during quiet periods.
+    _ACCOUNT_POLL_MIN_INTERVAL_SECONDS: float = 15.0
+
     async def poll_fills(self) -> None:
         """Polls Data Gateway for account equity and updates RiskManager.
 
@@ -1157,6 +1163,13 @@ class ExecutionEngine:
         await self.renew_service_lease()
 
         if not self._gateway_available:
+            return
+
+        now = datetime.now(UTC)
+        if (
+            self._last_fill_poll_ts is not None
+            and (now - self._last_fill_poll_ts).total_seconds() < self._ACCOUNT_POLL_MIN_INTERVAL_SECONDS
+        ):
             return
 
         try:
@@ -1172,7 +1185,7 @@ class ExecutionEngine:
                     # Orion's kill switch. Orion-only daily loss is maintained by
                     # update_post_fill from orion_-prefixed fills.
 
-            self._last_fill_poll_ts = datetime.now(UTC)
+            self._last_fill_poll_ts = now
 
         except Exception as e:
             logger.warning(
