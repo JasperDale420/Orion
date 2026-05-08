@@ -130,22 +130,46 @@ class IngestionService:
             start_time = asyncio.get_running_loop().time()
             try:
                 await self._run_cycle()
-            except Exception as e:
-                logger.error(f"Main Ingestion Loop Error: {e}")
-                await self._persist_loop_crash(e)
+            except BaseException as e:
+                # Catch BaseException (not just Exception) so SystemExit /
+                # CancelledError from a misbehaving background task can't
+                # silently break the loop condition. Re-raise after logging
+                # if it's a true control-flow signal so shutdown still works.
+                logger.error(f"Main Ingestion Loop Error: {type(e).__name__}: {e}", exc_info=True)
+                if isinstance(e, KeyboardInterrupt | SystemExit):
+                    raise
+                if isinstance(e, Exception):
+                    await self._persist_loop_crash(e)
                 await asyncio.sleep(5.0)
 
-            # Heartbeat & Sleep
-            elapsed = asyncio.get_running_loop().time() - start_time
-            sleep_time = max(0.1, loop_interval - elapsed)
+            # Heartbeat & Sleep — wrapped in try/except so a transient DB
+            # error here can't punch out of the loop with exit code 0.
+            try:
+                elapsed = asyncio.get_running_loop().time() - start_time
+                sleep_time = max(0.1, loop_interval - elapsed)
 
-            self.health_monitor.update_heartbeat()
-            await self._update_health_status()
+                self.health_monitor.update_heartbeat()
+                await self._update_health_status()
 
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
+            except Exception as e:
+                logger.error(f"Heartbeat/sleep tail error: {type(e).__name__}: {e}", exc_info=True)
+                await asyncio.sleep(5.0)
 
-        await self.stop()
+        if self.shutdown_event.is_set():
+            await self.stop()
+        else:
+            # Defensive: while-loop should only exit via shutdown_event.
+            # If we land here without the flag set, something silently
+            # broke the loop condition — surface as CRITICAL so the
+            # operator sees a signal instead of a clean exit-0 in the
+            # restart loop log.
+            logger.critical(
+                "ingestion_main_loop_exited_without_shutdown_signal",
+                extra={"event_type": "MAIN_LOOP_UNEXPECTED_EXIT"},
+            )
+            await self.stop()
 
     async def stop(self) -> None:
         if self.gateway_stream and self.gateway_stream.is_running:

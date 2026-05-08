@@ -88,9 +88,12 @@ services:
     # Bound memory: turns a runaway pyarrow/Heber scan into a visible
     # OOMKilled=true exit 137 instead of Docker Desktop VM-level silent
     # killing of whichever container has highest RSS. Sized for
-    # FeatureEngine hydration peak (~1.3GB) + headroom.
-    mem_limit: 2500m
-    memswap_limit: 2500m
+    # FeatureEngine hydration peak (~1.3GB) + headroom. Bumped from 2.5G
+    # to 4G after observing 84% RSS at "Polling Loop" entry (2.05G/2.44G)
+    # and a tight restart loop where the next allocation in `_run_cycle`
+    # (Heber flow scan + bar drain) was OOMing the container.
+    mem_limit: 4g
+    memswap_limit: 4g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -203,9 +206,15 @@ services:
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.main_execution" ]
     # Sized for FeatureEngine hydration + ML model RSS (~1.6GB observed)
-    # plus headroom for candidate processing batches.
-    mem_limit: 3g
-    memswap_limit: 3g
+    # plus headroom for candidate processing batches. Bumped from 3G to 5G
+    # after observing a tight restart loop where execution exited silently
+    # ~6s after "models_loaded" while processing 50 candidates — RSS
+    # consistently reached ~2.0–2.1G during the candidate batch + Heber
+    # gold-feature reads, with no OOMKilled flag set (Docker Desktop
+    # cgroup quirk) and no silent-exit signal from main_execution.py's
+    # guards, consistent with SIGKILL from the cgroup memory controller.
+    mem_limit: 5g
+    memswap_limit: 5g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
