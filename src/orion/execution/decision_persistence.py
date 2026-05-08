@@ -53,6 +53,53 @@ async def fetch_pending_candidates(limit: int = 100) -> list[CandidateTrade]:
     return await db_query(query_candidates)
 
 
+async def auto_skip_stale_candidates(batch_limit: int = 500) -> int:
+    """Insert SKIP decisions for candidates older than `max_data_lag_seconds`
+    that have no decision yet.
+
+    Without this, fetch_pending_candidates' freshness filter leaves stale
+    candidates as forever-pending rows: invisible to the execution loop
+    but still counted in any "pending" tally and growing unbounded over
+    time. This batch sweep gives them a proper SKIP decision row keyed
+    by candidate_id (matching the FK relationship downstream tooling
+    expects) so the table stays self-clean. Idempotent — once a stale
+    candidate has a decision row it's filtered by the same outer-join
+    on subsequent runs.
+    """
+    freshness_cutoff = datetime.now(UTC) - timedelta(seconds=float(system_settings.max_data_lag_seconds))
+    now = datetime.now(UTC)
+
+    async def insert_skips(session: Any) -> int:
+        stmt = (
+            select(CandidateTrade)
+            .outerjoin(StrategyDecision, CandidateTrade.candidate_id == StrategyDecision.candidate_id)
+            .where(StrategyDecision.candidate_id.is_(None))
+            .where(CandidateTrade.timestamp_utc < freshness_cutoff)
+            .limit(batch_limit)
+        )
+        result = await session.execute(stmt)
+        stale = result.scalars().all()
+        for c in stale:
+            session.add(
+                StrategyDecision(
+                    decision_id=str(uuid.uuid4()),
+                    candidate_id=c.candidate_id,
+                    ticker=c.ticker,
+                    strategy_version_id="auto_stale_skip",
+                    decision=DecisionAction.SKIP.value,
+                    reason="Stale at fetch: older than max_data_lag_seconds",
+                    executed_successfully="SKIPPED",
+                    timestamp_utc=now,
+                )
+            )
+        return len(stale)
+
+    swept = await db_write(insert_skips)
+    if swept:
+        logger.info("auto_skipped_stale_candidates", extra={"swept": swept})
+    return swept
+
+
 async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -> None:
     """Persist a strategy decision and associated signal/journal records."""
     # PRDv2 §11.2: EXECUTE decisions must carry expected_return, p_take, risk_score.

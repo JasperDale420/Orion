@@ -43,6 +43,26 @@ SERVICE_LEASE_KEY_PREFIX = "service_lease_"
 SERVICE_LEASE_STALE_SECONDS = 120
 
 
+def round_to_options_tick(price: float) -> float:
+    """Round a price to Alpaca's options tick increment.
+
+    Alpaca rejects options orders whose limit_price doesn't match the
+    minimum tick:
+      - price >= $3.00 -> $0.10 increments
+      - price <  $3.00 -> $0.05 increments
+
+    Sub-penny prices (e.g., a mid of $0.605, or float-precision artefacts
+    like 5.789999999999999) produce 422 Unprocessable Entity at the
+    broker, which we observed as `broker_order_id IS NULL` rows in the
+    `orders` table. Rounding here keeps internal sizing math and the
+    submitted price consistent (errors stay below one tick per contract).
+    """
+    if price <= 0:
+        return 0.0
+    tick = 0.10 if price >= 3.0 else 0.05
+    return round(round(price / tick) * tick, 2)
+
+
 class ExecutionEngine:
     """
     Translates Agent decisions into broker orders.
@@ -347,29 +367,44 @@ class ExecutionEngine:
             account = await client.get_account()
             if "error" not in account:
                 equity = float(account.get("equity", 0) or 0)
-                last_equity = float(account.get("last_equity", 0) or account.get("equity", 0) or 0)
+                float(account.get("last_equity", 0) or account.get("equity", 0) or 0)
 
                 if equity > 0:
-                    self.risk_manager.current_equity = equity
-                    self.risk_manager.starting_equity = last_equity
+                    # The paper Alpaca account is shared with
+                    # 3Roses/Cerberus/Kairos/Orbit/WhaleHunter, so the
+                    # account-wide `equity` and `last_equity` include
+                    # their P&L. Overwriting Orion-only running totals
+                    # with that pool falsely trips Orion's drawdown /
+                    # daily-loss kill switches when other systems lose.
+                    #
+                    # Seed-once pattern (mirrors current_daily_loss /
+                    # peak_equity): take the first Gateway equity as the
+                    # Orion baseline; afterwards `current_equity` only
+                    # moves from Orion-attributed fills via
+                    # `update_post_fill` (manager.py line 590), and
+                    # `peak_equity` is bumped by
+                    # `_evaluate_drawdown_kill_switch` when
+                    # current_equity rises above it.
+                    if not getattr(self.risk_manager, "_equity_seeded", False):
+                        self.risk_manager.current_equity = equity
+                        self.risk_manager.starting_equity = equity
+                        self.risk_manager._equity_seeded = True
+
+                    if not getattr(self.risk_manager, "_peak_equity_seeded", False):
+                        # Seed peak == current at session start so drawdown
+                        # begins at 0%. Using max(equity, last_equity) here
+                        # historically pulled in a yesterday-style high from
+                        # the shared account, instantly tripping drawdown
+                        # when any other system had lost since that high.
+                        # Real Orion-attributed gains/losses move peak from
+                        # this baseline forward.
+                        self.risk_manager.peak_equity = equity
+                        self.risk_manager._peak_equity_seeded = True
 
                     # Daily loss is Orion-attributed only: driven by update_post_fill
                     # from Orion-owned fills (client_order_id prefix "orion_"), not
-                    # by account-wide equity delta. The paper account is shared with
-                    # 3Roses/Cerberus/Kairos/Orbit/WhaleHunter, so last_equity-equity
-                    # would include their P&L and falsely trip Orion's kill switch.
-                    # We DO NOT overwrite self.risk_manager.current_daily_loss here.
-
-                    # Seed peak_equity from the real Gateway account on first
-                    # run only — replacing the older magic-default check
-                    # (`peak_equity == 100000.0`) that overwrote a legitimately-
-                    # loaded peak which happened to equal the hardcoded default.
-                    # Subsequent syncs must not reset peak_equity; the high-
-                    # water mark is updated by `_evaluate_drawdown_kill_switch`
-                    # whenever current_equity > peak_equity.
-                    if not getattr(self.risk_manager, "_peak_equity_seeded", False):
-                        self.risk_manager.peak_equity = max(equity, last_equity)
-                        self.risk_manager._peak_equity_seeded = True
+                    # by account-wide equity delta. We DO NOT overwrite
+                    # self.risk_manager.current_daily_loss here.
 
                     logger.info(
                         "Risk state synced from Gateway account",
@@ -539,6 +574,22 @@ class ExecutionEngine:
             logger.error("options_price_fetch_failed", option_symbol=candidate.option_symbol, ticker=candidate.ticker)
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Option Price Fetch Failed"
+            return
+
+        # Snap the price to Alpaca's options tick increment. Prior to this,
+        # mid-quotes like (bid 0.60 + ask 0.61) / 2 = 0.605 and float-
+        # precision artefacts (5.789999999999999) were rejected at the
+        # broker as `422 Unprocessable Entity`, which surfaced as orders
+        # with status='' / broker_order_id IS NULL.
+        option_price = round_to_options_tick(option_price)
+        if option_price <= 0:
+            logger.error(
+                "options_price_rounded_to_zero",
+                option_symbol=candidate.option_symbol,
+                ticker=candidate.ticker,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Option Price Rounded To Zero"
             return
 
         # Solver-driven sizing: use risk_per_trade_bps × regime_size_multiplier
@@ -1179,11 +1230,16 @@ class ExecutionEngine:
             if "error" not in account:
                 equity = float(account.get("equity", 0) or 0)
                 if equity > 0:
-                    self.risk_manager.current_equity = equity
-                    # Do not overwrite current_daily_loss with account-wide delta;
-                    # shared Alpaca account means other systems' P&L would false-trip
-                    # Orion's kill switch. Orion-only daily loss is maintained by
-                    # update_post_fill from orion_-prefixed fills.
+                    # Same seed-once pattern as `_sync_risk_from_gateway`:
+                    # account-wide equity includes other systems' P&L on
+                    # the shared paper account. After the initial seed,
+                    # current_equity moves only from Orion-attributed
+                    # fills via update_post_fill — overwriting it here
+                    # would falsely trip Orion's drawdown kill switch
+                    # whenever 3Roses/Cerberus/Kairos/etc. take losses.
+                    if not getattr(self.risk_manager, "_equity_seeded", False):
+                        self.risk_manager.current_equity = equity
+                        self.risk_manager._equity_seeded = True
 
             self._last_fill_poll_ts = now
 

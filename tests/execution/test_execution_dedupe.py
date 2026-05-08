@@ -28,10 +28,16 @@ def engine():
 async def test_poll_fills_updates_risk_state(engine):
     """Verify poll_fills refreshes risk state from MCP positions/account."""
     engine.risk_manager = MagicMock()
+    # `_equity_seeded` defaults to False on a real RiskManager and gates
+    # the one-shot seed of current_equity from the Gateway. On a MagicMock
+    # `getattr(..., "_equity_seeded", False)` returns a truthy auto-attr
+    # so we have to set it explicitly here.
+    engine.risk_manager._equity_seeded = False
 
     await engine.poll_fills()
 
-    # Verify account equity was updated
+    # Verify account equity was seeded
     assert engine.risk_manager.current_equity == 50000.0
+    assert engine.risk_manager._equity_seeded is True
     # Verify last fill poll timestamp was set
     assert engine._last_fill_poll_ts is not None

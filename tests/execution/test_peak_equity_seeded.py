@@ -75,13 +75,24 @@ async def test_first_gateway_sync_seeds_peak_from_account_below_default() -> Non
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_first_gateway_sync_uses_max_of_equity_and_last_equity() -> None:
-    """peak_equity should be the higher of equity and last_equity on first seed."""
+async def test_first_gateway_sync_seeds_peak_from_current_equity_only() -> None:
+    """peak_equity must seed to `equity`, not max(equity, last_equity).
+
+    The shared paper Alpaca account means `last_equity` (yesterday's
+    account-wide close) reflects 3Roses/Cerberus/Kairos/Orbit/WhaleHunter
+    P&L, not Orion's. Pulling that historical high into Orion's peak
+    instantly trips the drawdown kill switch when any other system has
+    lost since — observed live as 5.48% drawdown vs 5% limit at session
+    start with `daily_loss=0.0`. Real Orion-attributed gains move peak
+    forward from the seed baseline; the drop pattern (last_equity >
+    equity) reflects other systems' losses and must not bias Orion's
+    high-water mark.
+    """
     engine, _ = _make_engine_with_account({"equity": 95_000.0, "last_equity": 110_000.0})
 
     await engine._sync_risk_from_gateway()
 
-    assert engine.risk_manager.peak_equity == 110_000.0
+    assert engine.risk_manager.peak_equity == 95_000.0
     assert engine.risk_manager._peak_equity_seeded is True
 
 

@@ -15,6 +15,7 @@ from orion.execution.flow_helpers import (
     fetch_recent_flow_for_ticker,
 )
 from orion.execution.decision_persistence import (
+    auto_skip_stale_candidates,
     fetch_pending_candidates,
     save_decision,
     update_decision_status,
@@ -108,6 +109,18 @@ async def main() -> None:
                 continue
 
             # 2. Poll Pending Candidates
+            #    Sweep stale candidates first so the pending pool doesn't
+            #    accumulate forever-pending rows that fetch_pending_candidates
+            #    silently filters out. Best-effort: a transient DB error here
+            #    must not break the loop.
+            try:
+                await auto_skip_stale_candidates()
+            except Exception as e:
+                logger.warning(
+                    "auto_skip_stale_candidates_failed",
+                    extra={"event_type": "AUTO_SKIP_FAILED", "error": str(e)},
+                )
+
             candidates = await fetch_pending_candidates()
 
             if not candidates:

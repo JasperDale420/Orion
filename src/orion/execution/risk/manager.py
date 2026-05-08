@@ -57,6 +57,14 @@ class RiskManager:
         # legitimately-loaded peak just happened to equal the hardcoded
         # default and got silently overwritten on next sync.
         self._peak_equity_seeded = False
+        # Same one-shot seed pattern for current_equity: the paper Alpaca
+        # account is shared across 3Roses/Cerberus/Kairos/Orbit/WhaleHunter,
+        # so Gateway-account equity reflects ALL systems' P&L. Overwriting
+        # `current_equity` from that pool falsely trips Orion's drawdown
+        # kill switch when other systems lose. After the first seed we
+        # only mutate `current_equity` from Orion-attributed fills via
+        # `update_post_fill` (line 590).
+        self._equity_seeded = False
 
         # Track full position details (qty, avg_entry)
         self.positions: dict[str, dict[str, float]] = {}
@@ -459,6 +467,11 @@ class RiskManager:
                     # numerically equal the $100K default, downstream syncs
                     # must not overwrite it.
                     self._peak_equity_seeded = True
+                    # Same: persisted current_equity is the Orion-only
+                    # running total; treat it as already seeded so the
+                    # Gateway sync doesn't clobber it with account-wide
+                    # equity on the next poll.
+                    self._equity_seeded = True
                     logger.info(f"Risk State Loaded: DailyLoss={self.current_daily_loss}")
                 else:
                     logger.info("No persisted Risk State found.")
