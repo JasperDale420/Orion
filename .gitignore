@@ -73,3 +73,8 @@ sonar_scan.log
 
 # qlib third-party library
 qlib-main/
+
+# Pre-train snapshots created by scripts/run_nightly_retrain.sh — the
+# live models/*.pkl files stay tracked, but the dated archive grows
+# unboundedly and would pollute git history with binary churn.
+models/archive/
