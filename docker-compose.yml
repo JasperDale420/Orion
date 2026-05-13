@@ -331,11 +331,17 @@ services:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
     command: [ "python", "-m", "orion.main_data_quality", "--scheduled" ]
-    # data_quality has shown OOM cycles (exit 137) — give it headroom and
-    # bound it explicitly so a leak shows up here instead of taking down
-    # whichever VM-level container is the largest at the moment.
-    mem_limit: 2500m
-    memswap_limit: 2500m
+    # Bumped 2500m → 5g on 2026-05-13. With Heber gold partition growth,
+    # `run_quality_checks` peaked above 2.5G and entered a cgroup-OOM
+    # loop (failcnt=23967, restartcount=7424 in 5 days). The constant
+    # page churn pushed the Docker-VM into global-OOM and started
+    # killing ingestion + execution as collateral damage (RCA at
+    # predict/260513-2030-restart-loop-rca/RCA.md). This is a BAND-AID:
+    # the real fix is streaming the Heber reads in `run_quality_checks`
+    # instead of holding all DataFrames in a `results` dict. Until that
+    # ships, this cap leaves enough headroom for current dataset size.
+    mem_limit: 5g
+    memswap_limit: 5g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
