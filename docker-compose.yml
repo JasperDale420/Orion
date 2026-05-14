@@ -92,8 +92,12 @@ services:
     # to 4G after observing 84% RSS at "Polling Loop" entry (2.05G/2.44G)
     # and a tight restart loop where the next allocation in `_run_cycle`
     # (Heber flow scan + bar drain) was OOMing the container.
-    mem_limit: 4g
-    memswap_limit: 4g
+    # Bumped 4G → 6G on 2026-05-14: with the universe grown from 11 to
+    # 148 tickers and Heber gold partitions 5 days larger, observed
+    # ingestion's _run_cycle peak at 4.18 GiB RSS (over the 4G cap,
+    # confirmed via dmesg CONSTRAINT_MEMCG kill on cgroup 6a9530c9...).
+    mem_limit: 6g
+    memswap_limit: 6g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -213,8 +217,13 @@ services:
     # gold-feature reads, with no OOMKilled flag set (Docker Desktop
     # cgroup quirk) and no silent-exit signal from main_execution.py's
     # guards, consistent with SIGKILL from the cgroup memory controller.
-    mem_limit: 5g
-    memswap_limit: 5g
+    # Bumped 5G → 7G on 2026-05-14: same Heber gold growth that broke
+    # data_quality and ingestion now hits execution's working set —
+    # observed cgroup MEMCG kills at 5.20 GiB RSS while processing
+    # only 7 candidates (vs 50+ before). Streaming Heber reads in the
+    # ML feature path is the real fix; this is a band-aid.
+    mem_limit: 7g
+    memswap_limit: 7g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
