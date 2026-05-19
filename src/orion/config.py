@@ -175,6 +175,27 @@ class SystemSettings(BaseSettings):
         "'warn' = load stale models with warning, "
         "'bypass' = skip ML scoring entirely and pass candidates through",
     )
+    # --- Exit fallback rules (deterministic, independent of exit classifier) ---
+    # Profit-target exit: close when position return crosses this threshold.
+    # 1.00 = +100% on the option premium. Conservative because options can
+    # continue running; 1.50 (i.e. +150%) is also reasonable. Set to 0 to disable.
+    exit_fallback_profit_target_pct: float = Field(
+        default=1.00,
+        validation_alias="ORION_EXIT_FALLBACK_PROFIT_TARGET_PCT",
+    )
+    # Time-to-expiry exit: close when DTE drops below this. Prevents pin risk
+    # and theta wipeout on the last day. 1 = exit at T-1. Set to 0 to disable.
+    exit_fallback_min_dte: int = Field(
+        default=1,
+        validation_alias="ORION_EXIT_FALLBACK_MIN_DTE",
+    )
+    # Drawdown exit: close when position has retraced this far from its peak.
+    # 0.50 = if max_return_so_far was +200% and current is +100%, that's a 50%
+    # retracement → exit. Protects unrealized gains. Set to 0 to disable.
+    exit_fallback_max_drawdown_from_peak_pct: float = Field(
+        default=0.50,
+        validation_alias="ORION_EXIT_FALLBACK_MAX_DRAWDOWN_FROM_PEAK_PCT",
+    )
     proposals_dir: str = Field(default="proposals", validation_alias="ORION_PROPOSALS_DIR")
 
     # SQLite tuning
