@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd agent for orion.main_execution running natively on macOS.
+
+Install:
+    cp scripts/launchd/com.empire.orion.execution.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.execution.plist
+
+Status:
+    launchctl print gui/$(id -u)/com.empire.orion.execution
+
+Stop:
+    launchctl bootout gui/$(id -u)/com.empire.orion.execution
+
+Logs:
+    tail -f logs/execution_native.log               # structured Python logs
+    tail -f logs/execution_native.stdout.log        # launchd-captured stdout
+    tail -f logs/execution_native.stderr.log        # launchd-captured stderr
+
+Single-instance guarantee: Orion's own service-lease (`service_lease_execution`
+row in SystemStatus) keys on ORION_LEASE_OWNER_ID. The wrapper script sets
+`orion_execution_native`, which mutually excludes any docker-compose run
+that uses `orion_execution_compose` — start one or the other, not both.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.execution</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Orion/scripts/run_execution_native.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Start when this LaunchAgent is loaded (login or `launchctl bootstrap`). -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on exit, regardless of exit code. Equivalent to docker
+         `restart: unless-stopped`. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Minimum seconds between restart attempts. Prevents a hard
+         crash-loop from saturating CPU; matches the implicit ~5s Docker
+         delay but a bit larger for safety. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Inherit user environment (login keychains, etc.) where possible. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+    </dict>
+
+    <!-- Send the process's own stdout/stderr (anything not redirected
+         inside the wrapper) to dedicated files so we never have to
+         rummage in /var/log/system.log. -->
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/execution_native.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/execution_native.stderr.log</string>
+
+    <!-- Don't elevate; runs as the operator user. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

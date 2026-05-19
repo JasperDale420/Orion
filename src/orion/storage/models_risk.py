@@ -14,7 +14,13 @@ class RiskState(Base):
     __tablename__ = "risk_state"
 
     id = Column(String, primary_key=True)  # e.g. "global_risk_v1"
-    updated_at_utc = Column(DateTime, default=lambda: datetime.now(UTC))
+    # timezone=True so SQLAlchemy emits `TIMESTAMP WITH TIME ZONE` and the
+    # asyncpg driver accepts the tz-aware datetime produced by
+    # `datetime.now(UTC)`. Without it, an INSERT with a tz-aware default
+    # raises asyncpg.DataError ("can't subtract offset-naive and
+    # offset-aware datetimes") because the column is bound as
+    # `TIMESTAMP WITHOUT TIME ZONE`.
+    updated_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     current_daily_loss = Column(Float, default=0.0)
     current_equity = Column(Float, default=0.0)
@@ -33,7 +39,7 @@ class ProcessedFill(Base):
 
     fill_id = Column(String, primary_key=True)  # Unique ID from broker (or deduped ID)
     client_order_id = Column(String, index=True, nullable=True)
-    processed_at_utc = Column(DateTime, default=lambda: datetime.now(UTC))
+    processed_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     ticker = Column(String, nullable=True)
     qty = Column(Float, nullable=True)
@@ -58,4 +64,4 @@ class PendingOrder(Base):
     order_id = Column(String, primary_key=True)
     ticker = Column(String, nullable=False, index=True)
     signed_cost = Column(Float, nullable=False)  # +cost on BUY, -cost on SELL
-    created_at_utc = Column(DateTime, default=lambda: datetime.now(UTC))
+    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
