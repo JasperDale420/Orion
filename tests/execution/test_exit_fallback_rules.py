@@ -2,8 +2,6 @@
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from orion.execution.exit_fallback_rules import (
     DrawdownFromPeakRule,
     ProfitTargetRule,
@@ -15,8 +13,8 @@ from orion.execution.exit_fallback_rules import (
 def _make_position(
     *,
     symbol: str = "QQQ_PUT",
-    return_pct: float = 0.0,
-    max_return_pct: float = 0.0,
+    return_pct: float = 0.0,  # fraction: 1.05 = +105%
+    max_return_pct: float = 0.0,  # fraction: 2.00 = +200% peak
     entry_time: datetime | None = None,
     dte_at_entry: int = 7,
     expiry_date: datetime | None = None,
@@ -24,10 +22,12 @@ def _make_position(
     """Test fixture mimicking TrackedPosition fields the rules read."""
     from types import SimpleNamespace
 
+    # TrackedPosition stores these in PERCENT (see position_monitor.py:141)
+    # — fixture converts so test bodies stay in the easier-to-read fraction form.
     return SimpleNamespace(
         symbol=symbol,
-        unrealized_pnl_pct=return_pct,
-        max_return_pct=max_return_pct,
+        unrealized_pnl_pct=return_pct * 100.0,
+        max_return_pct=max_return_pct * 100.0,
         entry_time=entry_time or (datetime.now(UTC) - timedelta(days=1)),
         dte_at_entry=dte_at_entry,
         option_symbol=symbol,
@@ -159,3 +159,37 @@ def test_evaluate_fallback_rules_returns_none_when_no_match():
         max_drawdown_pct=0.50,
     )
     assert sig is None
+
+
+def test_dte_beats_drawdown_when_both_fire():
+    """DTE has priority over drawdown — both trigger here; DTE wins."""
+    pos = _make_position(
+        return_pct=0.50,  # +50%, not enough for profit target
+        max_return_pct=2.00,  # +200% peak → retracement = 0.75
+        expiry_date=datetime.now(UTC) + timedelta(hours=12),  # ~0 DTE
+    )
+    sig = evaluate_fallback_rules(
+        pos,
+        profit_target_pct=1.00,
+        min_dte=1,
+        max_drawdown_pct=0.50,
+    )
+    assert sig is not None
+    assert sig.rule_id == "time_to_expiry_v1"
+
+
+def test_only_drawdown_fires():
+    """Profit target and DTE don't trigger; only drawdown does."""
+    pos = _make_position(
+        return_pct=0.50,  # +50%, below 100% target
+        max_return_pct=2.00,  # +200% peak → retracement = 0.75
+        expiry_date=datetime.now(UTC) + timedelta(days=10),  # plenty of time
+    )
+    sig = evaluate_fallback_rules(
+        pos,
+        profit_target_pct=1.00,
+        min_dte=1,
+        max_drawdown_pct=0.50,
+    )
+    assert sig is not None
+    assert sig.rule_id == "drawdown_from_peak_v1"

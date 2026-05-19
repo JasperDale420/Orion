@@ -12,6 +12,12 @@ returns the first rule that fires, or None.
 The rules are intentionally conservative defaults — they're a safety net,
 not the primary exit strategy. The ML classifier (once fixed) remains the
 preferred signal source; these only fire when the classifier hasn't.
+
+Position attributes consumed: `unrealized_pnl_pct` and `max_return_pct`
+are read in PERCENT units (the convention `TrackedPosition` uses — see
+`position_monitor.py:141`); rule thresholds remain FRACTIONS (e.g.
+0.50 = 50%, matching the env-var defaults). Conversion happens inside
+each rule.
 """
 
 from __future__ import annotations
@@ -43,7 +49,10 @@ class ProfitTargetRule:
     def should_exit(self, position: Any) -> ExitSignal | None:
         if self.target_pct <= 0:
             return None
-        ret = float(getattr(position, "unrealized_pnl_pct", 0.0) or 0.0)
+        # TrackedPosition stores unrealized_pnl_pct in PERCENT (100.0 = +100%);
+        # convert to fraction so it can be compared to target_pct (a fraction).
+        ret_pct = float(getattr(position, "unrealized_pnl_pct", 0.0) or 0.0)
+        ret = ret_pct / 100.0
         if ret < self.target_pct:
             return None
         return ExitSignal(
@@ -54,7 +63,12 @@ class ProfitTargetRule:
 
 
 class TimeToExpiryRule:
-    """Exit when remaining time-to-expiry is below min_dte days."""
+    """Exit when remaining time-to-expiry is below min_dte days.
+
+    Requires `position.expiry_date` to be a tz-aware (or naive UTC) datetime.
+    When `expiry_date is None` the rule no-ops — consumer code is responsible
+    for populating the field.
+    """
 
     rule_id = "time_to_expiry_v1"
 
@@ -94,12 +108,17 @@ class DrawdownFromPeakRule:
     def should_exit(self, position: Any) -> ExitSignal | None:
         if self.max_drawdown_pct <= 0:
             return None
-        peak = float(getattr(position, "max_return_pct", 0.0) or 0.0)
+        # TrackedPosition stores these in PERCENT (200.0 = +200%);
+        # convert to fractions so the retracement ratio is well-defined and
+        # comparable to max_drawdown_pct (a fraction).
+        peak_pct = float(getattr(position, "max_return_pct", 0.0) or 0.0)
+        peak = peak_pct / 100.0
         if peak <= 0:
             return None  # never been profitable; no peak to defend
-        current = float(getattr(position, "unrealized_pnl_pct", 0.0) or 0.0)
+        current_pct = float(getattr(position, "unrealized_pnl_pct", 0.0) or 0.0)
+        current = current_pct / 100.0
         # Retracement as a fraction of peak: (peak - current) / peak.
-        # peak=200% current=50% → (2.0 - 0.5)/2.0 = 0.75 retracement.
+        # peak=2.00 current=0.50 → (2.0 - 0.5)/2.0 = 0.75 retracement.
         retracement = (peak - current) / peak
         if retracement < self.max_drawdown_pct:
             return None
