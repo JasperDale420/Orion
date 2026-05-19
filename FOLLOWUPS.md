@@ -5,7 +5,69 @@ debugging + native-migration work. Sorted roughly by impact.
 
 ---
 
-## P0 — actively losing trading opportunities
+## P0 (URGENT) — exits are broken, $62k of unrealized profit at risk
+
+### 0. Exit classifier is effectively constant-output
+**Symptom.** `BucketExitClassifier.predict(...)` returns
+`should_exit=False, confidence=0.17` for every return value tested:
++10%, +50%, +100%, +200%, +273%, +500%. Verified by direct invocation
+of the live `models/SHORT_SWING_exit.pkl`. **The classifier never
+recommends exit.**
+
+This explains the 8 profitable Orion positions sitting at
+~+$62k unrealized that expire 2026-05-22 (Friday). Position monitor
+checks them every 60s and gets the same 0.17 confidence back; never
+crosses the exit threshold.
+
+**Evidence.**
+- `position_monitor.evaluate_exits()` uses ONLY
+  `self.exit_classifier.predict(features)` for exit decisions —
+  no rule-based fallback.
+- Last exit decision in `exit_decisions` table: 2026-05-12 (one row).
+  Since then 7 trading days have passed with zero exits.
+- `position_check_complete` log shows 50 positions checked per cycle,
+  0 signals, 0 executed — consistently.
+- Direct test:
+  ```python
+  clf = BucketExitClassifier()  # loads SHORT_SWING_exit.pkl, etc.
+  for ret in (0.1, 0.5, 1.0, 2.0, 2.73, 5.0):
+      p = clf.predict(ExitFeatures(current_return_pct=ret, ...))
+      # → should_exit=False, confidence=0.17 for ALL ret values
+  ```
+
+**Hypothesis.** The exit classifier training data has very few
+"exit=True" labels — most positions in the training set were held to
+expiration. Trained AUC was 0.9998 (SHORT_SWING) / 0.89 (SWING) /
+0.96 (POSITION) — suspiciously high, indicating possible label
+imbalance / leakage. Result: the model predicts "hold" with ~17%
+exit probability regardless of input.
+
+**Compounding factor.** The `ExitFeatures` passed in include
+`iv_rank_at_entry`, `vix_at_entry`, `gex_at_entry`, `market_tide_30m`
+which would normally come from the entry context. Positions
+**loaded from Alpaca via Gateway don't carry this entry context**
+(see follow-up #4 — orders/fills sync gap), so those features are
+None/zero for every position. The model may be effectively scoring
+on degraded features and defaulting to its prior of 0.17.
+
+**Immediate operator action recommended (NOT automated):** Manually
+close the 8 profitable Orion put positions on the Alpaca UI before
+Friday's expiry to lock the ~+$62k of gains. The full position list:
+QQQ 721P × 15, GLD 420P × 45, COIN 190P × 30, COIN 210P × 8,
+NBIS 230P × 4, COIN 215P × 5, TOST 21.5P × 750, TNA 65P × 20.
+
+**To fix structurally:**
+- Audit `exit_classifier` training data — sample size of `exit=True`
+  vs `exit=False` labels, class balance, feature null-rate.
+- Add a deterministic fallback in `position_monitor.evaluate_exits()`:
+  hard exit at profit target (e.g., +100% on options), hard exit at
+  T-1 day to expiry for 0DTE/SHORT_SWING positions. Don't depend on
+  the classifier alone.
+- Fix the entry-context plumbing so positions loaded from Alpaca get
+  enriched with `iv_rank_at_entry` etc. from the original candidate
+  decision (joined via `client_order_id` ↔ `decision_id`).
+
+### 1. Ensemble consensus collapsed since May 14 (was P0, now P0a)
 
 ### 1. Ensemble consensus collapsed since May 14
 **Symptom.** On May 14 the solver ensemble scored candidates at 0.65-0.70
