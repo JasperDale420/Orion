@@ -86,6 +86,11 @@ class TrackedPosition:
     decision_id: str | None = None
     option_symbol: str | None = None  # For options positions
 
+    # Optional — populated by sync_positions when the parent decision/order
+    # carries it. TimeToExpiryRule no-ops when None (graceful), so it's
+    # safe to leave unset on positions where we don't have the data.
+    expiry_date: datetime | None = None
+
 
 class PositionMonitor:
     """
@@ -268,20 +273,59 @@ class PositionMonitor:
         return {"bucket": "SWING"}
 
     def evaluate_exits(self) -> list[tuple[TrackedPosition, ExitPrediction]]:
-        """
-        Evaluate exit signals for all tracked positions.
+        """Evaluate exit signals for all tracked positions.
 
-        Returns list of (position, prediction) tuples for positions
-        that should be exited.
+        Returns list of (position, prediction) tuples for positions that
+        should be exited.
+
+        Fallback rules (profit / time-to-expiry / drawdown) are evaluated
+        FIRST and short-circuit the ML classifier when they fire. This
+        keeps the deterministic safety net in place even when the
+        classifier is degraded or returns low-confidence predictions
+        (see FOLLOWUPS.md #0).
         """
+        from orion.config import system_settings
+        from orion.execution.exit_fallback_rules import evaluate_fallback_rules
+
         exit_signals = []
 
         for symbol, pos in self.tracked_positions.items():
-            # Calculate time held
+            # Fallback rules first — they're cheap and deterministic.
+            fallback = evaluate_fallback_rules(
+                pos,
+                profit_target_pct=system_settings.exit_fallback_profit_target_pct,
+                min_dte=system_settings.exit_fallback_min_dte,
+                max_drawdown_pct=system_settings.exit_fallback_max_drawdown_from_peak_pct,
+            )
+            if fallback is not None:
+                logger.info(
+                    f"Exit fallback fired for {symbol}: {fallback.reason}",
+                    extra={
+                        "event": "exit_signal_fallback",
+                        "symbol": symbol,
+                        "rule_id": fallback.rule_id,
+                        "urgency": fallback.urgency,
+                        "pnl_pct": pos.unrealized_pnl_pct,
+                        "bucket": pos.bucket,
+                    },
+                )
+                # Wrap the ExitSignal as ExitPrediction-compatible so the
+                # downstream execute_exits path doesn't need to branch.
+                # ExitPrediction's consumer reads .should_exit, .confidence,
+                # .reasoning, and (optionally) .rule_id.
+                prediction = SimpleNamespace(
+                    should_exit=True,
+                    confidence=fallback.confidence,
+                    reasoning=fallback.reason,
+                    rule_id=fallback.rule_id,
+                )
+                exit_signals.append((pos, prediction))
+                continue
+
+            # ML classifier path — unchanged from before.
             time_held = datetime.now(UTC) - pos.entry_time
             time_held_hours = time_held.total_seconds() / 3600
 
-            # Build features for exit classifier
             features = ExitFeatures(
                 current_return_pct=pos.unrealized_pnl_pct,
                 time_held_hours=time_held_hours,
@@ -297,7 +341,6 @@ class PositionMonitor:
                 market_tide_30m=pos.market_tide_30m,
             )
 
-            # Get exit prediction
             prediction = self.exit_classifier.predict(features)
 
             if prediction.should_exit:
