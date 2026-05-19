@@ -291,12 +291,29 @@ class PositionMonitor:
 
         for symbol, pos in self.tracked_positions.items():
             # Fallback rules first — they're cheap and deterministic.
-            fallback = evaluate_fallback_rules(
-                pos,
-                profit_target_pct=system_settings.exit_fallback_profit_target_pct,
-                min_dte=system_settings.exit_fallback_min_dte,
-                max_drawdown_pct=system_settings.exit_fallback_max_drawdown_from_peak_pct,
-            )
+            # Wrap in try/except so a future rule that raises (I/O,
+            # schema drift on expiry_date, etc.) doesn't kill the whole
+            # evaluate loop and starve the ML path for every remaining
+            # position this cycle. On failure: fall through to ML.
+            try:
+                fallback = evaluate_fallback_rules(
+                    pos,
+                    profit_target_pct=system_settings.exit_fallback_profit_target_pct,
+                    min_dte=system_settings.exit_fallback_min_dte,
+                    max_drawdown_pct=system_settings.exit_fallback_max_drawdown_from_peak_pct,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Exit fallback evaluation raised for {symbol}: {exc}",
+                    extra={
+                        "event": "exit_fallback_error",
+                        "symbol": symbol,
+                        "error": str(exc),
+                    },
+                    exc_info=True,
+                )
+                fallback = None  # fall through to ML branch
+
             if fallback is not None:
                 logger.info(
                     f"Exit fallback fired for {symbol}: {fallback.reason}",
