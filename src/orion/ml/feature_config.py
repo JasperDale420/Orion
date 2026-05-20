@@ -247,18 +247,29 @@ TARGETS = {
     """,
 }
 
-# Trade bucket configurations with bucket-specific lookback windows
+# Trade bucket configurations with bucket-specific lookback windows.
+#
+# Window sizing is driven by Heber Gold outcomes density. Probing the cache
+# (2026-05-20) showed bucket sample counts per window:
+#   window=10d:  0DTE=0    SHORT_SWING=0    SWING=40    POSITION=107
+#   window=20d:  0DTE=1    SHORT_SWING=13   SWING=158   POSITION=202
+#   window=45d:  0DTE=1    SHORT_SWING=91   SWING=2104  POSITION=700
+#   window=90d:  0DTE=931  SHORT_SWING=17622 SWING=34795 POSITION=44513
+# The original 10d/20d windows for 0DTE/SHORT_SWING never cleared min_samples,
+# so those 8 entry models silently froze (no .pkl writes for nightly retrain).
+# 90d clears the gate for every bucket and produces enough mass for stable
+# LightGBM training.
 TRADE_BUCKET_CONFIGS = {
     "0DTE": {
         "filter": "trade_type = '0DTE'",
-        "window_days": 10,
+        "window_days": 90,
         "min_samples": 50,
         "quick_winner_seconds": 3600,
         "description": "Same-day expiry options",
     },
     "SHORT_SWING": {
         "filter": "trade_type = 'SHORT_SWING'",
-        "window_days": 20,
+        "window_days": 90,
         "min_samples": 50,
         "quick_winner_seconds": 14400,
         "description": "1-3 day expiry options",
