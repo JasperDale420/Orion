@@ -144,7 +144,7 @@ class SolverEnsemble:
                 "per_solver": [
                     {
                         "solver_id": d["solver_id"],
-                        "score": d["p_take"],
+                        "p_take": d["p_take"],
                         "weight": d["weight"],
                     }
                     for d in ensemble_details
