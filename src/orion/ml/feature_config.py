@@ -259,6 +259,13 @@ TARGETS = {
 # so those 8 entry models silently froze (no .pkl writes for nightly retrain).
 # 90d clears the gate for every bucket and produces enough mass for stable
 # LightGBM training.
+#
+# Note: 90d is density-forced, not semantically optimal. A 0DTE/SHORT_SWING
+# bucket trained on 90d outcomes blends regimes/OPEX cycles/FOMC events that
+# the bucket's actual holding period (hours/days) won't see. Widening the
+# window is the only lever until upstream label generation produces more
+# samples per shorter window; lowering min_samples=50 was rejected because
+# 13 samples is genuinely too few for stable LightGBM.
 TRADE_BUCKET_CONFIGS = {
     "0DTE": {
         "filter": "trade_type = '0DTE'",

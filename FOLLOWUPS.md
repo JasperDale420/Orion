@@ -249,6 +249,27 @@ docker-compose change).
 
 ---
 
+### 15. Scorer silently no-ops on missing bucket model files
+**Symptom.** `BucketExitClassifier._load_models()` and `MLScorer._load_models()` skip any
+bucket whose `.pkl` file is missing without an audible warning. Today's
+0DTE entry models can't train (single-class Heber labels) so the live
+`models/` directory has no `0DTE_*` entry pkls. The scorer loads
+2/3 buckets and proceeds — the operator has no signal that one
+bucket is silently absent from every scoring decision.
+
+This is the same pathology that hid the SHORT_SWING 49-day-stale
+models for so long: the system kept "working" with degraded inputs.
+
+**To fix.** In `src/orion/ml/scorer.py::MLScorer._load_models` (and the
+analogous path in `BucketExitClassifier`), emit a single
+`logger.warning("ml_bucket_models_missing", bucket="0DTE", target=...)`
+once per startup when an expected bucket has no model file. Don't
+warn per scoring call — that floods logs. The current
+`stale_model_policy='warn'` plumbing is a reasonable place to extend
+since it already handles per-bucket warnings.
+
+---
+
 ## P3 — known but not blocking
 
 ### 11. Docker ingestion has the same Heber-gold-growth issue
