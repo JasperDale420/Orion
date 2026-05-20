@@ -15,6 +15,34 @@ from orion.storage.models_gold import CandidateTrade, StrategyDecision
 logger = setup_struct_logger(__name__)
 
 
+def _coerce_timestamp(value: Any) -> datetime | None:
+    """Coerce a Gateway timestamp (ISO-8601 string or datetime) to a timezone-aware datetime.
+
+    Gateway-returned orders have `filled_at` as an ISO-8601 string (e.g.
+    "2026-05-20T15:00:53.956207Z"), but the `fills.filled_at_utc` column is
+    TIMESTAMP WITH TIME ZONE and asyncpg requires a datetime instance. Without
+    this coercion every Gateway-fed persist_fill_record call raises a DataError
+    that the outer try/except swallows — silently losing all fill rows.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning(
+                "Could not parse timestamp",
+                extra={"event_type": "TIMESTAMP_PARSE_ERROR", "value": s},
+            )
+            return None
+    return None
+
+
 async def is_fill_processed(order_id: str) -> bool:
     """Check if a fill has already been processed (idempotency guard)."""
     from orion.storage.models_risk import ProcessedFill
@@ -193,7 +221,7 @@ async def persist_fill_record(fill: Any) -> None:
             qty = float(fill.get("filled_qty", 0) or 0)
             price = float(fill.get("filled_avg_price", 0) or 0)
             side = fill.get("side") or None
-            filled_at = fill.get("filled_at") or fill.get("filled_at_utc")
+            filled_at = _coerce_timestamp(fill.get("filled_at") or fill.get("filled_at_utc"))
             raw = fill
         else:
             broker_order_id = str(getattr(fill, "id", ""))
@@ -202,7 +230,7 @@ async def persist_fill_record(fill: Any) -> None:
             qty = float(getattr(fill, "filled_qty", 0) or 0)
             price = float(getattr(fill, "filled_avg_price", 0) or 0)
             side = str(getattr(fill, "side", "")) or None
-            filled_at = getattr(fill, "filled_at", None) or getattr(fill, "filled_at_utc", None)
+            filled_at = _coerce_timestamp(getattr(fill, "filled_at", None) or getattr(fill, "filled_at_utc", None))
             raw = fill.model_dump(mode="json") if hasattr(fill, "model_dump") else {}
 
         stmt = select(FillRecord).where(FillRecord.broker_order_id == broker_order_id)
