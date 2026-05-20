@@ -21,7 +21,11 @@ from typing import Any
 from orion.clients.gateway_trading_client import GatewayTradingClient
 from orion.execution.attribution import ORDER_ID_PREFIX
 from orion.execution.fill_processor import FillProcessor
-from orion.execution.persistence import persist_fill_record, persist_order_status_update
+from orion.execution.persistence import (
+    mark_fill_processed,
+    persist_fill_record,
+    persist_order_status_update,
+)
 from orion.execution.risk.manager import RiskManager
 from orion.shared.logger import setup_struct_logger
 
@@ -97,16 +101,37 @@ async def main(since_iso: str, dry_run: bool, force: bool) -> None:
                 logger.warning(f"Status update failed for {broker_id}: {e}")
 
         # Fill write — only for filled (or partially filled) orders.
-        # In --force mode we bypass the FillProcessor (and therefore the
-        # ProcessedFill idempotency guard) to recover from the historical
-        # bug where persist_fill_record silently failed due to string-typed
-        # `filled_at` timestamps — that left orphaned ProcessedFill markers
-        # with no matching fills row. Without --force the normal dedup
-        # applies; the script remains safe to re-run.
+        # In --force mode we bypass FillProcessor (skipping its ProcessedFill
+        # idempotency check) to recover from the historical bug where
+        # persist_fill_record silently failed due to string-typed `filled_at`
+        # timestamps — that left orphaned ProcessedFill markers with no
+        # matching fills row. We still write the ProcessedFill marker after
+        # persist so re-runs (force or not) remain idempotent. Without
+        # --force the normal dedup applies.
         if float(o.get("filled_qty") or 0) > 0:
             try:
                 if force:
                     await persist_fill_record(o)
+                    # Write the ProcessedFill marker so a future run without
+                    # --force won't re-fire FillProcessor.process_single_fill
+                    # (which would double-credit risk state and duplicate
+                    # ledger entries). The marker is what is_fill_processed
+                    # checks in the non-force path. See fill_processor.py:66.
+                    filled_qty = float(o.get("filled_qty") or 0)
+                    fill_marker = f"{broker_id}:{filled_qty}"
+                    client_oid = str(o.get("client_order_id", "") or "") or None
+                    ticker = o.get("symbol")
+                    try:
+                        await mark_fill_processed(
+                            fill_marker,
+                            client_oid=client_oid,
+                            ticker=ticker,
+                            qty=filled_qty,
+                        )
+                    except Exception as mark_exc:
+                        logger.warning(
+                            f"Force-path mark_fill_processed failed for {broker_id}: {mark_exc}"
+                        )
                 else:
                     await processor.process_single_fill(o, risk, _noop_remove_pending)
                 fill_writes += 1
@@ -137,9 +162,15 @@ if __name__ == "__main__":
         "--force",
         action="store_true",
         help=(
-            "Bypass FillProcessor + ProcessedFill dedup and write fills directly. "
-            "Use ONCE to recover from the historical persist_fill_record string-"
-            "timestamp silent failure that left orphaned dedup markers."
+            "Bypass FillProcessor + ProcessedFill dedup and write fills directly "
+            "via persist_fill_record (upsert by broker_order_id). After persist, "
+            "the ProcessedFill marker is written so subsequent runs (with or "
+            "without --force) are idempotent and safe. NOTE: --force does NOT "
+            "update RiskManager post-fill state and does NOT write empire-core "
+            "ledger entries — use only when those have already been updated "
+            "out-of-band, or when those side effects don't matter for the "
+            "backfill case (e.g. recovering historical fills for orders that "
+            "have already closed)."
         ),
     )
     args = parser.parse_args()

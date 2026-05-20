@@ -1273,6 +1273,11 @@ class ExecutionEngine:
                     extra={"event_type": "ORDER_POLL_ERROR", "error": str(e)},
                 )
                 orders = []
+                # Intentional: the throttle timestamp (set below) advances even on
+                # failure to prevent a tight retry loop when Gateway is unhealthy.
+                # Next attempt waits the full _ORDER_POLL_MIN_INTERVAL_SECONDS.
+                # Cost: filled orders land up to 5s late after a transient
+                # failure; acceptable vs spamming Gateway during a real outage.
 
             for order in orders:
                 # Filter to orion-attributed orders only (shared account safety).
