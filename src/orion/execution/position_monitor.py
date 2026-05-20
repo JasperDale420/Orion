@@ -6,6 +6,7 @@ and rule-based exit signals.
 """
 
 import asyncio
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -21,6 +22,14 @@ from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.execution.position_monitor")
+
+# OCC option-symbol pattern: ROOT (1-6 alphanumeric) + YYMMDD + C/P + 8-digit strike.
+# Example: QQQ260522P00721000, GDX260618C00086000.
+_OCC_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{0,5}\d{6}[CP]\d{8}$")
+
+
+def _is_occ_option_symbol(symbol: str) -> bool:
+    return bool(symbol and _OCC_SYMBOL_RE.match(symbol))
 
 
 class GatewayPositionAdapter:
@@ -112,6 +121,12 @@ class PositionMonitor:
         self._last_check_time: datetime | None = None
         self._execution_engine = execution_engine
         self._position_manager = position_manager
+        # Per-symbol entry-context cache. Populated lazily on first
+        # _fetch_entry_context call and reused for the lifetime of the
+        # PositionMonitor — entry-time market context (IV rank, VIX,
+        # GEX, market tide, premium, DTE-at-entry, …) is immutable
+        # post-entry, so a session-lifetime cache is correct.
+        self._entry_context_cache: dict[str, dict[str, Any]] = {}
 
     async def sync_positions(self, connector: Any) -> list[TrackedPosition]:
         """
@@ -186,6 +201,7 @@ class PositionMonitor:
                     market_tide_30m=entry_context.get("market_tide_30m"),
                     decision_id=entry_context.get("decision_id"),
                     option_symbol=entry_context.get("option_symbol"),
+                    expiry_date=entry_context.get("expiry_date"),
                 )
                 self.tracked_positions[symbol] = pos
 
@@ -195,6 +211,16 @@ class PositionMonitor:
                         "event": "position_tracked",
                         "symbol": symbol,
                         "bucket": pos.bucket,
+                        "decision_id": pos.decision_id,
+                        "has_entry_context": any(
+                            v is not None
+                            for v in (
+                                pos.iv_rank_at_entry,
+                                pos.vix_at_entry,
+                                pos.gex_at_entry,
+                                pos.market_tide_30m,
+                            )
+                        ),
                     },
                 )
 
@@ -202,75 +228,223 @@ class PositionMonitor:
 
     async def _fetch_entry_context(self, symbol: str) -> dict[str, Any]:
         """
-        Fetch entry context from recent strategy decisions.
+        Fetch entry context for a position symbol.
+
+        Joins orders → strategy_decisions → candidate_trades to recover the
+        originating Orion decision (filtering by the ``orion_`` client_order_id
+        prefix to ignore positions opened by other systems on the shared
+        Alpaca account). From that decision row we pull:
+
+          - decision_id, entry_time, direction, premium_usd, dte, bucket,
+            option_symbol, expiry_date — all directly queryable from the join.
+          - is_sweep, event_id — extracted from ``candidate_trades.evidence``.
+          - iv_rank_at_entry, vix_at_entry, gex_at_entry, market_tide_30m —
+            fetched from the same flow_enricher pipeline the ML scorer uses,
+            so train/inference parity is preserved.
+
+        Results are cached per-symbol on the PositionMonitor instance for the
+        lifetime of the session — entry-time context is immutable post-entry,
+        so the cache never needs invalidation. Positions opened by other
+        systems on the shared account fall through to the default ``{"bucket":
+        "SWING"}`` payload (no Orion decision rows match), and the exit
+        classifier / fallback rules already handle None fields gracefully.
         """
-        query = """
+        if symbol in self._entry_context_cache:
+            return self._entry_context_cache[symbol]
+
+        # Match by option_symbol when the position symbol looks like an OCC
+        # contract (e.g. QQQ260522P00721000); otherwise match by underlying
+        # ticker. Alpaca returns option positions keyed by OCC, equity
+        # positions keyed by ticker.
+        is_option = _is_occ_option_symbol(symbol)
+        join_clause = "ct.option_symbol = :symbol" if is_option else "ct.ticker = :symbol"
+
+        # DTE is computed in Python from expiration_date - decision_ts to
+        # stay portable across PostgreSQL (production) and SQLite (tests).
+        query = f"""
             SELECT
                 sd.decision_id,
                 sd.timestamp_utc as decision_ts,
+                ct.ticker,
                 ct.option_symbol,
-                ct.premium,
+                ct.expiration_date,
                 ct.option_type,
+                ct.premium,
                 ct.direction,
-                CASE
-                    WHEN ct.expiration_date IS NOT NULL THEN
-                        EXTRACT(DAY FROM ct.expiration_date - NOW())::int
-                    ELSE NULL
-                END as dte
+                ct.evidence
             FROM strategy_decisions sd
             JOIN candidate_trades ct ON sd.candidate_id = ct.candidate_id
-            WHERE ct.ticker = :symbol
+            LEFT JOIN orders o ON o.decision_id = sd.decision_id
+            WHERE {join_clause}
             AND sd.decision = 'EXECUTE'
-            AND sd.executed_successfully = 'TRUE'
+            AND (o.client_order_id LIKE 'orion_%' OR o.client_order_id IS NULL)
             ORDER BY sd.timestamp_utc DESC
             LIMIT 1
         """
 
+        row: dict[str, Any] | None = None
         try:
 
             async def run_query(session: Any) -> dict | None:
                 from sqlalchemy import text
 
                 result = await session.execute(text(query), {"symbol": symbol})
-                row = result.mappings().first()
-                return dict(row) if row else None
+                row_ = result.mappings().first()
+                return dict(row_) if row_ else None
 
             row = await db_query(run_query)
-
-            if row:
-                # Classify bucket based on DTE
-                dte = row.get("dte") or 7
-                if dte == 0:
-                    bucket = "0DTE"
-                elif dte <= 3:
-                    bucket = "SHORT_SWING"
-                elif dte <= 14:
-                    bucket = "SWING"
-                else:
-                    bucket = "POSITION"
-
-                # The decision row has the real entry timestamp; use it instead of
-                # now() so ML exit features (time_held_hours) are correct after a
-                # restart. Fall back to None so the caller can decide.
-                decision_ts = row.get("decision_ts")
-                from orion.shared.utils import ensure_utc as _ensure_utc
-
-                entry_time = _ensure_utc(decision_ts) if decision_ts is not None else None
-
-                return {
-                    "decision_id": row.get("decision_id"),
-                    "option_symbol": row.get("option_symbol"),
-                    "premium_usd": row.get("premium"),
-                    "dte": dte,
-                    "bucket": bucket,
-                    "direction": row.get("direction", "LONG"),
-                    "entry_time": entry_time,
-                }
         except Exception as e:
             logger.warning(f"Failed to fetch entry context for {symbol}: {e}")
 
-        # Default to SWING bucket if we can't determine
-        return {"bucket": "SWING"}
+        if not row:
+            # No matching Orion decision — either a non-Orion position on the
+            # shared account, or a legacy position pre-attribution. Cache the
+            # default so we don't re-hit the DB every 60s for the same symbol.
+            default = {"bucket": "SWING"}
+            self._entry_context_cache[symbol] = default
+            return default
+
+        # Compute DTE in Python (portable across Postgres/SQLite). Falls back
+        # to candidate.evidence["dte"] when expiration_date is missing.
+        def _coerce_dt(val: Any) -> datetime | None:
+            if val is None:
+                return None
+            if isinstance(val, datetime):
+                return val
+            if isinstance(val, str):
+                try:
+                    from dateutil.parser import parse as _parse
+
+                    return _parse(val)
+                except Exception:
+                    return None
+            return None
+
+        dte: int | None = None
+        expiration_date = _coerce_dt(row.get("expiration_date"))
+        decision_ts_for_dte = _coerce_dt(row.get("decision_ts"))
+        if expiration_date is not None and decision_ts_for_dte is not None:
+            try:
+                delta = expiration_date - decision_ts_for_dte
+                dte = max(int(delta.days), 0)
+            except Exception:
+                dte = None
+
+        if dte is None:
+            try:
+                evidence_raw = row.get("evidence") or {}
+                if isinstance(evidence_raw, str):
+                    import json as _json
+
+                    evidence_raw = _json.loads(evidence_raw)
+                if isinstance(evidence_raw, dict) and evidence_raw.get("dte") is not None:
+                    dte = int(evidence_raw["dte"])
+            except Exception:
+                dte = None
+
+        if dte is None:
+            dte = 7
+
+        # Classify bucket based on DTE
+        if dte == 0:
+            bucket = "0DTE"
+        elif dte <= 3:
+            bucket = "SHORT_SWING"
+        elif dte <= 14:
+            bucket = "SWING"
+        else:
+            bucket = "POSITION"
+
+        # The decision row has the real entry timestamp; use it instead of
+        # now() so ML exit features (time_held_hours) are correct after a
+        # restart. Fall back to None so the caller can decide.
+        decision_ts = decision_ts_for_dte  # already coerced to datetime above
+        from orion.shared.utils import ensure_utc as _ensure_utc
+
+        entry_time = _ensure_utc(decision_ts) if decision_ts is not None else None
+
+        evidence = row.get("evidence") or {}
+        if isinstance(evidence, str):
+            try:
+                import json as _json
+
+                evidence = _json.loads(evidence)
+            except Exception:
+                evidence = {}
+
+        is_sweep = bool(evidence.get("is_sweep")) if isinstance(evidence, dict) else False
+        event_id = evidence.get("event_id") if isinstance(evidence, dict) else None
+        if not event_id and isinstance(evidence, dict):
+            ids = evidence.get("event_ids") or []
+            if isinstance(ids, list) and ids:
+                event_id = ids[0]
+
+        put_call_raw = row.get("option_type") or (evidence.get("put_call") if isinstance(evidence, dict) else None)
+        put_call = "C"
+        if put_call_raw:
+            normalized = str(put_call_raw).upper()
+            put_call = "C" if normalized in {"C", "CALL"} else ("P" if normalized in {"P", "PUT"} else "C")
+
+        ticker = row.get("ticker") or symbol
+
+        premium_usd = row.get("premium")
+        if (premium_usd in (None, 0)) and isinstance(evidence, dict):
+            premium_usd = evidence.get("premium_usd") or evidence.get("premium") or premium_usd
+
+        # Enrich with iv_rank / vix / gex / market_tide via the same path
+        # the ML scorer uses, so position-monitor features stay aligned
+        # with training. Failures here are non-fatal: we still return the
+        # DB-derived context and let the exit classifier / fallback rules
+        # cope with None enrichment fields (they already do).
+        enrichment: dict[str, Any] = {}
+        if entry_time is not None:
+            try:
+                from orion.ml.flow_enricher import enrich_flow_for_scoring
+
+                expiry_str = None
+                if expiration_date is not None:
+                    try:
+                        expiry_str = expiration_date.date().isoformat()
+                    except AttributeError:
+                        expiry_str = str(expiration_date)
+
+                enrichment = await enrich_flow_for_scoring(
+                    ticker=ticker,
+                    entry_ts=entry_time,
+                    put_call=put_call,
+                    dte=dte,
+                    premium_usd=float(premium_usd) if premium_usd is not None else None,
+                    event_id=event_id,
+                    option_chain=row.get("option_symbol"),
+                    aggressor=evidence.get("aggressor") if isinstance(evidence, dict) else None,
+                    is_sweep=is_sweep,
+                    expiry=expiry_str,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to enrich entry context for {symbol}: {e}",
+                    extra={"event": "entry_context_enrichment_failed", "symbol": symbol, "error": str(e)},
+                )
+                enrichment = {}
+
+        context = {
+            "decision_id": row.get("decision_id"),
+            "option_symbol": row.get("option_symbol"),
+            "premium_usd": premium_usd,
+            "dte": dte,
+            "bucket": bucket,
+            "direction": row.get("direction", "LONG"),
+            "entry_time": entry_time,
+            "expiry_date": expiration_date,
+            "is_sweep": is_sweep,
+            "iv_rank_at_entry": enrichment.get("iv_rank_at_entry"),
+            "vix_at_entry": enrichment.get("vix_at_entry"),
+            "gex_at_entry": enrichment.get("gex_at_entry"),
+            "market_tide_30m": enrichment.get("market_tide_30m"),
+        }
+
+        self._entry_context_cache[symbol] = context
+        return context
 
     def evaluate_exits(self) -> list[tuple[TrackedPosition, ExitPrediction]]:
         """Evaluate exit signals for all tracked positions.
