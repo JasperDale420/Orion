@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
@@ -138,6 +138,45 @@ async def persist_order_record(
             await session.commit()
     except Exception as e:
         logger.error("Failed to persist order record", extra={"event_type": "ORDER_PERSIST_ERROR", "error": str(e)})
+
+
+@db_retry
+async def persist_order_status_update(
+    *,
+    broker_order_id: str,
+    status: str,
+    filled_qty: float | None = None,
+    filled_avg_price: float | None = None,
+) -> int:
+    """Update OrderRecord.status keyed on broker_order_id.
+
+    Returns row count updated (0 if no matching order — silent success;
+    upstream code is responsible for logging unmatched ids if it cares).
+
+    `filled_qty` and `filled_avg_price` are accepted for API symmetry with
+    the broker payload but are not persisted onto OrderRecord directly — the
+    `fills` table is the source of truth for fill quantities/prices.
+    """
+    from orion.storage.models_execution import OrderRecord
+
+    async def update_status(session: Any) -> int:
+        stmt = update(OrderRecord).where(OrderRecord.broker_order_id == broker_order_id).values(status=status)
+        result = await session.execute(stmt)
+        return int(result.rowcount or 0)
+
+    try:
+        return await db_write(update_status)
+    except Exception as e:
+        logger.error(
+            "Failed to update order status",
+            extra={
+                "event_type": "ORDER_STATUS_UPDATE_ERROR",
+                "broker_order_id": broker_order_id,
+                "status": status,
+                "error": str(e),
+            },
+        )
+        return 0
 
 
 @db_retry

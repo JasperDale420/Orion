@@ -17,7 +17,11 @@ from orion.execution.attribution import (
     orion_order_id_sql_pattern,
 )
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
-from orion.execution.persistence import persist_exit_decision, persist_order_record
+from orion.execution.persistence import (
+    persist_exit_decision,
+    persist_order_record,
+    persist_order_status_update,
+)
 from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
@@ -89,6 +93,7 @@ class ExecutionEngine:
         self.order_history: deque[tuple[float, bool]] = deque()
         self.last_positions_snapshot_ts: datetime | None = None
         self._last_fill_poll_ts: datetime | None = None
+        self._last_order_poll_ts: datetime | None = None
 
         # TTL cache for _check_system_health (avoids N identical DB queries per cycle)
         self._health_cache: tuple[bool, float] | None = None
@@ -1202,6 +1207,11 @@ class ExecutionEngine:
     # cuts ~3,600 redundant Gateway calls/hour during quiet periods.
     _ACCOUNT_POLL_MIN_INTERVAL_SECONDS: float = 15.0
 
+    # Separate (faster) cadence for /alpaca/orders polling so fills land in
+    # the local fills table before the position monitor evaluates exits.
+    # Throttled vs the per-iteration loop to avoid spamming the Gateway.
+    _ORDER_POLL_MIN_INTERVAL_SECONDS: float = 5.0
+
     async def poll_fills(self) -> None:
         """Polls Data Gateway for account equity and updates RiskManager.
 
@@ -1216,38 +1226,99 @@ class ExecutionEngine:
         if not self._gateway_available:
             return
 
+        client = self._get_gateway_client()
+
         now = datetime.now(UTC)
+        account_poll_due = (
+            self._last_fill_poll_ts is None
+            or (now - self._last_fill_poll_ts).total_seconds() >= self._ACCOUNT_POLL_MIN_INTERVAL_SECONDS
+        )
+
+        if account_poll_due:
+            try:
+                account = await client.get_account()
+                if "error" not in account:
+                    equity = float(account.get("equity", 0) or 0)
+                    if equity > 0:
+                        # Same seed-once pattern as `_sync_risk_from_gateway`:
+                        # account-wide equity includes other systems' P&L on
+                        # the shared paper account. After the initial seed,
+                        # current_equity moves only from Orion-attributed
+                        # fills via update_post_fill — overwriting it here
+                        # would falsely trip Orion's drawdown kill switch
+                        # whenever 3Roses/Cerberus/Kairos/etc. take losses.
+                        if not getattr(self.risk_manager, "_equity_seeded", False):
+                            self.risk_manager.current_equity = equity
+                            self.risk_manager._equity_seeded = True
+
+                self._last_fill_poll_ts = now
+            except Exception as e:
+                logger.warning(
+                    "Fill polling via Gateway failed",
+                    extra={"event_type": "FILL_POLL_ERROR", "error": str(e)},
+                )
+
+        # Order/fill poll — separately throttled from account-equity (5s vs 15s)
+        # so fills land promptly without spamming /api/v1/alpaca/account.
+        now2 = datetime.now(UTC)
         if (
-            self._last_fill_poll_ts is not None
-            and (now - self._last_fill_poll_ts).total_seconds() < self._ACCOUNT_POLL_MIN_INTERVAL_SECONDS
+            self._last_order_poll_ts is None
+            or (now2 - self._last_order_poll_ts).total_seconds() >= self._ORDER_POLL_MIN_INTERVAL_SECONDS
         ):
-            return
+            try:
+                orders = await client.get_orders(status="all", limit=200)
+            except Exception as e:
+                logger.warning(
+                    "Order poll via Gateway failed",
+                    extra={"event_type": "ORDER_POLL_ERROR", "error": str(e)},
+                )
+                orders = []
 
-        try:
-            client = self._get_gateway_client()
+            for order in orders:
+                # Filter to orion-attributed orders only (shared account safety).
+                coid = order.get("client_order_id", "") or ""
+                if not coid.startswith(ORDER_ID_PREFIX):
+                    continue
 
-            account = await client.get_account()
-            if "error" not in account:
-                equity = float(account.get("equity", 0) or 0)
-                if equity > 0:
-                    # Same seed-once pattern as `_sync_risk_from_gateway`:
-                    # account-wide equity includes other systems' P&L on
-                    # the shared paper account. After the initial seed,
-                    # current_equity moves only from Orion-attributed
-                    # fills via update_post_fill — overwriting it here
-                    # would falsely trip Orion's drawdown kill switch
-                    # whenever 3Roses/Cerberus/Kairos/etc. take losses.
-                    if not getattr(self.risk_manager, "_equity_seeded", False):
-                        self.risk_manager.current_equity = equity
-                        self.risk_manager._equity_seeded = True
+                # Update orders.status whenever the broker has a fresher state
+                # (idempotent — UPDATE with the latest known values).
+                broker_id = order.get("id") or order.get("broker_order_id")
+                status = order.get("status")
+                if broker_id and status:
+                    try:
+                        await persist_order_status_update(
+                            broker_order_id=str(broker_id),
+                            status=str(status),
+                            filled_qty=order.get("filled_qty"),
+                            filled_avg_price=order.get("filled_avg_price"),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Order status update failed",
+                            extra={
+                                "event_type": "ORDER_STATUS_UPDATE_ERROR",
+                                "broker_order_id": broker_id,
+                                "error": str(e),
+                            },
+                        )
 
-            self._last_fill_poll_ts = now
+                # If the order is filled (or partially), feed it through the fill
+                # processor — ProcessedFill table guards against double-processing.
+                filled_qty = float(order.get("filled_qty") or 0)
+                if filled_qty > 0:
+                    try:
+                        await self._process_single_fill(order)
+                    except Exception as e:
+                        logger.warning(
+                            "Fill processing failed for order",
+                            extra={
+                                "event_type": "FILL_PROCESS_ERROR",
+                                "broker_order_id": broker_id,
+                                "error": str(e),
+                            },
+                        )
 
-        except Exception as e:
-            logger.warning(
-                "Fill polling via Gateway failed",
-                extra={"event_type": "FILL_POLL_ERROR", "error": str(e)},
-            )
+            self._last_order_poll_ts = now2
 
     async def _process_single_fill(self, fill: Any) -> None:
         """Delegates fill processing to FillProcessor."""
