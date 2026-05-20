@@ -131,6 +131,29 @@ class SolverEnsemble:
         consensus_score = weighted_vote / total_weight if total_weight > 0 else 0.0
         ensemble_threshold = system_settings.ensemble_consensus_threshold
 
+        # Diagnostic logging — emit per-solver scores so we can attribute
+        # ensemble collapses (FOLLOWUPS #1). Volume is bounded by
+        # active_solver_count (5 today), so this stays well under the
+        # log-rate budget.
+        logger.info(
+            "ensemble_solver_votes",
+            extra={
+                "event_type": "ENSEMBLE_SOLVER_VOTES",
+                "ticker": candidate.ticker,
+                "candidate_id": candidate.candidate_id,
+                "per_solver": [
+                    {
+                        "solver_id": d["solver_id"],
+                        "score": d["p_take"],
+                        "weight": d["weight"],
+                    }
+                    for d in ensemble_details
+                ],
+                "consensus_score": consensus_score,
+                "ensemble_threshold": ensemble_threshold,
+            },
+        )
+
         if consensus_score < ensemble_threshold:
             return StageResult(
                 action="SKIP",
