@@ -151,6 +151,39 @@ class PositionMonitor:
                 extra={"event": "position_closed", "symbol": symbol},
             )
             del self.tracked_positions[symbol]
+            # Drop cached entry-context so a close+reopen of the same symbol
+            # in the same process doesn't reuse a stale decision_id / context.
+            self._entry_context_cache.pop(symbol, None)
+
+        # Pre-fetch entry-context for any newly-appearing symbols in parallel
+        # with a per-call timeout. On a cold container with ~200 positions and
+        # ~200ms per flow_enricher round-trip, doing this sequentially in the
+        # construction loop would block startup for tens of seconds before the
+        # first exit evaluation. Cached symbols short-circuit immediately.
+        new_symbols = [
+            p.symbol
+            for p in broker_positions
+            if p.symbol not in self.tracked_positions and p.symbol not in self._entry_context_cache
+        ]
+        if new_symbols:
+
+            async def _bounded_fetch(sym: str) -> None:
+                try:
+                    await asyncio.wait_for(self._fetch_entry_context(sym), timeout=2.0)
+                except TimeoutError:
+                    logger.warning(
+                        f"Entry-context fetch timed out for {sym}; using default context",
+                        extra={"event": "entry_context_timeout", "symbol": sym},
+                    )
+                    # Cache an empty-context default so the construction loop
+                    # below reads the same fallback and we don't re-hit the
+                    # slow path on the next sync tick.
+                    self._entry_context_cache.setdefault(sym, {"bucket": "SWING"})
+
+            await asyncio.gather(
+                *[_bounded_fetch(s) for s in new_symbols],
+                return_exceptions=True,
+            )
 
         # Update existing or add new positions
         for bp in broker_positions:
@@ -172,7 +205,9 @@ class PositionMonitor:
                 if unrealized_pnl_pct < pos.max_drawdown_pct:
                     pos.max_drawdown_pct = unrealized_pnl_pct
             else:
-                # New position - need to fetch entry context from DB
+                # New position — context was pre-fetched above and is in
+                # cache (either a real row or a default). _fetch_entry_context
+                # short-circuits on cache hit.
                 entry_context = await self._fetch_entry_context(symbol)
 
                 # Use the real entry timestamp from the decision row when
@@ -277,7 +312,12 @@ class PositionMonitor:
             LEFT JOIN orders o ON o.decision_id = sd.decision_id
             WHERE {join_clause}
             AND sd.decision = 'EXECUTE'
-            AND (o.client_order_id LIKE 'orion_%' OR o.client_order_id IS NULL)
+            -- o.id IS NULL is the LEFT-JOIN miss sentinel (no orders row at
+            -- all for this decision, e.g. legacy pre-attribution rows). We
+            -- intentionally do NOT use `client_order_id IS NULL` here because
+            -- that would also match orders rows another system inserted with
+            -- a null client_order_id, falsely attributing them to Orion.
+            AND (o.client_order_id LIKE 'orion_%' OR o.id IS NULL)
             ORDER BY sd.timestamp_utc DESC
             LIMIT 1
         """
