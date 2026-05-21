@@ -945,6 +945,26 @@ class ExecutionEngine:
             )
             return False
 
+        if qty == 0:
+            logger.warning(
+                f"close_position called with qty=0 for {ticker}; nothing to close",
+                extra={"event_type": "EXIT_ORDER_SKIPPED", "ticker": ticker, "qty": qty},
+            )
+            return False
+
+        # Broker positions are SIGNED — Alpaca returns SHORT equity positions
+        # with negative qty (e.g. CRNC qty=-8000.0). The Gateway endpoints
+        # (DELETE /positions/{symbol}?qty=…, POST /orders body qty=…) both
+        # reject negative values with `invalid qty: -8000.0`. The qty SIGN is
+        # the broker's ground truth for position side and must override the
+        # `direction` hint (which is the candidate's bullish/bearish bias and
+        # can be stale or defaulted to "LONG" for positions opened by sibling
+        # systems on the shared Alpaca account). Down-stream Gateway calls
+        # always receive `abs_qty`; equity close-side is derived from
+        # `held_short` below.
+        held_short = qty < 0
+        abs_qty = abs(qty)
+
         # Lazy-instantiate the market schedule the first time we need
         # it. Tests inject a stub via `engine._market_schedule = ...`
         # for hermetic control.
@@ -1012,7 +1032,7 @@ class ExecutionEngine:
                 client_order_id = mint_orion_order_id()
                 result = await client.create_order(
                     symbol=ticker,
-                    qty=qty,
+                    qty=abs_qty,
                     side=close_side,
                     order_type="limit",
                     limit_price=limit_price,
@@ -1024,11 +1044,11 @@ class ExecutionEngine:
                     raise RuntimeError(f"Gateway exit limit order failed: {result['error']}")
 
                 logger.info(
-                    f"EXIT LIMIT ORDER (OPTION): {ticker} x{qty} @ {limit_price} mark={current_price} - {exit_signal.reason}",
+                    f"EXIT LIMIT ORDER (OPTION): {ticker} x{abs_qty} @ {limit_price} mark={current_price} - {exit_signal.reason}",
                     extra={
                         "event_type": "EXIT_ORDER_SUBMITTED",
                         "ticker": ticker,
-                        "qty": qty,
+                        "qty": abs_qty,
                         "order_type": "LIMIT",
                         "limit_price": limit_price,
                         "mark_price": current_price,
@@ -1049,23 +1069,31 @@ class ExecutionEngine:
                 self._record_result(False)
                 return False
 
-        # ── Equity (unchanged): market for IMMEDIATE, limit otherwise ──
+        # ── Equity: market for IMMEDIATE, limit otherwise ──
+        #
+        # Position side for equity comes from the qty SIGN (`held_short`),
+        # not from the `direction` hint. Alpaca's market-close endpoint
+        # accepts only positive qty and infers BUY-to-cover from the
+        # existing short side, so the DELETE path just passes `abs_qty`.
+        # The limit path mirrors that: BUY when held_short else SELL,
+        # with the limit price crossing in the direction needed to fill
+        # (above mark for BUY-to-cover, below for SELL-to-close).
         try:
             client = self._get_gateway_client()
             client_order_id = mint_orion_order_id()
 
             if use_market_order or exit_signal.urgency == "IMMEDIATE":
-                result = await client.close_position(ticker, qty=qty)
+                result = await client.close_position(ticker, qty=abs_qty)
 
                 if "error" in result:
                     raise RuntimeError(f"Gateway close_position failed: {result['error']}")
 
                 logger.info(
-                    f"EXIT MARKET ORDER: {ticker} x{qty} - Reason: {exit_signal.reason}",
+                    f"EXIT MARKET ORDER: {ticker} x{abs_qty} - Reason: {exit_signal.reason}",
                     extra={
                         "event_type": "EXIT_ORDER_SUBMITTED",
                         "ticker": ticker,
-                        "qty": qty,
+                        "qty": abs_qty,
                         "order_type": "MARKET",
                         "rule_id": exit_signal.rule_id,
                         "reason": exit_signal.reason,
@@ -1087,13 +1115,18 @@ class ExecutionEngine:
                     return False
 
                 exit_buffer_bps = 5
-                limit_price = round(price * (1 - exit_buffer_bps / 10000.0), 2)
-
-                close_side = OrderSide.BUY if str(direction).upper() == TradeDirection.SHORT else OrderSide.SELL
+                if held_short:
+                    # BUY-to-cover: pay slightly above mark to ensure fill.
+                    limit_price = round(price * (1 + exit_buffer_bps / 10000.0), 2)
+                    close_side = OrderSide.BUY
+                else:
+                    # SELL-to-close: hit slightly below mark.
+                    limit_price = round(price * (1 - exit_buffer_bps / 10000.0), 2)
+                    close_side = OrderSide.SELL
 
                 result = await client.create_order(
                     symbol=ticker,
-                    qty=qty,
+                    qty=abs_qty,
                     side=close_side,
                     order_type="limit",
                     limit_price=limit_price,
@@ -1105,11 +1138,11 @@ class ExecutionEngine:
                     raise RuntimeError(f"Gateway exit limit order failed: {result['error']}")
 
                 logger.info(
-                    f"EXIT LIMIT ORDER: {ticker} x{qty} @ {limit_price} - Reason: {exit_signal.reason}",
+                    f"EXIT LIMIT ORDER: {ticker} x{abs_qty} @ {limit_price} - Reason: {exit_signal.reason}",
                     extra={
                         "event_type": "EXIT_ORDER_SUBMITTED",
                         "ticker": ticker,
-                        "qty": qty,
+                        "qty": abs_qty,
                         "order_type": "LIMIT",
                         "limit_price": limit_price,
                         "rule_id": exit_signal.rule_id,
