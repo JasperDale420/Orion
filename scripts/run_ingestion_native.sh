@@ -18,11 +18,14 @@
 # replaces the implicit Docker restart delay.
 #
 # Single-instance guard is enforced via Orion's own service-lease
-# mechanism (SystemStatus row `service_lease_ingestion`), keyed by the
-# ORION_LEASE_OWNER_ID below. The docker-compose version uses
-# `orion_ingestion_compose`; we use `orion_ingestion_native` so the two
-# can never co-exist without one refusing to start (Orion's lease guard
-# will trip).
+# mechanism (SystemStatus row `service_lease_ingestion`, populated by
+# `orion.core.service_lease.acquire_service_lease("ingestion")` from
+# `IngestionService.initialize`). The lease identity uses the
+# `ORION_LEASE_OWNER_ID` env var below. The docker-compose stanza
+# sets `orion_ingestion_compose`; we use `orion_ingestion_native` so
+# the two can never co-exist without one refusing to start — whichever
+# starts second raises RuntimeError and exits non-zero (visible in
+# logs/ingestion_native.log + launchd's stderr file).
 
 set -euo pipefail
 
