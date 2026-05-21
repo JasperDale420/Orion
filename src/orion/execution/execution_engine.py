@@ -332,38 +332,47 @@ class ExecutionEngine:
                 return
 
             positions = await client.get_positions()
-            if positions:
-                self.risk_manager.positions = {}
-                self.risk_manager.ticker_exposures = {}
-                skipped = 0
-                for p in positions:
-                    symbol = p.get("symbol", "")
-                    # Only load positions Orion has ever placed an order for.
-                    # Empty orion_tickers means Orion owns no positions at all —
-                    # skip everything (None is the error sentinel, handled above).
-                    if symbol not in orion_tickers:
-                        skipped += 1
-                        continue
+            # CRITICAL: This block ALWAYS runs, including when `positions` is
+            # an empty list. The previous `if positions:` guard meant that
+            # when the broker returned 0 orion-attributable positions, the
+            # risk_manager's `open_positions` count stayed at whatever was
+            # loaded from `risk_state.open_positions_count` — observed live
+            # on 2026-05-21 stuck at 5 ghost positions, causing every
+            # EXECUTE to fail preflight with "RISK REJECT: Max Positions 5
+            # Reached" despite the broker reporting zero. The risk
+            # manager's view of "how many positions am I holding" MUST be
+            # ground-truthed against the broker on every sync.
+            self.risk_manager.positions = {}
+            self.risk_manager.ticker_exposures = {}
+            skipped = 0
+            for p in positions:
+                symbol = p.get("symbol", "")
+                # Only load positions Orion has ever placed an order for.
+                # Empty orion_tickers means Orion owns no positions at all —
+                # skip everything (None is the error sentinel, handled above).
+                if symbol not in orion_tickers:
+                    skipped += 1
+                    continue
 
-                    qty = float(p.get("qty", 0) or 0)
-                    avg_entry = float(p.get("avg_entry_price", 0) or 0)
-                    market_value = float(p.get("market_value", 0) or 0)
+                qty = float(p.get("qty", 0) or 0)
+                avg_entry = float(p.get("avg_entry_price", 0) or 0)
+                market_value = float(p.get("market_value", 0) or 0)
 
-                    self.risk_manager.positions[symbol] = {"qty": qty, "avg_entry": avg_entry}
-                    self.risk_manager.ticker_exposures[symbol] = abs(market_value)
+                self.risk_manager.positions[symbol] = {"qty": qty, "avg_entry": avg_entry}
+                self.risk_manager.ticker_exposures[symbol] = abs(market_value)
 
-                self.risk_manager.open_positions = len(
-                    [p for p in self.risk_manager.positions.values() if abs(p["qty"]) > 1e-9]
-                )
-                logger.info(
-                    "Positions synced from Gateway (Orion-only)",
-                    extra={
-                        "event_type": "GATEWAY_POSITIONS_SYNC",
-                        "open_positions": self.risk_manager.open_positions,
-                        "skipped_non_orion": skipped,
-                        "total_account_positions": len(positions),
-                    },
-                )
+            self.risk_manager.open_positions = len(
+                [p for p in self.risk_manager.positions.values() if abs(p["qty"]) > 1e-9]
+            )
+            logger.info(
+                "Positions synced from Gateway (Orion-only)",
+                extra={
+                    "event_type": "GATEWAY_POSITIONS_SYNC",
+                    "open_positions": self.risk_manager.open_positions,
+                    "skipped_non_orion": skipped,
+                    "total_account_positions": len(positions),
+                },
+            )
 
             if hasattr(self.risk_manager, "evaluate_drawdown_kill_switch"):
                 await self.risk_manager.evaluate_drawdown_kill_switch()
