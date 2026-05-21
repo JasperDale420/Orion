@@ -138,8 +138,13 @@ async def test_options_close_inside_rth_uses_marketable_limit() -> None:
 
 @pytest.mark.asyncio
 async def test_options_close_inside_rth_short_close_buys_above_mark() -> None:
-    """A SHORT options close (BUY to cover) must lift the offer —
-    limit above the mark by ~5-10%, rounded to options tick."""
+    """A SHORT options close (BUY to cover) must lift the offer.
+
+    Broker reports SHORT positions with NEGATIVE qty — this test
+    reflects that wire reality. The close path derives side from
+    `qty < 0` (held_short), not from the caller's `direction` hint
+    (which can be stale; see test_options_close_side_from_qty_sign
+    below for the regression that motivated this change)."""
     engine = _make_engine(market_schedule_returns_options_open=True)
 
     mock_client = AsyncMock()
@@ -162,7 +167,7 @@ async def test_options_close_inside_rth_short_close_buys_above_mark() -> None:
 
         closed = await engine.close_position(
             ticker="SPY260522P00450000",
-            qty=5.0,
+            qty=-5.0,  # negative = broker says SHORT
             exit_signal=exit_signal,
             direction="SHORT",
             current_price=4.00,
@@ -173,12 +178,66 @@ async def test_options_close_inside_rth_short_close_buys_above_mark() -> None:
     assert closed is True
     call_kwargs = mock_client.create_order.call_args[1]
     assert call_kwargs["order_type"] == "limit"
-    assert call_kwargs["side"] == "buy"  # SHORT close → BUY
+    assert call_kwargs["side"] == "buy"  # held_short → BUY-to-cover
+    assert call_kwargs["qty"] == 5.0  # abs_qty
     # $4.00 is ≥ $3 → $0.10 tick. Lift offer by 5-10%: [4.20, 4.40].
     limit = call_kwargs["limit_price"]
     assert 4.10 <= limit <= 4.50, f"limit {limit} outside expected band"
     cents = round(limit * 100)
     assert cents % 10 == 0, f"limit {limit} not on $0.10 tick (>=$3 → 0.10 increments)"
+
+
+@pytest.mark.asyncio
+async def test_options_close_side_derived_from_qty_sign_not_direction() -> None:
+    """Codex review 2026-05-21 Important #2: the options branch was
+    deriving close_side from the caller's `direction` arg, but the
+    broker's signed qty is the ground truth. Mismatch scenario:
+    `_sync_risk_from_gateway` populates positions opened by sibling
+    Empire systems on the shared Alpaca account with a default
+    `direction="LONG"` even when the broker holds them SHORT
+    (negative qty). The close would then BUY-to-cover MORE of the
+    same position instead of SELLing to close.
+
+    This test pins the contract: side MUST come from qty sign, not
+    direction. Broker holds the position LONG (qty=+10) but caller
+    says direction='SHORT' (stale) → side must be SELL (LONG close),
+    not BUY (what the buggy code would do).
+    """
+    engine = _make_engine(market_schedule_returns_options_open=True)
+
+    mock_client = AsyncMock()
+    mock_client.create_order.return_value = {"id": "order-opt", "status": "accepted"}
+    engine._gateway_client = mock_client
+    engine._get_gateway_client = lambda: mock_client
+
+    import orion.execution.execution_engine as ee_mod
+
+    original_persist = ee_mod.persist_exit_decision
+    ee_mod.persist_exit_decision = AsyncMock()
+    try:
+        exit_signal = SimpleNamespace(
+            urgency="IMMEDIATE",
+            reason="test",
+            rule_id="r",
+            confidence=1.0,
+            details={"bucket": "SWING"},
+        )
+        closed = await engine.close_position(
+            ticker="NVDA260522C00250000",
+            qty=10.0,  # positive — broker says LONG
+            exit_signal=exit_signal,
+            direction="SHORT",  # stale/mislabeled — must NOT win
+            current_price=2.50,
+        )
+    finally:
+        ee_mod.persist_exit_decision = original_persist
+
+    assert closed is True
+    call_kwargs = mock_client.create_order.call_args[1]
+    assert call_kwargs["side"] == "sell", (
+        "broker qty sign (positive = LONG) MUST override caller direction='SHORT'; "
+        "BUY would compound exposure instead of closing"
+    )
 
 
 @pytest.mark.asyncio

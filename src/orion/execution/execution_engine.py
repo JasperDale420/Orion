@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select
 
 from orion.config import risk_settings, system_settings
-from orion.core.enums import DecisionStatus, OrderSide, TradeDirection
+from orion.core.enums import DecisionStatus, OrderSide
 from orion.execution.attribution import (
     ORDER_ID_PREFIX,
     is_occ_option_symbol,
@@ -1029,9 +1029,21 @@ class ExecutionEngine:
             # aggressive enough that a fallback exit (urgency=IMMEDIATE)
             # actually clears. round_to_options_tick handles the
             # $0.05/$0.10 increment requirement.
+            #
+            # Close-side comes from `held_short` (the broker's signed
+            # qty), NOT from the caller's `direction` hint. Codex
+            # review 2026-05-21 Important #2 caught the previous code
+            # trusting `direction` here even though the equity branch
+            # below correctly uses the qty sign (commit a6ae828).
+            # `_sync_risk_from_gateway` populates positions opened by
+            # sibling Empire systems on the shared account with a
+            # default `direction="LONG"` regardless of the actual
+            # broker side — relying on direction would BUY-to-cover
+            # on a held-long position, compounding exposure instead
+            # of closing.
             exit_buffer = 0.075
-            if str(direction).upper() == TradeDirection.SHORT:
-                # SHORT close → BUY, lift the offer
+            if held_short:
+                # SHORT close → BUY-to-cover, lift the offer
                 raw_limit = current_price * (1 + exit_buffer)
                 close_side = OrderSide.BUY
             else:
