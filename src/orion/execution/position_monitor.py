@@ -6,7 +6,6 @@ and rule-based exit signals.
 """
 
 import asyncio
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -25,11 +24,11 @@ logger = setup_struct_logger("orion.execution.position_monitor")
 
 # OCC option-symbol pattern: ROOT (1-6 alphanumeric) + YYMMDD + C/P + 8-digit strike.
 # Example: QQQ260522P00721000, GDX260618C00086000.
-_OCC_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{0,5}\d{6}[CP]\d{8}$")
-
-
-def _is_occ_option_symbol(symbol: str) -> bool:
-    return bool(symbol and _OCC_SYMBOL_RE.match(symbol))
+# OCC symbol detection now lives in `orion.execution.attribution`
+# (shared so `execution_engine.py` can use it without circular
+# imports). Re-exported here under the old private name so the rest
+# of this module's call sites continue to work.
+from orion.execution.attribution import is_occ_option_symbol as _is_occ_option_symbol  # noqa: E402
 
 
 class GatewayPositionAdapter:
@@ -682,12 +681,20 @@ class PositionMonitor:
                             details={"bucket": pos.bucket, "pnl_pct": pos.unrealized_pnl_pct},
                         )
 
+                        # `use_market_order=False` for the options path —
+                        # close_position routes options through limit orders
+                        # regardless of urgency, because Alpaca rejects
+                        # options market orders outside RTH (42210000).
+                        # Pass `current_price` (the mark sync_positions
+                        # maintains on `TrackedPosition`) so the limit can
+                        # be derived without a separate quote lookup.
                         closed = await self._execution_engine.close_position(
                             ticker=pos.symbol,
                             qty=pos.qty,
                             exit_signal=exit_signal,
                             direction=pos.direction,
-                            use_market_order=True,
+                            use_market_order=False,
+                            current_price=pos.current_price,
                         )
                     else:
                         # Fallback: direct connector call (legacy path, no safety guards)

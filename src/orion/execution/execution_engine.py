@@ -10,6 +10,7 @@ from orion.config import risk_settings, system_settings
 from orion.core.enums import DecisionStatus, OrderSide, TradeDirection
 from orion.execution.attribution import (
     ORDER_ID_PREFIX,
+    is_occ_option_symbol,
     mint_orion_order_id,
     orion_order_id_sql_pattern,
 )
@@ -910,8 +911,33 @@ class ExecutionEngine:
         exit_signal: Any,
         direction: str = "LONG",
         use_market_order: bool = False,
+        current_price: float | None = None,
     ) -> bool:
-        """Close a position based on exit signal via Data Gateway."""
+        """Close a position based on exit signal via Data Gateway.
+
+        Options behavior (Phase 2 of exit-pipeline RCA):
+
+        - Outside RTH (Alpaca 9:30-16:00 ET): logs and returns False
+          WITHOUT submitting. Submitting an options order outside this
+          window gets rejected with ``42210000``, producing noise and
+          no fill. The PositionMonitor loop will re-attempt on the
+          next iteration; when the market opens, the gate flips and
+          the submit goes through.
+        - Inside RTH: ALWAYS uses a marketable LIMIT order priced
+          aggressively relative to ``current_price`` (passed by the
+          caller from ``TrackedPosition.current_price``, the mark
+          maintained by sync_positions). The Gateway does not expose a
+          per-symbol option-quote endpoint, so we use the tracked mark
+          rather than pulling a fresh quote. For LONG close (SELL),
+          limit is 7.5% below mark; for SHORT close (BUY), 7.5% above.
+          Both rounded to the options tick (`round_to_options_tick`).
+        - Without ``current_price``: returns False with a log — does
+          NOT fall back to a market order. Defensive: any options
+          market order is going to be rejected by Alpaca anyway.
+
+        Equity behavior unchanged: market for IMMEDIATE / use_market,
+        limit otherwise. Equity has no RTH gate.
+        """
         if not await self._check_gateway_available():
             logger.warning(
                 "Data Gateway unavailable. Cannot close position.",
@@ -919,6 +945,111 @@ class ExecutionEngine:
             )
             return False
 
+        # Lazy-instantiate the market schedule the first time we need
+        # it. Tests inject a stub via `engine._market_schedule = ...`
+        # for hermetic control.
+        from orion.core.market_schedule import MarketSchedule
+
+        if not hasattr(self, "_market_schedule") or self._market_schedule is None:
+            self._market_schedule = MarketSchedule()
+
+        is_option = is_occ_option_symbol(ticker)
+
+        # ── Options outside RTH: skip submission ─────────────────
+        if is_option and not self._market_schedule.is_market_open_for_options():
+            # DEBUG level so the every-5-second retry across ~50
+            # positions doesn't flood WARN logs while market is closed.
+            # Operator can still see the gating decision via
+            # event_type filter, and the first attempt at the next
+            # market open is logged separately when the submit happens.
+            logger.debug(
+                f"Skipping options close for {ticker}: market closed for options",
+                extra={
+                    "event_type": "EXIT_SKIPPED_MARKET_CLOSED",
+                    "ticker": ticker,
+                    "rule_id": getattr(exit_signal, "rule_id", None),
+                },
+            )
+            return False
+
+        # ── Options inside RTH: marketable LIMIT only ────────────
+        if is_option:
+            if current_price is None or current_price <= 0:
+                logger.error(
+                    f"Cannot close {ticker}: no current_price available",
+                    extra={
+                        "event_type": "EXIT_ORDER_FAILED",
+                        "ticker": ticker,
+                        "error": "missing_current_price",
+                    },
+                )
+                return False
+
+            # Marketable limit: cross the spread by ~7.5% to ensure
+            # fill. Options spreads can be wide; this needs to be
+            # aggressive enough that a fallback exit (urgency=IMMEDIATE)
+            # actually clears. round_to_options_tick handles the
+            # $0.05/$0.10 increment requirement.
+            exit_buffer = 0.075
+            if str(direction).upper() == TradeDirection.SHORT:
+                # SHORT close → BUY, lift the offer
+                raw_limit = current_price * (1 + exit_buffer)
+                close_side = OrderSide.BUY
+            else:
+                # LONG close → SELL, hit the bid
+                raw_limit = current_price * (1 - exit_buffer)
+                close_side = OrderSide.SELL
+            limit_price = round_to_options_tick(raw_limit)
+            if limit_price <= 0:
+                logger.error(
+                    f"Cannot close {ticker}: limit price rounded to 0 (mark={current_price})",
+                    extra={"event_type": "EXIT_ORDER_FAILED", "ticker": ticker},
+                )
+                return False
+
+            try:
+                client = self._get_gateway_client()
+                client_order_id = mint_orion_order_id()
+                result = await client.create_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=close_side,
+                    order_type="limit",
+                    limit_price=limit_price,
+                    time_in_force="day",
+                    client_order_id=client_order_id,
+                )
+
+                if "error" in result:
+                    raise RuntimeError(f"Gateway exit limit order failed: {result['error']}")
+
+                logger.info(
+                    f"EXIT LIMIT ORDER (OPTION): {ticker} x{qty} @ {limit_price} mark={current_price} - {exit_signal.reason}",
+                    extra={
+                        "event_type": "EXIT_ORDER_SUBMITTED",
+                        "ticker": ticker,
+                        "qty": qty,
+                        "order_type": "LIMIT",
+                        "limit_price": limit_price,
+                        "mark_price": current_price,
+                        "rule_id": exit_signal.rule_id,
+                        "reason": exit_signal.reason,
+                    },
+                )
+
+                await persist_exit_decision(ticker, exit_signal, client_order_id, result)
+                self._record_result(True)
+                return True
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to close option {ticker}: {e}",
+                    extra={"event_type": "EXIT_ORDER_FAILED", "ticker": ticker, "error": str(e)},
+                )
+                self._record_result(False)
+                return False
+
+        # ── Equity (unchanged): market for IMMEDIATE, limit otherwise ──
         try:
             client = self._get_gateway_client()
             client_order_id = mint_orion_order_id()
@@ -941,19 +1072,22 @@ class ExecutionEngine:
                     },
                 )
             else:
-                snapshot = await client.get_stock_snapshot(ticker)
-                current_price = 0.0
-                if "error" not in snapshot:
-                    latest_trade = snapshot.get("latestTrade", {}) or snapshot.get("latest_trade", {})
-                    if latest_trade:
-                        current_price = float(latest_trade.get("p", 0) or latest_trade.get("price", 0) or 0)
+                # Prefer caller-supplied current_price (mark from sync_positions);
+                # fall back to a fresh snapshot only if the caller didn't supply.
+                price = current_price
+                if price is None or price <= 0:
+                    snapshot = await client.get_stock_snapshot(ticker)
+                    if "error" not in snapshot:
+                        latest_trade = snapshot.get("latestTrade", {}) or snapshot.get("latest_trade", {})
+                        if latest_trade:
+                            price = float(latest_trade.get("p", 0) or latest_trade.get("price", 0) or 0)
 
-                if current_price <= 0:
+                if price is None or price <= 0:
                     logger.error(f"Cannot close {ticker}: Failed to get current price")
                     return False
 
                 exit_buffer_bps = 5
-                limit_price = round(current_price * (1 - exit_buffer_bps / 10000.0), 2)
+                limit_price = round(price * (1 - exit_buffer_bps / 10000.0), 2)
 
                 close_side = OrderSide.BUY if str(direction).upper() == TradeDirection.SHORT else OrderSide.SELL
 

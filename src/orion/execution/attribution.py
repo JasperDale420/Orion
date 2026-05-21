@@ -16,11 +16,30 @@ attribute an order to Orion that lacks a prefix.
 
 from __future__ import annotations
 
+import re
 import uuid
 
 # Prefix for all Orion order IDs — used to identify Orion's positions
 # in the shared Alpaca paper account.
 ORDER_ID_PREFIX = "orion_"
+
+# OCC option-symbol regex: 1-6 alphanumeric ticker + 6-digit date (YYMMDD)
+# + 'C' or 'P' + 8-digit strike (8 digits, strike × 1000). Example:
+# `NVDA260522C00250000` = NVDA 2026-05-22 $250 Call.
+_OCC_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{0,5}\d{6}[CP]\d{8}$")
+
+
+def is_occ_option_symbol(symbol: str | None) -> bool:
+    """Return True iff `symbol` matches the OCC option-symbol pattern.
+
+    Used to branch between equity and option code paths
+    (e.g. ``ExecutionEngine.close_position`` uses limit orders for
+    options and may use market for equity). Centralized here so the
+    regex stays consistent across the codebase — moved from
+    `position_monitor.py` so `execution_engine.py` can use it without
+    risking a circular import.
+    """
+    return bool(symbol and _OCC_SYMBOL_RE.match(symbol))
 
 
 def mint_orion_order_id() -> str:
