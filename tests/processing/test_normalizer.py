@@ -123,3 +123,33 @@ def test_normalize_uw_flow_accepts_flow_ts_utc():
     assert normalized["flow_ts_utc"].startswith("2026-05-21T17:26:36")
     assert normalized["put_call"] == "P"
     assert normalized["flags"]["is_sweep"] is True
+
+
+def test_normalize_uw_darkpool_accepts_dark_ts_utc():
+    """Mirror of test_normalize_uw_flow_accepts_flow_ts_utc — same
+    silent-now() bug existed for darkpool; codex review 2026-05-21
+    flagged it as a sibling."""
+    payload = {
+        "ticker": "AAPL",
+        "dark_ts_utc": "2026-05-21T17:26:36+00:00",
+        "size": 1000,
+        "price": 180.0,
+    }
+    normalized = NormalizationEngine.normalize_event("UW", "UW_DARKPOOL", payload)
+    assert normalized["ticker"] == "AAPL"
+    # darkpool normalizer outputs `dark_ts_utc` as the canonical key
+    assert normalized["dark_ts_utc"].startswith("2026-05-21T17:26:36")
+
+
+def test_normalize_uw_alert_accepts_alert_ts_utc():
+    """Same shape for alerts."""
+    payload = {
+        "ticker": "AAPL",
+        "alert_ts_utc": "2026-05-21T17:26:36+00:00",
+        "put_call": "C",
+        "alert_tags": ["unusual_volume"],
+    }
+    normalized = NormalizationEngine.normalize_event("UW", "UW_ALERT", payload)
+    assert normalized["ticker"] == "AAPL"
+    # alert normalizer uses alert_ts_utc as the timestamp key in output
+    assert "alert_ts_utc" in normalized or "ts_utc" in normalized

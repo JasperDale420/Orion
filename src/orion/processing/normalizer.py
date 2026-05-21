@@ -165,7 +165,12 @@ class NormalizationEngine:
         """
         PRD 6.2 Silver Schema: UW Dark Pool
         """
-        ts_str = payload.get("executed_at") or payload.get("timestamp") or payload.get("date")
+        # Heber Silver `feed=darkpool` rows use `dark_ts_utc` — same gap
+        # that hit UW_FLOW (see _normalize_uw_flow for the full story).
+        # Codex review 2026-05-21 flagged this as the sibling bug.
+        ts_str = (
+            payload.get("executed_at") or payload.get("timestamp") or payload.get("date") or payload.get("dark_ts_utc")
+        )
         dark_ts = parse_timestamptz(ts_str, strict=True)
 
         conditions = payload.get("conditions", [])
@@ -187,7 +192,9 @@ class NormalizationEngine:
     def _normalize_uw_alert(payload: dict[str, Any]) -> dict[str, Any]:
         from orion.shared.utils import parse_occ_symbol
 
-        ts_str = payload.get("timestamp") or payload.get("created_at")
+        # Heber Silver `feed=alerts` rows use `alert_ts_utc` — same gap
+        # as UW_FLOW / UW_DARKPOOL above.
+        ts_str = payload.get("timestamp") or payload.get("created_at") or payload.get("alert_ts_utc")
         alert_ts = parse_timestamptz(ts_str, strict=True)
 
         tags = payload.get("alert_tags") or payload.get("tags") or []
