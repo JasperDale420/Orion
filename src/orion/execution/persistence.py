@@ -310,3 +310,82 @@ async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: 
         await db_write(save_exit)
     except Exception as e:
         logger.error(f"Failed to persist exit decision: {e}")
+
+
+# ── Phase 3 of exit-pipeline RCA: persist running-window position stats ──
+
+
+async def upsert_position_running_stats(
+    symbol: str,
+    max_return_pct: float,
+    max_drawdown_pct: float,
+) -> None:
+    """Upsert the per-symbol running-stats row.
+
+    Called on every `sync_positions` tick that observes a new peak or
+    trough for the symbol. Silently swallows errors — the live exit
+    pipeline must keep running even if this side-write fails. The next
+    tick retries with current values.
+    """
+    from orion.storage.models_execution import PositionRunningStats
+
+    async def write(session: Any) -> None:
+        existing = await session.get(PositionRunningStats, symbol)
+        now = datetime.now(UTC)
+        if existing is None:
+            session.add(
+                PositionRunningStats(
+                    symbol=symbol,
+                    max_return_pct=max_return_pct,
+                    max_drawdown_pct=max_drawdown_pct,
+                    last_updated_utc=now,
+                )
+            )
+        else:
+            existing.max_return_pct = max_return_pct
+            existing.max_drawdown_pct = max_drawdown_pct
+            existing.last_updated_utc = now
+
+    try:
+        await db_write(write)
+    except Exception as exc:
+        # Defensive: any DB blip must NOT break the position monitor
+        # loop. Log at WARNING (not ERROR) so we can see drift without
+        # alerting; the next sync_positions tick retries with the
+        # in-memory peak/trough still intact.
+        logger.warning(
+            "Failed to upsert position_running_stats",
+            extra={
+                "event_type": "POSITION_RUNNING_STATS_UPSERT_FAILED",
+                "symbol": symbol,
+                "error": str(exc),
+            },
+        )
+
+
+async def load_position_running_stats(symbol: str) -> tuple[float, float] | None:
+    """Load persisted (max_return_pct, max_drawdown_pct) for symbol.
+
+    Returns None when no row exists — caller falls back to the
+    in-memory seeding (`max(0, unrealized_pnl_pct)`, etc.).
+    """
+    from orion.storage.models_execution import PositionRunningStats
+
+    async def read(session: Any) -> Any:
+        return await session.get(PositionRunningStats, symbol)
+
+    try:
+        row = await db_query(read)
+    except Exception as exc:
+        logger.warning(
+            "Failed to load position_running_stats",
+            extra={
+                "event_type": "POSITION_RUNNING_STATS_LOAD_FAILED",
+                "symbol": symbol,
+                "error": str(exc),
+            },
+        )
+        return None
+    if row is None:
+        return None
+    return float(row.max_return_pct), float(row.max_drawdown_pct)

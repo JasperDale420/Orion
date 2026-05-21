@@ -29,6 +29,10 @@ logger = setup_struct_logger("orion.execution.position_monitor")
 # imports). Re-exported here under the old private name so the rest
 # of this module's call sites continue to work.
 from orion.execution.attribution import is_occ_option_symbol as _is_occ_option_symbol  # noqa: E402
+from orion.execution.persistence import (  # noqa: E402
+    load_position_running_stats,
+    upsert_position_running_stats,
+)
 
 
 class GatewayPositionAdapter:
@@ -198,11 +202,30 @@ class PositionMonitor:
                 pos.current_price = current_price
                 pos.unrealized_pnl_pct = unrealized_pnl_pct
 
-                # Update tracking metrics
+                # Update tracking metrics — record whether we observed a
+                # new peak or trough so we can avoid the DB write on
+                # uneventful ticks (each cycle covers ~50 positions; 12
+                # cycles/min = 600 writes/min if we upserted on every
+                # tick. Most ticks are inside the running envelope and
+                # don't change anything; only the peak/trough deserves
+                # a durable update).
+                running_changed = False
                 if unrealized_pnl_pct > pos.max_return_pct:
                     pos.max_return_pct = unrealized_pnl_pct
+                    running_changed = True
                 if unrealized_pnl_pct < pos.max_drawdown_pct:
                     pos.max_drawdown_pct = unrealized_pnl_pct
+                    running_changed = True
+                if running_changed:
+                    # Phase 3 of exit-pipeline RCA: persist so the ML
+                    # branch sees a non-zero MFE/MAE on restart-loaded
+                    # positions, instead of a fresh `max(0, unrealized)`
+                    # seed.
+                    await upsert_position_running_stats(
+                        symbol=symbol,
+                        max_return_pct=pos.max_return_pct,
+                        max_drawdown_pct=pos.max_drawdown_pct,
+                    )
             else:
                 # New position — context was pre-fetched above and is in
                 # cache (either a real row or a default). _fetch_entry_context
@@ -215,6 +238,25 @@ class PositionMonitor:
                 # `time_held_hours` feature toward "hold longer".
                 entry_time = entry_context.get("entry_time") or datetime.now(UTC)
 
+                # Phase 3 of exit-pipeline RCA: rehydrate running-window
+                # stats from the durable `position_running_stats` table
+                # if a row exists. Falls back to the original
+                # `max(0, unrealized) / min(0, unrealized)` seed when
+                # no row is present (genuinely-new position or first
+                # ever sync_positions cycle).
+                persisted = await load_position_running_stats(symbol)
+                if persisted is not None:
+                    persisted_max, persisted_drawdown = persisted
+                    # Defensive: the current tick might have moved the
+                    # peak/trough past the persisted values. Take the
+                    # more-extreme of (persisted, current) so a hot
+                    # restart-during-spike doesn't shrink the envelope.
+                    seeded_max = max(persisted_max, unrealized_pnl_pct, 0)
+                    seeded_drawdown = min(persisted_drawdown, unrealized_pnl_pct, 0)
+                else:
+                    seeded_max = max(0, unrealized_pnl_pct)
+                    seeded_drawdown = min(0, unrealized_pnl_pct)
+
                 pos = TrackedPosition(
                     symbol=symbol,
                     qty=qty,
@@ -224,8 +266,8 @@ class PositionMonitor:
                     entry_time=entry_time,
                     bucket=entry_context.get("bucket", "SWING"),
                     direction=entry_context.get("direction", "LONG"),
-                    max_return_pct=max(0, unrealized_pnl_pct),
-                    max_drawdown_pct=min(0, unrealized_pnl_pct),
+                    max_return_pct=seeded_max,
+                    max_drawdown_pct=seeded_drawdown,
                     premium_usd=entry_context.get("premium_usd"),
                     dte_at_entry=entry_context.get("dte"),
                     is_sweep=entry_context.get("is_sweep", False),
@@ -238,6 +280,14 @@ class PositionMonitor:
                     expiry_date=entry_context.get("expiry_date"),
                 )
                 self.tracked_positions[symbol] = pos
+                # Initial upsert so the row exists for subsequent
+                # rehydration (e.g. if the container restarts before
+                # the next peak/trough event).
+                await upsert_position_running_stats(
+                    symbol=symbol,
+                    max_return_pct=pos.max_return_pct,
+                    max_drawdown_pct=pos.max_drawdown_pct,
+                )
 
                 logger.info(
                     f"New position tracked: {symbol} @ {entry_price}",
