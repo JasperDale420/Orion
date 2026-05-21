@@ -34,15 +34,16 @@ write-up. 20 options positions worth ~$522K mark value, all expiring
     <key>WorkingDirectory</key>
     <string>/Users/jacobmcmillan/Empire/Orion</string>
 
-    <!-- Fire ONCE at 13:35 UTC = 9:35 AM ET on 2026-05-22.
-         launchd doesn't natively support "single absolute date" via
-         StartCalendarInterval (it repeats daily), so we use
-         StartCalendarInterval combined with RunAtLoad=false. After
-         the first fire, manually bootout to prevent next-day re-runs. -->
+    <!-- launchd interprets StartCalendarInterval in LOCAL TIME, not UTC
+         (verified against the host's PDT zone — codex review caught this
+         after the first version of this plist used Hour=13 thinking it
+         was UTC, which would have fired at 4:35 PM ET on 5/22, 35 minutes
+         after options-market close, missing the whole emergency window).
+         Target: 9:35 AM ET on 5/22 = 6:35 AM PT in the host's PDT zone. -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>13</integer>
+        <integer>6</integer>
         <key>Minute</key>
         <integer>35</integer>
     </dict>

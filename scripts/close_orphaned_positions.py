@@ -103,6 +103,31 @@ async def main(dry_run: bool, ticker_filter: str | None, min_value_usd: float) -
         print("no broker positions; nothing to close")
         return 0
 
+    # Idempotency check — query existing open orders so a re-run doesn't
+    # stack duplicate close attempts on the same symbol. The first call
+    # tagged each order with `orion_orphan_close_<uuid>`; if any of
+    # those are still NEW/PARTIALLY_FILLED, skip submitting another.
+    # Codex review 2026-05-21 flagged the previous version as
+    # not-actually-idempotent despite the docstring claiming so.
+    symbols_with_open_close: set[str] = set()
+    try:
+        open_orders = await client.get_orders(status="open") if hasattr(client, "get_orders") else []
+        if isinstance(open_orders, list):
+            for o in open_orders:
+                coid = o.get("client_order_id", "") or ""
+                if coid.startswith("orion_orphan_close_"):
+                    sym = o.get("symbol", "")
+                    if sym:
+                        symbols_with_open_close.add(sym)
+        if symbols_with_open_close:
+            print(f"# {len(symbols_with_open_close)} symbol(s) already have open orphan-close orders — will skip them")
+    except Exception as exc:
+        # If we can't enumerate open orders, fail closed — don't risk
+        # duplicates by assuming "no opens exist."
+        print(f"# WARN: open-order enumeration failed ({exc}); refusing to submit to avoid duplicates")
+        if not dry_run:
+            return 1
+
     # Filter to options + optional ticker + optional min_value
     candidates: list[dict[str, Any]] = []
     for p in raw_positions:
@@ -143,6 +168,14 @@ async def main(dry_run: bool, ticker_filter: str | None, min_value_usd: float) -
         direction = "SHORT" if signed_qty < 0 else "LONG"
         close_side = "buy" if direction == "SHORT" else "sell"
 
+        if sym in symbols_with_open_close:
+            print(
+                f"{sym:<24} {qty:>8.0f} {mark:>8.2f} {'-':>8} {close_side:>5} {market_value:>10.0f} "
+                f"{'skip-open':>8}"
+            )
+            skipped += 1
+            continue
+
         if qty <= 0 or mark <= 0:
             print(f"{sym:<24} {qty:>8.0f} {mark:>8.2f} {'-':>8} {close_side:>5} {market_value:>10.0f} {'skip-0':>8}")
             skipped += 1
@@ -171,11 +204,26 @@ async def main(dry_run: bool, ticker_filter: str | None, min_value_usd: float) -
                 time_in_force="day",
                 client_order_id=client_order_id,
             )
-            if "error" in result:
+            # Strict success check — money is at stake. A Gateway success
+            # response MUST carry a broker_order_id (Alpaca always returns
+            # one on accept) AND must not contain `error`. Anything else
+            # (empty dict, `{"success": false}`, malformed body, etc.) is
+            # treated as a failure so the operator can re-run with a
+            # wider limit instead of assuming the order is on the books.
+            # Codex review 2026-05-21 flagged the previous lax check
+            # ("any response without 'error' = success") as critical.
+            if not isinstance(result, dict):
+                print(f"    FAIL: non-dict response: {result!r}")
+                failed += 1
+            elif "error" in result:
                 print(f"    FAIL: {result['error']}")
                 failed += 1
+            elif not result.get("id"):
+                # Alpaca always returns `id` on accept. No id ⇒ no order.
+                print(f"    FAIL: no broker_id in response: {result!r}")
+                failed += 1
             else:
-                print(f"    OK: broker_id={result.get('id', '?')}")
+                print(f"    OK: broker_id={result['id']}  status={result.get('status', '?')}")
                 sent += 1
         except Exception as exc:
             print(f"    EXC: {exc}")
