@@ -35,6 +35,35 @@ from orion.execution.persistence import (  # noqa: E402
 )
 
 
+async def _fetch_orion_attributed_tickers() -> set[str]:
+    """Return the set of distinct tickers Orion has placed orders for.
+
+    Mirrors `ExecutionEngine._fetch_orion_tickers`. Keeping the
+    implementation here as well (rather than importing from execution_engine)
+    avoids a circular import — position_monitor and execution_engine both
+    need to filter shared-account state but live in the same package.
+
+    Returns an empty set if the query fails; callers MUST treat that as
+    "no orion attribution data" rather than "no positions to filter out"
+    — the latter would silently absorb other systems' positions back
+    into Orion's tracker.
+    """
+    from sqlalchemy import select
+
+    from orion.execution.attribution import orion_order_id_sql_pattern
+    from orion.shared.db_utils import db_query
+    from orion.storage.models_execution import OrderRecord
+
+    async def query_tickers(session: Any) -> set[str]:
+        stmt = (
+            select(OrderRecord.ticker).where(OrderRecord.client_order_id.like(orion_order_id_sql_pattern())).distinct()
+        )
+        result = await session.execute(stmt)
+        return {row[0] for row in result.all()}
+
+    return await db_query(query_tickers)
+
+
 class GatewayPositionAdapter:
     """Adapts GatewayTradingClient.get_positions() dicts to the attribute-based
     interface expected by PositionMonitor.sync_positions().
@@ -42,29 +71,86 @@ class GatewayPositionAdapter:
     sync_positions expects a connector with ``get_all_positions()`` returning
     objects that have ``.symbol``, ``.current_price``, ``.avg_entry_price``,
     ``.qty``, and ``.unrealized_plpc`` attributes.
+
+    SHARED-ACCOUNT FILTER — observed live 2026-05-21 — the Alpaca paper
+    account is shared by multiple Empire systems (3Roses, Cerberus, Kairos,
+    Orbit, WhaleHunter, Orion). Without filtering at this layer, the
+    position-monitor tracker absorbed every broker position
+    (30 of 30 entries were ghosts; ExecutionEngine separately reported
+    "open_positions=0 skipped_non_orion=38" using its own filter pattern).
+    `refresh()` now consults the orders table for distinct
+    `orion_`-prefixed `client_order_id` tickers and drops any broker
+    position whose symbol isn't in that set. Default-deny on DB failure.
     """
 
     def __init__(self, gateway_client: Any) -> None:
         self._client = gateway_client
+        self._cached_positions: list[SimpleNamespace] = []
 
     def get_all_positions(self) -> list[SimpleNamespace]:
-        """Synchronous wrapper — the actual fetch happens in _fetch_async, which
-        the monitor loop awaits before calling sync_positions."""
+        """Synchronous wrapper — the actual fetch happens in `refresh()`,
+        which the monitor loop awaits before calling sync_positions."""
         return self._cached_positions
 
     async def refresh(self) -> None:
-        """Fetch positions from Gateway and cache as SimpleNamespace objects."""
+        """Fetch positions from Gateway, filter to Orion-attributed only,
+        and cache as SimpleNamespace objects.
+
+        Default-deny semantics:
+          - DB query raises → cache empty list (NEVER fall back to
+            unfiltered raw positions).
+          - No orion-prefixed orders in DB → cache empty list.
+          - Gateway returns positions for tickers we don't have orders
+            for → those positions are excluded.
+
+        This is the same shape `ExecutionEngine._sync_risk_from_gateway`
+        uses for its risk-side filter, just at the position-monitor
+        layer too.
+        """
         raw = await self._client.get_positions()
-        self._cached_positions: list[SimpleNamespace] = []
+
+        try:
+            orion_tickers = await _fetch_orion_attributed_tickers()
+        except Exception as exc:
+            logger.error(
+                "Failed to fetch Orion-owned tickers for shared-account "
+                "position filtering; defaulting to EMPTY position list to "
+                "avoid absorbing other systems' positions",
+                extra={
+                    "event_type": "POSITION_ADAPTER_FILTER_FAILED",
+                    "error": str(exc),
+                    "raw_broker_position_count": len(raw),
+                },
+            )
+            self._cached_positions = []
+            return
+
+        filtered: list[SimpleNamespace] = []
         for p in raw:
-            self._cached_positions.append(
-                SimpleNamespace(
-                    symbol=p.get("symbol", ""),
-                    current_price=p.get("current_price", 0),
-                    avg_entry_price=p.get("avg_entry_price", 0),
-                    qty=p.get("qty", 0),
-                    unrealized_plpc=p.get("unrealized_plpc", 0),
+            symbol = p.get("symbol", "")
+            if symbol in orion_tickers:
+                filtered.append(
+                    SimpleNamespace(
+                        symbol=symbol,
+                        current_price=p.get("current_price", 0),
+                        avg_entry_price=p.get("avg_entry_price", 0),
+                        qty=p.get("qty", 0),
+                        unrealized_plpc=p.get("unrealized_plpc", 0),
+                    )
                 )
+
+        self._cached_positions = filtered
+
+        if len(filtered) != len(raw):
+            logger.info(
+                f"PositionAdapter filtered {len(raw) - len(filtered)} non-Orion "
+                f"positions from shared account; kept {len(filtered)} Orion-attributed",
+                extra={
+                    "event_type": "POSITION_ADAPTER_FILTERED",
+                    "raw_count": len(raw),
+                    "kept_count": len(filtered),
+                    "skipped_count": len(raw) - len(filtered),
+                },
             )
 
 
