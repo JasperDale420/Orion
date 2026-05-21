@@ -312,7 +312,7 @@ async def run_quality_checks():
     cache: dict[str, Any] = {}
     token = _run_cache.set(cache)
     try:
-        # 1. Alpaca Bars Summary
+        # 1. Alpaca Bars Summary — full 24h all-symbols read.
         bars_summary = await get_bars_summary()
         results["bars"] = bars_summary
         logger.info(
@@ -320,33 +320,42 @@ async def run_quality_checks():
             f"{bars_summary['validity_pct']}% valid, "
             f"{bars_summary['unique_tickers']} tickers"
         )
+        # Free the 24h-all-symbols DataFrame *immediately* so the next
+        # bars consumer's allocation doesn't stack on top. Each bars
+        # read shape is unique (no other consumer in this run uses the
+        # same cache key), so eviction here doesn't break dedup.
+        _cache_evict_prefix("bars_24h_*")
 
-        # 2. Zero-valued bars
+        # 2. Zero-valued bars — fresh 1h all-symbols read.
         zero_bars = await check_zero_valued_bars(lookback_hours=1)
         results["zero_bars"] = zero_bars
         if zero_bars:
             logger.warning(f"[BARS] ALERT: {len(zero_bars)} tickers with zero-valued bars!")
         else:
             logger.info("[BARS] No zero-valued bars in last hour ✓")
+        _cache_evict_prefix("bars_1h_*")
 
-        # 3. Bar Staleness
+        # 3. Bar Staleness — 24h CRITICAL_TICKERS read.
         stale = await check_data_staleness(stale_minutes=15)
         results["stale_bars"] = stale
         if stale:
             logger.warning(f"[BARS] ALERT: {len(stale)} critical tickers stale!")
         else:
             logger.info("[BARS] All critical tickers fresh ✓")
+        critical_key = ",".join(sorted(s.upper() for s in CRITICAL_TICKERS))
+        _cache_evict_prefix(f"bars_24h_{critical_key}")
 
-        # 4. SPY Gaps
+        # 4. SPY Gaps — 24h SPY-only read.
         gaps = await check_bar_gaps("SPY", gap_minutes=5)
         results["spy_gaps"] = gaps
         if gaps:
             logger.warning(f"[BARS] ALERT: {len(gaps)} gaps in SPY bars")
         else:
             logger.info("[BARS] No SPY gaps ✓")
+        _cache_evict_prefix("bars_24h_SPY")
 
-        # Bars phase complete — drop all bar DataFrames before the next
-        # phase allocates.
+        # Belt-and-braces sweep: any straggler bars entry we forgot
+        # about above also gets dropped here before flow allocates.
         _cache_evict_prefix("bars_")
 
         # 5. UW Flow Summary
@@ -878,8 +887,12 @@ async def _read_heber_bars_24h(symbols: list[str] | None = None, lookback_hours:
     # in `run_quality_checks` (full-24h-all-symbols, 1h-all-symbols,
     # 24h-CRITICAL_TICKERS, 24h-SPY) don't collide. Tuple→str so the
     # `_cache_evict_prefix("bars_")` sweep at the end of the bars phase
-    # catches everything in one pass.
-    sym_key = ",".join(sorted(symbols)) if symbols else "*"
+    # catches everything in one pass. Symbols are upper-cased (matches
+    # what `HeberReader._to_instrument_keys` does internally) so callers
+    # that pass `["spy"]` and `["SPY"]` share the cache slot.
+    # `symbols=[]` and `symbols=None` both collapse to `"*"` because the
+    # reader treats them identically (`instrument_keys=None`).
+    sym_key = ",".join(sorted(s.upper() for s in symbols)) if symbols else "*"
     cache_key = f"bars_{lookback_hours}h_{sym_key}"
     cached = _cache_get(cache_key)
     if cached is not None:

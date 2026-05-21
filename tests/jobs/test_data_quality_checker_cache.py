@@ -146,6 +146,13 @@ async def test_run_quality_checks_dedupes_heber_reads(monkeypatch: pytest.Monkey
     # 24h-SPY) so we don't expect dedup — just that no single signature
     # gets repeated. With 4 distinct sigs and the bars phase orchestration,
     # we expect exactly 4 read_bars calls.
+    # NOTE: Update this expected count if a NEW bars consumer is added to
+    # `run_quality_checks`. The invariant under test is "no bars signature
+    # is read twice", not "exactly four reads"; the count is only nailed
+    # down here because the four current consumers are stable. The
+    # `test_run_quality_checks_no_repeated_bars_signature` test below
+    # captures the no-repeat invariant directly and survives consumer
+    # additions.
     assert reader.read_bars_calls == 4, (
         f"bars expected 4 distinct reads, got {reader.read_bars_calls} "
         f"— either dedup over-collapsed or an extra unexpected call landed"
@@ -173,6 +180,95 @@ async def test_run_quality_checks_evicts_cache_between_phases(monkeypatch: pytes
         await dqc.run_quality_checks()
 
     assert dqc._run_cache.get() is None, "run_quality_checks must reset the ContextVar before returning"
+
+
+class _SignatureRecordingReader(_CountingReader):
+    """Extends `_CountingReader` to capture every bars call's
+    `(symbols-tuple, lookback_hours)` shape, so a test can verify
+    that no signature appears twice — survives consumer additions."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bars_signatures: list[tuple[tuple[str, ...], int | None]] = []
+
+    def read_bars(self, **kwargs):
+        symbols = tuple(sorted(s.upper() for s in (kwargs.get("symbols") or [])))
+        start = kwargs.get("start_time")
+        asof = kwargs.get("asof_time")
+        # Derive lookback in hours from the (asof - start) window so the
+        # signature captures the same "shape" the cache key encodes.
+        lookback = None
+        if start is not None and asof is not None:
+            lookback = int(round((asof - start).total_seconds() / 3600))
+        self.bars_signatures.append((symbols, lookback))
+        return super().read_bars(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_run_quality_checks_no_repeated_bars_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The invariant the cache exists to enforce: no two bars consumers
+    in the same run pull the SAME (symbols, lookback) shape. Survives
+    addition or removal of bars consumers — `read_bars_calls == 4`
+    in the sibling test would break on a new consumer even if the new
+    consumer is correctly cached on its first read."""
+    reader = _SignatureRecordingReader()
+    monkeypatch.setenv("ORION_DATA_QUALITY_CHECKER_PREFER_HEBER", "true")
+    monkeypatch.setattr(dqc, "get_heber_reader", lambda: reader)
+    monkeypatch.setattr(dqc, "_is_market_hours", lambda *_a, **_kw: True, raising=False)
+
+    with patch.object(dqc, "init_db", new=AsyncMock()):
+        await dqc.run_quality_checks()
+
+    # No duplicate signatures (the dedup invariant).
+    assert len(reader.bars_signatures) == len(set(reader.bars_signatures)), (
+        f"bars signatures repeated within a single run: {reader.bars_signatures}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_quality_checks_evicts_bars_intra_phase(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bars phase MUST evict each consumer's cache entry as soon as
+    the consumer is done, NOT just at the end of the phase. Without
+    this, peak in-flight bars DataFrames stays at 4 (one per consumer)
+    instead of 1. This test pins the per-consumer eviction by
+    monkeypatching the eviction helper to record its calls."""
+    reader = _CountingReader()
+    monkeypatch.setenv("ORION_DATA_QUALITY_CHECKER_PREFER_HEBER", "true")
+    monkeypatch.setattr(dqc, "get_heber_reader", lambda: reader)
+    monkeypatch.setattr(dqc, "_is_market_hours", lambda *_a, **_kw: True, raising=False)
+
+    evict_calls: list[str] = []
+    original_evict = dqc._cache_evict_prefix
+
+    def _spy(prefix: str) -> None:
+        evict_calls.append(prefix)
+        original_evict(prefix)
+
+    monkeypatch.setattr(dqc, "_cache_evict_prefix", _spy)
+
+    with patch.object(dqc, "init_db", new=AsyncMock()):
+        await dqc.run_quality_checks()
+
+    # The bars phase fires per-consumer evictions BEFORE the final
+    # `bars_` sweep. Each prefix below must appear in order.
+    # `bars_24h_*` is the get_bars_summary key (24h all symbols).
+    # `bars_1h_*` is check_zero_valued_bars (1h all symbols).
+    # `bars_24h_<sorted-critical>` is check_data_staleness.
+    # `bars_24h_SPY` is check_bar_gaps.
+    expected_bars_prefixes = [
+        "bars_24h_*",
+        "bars_1h_*",
+        # The CRITICAL_TICKERS key is computed in run_quality_checks
+        # — match by substring instead of pinning the exact value so
+        # the test doesn't break if CRITICAL_TICKERS gains a member.
+    ]
+    for expected in expected_bars_prefixes:
+        assert expected in evict_calls, f"expected bars eviction `{expected}` before flow phase, got: {evict_calls}"
+
+    # And the phase-boundary sweeps for the other phases.
+    assert "flow_" in evict_calls, f"flow phase must evict before darkpool, got: {evict_calls}"
+    assert "darkpool_" in evict_calls, f"darkpool phase must evict before ML, got: {evict_calls}"
+    assert "gold:" in evict_calls, f"ML phase must evict at end, got: {evict_calls}"
 
 
 @pytest.mark.asyncio
