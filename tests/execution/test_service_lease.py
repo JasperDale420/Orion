@@ -206,8 +206,10 @@ class TestRenewServiceLease:
         engine._lease_service_id = "phantom"
         engine._lease_run_id = "phantom-run"
 
+        # Lease logic now lives in orion.core.service_lease; ExecutionEngine
+        # delegates. Patch the session factory at its actual call site.
         fake_factory = AsyncMock(side_effect=RuntimeError("simulated DB failure"))
-        with patch("orion.execution.execution_engine.async_session_factory", fake_factory):
+        with patch("orion.core.service_lease.async_session_factory", fake_factory):
             # Should not raise
             await engine.renew_service_lease()
 

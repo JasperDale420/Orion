@@ -14,6 +14,7 @@ from orion.config import system_settings
 from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
+from orion.core.service_lease import acquire_service_lease, renew_service_lease
 from orion.core.timekeeping import derive_trading_date_and_session
 from orion.core.universe_manager import UniverseManager
 from orion.processing.deduper import DeduplicationEngine
@@ -65,9 +66,28 @@ class IngestionService:
         self._eod_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
 
+        # Single-instance lease (see orion.core.service_lease). Set in
+        # `initialize()` after a successful `acquire_service_lease` call;
+        # used by the heartbeat block in `run()` to renew. None until
+        # acquired — renewal is then a no-op (defensive against
+        # initialize-time failures).
+        self._lease_run_id: str | None = None
+
     async def initialize(self) -> None:
         """Initialize resources that require async execution."""
         logger.info("Initializing Ingestion Service...")
+
+        # Acquire the single-instance lease BEFORE any subscriptions or
+        # state-mutating work so a duplicate process refuses to start
+        # without producing duplicate bronze events on the way out.
+        # `ORION_LEASE_OWNER_ID` differentiates the docker-compose run
+        # (`orion_ingestion_compose`) from the native launchd run
+        # (`orion_ingestion_native`); identical owner ids would let two
+        # processes co-exist, distinct ids mutually exclude. Raises
+        # RuntimeError on a fresh competing lease; that propagates so
+        # the process exits non-zero and operator sees the failure.
+        await init_db()
+        self._lease_run_id = await acquire_service_lease("ingestion")
 
         if system_settings.reset_circuit_breaker_on_start:
             try:
@@ -77,7 +97,6 @@ class IngestionService:
             except Exception as cb_err:
                 logger.error(f"Failed to reset circuit breaker on start: {cb_err}", exc_info=True)
 
-        await init_db()
         await self.universe.hydrate_from_db()
         await self.feature_engine.hydrate_history()
 
@@ -150,6 +169,10 @@ class IngestionService:
 
                 self.health_monitor.update_heartbeat()
                 await self._update_health_status()
+                # Renew the single-instance lease (no-op if acquisition
+                # failed during initialize). Extracted helper so the
+                # heartbeat path is directly unit-testable.
+                await self._maybe_renew_lease()
 
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
@@ -176,6 +199,19 @@ class IngestionService:
             await self.gateway_stream.stop()
             logger.info("Gateway stream client stopped")
         logger.info("Ingestion Service Stopped.")
+
+    async def _maybe_renew_lease(self) -> None:
+        """Heartbeat-side lease renewal.
+
+        No-op if `initialize()` never successfully acquired a lease.
+        Delegates to the free function in `orion.core.service_lease`,
+        which swallows transient DB errors so a blip here can't crash
+        the ingestion loop. Repeated failures naturally let the lease
+        go stale so another process can legitimately take over.
+        """
+        if self._lease_run_id is None:
+            return
+        await renew_service_lease("ingestion", self._lease_run_id)
 
     async def _run_cycle(self) -> None:
         await self._check_overnight_sleep()

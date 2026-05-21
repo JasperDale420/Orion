@@ -87,6 +87,13 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_persistent_ingest
+      # Stable lease owner id so a container restart reclaims its own
+      # service lease within the stale window, and DISTINCT from the
+      # native launchd value (`orion_ingestion_native`) so the lease
+      # guard mutually-excludes the two paths. If both are accidentally
+      # started, whichever loses the race raises RuntimeError and exits
+      # non-zero — see orion.core.service_lease.
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_ingestion_compose}
       GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
     command: [ "python", "-m", "orion.ingestion" ]
@@ -184,6 +191,11 @@ services:
   execution:
     <<: *orion-common
     container_name: orion_execution
+    # Native launchd runner owns the execution lease by default
+    # (com.empire.orion.execution). To roll back to the containerised
+    # version, bootout the agent and run:
+    #   docker compose --profile docker up -d execution
+    profiles: [ "docker" ]
     restart: unless-stopped
     depends_on:
       timescaledb:
