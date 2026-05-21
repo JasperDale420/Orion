@@ -109,24 +109,46 @@ class SolverEnsemble:
             valid_solver_found = True
 
             # ABSTAIN semantics — FOLLOWUPS #1 (observed 2026-05-21):
-            # `solver_executor.py:65` initializes `p_take = 0.0` and only
-            # overwrites it when a model is loaded AND predict_proba is
-            # called. A solver whose conditions don't apply to the current
+            # A solver whose conditions don't apply to the current
             # candidate (e.g. swing_entry on a sweep-driven flow event)
-            # never invokes predict_proba and returns 0.0.
+            # returns p_take=0.0 + trace.abstained=True from
+            # `solver_executor`. Those abstentions are excluded from
+            # the weighted denominator so they don't drag consensus
+            # below threshold for every flow-driven candidate.
             #
-            # Pre-fix, those default-0.0 votes contributed to the weighted
-            # denominator: with 3 active solvers and only 1 actually
-            # applicable (0.7 vote), consensus = 0.7×1.5 / (1.5+1.4+1.3)
-            # = 0.25, below the 0.5 threshold. Every candidate got
-            # SKIPped with "Ensemble Rejected (0.25 < 0.5)" all day on
-            # 2026-05-21 and likely for weeks before that.
-            #
-            # Treating p_take==0.0 as abstention removes those silent
-            # downvotes from BOTH numerator and denominator. The
-            # ensemble_details record still includes them so the log
-            # trail captures who abstained.
-            if p_take > 0.0:
+            # IMPORTANT — codex review 2026-05-21 #3: this MUST NOT
+            # conflate "solver didn't apply" with "model genuinely
+            # predicts 0.0 (strong NO)". The first version of this fix
+            # used `p_take > 0.0` as the boundary, which silently
+            # excluded real-model strong-NO votes too. We now key off
+            # the explicit `trace.abstained` flag set by
+            # solver_executor, with a fallback to `p_take <= 0.0` only
+            # when the flag is missing (legacy traces / custom solver
+            # pipelines that pre-date the flag).
+            if isinstance(trace, dict) and "abstained" in trace:
+                # Preferred path — solver_executor sets this on rule
+                # mismatch. Becomes the only path once all callers
+                # adopt the flag.
+                abstained = bool(trace["abstained"])
+            elif isinstance(trace, dict) and trace.get("reason") == "Rule Mismatch":
+                # Legacy traces from a pre-flag solver_executor.
+                abstained = True
+            elif (
+                isinstance(trace, dict)
+                and isinstance(trace.get("stage"), str)
+                and trace["stage"].startswith("model_inference")
+            ):
+                # Real model ran — a 0.0 prediction here is a STRONG
+                # NO, not an abstention. Codex review 2026-05-21 #3.
+                abstained = False
+            else:
+                # Last-resort backward compat: no flag, no model trace,
+                # no abstention reason — fall back to the pre-2026-05-21
+                # heuristic. Will become dead code as all solver
+                # pipelines adopt the flag.
+                abstained = p_take <= 0.0
+
+            if not abstained:
                 weighted_vote += p_take * weight
                 total_weight += weight
 
@@ -137,7 +159,7 @@ class SolverEnsemble:
                     "oos_expect_bp": float(ss.oos_expect_bp or 0.0),
                     "weight": weight,
                     "p_take": p_take,
-                    "abstained": p_take <= 0.0,
+                    "abstained": abstained,
                     "trace": trace,
                 }
             )

@@ -361,3 +361,61 @@ async def test_ensemble_keeps_low_but_nonzero_votes():
     # consensus = (0.7*1.5 + 0.05*1.4 + 0.05*1.3) / (1.5+1.4+1.3)
     # = (1.05 + 0.07 + 0.065) / 4.2 ≈ 0.282 → SKIP (still below 0.5)
     assert result.action == "SKIP", "low-but-nonzero votes must count, not abstain"
+
+
+@pytest.mark.asyncio
+async def test_ensemble_counts_model_predicted_zero_as_vote_not_abstain():
+    """Codex review 2026-05-21 Important #3: pre-fix, the ensemble
+    treated ANY p_take==0.0 as abstention. That conflated two
+    different signals — (a) solver_executor's rule-mismatch default
+    (line 40-45 returns p_take=0.0 with trace.reason='Rule Mismatch'),
+    and (b) a model that genuinely predicted 0.0 as a strong NO.
+
+    The fix uses the trace's explicit `abstained` flag (set by
+    solver_executor on rule mismatch) instead of `p_take > 0.0`.
+    A model that returns 0.0 with no abstained flag is a real vote
+    and contributes to the weighted denominator.
+
+    Scenario: 1 active solver votes 0.7, 1 model genuinely predicts
+    0.0 (strong NO with a real inference trace), 1 abstains (rule
+    mismatch). Consensus should weight 0.7 against 0.0 and produce
+    a low score (0.5 / 2.9 ≈ 0.36) → SKIP, NOT count only the 0.7.
+    """
+    stage = SolverEnsemble()
+    s_yes = _mock_solver(solver_id="s_yes", info_ratio=1.5)
+    s_strongno = _mock_solver(solver_id="s_strong_no", info_ratio=1.4)
+    s_abstain = _mock_solver(solver_id="s_abstain", info_ratio=1.3)
+
+    stage.router = MagicMock()
+    stage.router.select_solvers = AsyncMock(return_value=[s_yes, s_strongno, s_abstain])
+
+    # Three traces with semantically different meanings:
+    #   - real model vote (high) → trace from model inference
+    #   - real model vote (zero) → trace from model inference, NO abstained flag
+    #   - abstention → trace marked abstained=True
+    stage.pipeline.execute = AsyncMock(
+        side_effect=[
+            (0.7, 1.0, {"stage": "model_inference_deterministic", "p_take_raw": 0.7}),
+            (0.0, 1.0, {"stage": "model_inference_deterministic", "p_take_raw": 0.0}),
+            (0.0, 1.0, {"reason": "Rule Mismatch", "abstained": True}),
+        ]
+    )
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await stage.evaluate(ctx)
+
+    # Expected: weighted_vote = 0.7*1.5 + 0.0*1.4 = 1.05
+    #           total_weight  = 1.5 + 1.4         = 2.9
+    #           consensus     = 1.05 / 2.9        ≈ 0.362 → below 0.5 → SKIP
+    assert result.action == "SKIP", (
+        "strong-NO vote (0.0 with real model trace) must count in denominator; "
+        "consensus should be ~0.36, NOT 0.7 (which would happen if the model "
+        "vote were silently treated as abstention)"
+    )
+    # Verify via the details that the strong-NO solver is NOT marked abstained
+    details = result.trace.get("ensemble_details", []) or result.trace.get("ensemble_solvers", [])
+    strong_no_entry = next((d for d in details if d.get("solver_id") == "s_strong_no"), None)
+    assert strong_no_entry is not None
+    assert strong_no_entry.get("abstained") is False, (
+        f"s_strong_no must be marked abstained=False (real model vote); got {strong_no_entry}"
+    )
