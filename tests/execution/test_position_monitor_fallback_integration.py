@@ -151,3 +151,67 @@ def test_fallback_exception_falls_through_to_ml_classifier(monkeypatch, caplog):
         or "Exit fallback evaluation raised" in r.getMessage()
         for r in error_records
     ), f"Expected exit_fallback_error log, got: {[r.getMessage() for r in error_records]}"
+
+
+# --- Test 3: smoke test — fallback rules called for EVERY tracked position ---
+
+
+def test_fallback_rules_called_once_per_tracked_position(monkeypatch):
+    """Phase 4 of exit-pipeline RCA: future-proofs the Phase 2 wire-in.
+
+    The earlier tests would BOTH pass if someone accidentally deleted
+    the `evaluate_fallback_rules` call from `evaluate_exits`:
+    test_fallback_short_circuits_classifier_on_profit_target would
+    pass because ML wouldn't be called (the classifier-boom would
+    re-raise as AssertionError… wait, actually that one WOULD catch
+    it). But test_fallback_exception_falls_through wouldn't, because
+    a benign ML classifier covers both code paths.
+
+    This smoke test spies on `evaluate_fallback_rules` and asserts
+    the call count equals the tracked-position count exactly once
+    per loop. If a future refactor removes the call (or accidentally
+    short-circuits past it), this test fails immediately.
+    """
+    from types import SimpleNamespace
+
+    from orion.execution import exit_fallback_rules as efr
+
+    call_args: list[str] = []  # capture position symbols passed to each call
+    real_fn = efr.evaluate_fallback_rules
+
+    def _spy(position, **kwargs):
+        call_args.append(position.symbol)
+        return real_fn(position, **kwargs)
+
+    monkeypatch.setattr(efr, "evaluate_fallback_rules", _spy)
+
+    class _ClassifierBenign:
+        def predict(self, _features):
+            return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
+
+    monitor = _build_monitor_with_classifier(_ClassifierBenign())
+    # Three positions, none at the fallback threshold (10% gain is
+    # well under the default 100% profit target and the 5-day DTE is
+    # well above the min_dte=1 cliff). All fallback rules return None,
+    # falling through to the benign ML classifier.
+    monitor.tracked_positions = {
+        f"POS_{i}": _tracked_position(
+            symbol=f"POS_{i}",
+            return_pct_value=10.0,
+            bucket="SWING",
+            dte_at_entry=5,
+        )
+        for i in range(3)
+    }
+
+    monitor.evaluate_exits()
+
+    # Every position must have been passed to evaluate_fallback_rules
+    # exactly once. A future regression that removes the call (or
+    # gates it behind some condition) fails this assertion loudly.
+    assert sorted(call_args) == ["POS_0", "POS_1", "POS_2"], (
+        f"evaluate_fallback_rules must be called once per tracked position; "
+        f"got call_args={call_args}. If this fails, check that the deferred "
+        f"`from orion.execution.exit_fallback_rules import evaluate_fallback_rules` "
+        f"inside `PositionMonitor.evaluate_exits` still wraps every position."
+    )
