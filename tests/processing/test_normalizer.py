@@ -86,3 +86,40 @@ def test_normalize_alpaca_bar():
     assert normalized["ticker"] == "SPY"
     assert normalized["close"] == 410.8
     assert normalized["volume"] == 1000
+
+
+def test_normalize_uw_flow_accepts_flow_ts_utc():
+    """Bronze events produced by `_heber_row_to_event` carry the Heber Silver
+    schema, which uses `flow_ts_utc` for the event timestamp — NOT `timestamp`
+    or `created_at`. Without this support, the normalizer's strict
+    parse_timestamptz call raises on None, the event is silently dropped,
+    and zero UW_FLOW silver signals get persisted even though bronze is
+    populating. This regression was caught in prod when Orion went 0-of-N
+    EXECUTEs for hours despite UW data flowing.
+    """
+    payload = {
+        "ticker": "EWY",
+        "flow_ts_utc": "2026-05-21T17:26:36+00:00",  # Heber-derived ts
+        "put_call": "P",
+        "expiry": "2026-05-22",
+        "strike": 175.0,
+        "price": 0.0,
+        "size_contracts": 210,
+        "bid": 0.0,
+        "ask": 0.0,
+        "underlying_price": 0.0,
+        "aggressor": "BID",
+        "is_sweep": "true",
+        "premium_usd": 15750.0,
+        "volume_contract": 890.0,
+        "open_interest": 951.0,
+        "volume_oi_ratio": 0.94,
+    }
+
+    normalized = NormalizationEngine.normalize_event("UW", "UW_FLOW", payload)
+
+    # Critical: must NOT have raised + must preserve the timestamp
+    assert normalized["ticker"] == "EWY"
+    assert normalized["flow_ts_utc"].startswith("2026-05-21T17:26:36")
+    assert normalized["put_call"] == "P"
+    assert normalized["flags"]["is_sweep"] is True

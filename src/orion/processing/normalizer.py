@@ -59,8 +59,22 @@ class NormalizationEngine:
         """
         PRD 6.2 Silver Schema: UW Options Flow
         """
-        # Parse timestamp - UW uses 'created_at' or 'timestamp'
-        ts_str = payload.get("timestamp") or payload.get("created_at")
+        # Parse timestamp — three known sources of UW flow data, three
+        # different field names:
+        #   - Data-Gateway UW stream → "timestamp"
+        #   - Legacy UW push → "created_at"
+        #   - Heber Silver `feed=flow_alerts` rows (current default since
+        #     the gateway-to-Heber migration) → "flow_ts_utc"
+        # Without the `flow_ts_utc` branch, every Heber-sourced flow event
+        # fell through `payload.get(...) or payload.get(...)` to None, and
+        # `parse_timestamptz(None, strict=True)` silently returned now()
+        # (strict only catches parse exceptions, not None input). Net
+        # effect: silver UW_FLOW signals were timestamped at ingestion
+        # time instead of event time, breaking the bar/flow time-
+        # correlation that downstream feature engineering and rule
+        # firing depend on. Found 2026-05-21 during the end-to-end
+        # pipeline health check.
+        ts_str = payload.get("timestamp") or payload.get("created_at") or payload.get("flow_ts_utc")
         flow_ts = parse_timestamptz(ts_str, strict=True)
 
         # Normalize sweep flag - support is_sweep (Heber Silver), has_sweep (Data-Gateway), sweep (legacy).
