@@ -107,8 +107,28 @@ class SolverEnsemble:
                 continue
 
             valid_solver_found = True
-            weighted_vote += p_take * weight
-            total_weight += weight
+
+            # ABSTAIN semantics — FOLLOWUPS #1 (observed 2026-05-21):
+            # `solver_executor.py:65` initializes `p_take = 0.0` and only
+            # overwrites it when a model is loaded AND predict_proba is
+            # called. A solver whose conditions don't apply to the current
+            # candidate (e.g. swing_entry on a sweep-driven flow event)
+            # never invokes predict_proba and returns 0.0.
+            #
+            # Pre-fix, those default-0.0 votes contributed to the weighted
+            # denominator: with 3 active solvers and only 1 actually
+            # applicable (0.7 vote), consensus = 0.7×1.5 / (1.5+1.4+1.3)
+            # = 0.25, below the 0.5 threshold. Every candidate got
+            # SKIPped with "Ensemble Rejected (0.25 < 0.5)" all day on
+            # 2026-05-21 and likely for weeks before that.
+            #
+            # Treating p_take==0.0 as abstention removes those silent
+            # downvotes from BOTH numerator and denominator. The
+            # ensemble_details record still includes them so the log
+            # trail captures who abstained.
+            if p_take > 0.0:
+                weighted_vote += p_take * weight
+                total_weight += weight
 
             ensemble_details.append(
                 {
@@ -117,6 +137,7 @@ class SolverEnsemble:
                     "oos_expect_bp": float(ss.oos_expect_bp or 0.0),
                     "weight": weight,
                     "p_take": p_take,
+                    "abstained": p_take <= 0.0,
                     "trace": trace,
                 }
             )

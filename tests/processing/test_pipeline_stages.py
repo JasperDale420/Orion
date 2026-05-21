@@ -258,3 +258,106 @@ async def test_solver_ensemble_continues_above_consensus():
     assert ctx.stop_loss_pct == 0.03
     assert ctx.take_profit_pct == 0.06
     assert ctx.risk_per_trade_bps == 150.0
+
+
+# --- Ensemble abstain semantics (FOLLOWUPS #1 — observed 2026-05-21) ---
+
+
+def _mock_solver(*, solver_id: str, info_ratio: float = 1.0) -> MagicMock:
+    s = MagicMock()
+    s.solver_id = solver_id
+    s.info_ratio = info_ratio
+    s.oos_expect_bp = 50
+    s.is_baseline = False
+    s.config.rules = ["*"]
+    s.config.exit_logic = MagicMock()
+    s.config.exit_logic.fixed_sl_pct = 0.03
+    s.config.exit_logic.fixed_tp_pct = 0.06
+    s.config.risk = MagicMock()
+    s.config.risk.risk_per_trade_bps = 150
+    return s
+
+
+@pytest.mark.asyncio
+async def test_ensemble_treats_zero_p_take_as_abstention():
+    """Three solvers; only one applies. The non-applicable solvers
+    return p_take=0.0 by default (solver_executor.py:65 — initial
+    value if predict_proba is not invoked). Pre-fix, the weighted
+    formula counted those zeros into the denominator and EVERY
+    flow-rule candidate was rejected at consensus≈0.25 even though
+    the one applicable solver clearly said TAKE.
+
+    With p_take=0.0 treated as abstention, only the active solver's
+    vote contributes — consensus = 0.7 → CONTINUE.
+    """
+    stage = SolverEnsemble()
+
+    s_active = _mock_solver(solver_id="bullish_sweep_paper_v1", info_ratio=1.5)
+    s_abstain1 = _mock_solver(solver_id="swing_entry_paper_v1", info_ratio=1.4)
+    s_abstain2 = _mock_solver(solver_id="bearish_put_paper_v1", info_ratio=1.3)
+
+    stage.router = MagicMock()
+    stage.router.select_solvers = AsyncMock(return_value=[s_active, s_abstain1, s_abstain2])
+
+    # Return different p_take per solver via side_effect
+    stage.pipeline.execute = AsyncMock(
+        side_effect=[
+            (0.7, 1.0, {"model": "active"}),  # active solver
+            (0.0, 1.0, {"model": "inactive1"}),  # abstain
+            (0.0, 1.0, {"model": "inactive2"}),  # abstain
+        ]
+    )
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await stage.evaluate(ctx)
+
+    assert result.action == "CONTINUE", (
+        "expected CONTINUE (consensus=0.7 from sole active solver), "
+        "got SKIP — abstain logic broken; consensus would be 0.25"
+    )
+    # Consensus should be exactly the active solver's vote when others
+    # abstain (1.5 * 0.7) / 1.5 = 0.7
+    assert abs(ctx.consensus_score - 0.7) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_ensemble_skips_when_all_solvers_abstain():
+    """If every solver votes p_take=0.0 (none apply), the ensemble
+    should still SKIP — consensus is undefined / no positive signal."""
+    stage = SolverEnsemble()
+
+    solvers = [_mock_solver(solver_id=f"s{i}") for i in range(3)]
+    stage.router = MagicMock()
+    stage.router.select_solvers = AsyncMock(return_value=solvers)
+    stage.pipeline.execute = AsyncMock(side_effect=[(0.0, 1.0, {})] * 3)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await stage.evaluate(ctx)
+
+    assert result.action == "SKIP"
+    assert "Rejected" in result.reason or "abstain" in result.reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_ensemble_keeps_low_but_nonzero_votes():
+    """A solver that votes 0.05 (low but non-zero) is STILL voting,
+    not abstaining. The fix must only exclude exact 0.0 (the default
+    initialization). 0.7 + low NOs should still average below
+    threshold and SKIP."""
+    stage = SolverEnsemble()
+
+    solvers = [
+        _mock_solver(solver_id="s_yes", info_ratio=1.5),
+        _mock_solver(solver_id="s_lownos1", info_ratio=1.4),
+        _mock_solver(solver_id="s_lownos2", info_ratio=1.3),
+    ]
+    stage.router = MagicMock()
+    stage.router.select_solvers = AsyncMock(return_value=solvers)
+    stage.pipeline.execute = AsyncMock(side_effect=[(0.7, 1.0, {}), (0.05, 1.0, {}), (0.05, 1.0, {})])
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await stage.evaluate(ctx)
+
+    # consensus = (0.7*1.5 + 0.05*1.4 + 0.05*1.3) / (1.5+1.4+1.3)
+    # = (1.05 + 0.07 + 0.065) / 4.2 ≈ 0.282 → SKIP (still below 0.5)
+    assert result.action == "SKIP", "low-but-nonzero votes must count, not abstain"
