@@ -67,6 +67,11 @@ services:
   ingestion:
     <<: *orion-common
     container_name: orion_ingestion
+    # Native launchd runner owns the ingestion lease by default
+    # (com.empire.orion.ingestion). To roll back to the containerised
+    # version, bootout the agent and run:
+    #   docker compose --profile docker up -d ingestion
+    profiles: [ "docker" ]
     restart: unless-stopped
     depends_on:
       timescaledb:
