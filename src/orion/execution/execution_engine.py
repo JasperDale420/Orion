@@ -17,8 +17,9 @@ from orion.execution.attribution import (
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import (
     persist_exit_decision,
-    persist_order_record,
+    persist_order_finalize,
     persist_order_status_update,
+    persist_pending_order,
 )
 from orion.execution.rate_limiter import get_order_rate_limiter
 from orion.shared.db_utils import db_query
@@ -713,6 +714,23 @@ class ExecutionEngine:
                 order_id=client_order_id,
             )
 
+        # Two-phase persistence: write the PENDING_SUBMIT tracking row BEFORE the
+        # Gateway round-trip so a crash mid-call (SIGTERM, cancel, OOM) cannot
+        # leave the broker with an order Orion's DB knows nothing about.
+        # Forensic context: between 2026-05-12 and 2026-05-21, 37 broker positions
+        # had ZERO matching `orders` rows because the original write happened
+        # after `client.create_order()` returned and the docker_execution
+        # container was crash-looping (380 restarts in 24h, lease-conflict).
+        # The post-Gateway persist_order_finalize fills in broker_order_id + status.
+        await persist_pending_order(
+            decision=decision,
+            candidate=candidate,
+            client_order_id=client_order_id,
+            side=side,
+            qty=num_contracts,
+            limit_price=option_price,
+        )
+
         try:
             client = self._get_gateway_client()
             result = await client.create_order(
@@ -728,13 +746,8 @@ class ExecutionEngine:
             if "error" in result:
                 raise RuntimeError(f"Gateway options order failed: {result['error']}")
 
-            await persist_order_record(
-                decision=decision,
-                candidate=candidate,
+            await persist_order_finalize(
                 client_order_id=client_order_id,
-                side=side,
-                qty=num_contracts,
-                limit_price=option_price,
                 broker_order=result,
                 error_message=None,
             )
@@ -788,13 +801,10 @@ class ExecutionEngine:
         except Exception as e:
             await self._remove_pending_order_compat(client_order_id)
 
-            await persist_order_record(
-                decision=decision,
-                candidate=candidate,
+            # Finalize the PENDING_SUBMIT row to REJECTED in place; the row
+            # already exists from persist_pending_order above.
+            await persist_order_finalize(
                 client_order_id=client_order_id,
-                side=side,
-                qty=num_contracts,
-                limit_price=option_price,
                 broker_order=None,
                 error_message=str(e),
             )

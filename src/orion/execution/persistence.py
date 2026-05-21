@@ -87,8 +87,18 @@ async def mark_fill_processed(
         logger.error(f"Failed to mark fill {order_id} as processed: {e}")
 
 
+# Status sentinel for a row written BEFORE the broker round-trip. A startup
+# reconciler queries by this status to find orders that may have landed on the
+# broker without a matching DB finalize (process killed mid-Gateway-call).
+PENDING_SUBMIT_STATUS = "PENDING_SUBMIT"
+# Status sentinel for finalize when the Gateway call raised. Distinct from
+# broker-side rejection statuses (e.g., 'rejected') so reconciler logic can
+# tell "we never heard back" from "broker said no".
+REJECTED_STATUS = "REJECTED"
+
+
 @db_retry
-async def persist_order_record(
+async def persist_pending_order(
     *,
     decision: StrategyDecision,
     candidate: CandidateTrade,
@@ -96,26 +106,24 @@ async def persist_order_record(
     side: str,
     qty: float,
     limit_price: float | None,
-    broker_order: Any | None,
-    error_message: str | None,
 ) -> None:
-    """Persist an order record and upsert the trade journal entry."""
+    """Persist a PENDING_SUBMIT order row BEFORE the broker round-trip.
 
-    async def save_order_and_journal(session: Any) -> None:
+    Two-phase persistence (RCA 2026-05-21): the previous flow wrote the
+    `orders` row only after `client.create_order()` returned, so a crash in
+    that window (lease-conflict crash-loop, SIGTERM, asyncio cancel) left
+    the broker holding the order with zero matching DB row. Writing here
+    guarantees a durable tracking row exists before any network call, so a
+    startup reconciler can resolve PENDING_SUBMIT rows against the Gateway
+    by ``client_order_id``.
+
+    Call ``persist_order_finalize`` after the Gateway returns to fill in
+    ``broker_order_id`` + ``status`` (or ``REJECTED`` + error_message).
+    """
+
+    async def save_pending(session: Any) -> None:
         from orion.storage.models_execution import OrderRecord
-
-        broker_order_id = None
-        status = None
-        raw = {}
-        if broker_order is not None:
-            if isinstance(broker_order, dict):
-                broker_order_id = str(broker_order.get("id", "")) or None
-                status = str(broker_order.get("status", "")) or None
-                raw = broker_order
-            else:
-                broker_order_id = str(getattr(broker_order, "id", None) or "")
-                status = str(getattr(broker_order, "status", None) or "")
-                raw = broker_order.model_dump(mode="json") if hasattr(broker_order, "model_dump") else {}
+        from orion.storage.models_trade_journal import TradeJournalEntry
 
         session.add(
             OrderRecord(
@@ -127,17 +135,15 @@ async def persist_order_record(
                 qty=float(qty),
                 limit_price=float(limit_price) if limit_price is not None else None,
                 client_order_id=client_order_id,
-                broker_order_id=broker_order_id or None,
-                status=status or None,
-                error_message=error_message,
-                raw_json=raw,
+                broker_order_id=None,
+                status=PENDING_SUBMIT_STATUS,
+                error_message=None,
+                raw_json={},
             )
         )
 
-        # PRD SS12.4: Ensure a trade journal entry exists and links to order ids.
+        # PRD SS12.4: journal entry pre-write — broker_order_id filled in by finalize.
         try:
-            from orion.storage.models_trade_journal import TradeJournalEntry
-
             journal_decision_id = decision.decision_id or str(uuid.uuid4())
             await session.merge(
                 TradeJournalEntry(
@@ -150,22 +156,117 @@ async def persist_order_record(
                     evidence=candidate.evidence or {},
                     decision_trace_json=decision.decision_trace_json or {},
                     client_order_id=client_order_id,
-                    broker_order_id=broker_order_id or None,
-                    raw_json={"order_status": status or None, "order_error": error_message},
+                    broker_order_id=None,
+                    raw_json={"order_status": PENDING_SUBMIT_STATUS},
                 )
             )
         except Exception as e:
             logger.error(
-                "Failed to upsert trade journal on order persist",
+                "Failed to upsert trade journal on pending order persist",
                 extra={"event_type": "TRADE_JOURNAL_UPSERT_ERROR", "error": str(e)},
             )
 
     try:
         async with async_session_factory() as session:
-            await save_order_and_journal(session)
+            await save_pending(session)
             await session.commit()
     except Exception as e:
-        logger.error("Failed to persist order record", extra={"event_type": "ORDER_PERSIST_ERROR", "error": str(e)})
+        logger.error(
+            "Failed to persist pending order",
+            extra={
+                "event_type": "PENDING_ORDER_PERSIST_ERROR",
+                "client_order_id": client_order_id,
+                "error": str(e),
+            },
+        )
+
+
+@db_retry
+async def persist_order_finalize(
+    *,
+    client_order_id: str,
+    broker_order: Any | None,
+    error_message: str | None,
+) -> None:
+    """Finalize the PENDING_SUBMIT row by ``client_order_id`` after Gateway returns.
+
+    On success: stamps ``broker_order_id`` + broker-reported ``status`` +
+    ``raw_json`` onto the existing row.
+
+    On failure (broker_order is None, error_message set): stamps
+    ``status='REJECTED'`` + ``error_message`` so reconciler can distinguish
+    "never submitted" from "broker said no" without scanning logs.
+    """
+    from orion.storage.models_execution import OrderRecord
+    from orion.storage.models_trade_journal import TradeJournalEntry
+
+    broker_order_id: str | None = None
+    status: str | None = None
+    raw: Any = {}
+    if broker_order is not None:
+        if isinstance(broker_order, dict):
+            broker_order_id = str(broker_order.get("id", "")) or None
+            status = str(broker_order.get("status", "")) or None
+            raw = broker_order
+        else:
+            broker_order_id = str(getattr(broker_order, "id", None) or "") or None
+            status = str(getattr(broker_order, "status", None) or "") or None
+            raw = broker_order.model_dump(mode="json") if hasattr(broker_order, "model_dump") else {}
+
+    if status is None and error_message is not None:
+        status = REJECTED_STATUS
+
+    async def update_row(session: Any) -> int:
+        order_stmt = (
+            update(OrderRecord)
+            .where(OrderRecord.client_order_id == client_order_id)
+            .values(
+                broker_order_id=broker_order_id,
+                status=status,
+                error_message=error_message,
+                raw_json=raw,
+            )
+        )
+        result = await session.execute(order_stmt)
+        rowcount = int(result.rowcount or 0)
+
+        # Mirror the OrderRecord update onto the trade journal so downstream
+        # joins on broker_order_id still resolve.
+        journal_stmt = (
+            update(TradeJournalEntry)
+            .where(TradeJournalEntry.client_order_id == client_order_id)
+            .values(
+                broker_order_id=broker_order_id,
+                raw_json={"order_status": status, "order_error": error_message},
+            )
+        )
+        await session.execute(journal_stmt)
+        return rowcount
+
+    try:
+        rowcount = await db_write(update_row)
+        if rowcount == 0:
+            # No PENDING_SUBMIT row matched — either persist_pending_order failed
+            # earlier (logged at that site) or someone called finalize without a
+            # prior pending write. Surface so the reconciler doesn't silently miss it.
+            logger.warning(
+                "Order finalize matched 0 rows by client_order_id",
+                extra={
+                    "event_type": "ORDER_FINALIZE_NO_PENDING_ROW",
+                    "client_order_id": client_order_id,
+                    "status": status,
+                    "has_broker_order_id": broker_order_id is not None,
+                },
+            )
+    except Exception as e:
+        logger.error(
+            "Failed to finalize order",
+            extra={
+                "event_type": "ORDER_FINALIZE_ERROR",
+                "client_order_id": client_order_id,
+                "error": str(e),
+            },
+        )
 
 
 @db_retry

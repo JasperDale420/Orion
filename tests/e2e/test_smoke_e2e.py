@@ -341,7 +341,11 @@ async def _execute_mock_smoke_order(*, run_tag: str, decision, candidate) -> Non
     execution_engine.risk_manager.update_post_trade = AsyncMock()
     execution_engine.risk_manager.remove_pending_order = AsyncMock()
 
-    with patch("orion.execution.execution_engine.persist_order_record", new=AsyncMock()) as persist_mock:
+    # Two-phase persistence: persist_pending_order fires BEFORE the Gateway
+    # round-trip, persist_order_finalize after. Asserting only the pending
+    # call is enough for the smoke check — finalize is exercised by the
+    # dedicated forensic regression tests.
+    with patch("orion.execution.execution_engine.persist_pending_order", new=AsyncMock()) as persist_mock:
         await execution_engine.execute_order(decision, candidate)
         persist_mock.assert_awaited()
 
