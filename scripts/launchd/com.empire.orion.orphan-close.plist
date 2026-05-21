@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+One-shot launchd agent that closes orphaned options positions at the
+next market open (2026-05-22 9:35 AM ET = 13:35 UTC).
+
+INSTALL ONCE:
+    cp scripts/launchd/com.empire.orion.orphan-close.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.orphan-close.plist
+
+CHECK STATUS:
+    launchctl print gui/$(id -u)/com.empire.orion.orphan-close
+
+REMOVE AFTER USE (this is a ONE-SHOT — does not need to live in
+LaunchAgents permanently):
+    launchctl bootout gui/$(id -u)/com.empire.orion.orphan-close
+    rm ~/Library/LaunchAgents/com.empire.orion.orphan-close.plist
+
+CONTEXT — see scripts/close_orphaned_positions.py for the full incident
+write-up. 20 options positions worth ~$522K mark value, all expiring
+5/22, need to be closed at the 5/22 9:30 ET open.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.orphan-close</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd /Users/jacobmcmillan/Empire/Orion &amp;&amp; /opt/homebrew/bin/uv run python scripts/close_orphaned_positions.py --min-value 50 >> logs/orphan_close.log 2>&amp;1</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Fire ONCE at 13:35 UTC = 9:35 AM ET on 2026-05-22.
+         launchd doesn't natively support "single absolute date" via
+         StartCalendarInterval (it repeats daily), so we use
+         StartCalendarInterval combined with RunAtLoad=false. After
+         the first fire, manually bootout to prevent next-day re-runs. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>13</integer>
+        <key>Minute</key>
+        <integer>35</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/orphan_close.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/orphan_close.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
