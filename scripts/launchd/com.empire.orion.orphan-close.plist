@@ -28,7 +28,12 @@ write-up. 20 options positions worth ~$522K mark value, all expiring
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>cd /Users/jacobmcmillan/Empire/Orion &amp;&amp; /opt/homebrew/bin/uv run python scripts/close_orphaned_positions.py --min-value 50 >> logs/orphan_close.log 2>&amp;1</string>
+        <!-- uv lives at ~/.local/bin/uv on this host, NOT /opt/homebrew/bin/uv.
+             The previous path made every fire return exit-127 silently
+             (incident 2026-05-22: orphans bled an additional $67K because
+             the orphan-close that was supposed to fire at 6:35 AM PT
+             never ran). Use absolute path to the real binary. -->
+        <string>cd /Users/jacobmcmillan/Empire/Orion &amp;&amp; /Users/jacobmcmillan/.local/bin/uv run python scripts/close_orphaned_positions.py --min-value 50 >> logs/orphan_close.log 2>&amp;1</string>
     </array>
 
     <key>WorkingDirectory</key>

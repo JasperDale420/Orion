@@ -146,8 +146,19 @@ class GatewayTradingClient:
         limit_price: float | None = None,
         client_order_id: str | None = None,
     ) -> dict[str, Any]:
-        """Submit a new order through the Gateway."""
-        body: dict[str, Any] = {
+        """Submit a new order through the Gateway.
+
+        2026-05-22: Gateway's POST /api/v1/alpaca/orders signature declares
+        all fields as FastAPI Query parameters (no Body annotation), so they
+        must travel in the URL query string, not the JSON body. Sending them
+        as a JSON body returns 422 with
+            loc: ["query", "symbol"] / ["query", "side"]
+        — see incident write-up in scripts/close_orphaned_positions.py
+        (orphan-close, 5/22). This bug silently blocked 100% of Orion's
+        live order submissions until it was caught running the orphan-close
+        the morning after the launchd job mis-fired.
+        """
+        params: dict[str, Any] = {
             "symbol": symbol,
             "qty": qty,
             "side": side,
@@ -155,10 +166,10 @@ class GatewayTradingClient:
             "time_in_force": time_in_force,
         }
         if limit_price is not None:
-            body["limit_price"] = limit_price
+            params["limit_price"] = limit_price
         if client_order_id is not None:
-            body["client_order_id"] = client_order_id
-        return await self._request("POST", "/api/v1/alpaca/orders", json_body=body)
+            params["client_order_id"] = client_order_id
+        return await self._request("POST", "/api/v1/alpaca/orders", params=params)
 
     async def get_orders(self, status: str = "open", limit: int = 50) -> list[dict[str, Any]]:
         """List orders with optional status filter."""
