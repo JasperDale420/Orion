@@ -12,6 +12,7 @@ from orion.execution.attribution import (
     ORDER_ID_PREFIX,
     is_occ_option_symbol,
     mint_orion_order_id,
+    occ_underlying,
     orion_order_id_sql_pattern,
 )
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
@@ -351,7 +352,16 @@ class ExecutionEngine:
                 # Only load positions Orion has ever placed an order for.
                 # Empty orion_tickers means Orion owns no positions at all —
                 # skip everything (None is the error sentinel, handled above).
-                if symbol not in orion_tickers:
+                #
+                # `orders.ticker` stores the UNDERLYING for both equity and
+                # option orders (e.g. "AAPL"); the broker reports option
+                # positions with the full OCC contract symbol (e.g.
+                # "AAPL260529P00315000"). Compare by underlying so options
+                # positions match. Equity symbols pass through
+                # `occ_underlying` unchanged. Regression caught 2026-05-26
+                # (0 exits all day on a portfolio of 39 options).
+                underlying = occ_underlying(symbol) or symbol
+                if underlying not in orion_tickers:
                     skipped += 1
                     continue
 

@@ -100,6 +100,79 @@ async def test_adapter_returns_empty_when_no_orion_orders() -> None:
 
 
 @pytest.mark.asyncio
+async def test_adapter_keeps_orion_options_positions_via_underlying_match() -> None:
+    """Regression for 2026-05-26: ``orders.ticker`` stores the underlying
+    (``AAPL``) but Alpaca broker ``positions.symbol`` stores the full OCC
+    option contract (``AAPL260529P00315000``). The adapter's filter must
+    compare by underlying, not raw symbol — otherwise every Orion options
+    position is silently dropped before the exit-evaluation loop can see
+    it.
+
+    Live impact: 0 exit_decisions all day on 2026-05-26 despite 39 fresh
+    Orion options positions on the broker, many at -30%+ unrealized loss
+    that should have hit stop-loss exits. The position monitor's filter
+    was returning ``kept_count=0`` for every ``/positions`` sync.
+    """
+    from sqlalchemy import text
+
+    from orion.execution.position_monitor import GatewayPositionAdapter
+    from orion.storage.db import async_session_factory, init_db
+
+    await init_db()
+
+    # Orion placed an order for the AAPL underlying — orders.ticker stores
+    # underlying for both equity and options orders.
+    async with async_session_factory() as session:
+        await session.execute(
+            text("""
+                INSERT INTO orders (id, created_at_utc, ticker, side, qty, client_order_id, status, raw_json, system)
+                VALUES ('o1', CURRENT_TIMESTAMP, 'AAPL', 'buy', 10, 'orion_aapl_opt', 'filled', '{}', 'orion')
+            """)
+        )
+        await session.commit()
+
+    # Broker returns the OCC contract for the AAPL position plus a
+    # non-Orion options position on MSFT and a non-Orion equity on TSLA.
+    fake_client = AsyncMock()
+    fake_client.get_positions = AsyncMock(
+        return_value=[
+            {
+                "symbol": "AAPL260529P00315000",
+                "current_price": 6.75,
+                "avg_entry_price": 5.50,
+                "qty": 10,
+                "unrealized_plpc": 0.227,
+            },
+            {
+                "symbol": "MSFT260529C00450000",
+                "current_price": 12.0,
+                "avg_entry_price": 10.0,
+                "qty": 5,
+                "unrealized_plpc": 0.2,
+            },
+            {
+                "symbol": "TSLA",
+                "current_price": 250,
+                "avg_entry_price": 240,
+                "qty": 1,
+                "unrealized_plpc": 0.04,
+            },
+        ]
+    )
+
+    adapter = GatewayPositionAdapter(fake_client)
+    await adapter.refresh()
+
+    symbols = {p.symbol for p in adapter.get_all_positions()}
+    assert symbols == {"AAPL260529P00315000"}, (
+        f"adapter must keep options positions whose UNDERLYING matches "
+        f"an orion-attributed ticker; got {symbols}. The OCC contract "
+        f"symbol on the broker side must be matched by deriving the "
+        f"underlying (regex ^[A-Z]+) and looking THAT up in orion_tickers."
+    )
+
+
+@pytest.mark.asyncio
 async def test_adapter_db_failure_returns_empty_not_unfiltered() -> None:
     """If the orion-ticker DB query raises, the adapter must fail
     SAFE (return empty) rather than fall back to the unfiltered

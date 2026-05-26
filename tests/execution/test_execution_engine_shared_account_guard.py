@@ -122,6 +122,76 @@ async def test_sync_risk_resets_open_positions_when_broker_returns_empty(
 
 
 @pytest.mark.asyncio
+async def test_sync_risk_from_gateway_matches_options_by_underlying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for 2026-05-26: orders.ticker stores the UNDERLYING
+    (``AAPL``) but the broker reports option positions with the full OCC
+    contract symbol (``AAPL260529P00315000``). The shared-account filter
+    in ``_sync_risk_from_gateway`` must compare by underlying or every
+    Orion options position is silently dropped — which leaves
+    ``risk_manager.open_positions = 0`` and lets max_positions=20 be
+    blown through repeatedly because the broker sync's view of "what
+    Orion owns" is empty.
+
+    Same root cause as the sibling fix in
+    ``test_position_adapter_orion_filter`` —
+    ``test_adapter_keeps_orion_options_positions_via_underlying_match``.
+    """
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    risk = _RiskManagerStub()
+    # Empty risk manager — simulate fresh process start.
+    risk.positions = {}
+    risk.ticker_exposures = {}
+    risk.open_positions = 0
+    risk._equity_seeded = True
+    risk._peak_equity_seeded = True
+    engine.risk_manager = risk
+
+    client = MagicMock()
+    client.get_account = AsyncMock(return_value={"equity": "100000", "last_equity": "100000"})
+    client.get_positions = AsyncMock(
+        return_value=[
+            # Orion-owned option position (OCC contract)
+            {
+                "symbol": "AAPL260529P00315000",
+                "qty": "10",
+                "avg_entry_price": "5.50",
+                "market_value": "6750",
+            },
+            # Other-system option position on a ticker Orion has not
+            # ordered — must be excluded.
+            {
+                "symbol": "CRWD260529C00500000",
+                "qty": "3",
+                "avg_entry_price": "8",
+                "market_value": "2400",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(engine, "_check_gateway_available", AsyncMock(return_value=True))
+    monkeypatch.setattr(engine, "_get_gateway_client", lambda: client)
+    # Orion has placed orders for AAPL (underlying). The CRWD option
+    # is owned by some other Empire system on the shared account.
+    monkeypatch.setattr(engine, "_fetch_orion_tickers", AsyncMock(return_value={"AAPL"}))
+
+    await engine._sync_risk_from_gateway()
+
+    assert engine.risk_manager.open_positions == 1, (
+        f"AAPL option position must be retained via underlying match; "
+        f"got open_positions={engine.risk_manager.open_positions}"
+    )
+    assert "AAPL260529P00315000" in engine.risk_manager.positions, (
+        "Orion-owned OCC option position must be stored in risk_manager.positions "
+        f"keyed by the OCC contract symbol; got keys={list(engine.risk_manager.positions)}"
+    )
+    assert "CRWD260529C00500000" not in engine.risk_manager.positions, (
+        "non-Orion option (no order for CRWD underlying) must be filtered out"
+    )
+
+
+@pytest.mark.asyncio
 async def test_sync_risk_resets_open_positions_when_broker_has_only_non_orion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

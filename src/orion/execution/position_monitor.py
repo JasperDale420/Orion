@@ -29,6 +29,7 @@ logger = setup_struct_logger("orion.execution.position_monitor")
 # imports). Re-exported here under the old private name so the rest
 # of this module's call sites continue to work.
 from orion.execution.attribution import is_occ_option_symbol as _is_occ_option_symbol  # noqa: E402
+from orion.execution.attribution import occ_underlying as _occ_underlying  # noqa: E402
 from orion.execution.persistence import (  # noqa: E402
     load_position_running_stats,
     upsert_position_running_stats,
@@ -128,7 +129,14 @@ class GatewayPositionAdapter:
         filtered: list[SimpleNamespace] = []
         for p in raw:
             symbol = p.get("symbol", "")
-            if symbol in orion_tickers:
+            # `orders.ticker` stores the UNDERLYING for both equity and
+            # option orders (e.g. "AAPL"), but the broker reports option
+            # positions with the full OCC contract symbol (e.g.
+            # "AAPL260529P00315000"). Compare by underlying so options
+            # positions match. Equity symbols pass through `occ_underlying`
+            # unchanged. Regression caught 2026-05-26.
+            underlying = _occ_underlying(symbol) or symbol
+            if underlying in orion_tickers:
                 filtered.append(
                     SimpleNamespace(
                         symbol=symbol,
