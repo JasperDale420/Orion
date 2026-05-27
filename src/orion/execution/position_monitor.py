@@ -29,7 +29,6 @@ logger = setup_struct_logger("orion.execution.position_monitor")
 # imports). Re-exported here under the old private name so the rest
 # of this module's call sites continue to work.
 from orion.execution.attribution import is_occ_option_symbol as _is_occ_option_symbol  # noqa: E402
-from orion.execution.attribution import occ_underlying as _occ_underlying  # noqa: E402
 from orion.execution.persistence import (  # noqa: E402
     load_position_running_stats,
     upsert_position_running_stats,
@@ -37,28 +36,44 @@ from orion.execution.persistence import (  # noqa: E402
 
 
 async def _fetch_orion_attributed_tickers() -> set[str]:
-    """Return the set of distinct tickers Orion has placed orders for.
+    """Return the set of distinct broker symbols Orion has actually filled.
 
-    Mirrors `ExecutionEngine._fetch_orion_tickers`. Keeping the
-    implementation here as well (rather than importing from execution_engine)
-    avoids a circular import — position_monitor and execution_engine both
-    need to filter shared-account state but live in the same package.
+    Sourced from the ``fills`` table (NOT ``orders``). For options,
+    ``fills.ticker`` stores the FULL OCC contract symbol
+    (e.g. ``AAPL260529P00315000``) — so the returned set lets the
+    adapter do per-contract attribution. For equity, ``fills.ticker``
+    is the underlying (e.g. ``AAPL``), which is also what the broker
+    reports as the position symbol. Both cases match directly without
+    any derivation.
 
-    Returns an empty set if the query fails; callers MUST treat that as
-    "no orion attribution data" rather than "no positions to filter out"
-    — the latter would silently absorb other systems' positions back
-    into Orion's tracker.
+    Per-contract attribution is what closes codex review 2026-05-26's
+    CRITICAL finding on commit 39174f8: the previous implementation
+    queried ``orders.ticker`` (which stores the UNDERLYING for both
+    equity and options) and admitted ANY broker option whose
+    underlying ever appeared in Orion's order history. With sibling
+    systems trading on the shared Alpaca account, that meant
+    "Orion bought AAPL puts last week" allowed a sibling's
+    AAPL CALL today (different OCC contract) to be classified as
+    Orion-owned — and the position monitor would route it to
+    ``close_position``, closing a position Orion doesn't own.
+
+    Mirrors ``ExecutionEngine._fetch_orion_tickers``. Keeping the
+    implementation here as well (rather than importing from
+    execution_engine) avoids a circular import.
+
+    Returns an empty set if the query fails; callers MUST treat that
+    as "no orion attribution data" rather than "no positions to filter
+    out" — the latter would silently absorb other systems' positions
+    back into Orion's tracker.
     """
     from sqlalchemy import select
 
     from orion.execution.attribution import orion_order_id_sql_pattern
     from orion.shared.db_utils import db_query
-    from orion.storage.models_execution import OrderRecord
+    from orion.storage.models_execution import FillRecord
 
     async def query_tickers(session: Any) -> set[str]:
-        stmt = (
-            select(OrderRecord.ticker).where(OrderRecord.client_order_id.like(orion_order_id_sql_pattern())).distinct()
-        )
+        stmt = select(FillRecord.ticker).where(FillRecord.client_order_id.like(orion_order_id_sql_pattern())).distinct()
         result = await session.execute(stmt)
         return {row[0] for row in result.all()}
 
@@ -129,14 +144,14 @@ class GatewayPositionAdapter:
         filtered: list[SimpleNamespace] = []
         for p in raw:
             symbol = p.get("symbol", "")
-            # `orders.ticker` stores the UNDERLYING for both equity and
-            # option orders (e.g. "AAPL"), but the broker reports option
-            # positions with the full OCC contract symbol (e.g.
-            # "AAPL260529P00315000"). Compare by underlying so options
-            # positions match. Equity symbols pass through `occ_underlying`
-            # unchanged. Regression caught 2026-05-26.
-            underlying = _occ_underlying(symbol) or symbol
-            if underlying in orion_tickers:
+            # `orion_tickers` now comes from `fills.ticker`, which stores
+            # the FULL OCC contract for options (e.g. AAPL260529P00315000)
+            # and the underlying for equity (e.g. AAPL). Both match the
+            # broker's position symbol verbatim, so a direct membership
+            # check is correct AND safe — a sibling system's AAPL option
+            # on a different contract won't be in the set even if Orion
+            # has traded other AAPL contracts. Codex review 2026-05-26.
+            if symbol in orion_tickers:
                 filtered.append(
                     SimpleNamespace(
                         symbol=symbol,

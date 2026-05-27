@@ -28,11 +28,6 @@ ORDER_ID_PREFIX = "orion_"
 # `NVDA260522C00250000` = NVDA 2026-05-22 $250 Call.
 _OCC_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{0,5}\d{6}[CP]\d{8}$")
 
-# Same pattern as _OCC_SYMBOL_RE, with a capture group on the underlying
-# root. Kept separate so the bool-only `is_occ_option_symbol` can stay
-# zero-allocation while `occ_underlying` returns the extracted root.
-_OCC_UNDERLYING_RE = re.compile(r"^([A-Z][A-Z0-9]{0,5})\d{6}[CP]\d{8}$")
-
 
 def is_occ_option_symbol(symbol: str | None) -> bool:
     """Return True iff `symbol` matches the OCC option-symbol pattern.
@@ -47,28 +42,15 @@ def is_occ_option_symbol(symbol: str | None) -> bool:
     return bool(symbol and _OCC_SYMBOL_RE.match(symbol))
 
 
-def occ_underlying(symbol: str | None) -> str | None:
-    """Return the underlying ticker of an OCC option symbol, or the
-    symbol unchanged if it doesn't match the OCC pattern.
-
-    Used by the shared-account attribution filters in `position_monitor.py`
-    and `execution_engine.py`. Both consult the `orders` table for
-    distinct `OrderRecord.ticker` values to decide which broker positions
-    belong to Orion. `OrderRecord.ticker` stores the UNDERLYING for both
-    equity and option orders, but Alpaca broker positions report the
-    full OCC option contract symbol (e.g. `AAPL260529P00315000`). Without
-    this derivation step the filter compares OCC strings against a set
-    of underlyings and matches nothing — observed live on 2026-05-26
-    when zero exits fired all session despite 39 fresh options positions
-    deep in the red.
-
-    `None` / empty input passes through unchanged so callers can use
-    the result in `if x in some_set:` without an extra null check.
-    """
-    if not symbol:
-        return symbol
-    m = _OCC_UNDERLYING_RE.match(symbol)
-    return m.group(1) if m else symbol
+# `occ_underlying` (introduced briefly in commit 39174f8) was removed
+# the same day after codex review. Its only use was the shared-account
+# attribution filter, but underlying-level matching is unsafe — a
+# sibling system's same-underlying option (different OCC contract)
+# would be incorrectly admitted as Orion-owned. Attribution now sources
+# from `fills.ticker`, which stores the full OCC contract for options,
+# and matches broker positions by exact symbol. If a legitimate future
+# use case for extracting the underlying arises, add the helper back
+# WITHOUT routing the attribution filter through it.
 
 
 def mint_orion_order_id() -> str:

@@ -122,25 +122,19 @@ async def test_sync_risk_resets_open_positions_when_broker_returns_empty(
 
 
 @pytest.mark.asyncio
-async def test_sync_risk_from_gateway_matches_options_by_underlying(
+async def test_sync_risk_from_gateway_matches_options_per_occ_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for 2026-05-26: orders.ticker stores the UNDERLYING
-    (``AAPL``) but the broker reports option positions with the full OCC
-    contract symbol (``AAPL260529P00315000``). The shared-account filter
-    in ``_sync_risk_from_gateway`` must compare by underlying or every
-    Orion options position is silently dropped — which leaves
-    ``risk_manager.open_positions = 0`` and lets max_positions=20 be
-    blown through repeatedly because the broker sync's view of "what
-    Orion owns" is empty.
-
-    Same root cause as the sibling fix in
-    ``test_position_adapter_orion_filter`` —
-    ``test_adapter_keeps_orion_options_positions_via_underlying_match``.
+    """Per-contract attribution from ``fills.ticker`` (which stores the
+    full OCC contract for options). Originally written 2026-05-26 as
+    ``test_sync_risk_from_gateway_matches_options_by_underlying`` —
+    rewritten same day after codex review CRITICAL on commit 39174f8
+    to test the per-OCC-contract contract, not the now-removed
+    underlying-only matching. See sibling adapter test
+    ``test_adapter_keeps_orion_options_positions_per_occ_contract``.
     """
     engine = ExecutionEngine.__new__(ExecutionEngine)
     risk = _RiskManagerStub()
-    # Empty risk manager — simulate fresh process start.
     risk.positions = {}
     risk.ticker_exposures = {}
     risk.open_positions = 0
@@ -152,15 +146,14 @@ async def test_sync_risk_from_gateway_matches_options_by_underlying(
     client.get_account = AsyncMock(return_value={"equity": "100000", "last_equity": "100000"})
     client.get_positions = AsyncMock(
         return_value=[
-            # Orion-owned option position (OCC contract)
+            # Orion-owned option position (OCC contract Orion has filled)
             {
                 "symbol": "AAPL260529P00315000",
                 "qty": "10",
                 "avg_entry_price": "5.50",
                 "market_value": "6750",
             },
-            # Other-system option position on a ticker Orion has not
-            # ordered — must be excluded.
+            # Sibling system's option position Orion has never filled.
             {
                 "symbol": "CRWD260529C00500000",
                 "qty": "3",
@@ -172,22 +165,72 @@ async def test_sync_risk_from_gateway_matches_options_by_underlying(
 
     monkeypatch.setattr(engine, "_check_gateway_available", AsyncMock(return_value=True))
     monkeypatch.setattr(engine, "_get_gateway_client", lambda: client)
-    # Orion has placed orders for AAPL (underlying). The CRWD option
-    # is owned by some other Empire system on the shared account.
-    monkeypatch.setattr(engine, "_fetch_orion_tickers", AsyncMock(return_value={"AAPL"}))
+    # Orion has filled the AAPL put — fills.ticker contains the full OCC.
+    monkeypatch.setattr(engine, "_fetch_orion_tickers", AsyncMock(return_value={"AAPL260529P00315000"}))
+
+    await engine._sync_risk_from_gateway()
+
+    assert engine.risk_manager.open_positions == 1
+    assert "AAPL260529P00315000" in engine.risk_manager.positions
+    assert "CRWD260529C00500000" not in engine.risk_manager.positions
+
+
+@pytest.mark.asyncio
+async def test_sync_risk_from_gateway_excludes_sibling_options_on_same_underlying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex review 2026-05-26 CRITICAL: per-OCC attribution, not
+    per-underlying. If a sibling system opens an AAPL CALL today on a
+    contract Orion has never filled, the executor's sync must NOT count
+    it toward Orion's risk — even if Orion has filled a different AAPL
+    contract historically. Companion to the adapter-side test
+    ``test_adapter_excludes_other_systems_options_on_same_underlying``.
+    """
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    risk = _RiskManagerStub()
+    risk.positions = {}
+    risk.ticker_exposures = {}
+    risk.open_positions = 0
+    risk._equity_seeded = True
+    risk._peak_equity_seeded = True
+    engine.risk_manager = risk
+
+    client = MagicMock()
+    client.get_account = AsyncMock(return_value={"equity": "100000", "last_equity": "100000"})
+    client.get_positions = AsyncMock(
+        return_value=[
+            # Orion's put — has a matching fill.
+            {
+                "symbol": "AAPL260529P00315000",
+                "qty": "10",
+                "avg_entry_price": "5.50",
+                "market_value": "6750",
+            },
+            # Sibling's call on the same underlying — no orion fill.
+            {
+                "symbol": "AAPL260529C00400000",
+                "qty": "5",
+                "avg_entry_price": "2.80",
+                "market_value": "1600",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(engine, "_check_gateway_available", AsyncMock(return_value=True))
+    monkeypatch.setattr(engine, "_get_gateway_client", lambda: client)
+    # Only the put is in Orion's fills set; the call is not.
+    monkeypatch.setattr(engine, "_fetch_orion_tickers", AsyncMock(return_value={"AAPL260529P00315000"}))
 
     await engine._sync_risk_from_gateway()
 
     assert engine.risk_manager.open_positions == 1, (
-        f"AAPL option position must be retained via underlying match; "
-        f"got open_positions={engine.risk_manager.open_positions}"
+        "only the orion-filled AAPL put may count toward open_positions; "
+        f"got {engine.risk_manager.open_positions} (would include the sibling call)"
     )
-    assert "AAPL260529P00315000" in engine.risk_manager.positions, (
-        "Orion-owned OCC option position must be stored in risk_manager.positions "
-        f"keyed by the OCC contract symbol; got keys={list(engine.risk_manager.positions)}"
-    )
-    assert "CRWD260529C00500000" not in engine.risk_manager.positions, (
-        "non-Orion option (no order for CRWD underlying) must be filtered out"
+    assert "AAPL260529P00315000" in engine.risk_manager.positions
+    assert "AAPL260529C00400000" not in engine.risk_manager.positions, (
+        "sibling system's AAPL call (different OCC contract, same underlying) "
+        "must NOT leak into Orion's risk-tracked positions"
     )
 
 

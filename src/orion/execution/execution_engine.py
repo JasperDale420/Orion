@@ -12,7 +12,6 @@ from orion.execution.attribution import (
     ORDER_ID_PREFIX,
     is_occ_option_symbol,
     mint_orion_order_id,
-    occ_underlying,
     orion_order_id_sql_pattern,
 )
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
@@ -232,13 +231,21 @@ class ExecutionEngine:
         )
 
     async def _fetch_orion_tickers(self) -> set[str] | None:
-        """Return the set of tickers that Orion has active orders for."""
-        from orion.storage.models_execution import OrderRecord
+        """Return the set of broker symbols Orion has actually filled.
+
+        Sourced from ``fills`` (not ``orders``) so that for options the
+        set contains full OCC contract symbols, enabling per-contract
+        attribution against the broker's position symbols. See
+        ``position_monitor._fetch_orion_attributed_tickers`` for the
+        full rationale (codex review 2026-05-26 CRITICAL on commit
+        39174f8).
+        """
+        from orion.storage.models_execution import FillRecord
 
         async def query_tickers(session: Any) -> set[str]:
             stmt = (
-                select(OrderRecord.ticker)
-                .where(OrderRecord.client_order_id.like(orion_order_id_sql_pattern()))
+                select(FillRecord.ticker)
+                .where(FillRecord.client_order_id.like(orion_order_id_sql_pattern()))
                 .distinct()
             )
             result = await session.execute(stmt)
@@ -349,19 +356,19 @@ class ExecutionEngine:
             skipped = 0
             for p in positions:
                 symbol = p.get("symbol", "")
-                # Only load positions Orion has ever placed an order for.
-                # Empty orion_tickers means Orion owns no positions at all —
-                # skip everything (None is the error sentinel, handled above).
+                # Only load positions Orion has actually filled. Empty
+                # orion_tickers means Orion owns no positions at all —
+                # skip everything (None is the error sentinel, handled
+                # above).
                 #
-                # `orders.ticker` stores the UNDERLYING for both equity and
-                # option orders (e.g. "AAPL"); the broker reports option
-                # positions with the full OCC contract symbol (e.g.
-                # "AAPL260529P00315000"). Compare by underlying so options
-                # positions match. Equity symbols pass through
-                # `occ_underlying` unchanged. Regression caught 2026-05-26
-                # (0 exits all day on a portfolio of 39 options).
-                underlying = occ_underlying(symbol) or symbol
-                if underlying not in orion_tickers:
+                # `orion_tickers` is sourced from `fills.ticker`, which
+                # stores the full OCC contract for options and the
+                # underlying for equity — both match the broker's symbol
+                # verbatim. Per-contract attribution, fixes codex review
+                # 2026-05-26 CRITICAL on commit 39174f8 (underlying-only
+                # matching let sibling systems' same-underlying options
+                # leak into Orion's risk and exit pipelines).
+                if symbol not in orion_tickers:
                     skipped += 1
                     continue
 

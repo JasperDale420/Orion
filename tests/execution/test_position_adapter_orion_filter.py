@@ -33,7 +33,7 @@ os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
 @pytest.mark.asyncio
 async def test_adapter_filters_to_orion_attributed_positions() -> None:
     """Broker returns 3 positions; only 1 has a matching orion-prefixed
-    order in the DB. Tracker should see only that 1."""
+    fill in the DB. Tracker should see only that 1."""
     from sqlalchemy import text
 
     from orion.execution.position_monitor import GatewayPositionAdapter
@@ -41,14 +41,16 @@ async def test_adapter_filters_to_orion_attributed_positions() -> None:
 
     await init_db()
 
-    # Plant an Orion-attributed order for AAPL and a non-orion order
-    # for MSFT. ABC has no order at all.
+    # Plant an Orion-attributed FILL for AAPL and a non-orion fill
+    # for MSFT. ABC has no fill at all. The adapter sources attribution
+    # from `fills.ticker` (not `orders.ticker`) so it has per-contract
+    # granularity for options; equity passes through unchanged.
     async with async_session_factory() as session:
         await session.execute(
             text("""
-                INSERT INTO orders (id, created_at_utc, ticker, side, qty, client_order_id, status, raw_json, system)
-                VALUES ('o1', CURRENT_TIMESTAMP, 'AAPL', 'buy', 10, 'orion_test1', 'filled', '{}', 'orion'),
-                       ('o2', CURRENT_TIMESTAMP, 'MSFT', 'buy', 10, 'cerberus_test2', 'filled', '{}', 'cerberus')
+                INSERT INTO fills (id, created_at_utc, ticker, broker_order_id, client_order_id, filled_qty, side, raw_json)
+                VALUES ('f1', CURRENT_TIMESTAMP, 'AAPL', 'b1', 'orion_test1', 10, 'buy', '{}'),
+                       ('f2', CURRENT_TIMESTAMP, 'MSFT', 'b2', 'cerberus_test2', 10, 'buy', '{}')
             """)
         )
         await session.commit()
@@ -100,18 +102,24 @@ async def test_adapter_returns_empty_when_no_orion_orders() -> None:
 
 
 @pytest.mark.asyncio
-async def test_adapter_keeps_orion_options_positions_via_underlying_match() -> None:
-    """Regression for 2026-05-26: ``orders.ticker`` stores the underlying
-    (``AAPL``) but Alpaca broker ``positions.symbol`` stores the full OCC
-    option contract (``AAPL260529P00315000``). The adapter's filter must
-    compare by underlying, not raw symbol — otherwise every Orion options
-    position is silently dropped before the exit-evaluation loop can see
-    it.
+async def test_adapter_keeps_orion_options_positions_per_occ_contract() -> None:
+    """Positive case for per-OCC attribution: Orion filled
+    ``AAPL260529P00315000``; broker reports that exact contract; the
+    adapter retains it.
 
-    Live impact: 0 exit_decisions all day on 2026-05-26 despite 39 fresh
-    Orion options positions on the broker, many at -30%+ unrealized loss
-    that should have hit stop-loss exits. The position monitor's filter
-    was returning ``kept_count=0`` for every ``/positions`` sync.
+    Originally written 2026-05-26 as a regression for the underlying-
+    only matching bug introduced in commit dca484d. Rewritten same day
+    (codex review CRITICAL on commit 39174f8) to source attribution
+    from ``fills.ticker`` — which stores the full OCC contract for
+    options — instead of ``orders.ticker`` (underlying). The negative
+    counterpart is
+    ``test_adapter_excludes_other_systems_options_on_same_underlying``.
+
+    Live impact of the original bug: 0 exit_decisions all day on
+    2026-05-26 despite 39 fresh Orion options positions on the broker
+    (many at -30%+ unrealized loss that should have hit stop-loss
+    exits). The position monitor's filter was logging
+    ``kept_count=0`` for every ``/positions`` sync.
     """
     from sqlalchemy import text
 
@@ -120,19 +128,19 @@ async def test_adapter_keeps_orion_options_positions_via_underlying_match() -> N
 
     await init_db()
 
-    # Orion placed an order for the AAPL underlying — orders.ticker stores
-    # underlying for both equity and options orders.
+    # Orion filled the AAPL put contract. `fills.ticker` stores the
+    # full OCC contract symbol for options.
     async with async_session_factory() as session:
         await session.execute(
             text("""
-                INSERT INTO orders (id, created_at_utc, ticker, side, qty, client_order_id, status, raw_json, system)
-                VALUES ('o1', CURRENT_TIMESTAMP, 'AAPL', 'buy', 10, 'orion_aapl_opt', 'filled', '{}', 'orion')
+                INSERT INTO fills (id, created_at_utc, ticker, broker_order_id, client_order_id, filled_qty, side, raw_json)
+                VALUES ('f1', CURRENT_TIMESTAMP, 'AAPL260529P00315000', 'b1', 'orion_aapl_put', 10, 'buy', '{}')
             """)
         )
         await session.commit()
 
-    # Broker returns the OCC contract for the AAPL position plus a
-    # non-Orion options position on MSFT and a non-Orion equity on TSLA.
+    # Broker returns the same OCC contract plus an MSFT contract Orion
+    # has never filled and an unrelated TSLA equity position.
     fake_client = AsyncMock()
     fake_client.get_positions = AsyncMock(
         return_value=[
@@ -165,10 +173,81 @@ async def test_adapter_keeps_orion_options_positions_via_underlying_match() -> N
 
     symbols = {p.symbol for p in adapter.get_all_positions()}
     assert symbols == {"AAPL260529P00315000"}, (
-        f"adapter must keep options positions whose UNDERLYING matches "
-        f"an orion-attributed ticker; got {symbols}. The OCC contract "
-        f"symbol on the broker side must be matched by deriving the "
-        f"underlying (regex ^[A-Z]+) and looking THAT up in orion_tickers."
+        f"adapter must keep the exact OCC contract Orion has filled; "
+        f"got {symbols}. MSFT and TSLA have no orion fill, so they "
+        f"belong to sibling systems and must be excluded."
+    )
+
+
+@pytest.mark.asyncio
+async def test_adapter_excludes_other_systems_options_on_same_underlying() -> None:
+    """Codex review 2026-05-26: per-position attribution, not per-underlying.
+
+    Commit 39174f8 used underlying-only matching: any broker position
+    whose underlying appeared anywhere in Orion's order history was
+    treated as Orion-owned. Counterexample: Orion bought AAPL puts last
+    week (so orders.ticker='AAPL' exists), Kairos opens an AAPL CALL
+    today (different OCC contract, same underlying). The 39174f8 filter
+    incorrectly admits Kairos's call → it counts in Orion's risk AND
+    PositionMonitor.execute_exits routes it to ExecutionEngine.close_position,
+    closing a position Orion doesn't own.
+
+    Per-position attribution uses the FILLS table (fills.ticker stores
+    the full OCC contract for options) — a contract Orion has actually
+    filled is the only one Orion owns. Same-underlying sibling positions
+    have different OCC contracts and are correctly excluded.
+    """
+    from sqlalchemy import text
+
+    from orion.execution.position_monitor import GatewayPositionAdapter
+    from orion.storage.db import async_session_factory, init_db
+
+    await init_db()
+
+    # Orion previously filled an AAPL put contract.
+    async with async_session_factory() as session:
+        await session.execute(
+            text("""
+                INSERT INTO fills (id, created_at_utc, ticker, broker_order_id, client_order_id, filled_qty, side, raw_json)
+                VALUES ('f1', CURRENT_TIMESTAMP, 'AAPL260529P00315000', 'b1', 'orion_aapl_put', 10, 'buy', '{}')
+            """)
+        )
+        await session.commit()
+
+    # Broker now reports two AAPL options:
+    #   1. AAPL260529P00315000 — the put Orion owns
+    #   2. AAPL260529C00400000 — a CALL on the same underlying, opened
+    #      by a sibling system (Kairos). Orion has NEVER filled this OCC.
+    fake_client = AsyncMock()
+    fake_client.get_positions = AsyncMock(
+        return_value=[
+            {
+                "symbol": "AAPL260529P00315000",
+                "current_price": 6.75,
+                "avg_entry_price": 5.50,
+                "qty": 10,
+                "unrealized_plpc": 0.227,
+            },
+            {
+                "symbol": "AAPL260529C00400000",
+                "current_price": 3.20,
+                "avg_entry_price": 2.80,
+                "qty": 5,
+                "unrealized_plpc": 0.143,
+            },
+        ]
+    )
+
+    adapter = GatewayPositionAdapter(fake_client)
+    await adapter.refresh()
+
+    symbols = {p.symbol for p in adapter.get_all_positions()}
+    assert symbols == {"AAPL260529P00315000"}, (
+        f"per-OCC attribution must EXCLUDE sibling-system AAPL options "
+        f"Orion has never filled; got {symbols}. Underlying-only matching "
+        f"(commit 39174f8) admitted both AAPL positions — that would close "
+        f"Kairos's call when Orion's exit-pipeline evaluates the put's "
+        f"stop-loss."
     )
 
 

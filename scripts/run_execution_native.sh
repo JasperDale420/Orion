@@ -55,15 +55,6 @@ export ORION_RUN_ID="${ORION_RUN_ID:-native_execution}"
 export ORION_LEASE_OWNER_ID="${ORION_LEASE_OWNER_ID:-orion_execution_native}"
 export ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE="${ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE:-false}"
 export ORION_RISK_MAX_DAILY_LOSS="${ORION_RISK_MAX_DAILY_LOSS:-20000}"
-# 2026-05-22: temporarily raised 5 → 20 with explicit operator approval.
-# 15 worthless options on the books (already-paid losses, auto-expire
-# at 4 PM ET) are consuming position slots; the lift allows the live
-# ExecutionEngine to be canary-validated end-to-end before close. Goal
-# is one organic entry through the full pipeline so we can verify the
-# Gateway-client fix (commit 51699c8) hasn't broken the persistence
-# leg. REVERT TO 5 MONDAY MORNING after expired options clear and
-# canary observation is complete.
-export ORION_RISK_MAX_POSITIONS="${ORION_RISK_MAX_POSITIONS:-20}"
 
 # Forward-testing knobs — match the docker-compose execution stanza so
 # behaviour is identical to what was running in Docker.
