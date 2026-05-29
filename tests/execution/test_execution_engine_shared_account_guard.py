@@ -18,6 +18,17 @@ class _RiskManagerStub:
         self.ticker_exposures = {"KEEP": 10.0}
         self.open_positions = 1
 
+    def seed_equity_baseline(self, gateway_equity: float) -> None:
+        # Mirror RiskManager's seed-once interface so _sync_risk_from_gateway
+        # can call it; these tests exercise position attribution, not equity.
+        if not getattr(self, "_equity_seeded", False):
+            self.current_equity = gateway_equity
+            self.starting_equity = gateway_equity
+            self._equity_seeded = True
+        if not getattr(self, "_peak_equity_seeded", False):
+            self.peak_equity = gateway_equity
+            self._peak_equity_seeded = True
+
     async def evaluate_drawdown_kill_switch(self) -> None:
         return None
 

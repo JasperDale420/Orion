@@ -36,6 +36,10 @@ def _make_engine_with_account(account_payload: dict, positions_payload: list | N
     from orion.execution.execution_engine import ExecutionEngine
 
     engine = ExecutionEngine()
+    # These tests pin the peak-seed LOGIC, not the allocated-equity cap —
+    # disable the cap so seed values above $100K (e.g. the never-lower-peak
+    # case at $110K) pass through unclamped.
+    engine.risk_manager.config.allocated_equity = None
     engine._check_system_health = AsyncMock(return_value=True)
     engine._gateway_available = True
     engine._gateway_check_ts = datetime.now(UTC)

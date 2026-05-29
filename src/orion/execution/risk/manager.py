@@ -143,6 +143,29 @@ class RiskManager:
             return False
         return self._current_drawdown_pct() >= cfg.max_drawdown_pct
 
+    # ── Equity baseline ──────────────────────────────────────────────────
+
+    def seed_equity_baseline(self, gateway_equity: float) -> None:
+        """Seed current/starting/peak equity ONCE from the Gateway account
+        equity, capped to Orion's allocated slice (`config.allocated_equity`).
+
+        The Alpaca paper account is shared across many systems, so Gateway
+        reports the full pooled equity. Sizing (max premium/order %) must
+        compute off Orion's slice, not the pool — uncapped seeding was the
+        root of the 5/26 over-exposure. After the one-shot seed, equity moves
+        only via Orion-attributed fills. `allocated_equity=None` disables the
+        cap.
+        """
+        allocated = getattr(self.config, "allocated_equity", None)
+        capped = min(gateway_equity, allocated) if allocated and allocated > 0 else gateway_equity
+        if not self._equity_seeded:
+            self.current_equity = capped
+            self.starting_equity = capped
+            self._equity_seeded = True
+        if not self._peak_equity_seeded:
+            self.peak_equity = capped
+            self._peak_equity_seeded = True
+
     # ── Order checking ───────────────────────────────────────────────────
 
     def check_order(

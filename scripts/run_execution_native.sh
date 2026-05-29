@@ -55,6 +55,11 @@ export ORION_RUN_ID="${ORION_RUN_ID:-native_execution}"
 export ORION_LEASE_OWNER_ID="${ORION_LEASE_OWNER_ID:-orion_execution_native}"
 export ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE="${ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE:-false}"
 export ORION_RISK_MAX_DAILY_LOSS="${ORION_RISK_MAX_DAILY_LOSS:-20000}"
+export ORION_RISK_MAX_POSITIONS="${ORION_RISK_MAX_POSITIONS:-10}"
+# Orion's allocated slice of the shared ~$1M paper account. Sizing (max
+# premium/order %) computes off this, not the pooled account equity. Config
+# default is also 100k; set explicitly here for operator visibility/tuning.
+export ORION_RISK_ALLOCATED_EQUITY="${ORION_RISK_ALLOCATED_EQUITY:-100000}"
 
 # Forward-testing knobs — match the docker-compose execution stanza so
 # behaviour is identical to what was running in Docker.

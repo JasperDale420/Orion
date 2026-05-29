@@ -156,6 +156,7 @@ class ExecutionEngine:
         self.last_positions_snapshot_ts: datetime | None = None
         self._last_fill_poll_ts: datetime | None = None
         self._last_order_poll_ts: datetime | None = None
+        self._last_position_sync_ts: datetime | None = None
 
         # TTL cache for _check_system_health (avoids N identical DB queries per cycle)
         self._health_cache: tuple[bool, float] | None = None
@@ -224,9 +225,17 @@ class ExecutionEngine:
             self._gateway_client = get_gateway_trading_client()
         return self._gateway_client
 
-    async def _check_gateway_available(self) -> bool:
-        """Check if Data Gateway is reachable. Caches result for 60s."""
-        if hasattr(self, "_gateway_check_ts") and self._gateway_check_ts:
+    # Close is a critical path — a transient Gateway blip must not abandon an
+    # exit for a full monitor cycle. The close path retries a fresh
+    # (cache-bypassing) availability probe a few times before giving up.
+    _CLOSE_GATEWAY_RETRY_ATTEMPTS: int = 3
+    _CLOSE_GATEWAY_RETRY_BACKOFF_SECONDS: float = 1.0
+
+    async def _check_gateway_available(self, force: bool = False) -> bool:
+        """Check if Data Gateway is reachable. Caches result for 60s unless
+        `force` is set (the critical close path bypasses a possibly-stale
+        cached blip)."""
+        if not force and hasattr(self, "_gateway_check_ts") and self._gateway_check_ts:
             elapsed = (datetime.now(UTC) - self._gateway_check_ts).total_seconds()
             if elapsed < 60:
                 return self._gateway_available
@@ -253,6 +262,26 @@ class ExecutionEngine:
             )
 
         return self._gateway_available
+
+    async def _gateway_available_for_close(self, ticker: str) -> bool:
+        """Critical-path availability check for closes: retry a fresh probe
+        with backoff before giving up so a transient blip doesn't abandon an
+        exit for a full monitor cycle."""
+        for attempt in range(1, self._CLOSE_GATEWAY_RETRY_ATTEMPTS + 1):
+            if await self._check_gateway_available(force=True):
+                return True
+            if attempt < self._CLOSE_GATEWAY_RETRY_ATTEMPTS:
+                logger.warning(
+                    "close_gateway_unavailable_retrying",
+                    extra={
+                        "event_type": "CLOSE_GATEWAY_RETRY",
+                        "ticker": ticker,
+                        "attempt": attempt,
+                        "max_attempts": self._CLOSE_GATEWAY_RETRY_ATTEMPTS,
+                    },
+                )
+                await asyncio.sleep(self._CLOSE_GATEWAY_RETRY_BACKOFF_SECONDS)
+        return False
 
     async def initialize(self) -> None:
         """
@@ -352,21 +381,13 @@ class ExecutionEngine:
                     # `peak_equity` is bumped by
                     # `_evaluate_drawdown_kill_switch` when
                     # current_equity rises above it.
-                    if not getattr(self.risk_manager, "_equity_seeded", False):
-                        self.risk_manager.current_equity = equity
-                        self.risk_manager.starting_equity = equity
-                        self.risk_manager._equity_seeded = True
-
-                    if not getattr(self.risk_manager, "_peak_equity_seeded", False):
-                        # Seed peak == current at session start so drawdown
-                        # begins at 0%. Using max(equity, last_equity) here
-                        # historically pulled in a yesterday-style high from
-                        # the shared account, instantly tripping drawdown
-                        # when any other system had lost since that high.
-                        # Real Orion-attributed gains/losses move peak from
-                        # this baseline forward.
-                        self.risk_manager.peak_equity = equity
-                        self.risk_manager._peak_equity_seeded = True
+                    # Seed the Orion equity baseline ONCE, capped to the
+                    # allocated slice (RiskManager.seed_equity_baseline). The
+                    # shared account reports pooled equity across all systems;
+                    # peak seeds to the same capped baseline so drawdown starts
+                    # at 0% (using max(equity, last_equity) historically pulled
+                    # a stale cross-system high and instantly tripped drawdown).
+                    self.risk_manager.seed_equity_baseline(equity)
 
                     # Daily loss is Orion-attributed only: driven by update_post_fill
                     # from Orion-owned fills (client_order_id prefix "orion_"), not
@@ -1093,9 +1114,9 @@ class ExecutionEngine:
         Equity behavior unchanged: market for IMMEDIATE / use_market,
         limit otherwise. Equity has no RTH gate.
         """
-        if not await self._check_gateway_available():
+        if not await self._gateway_available_for_close(ticker):
             logger.warning(
-                "Data Gateway unavailable. Cannot close position.",
+                "Data Gateway unavailable after retries. Cannot close position.",
                 extra={"event_type": "CLOSE_POSITION_NOOP", "ticker": ticker},
             )
             return False
@@ -1446,6 +1467,12 @@ class ExecutionEngine:
     # Throttled vs the per-iteration loop to avoid spamming the Gateway.
     _ORDER_POLL_MIN_INTERVAL_SECONDS: float = 5.0
 
+    # Cadence for re-grounding open_positions against the broker. Closes done
+    # by the position monitor (direct to Gateway) and option expiries don't
+    # flow back as Orion-attributed fills, so the in-memory count drifts high
+    # over a long-running process — a periodic ground-truth resync corrects it.
+    _POSITION_SYNC_MIN_INTERVAL_SECONDS: float = 120.0
+
     async def poll_fills(self) -> None:
         """Polls Data Gateway for account equity and updates RiskManager.
 
@@ -1481,9 +1508,7 @@ class ExecutionEngine:
                         # fills via update_post_fill — overwriting it here
                         # would falsely trip Orion's drawdown kill switch
                         # whenever 3Roses/Cerberus/Kairos/etc. take losses.
-                        if not getattr(self.risk_manager, "_equity_seeded", False):
-                            self.risk_manager.current_equity = equity
-                            self.risk_manager._equity_seeded = True
+                        self.risk_manager.seed_equity_baseline(equity)
 
                 self._last_fill_poll_ts = now
             except Exception as e:
@@ -1558,6 +1583,31 @@ class ExecutionEngine:
                         )
 
             self._last_order_poll_ts = now2
+
+        # Periodically re-ground open_positions against the broker. Closes done
+        # by the position monitor (direct to Gateway) and option expiries don't
+        # flow back as Orion-attributed fills, so the in-memory count drifts
+        # high over a long-running process (2026-05-29: 15 vs broker 12) and
+        # would keep entries blocked at the max_positions gate even after real
+        # positions fall below the limit. Interval-gated so we don't hit the
+        # Gateway every ~1s idle iteration.
+        now3 = datetime.now(UTC)
+        if (
+            self._last_position_sync_ts is None
+            or (now3 - self._last_position_sync_ts).total_seconds() >= self._POSITION_SYNC_MIN_INTERVAL_SECONDS
+        ):
+            self._last_position_sync_ts = now3
+            try:
+                await self._sync_risk_from_gateway()
+            except Exception as e:
+                logger.warning(
+                    "periodic_risk_resync_failed",
+                    extra={"event_type": "PERIODIC_RISK_RESYNC_FAILED", "error": str(e)},
+                )
+
+        # Persist a position snapshot for observability (self-throttles to its
+        # own interval; the table was empty because this was never called).
+        await self._maybe_snapshot_positions()
 
     async def _process_single_fill(self, fill: Any) -> None:
         """Delegates fill processing to FillProcessor."""

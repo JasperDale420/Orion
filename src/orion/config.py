@@ -20,6 +20,12 @@ class RiskSettings(BaseSettings):
     # Legacy compatibility field used by older tests/callers.
     max_ticker_exposure_usd: float | None = None
     risk_per_trade_pct: float = 0.01
+    # Orion's allocated slice of the shared Alpaca paper account. The account
+    # (~$1M) is shared across multiple systems, so Gateway reports the full
+    # pooled equity. Sizing (max premium/order %) must compute off Orion's
+    # slice, not the pool — uncapped seeding was the root of the 5/26
+    # over-exposure. Caps the seeded equity baseline; None = no cap.
+    allocated_equity: float | None = 100_000.0
     enable_shorting: bool = False
     default_stop_loss_pct: float = 0.02
     time_of_day_bans: list[str] | None = None

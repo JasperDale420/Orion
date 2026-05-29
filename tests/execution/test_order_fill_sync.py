@@ -16,6 +16,13 @@ def _make_engine() -> ExecutionEngine:
     engine._lease_run_id = None
     engine._last_fill_poll_ts = datetime.now(UTC)  # skip account-equity poll
     engine._last_order_poll_ts = None
+    # __new__ bypasses __init__; these tests target order polling, so set the
+    # periodic-position-sync state and stub the maintenance methods (covered by
+    # test_poll_fills_periodic_sync) so poll_fills' tail doesn't run here.
+    engine._last_position_sync_ts = datetime.now(UTC)
+    engine.last_positions_snapshot_ts = None
+    engine._sync_risk_from_gateway = AsyncMock()
+    engine._maybe_snapshot_positions = AsyncMock()
     engine._fill_processor = MagicMock()
     engine._fill_processor.process_single_fill = AsyncMock()
     engine.risk_manager = MagicMock()

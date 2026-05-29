@@ -27,12 +27,12 @@ def engine():
 @pytest.mark.asyncio
 async def test_poll_fills_updates_risk_state(engine):
     """Verify poll_fills refreshes risk state from MCP positions/account."""
-    engine.risk_manager = MagicMock()
-    # `_equity_seeded` defaults to False on a real RiskManager and gates
-    # the one-shot seed of current_equity from the Gateway. On a MagicMock
-    # `getattr(..., "_equity_seeded", False)` returns a truthy auto-attr
-    # so we have to set it explicitly here.
-    engine.risk_manager._equity_seeded = False
+    # Use a real RiskManager so seed_equity_baseline actually executes
+    # (a MagicMock would no-op the helper call). $50K is below the $100K
+    # allocated-equity cap, so it seeds through unclamped.
+    from orion.execution.risk.manager import RiskManager
+
+    engine.risk_manager = RiskManager()
 
     await engine.poll_fills()
 
