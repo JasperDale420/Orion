@@ -233,6 +233,10 @@ class PositionMonitor:
         self._last_check_time: datetime | None = None
         self._execution_engine = execution_engine
         self._position_manager = position_manager
+        # Per-symbol consecutive failed-close counter. Bounds retries so a
+        # single stuck position can't fire an unbounded stream of close
+        # attempts every cycle (2026-05-29: ~3,235 rejected order-creates/day).
+        self._consecutive_close_failures: dict[str, int] = {}
         # Per-symbol entry-context cache. Populated lazily on first
         # _fetch_entry_context call and reused for the lifetime of the
         # PositionMonitor — entry-time market context (IV rank, VIX,
@@ -747,6 +751,33 @@ class PositionMonitor:
 
         return exit_signals
 
+    # After this many consecutive failed closes, a symbol is abandoned (with a
+    # CRITICAL alert) until a close succeeds or the process restarts — so a
+    # single stuck position can't hammer the Gateway every cycle indefinitely.
+    _MAX_CONSECUTIVE_CLOSE_FAILURES = 5
+
+    def _close_attempts_exhausted(self, symbol: str) -> bool:
+        return self._consecutive_close_failures.get(symbol, 0) >= self._MAX_CONSECUTIVE_CLOSE_FAILURES
+
+    def _record_close_result(self, symbol: str, success: bool) -> None:
+        """Track consecutive close failures per symbol; reset on success."""
+        if success:
+            self._consecutive_close_failures.pop(symbol, None)
+            return
+        count = self._consecutive_close_failures.get(symbol, 0) + 1
+        self._consecutive_close_failures[symbol] = count
+        if count == self._MAX_CONSECUTIVE_CLOSE_FAILURES:
+            logger.critical(
+                f"Abandoning close for {symbol} after {count} consecutive failures — "
+                f"manual review required (position may be stuck/unclosable)",
+                extra={
+                    "event": "close_abandoned",
+                    "event_type": "CLOSE_ABANDONED",
+                    "symbol": symbol,
+                    "failures": count,
+                },
+            )
+
     async def execute_exits(
         self,
         connector: Any,
@@ -814,6 +845,12 @@ class PositionMonitor:
                         extra={"event": "ml_exit_duplicate_blocked", "symbol": pos.symbol},
                     )
                     result["error"] = "close_already_in_progress"
+                    results.append(result)
+                    continue
+
+                # Stop hammering a position that repeatedly fails to close.
+                if self._close_attempts_exhausted(pos.symbol):
+                    result["error"] = "close_abandoned_after_repeated_failures"
                     results.append(result)
                     continue
 
@@ -892,6 +929,10 @@ class PositionMonitor:
                     # Always release the closing guard
                     if self._position_manager:
                         self._position_manager.unmark_closing(pos.symbol)
+
+                # Bound retries: track consecutive failures so a stuck position
+                # is eventually abandoned instead of hammering every cycle.
+                self._record_close_result(pos.symbol, bool(result["executed"]))
 
             results.append(result)
 
