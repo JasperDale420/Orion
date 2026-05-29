@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd agent for the Orion launchd-health probe — runs once a minute
+and alerts on any com.empire.orion.* job whose last exit code is
+non-zero.
+
+Why this exists: on 2026-05-22 the com.empire.orion.orphan-close plist
+hardcoded /opt/homebrew/bin/uv (which doesn't exist on this host) and
+silently exited 127 every fire for 4.5 hours. No alert, no page, no
+visible failure — just $67K of additional unrealized loss while 20
+expiring options sat unmonitored. This probe makes that class of
+silent failure loud.
+
+The probe shells out to `launchctl list`, filters to com.empire.orion.*,
+classifies each entry, appends a JSON row to logs/launchd_health.log for
+anything not healthy, and POSTs to SLACK_WEBHOOK_URL when that env var
+is set. Exit 127 is escalated to CRITICAL (the failure mode cannot
+self-heal — a human must edit the plist).
+
+Install (create the log dir FIRST — launchd opens StandardOutPath /
+StandardErrorPath below before the wrapper ever runs, so a missing
+logs/ dir would stop the probe from launching at all, silently, which
+is the exact failure class this probe exists to catch):
+    mkdir -p /Users/jacobmcmillan/Empire/Orion/logs
+    cp scripts/launchd/com.empire.orion.launchd-health.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.launchd-health.plist
+
+Status:
+    launchctl print gui/$(id -u)/com.empire.orion.launchd-health
+
+Stop:
+    launchctl bootout gui/$(id -u)/com.empire.orion.launchd-health
+
+Logs:
+    tail -f logs/launchd_health.log              # structured alert rows (JSON, one per line)
+    tail -f logs/launchd_health.stdout.log       # launchd-captured stdout
+    tail -f logs/launchd_health.stderr.log       # launchd-captured stderr
+
+To enable Slack notifications, set SLACK_WEBHOOK_URL below (or copy this
+plist to a private location with the secret baked in — do not commit
+the URL).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.launchd-health</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Orion/scripts/run_launchd_health_probe.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Run once a minute. Matches the spec — "once a minute, reads
+         launchctl list". launchd guarantees at most one instance is
+         running at a time even if the previous run is still going. -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!-- Fire one probe on initial bootstrap so the system surface its
+         current health immediately, not after 60 seconds of opacity. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- KeepAlive=false: this is a periodic one-shot, not a long-running
+         daemon. If a probe exits non-zero we don't want launchd to
+         restart-loop it; the next StartInterval fire is sufficient. -->
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+        <!-- launchd defaults PATH to /usr/bin:/bin:/usr/sbin:/sbin only.
+             The wrapper extends this further, but having a reasonable
+             base here makes ad-hoc debugging easier. -->
+        <key>PATH</key>
+        <string>/Users/jacobmcmillan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Set SLACK_WEBHOOK_URL here (or via `launchctl setenv`) to
+             enable Slack notifications. Absent the env var the probe
+             still appends to logs/launchd_health.log, so the failure
+             is auditable after the fact. -->
+        <!--
+        <key>SLACK_WEBHOOK_URL</key>
+        <string>https://hooks.slack.com/services/...</string>
+        -->
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/launchd_health.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/launchd_health.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -1,0 +1,365 @@
+"""Tests for the launchd health probe.
+
+Background: on 2026-05-22 the orphan-close launchd job exited 127 on every
+fire because the wrapper used /opt/homebrew/bin/uv instead of the real path
+at /Users/jacobmcmillan/.local/bin/uv. The failure was invisible — no alert
+fired for 4.5 hours, costing ~$67K of additional unrealized loss. This probe
+makes that class of silent failure loud.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from orion.jobs.launchd_health_probe import (
+    REQUIRED_LABELS,
+    SELF_LABEL,
+    HealthAlert,
+    LaunchctlEntry,
+    Severity,
+    classify_entry,
+    detect_missing_jobs,
+    evaluate_orion_jobs,
+    parse_launchctl_list,
+    run_probe,
+)
+
+
+# `launchctl list` output with the two always-on daemons (execution,
+# ingestion) present and healthy, plus caller-supplied rows for the remaining
+# required job(s) and any extras. Keeps the missing-job detector quiet so
+# run_probe tests can isolate the fault they actually exercise.
+def _required_with(*job_lines: str) -> str:
+    lines = [
+        "PID\tStatus\tLabel",
+        "50960\t0\tcom.empire.orion.execution",
+        "12345\t0\tcom.empire.orion.ingestion",
+        *job_lines,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+# Real launchctl output captured 2026-05-22 — header + a handful of other
+# system jobs + the three Orion jobs. The probe must skip the header, skip
+# unrelated jobs, and parse PID `-` as None.
+SAMPLE_LAUNCHCTL_OUTPUT = (
+    "PID\tStatus\tLabel\n"
+    "-\t0\tcom.apple.SafariHistoryServiceAgent\n"
+    "-\t-9\tcom.apple.progressd\n"
+    "50960\t0\tcom.empire.orion.execution\n"
+    "12345\t0\tcom.empire.orion.ingestion\n"
+    "-\t0\tcom.empire.orion.orphan-close\n"
+)
+
+
+class TestParseLaunchctlList:
+    def test_skips_header_row(self) -> None:
+        entries = parse_launchctl_list(SAMPLE_LAUNCHCTL_OUTPUT)
+        assert all(e.label != "Label" for e in entries)
+
+    def test_filters_to_orion_prefix_by_default(self) -> None:
+        entries = parse_launchctl_list(SAMPLE_LAUNCHCTL_OUTPUT)
+        labels = {e.label for e in entries}
+        assert labels == {
+            "com.empire.orion.execution",
+            "com.empire.orion.ingestion",
+            "com.empire.orion.orphan-close",
+        }
+
+    def test_parses_pid_dash_as_none(self) -> None:
+        entries = parse_launchctl_list(SAMPLE_LAUNCHCTL_OUTPUT)
+        by_label = {e.label: e for e in entries}
+        assert by_label["com.empire.orion.orphan-close"].pid is None
+        assert by_label["com.empire.orion.execution"].pid == 50960
+
+    def test_parses_exit_code_as_int(self) -> None:
+        entries = parse_launchctl_list(SAMPLE_LAUNCHCTL_OUTPUT)
+        by_label = {e.label: e for e in entries}
+        assert by_label["com.empire.orion.execution"].exit_code == 0
+
+    def test_parses_negative_exit_codes(self) -> None:
+        # launchd reports signal-terminated jobs as negative exit codes
+        output = "PID\tStatus\tLabel\n-\t-15\tcom.empire.orion.execution\n"
+        entries = parse_launchctl_list(output)
+        assert entries[0].exit_code == -15
+
+    def test_handles_empty_output(self) -> None:
+        assert parse_launchctl_list("") == []
+
+    def test_handles_header_only_output(self) -> None:
+        assert parse_launchctl_list("PID\tStatus\tLabel\n") == []
+
+    def test_custom_prefix(self) -> None:
+        output = "PID\tStatus\tLabel\n100\t0\tcom.empire.orion.execution\n200\t0\tcom.example.other\n"
+        entries = parse_launchctl_list(output, prefix="com.example.")
+        assert len(entries) == 1
+        assert entries[0].label == "com.example.other"
+
+
+class TestClassifyEntry:
+    def test_healthy_running_job_is_ok(self) -> None:
+        entry = LaunchctlEntry(pid=50960, exit_code=0, label="com.empire.orion.execution")
+        assert classify_entry(entry).severity is Severity.OK
+
+    def test_idle_one_shot_is_ok(self) -> None:
+        # pid=- (None) with exit=0 is the legitimate idle-one-shot pattern
+        # (e.g. com.empire.orion.orphan-close between scheduled fires)
+        entry = LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close")
+        assert classify_entry(entry).severity is Severity.OK
+
+    def test_exit_127_is_critical(self) -> None:
+        # The exact failure mode from 2026-05-22 — program path was wrong,
+        # so the shell returned 127 (command not found). Critical because
+        # the job has NEVER run successfully and never will until the path
+        # is fixed.
+        entry = LaunchctlEntry(pid=None, exit_code=127, label="com.empire.orion.orphan-close")
+        alert = classify_entry(entry)
+        assert alert.severity is Severity.CRITICAL
+        assert alert.label == "com.empire.orion.orphan-close"
+        assert alert.exit_code == 127
+
+    def test_other_nonzero_exit_is_warning(self) -> None:
+        entry = LaunchctlEntry(pid=None, exit_code=1, label="com.empire.orion.execution")
+        assert classify_entry(entry).severity is Severity.WARNING
+
+    def test_running_with_nonzero_last_exit_is_warning(self) -> None:
+        # KeepAlive jobs may show a non-zero last-exit even while currently
+        # running (PID present) — we still want visibility because it means
+        # the job is flapping.
+        entry = LaunchctlEntry(pid=50960, exit_code=129, label="com.empire.orion.execution")
+        assert classify_entry(entry).severity is Severity.WARNING
+
+
+class TestEvaluateOrionJobs:
+    def test_all_healthy_jobs_produce_no_alerts(self) -> None:
+        # Case (a) from the task spec: all healthy → no alert.
+        entries = [
+            LaunchctlEntry(pid=50960, exit_code=0, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=12345, exit_code=0, label="com.empire.orion.ingestion"),
+            LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
+        ]
+        assert evaluate_orion_jobs(entries) == []
+
+    def test_one_exit_127_produces_critical_alert_with_label_and_code(self) -> None:
+        # Case (b) from the task spec — the exact 2026-05-22 incident.
+        entries = [
+            LaunchctlEntry(pid=50960, exit_code=0, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=None, exit_code=127, label="com.empire.orion.orphan-close"),
+        ]
+        alerts = evaluate_orion_jobs(entries)
+        assert len(alerts) == 1
+        assert alerts[0].severity is Severity.CRITICAL
+        assert alerts[0].label == "com.empire.orion.orphan-close"
+        assert alerts[0].exit_code == 127
+
+    def test_idle_one_shot_with_pid_dash_and_exit_zero_produces_no_alert(self) -> None:
+        # Case (c) from the task spec — distinguishing the idle one-shot
+        # pattern from real failures is the whole reason this rule exists.
+        entries = [
+            LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
+        ]
+        assert evaluate_orion_jobs(entries) == []
+
+    def test_multiple_alerts_returned_in_input_order(self) -> None:
+        entries = [
+            LaunchctlEntry(pid=None, exit_code=127, label="com.empire.orion.orphan-close"),
+            LaunchctlEntry(pid=50960, exit_code=1, label="com.empire.orion.execution"),
+        ]
+        alerts = evaluate_orion_jobs(entries)
+        assert [a.label for a in alerts] == [
+            "com.empire.orion.orphan-close",
+            "com.empire.orion.execution",
+        ]
+
+
+class TestRunProbe:
+    def test_no_log_write_and_no_notifier_when_all_healthy(self, tmp_path: Path) -> None:
+        notifications: list[HealthAlert] = []
+        log_path = tmp_path / "launchd_health.log"
+
+        alerts = run_probe(
+            launchctl_runner=lambda: _required_with("-\t0\tcom.empire.orion.orphan-close"),
+            notifier=notifications.append,
+            log_path=log_path,
+        )
+
+        assert alerts == []
+        assert notifications == []
+        # No alerts means no rows appended — the log file should not exist
+        # (or should be empty if pre-created).
+        assert not log_path.exists() or log_path.read_text() == ""
+
+    def test_writes_alert_row_and_notifies_on_exit_127(self, tmp_path: Path) -> None:
+        notifications: list[HealthAlert] = []
+        log_path = tmp_path / "launchd_health.log"
+
+        alerts = run_probe(
+            launchctl_runner=lambda: _required_with("-\t127\tcom.empire.orion.orphan-close"),
+            notifier=notifications.append,
+            log_path=log_path,
+        )
+
+        assert len(alerts) == 1
+        assert alerts[0].severity is Severity.CRITICAL
+        assert len(notifications) == 1
+        assert notifications[0].label == "com.empire.orion.orphan-close"
+        assert notifications[0].exit_code == 127
+
+        # Log file should contain one JSON line for the alert.
+        contents = log_path.read_text().strip()
+        assert contents, "expected at least one log row"
+        rows = [json.loads(line) for line in contents.splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["label"] == "com.empire.orion.orphan-close"
+        assert rows[0]["exit_code"] == 127
+        assert rows[0]["severity"] == "CRITICAL"
+        assert "ts" in rows[0]
+
+    def test_appends_rather_than_overwrites_log(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "launchd_health.log"
+        log_path.write_text('{"ts": "2026-05-22T13:35:00Z", "label": "earlier"}\n')
+
+        run_probe(
+            launchctl_runner=lambda: _required_with("-\t127\tcom.empire.orion.orphan-close"),
+            notifier=lambda _alert: None,
+            log_path=log_path,
+        )
+
+        lines = log_path.read_text().splitlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0])["label"] == "earlier"
+        assert json.loads(lines[1])["label"] == "com.empire.orion.orphan-close"
+
+    def test_notifier_exception_does_not_swallow_log_write(self, tmp_path: Path) -> None:
+        # If Slack/webhook is down, we still want the local log row to land.
+        log_path = tmp_path / "launchd_health.log"
+
+        def boom(_alert: HealthAlert) -> None:
+            raise RuntimeError("slack unreachable")
+
+        run_probe(
+            launchctl_runner=lambda: _required_with("-\t127\tcom.empire.orion.orphan-close"),
+            notifier=boom,
+            log_path=log_path,
+        )
+
+        assert log_path.exists()
+        rows = [json.loads(line) for line in log_path.read_text().splitlines()]
+        assert rows[0]["label"] == "com.empire.orion.orphan-close"
+
+
+class TestDetectMissingJobs:
+    def test_all_required_present_produces_no_alerts(self) -> None:
+        entries = [
+            LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
+            LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
+        ]
+        assert detect_missing_jobs(entries) == []
+
+    def test_missing_required_job_produces_critical_alert(self) -> None:
+        # ingestion was booted out — no row at all. classify_entry can never
+        # see this; only the expected-set comparison catches it.
+        entries = [
+            LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
+        ]
+        alerts = detect_missing_jobs(entries)
+        assert len(alerts) == 1
+        assert alerts[0].label == "com.empire.orion.ingestion"
+        assert alerts[0].severity is Severity.CRITICAL
+        assert alerts[0].exit_code is None
+        assert alerts[0].pid is None
+        assert "not loaded" in alerts[0].message
+
+    def test_multiple_missing_jobs_returned_in_sorted_order(self) -> None:
+        # Neither required daemon is present (only the unrequired one-shot is)
+        # → both missing, reported alphabetically for determinism.
+        entries = [LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close")]
+        alerts = detect_missing_jobs(entries)
+        assert [a.label for a in alerts] == [
+            "com.empire.orion.execution",
+            "com.empire.orion.ingestion",
+        ]
+
+    def test_one_shot_orphan_close_absence_is_not_required(self) -> None:
+        # orphan-close is a removable one-shot — its absence must NOT alert,
+        # even though both always-on daemons are present.
+        entries = [
+            LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
+        ]
+        assert detect_missing_jobs(entries) == []
+
+    def test_empty_launchctl_reports_every_required_job(self) -> None:
+        # Nothing loaded at all — the worst case the probe must shout about.
+        alerts = detect_missing_jobs([])
+        assert {a.label for a in alerts} == set(REQUIRED_LABELS)
+        assert all(a.severity is Severity.CRITICAL for a in alerts)
+
+    def test_custom_required_set(self) -> None:
+        alerts = detect_missing_jobs([], required_labels=frozenset({"com.x.only"}))
+        assert [a.label for a in alerts] == ["com.x.only"]
+
+
+class TestProbeSelfExclusion:
+    def test_probe_does_not_alert_on_its_own_nonzero_exit(self) -> None:
+        # main() returns 1/2 when it reports another job, so launchd records
+        # the probe's OWN last status as non-zero. The probe must not then
+        # alert on itself — otherwise it loops forever once it fires once.
+        notifications: list[HealthAlert] = []
+        alerts = run_probe(
+            launchctl_runner=lambda: _required_with(
+                "-\t0\tcom.empire.orion.orphan-close",
+                f"4242\t2\t{SELF_LABEL}",  # the probe itself, last exit 2
+            ),
+            notifier=notifications.append,
+            log_path=Path("/dev/null"),
+        )
+        assert alerts == []
+        assert notifications == []
+
+    def test_real_failure_alerts_while_probe_self_row_is_ignored(self, tmp_path: Path) -> None:
+        # A genuine failure (orphan-close 127) must still surface even when
+        # the probe's own non-zero row is present in the same listing.
+        log_path = tmp_path / "launchd_health.log"
+        alerts = run_probe(
+            launchctl_runner=lambda: _required_with(
+                "-\t127\tcom.empire.orion.orphan-close",
+                f"4242\t2\t{SELF_LABEL}",
+            ),
+            notifier=lambda _a: None,
+            log_path=log_path,
+        )
+        assert [a.label for a in alerts] == ["com.empire.orion.orphan-close"]
+        assert SELF_LABEL not in {a.label for a in alerts}
+
+    def test_run_probe_alerts_and_logs_when_required_job_missing(self, tmp_path: Path) -> None:
+        # ingestion daemon entirely absent (booted out): run_probe must log +
+        # notify, not just silently exit 0.
+        notifications: list[HealthAlert] = []
+        log_path = tmp_path / "launchd_health.log"
+        alerts = run_probe(
+            launchctl_runner=lambda: "PID\tStatus\tLabel\n50960\t0\tcom.empire.orion.execution\n",
+            notifier=notifications.append,
+            log_path=log_path,
+        )
+        assert [a.label for a in alerts] == ["com.empire.orion.ingestion"]
+        assert alerts[0].severity is Severity.CRITICAL
+        assert len(notifications) == 1
+        rows = [json.loads(line) for line in log_path.read_text().splitlines()]
+        assert rows[0]["label"] == "com.empire.orion.ingestion"
+        assert rows[0]["exit_code"] is None
+
+
+@pytest.mark.unit
+class TestMarkerAttachment:
+    """Smoke test ensuring the module is unit-test-marker-clean."""
+
+    def test_module_importable(self) -> None:
+        import orion.jobs.launchd_health_probe as m
+
+        assert hasattr(m, "run_probe")
