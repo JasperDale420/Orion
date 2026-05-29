@@ -69,6 +69,10 @@ class RiskManager:
         # Track full position details (qty, avg_entry)
         self.positions: dict[str, dict[str, float]] = {}
 
+        # Projected position greeks stashed at order-submit time (share-
+        # equivalent units), applied to portfolio greeks when the fill lands.
+        self._intended_position_greeks: dict[str, dict[str, float]] = {}
+
         # Idempotency Tracking
         self.processed_fill_ids: set[str] = set()
 
@@ -347,6 +351,23 @@ class RiskManager:
 
     def clear_position_greeks(self, ticker: str) -> None:
         self._greeks.clear_position_greeks(ticker)
+
+    def set_intended_position_greeks(
+        self, ticker: str, delta: float, gamma: float, theta: float = 0.0, vega: float = 0.0
+    ) -> None:
+        """Record the projected position greeks for `ticker` at order-submit
+        time (share-equivalent units) so the matching fill can update portfolio
+        greeks. Overwrites any prior stash for the ticker."""
+        self._intended_position_greeks[ticker] = {
+            "delta": delta,
+            "gamma": gamma,
+            "theta": theta,
+            "vega": vega,
+        }
+
+    def clear_intended_position_greeks(self, ticker: str) -> None:
+        """Drop the stashed intended greeks for `ticker` (e.g. on submit failure)."""
+        self._intended_position_greeks.pop(ticker, None)
 
     # ── Delegated methods (Sector) ───────────────────────────────────────
 
@@ -629,6 +650,19 @@ class RiskManager:
 
         self.ticker_exposures[ticker] = abs(new_qty * price)
         self.open_positions = sum(1 for p in self.positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
+
+        # Keep portfolio greeks tracking reality so the projected-greek gate on
+        # the next order is accurate. Intended greeks are stashed at submit time
+        # (set_intended_position_greeks); a flattened position clears them.
+        if math.isclose(self.positions[ticker]["qty"], 0, abs_tol=1e-9):
+            self.clear_position_greeks(ticker)
+            self._intended_position_greeks.pop(ticker, None)
+        else:
+            intended = self._intended_position_greeks.get(ticker)
+            if intended is not None:
+                self.update_position_greeks(
+                    ticker, intended["delta"], intended["gamma"], intended["theta"], intended["vega"]
+                )
 
         await self._save_state()
 

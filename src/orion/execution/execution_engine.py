@@ -77,6 +77,58 @@ def round_to_options_tick(price: float) -> float:
     return round(round(price / tick) * tick, 2)
 
 
+def _extract_contract_greeks(contract: dict[str, Any]) -> dict[str, float] | None:
+    """Pull per-contract (per-share) greeks off a Gateway chain contract.
+
+    Returns delta/gamma/theta/vega, or None if delta/gamma/vega are missing or
+    unparseable (theta is optional — tracking only). A real 0.0 is present data,
+    not missing. Decimal/str/None are coerced the same way as bid/ask above.
+    """
+
+    def _coerce(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    delta = _coerce(contract.get("delta"))
+    gamma = _coerce(contract.get("gamma"))
+    vega = _coerce(contract.get("vega"))
+    if delta is None or gamma is None or vega is None:
+        return None
+    theta = _coerce(contract.get("theta")) or 0.0
+    return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega}
+
+
+def _project_position_greeks(contract_greeks: dict[str, float] | None, num_contracts: int) -> dict[str, float] | None:
+    """Scale per-share contract greeks to share-equivalent position greeks:
+    per-share greek × 100 shares/contract × num_contracts."""
+    if contract_greeks is None:
+        return None
+    mult = 100.0 * num_contracts
+    return {
+        "delta": contract_greeks["delta"] * mult,
+        "gamma": contract_greeks["gamma"] * mult,
+        "theta": contract_greeks["theta"] * mult,
+        "vega": contract_greeks["vega"] * mult,
+    }
+
+
+def _greeks_gate_blocks_on_missing(greeks_enabled: bool) -> bool:
+    """Fail-safe policy when per-contract greeks are unavailable.
+
+    Block only in real-money stages (anything other than paper/test) and only
+    when greek checks are enabled. paper/test fail open (the caller logs a WARN
+    and skips the greek gate). Operators can disable the gate entirely with
+    ORION_RISK_ENABLE_GREEKS_CHECKS=False.
+    """
+    if not greeks_enabled:
+        return False
+    return system_settings.orion_stage.lower() not in ("paper", "test")
+
+
 class ExecutionEngine:
     """
     Translates Agent decisions into broker orders.
@@ -468,6 +520,7 @@ class ExecutionEngine:
         # is signal-time data and may be stale. Live mid/ask is needed for
         # accurate order sizing, risk checks, and limit price.
         option_price = None
+        contract_greeks: dict[str, float] | None = None
         client = self._get_gateway_client()
         chain_result = await client.get_option_chain(candidate.ticker)
 
@@ -476,6 +529,9 @@ class ExecutionEngine:
             for contract in contracts:
                 # Gateway returns `contract_symbol`; `symbol` is for the underlying.
                 if contract.get("contract_symbol") == candidate.option_symbol:
+                    # Same chain response carries per-contract greeks — capture
+                    # them here so the risk gate below has no extra round-trip.
+                    contract_greeks = _extract_contract_greeks(contract)
                     bid = contract.get("bid")
                     ask = contract.get("ask")
                     try:
@@ -580,7 +636,51 @@ class ExecutionEngine:
         # SHORT does not mean shorting the contract. Exit uses the inverted
         # side in the position_monitor close path.
         side_value = OrderSide.BUY
-        if not self.risk_manager.check_order(candidate.ticker, num_contracts, option_price * 100, side_value):
+        notional = option_price * 100
+
+        # Greeks gate. Per-contract greeks → share-equivalent position greeks
+        # (per-share × 100 × num_contracts). When available, enforce the
+        # configured portfolio/position limits via check_options_order; when
+        # unavailable, behavior is stage-gated (block in live, warn+skip in
+        # paper/test) per _greeks_gate_blocks_on_missing.
+        position_greeks = _project_position_greeks(contract_greeks, num_contracts)
+        # Bind to the config the risk manager actually enforces greeks under so
+        # the fail-safe decision matches check_greeks_limits' own toggle.
+        greeks_enabled = getattr(
+            getattr(self.risk_manager, "config", None), "enable_greeks_checks", risk_settings.enable_greeks_checks
+        )
+
+        if position_greeks is not None:
+            risk_ok = self.risk_manager.check_options_order(
+                candidate.ticker,
+                num_contracts,
+                notional,
+                side_value,
+                delta=position_greeks["delta"],
+                gamma=position_greeks["gamma"],
+                vega=position_greeks["vega"],
+            )
+        elif _greeks_gate_blocks_on_missing(greeks_enabled):
+            logger.error(
+                "options_blocked_greeks_unavailable",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                stage=system_settings.orion_stage,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Greeks Unavailable"
+            return
+        else:
+            if greeks_enabled:
+                logger.warning(
+                    "greeks_unavailable_skipping_gate",
+                    ticker=candidate.ticker,
+                    option_symbol=candidate.option_symbol,
+                    stage=system_settings.orion_stage,
+                )
+            risk_ok = self.risk_manager.check_order(candidate.ticker, num_contracts, notional, side_value)
+
+        if not risk_ok:
             logger.error(
                 "options_execution_blocked_by_risk",
                 ticker=candidate.ticker,
@@ -597,7 +697,7 @@ class ExecutionEngine:
             decision.reason = "High Error Rate"
             return
 
-        await self._submit_options_order(decision, candidate, num_contracts, option_price)
+        await self._submit_options_order(decision, candidate, num_contracts, option_price, position_greeks)
 
     async def _pre_flight_checks(self, decision: StrategyDecision, candidate: CandidateTrade) -> bool:
         """System Health, Data Lag, Shorting Checks"""
@@ -686,7 +786,12 @@ class ExecutionEngine:
             self.order_history.popleft()
 
     async def _submit_options_order(
-        self, decision: Any, candidate: Any, num_contracts: int, option_price: float
+        self,
+        decision: Any,
+        candidate: Any,
+        num_contracts: int,
+        option_price: float,
+        position_greeks: dict[str, float] | None = None,
     ) -> None:
         """Submit an options order via Data Gateway."""
         logger.info(
@@ -729,6 +834,18 @@ class ExecutionEngine:
                 price=option_price,
                 side=side,
                 order_id=client_order_id,
+            )
+
+        # Stash projected greeks so the fill that lands this order updates
+        # portfolio greeks (set_intended_position_greeks → process_fill). Cleared
+        # below if the submission fails (no fill will ever arrive).
+        if position_greeks is not None and hasattr(self.risk_manager, "set_intended_position_greeks"):
+            self.risk_manager.set_intended_position_greeks(
+                candidate.ticker,
+                delta=position_greeks["delta"],
+                gamma=position_greeks["gamma"],
+                theta=position_greeks["theta"],
+                vega=position_greeks["vega"],
             )
 
         # Two-phase persistence: write the PENDING_SUBMIT tracking row BEFORE the
@@ -817,6 +934,8 @@ class ExecutionEngine:
 
         except Exception as e:
             await self._remove_pending_order_compat(client_order_id)
+            if hasattr(self.risk_manager, "clear_intended_position_greeks"):
+                self.risk_manager.clear_intended_position_greeks(candidate.ticker)
 
             # Finalize the PENDING_SUBMIT row to REJECTED in place; the row
             # already exists from persist_pending_order above.
