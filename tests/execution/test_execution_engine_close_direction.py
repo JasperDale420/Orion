@@ -30,6 +30,7 @@ async def test_close_position_uses_buy_side_for_short_direction() -> None:
 
     exit_signal = SimpleNamespace(urgency="IMMEDIATE", reason="stop", rule_id="rule.stop", confidence=0.9, details={})
 
+    mock_client.get_position = AsyncMock(return_value={"qty": "1"})
     closed = await engine.close_position(ticker="AAPL", qty=1.0, exit_signal=exit_signal, direction="SHORT")
 
     assert closed is True
@@ -61,6 +62,7 @@ async def test_close_position_limit_order_for_long_direction() -> None:
 
     exit_signal = SimpleNamespace(urgency="NORMAL", reason="take_profit", rule_id="rule.tp", confidence=0.8, details={})
 
+    mock_client.get_position = AsyncMock(return_value={"qty": "5"})
     closed = await engine.close_position(ticker="AAPL", qty=5.0, exit_signal=exit_signal, direction="LONG")
 
     assert closed is True

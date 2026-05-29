@@ -283,6 +283,30 @@ class ExecutionEngine:
                 await asyncio.sleep(self._CLOSE_GATEWAY_RETRY_BACKOFF_SECONDS)
         return False
 
+    async def _live_position_qty(self, ticker: str) -> float | None:
+        """Signed live broker qty for `ticker`: 0.0 if flat, None if it could
+        not be determined (caller must fail safe and NOT submit a close —
+        submitting against an unknown position risks opening a naked short)."""
+        try:
+            pos = await self._get_gateway_client().get_position(ticker)
+        except Exception as e:
+            logger.warning(
+                f"Live position fetch failed for {ticker}: {e}",
+                extra={"event_type": "LIVE_POSITION_FETCH_ERROR", "ticker": ticker, "error": str(e)},
+            )
+            return None
+        if not isinstance(pos, dict):
+            return None
+        if "error" in pos:
+            return 0.0  # broker reports no such position → flat, nothing to reduce
+        raw = pos.get("qty")
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
     async def initialize(self) -> None:
         """
         Loads the last 20 execution attempts and initializes RiskManager state.
@@ -1128,18 +1152,36 @@ class ExecutionEngine:
             )
             return False
 
-        # Broker positions are SIGNED — Alpaca returns SHORT equity positions
-        # with negative qty (e.g. CRNC qty=-8000.0). The Gateway endpoints
-        # (DELETE /positions/{symbol}?qty=…, POST /orders body qty=…) both
-        # reject negative values with `invalid qty: -8000.0`. The qty SIGN is
-        # the broker's ground truth for position side and must override the
-        # `direction` hint (which is the candidate's bullish/bearish bias and
-        # can be stale or defaulted to "LONG" for positions opened by sibling
-        # systems on the shared Alpaca account). Down-stream Gateway calls
-        # always receive `abs_qty`; equity close-side is derived from
-        # `held_short` below.
-        held_short = qty < 0
-        abs_qty = abs(qty)
+        # Reduce-only safety: re-verify the LIVE broker position so a stale
+        # tracked qty can't turn a "close" into an OPENING (naked) short. Only
+        # ever reduce an existing position — never open or flip. The broker's
+        # signed qty is authoritative for the close direction (overriding the
+        # caller's `direction` hint, which can be stale or default "LONG" for
+        # sibling-system positions on the shared account). 2026-05-29: the close
+        # path oversold longs into naked short 0DTE puts (~3,235 rejected
+        # orders/day) because it trusted the passed qty — see
+        # test_close_reduce_only.
+        broker_qty = await self._live_position_qty(ticker)
+        if broker_qty is None:
+            logger.warning(
+                f"Skipping close for {ticker}: live position could not be verified",
+                extra={"event_type": "EXIT_SKIPPED_UNVERIFIED", "ticker": ticker},
+            )
+            return False
+        if abs(broker_qty) < 1e-9:
+            logger.info(
+                f"Skipping close for {ticker}: broker holds no position to reduce",
+                extra={"event_type": "EXIT_SKIPPED_NO_POSITION", "ticker": ticker},
+            )
+            return False
+
+        # `held_short` from the broker sign; cap the close to the held qty (and
+        # to the caller's requested qty). Down-stream Gateway calls receive the
+        # positive `abs_qty`.
+        held_short = broker_qty < 0
+        abs_qty = min(abs(qty), abs(broker_qty))
+        if abs_qty < 1e-9:
+            return False
 
         # Lazy-instantiate the market schedule the first time we need
         # it. Tests inject a stub via `engine._market_schedule = ...`

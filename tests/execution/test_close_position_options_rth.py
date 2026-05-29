@@ -108,6 +108,7 @@ async def test_options_close_inside_rth_uses_marketable_limit() -> None:
             details={"bucket": "SWING"},
         )
 
+        mock_client.get_position = AsyncMock(return_value={"qty": "10"})
         closed = await engine.close_position(
             ticker="NVDA260522C00250000",
             qty=10.0,
@@ -165,6 +166,7 @@ async def test_options_close_inside_rth_short_close_buys_above_mark() -> None:
             details={"bucket": "SWING"},
         )
 
+        mock_client.get_position = AsyncMock(return_value={"qty": "-5"})
         closed = await engine.close_position(
             ticker="SPY260522P00450000",
             qty=-5.0,  # negative = broker says SHORT
@@ -222,6 +224,7 @@ async def test_options_close_side_derived_from_qty_sign_not_direction() -> None:
             confidence=1.0,
             details={"bucket": "SWING"},
         )
+        mock_client.get_position = AsyncMock(return_value={"qty": "10"})  # broker LONG
         closed = await engine.close_position(
             ticker="NVDA260522C00250000",
             qty=10.0,  # positive — broker says LONG
@@ -287,6 +290,7 @@ async def test_equity_close_immediate_still_uses_market() -> None:
     try:
         exit_signal = SimpleNamespace(urgency="IMMEDIATE", reason="x", rule_id="r", confidence=1.0, details={})
 
+        mock_client.get_position = AsyncMock(return_value={"qty": "10"})
         closed = await engine.close_position(
             ticker="AAPL",  # equity, not OCC
             qty=10.0,

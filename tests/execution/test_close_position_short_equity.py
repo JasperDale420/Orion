@@ -81,6 +81,7 @@ async def test_short_equity_immediate_close_sends_positive_qty() -> None:
             details={},
         )
 
+        mock_client.get_position = AsyncMock(return_value={"qty": "-8000"})
         closed = await engine.close_position(
             ticker="CRNC",
             qty=-8000.0,
@@ -127,6 +128,7 @@ async def test_short_equity_limit_close_uses_buy_side_and_positive_qty() -> None
             details={},
         )
 
+        mock_client.get_position = AsyncMock(return_value={"qty": "-8000"})
         closed = await engine.close_position(
             ticker="CRNC",
             qty=-8000.0,
@@ -178,6 +180,7 @@ async def test_long_equity_limit_close_unchanged_uses_sell() -> None:
             details={},
         )
 
+        mock_client.get_position = AsyncMock(return_value={"qty": "100"})
         closed = await engine.close_position(
             ticker="AAPL",
             qty=100.0,
