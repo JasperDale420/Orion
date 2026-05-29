@@ -61,6 +61,7 @@ async def test_long_position_sells_to_close(monkeypatch):
     kw = client.create_order.await_args.kwargs
     assert kw["side"] == OrderSide.SELL
     assert kw["qty"] == 10
+    assert kw["position_intent"] == "sell_to_close"  # reduce-only at the broker
 
 
 @pytest.mark.asyncio
@@ -82,6 +83,7 @@ async def test_short_position_buys_to_cover(monkeypatch):
     kw = client.create_order.await_args.kwargs
     assert kw["side"] == OrderSide.BUY
     assert kw["qty"] == 8
+    assert kw["position_intent"] == "buy_to_close"
 
 
 @pytest.mark.asyncio

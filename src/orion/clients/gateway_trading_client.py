@@ -145,6 +145,7 @@ class GatewayTradingClient:
         time_in_force: str = "day",
         limit_price: float | None = None,
         client_order_id: str | None = None,
+        position_intent: str | None = None,
     ) -> dict[str, Any]:
         """Submit a new order through the Gateway.
 
@@ -169,6 +170,8 @@ class GatewayTradingClient:
             params["limit_price"] = limit_price
         if client_order_id is not None:
             params["client_order_id"] = client_order_id
+        if position_intent is not None:
+            params["position_intent"] = position_intent
         return await self._request("POST", "/api/v1/alpaca/orders", params=params)
 
     async def get_orders(self, status: str = "open", limit: int = 50) -> list[dict[str, Any]]:

@@ -1268,6 +1268,10 @@ class ExecutionEngine:
                     limit_price=limit_price,
                     time_in_force="day",
                     client_order_id=client_order_id,
+                    # Reduce-only intent: Alpaca will reject (not open a naked
+                    # short) if no matching position exists — belt-and-suspenders
+                    # alongside the live-position verification above.
+                    position_intent=("buy_to_close" if close_side == OrderSide.BUY else "sell_to_close"),
                 )
 
                 if "error" in result:
@@ -1362,6 +1366,10 @@ class ExecutionEngine:
                     limit_price=limit_price,
                     time_in_force="day",
                     client_order_id=client_order_id,
+                    # Reduce-only intent: Alpaca will reject (not open a naked
+                    # short) if no matching position exists — belt-and-suspenders
+                    # alongside the live-position verification above.
+                    position_intent=("buy_to_close" if close_side == OrderSide.BUY else "sell_to_close"),
                 )
 
                 if "error" in result:
