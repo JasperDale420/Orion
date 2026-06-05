@@ -211,7 +211,11 @@ async def test_options_42210000_escalates_to_native_no_plain_retry(monkeypatch: 
     client = _make_client(
         broker_qty="10",
         avg_entry="1.0",
-        limit_result={"error": "Client error '403'", "detail": '{"code":42210000,"message":"intent mismatch"}'},
+        limit_result={
+            "error": "Client error '403'",
+            "detail": '{"code":42210000,"message":"intent mismatch"}',
+            "status_code": 403,
+        },
         native_result={"id": "native-ok", "status": "accepted"},
     )
     engine._gateway_client = client
@@ -238,7 +242,7 @@ async def test_options_limit_rejected_escalates_to_native(monkeypatch: pytest.Mo
     client = _make_client(
         broker_qty="2",
         avg_entry="5.0",
-        limit_result={"error": "403", "detail": "potential wash trade detected"},
+        limit_result={"error": "403", "detail": "potential wash trade detected", "status_code": 403},
         native_result={"id": "native-ok", "status": "accepted"},
     )
     engine._gateway_client = client
@@ -251,6 +255,33 @@ async def test_options_limit_rejected_escalates_to_native(monkeypatch: pytest.Mo
     assert closed is True
     client.create_order.assert_called_once()
     client.close_position.assert_called_once_with("MU260612P00790000", qty=2.0)
+
+
+@pytest.mark.asyncio
+async def test_options_ambiguous_limit_outcome_defers_no_escalation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An AMBIGUOUS limit outcome (timeout / transport error → {"error"} with NO
+    status_code) must NOT escalate to the native flatten: the limit may have been
+    accepted and be resting, so a native close now could double-close and re-open
+    the naked-short hole. Defer (return False) instead — next cycle cancels any
+    live limit first (adversarial review)."""
+    _patch_persist(monkeypatch)
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    client = _make_client(
+        broker_qty="2",
+        avg_entry="5.0",
+        limit_result={"error": "ReadTimeout: gateway did not respond"},  # no status_code → ambiguous
+        native_result={"id": "should-not-be-used"},
+    )
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="MU260612P00790000", qty=2.0, exit_signal=_exit_signal(), direction="LONG", current_price=10.0
+    )
+
+    assert closed is False  # deferred, not escalated
+    client.create_order.assert_called_once()
+    client.close_position.assert_not_called()  # NO native flatten while the limit may be live
 
 
 @pytest.mark.asyncio
@@ -344,7 +375,7 @@ async def test_close_failure_persists_rejection(monkeypatch: pytest.MonkeyPatch)
     client = _make_client(
         broker_qty="2",
         avg_entry="5.0",
-        limit_result={"error": "403", "detail": "potential wash trade detected"},
+        limit_result={"error": "403", "detail": "potential wash trade detected", "status_code": 403},
         native_result={"error": "500", "detail": "gateway down"},
     )
     engine._gateway_client = client

@@ -149,6 +149,37 @@ async def test_bracket_orders_are_orion_attributed_and_reduce_only(mock_env, mon
 
 
 @pytest.mark.asyncio
+async def test_bracket_error_dict_marks_unprotected(mock_env, monkeypatch):
+    """GatewayTradingClient returns HTTP failures as {"error": ...} dicts, not
+    raised exceptions. A bracket leg that comes back as an error dict (or with no
+    id) must be recorded as a FAILED leg — not as protection with order_id=None
+    (adversarial review). Otherwise operators see no unprotected flag for a
+    genuinely unprotected position."""
+    monkeypatch.setattr("orion.execution.execution_engine.risk_settings.enable_bracket_orders", True, raising=False)
+
+    engine, mock_client = _make_engine()
+    mock_client.create_order.side_effect = [
+        {"id": "entry-1", "status": "accepted"},  # entry OK
+        {"error": "Client error '403'", "detail": "rejected", "status_code": 403},  # SL error dict
+        {"error": "Client error '403'", "detail": "rejected", "status_code": 403},  # TP error dict
+    ]
+
+    candidate, decision = _make_candidate_and_decision(
+        execution_params={"stop_loss_pct": 0.03, "take_profit_pct": 0.06}
+    )
+
+    await engine.execute_order(decision, candidate)
+
+    ep = decision.execution_params
+    assert ep.get("position_unprotected") is True
+    bracket = ep["bracket_orders"]
+    assert bracket["stop_loss"] is None
+    assert bracket["take_profit"] is None
+    assert bracket["unprotected"] is True
+    assert len(bracket["failure_reasons"]) == 2
+
+
+@pytest.mark.asyncio
 async def test_no_bracket_orders_when_disabled(mock_env):
     """Default (enable_bracket_orders=False): no stop/take-profit orders placed."""
     engine, mock_client = _make_engine()

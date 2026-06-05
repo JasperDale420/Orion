@@ -1142,6 +1142,11 @@ class ExecutionEngine:
                 client_order_id=mint_orion_order_id(),
                 position_intent=exit_intent,
             )
+            # GatewayTradingClient returns HTTP failures as {"error": ...} rather
+            # than raising — treat that as a failed leg, else we'd record an
+            # order_id=None dict as "protected" and hide an unprotected position.
+            if not isinstance(sl_order, dict) or "error" in sl_order or not sl_order.get("id"):
+                raise RuntimeError(str(sl_order.get("detail") or sl_order.get("error") or "no order id"))
             result["stop_loss"] = {"order_id": sl_order.get("id"), "stop_price": sl_price}
             logger.info(
                 "bracket_stop_loss_placed",
@@ -1164,6 +1169,8 @@ class ExecutionEngine:
                 client_order_id=mint_orion_order_id(),
                 position_intent=exit_intent,
             )
+            if not isinstance(tp_order, dict) or "error" in tp_order or not tp_order.get("id"):
+                raise RuntimeError(str(tp_order.get("detail") or tp_order.get("error") or "no order id"))
             result["take_profit"] = {"order_id": tp_order.get("id"), "limit_price": tp_price}
             logger.info(
                 "bracket_take_profit_placed",
@@ -1401,10 +1408,29 @@ class ExecutionEngine:
                 self._record_result(True)
                 return True
 
-            # 2) Limit rejected → escalate to the native flatten (last resort).
+            # 2) Limit failed. Escalate to the native flatten ONLY on a CONFIRMED
+            #    broker rejection (4xx) — then the limit definitively did not
+            #    rest. An AMBIGUOUS outcome (timeout / transport error / 5xx;
+            #    GatewayTradingClient returns {"error": ...} with no status_code)
+            #    could mean the limit was ACCEPTED and is resting: a native
+            #    flatten now could double-close (both fill) and re-open the
+            #    naked-short hole (adversarial review). Defer instead — next
+            #    cycle's cancel-resting-first cancels any live limit before
+            #    re-attempting, and a position that did close is caught by the
+            #    early no-position guard.
             detail = str(result.get("detail") or result.get("error") or "")
+            status_code = result.get("status_code")
+            confirmed_rejection = isinstance(status_code, int) and 400 <= status_code < 500
+            if not confirmed_rejection:
+                logger.warning(
+                    f"Close limit for {ticker} had an ambiguous outcome ({detail[:160]}); "
+                    f"deferring rather than escalating (limit may be live)",
+                    extra={"event_type": "EXIT_LIMIT_AMBIGUOUS_DEFER", "ticker": ticker, "error": detail[:200]},
+                )
+                self._record_result(False)
+                return False
             logger.warning(
-                f"Limit close rejected for {ticker}, escalating to native flatten: {detail[:200]}",
+                f"Limit close rejected for {ticker} ({status_code}), escalating to native flatten: {detail[:200]}",
                 extra={"event_type": "EXIT_LIMIT_REJECTED_ESCALATE", "ticker": ticker, "error": detail[:200]},
             )
             return await self._native_close_escalation(
