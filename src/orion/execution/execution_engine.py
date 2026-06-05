@@ -1120,6 +1120,15 @@ class ExecutionEngine:
         tp_failure_reason: str | None = None
         result: dict = {"stop_loss": None, "take_profit": None}
 
+        # Bracket legs MUST be orion-attributed (orion_ client_order_id) and
+        # reduce-only (adversarial review 2026-06-05). Without the orion_ id the
+        # close-path cancel sweep (_cancel_resting_orion_orders) can't cancel a
+        # resting bracket order before a flatten, so a surviving bracket SELL can
+        # fire on a now-flat position as a naked short; the id also attributes the
+        # bracket fill's P&L. position_intent is reduce-only defence-in-depth (the
+        # Gateway threads it for the limit TP; it's a harmless no-op on the stop).
+        exit_intent = "sell_to_close" if exit_side == OrderSide.SELL else "buy_to_close"
+
         client = self._get_gateway_client()
 
         try:
@@ -1130,6 +1139,8 @@ class ExecutionEngine:
                 order_type="stop",
                 stop_price=sl_price,
                 time_in_force="gtc",
+                client_order_id=mint_orion_order_id(),
+                position_intent=exit_intent,
             )
             result["stop_loss"] = {"order_id": sl_order.get("id"), "stop_price": sl_price}
             logger.info(
@@ -1150,6 +1161,8 @@ class ExecutionEngine:
                 order_type="limit",
                 limit_price=tp_price,
                 time_in_force="gtc",
+                client_order_id=mint_orion_order_id(),
+                position_intent=exit_intent,
             )
             result["take_profit"] = {"order_id": tp_order.get("id"), "limit_price": tp_price}
             logger.info(
