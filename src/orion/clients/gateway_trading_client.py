@@ -82,14 +82,23 @@ class GatewayTradingClient:
                 return body[_RESPONSE_DATA_KEY]
             return body
         except httpx.HTTPStatusError as exc:
+            # Surface the response BODY, not just the bare status line.
+            # The Gateway proxies Alpaca's error verbatim, so the body
+            # carries the actual reason code (40310000 insufficient
+            # day-trading buying power, 42210000 position-intent mismatch,
+            # "potential wash trade detected", …). `str(exc)` is only
+            # "Client error '403 Forbidden' for url …" — useless for
+            # operators and for the close-path intent retry. Callers that
+            # persist `error_message` or branch on the reason read `detail`.
+            body = exc.response.text
             logger.error(
                 "gateway_trading_http_error",
                 method=method,
                 path=path,
                 status=exc.response.status_code,
-                detail=exc.response.text[:500],
+                detail=body[:500],
             )
-            return {"error": str(exc)}
+            return {"error": str(exc), "detail": body, "status_code": exc.response.status_code}
         except Exception as exc:
             logger.error("gateway_trading_error", method=method, path=path, error=str(exc))
             return {"error": str(exc)}

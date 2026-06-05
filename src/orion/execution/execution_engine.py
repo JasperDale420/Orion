@@ -17,6 +17,7 @@ from orion.execution.attribution import (
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import (
     persist_exit_decision,
+    persist_exit_order_rejection,
     persist_order_finalize,
     persist_order_status_update,
     persist_pending_order,
@@ -307,6 +308,60 @@ class ExecutionEngine:
         except (TypeError, ValueError):
             return None
 
+    _ACCOUNT_CACHE_TTL_SECONDS = 30.0
+
+    async def _get_cached_account(self) -> dict[str, Any]:
+        """Account snapshot from the Gateway, cached for a short TTL so the
+        per-order buying-power gate doesn't add a round-trip to every order."""
+        now = time.monotonic()
+        ts = getattr(self, "_account_cache_ts", None)
+        cached = getattr(self, "_account_cache", None)
+        if cached is not None and ts is not None and (now - ts) < self._ACCOUNT_CACHE_TTL_SECONDS:
+            return cached
+        acct = await self._get_gateway_client().get_account()
+        self._account_cache = acct
+        self._account_cache_ts = now
+        return acct
+
+    _DTBP_BACKOFF_SECONDS = 120.0
+
+    def _in_dtbp_backoff(self) -> bool:
+        """True while inside the cooldown set after a CONFIRMED broker DTBP
+        rejection (40310000), so Orion stops submitting opening orders after the
+        first confirmed wall instead of hammering — even when the proactive
+        account check fails open on a degraded/malformed read (adversarial
+        review)."""
+        return time.monotonic() < getattr(self, "_dtbp_backoff_until", 0.0)
+
+    def _note_dtbp_rejection(self) -> None:
+        """Arm the DTBP backoff after a broker 40310000 rejection."""
+        self._dtbp_backoff_until = time.monotonic() + self._DTBP_BACKOFF_SECONDS
+
+    async def _has_daytrading_buying_power(self, estimated_cost: float) -> bool:
+        """True unless we can positively read that the shared account's
+        day-trading buying power can't cover ``estimated_cost``.
+
+        Fails OPEN (returns True) on any read/parse problem — a missing field or
+        a transient account-read error must never block trading. This only
+        exists to stop Orion hammering the Gateway with opening orders Alpaca
+        will reject 40310000 when the shared paper account's day-trading buying
+        power is exhausted (2026-06-02: 193 rejected buys in one day).
+        """
+        try:
+            acct = await self._get_cached_account()
+        except Exception:
+            return True
+        if not isinstance(acct, dict) or "error" in acct:
+            return True
+        raw = acct.get("daytrading_buying_power")
+        if raw is None:
+            return True  # field absent → don't gate
+        try:
+            dtbp = float(raw)
+        except (TypeError, ValueError):
+            return True
+        return dtbp >= estimated_cost
+
     async def initialize(self) -> None:
         """
         Loads the last 20 execution attempts and initializes RiskManager state.
@@ -374,6 +429,16 @@ class ExecutionEngine:
         via Data-Gateway, so we must filter to avoid counting other systems'
         positions in Orion's risk calculations.
         """
+        # Prune stale pending orders (DB-only, gateway-independent). Expired
+        # day orders never fire a fill, so they linger as phantom pending
+        # exposure until restart unless swept at runtime (RCA 2026-06-05).
+        prune = getattr(self.risk_manager, "prune_stale_pending_orders", None)
+        if prune is not None:
+            try:
+                await prune()
+            except Exception as e:
+                logger.debug(f"pending order prune skipped: {e}")
+
         if not await self._check_gateway_available():
             logger.info(
                 "Skipping Gateway risk sync; server unavailable. Using persisted risk state.",
@@ -853,6 +918,26 @@ class ExecutionEngine:
         decision.execution_params["order_type"] = "OPTIONS"
         decision.execution_params["contracts"] = num_contracts
 
+        # Pre-trade buying-power gate (RCA 2026-06-02). The shared Alpaca paper
+        # account periodically exhausts day-trading buying power (Alpaca
+        # 40310000) — mostly driven by sibling systems — after which every new
+        # opening order is rejected. Orion contributed 193 rejected buys in a
+        # single day by hammering straight through it. Back off early here, with
+        # a clear reason, before reserving rate-limiter / risk / pending-order
+        # state. Fails OPEN, so a transient account-read blip never blocks us.
+        estimated_cost = num_contracts * option_price * 100.0
+        if self._in_dtbp_backoff() or not await self._has_daytrading_buying_power(estimated_cost):
+            logger.warning(
+                "insufficient_daytrading_buying_power",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                estimated_cost=estimated_cost,
+                backoff_active=self._in_dtbp_backoff(),
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Insufficient day-trading buying power (shared account)"
+            return
+
         # Orion only opens options positions from candidates — it buys calls on
         # a LONG bet and buys puts on a SHORT bet. Both are BUYs at the broker.
         # The SHORT direction reflects a bearish view on the underlying, not a
@@ -923,7 +1008,13 @@ class ExecutionEngine:
             )
 
             if "error" in result:
-                raise RuntimeError(f"Gateway options order failed: {result['error']}")
+                # Include the Gateway/Alpaca response body so the REJECTED
+                # row records the real reason (e.g. 40310000 insufficient
+                # day-trading buying power) instead of a bare "403 Forbidden".
+                detail = result.get("detail")
+                raise RuntimeError(
+                    f"Gateway options order failed: {result['error']}" + (f" | {detail}" if detail else "")
+                )
 
             await persist_order_finalize(
                 client_order_id=client_order_id,
@@ -981,6 +1072,11 @@ class ExecutionEngine:
             await self._remove_pending_order_compat(client_order_id)
             if hasattr(self.risk_manager, "clear_intended_position_greeks"):
                 self.risk_manager.clear_intended_position_greeks(candidate.ticker)
+
+            # Confirmed day-trading-buying-power wall → arm the backoff so we
+            # stop submitting opening orders for a cooldown instead of flooding.
+            if "40310000" in str(e):
+                self._note_dtbp_rejection()
 
             # Finalize the PENDING_SUBMIT row to REJECTED in place; the row
             # already exists from persist_pending_order above.
@@ -1210,75 +1306,73 @@ class ExecutionEngine:
             )
             return False
 
-        # ── Options inside RTH: marketable LIMIT only ────────────
+        # ── Options inside RTH: attributed LIMIT first, native escalation ──
+        #
+        # RCA 2026-06-05 + adversarial review: the close MUST stay
+        # orion-attributed so its fill reaches RiskManager.process_fill and
+        # feeds realized-PnL / daily-loss / the drawdown kill switch. The
+        # Gateway's native DELETE /positions close carries NO orion_
+        # client_order_id, so its fill is dropped by the orion_-prefix fill
+        # filter — using it as the default would make the kill switch blind to
+        # option-close PnL. So:
+        #   1. cancel Orion's own resting orders on this symbol (avoid a
+        #      self-wash against a filled/working entry, and a re-open after);
+        #   2. submit an orion-attributed marketable LIMIT, floored strictly
+        #      above our own avg entry so it can't self-wash (the MU bug was a
+        #      stale mark putting the SELL below our $5.00 entry), with a
+        #      42210000 retry that re-verifies the live position (reduce-only);
+        #   3. only if the limit is rejected, ESCALATE to the native flatten as
+        #      a last resort to avoid stranding the position — accepting the
+        #      attribution gap only in that rare case.
+        #
+        # Close-side comes from `held_short` (broker signed qty), NOT the
+        # caller's `direction` hint (Codex review 2026-05-21 Important #2).
         if is_option:
+            client = self._get_gateway_client()
+            close_side = OrderSide.BUY if held_short else OrderSide.SELL
+
+            # Cancel our own resting orders first. If we cannot CONFIRM they're
+            # cleared, defer this close (don't risk a wash/re-open) and retry
+            # next cycle rather than escalating blind.
+            if not await self._cancel_resting_orion_orders(ticker):
+                logger.warning(
+                    f"Deferring close for {ticker}: own resting orders not confirmed cancelled",
+                    extra={"event_type": "EXIT_DEFERRED_RESTING_ORDERS", "ticker": ticker},
+                )
+                return False
+
+            # No mark → can't price an attributed limit; escalate to native.
             if current_price is None or current_price <= 0:
-                logger.error(
-                    f"Cannot close {ticker}: no current_price available",
-                    extra={
-                        "event_type": "EXIT_ORDER_FAILED",
-                        "ticker": ticker,
-                        "error": "missing_current_price",
-                    },
+                return await self._native_close_escalation(
+                    client, ticker, abs_qty, close_side, exit_signal, "no mark for limit"
                 )
-                return False
 
-            # Marketable limit: cross the spread by ~7.5% to ensure
-            # fill. Options spreads can be wide; this needs to be
-            # aggressive enough that a fallback exit (urgency=IMMEDIATE)
-            # actually clears. round_to_options_tick handles the
-            # $0.05/$0.10 increment requirement.
-            #
-            # Close-side comes from `held_short` (the broker's signed
-            # qty), NOT from the caller's `direction` hint. Codex
-            # review 2026-05-21 Important #2 caught the previous code
-            # trusting `direction` here even though the equity branch
-            # below correctly uses the qty sign (commit a6ae828).
-            # `_sync_risk_from_gateway` populates positions opened by
-            # sibling Empire systems on the shared account with a
-            # default `direction="LONG"` regardless of the actual
-            # broker side — relying on direction would BUY-to-cover
-            # on a held-long position, compounding exposure instead
-            # of closing.
-            exit_buffer = 0.075
-            if held_short:
-                # SHORT close → BUY-to-cover, lift the offer
-                raw_limit = current_price * (1 + exit_buffer)
-                close_side = OrderSide.BUY
-            else:
-                # LONG close → SELL, hit the bid
-                raw_limit = current_price * (1 - exit_buffer)
-                close_side = OrderSide.SELL
-            limit_price = round_to_options_tick(raw_limit)
+            limit_price = self._compute_close_limit(current_price, held_short)
             if limit_price <= 0:
-                logger.error(
-                    f"Cannot close {ticker}: limit price rounded to 0 (mark={current_price})",
-                    extra={"event_type": "EXIT_ORDER_FAILED", "ticker": ticker},
-                )
-                return False
-
-            try:
-                client = self._get_gateway_client()
-                client_order_id = mint_orion_order_id()
-                result = await client.create_order(
-                    symbol=ticker,
-                    qty=abs_qty,
-                    side=close_side,
-                    order_type="limit",
-                    limit_price=limit_price,
-                    time_in_force="day",
-                    client_order_id=client_order_id,
-                    # Reduce-only intent: Alpaca will reject (not open a naked
-                    # short) if no matching position exists — belt-and-suspenders
-                    # alongside the live-position verification above.
-                    position_intent=("buy_to_close" if close_side == OrderSide.BUY else "sell_to_close"),
+                return await self._native_close_escalation(
+                    client,
+                    ticker,
+                    abs_qty,
+                    close_side,
+                    exit_signal,
+                    f"limit priced <= 0 (mark={current_price})",
                 )
 
-                if "error" in result:
-                    raise RuntimeError(f"Gateway exit limit order failed: {result['error']}")
-
+            # 1) Primary: orion-attributed marketable LIMIT (keeps the fill
+            #    orion-attributed → PnL / daily-loss / kill-switch accounting).
+            client_order_id = mint_orion_order_id()
+            result, client_order_id = await self._submit_close_limit(
+                client=client,
+                ticker=ticker,
+                qty=abs_qty,
+                close_side=close_side,
+                limit_price=limit_price,
+                client_order_id=client_order_id,
+            )
+            if "error" not in result:
                 logger.info(
-                    f"EXIT LIMIT ORDER (OPTION): {ticker} x{abs_qty} @ {limit_price} mark={current_price} - {exit_signal.reason}",
+                    f"EXIT LIMIT ORDER (OPTION): {ticker} x{abs_qty} @ {limit_price} "
+                    f"mark={current_price} - {getattr(exit_signal, 'reason', None)}",
                     extra={
                         "event_type": "EXIT_ORDER_SUBMITTED",
                         "ticker": ticker,
@@ -1286,22 +1380,23 @@ class ExecutionEngine:
                         "order_type": "LIMIT",
                         "limit_price": limit_price,
                         "mark_price": current_price,
-                        "rule_id": exit_signal.rule_id,
-                        "reason": exit_signal.reason,
+                        "rule_id": getattr(exit_signal, "rule_id", None),
+                        "reason": getattr(exit_signal, "reason", None),
                     },
                 )
-
                 await persist_exit_decision(ticker, exit_signal, client_order_id, result)
                 self._record_result(True)
                 return True
 
-            except Exception as e:
-                logger.error(
-                    f"Failed to close option {ticker}: {e}",
-                    extra={"event_type": "EXIT_ORDER_FAILED", "ticker": ticker, "error": str(e)},
-                )
-                self._record_result(False)
-                return False
+            # 2) Limit rejected → escalate to the native flatten (last resort).
+            detail = str(result.get("detail") or result.get("error") or "")
+            logger.warning(
+                f"Limit close rejected for {ticker}, escalating to native flatten: {detail[:200]}",
+                extra={"event_type": "EXIT_LIMIT_REJECTED_ESCALATE", "ticker": ticker, "error": detail[:200]},
+            )
+            return await self._native_close_escalation(
+                client, ticker, abs_qty, close_side, exit_signal, f"limit rejected: {detail}"
+            )
 
         # ── Equity: market for IMMEDIATE, limit otherwise ──
         #
@@ -1399,6 +1494,176 @@ class ExecutionEngine:
             )
             self._record_result(False)
             return False
+
+    async def _cancel_resting_orion_orders(self, ticker: str) -> bool:
+        """Cancel Orion's own OPEN orders on ``ticker`` before a close.
+
+        Returns ``True`` only when it is SAFE to proceed — no Orion resting
+        order remains that could self-wash the close or re-open exposure after
+        it. Returns ``False`` if the open-order listing failed or ANY cancel was
+        rejected, so the caller can defer and retry rather than close blind. The
+        Gateway surfaces failures as ``{"error": ...}`` (not exceptions), so we
+        inspect the cancel result rather than assuming success (adversarial
+        review). Only Orion's own ``orion_``-prefixed orders are touched; on a
+        successful cancel the order is dropped from risk pending exposure so it
+        isn't double-counted until the hourly prune.
+        """
+        try:
+            client = self._get_gateway_client()
+            open_orders = await client.get_orders(status="open", limit=500)
+        except Exception as e:
+            logger.warning(
+                f"Could not list open orders before closing {ticker}: {e}",
+                extra={"event_type": "EXIT_CANCEL_RESTING_LIST_FAILED", "ticker": ticker},
+            )
+            return False
+        if not isinstance(open_orders, list):
+            return False
+
+        safe = True
+        for order in open_orders:
+            if not isinstance(order, dict) or order.get("symbol") != ticker:
+                continue
+            coid = str(order.get("client_order_id") or "")
+            if not coid.startswith(ORDER_ID_PREFIX):
+                continue  # only Orion's own orders on the shared account
+            order_id = order.get("id")
+            if not order_id:
+                continue
+            result = await client.cancel_order(str(order_id))
+            if isinstance(result, dict) and "error" in result:
+                logger.warning(
+                    f"Failed to cancel resting order {order_id} on {ticker}: "
+                    f"{result.get('detail') or result.get('error')}",
+                    extra={"event_type": "EXIT_CANCEL_RESTING_FAILED", "ticker": ticker, "order_id": str(order_id)},
+                )
+                safe = False
+                continue
+            # Cancel accepted → drop it from risk pending exposure.
+            remove = getattr(self.risk_manager, "remove_pending_order", None)
+            if remove is not None:
+                try:
+                    await remove(coid)
+                except Exception:
+                    pass
+            logger.info(
+                f"Cancelled resting Orion order {order_id} on {ticker} before close",
+                extra={"event_type": "EXIT_CANCEL_RESTING", "ticker": ticker, "order_id": str(order_id)},
+            )
+        return safe
+
+    def _compute_close_limit(self, mark: float, held_short: bool) -> float:
+        """Marketable close limit: cross the spread by ~7.5% so the order
+        actually fills. SELL-to-close hits the bid (below mark); BUY-to-cover
+        lifts the offer (above mark). ``round_to_options_tick`` handles the
+        $0.05/$0.10 increment requirement.
+
+        Deliberately NOT floored against our own avg entry: an entry floor can
+        push a loser's exit far from the market so Alpaca accepts a *resting*
+        limit that never fills (adversarial review). Self-wash is handled
+        instead by cancelling our own resting orders first, and by escalating to
+        the native flatten if a residual wash rejects the limit.
+        """
+        buffer = 0.075
+        if held_short:
+            return round_to_options_tick(mark * (1 + buffer))  # BUY-to-cover lifts the offer
+        return round_to_options_tick(mark * (1 - buffer))  # SELL-to-close hits the bid
+
+    async def _submit_close_limit(
+        self,
+        *,
+        client: Any,
+        ticker: str,
+        qty: float,
+        close_side: Any,
+        limit_price: float,
+        client_order_id: str,
+    ) -> tuple[dict[str, Any], str]:
+        """Submit a single reduce-only close LIMIT with ``position_intent=
+        *_to_close``.
+
+        There is deliberately NO plain-limit retry. Alpaca rejects the forced
+        intent with ``42210000`` when it infers the OPENING side, but retrying
+        WITHOUT intent has an inherent reduce-only race: the live position can
+        change between any pre-check and the ``create_order`` call, so a plain
+        SELL/BUY with no broker-side reduce-only guard could open or flip
+        exposure (adversarial review). Instead the rejection is returned to the
+        caller, which escalates to the native flatten — reduce-only by
+        construction and 404-safe.
+
+        Returns ``(result, client_order_id)``.
+        """
+        intent = "buy_to_close" if close_side == OrderSide.BUY else "sell_to_close"
+        result = await client.create_order(
+            symbol=ticker,
+            qty=qty,
+            side=close_side,
+            order_type="limit",
+            limit_price=limit_price,
+            time_in_force="day",
+            client_order_id=client_order_id,
+            position_intent=intent,
+        )
+        return result, client_order_id
+
+    async def _native_close_escalation(
+        self,
+        client: Any,
+        ticker: str,
+        abs_qty: float,
+        close_side: Any,
+        exit_signal: Any,
+        reason: str,
+    ) -> bool:
+        """Last-resort flatten via the Gateway native close (``DELETE
+        /positions/{symbol}``), bounded to ``abs_qty``, used only when the
+        attributed limit close can't be priced or is rejected.
+
+        The native close fill is NOT orion-attributed (the endpoint takes no
+        ``client_order_id``), so it does NOT feed ``RiskManager.process_fill`` —
+        accepted only as an escape hatch to avoid stranding a position. A
+        vanished position (404 / POSITION_NOT_FOUND / 40410000) counts as
+        already-closed (do NOT submit an opposing order — that could open a
+        naked short).
+        """
+        client_order_id = mint_orion_order_id()
+        native = await client.close_position(ticker, qty=abs_qty)
+        native_err = str(native.get("detail") or native.get("error") or "")
+        if "error" not in native:
+            logger.info(
+                f"EXIT NATIVE CLOSE (escalation): {ticker} x{abs_qty} - {reason}",
+                extra={
+                    "event_type": "EXIT_ORDER_SUBMITTED",
+                    "ticker": ticker,
+                    "qty": abs_qty,
+                    "order_type": "NATIVE_CLOSE",
+                    "reason": getattr(exit_signal, "reason", None),
+                },
+            )
+            await persist_exit_decision(ticker, exit_signal, client_order_id, native)
+            self._record_result(True)
+            return True
+        if native.get("status_code") == 404 or "POSITION_NOT_FOUND" in native_err or "40410000" in native_err:
+            logger.info(
+                f"Close for {ticker}: broker reports no position (already closed)",
+                extra={"event_type": "EXIT_SKIPPED_NO_POSITION", "ticker": ticker},
+            )
+            self._record_result(True)
+            return True
+        logger.error(
+            f"Native close escalation failed for {ticker}: {native_err[:200]}",
+            extra={"event_type": "EXIT_ORDER_FAILED", "ticker": ticker, "error": native_err[:200]},
+        )
+        await persist_exit_order_rejection(
+            client_order_id=client_order_id,
+            ticker=ticker,
+            side=close_side,
+            qty=abs_qty,
+            limit_price=None,
+            error_message=f"limit+native both failed ({reason}); native: {native_err}",
+        )
+        self._record_result(False)
+        return False
 
     # ── System health ────────────────────────────────────────────────────
 

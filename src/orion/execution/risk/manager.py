@@ -781,6 +781,53 @@ class RiskManager:
                 extra={"event_type": "PENDING_ORDER_DELETE_FAILED", "order_id": order_id, "error": str(exc)},
             )
 
+    async def prune_stale_pending_orders(self) -> int:
+        """Drop pending orders older than the load TTL from memory + DB at runtime.
+
+        ``_load_pending_orders`` only prunes on startup. A day order that
+        EXPIRES unfilled never fires a fill, so ``remove_pending_order`` is
+        never called and the row lingers as phantom pending exposure until the
+        next process restart (RCA 2026-06-05: three expired 6/04 entries —
+        RBLX/ETSY/QURE — were still counted on 6/05 on a long-running native
+        process). Running the same TTL sweep on the periodic risk re-sync
+        bounds the staleness to the TTL. Returns the number pruned.
+        """
+        from sqlalchemy import select
+
+        from orion.shared.utils import ensure_utc as _ensure_utc
+        from orion.storage.db import async_session_factory
+        from orion.storage.models_risk import PendingOrder
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=self.PENDING_ORDER_LOAD_TTL_SECONDS)
+        pruned = 0
+        try:
+            async with async_session_factory() as session:
+                rows = list((await session.execute(select(PendingOrder))).scalars().all())
+                for row in rows:
+                    created = row.created_at_utc
+                    if created is None or _ensure_utc(created) < cutoff:
+                        self.pending_orders.pop(row.order_id, None)
+                        await session.delete(row)
+                        pruned += 1
+                if pruned:
+                    await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "pending_orders_prune_failed",
+                extra={"event_type": "PENDING_ORDERS_PRUNE_FAILED", "error": str(exc)},
+            )
+            return 0
+        if pruned:
+            logger.info(
+                "pending_orders_pruned",
+                extra={
+                    "event_type": "PENDING_ORDERS_PRUNED",
+                    "pruned": pruned,
+                    "ttl_seconds": self.PENDING_ORDER_LOAD_TTL_SECONDS,
+                },
+            )
+        return pruned
+
     async def _load_pending_orders(self) -> None:
         """Restore the in-memory `pending_orders` dict from the DB.
 

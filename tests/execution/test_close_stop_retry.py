@@ -3,8 +3,10 @@
 Backstop for the 2026-05-29 flood: even with the reduce-only guard, a position
 that keeps failing to close (e.g. a genuinely stuck contract) must not fire an
 unbounded stream of attempts every 60s. After N consecutive failures the symbol
-is abandoned (with a CRITICAL alert) until a close succeeds or the process
-restarts.
+is abandoned (with a CRITICAL alert) until a close succeeds, the abandon
+cooldown elapses, or the process restarts. The cooldown keeps abandonment from
+being permanent — a transient cause (stale mark, buying-power wall, sibling's
+resting order) must not strand a position forever (RCA 2026-06-05: MU).
 """
 
 from __future__ import annotations
@@ -65,6 +67,27 @@ def test_counter_resets_on_success():
     for _ in range(pm._MAX_CONSECUTIVE_CLOSE_FAILURES - 1):
         pm._record_close_result(sym, success=False)
     pm._record_close_result(sym, success=True)
+    assert pm._close_attempts_exhausted(sym) is False
+    assert sym not in pm._consecutive_close_failures
+
+
+def test_abandoned_symbol_retries_after_cooldown(monkeypatch):
+    """Abandonment must be time-bounded: once the cooldown elapses since the
+    last failure, the symbol is eligible again and the counter resets. Without
+    this a +320% MU winner stayed unclosable until process restart
+    (RCA 2026-06-05)."""
+    pm = PositionMonitor(execution_engine=MagicMock(), position_manager=PositionManager())
+    sym = "MU260612P00790000"
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(pm, "_now", lambda: clock["t"])
+
+    for _ in range(pm._MAX_CONSECUTIVE_CLOSE_FAILURES):
+        pm._record_close_result(sym, success=False)
+    # Just abandoned — cooldown not yet elapsed.
+    assert pm._close_attempts_exhausted(sym) is True
+
+    # Advance past the cooldown → eligible again, counter reset.
+    clock["t"] += pm._CLOSE_ABANDON_COOLDOWN_SECONDS + 1.0
     assert pm._close_attempts_exhausted(sym) is False
     assert sym not in pm._consecutive_close_failures
 

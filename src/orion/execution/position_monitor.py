@@ -6,6 +6,7 @@ and rule-based exit signals.
 """
 
 import asyncio
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -236,7 +237,12 @@ class PositionMonitor:
         # Per-symbol consecutive failed-close counter. Bounds retries so a
         # single stuck position can't fire an unbounded stream of close
         # attempts every cycle (2026-05-29: ~3,235 rejected order-creates/day).
+        # Paired with a per-symbol last-failure timestamp so abandonment is
+        # time-bounded, not permanent (RCA 2026-06-05: a +320% MU winner was
+        # stranded unclosable after 5 wash-trade rejections exhausted the
+        # counter and nothing ever reset it short of a process restart).
         self._consecutive_close_failures: dict[str, int] = {}
+        self._close_failure_ts: dict[str, float] = {}
         # Per-symbol entry-context cache. Populated lazily on first
         # _fetch_entry_context call and reused for the lifetime of the
         # PositionMonitor — entry-time market context (IV rank, VIX,
@@ -752,24 +758,53 @@ class PositionMonitor:
         return exit_signals
 
     # After this many consecutive failed closes, a symbol is abandoned (with a
-    # CRITICAL alert) until a close succeeds or the process restarts — so a
-    # single stuck position can't hammer the Gateway every cycle indefinitely.
+    # CRITICAL alert) so a single stuck position can't hammer the Gateway every
+    # cycle. Abandonment is NOT permanent: after the cooldown below the symbol
+    # gets another attempt, because the cause is often transient (a stale mark,
+    # a day-trading-buying-power wall, a sibling's resting order on the shared
+    # account). Permanent abandonment stranded a +320% MU winner on 2026-06-05.
     _MAX_CONSECUTIVE_CLOSE_FAILURES = 5
+    _CLOSE_ABANDON_COOLDOWN_SECONDS = 600.0
+
+    def _now(self) -> float:
+        """Monotonic clock for cooldown math (patchable in tests)."""
+        return time.monotonic()
 
     def _close_attempts_exhausted(self, symbol: str) -> bool:
-        return self._consecutive_close_failures.get(symbol, 0) >= self._MAX_CONSECUTIVE_CLOSE_FAILURES
+        count = self._consecutive_close_failures.get(symbol, 0)
+        if count < self._MAX_CONSECUTIVE_CLOSE_FAILURES:
+            return False
+        # Abandoned — but give it another chance once the cooldown elapses so a
+        # transient cause can clear instead of stranding the position forever.
+        last = self._close_failure_ts.get(symbol)
+        if last is not None and (self._now() - last) >= self._CLOSE_ABANDON_COOLDOWN_SECONDS:
+            self._consecutive_close_failures.pop(symbol, None)
+            self._close_failure_ts.pop(symbol, None)
+            logger.warning(
+                f"Re-attempting close for {symbol} after abandon cooldown elapsed",
+                extra={
+                    "event": "close_abandon_cooldown_elapsed",
+                    "event_type": "CLOSE_ABANDON_RETRY",
+                    "symbol": symbol,
+                },
+            )
+            return False
+        return True
 
     def _record_close_result(self, symbol: str, success: bool) -> None:
         """Track consecutive close failures per symbol; reset on success."""
         if success:
             self._consecutive_close_failures.pop(symbol, None)
+            self._close_failure_ts.pop(symbol, None)
             return
         count = self._consecutive_close_failures.get(symbol, 0) + 1
         self._consecutive_close_failures[symbol] = count
+        self._close_failure_ts[symbol] = self._now()
         if count == self._MAX_CONSECUTIVE_CLOSE_FAILURES:
             logger.critical(
                 f"Abandoning close for {symbol} after {count} consecutive failures — "
-                f"manual review required (position may be stuck/unclosable)",
+                f"will retry after {int(self._CLOSE_ABANDON_COOLDOWN_SECONDS)}s; "
+                f"manual review recommended (position may be stuck/unclosable)",
                 extra={
                     "event": "close_abandoned",
                     "event_type": "CLOSE_ABANDONED",

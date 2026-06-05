@@ -182,6 +182,61 @@ async def persist_pending_order(
 
 
 @db_retry
+async def persist_exit_order_rejection(
+    *,
+    client_order_id: str,
+    ticker: str,
+    side: str,
+    qty: float,
+    limit_price: float | None,
+    error_message: str,
+) -> None:
+    """Persist a REJECTED ``orders`` row for a CLOSE the broker refused.
+
+    Close/exit failures previously only logged, so a position the system
+    tried-and-failed to close was indistinguishable in the DB from one it
+    simply held (RCA 2026-06-05: 5 MU wash-trade close rejections left ZERO
+    rows in ``orders`` while the orders table showed only the two filled
+    entries). Writing the rejection makes exit failures auditable alongside
+    entry rejections. Best-effort — never raises into the close path.
+    """
+
+    async def save_rejection(session: Any) -> None:
+        from orion.storage.models_execution import OrderRecord
+
+        session.add(
+            OrderRecord(
+                id=str(uuid.uuid4()),
+                decision_id=None,
+                candidate_id=None,
+                ticker=ticker,
+                side=side,
+                qty=float(qty),
+                limit_price=float(limit_price) if limit_price is not None else None,
+                client_order_id=client_order_id,
+                broker_order_id=None,
+                status=REJECTED_STATUS,
+                error_message=error_message[:1000],
+                raw_json={"order_kind": "exit"},
+            )
+        )
+
+    try:
+        async with async_session_factory() as session:
+            await save_rejection(session)
+            await session.commit()
+    except Exception as e:
+        logger.error(
+            "Failed to persist exit order rejection",
+            extra={
+                "event_type": "EXIT_REJECTION_PERSIST_ERROR",
+                "client_order_id": client_order_id,
+                "error": str(e),
+            },
+        )
+
+
+@db_retry
 async def persist_order_finalize(
     *,
     client_order_id: str,

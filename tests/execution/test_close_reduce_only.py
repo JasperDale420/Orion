@@ -4,12 +4,13 @@ Root cause (2026-05-29): position_monitor passed a stale/wrong tracked qty into
 close_position, which trusted it and submitted a SELL. When no long actually
 existed at the broker, Alpaca treated the sell as OPENING a cash-secured short
 put (code 40310000) — rejected, retried every 60s (~3,235/day), and in cases
-where buying power existed, it FILLED, flipping Orion into naked short puts
-(fills showed sold > bought; some contracts sold with zero buys).
+where buying power existed, it FILLED, flipping Orion into naked short puts.
 
 The fix: re-verify the live broker position at submit time and only ever
 REDUCE it — sell only when long, buy-to-cover only when short, cap to the held
-qty, and refuse to submit when the position can't be confirmed.
+qty, and refuse to submit when the position can't be confirmed. The primary
+close is an orion-attributed LIMIT (so its fill feeds PnL/kill-switch); the
+side derives from the broker qty sign, not the caller's direction hint.
 """
 
 from datetime import UTC, datetime
@@ -18,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orion.core.enums import OrderSide
 from orion.execution.execution_engine import ExecutionEngine
 
 OCC = "AAPL260529P00315000"
@@ -42,10 +42,16 @@ def _engine(broker_position, monkeypatch):
         client.get_position = AsyncMock(side_effect=RuntimeError("gateway down"))
     else:
         client.get_position = AsyncMock(return_value=broker_position)
+    # Primary close is the orion-attributed LIMIT (create_order); it succeeds
+    # here so the native escalation (close_position) is only hit by tests that
+    # force a limit rejection.
     client.create_order = AsyncMock(return_value={"id": "o1", "status": "accepted"})
+    client.close_position = AsyncMock(return_value={"id": "o1", "status": "accepted"})
+    client.get_orders = AsyncMock(return_value=[])
     ee._gateway_client = client
     ee._get_gateway_client = lambda: client
     ee.risk_manager = MagicMock()
+    ee.risk_manager.remove_pending_order = AsyncMock()
 
     # Avoid DB writes from the success path.
     monkeypatch.setattr("orion.execution.execution_engine.persist_exit_decision", AsyncMock())
@@ -54,45 +60,49 @@ def _engine(broker_position, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_long_position_sells_to_close(monkeypatch):
-    ee, client = _engine({"symbol": OCC, "qty": "10"}, monkeypatch)
+    """A live long is closed with a SELL limit, bounded to the held qty, with
+    reduce-only position_intent. No native escalation when the limit succeeds."""
+    ee, client = _engine({"symbol": OCC, "qty": "10", "avg_entry_price": "1.0"}, monkeypatch)
     ok = await ee.close_position(ticker=OCC, qty=10, exit_signal=_exit_signal(), current_price=5.0)
     assert ok is True
     client.create_order.assert_awaited_once()
     kw = client.create_order.await_args.kwargs
-    assert kw["side"] == OrderSide.SELL
-    assert kw["qty"] == 10
-    assert kw["position_intent"] == "sell_to_close"  # reduce-only at the broker
+    assert kw["side"] == "sell"
+    assert kw["qty"] == 10.0
+    assert kw["position_intent"] == "sell_to_close"
+    client.close_position.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_flat_broker_does_not_open_short(monkeypatch):
     """THE regression: tracker thinks long 10, but the broker holds nothing.
-    Selling would OPEN a naked short put — must be refused."""
+    Selling would OPEN a naked short put — must be refused before any submit."""
     ee, client = _engine({"error": "position does not exist"}, monkeypatch)
     ok = await ee.close_position(ticker=OCC, qty=10, exit_signal=_exit_signal(), current_price=5.0)
     assert ok is False
     client.create_order.assert_not_called()
+    client.close_position.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_short_position_buys_to_cover(monkeypatch):
-    ee, client = _engine({"symbol": OCC, "qty": "-8"}, monkeypatch)
-    # Tracker passes a (wrong) positive qty; the broker sign must win.
-    ok = await ee.close_position(ticker=OCC, qty=8, exit_signal=_exit_signal(), current_price=5.0)
+    ee, client = _engine({"symbol": OCC, "qty": "-8", "avg_entry_price": "5.0"}, monkeypatch)
+    # Tracker passes a (wrong) positive qty; the broker sign must win → BUY-to-cover.
+    ok = await ee.close_position(ticker=OCC, qty=8, exit_signal=_exit_signal(), current_price=3.0)
     assert ok is True
     kw = client.create_order.await_args.kwargs
-    assert kw["side"] == OrderSide.BUY
-    assert kw["qty"] == 8
+    assert kw["side"] == "buy"
+    assert kw["qty"] == 8.0
     assert kw["position_intent"] == "buy_to_close"
 
 
 @pytest.mark.asyncio
-async def test_caps_sell_qty_to_held_long(monkeypatch):
-    """Tracker says 10 but the broker only holds 5 long → sell at most 5."""
-    ee, client = _engine({"symbol": OCC, "qty": "5"}, monkeypatch)
+async def test_caps_close_qty_to_held_long(monkeypatch):
+    """Tracker says 10 but the broker only holds 5 long → close at most 5."""
+    ee, client = _engine({"symbol": OCC, "qty": "5", "avg_entry_price": "1.0"}, monkeypatch)
     ok = await ee.close_position(ticker=OCC, qty=10, exit_signal=_exit_signal(), current_price=5.0)
     assert ok is True
-    assert client.create_order.await_args.kwargs["qty"] == 5
+    assert client.create_order.await_args.kwargs["qty"] == 5.0
 
 
 @pytest.mark.asyncio
@@ -102,3 +112,4 @@ async def test_unverifiable_position_is_skipped(monkeypatch):
     ok = await ee.close_position(ticker=OCC, qty=10, exit_signal=_exit_signal(), current_price=5.0)
     assert ok is False
     client.create_order.assert_not_called()
+    client.close_position.assert_not_called()

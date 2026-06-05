@@ -200,6 +200,54 @@ class TestLoadPendingOrders:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+class TestRuntimePruneStalePendingOrders:
+    async def test_prune_drops_stale_keeps_fresh(self) -> None:
+        """Runtime prune (not just on load) drops rows older than the TTL from
+        BOTH memory and DB, so an expired day-order never cleared by a fill
+        doesn't linger as phantom exposure until restart (RCA 2026-06-05:
+        RBLX/ETSY/QURE)."""
+        await init_db()
+        await _wipe_pending_orders()
+
+        stale_age = RiskManager.PENDING_ORDER_LOAD_TTL_SECONDS + 60
+        async with async_session_factory() as session:
+            session.add(
+                PendingOrder(
+                    order_id="stale_x",
+                    ticker="RBLX",
+                    signed_cost=3.1,
+                    created_at_utc=datetime.now(UTC) - timedelta(seconds=stale_age),
+                )
+            )
+            session.add(
+                PendingOrder(
+                    order_id="fresh_x",
+                    ticker="NVDA",
+                    signed_cost=3000.0,
+                    created_at_utc=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+
+        rm = RiskManager(config=RiskSettings())
+        # Mirror the long-running-process state: both entries live in memory
+        # because no fill ever cleared them.
+        rm.pending_orders["stale_x"] = ("RBLX", 3.1)
+        rm.pending_orders["fresh_x"] = ("NVDA", 3000.0)
+
+        pruned = await rm.prune_stale_pending_orders()
+
+        assert pruned == 1
+        assert "stale_x" not in rm.pending_orders
+        assert "fresh_x" in rm.pending_orders
+
+        async with async_session_factory() as session:
+            remaining = {r.order_id for r in (await session.execute(select(PendingOrder))).scalars().all()}
+        assert remaining == {"fresh_x"}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_restart_round_trip_preserves_pending_exposure() -> None:
     """End-to-end: simulate submit → restart → check that pending exposure
     is still counted in `_calculate_projected_exposure`."""

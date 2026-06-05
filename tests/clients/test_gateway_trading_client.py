@@ -2,10 +2,49 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 import orion.clients.gateway_trading_client as gateway_module
 from orion.clients.gateway_trading_client import GatewayTradingClient, GatewayTradingClientError
+
+
+@pytest.mark.asyncio
+async def test_request_propagates_alpaca_error_body_on_http_error() -> None:
+    """On an HTTP error (e.g. 403), ``_request`` must surface the response
+    BODY, not just the bare status line. The Gateway proxies Alpaca's error
+    verbatim, so the body carries the real reason code — 40310000
+    (insufficient day-trading buying power), 42210000 (position-intent
+    mismatch), "potential wash trade detected", etc. Without this, the
+    ``orders`` table only ever recorded "403 Forbidden" and the close-path
+    intent-retry has nothing to branch on (RCA 2026-06-05)."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+
+    body = (
+        '{"detail":"Alpaca API Error: {\\"code\\":40310000,\\"message\\":\\"insufficient day trading buying power\\"}"}'
+    )
+    request = httpx.Request("POST", "http://gateway/api/v1/alpaca/orders")
+    response = httpx.Response(403, text=body, request=request)
+
+    mock_httpx = MagicMock()
+    mock_httpx.request = AsyncMock(return_value=response)
+    mock_httpx.is_closed = False
+    client._client = mock_httpx
+
+    result = await client.create_order(
+        symbol="MU260612P00790000",
+        qty=1,
+        side="buy",
+        order_type="limit",
+        limit_price=4.4,
+        client_order_id="orion_test_body",
+    )
+
+    assert "error" in result
+    assert result.get("status_code") == 403
+    # The actual Alpaca reason code + message must survive to the caller.
+    assert "40310000" in str(result.get("detail"))
+    assert "insufficient day trading buying power" in str(result.get("detail"))
 
 
 @pytest.mark.asyncio
