@@ -525,7 +525,10 @@ class HeberReader:
             # columns (for example `instrument_type`). Disable partition discovery to avoid
             # Arrow schema merge conflicts (`string` vs `dictionary`).
             table = self._read_table(path=path, columns=columns, filters=filters, partitioning=None, min_dt=min_dt)
-            return cast(pd.DataFrame, table.to_pandas())
+            # use_threads=False: keep the Arrow->pandas conversion single-threaded
+            # too. to_pandas() defaults to spawning the same Arrow CPU threadpool
+            # that aborted the process on 2026-06-02; these frames are small.
+            return cast(pd.DataFrame, table.to_pandas(use_threads=False))
         except Exception as exc:
             if (
                 self._is_corrupt_parquet_error(exc)
@@ -568,10 +571,12 @@ class HeberReader:
                 # the full directory (which would defeat the pruning).
                 return pa.table({})
         try:
-            # use_threads=False: do NOT spin up Arrow's C++ CPU threadpool for
-            # these reads. On 2026-06-02 the execution service took two SIGABRTs
-            # (Abort trap: 6) — a PyArrow worker thread (arrow::internal::
-            # ThreadPool) hit an unhandled C++ exception that escaped to
+            # use_threads=False AND pre_buffer=False: do NOT spin up any of
+            # Arrow's C++ thread pools for these reads — neither the CPU pool
+            # (use_threads) nor the background I/O prefetch pool (pre_buffer).
+            # On 2026-06-02 the execution service took two SIGABRTs (Abort
+            # trap: 6) — a PyArrow worker thread (arrow::internal::ThreadPool)
+            # hit an unhandled C++ exception that escaped to
             # std::terminate()->abort(), crashing the whole process. The read is
             # invoked from inside an asyncio.to_thread executor thread, and
             # spinning a detached Arrow threadpool from there is what aborted.
@@ -583,6 +588,7 @@ class HeberReader:
                 filters=filters if filters else None,
                 partitioning=partitioning,
                 use_threads=False,
+                pre_buffer=False,
             )
         except Exception as exc:
             if self._is_corrupt_parquet_error(exc):
@@ -595,7 +601,13 @@ class HeberReader:
                 )
                 # Reuse the pruned/sidecar-filtered source so the fallback keeps
                 # the same partition window as the primary read.
-                return pq.read_table(source, columns=columns, partitioning=partitioning, use_threads=False)
+                return pq.read_table(
+                    source,
+                    columns=columns,
+                    partitioning=partitioning,
+                    use_threads=False,
+                    pre_buffer=False,
+                )
             raise
 
     def _partition_parquet_files(self, path: Path, min_dt: date | None) -> list[Path]:
@@ -638,7 +650,9 @@ class HeberReader:
         for parquet_file in parquet_files:
             try:
                 table = self._read_table(path=parquet_file, columns=columns, filters=filters, partitioning=None)
-                frame = cast(pd.DataFrame, table.to_pandas())
+                # use_threads=False: single-threaded Arrow->pandas conversion, same
+                # SIGABRT-avoidance rationale as the primary _read_parquet path.
+                frame = cast(pd.DataFrame, table.to_pandas(use_threads=False))
                 if not frame.empty:
                     frames.append(frame)
             except Exception as file_exc:
