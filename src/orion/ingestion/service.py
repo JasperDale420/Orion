@@ -103,7 +103,10 @@ class IngestionService:
             except Exception as cb_err:
                 logger.error(f"Failed to reset circuit breaker on start: {cb_err}", exc_info=True)
 
-        await self.universe.hydrate_from_db()
+        # required=True: a startup hydrate failure must NOT silently fall through
+        # to a static-watchlist-only session (2026-06-01 near-outage). Fail loud
+        # so the wait_for_db-guarded restart hydrates against a live DB.
+        await self.universe.hydrate_from_db(required=True)
         await self.feature_engine.hydrate_history()
 
         logger.info("Skipping startup earnings sync; earnings data is sourced from Data-Gateway/Heber on demand")

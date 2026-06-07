@@ -58,8 +58,13 @@ async def main() -> None:
 
     # Ensure DB and solver inventory exist before the execution loop starts.
     # Wait out a transient DB outage (bounded) so a brief TimescaleDB blip
-    # doesn't crash-loop the service on the launchd 30s throttle.
-    await wait_for_db()
+    # doesn't crash-loop the service on the launchd 30s throttle. Pass the
+    # shutdown_event so a SIGTERM/SIGINT during the wait aborts startup promptly
+    # instead of blocking for the full backoff.
+    await wait_for_db(cancel_event=shutdown_event)
+    if shutdown_event.is_set():
+        logger.info("Shutdown requested during DB wait; exiting before startup.")
+        return
     await init_db()
     solver_inventory = await ensure_active_solvers_ready(system_settings.orion_stage)
     logger.info(

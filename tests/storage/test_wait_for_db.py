@@ -9,6 +9,7 @@ loudly after a bounded number of attempts.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from unittest.mock import AsyncMock
 
@@ -57,3 +58,33 @@ async def test_raises_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> Non
         await db.wait_for_db(max_attempts=3)
 
     assert probe.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_aborts_immediately_if_cancel_already_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shutdown already requested before the wait → abort before any probe."""
+    cancel = asyncio.Event()
+    cancel.set()
+    probe = AsyncMock()
+    monkeypatch.setattr(db, "_check_db_connection", probe)
+
+    with pytest.raises(RuntimeError, match="aborted: shutdown requested"):
+        await db.wait_for_db(max_attempts=5, cancel_event=cancel)
+
+    probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_aborts_when_cancel_set_during_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SIGTERM during the DB wait aborts promptly instead of blocking for the
+    full backoff (the operational-shutdown regression the review flagged)."""
+    cancel = asyncio.Event()
+
+    async def _probe_then_signal() -> None:
+        cancel.set()  # simulate the shutdown signal arriving during the connect
+        raise OSError("refused")
+
+    monkeypatch.setattr(db, "_check_db_connection", _probe_then_signal)
+
+    with pytest.raises(RuntimeError, match="aborted: shutdown requested"):
+        await db.wait_for_db(max_attempts=10, base_delay=0.01, cancel_event=cancel)

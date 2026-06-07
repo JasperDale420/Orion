@@ -69,7 +69,12 @@ async def _check_db_connection() -> None:
         await conn.execute(text("SELECT 1"))
 
 
-async def wait_for_db(max_attempts: int = 30, base_delay: float = 1.0, max_delay: float = 10.0) -> None:
+async def wait_for_db(
+    max_attempts: int = 30,
+    base_delay: float = 1.0,
+    max_delay: float = 10.0,
+    cancel_event: "asyncio.Event | None" = None,
+) -> None:
     """Block until the database accepts a connection, with bounded backoff.
 
     Startup used to call ``init_db()`` directly; a transient DB outage
@@ -81,6 +86,11 @@ async def wait_for_db(max_attempts: int = 30, base_delay: float = 1.0, max_delay
     transient outage clear before the service proceeds. Raises after
     ``max_attempts`` so a genuinely-down DB still surfaces loudly
     (fail-fast-after-bounded-retry, per the Empire error philosophy).
+
+    ``cancel_event``: when provided (e.g. the service's shutdown event), a
+    SIGTERM/SIGINT during the wait aborts promptly instead of blocking startup
+    for the full backoff (~265s with defaults) — important so launchd/Docker can
+    stop the service during the exact DB outage this guards against.
     """
     from orion.shared.logger import setup_struct_logger
 
@@ -88,6 +98,8 @@ async def wait_for_db(max_attempts: int = 30, base_delay: float = 1.0, max_delay
     delay = base_delay
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("wait_for_db aborted: shutdown requested")
         try:
             await _check_db_connection()
             if attempt > 1:
@@ -105,7 +117,17 @@ async def wait_for_db(max_attempts: int = 30, base_delay: float = 1.0, max_delay
                 },
             )
             if attempt < max_attempts:
-                await asyncio.sleep(delay)
+                if cancel_event is not None:
+                    # Race the backoff against shutdown: if the event fires
+                    # within `delay`, abort promptly; otherwise sleep the full
+                    # delay and retry.
+                    try:
+                        await asyncio.wait_for(cancel_event.wait(), timeout=delay)
+                        raise RuntimeError("wait_for_db aborted: shutdown requested")
+                    except (TimeoutError, asyncio.TimeoutError):
+                        pass
+                else:
+                    await asyncio.sleep(delay)
                 delay = min(delay * 2.0, max_delay)
     raise RuntimeError(f"Database not reachable after {max_attempts} attempts: {last_exc}")
 
