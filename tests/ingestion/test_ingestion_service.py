@@ -831,3 +831,172 @@ class TestHeberFlowPoll:
             events = svc._poll_heber_flow("trace123")
 
         assert events == []
+
+
+# ---------------------------------------------------------------------------
+# Self-healing universe: periodic re-hydration + breadth collapse alarm
+# ---------------------------------------------------------------------------
+class TestUniverseSelfHealing:
+    """Regression guard for the 2026-06-01 near-outage.
+
+    A DB-down start pinned the WS subscription to the 11-ticker static
+    watchlist for the whole session with no recovery and no alert. Two
+    safety nets: periodic re-hydration self-broadens a sparse start within
+    minutes, and a breadth alarm pages when subscribed bar breadth collapses
+    to ~static-watchlist size during market hours.
+    """
+
+    def _make_service(self):
+        with (
+            patch("orion.ingestion.service.HealthMonitor"),
+            patch("orion.ingestion.service.UniverseManager"),
+            patch("orion.ingestion.service.FeatureEngine"),
+            patch("orion.ingestion.service.RuleEngine"),
+            patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
+        ):
+            mock_client = MagicMock()
+            mock_client.subscribed_symbols = set()
+            mock_factory.return_value = mock_client
+            from orion.ingestion.service import IngestionService
+
+            return IngestionService()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_rehydrate_runs_when_interval_elapsed(self):
+        svc = self._make_service()
+        svc.universe.hydrate_from_db = AsyncMock()
+        svc._last_universe_rehydrate_ts = datetime.now(UTC) - timedelta(seconds=10_000)
+
+        await svc._maybe_rehydrate_universe()
+
+        # Periodic re-hydration must be non-fatal (required=False) so a
+        # transient DB error can't crash the ingestion loop.
+        svc.universe.hydrate_from_db.assert_awaited_once_with(required=False)
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_rehydrate_skipped_when_interval_not_elapsed(self):
+        svc = self._make_service()
+        svc.universe.hydrate_from_db = AsyncMock()
+        svc._last_universe_rehydrate_ts = datetime.now(UTC)
+
+        await svc._maybe_rehydrate_universe()
+
+        svc.universe.hydrate_from_db.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_rehydrate_advances_timestamp(self):
+        svc = self._make_service()
+        svc.universe.hydrate_from_db = AsyncMock()
+        old_ts = datetime.now(UTC) - timedelta(seconds=10_000)
+        svc._last_universe_rehydrate_ts = old_ts
+
+        await svc._maybe_rehydrate_universe()
+
+        assert svc._last_universe_rehydrate_ts > old_ts
+
+    @pytest.mark.unit
+    def test_breadth_alarm_fires_below_threshold_during_market_hours(self):
+        svc = self._make_service()
+        # ~static-watchlist floor (the 06-01 signature was 11 tickers)
+        svc.gateway_stream.subscribed_symbols = {f"T{i}" for i in range(11)}
+
+        with (
+            patch("orion.core.market_schedule.MarketSchedule") as mock_sched,
+            patch("orion.ingestion.service.logger") as mock_logger,
+        ):
+            mock_sched.return_value.is_market_open.return_value = True
+            svc._check_universe_breadth()
+
+        mock_logger.critical.assert_called_once()
+
+    @pytest.mark.unit
+    def test_breadth_alarm_silent_above_threshold(self):
+        svc = self._make_service()
+        svc.gateway_stream.subscribed_symbols = {f"T{i}" for i in range(300)}
+
+        with (
+            patch("orion.core.market_schedule.MarketSchedule") as mock_sched,
+            patch("orion.ingestion.service.logger") as mock_logger,
+        ):
+            mock_sched.return_value.is_market_open.return_value = True
+            svc._check_universe_breadth()
+
+        mock_logger.critical.assert_not_called()
+
+    @pytest.mark.unit
+    def test_breadth_alarm_silent_when_market_closed(self):
+        svc = self._make_service()
+        svc.gateway_stream.subscribed_symbols = {f"T{i}" for i in range(11)}
+
+        with (
+            patch("orion.core.market_schedule.MarketSchedule") as mock_sched,
+            patch("orion.ingestion.service.logger") as mock_logger,
+        ):
+            mock_sched.return_value.is_market_open.return_value = False
+            svc._check_universe_breadth()
+
+        mock_logger.critical.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_run_cycle_invokes_self_healing(self):
+        """Wiring guard: the methods must actually be called each cycle, not
+        defined-but-orphaned."""
+        svc = self._make_service()
+        svc.gateway_stream.drain_events = MagicMock(return_value=[])
+
+        with (
+            patch.object(svc, "_check_overnight_sleep", new_callable=AsyncMock),
+            patch.object(svc, "_maybe_rehydrate_universe", new_callable=AsyncMock) as mock_rehydrate,
+            patch.object(svc, "_sync_gateway_subscriptions", new_callable=AsyncMock),
+            patch.object(svc, "_poll_heber_flow", return_value=[]),
+            patch.object(svc, "_check_universe_breadth") as mock_breadth,
+            patch.object(svc, "_check_eod_trigger"),
+        ):
+            await svc._run_cycle()
+
+        mock_rehydrate.assert_awaited_once()
+        mock_breadth.assert_called_once()
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_sparse_start_self_broadens_subscription(self):
+        """End-to-end recovery path (the 2026-06-01 fix): a sparse universe
+        (static watchlist only) broadens after a periodic re-hydration recovers
+        tickers, and the very next subscription sync subscribes them on the
+        Gateway. Uses a real UniverseManager so get_active_universe reflects the
+        recovered state."""
+        from orion.core.universe_manager import UniverseManager
+
+        svc = self._make_service()
+        svc.universe = UniverseManager()  # real, sparse: static watchlist only
+        initial = set(svc.universe.get_active_universe())
+
+        # Gateway starts pinned to the static watchlist (the degraded 06-01 state)
+        subscribed = set(initial)
+        svc.gateway_stream.subscribed_symbols = subscribed
+
+        async def fake_subscribe(symbols):
+            subscribed.update(symbols)
+
+        svc.gateway_stream.subscribe = AsyncMock(side_effect=fake_subscribe)
+
+        # Simulate the DB coming back: re-hydration recovers 50 active tickers
+        async def fake_hydrate(required=False):
+            for i in range(50):
+                svc.universe.add_ticker(f"TKR{i}")
+
+        svc.universe.hydrate_from_db = AsyncMock(side_effect=fake_hydrate)
+        svc._last_universe_rehydrate_ts = datetime.now(UTC) - timedelta(seconds=10_000)
+
+        await svc._maybe_rehydrate_universe()
+        await svc._sync_gateway_subscriptions()
+
+        # Subscription self-broadened well past the static-watchlist floor
+        assert len(subscribed) > len(initial)
+        assert "TKR0" in subscribed
+        assert "TKR49" in subscribed

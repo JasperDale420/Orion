@@ -63,6 +63,9 @@ class IngestionService:
         # State
         self.eod_trigger_last_run: str | None = None
         self._last_flow_poll_ts: datetime = datetime.now(UTC) - timedelta(minutes=15)
+        # Startup hydrate just ran in initialize(); defer the first periodic
+        # re-hydration by one interval rather than re-querying immediately.
+        self._last_universe_rehydrate_ts: datetime = datetime.now(UTC)
         self._eod_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
 
@@ -228,8 +231,15 @@ class IngestionService:
 
         trace_id = str(uuid.uuid4())
 
+        # Self-heal a sparse/degraded universe before reconciling subscriptions
+        # so any recovered tickers get subscribed in the same cycle.
+        await self._maybe_rehydrate_universe()
+
         # Sync subscriptions: subscribe to any new tickers discovered by the universe
         await self._sync_gateway_subscriptions()
+
+        # Alarm if subscribed bar breadth has collapsed to ~static-watchlist size
+        self._check_universe_breadth()
 
         # Drain buffered bar events from the Gateway WebSocket stream
         all_events = self.gateway_stream.drain_events()
@@ -263,6 +273,50 @@ class IngestionService:
                 },
             },
         )
+
+    async def _maybe_rehydrate_universe(self) -> None:
+        """Periodically re-hydrate the universe from recent candidate_trades.
+
+        A DB-down/sparse start previously left the WS subscription pinned to the
+        static watchlist for the whole session (2026-06-01 near-outage) because
+        nothing re-broadened it. Re-running hydrate_from_db on an interval lets a
+        degraded start self-correct within minutes — the next
+        ``_sync_gateway_subscriptions`` picks up the broadened universe.
+        ``required=False`` keeps it non-fatal so a transient DB error here can't
+        crash the ingestion loop.
+        """
+        interval = system_settings.universe_rehydrate_interval_seconds
+        if interval <= 0:
+            return
+        now = datetime.now(UTC)
+        if (now - self._last_universe_rehydrate_ts).total_seconds() < interval:
+            return
+        self._last_universe_rehydrate_ts = now
+        await self.universe.hydrate_from_db(required=False)
+
+    def _check_universe_breadth(self) -> None:
+        """Alarm when subscribed Alpaca bar breadth collapses during market hours.
+
+        The 2026-06-01 near-outage ran the whole session subscribed to only the
+        11 static-watchlist tickers (normal breadth is 100s) and was caught only
+        in post-mortem. Log CRITICAL with a structured event_type so it pages at
+        the open instead. Only meaningful during market hours, when bars stream.
+        """
+        from orion.core.market_schedule import MarketSchedule
+
+        if not MarketSchedule().is_market_open():
+            return
+        threshold = system_settings.universe_breadth_min_tickers
+        subscribed = len(self.gateway_stream.subscribed_symbols)
+        if subscribed < threshold:
+            logger.critical(
+                "ingestion_universe_breadth_collapsed",
+                extra={
+                    "event_type": "UNIVERSE_BREADTH_COLLAPSE",
+                    "subscribed_tickers": subscribed,
+                    "threshold": threshold,
+                },
+            )
 
     async def _sync_gateway_subscriptions(self) -> None:
         """Subscribe to any tickers the universe knows about that the Gateway doesn't."""

@@ -166,6 +166,21 @@ class SystemSettings(BaseSettings):
     uw_base_url: str = Field(default="https://api.unusualwhales.com", validation_alias="UW_BASE_URL")
     static_watchlist: list[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL", "VIXY"]
     require_rollups_for_signals_live: bool = True
+    # Self-healing universe (2026-06-01 near-outage). A DB-down/sparse start
+    # previously pinned the WS subscription to the static watchlist for the
+    # whole session with no recovery. Re-hydrate from candidate_trades on this
+    # interval so a degraded start self-broadens within minutes. 0 disables.
+    universe_rehydrate_interval_seconds: int = Field(
+        default=300,
+        validation_alias="ORION_UNIVERSE_REHYDRATE_INTERVAL_SECONDS",
+    )
+    # Breadth alarm: page when subscribed Alpaca bar breadth collapses to
+    # ~static-watchlist size during market hours (06-01 was 314 -> 11). Sits
+    # above the 11-ticker static floor and below normal 100s+ breadth.
+    universe_breadth_min_tickers: int = Field(
+        default=30,
+        validation_alias="ORION_UNIVERSE_BREADTH_MIN_TICKERS",
+    )
 
     # Runtime / Observability
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()), validation_alias="ORION_RUN_ID")
