@@ -522,8 +522,21 @@ class HeberReader:
                 # EPERM errors and trigger noisy filewise fallback warnings.
                 valid_files = [str(f) for f in sorted(path.rglob("*.parquet")) if not f.name.startswith("._")]
                 source = valid_files if valid_files else path
+            # use_threads=False: do NOT spin up Arrow's C++ CPU threadpool for
+            # these reads. On 2026-06-02 the execution service took two SIGABRTs
+            # (Abort trap: 6) — a PyArrow worker thread (arrow::internal::
+            # ThreadPool) hit an unhandled C++ exception that escaped to
+            # std::terminate()->abort(), crashing the whole process. The read is
+            # invoked from inside an asyncio.to_thread executor thread, and
+            # spinning a detached Arrow threadpool from there is what aborted.
+            # These reads are small (single-symbol/recent rows) so single-thread
+            # is plenty; this removes the abort path entirely.
             return pq.read_table(
-                source, columns=columns, filters=filters if filters else None, partitioning=partitioning
+                source,
+                columns=columns,
+                filters=filters if filters else None,
+                partitioning=partitioning,
+                use_threads=False,
             )
         except Exception as exc:
             if self._is_corrupt_parquet_error(exc):
@@ -534,7 +547,7 @@ class HeberReader:
                     path=str(path),
                     error=str(exc),
                 )
-                return pq.read_table(path, columns=columns, partitioning=partitioning)
+                return pq.read_table(path, columns=columns, partitioning=partitioning, use_threads=False)
             raise
 
     def _read_parquet_filewise(

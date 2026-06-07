@@ -24,7 +24,7 @@ from orion.processing.signal_engine import SignalEngine
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.jobs.seed_solvers import ensure_active_solvers_ready
-from orion.storage.db import init_db
+from orion.storage.db import init_db, wait_for_db
 
 # Configure Logger
 logger = setup_struct_logger("orion.execution")
@@ -57,6 +57,9 @@ async def main() -> None:
     logger.info("Starting Orion Execution Service (V1 Deterministic)...")
 
     # Ensure DB and solver inventory exist before the execution loop starts.
+    # Wait out a transient DB outage (bounded) so a brief TimescaleDB blip
+    # doesn't crash-loop the service on the launchd 30s throttle.
+    await wait_for_db()
     await init_db()
     solver_inventory = await ensure_active_solvers_ready(system_settings.orion_stage)
     logger.info(

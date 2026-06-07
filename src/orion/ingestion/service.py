@@ -29,7 +29,7 @@ from orion.processing.rule_engine import RuleEngine
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import make_json_safe
-from orion.storage.db import async_session_factory, init_db
+from orion.storage.db import async_session_factory, init_db, wait_for_db
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
 from orion.storage.models_gold import CandidateTrade
@@ -86,6 +86,12 @@ class IngestionService:
         # processes co-exist, distinct ids mutually exclude. Raises
         # RuntimeError on a fresh competing lease; that propagates so
         # the process exits non-zero and operator sees the failure.
+        # Wait out a transient DB outage (bounded) BEFORE init_db + the
+        # hydrate_from_db universe load below. A DB-down start previously
+        # crash-looped ingestion and left it pinned to the static watchlist for
+        # the whole session (2026-06-01 near-outage); waiting for the DB lets
+        # the universe hydrate against a live DB instead of a degraded start.
+        await wait_for_db()
         await init_db()
         self._lease_run_id = await acquire_service_lease("ingestion")
 
