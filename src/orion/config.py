@@ -143,6 +143,16 @@ class SystemSettings(BaseSettings):
         default=Path("/Volumes/heber/data"),
         validation_alias="HEBER_DATA_ROOT",
     )
+    # Live ML scoring needs only the most recent Gold feature row per symbol
+    # as-of decision time, so it scans just the last N days of dt= partitions
+    # rather than the full (unbounded) dataset history. Bounds per-candidate
+    # read latency that was aging candidates past max_data_lag_seconds. A row
+    # last computed longer ago than this is treated as missing (scorer defaults
+    # to None). Training/backfill callers pass no lookback and read full history.
+    gold_feature_lookback_days: int = Field(
+        default=7,
+        validation_alias="ORION_GOLD_FEATURE_LOOKBACK_DAYS",
+    )
 
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)

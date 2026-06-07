@@ -228,6 +228,158 @@ def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:
     assert float(result.iloc[0]["momentum_5d"]) == 0.1
 
 
+def test_read_gold_features_prunes_dt_partitions_older_than_lookback(tmp_path: Path) -> None:
+    """With lookback_days set, rows in dt-partitions older than the window are
+    excluded even though their ts_available is at/before asof (so this isolates
+    dt-partition pruning from the existing as-of filter)."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    recent = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=1)],
+            "ts_available": [asof - timedelta(days=1)],
+            "momentum_5d": [0.42],
+        }
+    )
+    stale = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=20)],
+            "ts_available": [asof - timedelta(days=20)],
+            "momentum_5d": [0.11],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-06-04" / "part-0.parquet", recent)
+    _write_parquet(root / "dt=2026-05-16" / "part-0.parquet", stale)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["momentum_5d"]) == 0.42
+
+
+def test_read_gold_features_includes_partition_exactly_at_lookback_cutoff(tmp_path: Path) -> None:
+    """The cutoff (asof_date - lookback_days) is inclusive: a partition dated
+    exactly on the cutoff is kept; one day earlier is pruned."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)  # cutoff = 2026-05-29 with lookback 7
+    on_cutoff = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [datetime(2026, 5, 29, 12, 0, tzinfo=UTC)],
+            "ts_available": [datetime(2026, 5, 29, 12, 0, tzinfo=UTC)],
+            "momentum_5d": [0.29],
+        }
+    )
+    before_cutoff = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [datetime(2026, 5, 28, 12, 0, tzinfo=UTC)],
+            "ts_available": [datetime(2026, 5, 28, 12, 0, tzinfo=UTC)],
+            "momentum_5d": [0.28],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-05-29" / "part-0.parquet", on_cutoff)
+    _write_parquet(root / "dt=2026-05-28" / "part-0.parquet", before_cutoff)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["momentum_5d"]) == 0.29
+
+
+def test_read_gold_features_reads_all_partitions_without_lookback(tmp_path: Path) -> None:
+    """Default (no lookback_days) preserves full-history reads for training/backfill."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    recent = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=1)],
+            "ts_available": [asof - timedelta(days=1)],
+            "momentum_5d": [0.42],
+        }
+    )
+    stale = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=20)],
+            "ts_available": [asof - timedelta(days=20)],
+            "momentum_5d": [0.11],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-06-04" / "part-0.parquet", recent)
+    _write_parquet(root / "dt=2026-05-16" / "part-0.parquet", stale)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+    )
+
+    assert len(result) == 2
+    assert set(round(float(v), 2) for v in result["momentum_5d"]) == {0.42, 0.11}
+
+
+def test_read_gold_features_widens_to_full_history_when_window_empty(tmp_path: Path) -> None:
+    """When no partition falls within the lookback window, fall back to a full
+    read so a low-cadence/stalled dataset's most recent (older) row is still
+    returned rather than silently dropped to None."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    stale = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [datetime(2026, 4, 1, 12, 0, tzinfo=UTC)],
+            "ts_available": [datetime(2026, 4, 1, 12, 0, tzinfo=UTC)],
+            "momentum_5d": [0.99],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-04-01" / "part-0.parquet", stale)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["momentum_5d"]) == 0.99
+
+
+def test_read_gold_features_returns_empty_for_genuinely_empty_dataset_with_lookback(tmp_path: Path) -> None:
+    """A dataset with no parquet files at all returns empty even with the
+    widen-if-empty fallback (nothing to widen to)."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    (tmp_path / "gold" / "dataset=momentum_features").mkdir(parents=True)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert result.empty
+
+
 def test_read_gold_features_supports_nested_watch_layout(tmp_path: Path) -> None:
     base = datetime(2026, 2, 12, 14, 0, tzinfo=UTC)
     features = pd.DataFrame(

@@ -10,13 +10,14 @@ It intentionally avoids unsupported endpoints like `/silver/read` and `/gold/rea
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
 import httpx
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import structlog
 
@@ -326,8 +327,17 @@ class HeberReader:
         dataset: str,
         asof_time: datetime,
         symbols: list[str] | None = None,
+        lookback_days: int | None = None,
     ) -> pd.DataFrame:
-        """Read Gold features/labels from Heber parquet layout."""
+        """Read Gold features/labels from Heber parquet layout.
+
+        When ``lookback_days`` is set, only ``dt=`` partitions on or after
+        ``asof_time.date() - lookback_days`` are scanned, skipping footer reads
+        over the full dataset history (which grows unbounded as Gold accumulates
+        and was aging live candidates past ``max_data_lag_seconds``). Default
+        (``None``) reads all partitions — required by training/backfill callers
+        that consume full history.
+        """
         # Negative cache: skip the full path walk and ParquetDataset open
         # for datasets we just confirmed are empty. Empty source data
         # (Gold-builder upstream gap) was costing ~3s per call across 6
@@ -337,25 +347,29 @@ class HeberReader:
         if cache_expiry is not None and cache_expiry > time.monotonic():
             return pd.DataFrame()
 
+        min_dt = (asof_time.date() - timedelta(days=lookback_days)) if lookback_days is not None else None
+
         instrument_keys = self._to_instrument_keys(symbols) if symbols else None
         filters: list[tuple[str, str, Any]] = []
         if instrument_keys:
             filters.append(("instrument_key", "in", instrument_keys))
 
-        frames: list[pd.DataFrame] = []
         candidate_paths = self._gold_dataset_candidate_paths(dataset)
-        paths_checked: list[str] = []
-        for gold_path in candidate_paths:
-            if not gold_path.exists():
-                paths_checked.append(f"{gold_path} (missing)")
-                continue
-            paths_checked.append(f"{gold_path} (found)")
-            frame = self._read_parquet(gold_path, filters=filters)
-            if frame.empty:
-                continue
-            frames.append(frame)
+        frames, paths_checked = self._read_gold_frames(candidate_paths, filters, min_dt)
+
+        if not frames and min_dt is not None:
+            # Widen-if-empty: no rows in the lookback window for this symbol. Its
+            # latest feature predates the window — a low-cadence or stalled
+            # dataset (e.g. base rates updated weekly). Fall back to a full read
+            # so we still return its most recent row instead of dropping it to
+            # None. These datasets are small, so the fallback read is cheap; the
+            # speedup is kept for high-cadence datasets, whose window is non-empty.
+            frames, paths_checked = self._read_gold_frames(candidate_paths, filters, None)
 
         if not frames:
+            # By here a full read has always run (min_dt was None, or we widened),
+            # so an empty result means the dataset is genuinely empty upstream —
+            # safe to negative-cache to skip the full-history walk next time.
             self._gold_empty_dataset_cache[dataset] = time.monotonic() + _GOLD_EMPTY_DATASET_TTL_SECONDS
             logger.warning(
                 "gold_dataset_empty",
@@ -377,6 +391,29 @@ class HeberReader:
             return df
 
         return self._apply_asof_filter(df, asof_time)
+
+    def _read_gold_frames(
+        self,
+        candidate_paths: tuple[Path, ...],
+        filters: list[tuple[str, str, Any]],
+        min_dt: date | None,
+    ) -> tuple[list[pd.DataFrame], list[str]]:
+        """Read each candidate gold path, pruning to ``min_dt`` when set.
+
+        Returns the non-empty frames and a per-path found/missing audit trail.
+        """
+        frames: list[pd.DataFrame] = []
+        paths_checked: list[str] = []
+        for gold_path in candidate_paths:
+            if not gold_path.exists():
+                paths_checked.append(f"{gold_path} (missing)")
+                continue
+            paths_checked.append(f"{gold_path} (found)")
+            frame = self._read_parquet(gold_path, filters=filters, min_dt=min_dt)
+            if frame.empty:
+                continue
+            frames.append(frame)
+        return frames, paths_checked
 
     def _gold_dataset_candidate_paths(self, dataset: str) -> tuple[Path, ...]:
         """Resolve supported Heber gold path variants for a dataset."""
@@ -481,12 +518,13 @@ class HeberReader:
         path: Path,
         columns: list[str] | None = None,
         filters: list[tuple[str, str, Any]] | None = None,
+        min_dt: date | None = None,
     ) -> pd.DataFrame:
         try:
             # Heber paths are hive-partitioned, and some partition keys also exist in parquet
             # columns (for example `instrument_type`). Disable partition discovery to avoid
             # Arrow schema merge conflicts (`string` vs `dictionary`).
-            table = self._read_table(path=path, columns=columns, filters=filters, partitioning=None)
+            table = self._read_table(path=path, columns=columns, filters=filters, partitioning=None, min_dt=min_dt)
             return cast(pd.DataFrame, table.to_pandas())
         except Exception as exc:
             if (
@@ -500,7 +538,7 @@ class HeberReader:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
-                return self._read_parquet_filewise(path=path, columns=columns, filters=filters)
+                return self._read_parquet_filewise(path=path, columns=columns, filters=filters, min_dt=min_dt)
             logger.error(
                 "heber_read_failed",
                 path=str(path),
@@ -514,14 +552,22 @@ class HeberReader:
         columns: list[str] | None,
         filters: list[tuple[str, str, Any]] | None,
         partitioning: str | None,
+        min_dt: date | None = None,
     ) -> Any:
+        source: Path | list[str] = path
+        if path.is_dir():
+            # Pre-filter to skip macOS ._ sidecar files that cause EPERM errors
+            # and trigger noisy filewise fallback warnings, and (when min_dt is
+            # set) to prune dt= partitions older than the lookback window so we
+            # never open footers for irrelevant history.
+            valid_files = [str(f) for f in self._partition_parquet_files(path, min_dt)]
+            if valid_files:
+                source = valid_files
+            elif min_dt is not None:
+                # No in-window partitions: return empty rather than re-walking
+                # the full directory (which would defeat the pruning).
+                return pa.table({})
         try:
-            source: Path | list[str] = path
-            if path.is_dir():
-                # Pre-filter to skip macOS ._ sidecar files that cause
-                # EPERM errors and trigger noisy filewise fallback warnings.
-                valid_files = [str(f) for f in sorted(path.rglob("*.parquet")) if not f.name.startswith("._")]
-                source = valid_files if valid_files else path
             # use_threads=False: do NOT spin up Arrow's C++ CPU threadpool for
             # these reads. On 2026-06-02 the execution service took two SIGABRTs
             # (Abort trap: 6) — a PyArrow worker thread (arrow::internal::
@@ -547,18 +593,43 @@ class HeberReader:
                     path=str(path),
                     error=str(exc),
                 )
-                return pq.read_table(path, columns=columns, partitioning=partitioning, use_threads=False)
+                # Reuse the pruned/sidecar-filtered source so the fallback keeps
+                # the same partition window as the primary read.
+                return pq.read_table(source, columns=columns, partitioning=partitioning, use_threads=False)
             raise
+
+    def _partition_parquet_files(self, path: Path, min_dt: date | None) -> list[Path]:
+        """List a directory's parquet files, skipping ._ sidecars and (when
+        ``min_dt`` is set) dt= partitions older than the lookback window."""
+        return [
+            f
+            for f in sorted(path.rglob("*.parquet"))
+            if not f.name.startswith("._") and (min_dt is None or self._partition_dt_within_window(f, min_dt))
+        ]
+
+    @staticmethod
+    def _partition_dt_within_window(file_path: Path, min_dt: date) -> bool:
+        """True if the file's hive ``dt=`` partition is on/after ``min_dt``.
+
+        Files with no parseable ``dt=`` partition are kept — never silently drop
+        data that cannot be classified by date.
+        """
+        for part in file_path.parts:
+            if part.startswith("dt="):
+                try:
+                    return date.fromisoformat(part[3:]) >= min_dt
+                except ValueError:
+                    return True
+        return True
 
     def _read_parquet_filewise(
         self,
         path: Path,
         columns: list[str] | None,
         filters: list[tuple[str, str, Any]] | None,
+        min_dt: date | None = None,
     ) -> pd.DataFrame:
-        parquet_files = [
-            file_path for file_path in sorted(path.rglob("*.parquet")) if not file_path.name.startswith("._")
-        ]
+        parquet_files = self._partition_parquet_files(path, min_dt)
         if not parquet_files:
             return pd.DataFrame()
 
