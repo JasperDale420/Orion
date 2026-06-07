@@ -810,7 +810,9 @@ class TestHeberFlowPoll:
                     "event_id": "e1",
                     "underlying": "SPY",
                     "premium": 1000.0,
-                    "ts_event": pd.Timestamp("2026-03-10 15:00:00", tz="UTC"),
+                    # Fresh event (now-ish) so it survives the ingest-boundary
+                    # staleness drop; this test asserts timestamp advancement.
+                    "ts_event": pd.Timestamp(datetime.now(UTC) - timedelta(seconds=30)),
                 }
             ]
         )
@@ -819,6 +821,78 @@ class TestHeberFlowPoll:
             events = svc._poll_heber_flow("trace123")
 
         assert len(events) == 1
+        assert svc._last_flow_poll_ts > original_ts
+
+    @pytest.mark.unit
+    def test_poll_drops_events_older_than_max_data_lag(self):
+        """Flow alerts born past the max_data_lag budget are dropped at ingest.
+
+        A candidate created from a >max_data_lag_seconds event is guaranteed
+        to be rejected downstream (preflight Data-Lag / auto-skip). Dropping it
+        here stops the startup catch-up burst from manufacturing thousands of
+        guaranteed-stale candidates.
+        """
+        import pandas as pd
+
+        from orion.config import system_settings
+
+        svc = self._make_service()
+        now = datetime.now(UTC)
+        max_lag = system_settings.max_data_lag_seconds
+
+        mock_reader = MagicMock()
+        mock_reader.read_flow.return_value = pd.DataFrame(
+            [
+                {
+                    "event_id": "fresh",
+                    "underlying": "SPY",
+                    "premium": 1000.0,
+                    "ts_event": pd.Timestamp(now - timedelta(seconds=30)),
+                },
+                {
+                    "event_id": "stale",
+                    "underlying": "AAPL",
+                    "premium": 1000.0,
+                    "ts_event": pd.Timestamp(now - timedelta(seconds=max_lag + 3600)),
+                },
+            ]
+        )
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            events = svc._poll_heber_flow("trace123")
+
+        assert [e.event_id for e in events] == ["fresh"]
+
+    @pytest.mark.unit
+    def test_poll_drops_all_stale_returns_empty_but_advances_cursor(self):
+        """An all-stale poll (e.g. startup catch-up burst) yields zero events
+        but still advances the poll cursor so the burst isn't re-read."""
+        import pandas as pd
+
+        from orion.config import system_settings
+
+        svc = self._make_service()
+        original_ts = svc._last_flow_poll_ts
+        now = datetime.now(UTC)
+        max_lag = system_settings.max_data_lag_seconds
+
+        mock_reader = MagicMock()
+        mock_reader.read_flow.return_value = pd.DataFrame(
+            [
+                {
+                    "event_id": f"old{i}",
+                    "underlying": "SPY",
+                    "premium": 1000.0,
+                    "ts_event": pd.Timestamp(now - timedelta(seconds=max_lag + 1000 + i)),
+                }
+                for i in range(3)
+            ]
+        )
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            events = svc._poll_heber_flow("trace123")
+
+        assert events == []
         assert svc._last_flow_poll_ts > original_ts
 
     @pytest.mark.unit

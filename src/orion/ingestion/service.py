@@ -387,12 +387,37 @@ class IngestionService:
 
             self._last_flow_poll_ts = now
             events: list[BronzeEvent] = []
+            stale_dropped = 0
+            # Flow alerts already past the data-lag budget at ingest become
+            # candidates that the execution path is guaranteed to reject
+            # (preflight Data-Lag gate / auto_skip_stale_candidates). Dropping
+            # them here — rather than minting doomed candidates — is what
+            # suppresses the startup catch-up burst of prior-day events that
+            # otherwise manufactures thousands of born-stale "Stale at fetch"
+            # SKIPs. The downstream cutoff is computed against a later `now`, so
+            # anything dropped here is strictly staler at decision time too:
+            # this never removes an event the execution path would have kept.
+            freshness_cutoff = now - timedelta(seconds=system_settings.max_data_lag_seconds)
 
             for _, row in df.iterrows():
                 event = self._heber_row_to_event(row, now)
-                if event:
-                    self._tag_ingest_metadata(event, trace_id, "heber_flow")
-                    events.append(event)
+                if not event:
+                    continue
+                event_ts = event.event_ts_utc
+                if event_ts is not None and event_ts.tzinfo is None:
+                    event_ts = event_ts.replace(tzinfo=UTC)
+                if event_ts is not None and event_ts < freshness_cutoff:
+                    stale_dropped += 1
+                    continue
+                self._tag_ingest_metadata(event, trace_id, "heber_flow")
+                events.append(event)
+
+            if stale_dropped:
+                logger.info(
+                    f"Dropped {stale_dropped} stale UW flow alerts at ingest "
+                    f"(older than {system_settings.max_data_lag_seconds}s data-lag budget)",
+                    extra={"stale_dropped": stale_dropped, "fresh_kept": len(events)},
+                )
 
             if events:
                 logger.info(
