@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd agent for the Orion market-open data-flow check — fires a few
+minutes after the US equity cash open and alerts (CRITICAL) if fresh
+bronze_events are NOT landing in TimescaleDB while the market is open.
+
+Why this exists: on 2026-06-08 a service-lease split-brain starved
+ingestion and only 403 bronze events landed all day (normal is
+~150k-200k). The split-brain was fixed, but the stall was discovered by
+hand hours later. This check pages us at the open instead.
+
+The check queries `max(received_ts_utc)` from bronze_events via
+`docker exec orion_timescaledb psql`, probes Data-Gateway liveness via
+curl, and — only during the 09:30-16:00 ET cash session — alerts if the
+newest event is older than the staleness threshold (default 300s). It
+appends a JSON row to logs/market_open_dataflow_check.log every run and
+POSTs to SLACK_WEBHOOK_URL when that env var is set.
+
+Schedule (host TZ is America/Los_Angeles / PDT). StartCalendarInterval
+times are interpreted in LOCAL time by launchd, so these PDT clock times
+map to ET as:
+    06:40 PDT == 09:40 ET   (10 min after the open)
+    07:00 PDT == 10:00 ET
+    07:30 PDT == 10:30 ET
+Weekday 1-5 == Monday-Friday. NOTE: launchd reads the wall-clock fields
+literally, so when the host shifts to PST (standard time) these fire at
+the same LOCAL times but 1h earlier relative to ET would NOT happen —
+ET and PT both observe DST in lockstep, so 06:40 PT stays 09:40 ET
+year-round. No seasonal adjustment needed.
+
+Install (create the log dir FIRST — launchd opens StandardOutPath /
+StandardErrorPath below before the wrapper ever runs, so a missing logs/
+dir would stop the check from launching at all, silently):
+    mkdir -p /Users/jacobmcmillan/Empire/Orion/logs
+    cp scripts/launchd/com.empire.orion.market-open-dataflow-check.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.market-open-dataflow-check.plist
+
+Status:
+    launchctl print gui/$(id -u)/com.empire.orion.market-open-dataflow-check
+
+Stop:
+    launchctl bootout gui/$(id -u)/com.empire.orion.market-open-dataflow-check
+
+Run once manually (market-closed path prints diagnostics, exits 0):
+    scripts/run_market_open_dataflow_check.sh
+
+Logs:
+    tail -f logs/market_open_dataflow_check.log          # structured rows (JSON, one per line)
+    tail -f logs/market_open_dataflow_check.stdout.log   # launchd-captured stdout
+    tail -f logs/market_open_dataflow_check.stderr.log   # launchd-captured stderr
+
+To enable Slack notifications, set SLACK_WEBHOOK_URL below (or copy this
+plist to a private location with the secret baked in — do not commit the
+URL).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.market-open-dataflow-check</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Orion/scripts/run_market_open_dataflow_check.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Fire a few minutes after the cash open, weekdays only. Each dict is
+         one trigger; launchd ORs them. Weekday 1-5 == Mon-Fri. Times are
+         LOCAL (PDT). See the header comment for the ET mapping. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>40</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>40</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>40</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>40</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>40</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+    </array>
+
+    <!-- KeepAlive omitted (false): this is a periodic one-shot. A non-zero
+         exit (CRITICAL alert) must NOT make launchd restart-loop it; the
+         next scheduled fire is sufficient. -->
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+        <!-- launchd defaults PATH to /usr/bin:/bin:/usr/sbin:/sbin only.
+             The wrapper extends this (it needs docker + curl), but a
+             reasonable base here makes ad-hoc debugging easier. -->
+        <key>PATH</key>
+        <string>/Users/jacobmcmillan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Set SLACK_WEBHOOK_URL here (or via `launchctl setenv`) to
+             enable Slack notifications. Absent the env var the check still
+             appends to logs/market_open_dataflow_check.log, so the stall is
+             auditable after the fact. -->
+        <!--
+        <key>SLACK_WEBHOOK_URL</key>
+        <string>https://hooks.slack.com/services/...</string>
+        -->
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/market_open_dataflow_check.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/market_open_dataflow_check.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
