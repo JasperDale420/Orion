@@ -436,6 +436,67 @@ async def persist_fill_record(fill: Any) -> None:
         logger.error("Failed to persist fill record", extra={"event_type": "FILL_PERSIST_ERROR", "error": str(e)})
 
 
+async def persist_realized_pnl_to_journal(
+    ticker: str,
+    realized_pnl: float,
+    exit_broker_order_id: str | None = None,
+    filled_at: datetime | None = None,
+) -> None:
+    """Attribute realized PnL from a closing fill back to the originating
+    entry's trade-journal row.
+
+    B2 RCA: ``persist_fill_record`` updates the journal by ``broker_order_id``,
+    but an EXIT fill's ``broker_order_id`` never matches the ENTRY journal row
+    (which carries the *entry* order ids) — so ``realized_pnl`` stayed NULL for
+    every trade and EOD/weekly PnL reporting was blind. The only stable link
+    across the entry/exit boundary on the shared account is ``ticker``: match
+    the oldest still-open entry (``broker_order_id`` set = actually entered;
+    ``realized_pnl`` NULL = not yet closed). Exact for the common single-fill
+    full close; a multi-partial close attributes the first increment's PnL
+    (acceptable — far better than recording nothing).
+
+    Defensive: any DB failure is logged, never raised — a journal side-write
+    must not break fill processing or the risk/kill-switch path.
+    """
+    from orion.storage.models_trade_journal import TradeJournalEntry
+
+    async def write(session: Any) -> None:
+        stmt = (
+            select(TradeJournalEntry)
+            .where(
+                TradeJournalEntry.ticker == ticker,
+                TradeJournalEntry.broker_order_id.is_not(None),
+                TradeJournalEntry.realized_pnl.is_(None),
+            )
+            .order_by(TradeJournalEntry.created_at_utc.asc())
+            .limit(1)
+        )
+        row = (await session.execute(stmt)).scalars().first()
+        if row is None:
+            logger.warning(
+                "No open trade-journal entry to attribute realized PnL",
+                extra={
+                    "event_type": "REALIZED_PNL_NO_OPEN_JOURNAL_ENTRY",
+                    "ticker": ticker,
+                    "realized_pnl": realized_pnl,
+                },
+            )
+            return
+        row.realized_pnl = float(realized_pnl)
+        if filled_at is not None:
+            row.filled_at_utc = filled_at
+        if exit_broker_order_id:
+            row.notes = f"closed_by={exit_broker_order_id}"
+
+    try:
+        await db_write(write)
+    except Exception as e:
+        logger.error(
+            "Failed to write realized PnL to trade journal",
+            extra={"event_type": "REALIZED_PNL_JOURNAL_WRITE_ERROR", "ticker": ticker, "error": str(e)},
+        )
+
+
 async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: str, order: Any) -> None:
     """Persist exit decision to database."""
     try:

@@ -91,7 +91,22 @@ class FillProcessor:
                 },
             )
 
-            await risk_manager.process_fill(ticker, incremental_qty, filled_avg_price, side, fill_id=fill_marker)
+            fill_outcome = await risk_manager.process_fill(
+                ticker, incremental_qty, filled_avg_price, side, fill_id=fill_marker
+            )
+
+            # Attribute realized PnL from a closing fill back to the originating
+            # entry's trade-journal row. The exit fill's broker_order_id never
+            # matches the entry journal row, so persist_fill_record's
+            # by-broker_order_id update can't reach it (B2 RCA).
+            if getattr(fill_outcome, "is_closing", False):
+                from orion.execution.persistence import persist_realized_pnl_to_journal
+
+                await persist_realized_pnl_to_journal(
+                    ticker=ticker,
+                    realized_pnl=fill_outcome.realized_pnl,
+                    exit_broker_order_id=order_id,
+                )
 
             # Update sector exposure tracking
             sector = SECTOR_MAPPING.get(ticker)

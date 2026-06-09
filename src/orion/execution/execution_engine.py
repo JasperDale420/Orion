@@ -1429,6 +1429,24 @@ class ExecutionEngine:
                 )
                 self._record_result(False)
                 return False
+            # A reduce-only close rejected as an OPENING trade — Alpaca prices it
+            # as a cash-secured short put — proves the broker is NOT long what we
+            # think we hold: a phantom from a non-attributed close or a stale
+            # Gateway position read (B1 RCA 2026-06-08). Escalating to the native
+            # flatten here would itself attempt to OPEN a naked short. Abandon and
+            # reconcile our risk state to flat instead of escalating/retrying.
+            if self._is_reduce_only_rejected_as_open(detail):
+                logger.error(
+                    f"Reduce-only close for {ticker} rejected as an OPENING trade "
+                    f"(broker is not long the position) — abandoning and reconciling to flat",
+                    extra={"event_type": "EXIT_ABANDON_PHANTOM", "ticker": ticker, "error": detail[:200]},
+                )
+                reconcile = getattr(self.risk_manager, "reconcile_position_flat", None)
+                if reconcile is not None:
+                    await reconcile(ticker)
+                self._record_result(True)
+                return True
+
             logger.warning(
                 f"Limit close rejected for {ticker} ({status_code}), escalating to native flatten: {detail[:200]}",
                 extra={"event_type": "EXIT_LIMIT_REJECTED_ESCALATE", "ticker": ticker, "error": detail[:200]},
@@ -1590,6 +1608,20 @@ class ExecutionEngine:
                 extra={"event_type": "EXIT_CANCEL_RESTING", "ticker": ticker, "order_id": str(order_id)},
             )
         return safe
+
+    @staticmethod
+    def _is_reduce_only_rejected_as_open(detail: str) -> bool:
+        """True when a reduce-only close was rejected because Alpaca priced it as
+        OPENING a position (a cash-secured short put), i.e. the broker does not
+        actually hold the position we tried to close.
+
+        Disambiguated by the error TEXT, not just the 40310000 code: a plain
+        day-trading-buying-power exhaustion (sibling-driven, transient, on a real
+        long) carries a different message and must still escalate/defer, so this
+        only matches the cash-secured-put opening-short signature.
+        """
+        d = (detail or "").lower()
+        return "cash-secured put" in d or "cash secured put" in d or "cash_secured_put" in d
 
     def _compute_close_limit(self, mark: float, held_short: bool) -> float:
         """Marketable close limit: cross the spread by ~7.5% so the order

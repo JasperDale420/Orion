@@ -8,6 +8,7 @@ Delegates to focused sub-modules:
 """
 
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,20 @@ if TYPE_CHECKING:
     from orion.storage.models_execution import Position
 
 logger = setup_struct_logger(__name__)
+
+
+@dataclass(frozen=True)
+class FillOutcome:
+    """Result of ``RiskManager.process_fill``.
+
+    ``is_closing`` is True when the fill reduced/flattened an existing
+    position (so the caller can attribute ``realized_pnl`` to the trade
+    journal). ``realized_pnl`` is 0.0 for opening fills.
+    """
+
+    realized_pnl: float = 0.0
+    is_closing: bool = False
+
 
 # Initialize metrics
 _metrics: "Metrics | None" = None
@@ -392,6 +407,25 @@ class RiskManager:
         """Drop the stashed intended greeks for `ticker` (e.g. on submit failure)."""
         self._intended_position_greeks.pop(ticker, None)
 
+    async def reconcile_position_flat(self, ticker: str) -> None:
+        """Force a tracked position to flat when the broker confirms it does not
+        exist (B1 RCA): a phantom left by a non-attributed close or a stale
+        Gateway position read. Keeps in-memory risk state — position count,
+        per-ticker exposure, greeks — consistent with broker truth so sizing and
+        the greek gate on the next order aren't computed against exposure we
+        don't actually hold. Persists the corrected state.
+        """
+        self.positions[ticker] = {"qty": 0.0, "avg_entry": 0.0}
+        self.ticker_exposures[ticker] = 0.0
+        self.open_positions = sum(1 for p in self.positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
+        self.clear_position_greeks(ticker)
+        self._intended_position_greeks.pop(ticker, None)
+        logger.warning(
+            f"Reconciled {ticker} to flat (broker holds no such position)",
+            extra={"event_type": "POSITION_RECONCILED_FLAT", "ticker": ticker},
+        )
+        await self._save_state()
+
     # ── Delegated methods (Sector) ───────────────────────────────────────
 
     def check_sector_exposure(
@@ -592,14 +626,18 @@ class RiskManager:
         side: str,
         fill_id: str,
         expected_price: float | None = None,
-    ) -> None:
+    ) -> FillOutcome:
         """Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
         Idempotent: Checks fill_id against in-memory history.
+
+        Returns a ``FillOutcome`` so the caller can persist realized PnL on a
+        closing fill. A duplicate (already-processed) fill returns a neutral
+        outcome.
         """
         if fill_id in self.processed_fill_ids:
             logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
-            return
+            return FillOutcome()
 
         self.processed_fill_ids.add(fill_id)
 
@@ -691,6 +729,8 @@ class RiskManager:
 
         if _metrics and hasattr(_metrics, "risk_exposure"):
             _metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
+
+        return FillOutcome(realized_pnl=realized_pnl, is_closing=is_closing)
 
     # ── Post-trade & pending order tracking ──────────────────────────────
 

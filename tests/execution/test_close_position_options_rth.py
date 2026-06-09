@@ -410,3 +410,43 @@ async def test_equity_close_immediate_still_uses_market(monkeypatch: pytest.Monk
     assert closed is True
     client.close_position.assert_called_once_with("AAPL", qty=10.0)
     client.create_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reduce_only_close_rejected_as_open_abandons_and_reconciles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B1 RCA: a reduce-only close rejected as OPENING a cash-secured short put
+    proves the broker is not long the position we think we hold (phantom from a
+    non-attributed close / stale Gateway read). Escalating to the native flatten
+    would itself attempt to OPEN a naked short. The close must abandon and
+    reconcile our risk state to flat instead — never escalate."""
+    _patch_persist(monkeypatch)
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    engine.risk_manager.reconcile_position_flat = AsyncMock()
+    # get_position says long (passes the reduce-only guard), but the limit close
+    # is rejected with the cash-secured-put opening-short signature.
+    rejection = {
+        "error": {"code": "GW-E2003"},
+        "detail": (
+            "Alpaca API Error: insufficient options buying power for cash-secured put "
+            "(required: 158000, available: 80576.42)"
+        ),
+        "status_code": 403,
+    }
+    client = _make_client(
+        broker_qty="2",
+        avg_entry="5.0",
+        limit_result=rejection,
+        native_result={"id": "should-not-be-used"},
+    )
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="MU260612P00790000", qty=2.0, exit_signal=_exit_signal(), direction="LONG", current_price=2.0
+    )
+
+    assert closed is True  # resolved — there is nothing to close
+    client.close_position.assert_not_called()  # native flatten NOT attempted (would open a naked short)
+    engine.risk_manager.reconcile_position_flat.assert_awaited_once_with("MU260612P00790000")
