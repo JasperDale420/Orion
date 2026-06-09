@@ -2,10 +2,10 @@ import asyncio
 import math
 import time
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from orion.config import risk_settings, system_settings
 from orion.core.enums import DecisionStatus, OrderSide
@@ -1602,6 +1602,107 @@ class ExecutionEngine:
             )
         return safe
 
+    async def _fetch_stale_entry_orders(self) -> list[dict[str, Any]]:
+        """Orion entry orders that reached the broker, are still unfilled, and
+        have aged past ``_STALE_ENTRY_ORDER_TTL_SECONDS``.
+
+        Scoping to genuine buy-to-open entries comes from the filters, not from
+        the table being entries-only: successful closes never get an ``orders``
+        row (they persist to ``exit_decisions``) and bracket SL/TP legs are
+        never persisted. The one exception — ``persist_exit_order_rejection``
+        writes a REJECTED close row — always has ``broker_order_id IS NULL`` and
+        a terminal status, so the ``broker_order_id IS NOT NULL`` + open-status
+        filters exclude it. A buy-to-close on a short can therefore never be
+        returned here. Only ``orion_``-prefixed rows are considered
+        (shared-account safety).
+        """
+        from orion.storage.models_execution import OrderRecord
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=self._STALE_ENTRY_ORDER_TTL_SECONDS)
+        # Broker-reported working states for an unfilled order. Terminal states
+        # (filled / partially_filled / canceled / expired / rejected / ...) are
+        # excluded so we never touch an order that is done or already filling.
+        open_states = ("new", "accepted", "pending_new", "held", "accepted_for_bidding")
+
+        async def query(session: Any) -> list[dict[str, Any]]:
+            stmt = (
+                select(OrderRecord.broker_order_id, OrderRecord.client_order_id, OrderRecord.ticker)
+                .where(OrderRecord.client_order_id.like(orion_order_id_sql_pattern()))
+                .where(OrderRecord.broker_order_id.isnot(None))
+                .where(func.lower(OrderRecord.status).in_(open_states))
+                .where(OrderRecord.created_at_utc < cutoff)
+            )
+            result = await session.execute(stmt)
+            return [{"broker_order_id": r[0], "client_order_id": r[1], "ticker": r[2]} for r in result.all()]
+
+        return await db_query(query)
+
+    async def _cancel_stale_entry_orders(self, client: Any) -> int:
+        """Cancel resting unfilled Orion entry orders past the stale-entry TTL.
+
+        Frees the day-trading buying power they reserve on the shared account
+        and prevents a late fill on an hours-old signal. Best-effort: the
+        Gateway surfaces failures as ``{"error": ...}`` (not exceptions), so a
+        rejected cancel is logged and skipped rather than counted. On a clean
+        cancel the order is dropped from risk pending exposure so it isn't
+        double-counted until the hourly prune. Returns the number cancelled.
+        """
+        try:
+            stale = await self._fetch_stale_entry_orders()
+        except Exception as e:
+            logger.warning(
+                "Could not list stale entry orders for cancellation",
+                extra={"event_type": "STALE_ENTRY_QUERY_FAILED", "error": str(e)},
+            )
+            return 0
+
+        cancelled = 0
+        for row in stale:
+            broker_id = row.get("broker_order_id")
+            coid = row.get("client_order_id")
+            ticker = row.get("ticker")
+            if not broker_id:
+                continue
+            try:
+                result = await client.cancel_order(str(broker_id))
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cancel stale entry order {broker_id} on {ticker}: {e}",
+                    extra={"event_type": "STALE_ENTRY_CANCEL_FAILED", "ticker": ticker, "order_id": str(broker_id)},
+                )
+                continue
+            if isinstance(result, dict) and "error" in result:
+                logger.warning(
+                    f"Cancel rejected for stale entry order {broker_id} on {ticker}: "
+                    f"{result.get('detail') or result.get('error')}",
+                    extra={"event_type": "STALE_ENTRY_CANCEL_REJECTED", "ticker": ticker, "order_id": str(broker_id)},
+                )
+                continue
+            await self._remove_pending_order_compat(coid)
+            # Optimistically flip the DB row out of the open-status set so this
+            # sweep doesn't re-issue a (rejected) cancel for it every cycle when
+            # the row falls outside the next status-poll's 200-row window — the
+            # exact high-order-volume day this fix targets. The next poll
+            # reconciles to the broker's real terminal status.
+            try:
+                await persist_order_status_update(broker_order_id=str(broker_id), status="canceled")
+            except Exception as e:
+                logger.warning(
+                    "Could not mark cancelled stale entry order in DB",
+                    extra={
+                        "event_type": "STALE_ENTRY_STATUS_UPDATE_FAILED",
+                        "order_id": str(broker_id),
+                        "error": str(e),
+                    },
+                )
+            cancelled += 1
+            logger.info(
+                f"Cancelled stale entry order {broker_id} on {ticker} "
+                f"(unfilled > {self._STALE_ENTRY_ORDER_TTL_SECONDS:.0f}s)",
+                extra={"event_type": "STALE_ENTRY_CANCELLED", "ticker": ticker, "order_id": str(broker_id)},
+            )
+        return cancelled
+
     async def _fresh_close_limit(self, client: Any, ticker: str, held_short: bool) -> float | None:
         """Marketable options close limit from a FRESH chain quote, or ``None``
         if no usable quote is available (the caller then falls back to the
@@ -1877,6 +1978,13 @@ class ExecutionEngine:
     # over a long-running process — a periodic ground-truth resync corrects it.
     _POSITION_SYNC_MIN_INTERVAL_SECONDS: float = 120.0
 
+    # An Orion entry is a mid-priced DAY limit. One that has filled NOTHING this
+    # long after submission is working an increasingly stale signal and only
+    # reserves shared day-trading buying power until it EXPIRES at the close
+    # (2026-06-09: EWY/XHB entries sat unfilled all session, then expired).
+    # poll_fills cancels it once past this TTL.
+    _STALE_ENTRY_ORDER_TTL_SECONDS: float = 180.0
+
     async def poll_fills(self) -> None:
         """Polls Data Gateway for account equity and updates RiskManager.
 
@@ -1985,6 +2093,20 @@ class ExecutionEngine:
                                 "error": str(e),
                             },
                         )
+
+            # Cancel Orion's own resting unfilled entry orders that have aged
+            # past the stale-entry TTL (statuses were just refreshed above).
+            # Mid-priced DAY limits that never fill otherwise sit reserving
+            # shared DTBP until they EXPIRE at the close. Closes don't get a
+            # cancellable orders row and bracket legs aren't persisted, so the
+            # query's filters scope this to buy-to-open entries only.
+            try:
+                await self._cancel_stale_entry_orders(client)
+            except Exception as e:
+                logger.warning(
+                    "Stale entry-order cancel sweep failed",
+                    extra={"event_type": "STALE_ENTRY_CANCEL_SWEEP_FAILED", "error": str(e)},
+                )
 
             self._last_order_poll_ts = now2
 
