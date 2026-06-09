@@ -189,3 +189,62 @@ async def test_create_order_sends_all_fields_as_query_params_not_body() -> None:
     assert json_body is None, (
         f"`POST /alpaca/orders` accepts only query params; the client must send no JSON body. Got json={json_body}."
     )
+
+
+@pytest.mark.asyncio
+async def test_get_option_quote_extracts_contract_bid_ask() -> None:
+    """`get_option_quote` parses the underlying from the OCC symbol, fetches the
+    chain, and returns the matching contract's bid/ask/last (RCA 2026-06-08:
+    used to price an options close at the live market, not a stale tracked mark)."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+    client.get_option_chain = AsyncMock(
+        return_value={
+            "underlying": "MU",
+            "contracts": [
+                {"contract_symbol": "MU260612P00780000", "bid": "1.0", "ask": "1.2"},
+                {"contract_symbol": "MU260612P00790000", "bid": "6.4", "ask": "6.6", "last": "6.45"},
+            ],
+        }
+    )
+
+    q = await client.get_option_quote("MU260612P00790000")
+
+    assert q == {"bid": 6.4, "ask": 6.6, "last": 6.45, "timestamp": None}
+    client.get_option_chain.assert_awaited_once_with("MU")
+
+
+@pytest.mark.asyncio
+async def test_get_option_quote_missing_contract_returns_empty() -> None:
+    """A contract not present in the chain → empty dict (caller falls back)."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+    client.get_option_chain = AsyncMock(return_value={"underlying": "MU", "contracts": []})
+    assert await client.get_option_quote("MU260612P00790000") == {}
+
+
+@pytest.mark.asyncio
+async def test_get_option_quote_bad_symbol_returns_empty() -> None:
+    """An un-parseable (non-OCC) symbol → empty dict, no chain fetch."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+    client.get_option_chain = AsyncMock(return_value={})
+    assert await client.get_option_quote("AAPL") == {}
+    client.get_option_chain.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_option_quote_caches_chain_per_underlying() -> None:
+    """A second lookup on the same underlying within the TTL reuses the cached
+    chain (one fetch), so a close retry loop doesn't refetch the multi-MB chain."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+    client.get_option_chain = AsyncMock(
+        return_value={
+            "underlying": "MU",
+            "contracts": [
+                {"contract_symbol": "MU260612P00790000", "bid": "6.4", "ask": "6.6"},
+                {"contract_symbol": "MU260612C00800000", "bid": "2.1", "ask": "2.3"},
+            ],
+        }
+    )
+    a = await client.get_option_quote("MU260612P00790000")
+    b = await client.get_option_quote("MU260612C00800000")
+    assert a["bid"] == 6.4 and b["bid"] == 2.1
+    client.get_option_chain.assert_awaited_once()  # one fetch served both

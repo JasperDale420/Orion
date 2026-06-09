@@ -410,3 +410,70 @@ async def test_equity_close_immediate_still_uses_market(monkeypatch: pytest.Monk
     assert closed is True
     client.close_position.assert_called_once_with("AAPL", qty=10.0)
     client.create_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_options_close_prices_off_fresh_bid_not_stale_mark(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RCA 2026-06-08: the options close must price off a FRESH chain quote (the
+    live bid for a SELL-to-close), NOT a stale tracked mark. A stale mark (21.0
+    for a contract worth ~6.45) produced an off-market resting order that
+    reserved the long for ~30 min and got every new close rejected 40310000.
+    With a fresh bid of 6.40, the limit is 6.40 even though current_price=21.0."""
+    _patch_persist(monkeypatch)
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    client = _make_client(broker_qty="2", avg_entry="5.0", limit_result={"id": "o", "status": "accepted"})
+    client.get_option_quote = AsyncMock(return_value={"bid": 6.40, "ask": 6.60, "last": 6.45})
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="MU260612P00790000",
+        qty=2.0,
+        exit_signal=_exit_signal(),
+        direction="LONG",
+        current_price=21.0,  # deliberately stale — must be ignored in favour of the fresh bid
+    )
+
+    assert closed is True
+    limit = client.create_order.call_args[1]["limit_price"]
+    assert limit == pytest.approx(6.40), f"expected marketable fresh bid 6.40, got {limit} (stale-mark bug?)"
+
+
+@pytest.mark.asyncio
+async def test_options_close_falls_back_to_mark_without_fresh_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No fresh chain quote (empty / biddless) → fall back to the tracked-mark
+    pricing (mark*0.925 for a sell). Preserves behaviour when the chain is down."""
+    _patch_persist(monkeypatch)
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    client = _make_client(broker_qty="2", avg_entry="5.0", limit_result={"id": "o", "status": "accepted"})
+    client.get_option_quote = AsyncMock(return_value={})
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="MU260612P00790000", qty=2.0, exit_signal=_exit_signal(), direction="LONG", current_price=2.0
+    )
+
+    assert closed is True
+    limit = client.create_order.call_args[1]["limit_price"]
+    assert 1.7 <= limit <= 2.0, f"expected mark*0.925 fallback ~1.85, got {limit}"
+
+
+@pytest.mark.asyncio
+async def test_options_short_cover_prices_off_fresh_ask(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SHORT cover (broker qty<0 → BUY-to-cover) lifts the live ask, ceil-rounded."""
+    _patch_persist(monkeypatch)
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    client = _make_client(broker_qty="-5", avg_entry="5.0", limit_result={"id": "o", "status": "accepted"})
+    client.get_option_quote = AsyncMock(return_value={"bid": 4.00, "ask": 4.20})
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="SPY260522P00450000", qty=-5.0, exit_signal=_exit_signal(), direction="SHORT", current_price=4.0
+    )
+
+    assert closed is True
+    kwargs = client.create_order.call_args[1]
+    assert kwargs["side"] == "buy"
+    assert kwargs["limit_price"] == pytest.approx(4.20)

@@ -41,6 +41,11 @@ class GatewayTradingClient:
         self.api_key = api_key or system_settings.data_gateway_api_key or ""
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        # Short-TTL cache of option chains keyed by underlying, so a burst of
+        # close attempts (multiple contracts on the same name, or a retry loop)
+        # doesn't refetch the multi-MB chain each time.
+        self._chain_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._chain_cache_ttl_s = 5.0
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -229,6 +234,57 @@ class GatewayTradingClient:
             f"/api/v1/alpaca/options/chain/{underlying}",
             params={"limit": limit},
         )
+
+    async def get_option_quote(self, option_symbol: str) -> dict[str, Any]:
+        """Return a fresh ``{bid, ask, last, timestamp}`` for a single OCC option
+        contract, sourced from its underlying's live chain.
+
+        The Gateway exposes no single-contract option-quote endpoint, so this
+        fetches the underlying chain (short-TTL cached) and locates the contract
+        by ``contract_symbol``. Returns ``{}`` if the symbol can't be parsed, the
+        chain is unavailable, or the contract isn't found — the caller must treat
+        an empty/biddless result as "no fresh quote" and fall back. Used to price
+        an options close at the live market instead of a possibly-stale tracked
+        mark.
+        """
+        import time
+
+        from orion.shared.utils import parse_occ_symbol
+
+        parsed = parse_occ_symbol(option_symbol)
+        underlying = parsed.get("underlying")
+        if not underlying or not isinstance(underlying, str):
+            return {}
+
+        cached = self._chain_cache.get(underlying)
+        now = time.monotonic()
+        if cached is not None and (now - cached[0]) < self._chain_cache_ttl_s:
+            contracts = cached[1]
+        else:
+            chain = await self.get_option_chain(underlying)
+            if not isinstance(chain, dict) or "error" in chain:
+                return {}
+            contracts = chain.get("contracts") or []
+            if not isinstance(contracts, list):
+                return {}
+            self._chain_cache[underlying] = (now, contracts)
+
+        for c in contracts:
+            if isinstance(c, dict) and c.get("contract_symbol") == option_symbol:
+
+                def _f(v: Any) -> float | None:
+                    try:
+                        return float(v) if v is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                return {
+                    "bid": _f(c.get("bid")),
+                    "ask": _f(c.get("ask")),
+                    "last": _f(c.get("last")),
+                    "timestamp": c.get("timestamp"),
+                }
+        return {}
 
     # ── Clock ────────────────────────────────────────────────
 

@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 from collections import deque
 from datetime import UTC, datetime
@@ -1361,13 +1362,23 @@ class ExecutionEngine:
                 )
                 return False
 
-            # No mark → can't price an attributed limit; escalate to native.
-            if current_price is None or current_price <= 0:
-                return await self._native_close_escalation(
-                    client, ticker, abs_qty, close_side, exit_signal, "no mark for limit"
-                )
+            # Price the close at the LIVE market from a fresh chain quote, not
+            # the tracked mark. RCA 2026-06-08 (MU260612P00790000): the tracked
+            # mark was 21.0 for a contract actually worth ~6.45, so the close
+            # limit (mark*0.925 = 19.4) rested far off-market, reserved the long
+            # for ~30 min, and every new full-size close into that window was
+            # priced by Alpaca as OPENING a short → 40310000. A marketable limit
+            # off the live bid/ask fills immediately and never rests.
+            limit_price = await self._fresh_close_limit(client, ticker, held_short)
 
-            limit_price = self._compute_close_limit(current_price, held_short)
+            # Fall back to the tracked mark only if no fresh quote is available.
+            if limit_price is None or limit_price <= 0:
+                if current_price is None or current_price <= 0:
+                    return await self._native_close_escalation(
+                        client, ticker, abs_qty, close_side, exit_signal, "no fresh quote or mark for limit"
+                    )
+                limit_price = self._compute_close_limit(current_price, held_short)
+
             if limit_price <= 0:
                 return await self._native_close_escalation(
                     client,
@@ -1590,6 +1601,45 @@ class ExecutionEngine:
                 extra={"event_type": "EXIT_CANCEL_RESTING", "ticker": ticker, "order_id": str(order_id)},
             )
         return safe
+
+    async def _fresh_close_limit(self, client: Any, ticker: str, held_short: bool) -> float | None:
+        """Marketable options close limit from a FRESH chain quote, or ``None``
+        if no usable quote is available (the caller then falls back to the
+        tracked mark).
+
+        SELL-to-close hits the live bid; BUY-to-cover lifts the live ask — both
+        immediately marketable, so the close fills instead of resting off-market
+        (RCA 2026-06-08: a stale tracked mark priced the close 3× off, the order
+        rested and reserved the position for 30 min, and new closes into that
+        window were rejected as opening a cash-secured short). The price is
+        rounded in the MARKETABLE direction (floor a sell to the tick so it stays
+        ≤ bid; ceil a buy so it stays ≥ ask) — ``round_to_options_tick`` rounds
+        to nearest, which could nudge a sell above the bid and re-create a
+        resting order. Returns ``None`` on any quote problem (no method, error,
+        biddless/askless contract) so the mark-based fallback still runs.
+        """
+        getq = getattr(client, "get_option_quote", None)
+        if getq is None:
+            return None
+        try:
+            quote = await getq(ticker)
+        except Exception as e:
+            logger.warning(
+                f"Fresh option quote fetch failed for {ticker}: {e}",
+                extra={"event_type": "CLOSE_QUOTE_FETCH_ERROR", "ticker": ticker},
+            )
+            return None
+        if not isinstance(quote, dict):
+            return None
+        # Cross into the side we need: bid for a SELL-to-close, ask for a
+        # BUY-to-cover. A missing/zero touch on that side → no usable quote.
+        touch = quote.get("ask") if held_short else quote.get("bid")
+        if not isinstance(touch, (int, float)) or isinstance(touch, bool) or touch <= 0:
+            return None
+        touch = float(touch)
+        tick = 0.10 if touch >= 3.0 else 0.05
+        limit = math.ceil(touch / tick) * tick if held_short else math.floor(touch / tick) * tick
+        return round(limit, 2)
 
     def _compute_close_limit(self, mark: float, held_short: bool) -> float:
         """Marketable close limit: cross the spread by ~7.5% so the order
