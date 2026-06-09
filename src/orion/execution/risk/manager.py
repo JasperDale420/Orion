@@ -407,25 +407,6 @@ class RiskManager:
         """Drop the stashed intended greeks for `ticker` (e.g. on submit failure)."""
         self._intended_position_greeks.pop(ticker, None)
 
-    async def reconcile_position_flat(self, ticker: str) -> None:
-        """Force a tracked position to flat when the broker confirms it does not
-        exist (B1 RCA): a phantom left by a non-attributed close or a stale
-        Gateway position read. Keeps in-memory risk state — position count,
-        per-ticker exposure, greeks — consistent with broker truth so sizing and
-        the greek gate on the next order aren't computed against exposure we
-        don't actually hold. Persists the corrected state.
-        """
-        self.positions[ticker] = {"qty": 0.0, "avg_entry": 0.0}
-        self.ticker_exposures[ticker] = 0.0
-        self.open_positions = sum(1 for p in self.positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
-        self.clear_position_greeks(ticker)
-        self._intended_position_greeks.pop(ticker, None)
-        logger.warning(
-            f"Reconciled {ticker} to flat (broker holds no such position)",
-            extra={"event_type": "POSITION_RECONCILED_FLAT", "ticker": ticker},
-        )
-        await self._save_state()
-
     # ── Delegated methods (Sector) ───────────────────────────────────────
 
     def check_sector_exposure(

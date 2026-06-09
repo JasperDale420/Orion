@@ -128,6 +128,15 @@ class GatewayStreamClient:
                 self.ws_url,
                 ping_interval=30,  # Match Data Gateway's uvicorn --ws-ping-interval
                 ping_timeout=90,  # Match Data Gateway's uvicorn --ws-ping-timeout
+                # The Gateway serializes websocket.accept() behind a shared
+                # asyncio.Lock on a single-worker event loop that is also
+                # serving the REST trading proxy + broadcast fan-out, so the
+                # handshake can exceed the websockets default 10s open_timeout
+                # under market-open load (TimeoutError: timed out during opening
+                # handshake, seen 2026-06-05/07). 30s tolerates the slow accept;
+                # the real fix is Gateway-side (accept before lock + uvicorn
+                # concurrency limits).
+                open_timeout=30,
             )
 
             # Send authentication
