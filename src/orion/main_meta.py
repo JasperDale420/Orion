@@ -10,10 +10,6 @@ from orion.shared.logger import setup_struct_logger
 # Setup Logger
 logger = setup_struct_logger("orion.meta")
 
-# Run daily 2 hours after market close (6 PM ET = 22:00 UTC on regular days)
-SCHEDULED_HOUR_UTC = 22
-SCHEDULED_MINUTE = 0
-
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Orion Meta-Search Agent CLI")

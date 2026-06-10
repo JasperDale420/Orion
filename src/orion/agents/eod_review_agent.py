@@ -96,8 +96,13 @@ class EODReviewAgent:
         # Search for recent similar performance issues or strategy docs
         rag_context = await self._fetch_rag_context("performance drift strategy issues")
 
+        # 2b. Resolve the real, valid solver ids the LLM may target. The prompt
+        # must never hardcode an id (e.g. 'paper_v1') that isn't seeded, or the
+        # derived-solver insert FK-violates and aborts the run.
+        valid_solver_ids = await self._fetch_valid_solver_ids()
+
         # 3. LLM Analysis & Proposal Generation
-        analysis_json = await self._generate_analysis(data, rag_context)
+        analysis_json = await self._generate_analysis(data, rag_context, valid_solver_ids)
 
         # 4. Save Artifacts
         # Save Markdown Report
@@ -141,55 +146,104 @@ class EODReviewAgent:
             "solver_edit_proposals": [p for p in proposals if p.get("type") == "solver_edit"],
         }
 
+    async def _fetch_valid_solver_ids(self) -> list[str]:
+        """Return the solver ids the LLM may legally target as parent/base.
+
+        A proposal's target_solver_id becomes the parent_solver_id of an
+        auto-derived solver, which is FK-constrained to ``solvers.solver_id``.
+        Surfacing the real list to the prompt (and validating against it before
+        insert) prevents the FK violation that aborts the run.
+        """
+
+        async def query(session: Any) -> list[str]:
+            result = await session.execute(select(Solver.solver_id, Solver.stage))
+            rows = result.all()
+            # Prefer non-research solvers (paper/live/shadow) as edit targets, but
+            # return all ids so validation never rejects a real solver.
+            return [str(r[0]) for r in rows]
+
+        try:
+            return await db_query(query)
+        except Exception:
+            logger.warning("eod_valid_solver_fetch_failed", exc_info=True)
+            return []
+
     async def _persist_solver_edits(self, proposals: list[dict[str, Any]], run_id: str) -> None:
         if not proposals:
             return
 
-        async def save_edits(session: Any) -> None:
-            for p in proposals:
-                if p.get("type") != "solver_edit":
-                    continue
+        for p in proposals:
+            if p.get("type") != "solver_edit":
+                continue
 
-                base_id = p.get("target_solver_id")
-                ops_data = p.get("ops", [])
-                if not base_id or not isinstance(ops_data, list) or not ops_data:
-                    continue
+            base_id = p.get("target_solver_id")
+            ops_data = p.get("ops", [])
+            if not base_id or not isinstance(ops_data, list) or not ops_data:
+                continue
 
-                new_solver_id = deterministic_solver_id(
-                    base_solver_id=str(base_id),
-                    edit_ops={"ops": ops_data},
-                    prefix="eod",
+            try:
+                await self._persist_one_solver_edit(str(base_id), ops_data, run_id)
+            except Exception as e:
+                # Isolate failures so one bad proposal cannot abort the whole run
+                # (report + remaining YAML artifacts must still be saved).
+                logger.error(
+                    "eod_proposal_persist_failed",
+                    target_solver_id=str(base_id),
+                    run_id=run_id,
+                    error=str(e),
+                    exc_info=True,
                 )
 
-                # Check if solver already exists
-                existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
-                if existing.scalars().first() is None:
-                    # Create solver stub in research stage
-                    session.add(
-                        Solver(
-                            solver_id=new_solver_id,
-                            family_name="eod_derived",
-                            parent_solver_id=str(base_id),
-                            created_by="llm_eod_agent",
-                            stage="research",
-                            config={"derived_from": str(base_id), "ops": ops_data},
-                            notes=f"Auto-generated from EOD review run {run_id}",
-                        )
-                    )
+    async def _persist_one_solver_edit(self, base_id: str, ops_data: list[Any], run_id: str) -> None:
+        new_solver_id = deterministic_solver_id(
+            base_solver_id=base_id,
+            edit_ops={"ops": ops_data},
+            prefix="eod",
+        )
 
+        async def save_edit(session: Any) -> None:
+            # Validate the parent/target solver exists before inserting a
+            # derived solver (whose parent_solver_id is FK-constrained). An
+            # invalid id (e.g. a hallucinated 'paper_v1') is skipped, not raised.
+            parent_exists = (
+                await session.execute(select(Solver.solver_id).where(Solver.solver_id == base_id))
+            ).scalars().first() is not None
+            if not parent_exists:
+                logger.warning(
+                    "eod_proposal_invalid_solver",
+                    target_solver_id=base_id,
+                    run_id=run_id,
+                )
+                return
+
+            existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
+            if existing.scalars().first() is None:
+                # Create solver stub in research stage
                 session.add(
-                    SolverEdits(
-                        id=str(uuid.uuid4()),
-                        experiment_id=None,
-                        base_solver_id=str(base_id),
-                        new_solver_id=new_solver_id,
-                        edit_json={"ops": ops_data, "run_id": run_id},
-                        generated_by="llm_eod_agent",
-                        reward=None,
+                    Solver(
+                        solver_id=new_solver_id,
+                        family_name="eod_derived",
+                        parent_solver_id=base_id,
+                        created_by="llm_eod_agent",
+                        stage="research",
+                        config={"derived_from": base_id, "ops": ops_data},
+                        notes=f"Auto-generated from EOD review run {run_id}",
                     )
                 )
 
-        await db_write(save_edits)
+            session.add(
+                SolverEdits(
+                    id=str(uuid.uuid4()),
+                    experiment_id=None,
+                    base_solver_id=base_id,
+                    new_solver_id=new_solver_id,
+                    edit_json={"ops": ops_data, "run_id": run_id},
+                    generated_by="llm_eod_agent",
+                    reward=None,
+                )
+            )
+
+        await db_write(save_edit)
 
     def _day_bounds_utc(self, date: datetime.date) -> tuple[datetime, datetime]:
         start_ts = datetime.combine(date, datetime.min.time()).replace(tzinfo=UTC)
@@ -812,7 +866,10 @@ class EODReviewAgent:
             logger.debug(f"TradingRAG context fetch failed (non-fatal): {e}")
             return ""
 
-    async def _generate_analysis(self, data: dict[str, Any], rag_context: str) -> dict[str, Any]:
+    async def _generate_analysis(
+        self, data: dict[str, Any], rag_context: str, valid_solver_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        valid_solver_ids = valid_solver_ids or []
         system_prompt = """You are the Orion EOD Review Agent - analyzing today's trading performance.
 ## Your Capabilities
 - You have access to codebase tools: `read_file`, `write_file`, and `run_command`.
@@ -851,7 +908,7 @@ Analyze today's performance and identify:
       "rationale": "Brief reason with data reference",
       "evidence_pointers": {"ml_insight": "AUC=0.85 for iv_rank feature", "drift_psi": 0.02},
       "test_plan": ["Backtest with 30-day window", "Verify win_rate improvement"],
-      "target_solver_id": "paper_v1",
+      "target_solver_id": "<MUST be one of the valid solver ids listed below>",
       "ops": [
         {"op": "modify_param", "param_name": "exit_logic.take_profit_atr_multiple", "new_value": 2.5, "reasoning": "..."},
         {"op": "add_rule", "new_value": "rule_iv_rank_v1", "reasoning": "ML shows IV rank is predictive"},
@@ -881,7 +938,7 @@ Analyze today's performance and identify:
 - When a pattern works well for specific bucket (e.g., 0DTE) but current solver doesn't exploit it
 - When win rate could improve with tighter/looser exit logic based on today's data
 - Edits start in 'research' stage - they gather data but don't trade live until promoted
-- Use target_solver_id='paper_v1' to mutate the active paper solver
+- target_solver_id MUST be one of the valid solver ids listed below — do NOT invent ids
 
 ## Rules
 - Ground ALL proposals in data from the input - no speculation
@@ -890,6 +947,19 @@ Analyze today's performance and identify:
 - If nothing actionable, say so clearly
 - REQUIRED fields for all proposals: type, rationale, evidence_pointers (dict), test_plan (list)
 - For solver_edit: also need target_solver_id, ops (list)"""
+
+        if valid_solver_ids:
+            valid_ids_block = ", ".join(valid_solver_ids)
+            system_prompt += (
+                "\n\n## Valid solver ids (for target_solver_id)\n"
+                f"target_solver_id MUST be EXACTLY one of: {valid_ids_block}.\n"
+                "Any other value (including 'paper_v1') is invalid and the proposal will be discarded."
+            )
+        else:
+            system_prompt += (
+                "\n\n## Valid solver ids (for target_solver_id)\n"
+                "No solvers are currently available — do NOT emit any solver_edit proposals."
+            )
 
         user_prompt = f"## Today's Snapshot\n```json\n{json.dumps(data, indent=2, default=str)}\n```\n\n{rag_context}"
 
