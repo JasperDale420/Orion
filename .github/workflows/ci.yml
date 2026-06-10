@@ -22,6 +22,23 @@ jobs:
         python-version: ${{ matrix.python-version }}
         enable-cache: true
 
+    - name: Check out empire-core (monorepo path dependency)
+      # Orion's pyproject pins empire-core as an editable path dep at
+      # ../empire-core (a sibling in the local monorepo). In CI only Orion is
+      # checked out, so `uv sync` fails with "Distribution not found at
+      # .../empire-core" unless we materialise empire-core at the sibling path.
+      # empire-core is private, so the default github.token cannot read it
+      # across repos — reuse DATA_GATEWAY_CHECKOUT_TOKEN (it must also have
+      # "Contents: read" on JasperDale420/empire-core). actions/checkout cannot
+      # target a path outside $GITHUB_WORKSPACE, so clone manually into the
+      # parent directory, which is exactly where ../empire-core resolves.
+      env:
+        EMPIRE_CORE_TOKEN: ${{ secrets.DATA_GATEWAY_CHECKOUT_TOKEN }}
+      run: |
+        git clone --depth 1 \
+          "https://x-access-token:${EMPIRE_CORE_TOKEN}@github.com/JasperDale420/empire-core.git" \
+          "${GITHUB_WORKSPACE}/../empire-core"
+
     - name: Install dependencies
       run: |
         uv sync --dev
