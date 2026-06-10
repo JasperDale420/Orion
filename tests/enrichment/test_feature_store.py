@@ -182,7 +182,7 @@ class TestGetScoringFeatures:
     def _mock_reader(self, alert_df: pd.DataFrame | None = None, equity_dfs: dict | None = None):
         reader = MagicMock()
 
-        def read_gold(dataset: str, asof_time=None, symbols=None):
+        def read_gold(dataset: str, asof_time=None, symbols=None, lookback_days=None):
             if dataset == "meta_label_features":
                 return alert_df if alert_df is not None else pd.DataFrame()
             if equity_dfs and dataset in equity_dfs:
@@ -343,7 +343,7 @@ class TestGetScoringFeatures:
         reader = MagicMock()
         call_log: list[tuple[str, list[str] | None]] = []
 
-        def read_gold(dataset: str, asof_time=None, symbols=None):
+        def read_gold(dataset: str, asof_time=None, symbols=None, lookback_days=None):
             call_log.append((dataset, symbols))
             if dataset == "meta_label_features":
                 return _make_alert_df()
