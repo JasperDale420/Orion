@@ -456,6 +456,37 @@ class GatewayStreamClient:
         self._receive_task = asyncio.create_task(self._receive_loop())
         logger.info("Gateway stream client started")
 
+    async def restart(self) -> bool:
+        """Re-establish a dead connection after reconnect exhaustion.
+
+        ``_receive_loop`` sets ``_running=False`` once it exhausts
+        MAX_RECONNECT_ATTEMPTS, leaving the client permanently silent. This
+        resets that state and attempts a single fresh connect (with the normal
+        backoff budget), restarting the receive loop on success so the
+        ingestion service can recover bar streaming without a process restart.
+        Returns True if the connection and receive loop were re-established.
+        """
+        # Tear down any half-open state from the previous run.
+        if self._receive_task and not self._receive_task.done():
+            self._receive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._receive_task
+        self._receive_task = None
+        await self._cleanup_failed_connection()
+
+        self._running = True
+        # _reconnect_with_backoff already resubscribes _subscribed_symbols on a
+        # successful connect — do not resubscribe again here (a second
+        # _send_subscribe would double-subscribe if Gateway isn't idempotent,
+        # duplicating stream events and downstream pipeline writes).
+        if not await self._reconnect_with_backoff():
+            self._running = False
+            return False
+
+        self._receive_task = asyncio.create_task(self._receive_loop())
+        logger.info("Gateway stream client restarted")
+        return True
+
     async def stop(self) -> None:
         """Stop the WebSocket client."""
         if not self._running:

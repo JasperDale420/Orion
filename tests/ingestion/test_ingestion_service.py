@@ -491,7 +491,11 @@ class TestStop:
             mock_factory.return_value = MagicMock()
             from orion.ingestion.service import IngestionService
 
-            return IngestionService()
+            svc = IngestionService()
+            # stop() awaits feature_engine.drain(); the patched FeatureEngine
+            # is a plain MagicMock, so make drain awaitable.
+            svc.feature_engine.drain = AsyncMock()
+            return svc
 
     @pytest.mark.unit
     @pytest.mark.asyncio
@@ -784,7 +788,8 @@ class TestHeberFlowPoll:
         assert result is None
 
     @pytest.mark.unit
-    def test_poll_returns_empty_on_empty_dataframe(self):
+    @pytest.mark.asyncio
+    async def test_poll_returns_empty_on_empty_dataframe(self):
         import pandas as pd
 
         svc = self._make_service()
@@ -792,12 +797,13 @@ class TestHeberFlowPoll:
         mock_reader.read_flow.return_value = pd.DataFrame()
 
         with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
-            events = svc._poll_heber_flow("trace123")
+            events = await svc._poll_heber_flow("trace123")
 
         assert events == []
 
     @pytest.mark.unit
-    def test_poll_advances_timestamp_on_success(self):
+    @pytest.mark.asyncio
+    async def test_poll_advances_timestamp_on_success(self):
         import pandas as pd
 
         svc = self._make_service()
@@ -818,13 +824,14 @@ class TestHeberFlowPoll:
         )
 
         with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
-            events = svc._poll_heber_flow("trace123")
+            events = await svc._poll_heber_flow("trace123")
 
         assert len(events) == 1
         assert svc._last_flow_poll_ts > original_ts
 
     @pytest.mark.unit
-    def test_poll_drops_events_older_than_max_data_lag(self):
+    @pytest.mark.asyncio
+    async def test_poll_drops_events_older_than_max_data_lag(self):
         """Flow alerts born past the max_data_lag budget are dropped at ingest.
 
         A candidate created from a >max_data_lag_seconds event is guaranteed
@@ -859,12 +866,13 @@ class TestHeberFlowPoll:
         )
 
         with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
-            events = svc._poll_heber_flow("trace123")
+            events = await svc._poll_heber_flow("trace123")
 
         assert [e.event_id for e in events] == ["fresh"]
 
     @pytest.mark.unit
-    def test_poll_drops_all_stale_returns_empty_but_advances_cursor(self):
+    @pytest.mark.asyncio
+    async def test_poll_drops_all_stale_returns_empty_but_advances_cursor(self):
         """An all-stale poll (e.g. startup catch-up burst) yields zero events
         but still advances the poll cursor so the burst isn't re-read."""
         import pandas as pd
@@ -890,19 +898,20 @@ class TestHeberFlowPoll:
         )
 
         with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
-            events = svc._poll_heber_flow("trace123")
+            events = await svc._poll_heber_flow("trace123")
 
         assert events == []
         assert svc._last_flow_poll_ts > original_ts
 
     @pytest.mark.unit
-    def test_poll_returns_empty_on_exception(self):
+    @pytest.mark.asyncio
+    async def test_poll_returns_empty_on_exception(self):
         svc = self._make_service()
         mock_reader = MagicMock()
         mock_reader.read_flow.side_effect = RuntimeError("parquet broken")
 
         with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
-            events = svc._poll_heber_flow("trace123")
+            events = await svc._poll_heber_flow("trace123")
 
         assert events == []
 

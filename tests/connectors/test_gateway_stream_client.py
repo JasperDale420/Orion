@@ -120,3 +120,60 @@ def test_bar_message_detection_handles_gateway_shape() -> None:
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_restart_resets_running_and_reconnects(monkeypatch) -> None:
+    """After reconnect exhaustion leaves the client dead, restart() revives it."""
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+    # Simulate the post-exhaustion state: stopped, no receive task.
+    client._running = False
+    client._receive_task = None
+    client._subscribed_symbols = {"AAPL"}
+
+    sent: list[list[str]] = []
+
+    async def fake_send_subscribe(symbols: list[str]) -> bool:
+        sent.append(list(symbols))
+        return True
+
+    async def fake_reconnect() -> bool:
+        # The real _reconnect_with_backoff resubscribes stored symbols on a
+        # successful connect; mirror that so the test exercises the single
+        # subscribe path (restart() must NOT resubscribe a second time).
+        if client._subscribed_symbols:
+            await client._send_subscribe(list(client._subscribed_symbols))
+        return True
+
+    async def fake_receive_loop() -> None:
+        return None
+
+    monkeypatch.setattr(client, "_reconnect_with_backoff", fake_reconnect)
+    monkeypatch.setattr(client, "_send_subscribe", fake_send_subscribe)
+    monkeypatch.setattr(client, "_receive_loop", fake_receive_loop)
+
+    result = await client.restart()
+
+    assert result is True
+    assert client.is_running is True
+    # Subscribed exactly once — no double-subscribe from restart().
+    assert sent == [["AAPL"]]
+    assert client._receive_task is not None
+    # Cleanup the spawned task.
+    await client.stop()
+
+
+@pytest.mark.asyncio
+async def test_restart_returns_false_when_reconnect_fails(monkeypatch) -> None:
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+    client._running = False
+
+    async def fake_reconnect() -> bool:
+        return False
+
+    monkeypatch.setattr(client, "_reconnect_with_backoff", fake_reconnect)
+
+    result = await client.restart()
+
+    assert result is False
+    assert client.is_running is False

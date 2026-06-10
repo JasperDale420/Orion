@@ -135,6 +135,10 @@ class SystemSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("DATA_GATEWAY_API_KEY", "GATEWAY_API_KEY"),
     )
+    discord_webhook_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ORION_DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK_URL"),
+    )
     heber_catalog_url: str = Field(
         default="http://localhost:8085/api/v1",
         validation_alias="HEBER_CATALOG_URL",
@@ -310,12 +314,35 @@ class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")
 
 
+def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSettings") -> list[str]:
+    """Log a WARNING when known default dev credentials are still active.
+
+    Returns the list of field names found using a default dev credential so
+    callers/tests can assert on it. Silent (no warning) when none are active.
+    """
+    from orion.shared.logger import setup_struct_logger
+
+    flagged: list[str] = []
+    if system.data_gateway_api_key == "gw_orion_trading_key_55555":  # pragma: allowlist secret
+        flagged.append("data_gateway_api_key")
+    if agent.ai_gateway_key == "empire-ai-gateway-key":  # pragma: allowlist secret
+        flagged.append("ai_gateway_key")
+
+    if flagged:
+        log = setup_struct_logger("orion.config")
+        for field in flagged:
+            log.warning("default_dev_credential_in_use", field=field)
+    return flagged
+
+
 # Singleton Instances
 risk_settings = RiskSettings()
 system_settings = SystemSettings()
 meta_settings = MetaSearchSettings()
 agent_settings = AgentSettings()
 heuristic_weights = HeuristicWeights()
+
+warn_on_default_dev_credentials(system_settings, agent_settings)
 
 # Exports for compatibility
 STATIC_WATCHLIST = system_settings.static_watchlist

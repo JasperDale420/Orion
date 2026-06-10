@@ -26,6 +26,7 @@ from orion.processing.persistence import (
     persist_silver_signals,
 )
 from orion.processing.rule_engine import RuleEngine
+from orion.shared.alerts import send_discord_alert
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import make_json_safe
@@ -36,6 +37,12 @@ from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
 
 logger = setup_struct_logger("orion.ingest")
+
+# Cycle-latency thresholds. A cycle that runs long means the event loop is
+# blocked (sync Heber read, slow DB) and bars/flow are not being drained —
+# surface it before it becomes a silent stall.
+CYCLE_LATENCY_WARN_SECONDS = 15.0
+CYCLE_LATENCY_ERROR_SECONDS = 45.0
 
 
 class IngestionService:
@@ -68,6 +75,13 @@ class IngestionService:
         self._last_universe_rehydrate_ts: datetime = datetime.now(UTC)
         self._eod_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
+
+        # Gateway WS degrade-mode state. `_ws_ever_connected` guards against
+        # tripping DEGRADED during the *initial* connection backoff — we only
+        # degrade after a connection was established at least once and then
+        # lost. `_ws_degraded` is exposed via `is_degraded` for health/tests.
+        self._ws_ever_connected: bool = False
+        self._ws_degraded: bool = False
 
         # Single-instance lease (see orion.core.service_lease). Set in
         # `initialize()` after a successful `acquire_service_lease` call;
@@ -127,6 +141,10 @@ class IngestionService:
         # Start Gateway WebSocket stream and subscribe to initial tickers
         try:
             await self.gateway_stream.start()
+            # Record that a WS connection was successfully established at least
+            # once; degrade-mode detection keys off this so initial-connection
+            # backoff is never mistaken for a degraded (post-connect) outage.
+            self._ws_ever_connected = True
             initial_tickers = list(system_settings.static_watchlist)
             await self.gateway_stream.subscribe(initial_tickers)
             logger.info(
@@ -161,6 +179,7 @@ class IngestionService:
             start_time = asyncio.get_running_loop().time()
             try:
                 await self._run_cycle()
+                self._log_cycle_latency(asyncio.get_running_loop().time() - start_time)
             except BaseException as e:
                 # Catch BaseException (not just Exception) so SystemExit /
                 # CancelledError from a misbehaving background task can't
@@ -210,6 +229,9 @@ class IngestionService:
         if self.gateway_stream and self.gateway_stream.is_running:
             await self.gateway_stream.stop()
             logger.info("Gateway stream client stopped")
+        # Flush any in-flight background feature persistence before exit so
+        # tracked tasks aren't cancelled mid-write on shutdown.
+        await self.feature_engine.drain()
         logger.info("Ingestion Service Stopped.")
 
     async def _maybe_renew_lease(self) -> None:
@@ -235,6 +257,11 @@ class IngestionService:
         # so any recovered tickers get subscribed in the same cycle.
         await self._maybe_rehydrate_universe()
 
+        # Detect/recover a dead Gateway WS stream BEFORE syncing subscriptions
+        # or draining events. Degrades (alerts + attempts reconnect) rather than
+        # exiting, so the Heber flow-poll path below keeps running regardless.
+        await self._check_gateway_stream_health()
+
         # Sync subscriptions: subscribe to any new tickers discovered by the universe
         await self._sync_gateway_subscriptions()
 
@@ -247,7 +274,7 @@ class IngestionService:
             self._tag_ingest_metadata(event, trace_id, "gateway_stream")
 
         # Poll Heber for new UW flow alerts
-        flow_events = self._poll_heber_flow(trace_id)
+        flow_events = await self._poll_heber_flow(trace_id)
         all_events.extend(flow_events)
 
         # Universe updates are deferred to _run_pipeline — only tickers
@@ -330,6 +357,80 @@ class IngestionService:
         except Exception as e:
             logger.error(f"Failed to sync Gateway subscriptions: {e}", exc_info=True)
 
+    def _log_cycle_latency(self, elapsed_seconds: float) -> None:
+        """Surface a slow ingestion cycle (blocked event loop) before it stalls."""
+        if elapsed_seconds >= CYCLE_LATENCY_ERROR_SECONDS:
+            logger.error(
+                "ingestion_cycle_slow",
+                extra={
+                    "event_type": "CYCLE_LATENCY_ERROR",
+                    "elapsed_seconds": round(elapsed_seconds, 2),
+                    "threshold_seconds": CYCLE_LATENCY_ERROR_SECONDS,
+                },
+            )
+        elif elapsed_seconds >= CYCLE_LATENCY_WARN_SECONDS:
+            logger.warning(
+                "ingestion_cycle_slow",
+                extra={
+                    "event_type": "CYCLE_LATENCY_WARN",
+                    "elapsed_seconds": round(elapsed_seconds, 2),
+                    "threshold_seconds": CYCLE_LATENCY_WARN_SECONDS,
+                },
+            )
+
+    @property
+    def is_degraded(self) -> bool:
+        """True when bar ingestion is down but the service keeps polling flow."""
+        return self._ws_degraded
+
+    async def _check_gateway_stream_health(self) -> None:
+        """Detect a dead Gateway WS stream and degrade instead of stalling.
+
+        After MAX_RECONNECT_ATTEMPTS the stream client sets ``is_running``
+        False and stops draining bars forever, while the ingestion loop happily
+        keeps heartbeating — a classic silent stall. Here we:
+          - enter DEGRADED on the first cycle the stream is found dead (only if
+            it had connected at least once), firing ONE Discord alert;
+          - log ERROR every degraded cycle so the outage stays visible;
+          - attempt a fresh reconnect every cycle via the client's restart();
+          - on recovery, fire a recovery alert and clear degraded state.
+        The Heber flow-poll path in `_run_cycle` continues either way.
+        """
+        # Never degrade during the initial connection backoff.
+        if not self._ws_ever_connected:
+            return
+
+        if self.gateway_stream.is_running:
+            return
+
+        if not self._ws_degraded:
+            self._ws_degraded = True
+            await send_discord_alert(
+                "Gateway WS bar ingestion is DOWN — reconnect attempts exhausted. "
+                "Heber flow polling continues; will keep retrying the WS each cycle.",
+                dedupe_key="gateway_ws_down",
+            )
+
+        logger.error(
+            "gateway_ws_degraded",
+            extra={"event_type": "GATEWAY_WS_DEGRADED", "ws_running": False},
+        )
+
+        # Attempt to re-establish the WS connection this cycle.
+        try:
+            recovered = await self.gateway_stream.restart()
+        except Exception as e:
+            logger.error(f"Gateway stream restart attempt failed: {e}", exc_info=True)
+            return
+
+        if recovered:
+            self._ws_degraded = False
+            await send_discord_alert(
+                "Gateway WS bar ingestion RECOVERED — stream reconnected.",
+                dedupe_key="gateway_ws_recovered",
+            )
+            logger.info("gateway_ws_recovered", extra={"event_type": "GATEWAY_WS_RECOVERED"})
+
     async def _check_overnight_sleep(self) -> None:
         from orion.core.market_schedule import MarketSchedule
 
@@ -371,12 +472,18 @@ class IngestionService:
             "flow_source": "heber_silver",
         }
 
-    def _poll_heber_flow(self, trace_id: str) -> list[BronzeEvent]:
-        """Poll Heber Silver for new UW flow alerts since last poll."""
+    async def _poll_heber_flow(self, trace_id: str) -> list[BronzeEvent]:
+        """Poll Heber Silver for new UW flow alerts since last poll.
+
+        The pyarrow read is a blocking call; running it inline on the event
+        loop stalls bar draining and heartbeats. Offload it to a worker thread
+        with `asyncio.to_thread` (matching the labeler/connectors pattern).
+        """
         try:
             reader = get_heber_reader()
             now = datetime.now(UTC)
-            df = reader.read_flow(
+            df = await asyncio.to_thread(
+                reader.read_flow,
                 symbols=None,
                 asof_time=now,
                 start_time=self._last_flow_poll_ts,
@@ -568,7 +675,16 @@ class IngestionService:
                     for c in candidates:
                         self.universe.add_ticker(c.ticker)
         except Exception as e:
+            # Mirror _persist_events: don't just log-and-drop the batch — route
+            # the failing events to the DLQ so the failure is recoverable and
+            # visible, then continue the cycle.
             logger.error(f"{label} Pipeline Error: {e}")
+            event_ids = [getattr(ev, "event_id", None) for ev in events]
+            await self._send_to_dlq(
+                e,
+                f"{label}_PIPELINE_ERROR",
+                payload={"event_ids": event_ids, "event_count": len(events)},
+            )
 
     def _check_eod_trigger(self) -> None:
         now_utc = datetime.now(UTC)

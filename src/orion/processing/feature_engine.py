@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
@@ -55,6 +56,12 @@ class FeatureEngine:
         self.flow_max_age_seconds = 900  # 15 minutes window
         self.flow_max_size_per_ticker = 500  # Max entries per ticker to prevent memory growth
         self._hydrated = False  # Track initialization state for cold-start detection
+
+        # Strong references to in-flight background persistence tasks. Without
+        # this set, `ensure_future` tasks can be garbage-collected before they
+        # run and their failures vanish silently. The done-callback logs
+        # exceptions and discards the task from the set.
+        self._persist_tasks: set[asyncio.Task[None]] = set()
 
     async def hydrate_history(self) -> None:
         """
@@ -595,15 +602,37 @@ class FeatureEngine:
 
         # PERSISTENCE
         try:
-            # Background persistence - use asyncio.shield to protect from cancellation
-            # and ensure task completes even if caller context is cancelled
-            import asyncio
-
-            asyncio.ensure_future(self.persist_features(ticker, ts, features, feature_set_id))
-        except Exception as e:
+            # Background persistence — tracked so the task is not GC'd before it
+            # runs and so failures are logged rather than silently swallowed.
+            task = asyncio.ensure_future(self.persist_features(ticker, ts, features, feature_set_id))
+            self._persist_tasks.add(task)
+            task.add_done_callback(self._on_persist_done)
+        except RuntimeError as e:
+            # No running event loop (e.g. called from a sync context) — log and
+            # skip rather than crashing the feature computation.
             logger.warning(f"Persistence scheduling failed: {e}")
 
         return features
+
+    def _on_persist_done(self, task: asyncio.Task[None]) -> None:
+        """Done-callback for background persistence tasks: log failures, discard."""
+        self._persist_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("feature_persist_failed", exc_info=exc)
+
+    async def drain(self) -> None:
+        """Await all outstanding background persistence tasks.
+
+        Call from the feature-enrichment shutdown path to flush pending writes.
+        Exceptions are already handled by the done-callback, so they are
+        gathered with ``return_exceptions=True`` here.
+        """
+        if not self._persist_tasks:
+            return
+        await asyncio.gather(*list(self._persist_tasks), return_exceptions=True)
 
     @staticmethod
     def _merge_filtered(
