@@ -38,32 +38,6 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  price_target_labeler:
-    <<: *orion-common
-    container_name: orion_price_target
-    profiles: [ "legacy-labels" ]
-    restart: on-failure
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    volumes:
-      - .:/app
-      - ../empire-core:/empire-core:ro
-      - ${HEBER_HOST_DATA:-/Users/jacobmcmillan/.heber-cache/data}:/Volumes/heber/data:ro
-    environment:
-      <<: *orion-env
-      DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      ORION_RUN_ID: docker_persistent
-      GATEWAY_URL: http://data-gateway:8080
-      ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
-      ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER: ${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}
-    command: [ "python", "-m", "orion.main_price_target_labeler" ]
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-
   ingestion:
     <<: *orion-common
     container_name: orion_ingestion
@@ -473,8 +447,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      price_target_labeler:
-        condition: service_started
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
@@ -497,8 +469,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      price_target_labeler:
-        condition: service_started
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db

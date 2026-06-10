@@ -10,7 +10,7 @@ Runs hourly to check for:
 6. ML Features population status
 
 Usage:
-    docker-compose run --rm price_target_labeler python -m orion.jobs.data_quality_checker
+    python -m orion.jobs.data_quality_checker
 """
 
 import asyncio
