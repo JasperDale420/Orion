@@ -171,6 +171,14 @@ async def persist_pending_order(
             await save_pending(session)
             await session.commit()
     except Exception as e:
+        # Re-raise after logging. This is the load-bearing half of the
+        # two-phase guarantee (RCA 2026-05-21): if the durable PENDING_SUBMIT
+        # row cannot be written, the caller MUST NOT proceed to the broker —
+        # otherwise we recreate the orphaned-order scenario this function
+        # exists to prevent. The caller (_submit_options_order) wraps this
+        # call and compensates (drops the pending reservation + intended
+        # greeks, marks the decision failed) on raise. @db_retry has already
+        # exhausted its attempts by the time we get here.
         logger.error(
             "Failed to persist pending order",
             extra={
@@ -179,6 +187,7 @@ async def persist_pending_order(
                 "error": str(e),
             },
         )
+        raise
 
 
 @db_retry

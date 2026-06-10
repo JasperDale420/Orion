@@ -987,14 +987,37 @@ class ExecutionEngine:
         # after `client.create_order()` returned and the docker_execution
         # container was crash-looping (380 restarts in 24h, lease-conflict).
         # The post-Gateway persist_order_finalize fills in broker_order_id + status.
-        await persist_pending_order(
-            decision=decision,
-            candidate=candidate,
-            client_order_id=client_order_id,
-            side=side,
-            qty=num_contracts,
-            limit_price=option_price,
-        )
+        #
+        # If THIS write fails (DB error), the reservations made above
+        # (update_post_trade pending order + set_intended_position_greeks)
+        # would otherwise leak: the exception escapes the method before the
+        # Gateway try/except below can compensate, inflating portfolio-greeks
+        # checks for this ticker until the stale-pending prune. Roll them back
+        # here. Do NOT call persist_order_finalize — the PENDING_SUBMIT row was
+        # never written, so there is nothing to finalize.
+        try:
+            await persist_pending_order(
+                decision=decision,
+                candidate=candidate,
+                client_order_id=client_order_id,
+                side=side,
+                qty=num_contracts,
+                limit_price=option_price,
+            )
+        except Exception as e:
+            await self._remove_pending_order_compat(client_order_id)
+            if hasattr(self.risk_manager, "clear_intended_position_greeks"):
+                self.risk_manager.clear_intended_position_greeks(candidate.ticker)
+            logger.error(
+                "options_pending_order_persist_failed",
+                error=str(e),
+                client_order_id=client_order_id,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = f"Pending-order persist failed: {e}"
+            self._record_result(False)
+            return
 
         try:
             client = self._get_gateway_client()

@@ -17,6 +17,7 @@ from orion.execution.flow_helpers import (
 from orion.execution.decision_persistence import (
     auto_skip_stale_candidates,
     fetch_pending_candidates,
+    reconcile_orphaned_decisions,
     save_decision,
     update_decision_status,
 )
@@ -66,6 +67,19 @@ async def main() -> None:
         logger.info("Shutdown requested during DB wait; exiting before startup.")
         return
     await init_db()
+
+    # Repair decisions orphaned by a crash in the finalize→status-update gap:
+    # an order finalized at the broker (accepted/REJECTED) whose StrategyDecision
+    # is still PENDING. Best-effort — a transient DB error here must not block
+    # startup of the execution loop.
+    try:
+        await reconcile_orphaned_decisions()
+    except Exception as e:
+        logger.warning(
+            "reconcile_orphaned_decisions_failed",
+            extra={"event_type": "ORPHAN_RECONCILE_FAILED", "error": str(e)},
+        )
+
     solver_inventory = await ensure_active_solvers_ready(system_settings.orion_stage)
     logger.info(
         "Solver inventory ready",

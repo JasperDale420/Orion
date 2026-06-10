@@ -654,6 +654,27 @@ class RiskManager:
         is_closing = (old_qty > 0 and signed_fill_qty < 0) or (old_qty < 0 and signed_fill_qty > 0)
 
         if is_closing:
+            # Defensive guard against out-of-order partial-fill delivery. Under
+            # in-order delivery a closing fill can never exceed the known
+            # position. If it does (e.g. a later partial arrives before an
+            # earlier one), computing PnL off the oversized fill would
+            # mis-realize PnL into `current_daily_loss` — the kill-switch input.
+            # Clamp to the known position size (which `min(...)` below already
+            # does for the normal path) and log loudly so the reorder is
+            # visible. The normal-path math is unchanged.
+            if abs(signed_fill_qty) > abs(old_qty):
+                logger.error(
+                    f"Closing fill exceeds known position for {ticker}: "
+                    f"fill_qty={signed_fill_qty} old_qty={old_qty} (clamping PnL to old_qty)",
+                    extra={
+                        "event_type": "closing_fill_exceeds_position",
+                        "ticker": ticker,
+                        "fill_qty": signed_fill_qty,
+                        "old_qty": old_qty,
+                        "client_order_id": fill_id,
+                    },
+                )
+
             qty_closing = min(abs(old_qty), abs(signed_fill_qty))
 
             if old_qty > 0:
