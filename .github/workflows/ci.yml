@@ -67,7 +67,13 @@ jobs:
         token: ${{ secrets.DATA_GATEWAY_CHECKOUT_TOKEN || github.token }}
 
     - name: Run Tests
-      # Ensure coverage.xml is generated
+      # Ensure coverage.xml is generated.
+      #
+      # tests/e2e/ is excluded: those tests connect to a real TimescaleDB on
+      # port 5440 (and exercise the full migrated schema), which CI does not
+      # provision. They are local/real-infra verification — see
+      # docs/testing-guide.md. Follow-up: add a timescaledb service container +
+      # `alembic upgrade head` to run e2e in CI.
       env:
         # tests/contracts/test_create_order_contract.py reads this to locate
         # the Gateway repo. Set to the checkout path from the prior step.
@@ -77,7 +83,7 @@ jobs:
         # cross-repo signature drift, and silent-skip in CI defeats that.
         ORION_CONTRACT_TESTS_REQUIRE_GATEWAY: "1"
       run: |
-        uv run pytest -v --cov=src --cov-report=xml --junitxml=test-results.xml
+        uv run pytest -v --cov=src --cov-report=xml --junitxml=test-results.xml --ignore=tests/e2e
 
     - name: SonarQube Analysis
       if: env.SONAR_TOKEN != ''
