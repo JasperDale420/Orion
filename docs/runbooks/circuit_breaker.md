@@ -26,7 +26,7 @@ updated_at: <timestamp>
 ```sql
 INSERT INTO system_status (status, reason, updated_at)
 VALUES ('OPEN', 'Manual halt - <your reason>', NOW())
-ON CONFLICT (status) DO UPDATE SET 
+ON CONFLICT (status) DO UPDATE SET
   status = 'OPEN',
   reason = 'Manual halt - <your reason>',
   updated_at = NOW();
@@ -46,7 +46,7 @@ await breaker.open("Manual halt - investigating issue X")
 ### Via Database
 
 ```sql
-UPDATE system_status 
+UPDATE system_status
 SET status = 'CLOSED', reason = NULL, updated_at = NOW()
 WHERE status = 'OPEN';
 ```
