@@ -8,7 +8,7 @@ and rule-based exit signals.
 import asyncio
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -978,6 +978,71 @@ class PositionMonitor:
 
         return results
 
+    async def _reprotect_unprotected_positions(self) -> None:
+        """Re-place missing protective bracket legs once per cycle.
+
+        Reads the risk manager's in-memory unprotected registry (populated
+        by ExecutionEngine when entry-time bracket placement failed) and asks
+        the execution engine to re-attempt protection for each entry that maps
+        to a currently-tracked position. On success the engine clears the
+        registry entry and emits a recovery alert. Best-effort: any per-symbol
+        failure is logged and skipped, never blocking the rest of the cycle.
+        """
+        engine = self._execution_engine
+        if engine is None:
+            return
+        risk_manager = getattr(engine, "risk_manager", None)
+        get_unprotected = getattr(risk_manager, "get_unprotected", None)
+        if not callable(get_unprotected):
+            return
+
+        unprotected = get_unprotected()
+        if not unprotected:
+            return
+
+        # An entry that no longer maps to a live position is stale: the
+        # position closed (exit/manual flatten) before re-protection landed.
+        # Clearing it prevents a later reopen of the same OCC contract from
+        # inheriting the old entry and getting spurious bracket orders. The
+        # grace window covers the entry-fill race (brackets are attempted at
+        # submit time, before the fill lands in tracked_positions).
+        stale_grace = timedelta(minutes=30)
+        now = datetime.now(UTC)
+
+        for option_symbol in list(unprotected.keys()):
+            pos = self.tracked_positions.get(option_symbol)
+            entry = unprotected[option_symbol]
+            if pos is None:
+                marked_at = entry.get("marked_at_utc")
+                if isinstance(marked_at, datetime) and now - marked_at > stale_grace:
+                    clear = getattr(risk_manager, "clear_unprotected", None)
+                    if callable(clear):
+                        clear(option_symbol)
+                    logger.info(
+                        "unprotected_entry_stale_cleared",
+                        extra={"option_symbol": option_symbol, "marked_at_utc": str(marked_at)},
+                    )
+                # Within the grace window: broker sync may not have surfaced
+                # the fill yet — leave it registered for a later cycle.
+                continue
+            ticker = entry.get("ticker") or option_symbol
+            try:
+                # Orion positions are always long options (entries are BUYs);
+                # reprotect_position hardcodes the side accordingly and places
+                # only the legs recorded missing at registration time.
+                await engine.reprotect_position(
+                    ticker=ticker,
+                    option_symbol=option_symbol,
+                    entry_price=pos.entry_price,
+                    qty=int(abs(pos.qty)),
+                    missing_legs=entry.get("missing_legs"),
+                )
+            except Exception as exc:
+                logger.error(
+                    "reprotect_attempt_failed",
+                    extra={"option_symbol": option_symbol, "error": str(exc)},
+                )
+
     async def run_check(
         self,
         connector: Any,
@@ -996,6 +1061,13 @@ class PositionMonitor:
 
         # Sync positions
         positions = await self.sync_positions(connector)
+
+        # Re-protection runs FIRST — before exit evaluation — so a position
+        # left naked by a failed entry-time bracket regains its stop/take-
+        # profit as early as possible in the cycle. dry_run skips it (no
+        # order submission). Runs even with no exit signals.
+        if not dry_run:
+            await self._reprotect_unprotected_positions()
 
         if not positions:
             return {

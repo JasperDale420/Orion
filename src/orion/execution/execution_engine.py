@@ -3,7 +3,7 @@ import math
 import time
 from collections import deque
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 
@@ -57,6 +57,58 @@ from orion.core.service_lease import (
 )
 
 __all__ += ["SERVICE_LEASE_KEY_PREFIX", "SERVICE_LEASE_STALE_SECONDS"]
+
+
+class _SkipLeg(Exception):
+    """Internal sentinel: a bracket leg was intentionally not placed."""
+
+
+def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejection", "ambiguous"]:
+    """Classify a failed close-order Gateway response for escalation routing.
+
+    Only a CONFIRMED broker rejection (HTTP 4xx) means the limit definitively
+    did not rest, so escalating to a native flatten is safe. Anything else —
+    a 5xx, a sub-400 code, a missing/None status_code, or a non-int shape — is
+    AMBIGUOUS: the limit may have been accepted and be resting, so we must
+    defer (never escalate), or a double-close could re-open a naked-short hole
+    (the reverted-a388337 class of bug).
+
+    ``bool`` is an ``int`` subclass in Python, but a boolean status_code is a
+    shape error, not a real HTTP status — treated as ambiguous and logged.
+    """
+    status_code = result.get("status_code")
+
+    # bool is a subclass of int; reject it before the int check so True/False
+    # can't masquerade as HTTP 1/0. A boolean here is an unexpected shape.
+    if isinstance(status_code, bool):
+        logger.warning(
+            "close_failure_unclassified",
+            reason="status_code is bool",
+            status_code=status_code,
+        )
+        return "ambiguous"
+
+    if isinstance(status_code, int):
+        if 400 <= status_code < 500:
+            return "confirmed_rejection"
+        # 5xx, or any sub-400 code — server-side / transport-ambiguous.
+        return "ambiguous"
+
+    # Missing key or explicit None: GatewayTradingClient returns {"error": ...}
+    # with no status_code on timeout / transport error — genuinely ambiguous,
+    # no warning needed (this is the expected shape for those cases).
+    if status_code is None:
+        return "ambiguous"
+
+    # Any other non-int shape (str, float, list, …) is unexpected — log it so
+    # a Gateway error-shape change surfaces instead of silently misclassifying.
+    logger.warning(
+        "close_failure_unclassified",
+        reason="status_code is non-int, non-None",
+        status_code_type=type(status_code).__name__,
+        status_code=str(status_code)[:80],
+    )
+    return "ambiguous"
 
 
 def round_to_options_tick(price: float) -> float:
@@ -1096,6 +1148,16 @@ class ExecutionEngine:
                     ep["position_unprotected"] = True
                 if bracket_result.get("partial_protection"):
                     ep["position_partial_protection"] = True
+                # Give the risk layer and PositionMonitor first-class knowledge
+                # of the missing protection, and alert operators ONCE per
+                # occurrence. The execution_params flags above remain the
+                # durable record; this in-memory registry drives re-protection.
+                if bracket_result.get("unprotected") or bracket_result.get("partial_protection"):
+                    await self._register_unprotected_position(
+                        ticker=candidate.ticker,
+                        option_symbol=candidate.option_symbol,
+                        bracket_result=bracket_result,
+                    )
 
         except Exception as e:
             await self._remove_pending_order_compat(client_order_id)
@@ -1134,6 +1196,8 @@ class ExecutionEngine:
         stop_loss_pct: float,
         take_profit_pct: float,
         side: str,
+        place_stop_loss: bool = True,
+        place_take_profit: bool = True,
     ) -> dict[str, Any]:
         """Place stop-loss and take-profit orders after a successful entry.
 
@@ -1141,6 +1205,12 @@ class ExecutionEngine:
         But protection-state is tracked in the return dict so the caller can
         surface unprotected positions to operators (otherwise they're invisible
         outside the log stream).
+
+        ``place_stop_loss``/``place_take_profit`` let re-protection place ONLY
+        the missing leg(s) — re-placing a leg that already exists would put a
+        second GTC stop/limit on the same position (double-close risk). A
+        skipped leg is reported as ``{"preexisting": True}`` so the
+        protection-state math below treats it as present.
         """
         exit_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
         sl_price = round(entry_price * (1 - stop_loss_pct), 2)
@@ -1160,7 +1230,11 @@ class ExecutionEngine:
 
         client = self._get_gateway_client()
 
+        if not place_stop_loss:
+            result["stop_loss"] = {"preexisting": True}
         try:
+            if not place_stop_loss:
+                raise _SkipLeg()
             sl_order = await client.create_order(
                 symbol=option_symbol,
                 qty=qty,
@@ -1183,11 +1257,17 @@ class ExecutionEngine:
                 stop_price=sl_price,
                 order_id=sl_order.get("id"),
             )
+        except _SkipLeg:
+            pass
         except Exception as e:
             sl_failure_reason = str(e)
             logger.error("bracket_stop_loss_failed", error=sl_failure_reason, option_symbol=option_symbol)
 
+        if not place_take_profit:
+            result["take_profit"] = {"preexisting": True}
         try:
+            if not place_take_profit:
+                raise _SkipLeg()
             tp_order = await client.create_order(
                 symbol=option_symbol,
                 qty=qty,
@@ -1207,6 +1287,8 @@ class ExecutionEngine:
                 take_profit_price=tp_price,
                 order_id=tp_order.get("id"),
             )
+        except _SkipLeg:
+            pass
         except Exception as e:
             tp_failure_reason = str(e)
             logger.error("bracket_take_profit_failed", error=tp_failure_reason, option_symbol=option_symbol)
@@ -1248,6 +1330,102 @@ class ExecutionEngine:
             )
 
         return result
+
+    async def _register_unprotected_position(
+        self,
+        ticker: str,
+        option_symbol: str,
+        bracket_result: dict[str, Any],
+    ) -> None:
+        """Mark a position as unprotected in the risk layer and alert ONCE.
+
+        Called when bracket placement fully or partially failed. The risk
+        manager's in-memory registry drives PositionMonitor re-protection;
+        the Discord alert (deduped per option_symbol) tells operators. Never
+        raises — a failed registration/alert must not roll back the entry.
+        """
+        fully = bool(bracket_result.get("unprotected"))
+        reasons = bracket_result.get("failure_reasons") or []
+        reason = "; ".join(reasons) if reasons else ("no protective legs placed" if fully else "partial protection")
+        # Record WHICH legs are missing so re-protection places only those —
+        # re-placing an existing leg would double-stop the position.
+        missing_legs = [leg for leg in ("stop_loss", "take_profit") if bracket_result.get(leg) is None]
+        try:
+            mark = getattr(self.risk_manager, "mark_unprotected", None)
+            if callable(mark):
+                mark(ticker, option_symbol, reason, missing_legs=missing_legs)
+        except Exception as exc:
+            logger.error("unprotected_register_failed", option_symbol=option_symbol, error=str(exc))
+
+        kind = "UNPROTECTED" if fully else "PARTIALLY PROTECTED"
+        try:
+            from orion.shared.alerts import send_discord_alert
+
+            await send_discord_alert(
+                f"Position {kind}: {ticker} {option_symbol} — bracket placement failed ({reason}). "
+                f"PositionMonitor will retry re-protection.",
+                dedupe_key=f"unprotected_{option_symbol}",
+            )
+        except Exception as exc:
+            logger.error("unprotected_alert_failed", option_symbol=option_symbol, error=str(exc))
+
+    async def reprotect_position(
+        self,
+        ticker: str,
+        option_symbol: str,
+        entry_price: float,
+        qty: int,
+        missing_legs: list[str] | None = None,
+    ) -> bool:
+        """Re-attempt protective bracket placement for an unprotected position.
+
+        Called by PositionMonitor once per cycle for each position in the
+        risk manager's unprotected registry. Places ONLY the legs recorded as
+        missing (``missing_legs``; None = both) — re-placing an existing leg
+        would put a second GTC stop on the position. Orion only opens LONG
+        option positions (entries are always BUY; a SHORT candidate buys
+        puts), so the entry side here is always BUY and exits are SELLs.
+        On full success, clears the registry entry and sends a recovery
+        alert. Returns True only on full re-protection. Never raises.
+        """
+        sl_pct = float(risk_settings.default_stop_loss_pct)
+        tp_pct = 0.50
+        legs = missing_legs if missing_legs is not None else ["stop_loss", "take_profit"]
+        try:
+            bracket_result = await self._place_bracket_orders(
+                option_symbol=option_symbol,
+                qty=qty,
+                entry_price=entry_price,
+                stop_loss_pct=sl_pct,
+                take_profit_pct=tp_pct,
+                side=OrderSide.BUY,
+                place_stop_loss="stop_loss" in legs,
+                place_take_profit="take_profit" in legs,
+            )
+        except Exception as exc:
+            logger.error("reprotect_failed", option_symbol=option_symbol, error=str(exc))
+            return False
+
+        fully_protected = not bracket_result.get("unprotected") and not bracket_result.get("partial_protection")
+        if not fully_protected:
+            return False
+
+        clear = getattr(self.risk_manager, "clear_unprotected", None)
+        if callable(clear):
+            clear(option_symbol)
+
+        try:
+            from orion.shared.alerts import send_discord_alert
+
+            await send_discord_alert(
+                f"Position RE-PROTECTED: {ticker} {option_symbol} — protective bracket re-placed successfully.",
+                dedupe_key=f"reprotected_{option_symbol}",
+            )
+        except Exception as exc:
+            logger.error("reprotect_alert_failed", option_symbol=option_symbol, error=str(exc))
+
+        logger.info("position_reprotected", ticker=ticker, option_symbol=option_symbol)
+        return True
 
     async def close_position(
         self,
@@ -1459,7 +1637,7 @@ class ExecutionEngine:
             #    early no-position guard.
             detail = str(result.get("detail") or result.get("error") or "")
             status_code = result.get("status_code")
-            confirmed_rejection = isinstance(status_code, int) and 400 <= status_code < 500
+            confirmed_rejection = classify_close_failure(result) == "confirmed_rejection"
             if not confirmed_rejection:
                 logger.warning(
                     f"Close limit for {ticker} had an ambiguous outcome ({detail[:160]}); "

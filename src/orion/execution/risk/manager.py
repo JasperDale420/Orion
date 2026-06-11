@@ -25,7 +25,6 @@ from orion.shared.logger import setup_struct_logger
 if TYPE_CHECKING:
     from orion.execution.correlation_adjuster import CorrelationAdjuster
     from orion.shared.metrics import Metrics
-    from orion.storage.models_execution import Position  # type: ignore[attr-defined]
 
 logger = setup_struct_logger(__name__)
 
@@ -100,6 +99,16 @@ class RiskManager:
 
         # Idempotency Tracking
         self.processed_fill_ids: set[str] = set()
+
+        # In-memory registry of positions whose protective bracket order(s)
+        # (stop-loss / take-profit) failed to place at entry. Keyed by
+        # option_symbol. This is a *secondary* signal for operators and the
+        # PositionMonitor's re-protection retry — NOT a durable record and
+        # NOT a gate on order flow. A process restart loses this registry;
+        # the durable record is the `position_unprotected` /
+        # `position_partial_protection` flags hoisted onto each
+        # StrategyDecision.execution_params at entry time.
+        self.unprotected_positions: dict[str, dict[str, Any]] = {}
 
         # Composed sub-modules
         self._greeks = GreeksTracker()
@@ -481,35 +490,51 @@ class RiskManager:
         self._sizer.set_correlation_adjuster(adjuster)
         logger.info("Correlation adjuster configured for RiskManager")
 
+    # ── Unprotected-position registry ────────────────────────────────────
+    #
+    # First-class (in-memory) knowledge that a position is missing one or
+    # both protective bracket legs. The ExecutionEngine marks here when
+    # bracket placement fully/partially fails; the PositionMonitor reads it
+    # to prioritise re-protection and clears it on success. Purely
+    # advisory: it never blocks order flow. Lost on restart (see note in
+    # __init__ — the durable record lives in execution_params).
+
+    def mark_unprotected(
+        self,
+        ticker: str,
+        option_symbol: str,
+        reason: str,
+        missing_legs: list[str] | None = None,
+    ) -> None:
+        """Record that ``option_symbol`` is missing protective coverage.
+
+        ``missing_legs`` records exactly which bracket legs failed so
+        re-protection places only those (None = treat both as missing).
+        """
+        self.unprotected_positions[option_symbol] = {
+            "ticker": ticker,
+            "option_symbol": option_symbol,
+            "reason": reason,
+            "missing_legs": list(missing_legs) if missing_legs is not None else ["stop_loss", "take_profit"],
+            "marked_at_utc": datetime.now(UTC),
+        }
+        logger.warning(
+            "risk_position_marked_unprotected",
+            ticker=ticker,
+            option_symbol=option_symbol,
+            reason=reason,
+        )
+
+    def clear_unprotected(self, option_symbol: str) -> None:
+        """Drop a position from the unprotected registry (re-protection succeeded)."""
+        if self.unprotected_positions.pop(option_symbol, None) is not None:
+            logger.info("risk_position_unprotected_cleared", option_symbol=option_symbol)
+
+    def get_unprotected(self) -> dict[str, dict[str, Any]]:
+        """Return a snapshot copy of the unprotected-position registry."""
+        return dict(self.unprotected_positions)
+
     # ── Persistence ──────────────────────────────────────────────────────
-
-    @db_retry
-    async def upsert_position(self, position: "Position") -> None:
-        """Persist position to DB."""
-
-        async def save_position(session: Any) -> None:
-            from sqlalchemy import select
-
-            from orion.storage.models_execution import Position as PositionModel  # type: ignore[attr-defined]
-
-            stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
-            result = await session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                existing.qty = position.qty
-                existing.avg_price = position.avg_price
-                existing.updated_at_utc = datetime.now(UTC)
-            else:
-                session.add(
-                    PositionModel(
-                        ticker=position.ticker,
-                        qty=position.qty,
-                        avg_price=position.avg_price,
-                    )
-                )
-
-        await db_write(save_position)
 
     @db_retry
     async def initialize(self) -> None:
