@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -21,6 +22,36 @@ from orion.storage.models import BronzeEvent
 from orion.storage.models_silver import SignalType, SilverSignal
 
 logger = logging.getLogger(__name__)
+
+# Cap on the number of tickers held in the in-memory per-ticker stores
+# (``history`` and ``flow_history``). Over a multi-day session every ticker
+# ever seen — including transient universe additions — would otherwise
+# accumulate forever. The cap is generous versus the ~100-ticker universe;
+# the least-recently-touched ticker is evicted when exceeded. Eviction is
+# safe because a re-seen ticker simply rebuilds from incoming bars/flow
+# (the existing cold-start path).
+MAX_TRACKED_TICKERS = 500
+
+
+class _LRUTickerStore(OrderedDict):
+    """OrderedDict keyed by ticker with LRU eviction at ``MAX_TRACKED_TICKERS``.
+
+    ``touch()`` marks a ticker most-recently-used. Insertion of a new ticker
+    over the cap evicts the least-recently-touched entry and logs it.
+    """
+
+    def touch(self, ticker: str) -> None:
+        """Mark ``ticker`` most-recently-used if present (no-op otherwise)."""
+        if ticker in self:
+            self.move_to_end(ticker)
+
+    def __setitem__(self, ticker: str, value: Any) -> None:
+        existed = ticker in self
+        super().__setitem__(ticker, value)
+        self.move_to_end(ticker)
+        if not existed and len(self) > MAX_TRACKED_TICKERS:
+            evicted, _ = self.popitem(last=False)
+            logger.info("feature_engine_ticker_evicted", extra={"ticker": evicted, "cap": MAX_TRACKED_TICKERS})
 
 
 def _normalize_put_call_token(value: Any) -> str | None:
@@ -49,10 +80,10 @@ class FeatureEngine:
         # For this V1 Slice, we will implement the mechanism to 'append' new bars
         # to a small in-memory history buffer per ticker to allow computing rolling metrics.
 
-        self.history: dict[str, pd.DataFrame] = {}  # ticker -> DataFrame(OHLCV)
+        self.history: _LRUTickerStore = _LRUTickerStore()  # ticker -> DataFrame(OHLCV)
         self.max_history_len = 100  # Keep last 100 bars for calculation context
 
-        self.flow_history: dict[str, list[dict[str, Any]]] = {}
+        self.flow_history: _LRUTickerStore = _LRUTickerStore()
         self.flow_max_age_seconds = 900  # 15 minutes window
         self.flow_max_size_per_ticker = 500  # Max entries per ticker to prevent memory growth
         self._hydrated = False  # Track initialization state for cold-start detection
@@ -302,7 +333,10 @@ class FeatureEngine:
             is_put = put_call == "PUT"
             premium = float(e.payload.get("premium_usd") or 0.0)
 
-            self.flow_history.setdefault(ticker, []).append(
+            if ticker not in self.flow_history:
+                self.flow_history[ticker] = []
+            self.flow_history.touch(ticker)
+            self.flow_history[ticker].append(
                 {"ts": e.event_ts_utc, "premium": premium, "is_put": is_put, "type": e.event_type}
             )
 
@@ -646,6 +680,7 @@ class FeatureEngine:
         if ticker not in self.history:
             return {}
 
+        self.history.touch(ticker)
         df = self.history[ticker]
         try:
             idx = df.index.get_indexer([ts], method="pad")[0]
