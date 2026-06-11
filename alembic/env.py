@@ -27,12 +27,45 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from orion.storage.models import Base  # noqa: E402
 
+# Import every model module so all tables register on Base.metadata before
+# autogenerate compares it against the database. models.py only defines its
+# own tables; the remaining tables live in these sibling modules (the same set
+# init_db() imports). Without these imports autogen sees a partial schema.
+from orion.storage import (  # noqa: E402, F401
+    models_audit,
+    models_dlq,
+    models_execution,
+    models_gold,
+    models_liveness,
+    models_ml,
+    models_rag,
+    models_risk,
+    models_signals,
+    models_silver,
+    models_solvers,
+    models_trade_journal,
+)
+
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+
+
+def _include_object(obj, name, type_, reflected, compare_to):
+    """Autogenerate guard: never propose DROPs of database-only tables.
+
+    The live DB can carry legacy tables that predate the 2026-06-11 baseline
+    squash (e.g. historical artifacts with no model). A reflected table with
+    no matching model (compare_to is None) would otherwise autogenerate a
+    drop_table — silently destructive against production history. Additive
+    drift (model exists, table missing) is still surfaced normally.
+    """
+    if type_ == "table" and reflected and compare_to is None:
+        return False
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -89,7 +122,7 @@ def do_run_migrations(connection: Connection) -> None:
     # transaction handling, otherwise it may be created within an uncommitted
     # transaction and appear to "vanish" for subsequent commands.
     _ensure_alembic_version_table(connection.execution_options(isolation_level="AUTOCOMMIT"))
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(connection=connection, target_metadata=target_metadata, include_object=_include_object)
 
     with context.begin_transaction():
         context.run_migrations()

@@ -29,6 +29,7 @@ All plists live in `scripts/launchd/` and install into
 | `com.empire.orion.meta-search.plist` | `scripts/run_meta_search.sh` | `orion.main_meta --scheduled` — daily solver evolution, self-fires 18:00 ET weekdays |
 | `com.empire.orion.meta-weekly.plist` | `scripts/run_meta_weekly.sh` | `orion.main_meta_weekly --scheduled` — weekly evolution + promotions, self-fires Fri 17:30 ET |
 | `com.empire.orion.launchd-health.plist` | `scripts/run_launchd_health_probe.sh` | Once-per-minute audit of all `com.empire.orion.*` jobs |
+| `com.empire.orion.deadman.plist` | `scripts/run_deadman_watchdog.sh` | Every-5-min dead-man watchdog — service-liveness absence + pipeline-depth stage freshness |
 | `com.empire.orion.orphan-close.plist.DISABLED-260526` | inline bash | **Disabled.** One-shot orphan-position closer; preserved as a reference (see [Orphan-close history](#orphan-close-history)) |
 
 ### Install / status / stop
@@ -174,6 +175,59 @@ The probe exists because of the 2026-05-22 incident
 ([below](#orphan-close-history)) — a silent exit-127 loop went unnoticed for
 4.5 hours.
 
+## Dead-man watchdog (unified liveness)
+
+`com.empire.orion.deadman` runs every 5 minutes (`StartInterval=300`, plus
+`RunAtLoad` for an immediate first pass) and is the **unified absence guard**.
+It performs two independent checks:
+
+1. **Service liveness (always-on).** Each long-running service
+   (`ingestion`, `execution`, `position_monitor`, `feature_enrichment`,
+   `meta_search`, `meta_weekly`, `eod_agent`) upserts a row into the
+   `service_liveness` table at the end of every successful work cycle via
+   `orion.shared.liveness.publish_liveness` — advancing `last_success_ts_utc`,
+   incrementing `cycle_count`, and recording its own declared
+   `cadence_budget_seconds`. The watchdog reads every row and fires a Discord
+   alert (dedupe key `deadman_<service>`, 15-min window) when
+   `now - last_success_ts_utc` exceeds that service's budget. **A service the
+   watchdog has never seen is never alerted on** — registration happens on
+   first publish, so absence it cannot attribute stays silent.
+
+2. **Pipeline-depth stage freshness (market-hours-gated, REAL data).** During
+   the 09:30-16:00 ET cash session it asserts per-stage freshness on the actual
+   pipeline tables — `max(bronze_events.received_ts_utc)` (budget 300s),
+   `max(silver_signals.created_at_utc)` (600s),
+   `max(gold_feature_events.created_at_utc)` (1200s) — and logs today's
+   `candidate_trades` count (informational only, never an alert). This catches
+   every stall class in the incident history (redis flap, gold-poller OOM,
+   born-stale, WS death) with **zero contamination risk**: no synthetic events
+   are ever injected. Outside market hours the stage checks are informational
+   only — same convention as the market-open data-flow check.
+
+The job runs in a **separate process with its own lightweight async engine**, so
+it still reads liveness/pipeline state even when the main stack is wedged. It is
+a periodic **one-shot** (no `KeepAlive`): exit 2 means an alert was dispatched,
+and the next 5-minute fire is sufficient — a non-zero exit must not restart-loop.
+
+> **Not in `REQUIRED_LABELS`.** Per the launchd-health probe's documented rule,
+> only always-on `RunAtLoad`+`KeepAlive` daemons belong in `REQUIRED_LABELS`
+> (a missing row = a daemon that should be running but isn't). The dead-man
+> watchdog is a `StartInterval` one-shot whose idle/absent state between fires is
+> normal, so requiring it would false-alarm — exactly like `orphan-close`. It is
+> therefore intentionally excluded.
+
+```bash
+mkdir -p /Users/jacobmcmillan/Empire/Orion/logs
+cp scripts/launchd/com.empire.orion.deadman.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.deadman.plist
+
+# Verify (runs >= 1, last exit code 0 — NOT 127)
+launchctl print gui/$(id -u)/com.empire.orion.deadman | grep -E "runs =|last exit code"
+
+# Run once manually
+scripts/run_deadman_watchdog.sh
+```
+
 ## Docker Compose
 
 ```bash
@@ -221,6 +275,13 @@ uv run alembic downgrade -1                # single step back
 
 Always read and edit `--autogenerate` output before committing. Migrations
 must be reviewable in isolation.
+
+As of the 2026-06-11 baseline squash, the chain starts from a single baseline
+revision (`baseline_2026_06_11`) that creates the full schema (including
+`CREATE EXTENSION vector`), so a fresh empty database is provisioned entirely
+by `alembic upgrade head`. The pre-baseline incremental migrations are kept for
+reference under `archive/2026-06-11_alembic-pre-baseline/` and must not be
+moved back into `alembic/versions/`.
 
 ## Health checks
 
