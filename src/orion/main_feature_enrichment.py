@@ -30,10 +30,16 @@ from orion.enrichment.heber_context import (
     persist_regime_snapshot,
 )
 from orion.shared.async_main import run_service
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.feature_enrichment")
+
+# Liveness cadence budget. The loop ticks every ~30s but its heaviest sub-poll
+# (regime/connector intervals) is up to 15 min; 900s gives the dead-man watchdog
+# headroom over the longest legitimate gap between successful cycles.
+LIVENESS_CADENCE_BUDGET_SECONDS = 900
 
 # Poll intervals
 MARKET_TIDE_INTERVAL = 300  # Every 5 minutes (reduced from 60s to save API calls)
@@ -460,6 +466,9 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                 except Exception as e:
                     logger.error(f"Regime snapshot error: {e}", exc_info=True)
             loop_error_streak = 0
+
+            # Liveness: one publish per successful cycle (swallows its own errors).
+            await publish_liveness("feature_enrichment", cadence_budget_seconds=LIVENESS_CADENCE_BUDGET_SECONDS)
 
         except Exception as e:
             logger.error(f"Feature enrichment error: {e}", exc_info=True)

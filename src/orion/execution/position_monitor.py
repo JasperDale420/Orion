@@ -19,9 +19,14 @@ from orion.ml.exit_classifier import (
     get_exit_classifier,
 )
 from orion.shared.db_utils import db_query
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.execution.position_monitor")
+
+# Liveness cadence budget for the position-monitor loop (default 60s tick); the
+# dead-man watchdog alerts if no successful check lands within 300s.
+POSITION_MONITOR_LIVENESS_CADENCE_BUDGET_SECONDS = 300
 
 # OCC option-symbol pattern: ROOT (1-6 alphanumeric) + YYMMDD + C/P + 8-digit strike.
 # Example: QQQ260522P00721000, GDX260618C00086000.
@@ -521,7 +526,7 @@ class PositionMonitor:
                 return val
             if isinstance(val, str):
                 try:
-                    from dateutil.parser import parse as _parse  # type: ignore[import-untyped]
+                    from dateutil.parser import parse as _parse  # type: ignore[import-untyped,unused-ignore]
 
                     return _parse(val)
                 except Exception:
@@ -1153,6 +1158,11 @@ async def run_position_monitor_loop(
             logger.debug(
                 "Position monitor cycle complete",
                 extra={"event": "monitor_cycle", **summary},
+            )
+            # Liveness: one publish per successful check (swallows its own errors).
+            await publish_liveness(
+                "position_monitor",
+                cadence_budget_seconds=POSITION_MONITOR_LIVENESS_CADENCE_BUDGET_SECONDS,
             )
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)

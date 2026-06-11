@@ -23,12 +23,17 @@ from orion.execution.decision_persistence import (
 from orion.processing.signal_engine import SignalEngine
 from orion.shared.async_main import run_service
 from orion.shared.db_utils import db_query
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 from orion.jobs.seed_solvers import ensure_active_solvers_ready
 from orion.storage.db import init_db, wait_for_db
 
 # Configure Logger
 logger = setup_struct_logger("orion.execution")
+
+# Liveness cadence budget: the ~1s execution loop publishes every iteration; the
+# dead-man watchdog alerts if no successful iteration lands within 300s.
+EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS = 300
 
 # Re-export for backward compatibility (tests import from here)
 from orion.execution.flow_helpers import (  # noqa: E402, F401
@@ -118,6 +123,10 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
             if await cb.is_open():
                 state = await cb.get_state()
                 logger.warning(f"CIRCUIT BREAKER OPEN: {state.get('reason')}. Pausing execution.")
+                # Liveness: a deliberate breaker pause is a healthy, functioning
+                # loop — publish success so the dead-man doesn't double-alarm on
+                # top of the breaker's own alerting.
+                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
                 await asyncio.sleep(5.0)
                 continue
 
@@ -137,6 +146,9 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
             candidates = await fetch_pending_candidates()
 
             if not candidates:
+                # Liveness: an empty candidate pool is the normal quiet state —
+                # the full poll+sweep+fetch cycle succeeded.
+                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
                 # Sleep and continue
                 await asyncio.sleep(1.0)
                 continue
@@ -194,8 +206,20 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
                 # 6. Update Decision Status
                 await update_decision_status(decision.decision_id, exec_status)
 
+            # Liveness: full candidate-processing cycle completed (adversarial-
+            # review finding: publishing right after poll_fills advanced the
+            # heartbeat even when decisioning/preflight/persistence then failed).
+            await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
+
         except Exception as e:
             logger.error(f"Main Loop Error: {e}")
+            # Error-only liveness: records last_error but does NOT advance
+            # last_success — persistent failures age the row into a dead-man alert.
+            await publish_liveness(
+                "execution",
+                cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS,
+                error=f"main loop error: {e}",
+            )
             await asyncio.sleep(5.0)  # Backoff
 
         # Position Manager: Check exit rules for open positions

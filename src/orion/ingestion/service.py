@@ -29,6 +29,7 @@ from orion.processing.persistence import (
 from orion.processing.rule_engine import RuleEngine
 from orion.shared.alerts import send_discord_alert
 from orion.shared.db_utils import db_write
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import make_json_safe
 from orion.storage.db import async_session_factory, init_db, wait_for_db
@@ -43,6 +44,10 @@ logger = setup_struct_logger("orion.ingest")
 # blocked (sync Heber read, slow DB) and bars/flow are not being drained —
 # surface it before it becomes a silent stall.
 CYCLE_LATENCY_WARN_SECONDS = 15.0
+
+# Liveness cadence budget: the 60s poll loop should publish well within this
+# window; the dead-man watchdog alerts if no successful cycle lands in 300s.
+LIVENESS_CADENCE_BUDGET_SECONDS = 300
 CYCLE_LATENCY_ERROR_SECONDS = 45.0
 
 
@@ -303,6 +308,9 @@ class IngestionService:
                 },
             },
         )
+
+        # Liveness: one publish per successful cycle (swallows its own errors).
+        await publish_liveness("ingestion", cadence_budget_seconds=LIVENESS_CADENCE_BUDGET_SECONDS)
 
     async def _maybe_rehydrate_universe(self) -> None:
         """Periodically re-hydrate the universe from recent candidate_trades.

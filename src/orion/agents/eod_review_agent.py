@@ -36,6 +36,7 @@ from orion.core.enums import DecisionAction
 from orion.core.id_utils import deterministic_solver_id
 from orion.rag.vector_store import VectorStore
 from orion.shared.db_utils import db_query, db_write
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
@@ -47,6 +48,14 @@ from orion.storage.models_solvers import Solver, SolverEdits
 from orion.storage.models_trade_journal import TradeJournalEntry
 
 logger = setup_struct_logger("orion.agents.eod_review_agent")
+
+# Liveness cadence budget. The EOD review runs once per trading day; 1.5 days
+# bridges a normal weekday gap before the dead-man watchdog flags a missed run.
+# 3.5 days: survives weekends + a Monday holiday without false dead-man
+# alerts (the run's own Discord success/failure alert is the primary signal;
+# the dead-man is a backstop). Adversarial-review finding: 1.5d went stale
+# every Sunday.
+EOD_LIVENESS_CADENCE_BUDGET_SECONDS = int(86400 * 3.5)
 
 
 class EODReviewAgent:
@@ -136,6 +145,10 @@ class EODReviewAgent:
                 saved_paths.append(path)
 
         logger.info(f"EOD Review Complete. Report: {file_path}. Proposals: {len(saved_paths)}")
+
+        # Liveness: one publish per completed review (swallows its own errors).
+        await publish_liveness("eod_agent", cadence_budget_seconds=EOD_LIVENESS_CADENCE_BUDGET_SECONDS)
+
         return {
             "run_id": run_id,
             "date": str(target_date),

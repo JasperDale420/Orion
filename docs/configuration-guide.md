@@ -48,6 +48,77 @@ so existing `.env` files keep working — prefer the recommended name in new con
 | `ALPACA_PAPER` | default `true` | Set `false` only for explicit live runs |
 | `ORION_API_KEY` | yes (for API) | `x-api-key` header for `api/main.py`; unset means auth-required routes return server-config error |
 
+## Enabling a dedicated Alpaca account (when a 4th paper key frees up)
+
+Today Orion routes every order through Data-Gateway into a **shared** Alpaca
+paper account pooled across six trading systems. Only three paper keys exist and
+all three are in use, so Orion cannot have its own account yet. The config below
+is **scaffolded and dormant** — nothing reads it, and the default behavior is
+unchanged. The moment a fourth key frees up, enabling a dedicated account is a
+small config + client task, not a rewrite.
+
+### The dormant env vars
+
+These are `SystemSettings` fields (`ORION_` prefix). They are deliberately named
+`ORION_ALPACA_*` so they never collide with the shared-account `ALPACA_API_KEY`
+/ `ALPACA_SECRET_KEY` vars above.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ORION_ALPACA_API_KEY` | — (None) | Dedicated-account key. Unset = dormant. |
+| `ORION_ALPACA_SECRET_KEY` | — (None) | Dedicated-account secret. Unset = dormant. |
+| `ORION_ALPACA_PAPER` | `true` | Keep `true` — paper-mode default holds. |
+| `ORION_BROKER_MODE` | `gateway` | `gateway` = today's shared-account path. `direct` = future dedicated path. |
+
+`ORION_BROKER_MODE` is validated at settings load: `direct` (not yet
+implemented) and any unknown value are **coerced to `gateway` with a CRITICAL
+log** rather than raising. SystemSettings instantiates at import in every
+service — including the dead-man watchdog — so a raising validator would turn a
+stray `.env` value into a fleet-wide boot kill switch with no surviving
+alerter. The CRITICAL log line is the signal to fix the env var.
+
+### Order of operations (the day a key frees up)
+
+1. **Implement the direct broker client first** (separate future task): a thin
+   alpaca-py `TradingClient` adapter behind the same interface
+   `GatewayTradingClient` exposes, wired so `ExecutionEngine` selects it when
+   `broker_mode == "direct"`. alpaca-py `0.43.2` is already an installed,
+   importable dependency (`alpaca.trading.client.TradingClient`,
+   `alpaca.data`) — see `tests/unit/test_alpaca_sdk_ready.py`.
+2. **Set the dedicated credentials**: `ORION_ALPACA_API_KEY`,
+   `ORION_ALPACA_SECRET_KEY`, `ORION_ALPACA_PAPER=true` in the native wrapper /
+   `.env`.
+3. **Flip `ORION_BROKER_MODE=direct`** only after step 1 lands. Until then the
+   load-time guard keeps `direct` from starting a half-mode.
+
+### Payoff — what becomes deletable
+
+A dedicated account means Orion is the only writer, so the shared-account
+machinery built to survive a pooled account can be removed (blast radius for
+future-you):
+
+- **`orion_` attribution filtering** — `src/orion/execution/attribution.py`
+  (`ORDER_ID_PREFIX`, `is_orion_order`, the `orion_%` client-order-id LIKE
+  filter) and the `_sync_risk_from_gateway` position filter in
+  `src/orion/execution/execution_engine.py`. With a sole-owner account, every
+  position/fill is Orion's — no need to tag and filter.
+- **Shared-equity seeding gymnastics** — `seed_equity_baseline` and the
+  one-shot `_equity_seeded` / `_peak_equity_seeded` capping to
+  `config.allocated_equity` in `src/orion/execution/risk/manager.py`. A
+  dedicated account reports Orion-only equity directly, so the slice-capping
+  (built to stop sizing off the ~$1M pool) is unnecessary.
+- **DTBP backoff** — `_dtbp_backoff_until` / `_DTBP_BACKOFF_SECONDS` and the
+  `40310000` handling in `src/orion/execution/execution_engine.py`. Day-trade
+  buying-power exhaustion was driven by sibling systems on the shared account;
+  a dedicated account removes the cross-system contention.
+- **Wash-block handling** — the `42210000` intent-mismatch / native-close
+  escalation path in `src/orion/execution/execution_engine.py`. Self-block and
+  sibling-driven wash conflicts on the shared account go away when Orion owns
+  the account.
+
+These stay in place until `broker_mode` is actually flipped to `direct`; this
+section is the map for removing them then.
+
 ## Risk envelope (`ORION_RISK_*`)
 
 | Variable | Wrapper default | Purpose |

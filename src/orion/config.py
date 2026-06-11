@@ -5,7 +5,7 @@ load_dotenv()  # Load .env file if present
 import uuid
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -107,6 +107,50 @@ class SystemSettings(BaseSettings):
     alpaca_api_key: str | None = Field(default=None, validation_alias="ALPACA_API_KEY")
     alpaca_secret_key: str | None = Field(default=None, validation_alias="ALPACA_SECRET_KEY")
     alpaca_paper: bool = Field(default=True, validation_alias="ALPACA_PAPER")
+
+    # --- Dedicated Alpaca account scaffolding (DORMANT; A4 of the 2026-06-11
+    # redesign plan). These configure a future direct-to-Alpaca broker path for
+    # a dedicated paper account, replacing the shared-account attribution
+    # gymnastics. They are deliberately ORION_-prefixed so they never collide
+    # with the shared-account ALPACA_API_KEY / ALPACA_SECRET_KEY above. Nothing
+    # reads these yet — the direct broker client is a separate future task. See
+    # docs/configuration-guide.md "Enabling a dedicated Alpaca account".
+    orion_alpaca_api_key: str | None = Field(default=None, validation_alias="ORION_ALPACA_API_KEY")
+    orion_alpaca_secret_key: str | None = Field(default=None, validation_alias="ORION_ALPACA_SECRET_KEY")
+    orion_alpaca_paper: bool = Field(default=True, validation_alias="ORION_ALPACA_PAPER")
+    # Broker routing mode. "gateway" (default) routes orders through
+    # Data-Gateway → shared Alpaca account (today's behavior). "direct" is
+    # scaffolded but NOT implemented: it raises at settings load so a half-mode
+    # can never silently start. Flip to "direct" only after the direct client
+    # exists and a dedicated key is set (see the doc section above).
+    broker_mode: str = Field(default="gateway", validation_alias="ORION_BROKER_MODE")
+
+    @field_validator("broker_mode")
+    @classmethod
+    def _validate_broker_mode(cls, value: str) -> str:
+        # COERCE, never raise (adversarial-review finding): SystemSettings is
+        # instantiated at module import by every service INCLUDING the dead-man
+        # watchdog, so a raising validator turns a stray .env value into a
+        # fleet-wide boot kill switch with no surviving alerter. Given this
+        # repo's silent-stall history, log loudly and fall back to gateway.
+        if value == "direct":
+            import logging
+
+            logging.getLogger("orion.config").critical(
+                "ORION_BROKER_MODE=direct is scaffolded but not implemented — "
+                "falling back to 'gateway'. See docs/configuration-guide.md "
+                "'Enabling a dedicated Alpaca account'."
+            )
+            return "gateway"
+        if value not in {"gateway"}:
+            import logging
+
+            logging.getLogger("orion.config").critical(
+                "Unknown ORION_BROKER_MODE %r — falling back to 'gateway' (must be 'gateway' or 'direct').",
+                value,
+            )
+            return "gateway"
+        return value
 
     # Environment
     orion_stage: str = Field(default="paper", validation_alias="ORION_STAGE")

@@ -140,6 +140,7 @@ async def init_db() -> None:
         models_dlq,
         models_execution,
         models_gold,
+        models_liveness,
         models_ml,
         models_rag,
         models_risk,
