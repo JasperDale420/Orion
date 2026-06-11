@@ -126,27 +126,32 @@ jobs:
 
     - name: Run E2E smoke (real TimescaleDB)
       # Runs against the `timescaledb` service container (pgvector/pgvector:pg16,
-      # mapped to localhost:5440 — see services: block). Applies the full schema
-      # via `alembic upgrade head`, then runs the smoke + Postgres-dialect e2e
-      # tests. test_live_data_flow.py is deliberately NOT run: it is a
+      # mapped to localhost:5440 — see services: block). Bootstraps the schema
+      # via init_db() — Base.metadata.create_all + CREATE EXTENSION vector —
+      # then `alembic stamp head`. The migration chain is INCREMENTAL-ONLY:
+      # migration 0001 ALTERs an assumed-existing bronze_events; no baseline
+      # migration creates the core tables, so `alembic upgrade head` on an
+      # empty database fails with UndefinedTableError. create_all + stamp is
+      # exactly how local databases are provisioned. (Future hygiene: squash a
+      # baseline migration so fresh DBs are migration-driven.)
+      # test_live_data_flow.py is deliberately NOT run: it is a
       # live-market-data freshness check and is meaningless against an empty CI
       # database.
       #
       # alembic reads its URL from alembic.ini's hardcoded
       #   sqlalchemy.url = postgresql+asyncpg://orion:orion_password@127.0.0.1:5440/orion_db
-      # (alembic/env.py does NOT consult DB_URL), which already matches the
-      # service container's creds and port mapping. The smoke + dialect tests
-      # likewise hardcode REAL_DB_URL at localhost:5440 with the same creds.
+      # (alembic/env.py does NOT consult DB_URL); init_db reads DB_URL. Both
+      # resolve to the same service container.
       #
       # ORION_RUN_LIVE_DB_SMOKE=1 is REQUIRED: test_smoke_e2e_real_db skips
       # itself unless this opt-in is set, so without it the smoke test would
-      # silently no-op. DB_URL is exported for parity (the smoke test rebinds
-      # the DB to REAL_DB_URL internally regardless).
+      # silently no-op.
       env:
         DB_URL: postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db  # pragma: allowlist secret
         ORION_RUN_LIVE_DB_SMOKE: "1"
       run: |
-        uv run alembic upgrade head
+        uv run python -c "import asyncio; from orion.storage.db import init_db; asyncio.run(init_db())"
+        uv run alembic stamp head
         uv run pytest tests/e2e/test_smoke_e2e.py tests/e2e/test_postgres_dialect.py -v
 
     - name: SonarQube Analysis
