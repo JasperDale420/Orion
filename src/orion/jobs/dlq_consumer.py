@@ -15,7 +15,7 @@ from orion.processing.persistence import (
     persist_silver_signals,
 )
 from orion.processing.rule_engine import RuleEngine
-from orion.shared.db_utils import db_query, db_write
+from orion.shared.db_utils import db_write
 from orion.shared.utils import ensure_utc
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
@@ -41,7 +41,12 @@ class DLQConsumer:
 
         batch_size = 10
 
-        async def fetch_dlq_events(session: Any) -> list[Any]:
+        # Fetch and mutate in the SAME write session. The previous version
+        # fetched rows via db_query (session A) and mutated them inside a
+        # separate db_write (session B): the instances were detached, the
+        # commit was a no-op, and DLQ rows never left PENDING — every batch
+        # was replayed again on the next run.
+        async def process_and_update_dlq_items(session: Any) -> None:
             stmt = (
                 select(DeadLetterQueue)
                 .where(DeadLetterQueue.status == "PENDING")
@@ -49,15 +54,12 @@ class DLQConsumer:
                 .limit(batch_size)
             )
             result = await session.execute(stmt)
-            return result.scalars().all()
+            events = result.scalars().all()
 
-        events = await db_query(fetch_dlq_events)
+            if not events:
+                logger.info("No retryable DLQ items found.")
+                return
 
-        if not events:
-            logger.info("No retryable DLQ items found.")
-            return
-
-        async def process_and_update_dlq_items(session: Any) -> None:
             for task in events:
                 logger.info(f"Replaying DLQ {task.id} (Type: {task.event_type})...")
 
@@ -155,9 +157,11 @@ class DLQConsumer:
             unique_events = [bronze]
 
         # Persist bronze + silver (idempotent via ON CONFLICT DO NOTHING).
+        # No commit here: the outer db_write commits the whole batch once, so
+        # replay writes and the DLQ status update land (or roll back) together
+        # — a mid-batch commit left a replayed-but-still-PENDING window.
         await persist_bronze_events(session, unique_events)
         await persist_silver_from_bronze(session, unique_events)
-        await session.commit()
 
         # Re-run downstream feature + rule pipeline for supported event types.
         self.feature_engine.process_uw_flow(unique_events)
@@ -172,8 +176,8 @@ class DLQConsumer:
             sigs = self.feature_engine.process_alpaca_bars(alpaca_events)
             await self._persist_signals_and_candidates(session, sigs)
 
-        # For other event types, bronze/silver persistence is still useful even if we skip downstream steps.
-        await session.commit()
+        # For other event types, bronze/silver persistence is still useful even
+        # if we skip downstream steps. Commit happens once in the outer db_write.
         return True
 
 
