@@ -6,8 +6,6 @@ Checks open positions and executes exits when triggered.
 """
 
 import argparse
-import asyncio
-import sys
 
 from orion.clients.gateway_trading_client import get_gateway_trading_client
 from orion.config import system_settings
@@ -16,6 +14,7 @@ from orion.execution.position_monitor import (
     get_position_monitor,
     run_position_monitor_loop,
 )
+from orion.shared.async_main import run_entrypoint
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.main_position_monitor")
@@ -81,8 +80,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Position Monitor stopped.")
-        sys.exit(0)
+    run_entrypoint("orion.main_position_monitor", main())

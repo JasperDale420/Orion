@@ -7,11 +7,10 @@ Runs hourly during market hours to detect data quality issues
 
 import argparse
 import asyncio
-import signal
 from datetime import datetime
-from functools import partial
 from zoneinfo import ZoneInfo
 
+from orion.shared.async_main import run_service
 from orion.shared.logger import setup_logging
 from orion.jobs.data_quality_checker import run_quality_checks
 from orion.shared.logger import setup_struct_logger
@@ -72,30 +71,22 @@ async def run_scheduled(shutdown_event: asyncio.Event) -> None:
     logger.info("Data quality checker stopped.")
 
 
-async def main() -> None:
+async def run_once() -> None:
+    await init_db()
+    summary = await run_quality_checks()
+    anomaly_count = sum(len(v) for v in summary.values() if isinstance(v, list))
+    logger.info(f"Data quality check complete. {anomaly_count} anomalies found.")
+
+
+if __name__ == "__main__":
+    configure_logging()
+
     parser = argparse.ArgumentParser(description="Orion Data Quality Checker")
     parser.add_argument("--scheduled", action="store_true", help="Run in scheduled loop mode")
     args = parser.parse_args()
 
     if args.scheduled:
-        shutdown_event = asyncio.Event()
-        loop = asyncio.get_event_loop()
-
-        def handle_signal(sig: int) -> None:
-            logger.info(f"Received signal {sig}. Shutting down...")
-            shutdown_event.set()
-
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, partial(handle_signal, sig))
-
-        await run_scheduled(shutdown_event)
+        # run_scheduled() calls init_db() itself, so skip the helper's init.
+        run_service("orion.data_quality", run_scheduled, init_database=False)
     else:
-        await init_db()
-        summary = await run_quality_checks()
-        anomaly_count = sum(len(v) for v in summary.values() if isinstance(v, list))
-        logger.info(f"Data quality check complete. {anomaly_count} anomalies found.")
-
-
-if __name__ == "__main__":
-    configure_logging()
-    asyncio.run(main())
+        asyncio.run(run_once())

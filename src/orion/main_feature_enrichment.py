@@ -6,9 +6,7 @@ Runs as a background service to populate feature tables for ML.
 
 import asyncio
 import os
-import signal
 from datetime import UTC, datetime, timedelta
-from functools import partial
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -31,6 +29,7 @@ from orion.enrichment.heber_context import (
     persist_discovery_status,
     persist_regime_snapshot,
 )
+from orion.shared.async_main import run_service
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -480,31 +479,8 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     logger.info("Feature Enrichment Service stopped")
 
 
-async def main() -> None:
-    """Main entry point."""
-    shutdown_event = asyncio.Event()
-    loop = asyncio.get_event_loop()
-
-    def handle_signal(sig: int) -> None:
-        logger.info(f"Received signal {sig}. Shutting down...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, partial(handle_signal, sig))
-
-    # Log any unhandled exit so silent crash-loops (e.g. OOM killing child
-    # processes that raise past the inner try/except) leave a traceable line
-    # before the process dies. Re-raise so the container still exits non-zero.
-    try:
-        await run_feature_loop(shutdown_event)
-    except BaseException as exc:
-        logger.error(
-            "Feature enrichment service terminated unexpectedly",
-            exc_info=True,
-            extra={"event": "feature_enrichment_unexpected_exit", "error": repr(exc)},
-        )
-        raise
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    # run_feature_loop() calls init_db() itself, so skip the helper's init.
+    # The helper installs SIGINT/SIGTERM handlers, logs any unhandled crash as
+    # CRITICAL, and exits non-zero so OOM/restart loops stay visible.
+    run_service("orion.feature_enrichment", run_feature_loop, init_database=False)

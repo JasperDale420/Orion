@@ -5,9 +5,9 @@ Runs every weekday after market close to train ML models and extract trading pat
 """
 
 import asyncio
-import signal
 from datetime import UTC, datetime, timedelta
 
+from orion.shared.async_main import run_service
 from orion.shared.logger import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.ml.pattern_miner import run_all_pattern_mining
@@ -154,25 +154,13 @@ async def wait_for_next_run(shutdown_event: asyncio.Event) -> tuple[bool, bool]:
             return (False, True)  # Time to check drift
 
 
-async def main() -> None:
+async def run_mining_service(shutdown_event: asyncio.Event) -> None:
     """
-    Main entry point for pattern mining service.
+    Main pattern mining loop.
     Runs continuously, executing mining job:
     - Monday and Friday after market close (scheduled)
     - Any day when drift flag is set by EOD agent (triggered)
     """
-    await init_db()
-
-    shutdown_event = asyncio.Event()
-
-    def handle_signal(sig: int) -> None:
-        logger.info(f"Received signal {sig}. Shutting down...")
-        shutdown_event.set()
-
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
-
     logger.info("Pattern mining service started. Running every weekday + on drift trigger.")
 
     while not shutdown_event.is_set():
@@ -211,4 +199,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     configure_logging()
-    asyncio.run(main())
+    run_service("orion.main_pattern_miner", run_mining_service)

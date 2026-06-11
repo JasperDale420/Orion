@@ -1,5 +1,4 @@
 import asyncio
-import signal
 from typing import Any
 
 from dotenv import load_dotenv
@@ -22,6 +21,7 @@ from orion.execution.decision_persistence import (
     update_decision_status,
 )
 from orion.processing.signal_engine import SignalEngine
+from orion.shared.async_main import run_service
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.jobs.seed_solvers import ensure_active_solvers_ready
@@ -43,17 +43,8 @@ from orion.execution.flow_helpers import (  # noqa: E402, F401
 from orion.clients.heber_reader import get_heber_reader  # noqa: E402, F401
 
 
-async def main() -> None:
-    # Graceful Shutdown Setup
+async def run_execution_service(shutdown_event: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
-    shutdown_event = asyncio.Event()
-
-    def _signal_handler() -> None:
-        logger.info("Shutdown signal received. Stopping execution loop...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
 
     logger.info("Starting Orion Execution Service (V1 Deterministic)...")
 
@@ -278,23 +269,33 @@ async def main() -> None:
         )
 
 
+async def main() -> None:
+    """In-loop entry point: install signal handlers and run the execution loop.
+
+    The ``__main__`` path uses ``run_service`` for the same plumbing plus
+    process-level crash logging. This coroutine exists for callers that already
+    own an event loop and drive the service directly.
+    """
+    import signal
+
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler() -> None:
+        logger.info("Shutdown signal received. Stopping execution loop...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    await run_execution_service(shutdown_event)
+
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        # Ctrl-C path — silent exit is fine, operator initiated.
-        pass
-    except BaseException:
-        # Anything else escaping main() is a silent crash. Without this
-        # logger.critical the process exits with a traceback printed to
-        # stderr but no structured event, which is invisible to log
-        # aggregation. Re-raise so the exit code remains non-zero so
-        # docker restart_policy correctly reports failure (was previously
-        # ec=0 in some restart-loop incidents because main() returned
-        # silently rather than propagating the error).
-        logger.critical(
-            "execution_process_crashed",
-            extra={"event_type": "EXECUTION_PROCESS_CRASHED"},
-            exc_info=True,
-        )
-        raise
+    # run_service owns signal handlers (set the shutdown event), silent Ctrl-C
+    # exit, and structured crash logging with a non-zero exit code so docker
+    # restart_policy correctly reports failure (was previously ec=0 in some
+    # restart-loop incidents when the loop returned silently). init_database
+    # is False because run_execution_service runs wait_for_db() + init_db()
+    # itself, gated on the shutdown event.
+    run_service("orion.execution", run_execution_service, init_database=False)
