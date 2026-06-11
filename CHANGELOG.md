@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added (Redesign Wave A — 2026-06-11)
+
+- **Unified service-liveness contract + dead-man watchdog**: every long-running loop publishes a heartbeat per successful cycle (errors record without advancing it); a 5-minute watchdog alerts Discord on *absence* of success per service-declared budget, plus market-hours per-stage freshness checks on real pipeline data. Built for this repo's dominant failure mode: the silent stall.
+- **Alembic is finally baseline-driven**: the 34-migration incremental chain is squashed into a machine-verified baseline (column/index/FK parity proven); fresh databases bootstrap with plain `alembic upgrade head`; autogenerate gained a guard preventing drops of database-only legacy tables and now sees all 36 models (previously only 6 — every past autogen ran on incomplete metadata).
+- **Dedicated-Alpaca readiness (dormant)**: `ORION_ALPACA_*` config scaffolding + `ORION_BROKER_MODE` flag (coerces safely, never crashes the fleet) and a written enablement runbook for when a 4th paper key frees up.
+- **Flow-push design doc**: full discovery for replacing the 5-hop Heber polling path with Gateway WS push — event-id parity comes free (Gateway-minted ids flow through to Orion's dedup), implementation queued for Wave B.
+
+
 ### Added (Wave 3 — 2026-06-10 audit remediation)
 
 - **E2E tests run in CI** against a real Postgres+pgvector service container: schema migration, the 9-stage pipeline smoke test, and the pgvector/ON-CONFLICT dialect tests now gate every push (live-freshness checks stay local-only).
