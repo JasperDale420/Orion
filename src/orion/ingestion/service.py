@@ -3,6 +3,7 @@ import contextlib
 import os
 import signal
 import traceback
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -69,7 +70,9 @@ class IngestionService:
 
         # State
         self.eod_trigger_last_run: str | None = None
-        self._last_flow_poll_ts: datetime = datetime.now(UTC) - timedelta(minutes=15)
+        self._last_flow_poll_ts: datetime = datetime.now(UTC) - timedelta(
+            minutes=system_settings.initial_flow_lookback_minutes
+        )
         # Startup hydrate just ran in initialize(); defer the first periodic
         # re-hydration by one interval rather than re-querying immediately.
         self._last_universe_rehydrate_ts: datetime = datetime.now(UTC)
@@ -482,11 +485,21 @@ class IngestionService:
         try:
             reader = get_heber_reader()
             now = datetime.now(UTC)
+            # Rewind the read window by the overlap so a recovered Heber outage
+            # replays the gap between the pre-outage watermark and now, instead
+            # of the watermark jumping straight to `now` and silently dropping
+            # the gap. Re-delivered events that were already persisted are
+            # filtered out by the DeduplicationEngine (and bronze ON CONFLICT);
+            # the born-stale drop below still discards anything past the
+            # data-lag budget, so the overlap only resurfaces recent unseen
+            # events and cannot resurrect the "born-stale SKIP" incident class.
+            overlap = timedelta(seconds=system_settings.flow_poll_overlap_seconds)
+            read_start = self._last_flow_poll_ts - overlap
             df = await asyncio.to_thread(
                 reader.read_flow,
                 symbols=None,
                 asof_time=now,
-                start_time=self._last_flow_poll_ts,
+                start_time=read_start,
             )
 
             if df.empty:
@@ -575,7 +588,20 @@ class IngestionService:
                 payload["dte"] = dte
         payload["aggressor_ind"] = IngestionService._infer_aggressor(payload)
 
-        event_id = str(payload.get("event_id") or uuid.uuid4())
+        raw_event_id = payload.get("event_id")
+        if raw_event_id:
+            event_id = str(raw_event_id)
+        else:
+            # Deterministic fallback: the watermark overlap window re-reads
+            # recent rows on every poll, and dedup keys on event_id. A random
+            # uuid4 here minted a NEW id for the same id-less row each poll,
+            # defeating dedup and duplicating bronze/silver work. Hash stable
+            # row fields instead so re-reads collapse to one event.
+            basis = "|".join(
+                str(payload.get(k, ""))
+                for k in ("ticker", "ts_event", "executed_at", "premium", "put_call", "strike", "expiry", "volume")
+            )
+            event_id = f"uwflow_{hashlib.sha1(basis.encode()).hexdigest()}"
 
         # Extract event timestamp before it was converted to ISO string
         ts_event_raw = raw.get("ts_event")

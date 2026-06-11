@@ -917,6 +917,207 @@ class TestHeberFlowPoll:
 
 
 # ---------------------------------------------------------------------------
+# Flow watermark: startup lookback + outage-gap overlap (audit #12)
+# ---------------------------------------------------------------------------
+class TestFlowWatermarkOverlap:
+    """Regression guard for the flow-watermark data-loss edge.
+
+    Two defects fixed:
+      1. Outage gap loss — when Heber reads fail for N minutes then recover,
+         the watermark previously jumped from pre-outage straight to `now`,
+         silently dropping the gap. The poll now rewinds the read window by
+         `flow_poll_overlap_seconds` so the gap is replayed. The
+         DeduplicationEngine (cache + DB lookup) and the bronze ON CONFLICT
+         DO NOTHING absorb the re-delivered events.
+      2. Hardcoded startup lookback — the -15min literal is replaced by the
+         `initial_flow_lookback_minutes` setting.
+
+    The overlap re-delivers only *recent* events; the born-stale drop in
+    `_poll_heber_flow` still discards anything past the data-lag budget, so
+    the overlap cannot resurrect the "born-stale SKIP" incident class.
+    """
+
+    def _make_service(self):
+        with (
+            patch("orion.ingestion.service.HealthMonitor"),
+            patch("orion.ingestion.service.UniverseManager"),
+            patch("orion.ingestion.service.FeatureEngine"),
+            patch("orion.ingestion.service.RuleEngine"),
+            patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
+        ):
+            mock_factory.return_value = MagicMock()
+            from orion.ingestion.service import IngestionService
+
+            return IngestionService()
+
+    @pytest.mark.unit
+    def test_initial_lookback_uses_setting(self, monkeypatch):
+        """Startup watermark is seeded from initial_flow_lookback_minutes."""
+        from orion.config import system_settings
+
+        monkeypatch.setattr(system_settings, "initial_flow_lookback_minutes", 42)
+
+        before = datetime.now(UTC)
+        svc = self._make_service()
+        after = datetime.now(UTC)
+
+        # Watermark should be ~42 minutes before construction time.
+        assert (before - timedelta(minutes=42)) <= svc._last_flow_poll_ts <= (after - timedelta(minutes=42))
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_poll_reads_from_watermark_minus_overlap(self, monkeypatch):
+        """The read window starts at watermark - flow_poll_overlap_seconds."""
+        import pandas as pd
+
+        from orion.config import system_settings
+
+        monkeypatch.setattr(system_settings, "flow_poll_overlap_seconds", 120)
+
+        svc = self._make_service()
+        watermark = datetime(2026, 6, 10, 14, 0, 0, tzinfo=UTC)
+        svc._last_flow_poll_ts = watermark
+
+        mock_reader = MagicMock()
+        mock_reader.read_flow.return_value = pd.DataFrame()
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            await svc._poll_heber_flow("trace123")
+
+        called_start = mock_reader.read_flow.call_args.kwargs["start_time"]
+        assert called_start == watermark - timedelta(seconds=120)
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_outage_recovery_replays_gap_window(self, monkeypatch):
+        """After an outage, the recovery poll re-reads from before the
+        pre-outage watermark instead of jumping the read start to `now`.
+
+        Simulates: watermark stuck at pre-outage time (reads were failing),
+        Heber recovers. The recovery read window must cover the gap so the
+        events produced during the outage are picked up.
+        """
+        import pandas as pd
+
+        from orion.config import system_settings
+
+        monkeypatch.setattr(system_settings, "flow_poll_overlap_seconds", 120)
+
+        svc = self._make_service()
+        now = datetime.now(UTC)
+        # Watermark is 10 minutes stale (the outage window) because reads kept
+        # raising and the watermark was never advanced.
+        pre_outage_watermark = now - timedelta(minutes=10)
+        svc._last_flow_poll_ts = pre_outage_watermark
+
+        mock_reader = MagicMock()
+        mock_reader.read_flow.return_value = pd.DataFrame()
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            await svc._poll_heber_flow("trace-recover")
+
+        called_start = mock_reader.read_flow.call_args.kwargs["start_time"]
+        # The gap (pre_outage_watermark .. now) is replayed: read start sits at
+        # or before the pre-outage watermark, never jumps forward to `now`.
+        assert called_start <= pre_outage_watermark
+        assert called_start == pre_outage_watermark - timedelta(seconds=120)
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_overlap_redelivery_dedupes_no_duplicate_bronze(self):
+        """Re-delivered (overlapping) events do not produce duplicate bronze
+        rows: the DeduplicationEngine filters already-persisted event_ids, and
+        bronze ON CONFLICT DO NOTHING is the final backstop."""
+        from sqlalchemy import func, select
+
+        from orion.processing.deduper import DeduplicationEngine
+        from orion.processing.persistence import persist_bronze_events
+        from orion.storage.db import async_session_factory
+        from orion.storage.models import BronzeEvent
+
+        now = datetime.now(UTC)
+
+        def _make_event(eid: str) -> BronzeEvent:
+            return BronzeEvent(
+                event_id=eid,
+                source="UW",
+                event_type="UW_FLOW",
+                event_ts_utc=now,
+                received_ts_utc=now,
+                ticker="SPY",
+                session="REGULAR",
+                payload={"ticker": "SPY"},
+            )
+
+        # First poll batch: events e1, e2.
+        batch1 = [_make_event("e1"), _make_event("e2")]
+        async with async_session_factory() as session:
+            deduped1 = await DeduplicationEngine(session).dedupe_batch(batch1)
+            await persist_bronze_events(session, deduped1)
+            await session.commit()
+        assert {e.event_id for e in deduped1} == {"e1", "e2"}
+
+        # Overlap re-delivers e2 (already seen) plus a new e3. A *fresh*
+        # DeduplicationEngine (no warm cache) must still discard e2 via the DB
+        # lookup, keeping only e3.
+        batch2 = [_make_event("e2"), _make_event("e3")]
+        async with async_session_factory() as session:
+            deduped2 = await DeduplicationEngine(session).dedupe_batch(batch2)
+            # Persist the full re-delivered batch to exercise ON CONFLICT too.
+            await persist_bronze_events(session, batch2)
+            await session.commit()
+        assert {e.event_id for e in deduped2} == {"e3"}
+
+        # Exactly 3 distinct bronze rows — no duplicate from the overlap.
+        async with async_session_factory() as session:
+            total = await session.scalar(select(func.count()).select_from(BronzeEvent))
+        assert total == 3
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_overlap_does_not_resurrect_born_stale(self, monkeypatch):
+        """Overlap widens the read window but the born-stale drop still
+        discards events past the data-lag budget — the overlap cannot
+        resurrect the 'born-stale SKIP' incident class."""
+        import pandas as pd
+
+        from orion.config import system_settings
+
+        monkeypatch.setattr(system_settings, "flow_poll_overlap_seconds", 120)
+
+        svc = self._make_service()
+        now = datetime.now(UTC)
+        max_lag = system_settings.max_data_lag_seconds
+        # Watermark far enough back that the overlap window straddles a stale
+        # event, but the born-stale drop must still reject it.
+        svc._last_flow_poll_ts = now - timedelta(seconds=60)
+
+        mock_reader = MagicMock()
+        mock_reader.read_flow.return_value = pd.DataFrame(
+            [
+                {
+                    "event_id": "fresh",
+                    "underlying": "SPY",
+                    "premium": 1000.0,
+                    "ts_event": pd.Timestamp(now - timedelta(seconds=30)),
+                },
+                {
+                    "event_id": "born_stale",
+                    "underlying": "AAPL",
+                    "premium": 1000.0,
+                    "ts_event": pd.Timestamp(now - timedelta(seconds=max_lag + 1800)),
+                },
+            ]
+        )
+
+        with patch("orion.ingestion.service.get_heber_reader", return_value=mock_reader):
+            events = await svc._poll_heber_flow("trace-stale")
+
+        assert [e.event_id for e in events] == ["fresh"]
+
+
+# ---------------------------------------------------------------------------
 # Self-healing universe: periodic re-hydration + breadth collapse alarm
 # ---------------------------------------------------------------------------
 class TestUniverseSelfHealing:

@@ -165,6 +165,22 @@ class SystemSettings(BaseSettings):
     # cycle times we see in practice (rollups can run 30-60s on busy days).
     ingestion_heartbeat_max_age: int = 600
     max_data_lag_seconds: int = 600  # Pre-market/post-market data can lag 300s+
+    # First flow poll on startup looks back this many minutes from `now` to
+    # seed `_last_flow_poll_ts` (was a hardcoded 15-minute literal).
+    initial_flow_lookback_minutes: int = Field(
+        default=15,
+        validation_alias="ORION_INITIAL_FLOW_LOOKBACK_MINUTES",
+    )
+    # Each periodic flow poll rewinds the watermark by this overlap before
+    # reading, so a Heber outage that recovers replays the gap window instead
+    # of jumping the watermark to `now` and silently dropping it. Re-delivered
+    # events are absorbed by the DeduplicationEngine + bronze ON CONFLICT; the
+    # born-stale drop in _poll_heber_flow still discards anything past the
+    # data-lag budget, so the overlap only resurfaces recent unseen events.
+    flow_poll_overlap_seconds: int = Field(
+        default=120,
+        validation_alias="ORION_FLOW_POLL_OVERLAP_SECONDS",
+    )
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
     uw_base_url: str = Field(default="https://api.unusualwhales.com", validation_alias="UW_BASE_URL")
