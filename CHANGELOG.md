@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added (Wave 3 — 2026-06-10 audit remediation)
+
+- **E2E tests run in CI** against a real Postgres+pgvector service container: schema migration, the 9-stage pipeline smoke test, and the pgvector/ON-CONFLICT dialect tests now gate every push (live-freshness checks stay local-only).
+- **Pytest markers are real**: unit/integration/e2e auto-apply by directory, so `-m unit` (503 tests) and friends finally select correctly; explicit markers still win.
+
+### Changed (Wave 3)
+
+- Configuration guide and `config.py` now document the recommended env-var names AND the actual precedence when both names of an alias pair are set (first-listed alias wins — e.g. `DB_URL` over `ORION_DB_URL`).
+- Vendored `qlib-main/` removed (zero references); stale debug/fix session artifacts archived under `archive/sessions/`.
+
+
 ### Added (Wave 2 — 2026-06-10 audit remediation)
 
 - **Meta-search and meta-weekly are enabled in production for the first time** via native launchd daemons with a Discord alert per scheduled run (success summary or failure) — they had only ever existed behind a never-started compose profile.
