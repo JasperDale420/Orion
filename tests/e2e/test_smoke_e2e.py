@@ -324,8 +324,11 @@ async def _execute_mock_smoke_order(*, run_tag: str, decision, candidate) -> Non
 
     mock_client = AsyncMock()
     mock_client.get_clock.return_value = {"is_open": True}
+    # The engine's price fetch matches on contract_symbol (not symbol) and
+    # reads bid/ask (not mid) — same contract the dedicated integration test
+    # exercises; a stale shape here aborts with options_price_fetch_failed.
     mock_client.get_option_chain.return_value = {
-        "contracts": [{"symbol": candidate.option_symbol, "mid": 3.50, "ask": 3.70}]
+        "contracts": [{"contract_symbol": candidate.option_symbol, "bid": 3.30, "ask": 3.70}]
     }
     mock_client.create_order.return_value = {"id": _smoke_order_id(run_tag), "status": "accepted"}
     execution_engine._get_gateway_client = lambda: mock_client
