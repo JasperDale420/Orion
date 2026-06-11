@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **RiskManager Prometheus gauges were permanently inert.** The module-level init called the async `Metrics.get_instance()` without awaiting it, so risk equity / daily loss / open positions / slippage / exposure gauges never reached Prometheus — surfaced by enabling real mypy coverage, confirmed blocking by adversarial review. Metrics now resolve via a synchronous singleton accessor on first emission; failures degrade to no-metrics rather than touching the risk path.
+- **Bounded the two unbounded in-memory caches in the ingestion path** (2026-06-10 audit #10): `FeatureEngine` per-ticker history/flow dicts now LRU-evict above 500 tracked tickers (re-seen tickers rebuild via the normal cold-start path), and the dedup engine's seen-ids cache is a 200k-entry FIFO with the DB remaining authoritative — an evicted id that reappears is still deduplicated.
+
+### Added
+
+- **mypy actually checks the safety-critical packages now** (audit #23): new pragmatic tier covers all of `orion.execution.*` and `orion.core.*` (188 files checked, 0 errors — previously a blanket ignore meant only 3 files were checked), enforced by a new CI Type Check step.
+- **Postgres-dialect e2e tests** (audit #17): pgvector similarity search and ON CONFLICT upsert/dedupe paths now run against the real TimescaleDB — the first run immediately caught a NOT NULL constraint SQLite had been silently ignoring.
+
+
 ### Added
 
 - **Discord alerting + ingestion degrade mode — the Gateway WebSocket can no longer die silently (2026-06-10 audit).** Previously, if the Gateway stream exhausted its 10 reconnect attempts, the client set itself not-running but the ingestion loop kept cycling and heartbeating with `drain_events()` returning `[]` forever — zero bars ingested, nothing alerted. The service now detects a dead post-connect stream each cycle and enters DEGRADED mode: one Discord alert (new `orion.shared.alerts.send_discord_alert`, webhook via `DISCORD_WEBHOOK_URL`/`ORION_DISCORD_WEBHOOK_URL`, 15-min dedupe, never raises), an ERROR log per degraded cycle, continued Heber flow polling, and a `GatewayStreamClient.restart()` attempt every cycle (fresh backoff budget); recovery sends a recovery alert and clears the state (`IngestionService.is_degraded`). Initial-connection backoff never trips degrade.
