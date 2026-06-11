@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added (Wave 2 — 2026-06-10 audit remediation)
+
+- **Meta-search and meta-weekly are enabled in production for the first time** via native launchd daemons with a Discord alert per scheduled run (success summary or failure) — they had only ever existed behind a never-started compose profile.
+- **Unprotected positions now reach the risk layer**: failed protective-bracket legs register in a RiskManager registry (recording which legs are missing), alert Discord once, and PositionMonitor re-places ONLY the missing legs first thing each cycle, with stale entries cleared when the position closes before re-protection.
+- **Flow watermark overlap window**: a Heber outage no longer silently loses the gap — every poll re-reads a configurable overlap (dedup absorbs repeats), and the startup lookback is configurable (`ORION_INITIAL_FLOW_LOOKBACK_MINUTES`, `ORION_FLOW_POLL_OVERLAP_SECONDS`).
+- **Smoke tests for 5 previously-untested jobs** (dlq_consumer, nightly_backfill, solver_promoter, sync_earnings, rollup_job) and a shared async-main runner deduplicating 7 entry points' startup/shutdown boilerplate.
+
+### Fixed (Wave 2)
+
+- **Rollup watermarks never persisted** — `run_once` never committed, so every rollup run cold-started. Found by the new smoke tests.
+- **DLQ rows never left PENDING** — status updates were applied to detached ORM instances in a different session, so every batch replayed forever; replay writes and status updates now commit atomically per batch.
+- **Close-escalation classification made explicit** (`classify_close_failure`): ambiguous Gateway failure shapes (missing/None/non-int status codes) always defer instead of risking premature native-flatten escalation.
+- **Id-less Heber flow rows now get a deterministic event id** (hash of stable fields) instead of a random uuid per read — required for the overlap window's dedup to hold.
+
 ### Fixed
 
 - **RiskManager Prometheus gauges were permanently inert.** The module-level init called the async `Metrics.get_instance()` without awaiting it, so risk equity / daily loss / open positions / slippage / exposure gauges never reached Prometheus — surfaced by enabling real mypy coverage, confirmed blocking by adversarial review. Metrics now resolve via a synchronous singleton accessor on first emission; failures degrade to no-metrics rather than touching the risk path.
