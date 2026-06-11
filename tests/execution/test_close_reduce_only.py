@@ -71,6 +71,8 @@ async def test_long_position_sells_to_close(monkeypatch):
     assert kw["qty"] == 10.0
     assert kw["position_intent"] == "sell_to_close"
     client.close_position.assert_not_called()
+    # State effect: the limit success was recorded for the circuit breaker.
+    assert ee.order_history[-1][1] is True
 
 
 @pytest.mark.asyncio
@@ -82,6 +84,10 @@ async def test_flat_broker_does_not_open_short(monkeypatch):
     assert ok is False
     client.create_order.assert_not_called()
     client.close_position.assert_not_called()
+    # State effect: a refused close is NOT a broker round-trip — nothing is
+    # recorded to the breaker history (a regression that records a False here
+    # would erode the breaker on a no-op safety refusal).
+    assert list(ee.order_history) == []
 
 
 @pytest.mark.asyncio
@@ -94,6 +100,7 @@ async def test_short_position_buys_to_cover(monkeypatch):
     assert kw["side"] == "buy"
     assert kw["qty"] == 8.0
     assert kw["position_intent"] == "buy_to_close"
+    assert ee.order_history[-1][1] is True
 
 
 @pytest.mark.asyncio
@@ -113,3 +120,6 @@ async def test_unverifiable_position_is_skipped(monkeypatch):
     assert ok is False
     client.create_order.assert_not_called()
     client.close_position.assert_not_called()
+    # State effect: an unverifiable position is skipped, not counted as a
+    # broker round-trip — breaker history stays empty.
+    assert list(ee.order_history) == []

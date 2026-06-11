@@ -64,3 +64,9 @@ async def test_close_position_bails_after_retries_when_gateway_down():
     # Retried, not a single shot.
     assert ee._check_gateway_available.await_count == ee._CLOSE_GATEWAY_RETRY_ATTEMPTS
     client.create_order.assert_not_called()
+    # State effect: bailing before any submit is NOT a broker round-trip, so
+    # nothing lands in the breaker history. A regression that recorded a False
+    # here would let a flaky gateway erode the circuit breaker on its own.
+    assert list(ee.order_history) == []
+    # And the native flatten was never reached either.
+    client.close_position.assert_not_called()

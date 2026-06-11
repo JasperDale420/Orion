@@ -101,6 +101,13 @@ async def test_solver_driven_sizing_uses_risk_bps(mock_env):
     mock_client.create_order.assert_called_once()
     call_kwargs = mock_client.create_order.call_args[1]
     assert int(call_kwargs["qty"]) == 5
+    # State effects: sizing alone isn't enough — the order must have actually
+    # gone through. Pin the decision outcome, the risk-reservation, and the
+    # breaker bookkeeping so a regression that sizes right but fails/skips the
+    # submit (or skips reserving pending risk) is caught.
+    assert decision.executed_successfully == "TRUE"
+    engine.risk_manager.update_post_trade.assert_awaited_once()
+    assert engine.order_history[-1][1] is True
 
 
 @pytest.mark.asyncio
@@ -119,6 +126,9 @@ async def test_regime_multiplier_reduces_size(mock_env):
     mock_client.create_order.assert_called_once()
     call_kwargs = mock_client.create_order.call_args[1]
     assert int(call_kwargs["qty"]) == 2
+    # The reduced-size order still completed end-to-end.
+    assert decision.executed_successfully == "TRUE"
+    assert engine.order_history[-1][1] is True
 
 
 @pytest.mark.asyncio
@@ -138,6 +148,9 @@ async def test_sizing_capped_at_max_premium(mock_env):
     call_kwargs = mock_client.create_order.call_args[1]
     # Should be capped at 10 (max_option_premium_pct=0.02 * 100000 / 200 = 10)
     assert int(call_kwargs["qty"]) <= 10
+    # The capped order still completed end-to-end.
+    assert decision.executed_successfully == "TRUE"
+    assert engine.order_history[-1][1] is True
 
 
 @pytest.mark.asyncio
@@ -154,3 +167,6 @@ async def test_fallback_to_flat_sizing_without_risk_bps(mock_env):
     mock_client.create_order.assert_called_once()
     call_kwargs = mock_client.create_order.call_args[1]
     assert int(call_kwargs["qty"]) == 10
+    # The flat-sized fallback order still completed end-to-end.
+    assert decision.executed_successfully == "TRUE"
+    assert engine.order_history[-1][1] is True

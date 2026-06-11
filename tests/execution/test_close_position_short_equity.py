@@ -46,7 +46,9 @@ def _make_engine(market_schedule_returns_options_open: bool = True) -> Execution
     engine.last_positions_snapshot_ts = None
     engine._ledger = None
     engine._check_gateway_available = AsyncMock(return_value=True)
-    engine._record_result = Mock()
+    # NOTE: _record_result is left REAL so the broker round-trip outcome lands in
+    # the real ``order_history`` deque/list — tests assert the success was
+    # recorded for the circuit breaker, not just the broker-call shape.
     engine._market_schedule = MagicMock()
     engine._market_schedule.is_market_open_for_options = Mock(return_value=market_schedule_returns_options_open)
     return engine
@@ -71,7 +73,8 @@ async def test_short_equity_immediate_close_sends_positive_qty() -> None:
     import orion.execution.execution_engine as ee_mod
 
     original_persist = ee_mod.persist_exit_decision
-    ee_mod.persist_exit_decision = AsyncMock()
+    persist_mock = AsyncMock()
+    ee_mod.persist_exit_decision = persist_mock
     try:
         exit_signal = SimpleNamespace(
             urgency="IMMEDIATE",
@@ -99,6 +102,11 @@ async def test_short_equity_immediate_close_sends_positive_qty() -> None:
     assert call_kwargs["qty"] == 8000.0, f"expected abs qty, got {call_kwargs['qty']}"
     # And no fallback to create_order.
     mock_client.create_order.assert_not_called()
+    # State effect: the successful close was recorded for the circuit breaker.
+    # A regression that returns True without _record_result(True) would let a
+    # later genuine failure trip the breaker one attempt too early.
+    assert engine.order_history[-1][1] is True
+    persist_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -152,6 +160,8 @@ async def test_short_equity_limit_close_uses_buy_side_and_positive_qty() -> None
     limit = call_kwargs["limit_price"]
     assert limit >= 12.50, f"BUY-to-cover limit {limit} below mark 12.50 will not fill"
     assert limit <= 12.50 * 1.01, f"BUY-to-cover limit {limit} unreasonably above mark"
+    # State effect: limit-path success was recorded for the breaker.
+    assert engine.order_history[-1][1] is True
 
 
 @pytest.mark.asyncio
@@ -197,3 +207,6 @@ async def test_long_equity_limit_close_unchanged_uses_sell() -> None:
     assert call_kwargs["side"] == "sell"
     # Long close limit goes BELOW the mark (sell, hit bid).
     assert call_kwargs["limit_price"] <= 200.0
+    # State effect: success recorded for the breaker; no native-flatten fallback.
+    assert engine.order_history[-1][1] is True
+    mock_client.close_position.assert_not_called()

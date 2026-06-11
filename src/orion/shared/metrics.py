@@ -38,6 +38,15 @@ class Metrics(AsyncSingleton):
         self.risk_exposure = Gauge("orion_risk_exposure", "Position exposure in USD", ["ticker"])
         self.risk_daily_loss = Gauge("orion_risk_daily_loss", "Current daily loss")
         self.risk_open_positions = Gauge("orion_risk_open_positions", "Number of open positions")
+        # Fill-quality: adverse slippage between limit and fill, in basis points.
+        # RiskManager.process_fill guards emission with hasattr(); this
+        # histogram was never defined, so slippage observability was silently
+        # dead even after the gauges were fixed.
+        self.slippage_bps = Histogram(
+            "orion_slippage_bps",
+            "Adverse fill slippage vs limit price in basis points",
+            ["ticker", "side"],
+        )
 
     async def _async_init(self) -> None:
         """Async initialization hook called once on first instantiation."""

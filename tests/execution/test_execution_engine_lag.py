@@ -62,6 +62,12 @@ async def test_execution_fresh_signal(engine):
     assert decision.executed_successfully == "TRUE"
     mock_client = engine._gateway_client
     mock_client.create_order.assert_called_once()
+    # State effects on the happy path: pending risk was reserved before the
+    # broker round-trip and the success was recorded for the circuit breaker.
+    # Pinning these catches a regression that fills the order but skips the
+    # risk reservation (greeks/daily-loss accounting would then under-count).
+    engine.risk_manager.update_post_trade.assert_awaited_once()
+    assert engine.order_history[-1][1] is True
 
 
 @pytest.mark.asyncio
@@ -92,3 +98,7 @@ async def test_execution_stale_signal(engine):
     assert "Data Lag" in decision.reason
     mock_client = engine._gateway_client
     mock_client.create_order.assert_not_called()
+    # State effect: the stale-data gate bails before any broker round-trip, so
+    # nothing is recorded to the breaker (a stale-data SKIP must not look like a
+    # broker failure to the circuit breaker).
+    assert list(engine.order_history) == []
