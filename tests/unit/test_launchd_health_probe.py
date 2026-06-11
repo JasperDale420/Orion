@@ -28,15 +28,17 @@ from orion.jobs.launchd_health_probe import (
 )
 
 
-# `launchctl list` output with the two always-on daemons (execution,
-# ingestion) present and healthy, plus caller-supplied rows for the remaining
-# required job(s) and any extras. Keeps the missing-job detector quiet so
-# run_probe tests can isolate the fault they actually exercise.
+# `launchctl list` output with all always-on daemons (execution, ingestion,
+# meta-search, meta-weekly) present and healthy, plus caller-supplied rows for
+# any extras. Keeps the missing-job detector quiet so run_probe tests can
+# isolate the fault they actually exercise.
 def _required_with(*job_lines: str) -> str:
     lines = [
         "PID\tStatus\tLabel",
         "50960\t0\tcom.empire.orion.execution",
         "12345\t0\tcom.empire.orion.ingestion",
+        "23456\t0\tcom.empire.orion.meta-search",
+        "34567\t0\tcom.empire.orion.meta-weekly",
         *job_lines,
     ]
     return "\n".join(lines) + "\n"
@@ -256,6 +258,8 @@ class TestDetectMissingJobs:
         entries = [
             LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
             LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
+            LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
+            LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
             LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
         ]
         assert detect_missing_jobs(entries) == []
@@ -265,6 +269,8 @@ class TestDetectMissingJobs:
         # see this; only the expected-set comparison catches it.
         entries = [
             LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
+            LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
             LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
         ]
         alerts = detect_missing_jobs(entries)
@@ -276,21 +282,25 @@ class TestDetectMissingJobs:
         assert "not loaded" in alerts[0].message
 
     def test_multiple_missing_jobs_returned_in_sorted_order(self) -> None:
-        # Neither required daemon is present (only the unrequired one-shot is)
-        # → both missing, reported alphabetically for determinism.
+        # No required daemon is present (only the unrequired one-shot is)
+        # → all missing, reported alphabetically for determinism.
         entries = [LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close")]
         alerts = detect_missing_jobs(entries)
         assert [a.label for a in alerts] == [
             "com.empire.orion.execution",
             "com.empire.orion.ingestion",
+            "com.empire.orion.meta-search",
+            "com.empire.orion.meta-weekly",
         ]
 
     def test_one_shot_orphan_close_absence_is_not_required(self) -> None:
         # orphan-close is a removable one-shot — its absence must NOT alert,
-        # even though both always-on daemons are present.
+        # even though all always-on daemons are present.
         entries = [
             LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
             LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
+            LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
+            LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
         ]
         assert detect_missing_jobs(entries) == []
 
@@ -343,7 +353,12 @@ class TestProbeSelfExclusion:
         notifications: list[HealthAlert] = []
         log_path = tmp_path / "launchd_health.log"
         alerts = run_probe(
-            launchctl_runner=lambda: "PID\tStatus\tLabel\n50960\t0\tcom.empire.orion.execution\n",
+            launchctl_runner=lambda: (
+                "PID\tStatus\tLabel\n"
+                "50960\t0\tcom.empire.orion.execution\n"
+                "23456\t0\tcom.empire.orion.meta-search\n"
+                "34567\t0\tcom.empire.orion.meta-weekly\n"
+            ),
             notifier=notifications.append,
             log_path=log_path,
         )

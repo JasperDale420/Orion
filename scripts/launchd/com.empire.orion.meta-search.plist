@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd agent for orion.main_meta --scheduled running natively on macOS.
+
+This is the FIRST production scheduler for meta-search. It replaces the
+Docker `meta-search` service, which sat behind the `scheduled` compose
+profile that was never `up` (see
+proposals/2026-06-10-eod-meta-diagnosis.md root-cause #2).
+
+SHAPE: long-running KeepAlive daemon (like ingestion/execution), NOT a
+StartCalendarInterval one-shot. main_meta.py's `--scheduled` mode is an
+internal 60s poll loop that self-fires at 18:00 ET on weekdays. The
+process owns its own schedule, so launchd only keeps it alive. A calendar
+one-shot would be wrong: the loop never exits, so the process must run
+24/7 for the 18:00 ET tick to land.
+
+Install:
+    cp scripts/launchd/com.empire.orion.meta-search.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.meta-search.plist
+
+Status:
+    launchctl print gui/$(id -u)/com.empire.orion.meta-search
+
+Stop / disable:
+    launchctl bootout gui/$(id -u)/com.empire.orion.meta-search
+
+Logs:
+    tail -f logs/meta_search_native.log          # structured Python logs
+    tail -f logs/meta_search_native.stdout.log   # launchd-captured stdout
+    tail -f logs/meta_search_native.stderr.log   # launchd-captured stderr
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.meta-search</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Orion/scripts/run_meta_search.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Start when this LaunchAgent is loaded (login or `launchctl bootstrap`). -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on exit, regardless of exit code. Equivalent to docker
+         `restart: unless-stopped`. The internal scheduler loop is the
+         system of record for *when* meta-search fires; KeepAlive just
+         ensures the loop is always alive. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Minimum seconds between restart attempts; prevents a hard
+         crash-loop from saturating CPU. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/meta_search_native.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/meta_search_native.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 
 from orion.agents.meta_search_agent import MetaSearchAgent
+from orion.shared.alerts import send_discord_alert
 from orion.shared.logger import setup_struct_logger
 
 # Setup Logger
@@ -57,8 +58,15 @@ async def run_scheduled(base_solver: str) -> None:
                     experiment_name=f"Scheduled Daily {now.strftime('%Y-%m-%d')}",
                 )
                 logger.info("Daily scheduled meta-search evolution completed.")
+                await send_discord_alert(
+                    f"Meta-search daily evolution completed for {base_solver} ({now.strftime('%Y-%m-%d')})."
+                )
             except Exception as e:
                 logger.error(f"Daily meta-search evolution failed: {e}", exc_info=True)
+                await send_discord_alert(
+                    f"Meta-search daily evolution FAILED for {base_solver} "
+                    f"({now.strftime('%Y-%m-%d')}): {type(e).__name__}: {e}"
+                )
 
             # Wait 1 hour to avoid re-triggering
             await asyncio.sleep(3600)

@@ -26,6 +26,8 @@ All plists live in `scripts/launchd/` and install into
 |---|---|---|
 | `com.empire.orion.execution.plist` | `scripts/run_execution_native.sh` | `orion.main_execution` |
 | `com.empire.orion.ingestion.plist` | `scripts/run_ingestion_native.sh` | `orion.ingestion` |
+| `com.empire.orion.meta-search.plist` | `scripts/run_meta_search.sh` | `orion.main_meta --scheduled` — daily solver evolution, self-fires 18:00 ET weekdays |
+| `com.empire.orion.meta-weekly.plist` | `scripts/run_meta_weekly.sh` | `orion.main_meta_weekly --scheduled` — weekly evolution + promotions, self-fires Fri 17:30 ET |
 | `com.empire.orion.launchd-health.plist` | `scripts/run_launchd_health_probe.sh` | Once-per-minute audit of all `com.empire.orion.*` jobs |
 | `com.empire.orion.orphan-close.plist.DISABLED-260526` | inline bash | **Disabled.** One-shot orphan-position closer; preserved as a reference (see [Orphan-close history](#orphan-close-history)) |
 
@@ -97,6 +99,63 @@ logs/orphan_close.log                 # populated only when orphan plist fires
 
 Tail the structured log first; only fall back to stdout/stderr when something
 crashed before logger init.
+
+## Meta-search & meta-weekly (native)
+
+`com.empire.orion.meta-search` and `com.empire.orion.meta-weekly` are the
+production schedulers for solver evolution. They replace the Docker
+`meta-search` / `meta-weekly` services, which sat behind the `scheduled`
+compose profile that was never brought up — so meta-search had **no**
+production scheduler before this (see
+`proposals/2026-06-10-eod-meta-diagnosis.md`).
+
+Both are **long-running KeepAlive daemons**, not `StartCalendarInterval`
+one-shots. `main_meta.py --scheduled` and `main_meta_weekly.py --scheduled`
+each run an internal 60-second poll loop that self-fires at a fixed time and
+otherwise sleeps:
+
+- **meta-search** — daily, 18:00 ET on weekdays. Evolves the base solver
+  (`ORION_META_BASE_SOLVER`, default `diversified_baseline_v1`).
+- **meta-weekly** — Friday 17:30 ET. Runs the weekly evolution, then a solver
+  promotion sweep. The fire time is hard-coded in `run_scheduled()`; the plist
+  intentionally imposes no calendar time of its own (that would fight the
+  in-process scheduler).
+
+Because the process owns its schedule, launchd's only job is to keep the loop
+alive across reboots/crashes — exactly like `execution`/`ingestion`. Both are
+therefore in the launchd-health probe's `REQUIRED_LABELS`: a missing row means
+the scheduler loop is dead and the next fire silently never happens.
+
+Each fire posts a **Discord notification** (via `orion.shared.alerts`):
+a success summary (experiments / reports analyzed, mutations applied, solvers
+promoted) or a failure with the exception class. Configure the webhook with
+`ORION_DISCORD_WEBHOOK_URL`; absent it, the alert no-ops and the run still logs
+normally.
+
+```bash
+# Install + load
+cp scripts/launchd/com.empire.orion.meta-search.plist  ~/Library/LaunchAgents/
+cp scripts/launchd/com.empire.orion.meta-weekly.plist  ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.meta-search.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.meta-weekly.plist
+
+# Verify (PID present, LastExitStatus 0 — not 127)
+launchctl list | grep -E 'com.empire.orion.meta'
+
+# Disable / uninstall
+launchctl bootout gui/$(id -u)/com.empire.orion.meta-search
+launchctl bootout gui/$(id -u)/com.empire.orion.meta-weekly
+rm ~/Library/LaunchAgents/com.empire.orion.meta-search.plist
+rm ~/Library/LaunchAgents/com.empire.orion.meta-weekly.plist
+```
+
+> After `bootout`, both labels are removed from `REQUIRED_LABELS`' expected
+> set only in code — if you disable them but leave `REQUIRED_LABELS` unchanged,
+> the health probe will fire a CRITICAL "not loaded" alert every minute. Disable
+> the daemons and the `REQUIRED_LABELS` entries together, or leave them loaded.
+
+Logs: `logs/meta_search_native.log` / `logs/meta_weekly_native.log` (structured),
+plus the launchd-captured `*.stdout.log` / `*.stderr.log`.
 
 ## Launchd health probe
 

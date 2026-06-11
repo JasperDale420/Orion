@@ -37,9 +37,17 @@ DEFAULT_LOG_PATH = Path("logs/launchd_health.log")
 SELF_LABEL = DEFAULT_PREFIX + "launchd-health"
 
 # Always-on Orion launchd jobs that must be present as a row in
-# `launchctl list` at all times. Both are RunAtLoad+KeepAlive daemons, so a
+# `launchctl list` at all times. All are RunAtLoad+KeepAlive daemons, so a
 # missing row means the daemon was booted out or never loaded — a silent
 # failure `classify_entry` cannot see (there is no row to classify).
+#
+# meta-search and meta-weekly qualify: their `--scheduled` modes are
+# internal poll loops that never exit (they self-fire at 18:00 ET weekdays /
+# Friday 17:30 ET respectively and otherwise sleep), so the plists run them
+# as RunAtLoad+KeepAlive daemons exactly like execution/ingestion. A missing
+# row means the always-on scheduler loop is not running and the scheduled
+# fire will silently never happen — precisely the steady-state-required case
+# this set guards. (Contrast the StartCalendarInterval one-shots below.)
 #
 # Deliberately NOT required: the probe itself (it cannot report its own
 # absence — see SELF_LABEL) and `com.empire.orion.orphan-close`. orphan-close
@@ -52,6 +60,8 @@ REQUIRED_LABELS = frozenset(
     {
         DEFAULT_PREFIX + "execution",
         DEFAULT_PREFIX + "ingestion",
+        DEFAULT_PREFIX + "meta-search",
+        DEFAULT_PREFIX + "meta-weekly",
     }
 )
 
