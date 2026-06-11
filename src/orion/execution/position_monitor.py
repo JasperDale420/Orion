@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from orion.ml.exit_classifier import (
     BucketExitClassifier,
@@ -493,7 +493,7 @@ class PositionMonitor:
         row: dict[str, Any] | None = None
         try:
 
-            async def run_query(session: Any) -> dict | None:
+            async def run_query(session: Any) -> dict[str, Any] | None:
                 from sqlalchemy import text
 
                 result = await session.execute(text(query), {"symbol": symbol})
@@ -521,7 +521,7 @@ class PositionMonitor:
                 return val
             if isinstance(val, str):
                 try:
-                    from dateutil.parser import parse as _parse
+                    from dateutil.parser import parse as _parse  # type: ignore[import-untyped]
 
                     return _parse(val)
                 except Exception:
@@ -669,7 +669,7 @@ class PositionMonitor:
         from orion.config import system_settings
         from orion.execution.exit_fallback_rules import evaluate_fallback_rules
 
-        exit_signals = []
+        exit_signals: list[tuple[TrackedPosition, ExitPrediction]] = []
 
         for symbol, pos in self.tracked_positions.items():
             # Fallback rules first — they're cheap and deterministic.
@@ -712,11 +712,16 @@ class PositionMonitor:
                 # downstream execute_exits path doesn't need to branch.
                 # ExitPrediction's consumer reads .should_exit, .confidence,
                 # .reasoning, and (optionally) .rule_id.
-                prediction = SimpleNamespace(
-                    should_exit=True,
-                    confidence=fallback.confidence,
-                    reasoning=fallback.reason,
-                    rule_id=fallback.rule_id,
+                # Duck-typed as ExitPrediction: consumers only read .should_exit,
+                # .confidence, .reasoning, .rule_id (see comment above).
+                prediction = cast(
+                    "ExitPrediction",
+                    SimpleNamespace(
+                        should_exit=True,
+                        confidence=fallback.confidence,
+                        reasoning=fallback.reason,
+                        rule_id=fallback.rule_id,
+                    ),
                 )
                 exit_signals.append((pos, prediction))
                 continue

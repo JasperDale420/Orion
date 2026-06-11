@@ -37,7 +37,7 @@ async def fetch_pending_candidates(limit: int = 100) -> list[CandidateTrade]:
     """
     freshness_cutoff = datetime.now(UTC) - timedelta(seconds=float(system_settings.max_data_lag_seconds))
 
-    async def query_candidates(session: Any) -> None:
+    async def query_candidates(session: Any) -> list[CandidateTrade]:
         stmt = (
             select(CandidateTrade)
             .outerjoin(StrategyDecision, CandidateTrade.candidate_id == StrategyDecision.candidate_id)

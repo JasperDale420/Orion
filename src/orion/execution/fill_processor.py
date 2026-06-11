@@ -192,7 +192,7 @@ async def maybe_snapshot_positions(
         return None
 
 
-def _create_position_snapshot_from_dict(p: dict, now: datetime, model_class: Any) -> Any | None:
+def _create_position_snapshot_from_dict(p: dict[str, Any], now: datetime, model_class: Any) -> Any | None:
     """Create a PositionSnapshot model from a Gateway position dict."""
     symbol = p.get("symbol")
     if not symbol:

@@ -63,7 +63,7 @@ class SolverPipeline:
             logger.warning("FeatureEngine not provided to SolverPipeline; state/history will be lost.")
             feature_engine = FeatureEngine()
 
-        features = {}
+        features: dict[str, float] = {}
         try:
             features = await feature_engine.compute(candidate, solver.universe)
         except Exception as e:

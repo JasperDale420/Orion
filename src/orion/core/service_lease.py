@@ -104,7 +104,9 @@ async def acquire_service_lease(service_id: str) -> str:
         if existing is not None:
             last = existing.last_updated_utc
             if last is not None:
-                age = (now - ensure_utc(last)).total_seconds()
+                last_utc = ensure_utc(last)
+                assert last_utc is not None  # last is non-None here
+                age = (now - last_utc).total_seconds()
                 is_fresh = age < SERVICE_LEASE_STALE_SECONDS
                 is_other = f"run_id={run_id}" not in (existing.details or "")
                 if is_fresh and is_other:

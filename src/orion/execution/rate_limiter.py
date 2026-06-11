@@ -48,7 +48,7 @@ class OrderRateLimiter:
         self.window_seconds = window_seconds
 
         # Track request timestamps
-        self._request_times: deque = deque()
+        self._request_times: deque[float] = deque()
         self._lock = asyncio.Lock()
 
     @property

@@ -157,7 +157,7 @@ class MarketSchedule:
 
         ts = timestamp or datetime.now(UTC)
         # exchange_calendars typing is loose, cast result
-        return self.calendar.next_open(ts).to_pydatetime()  # type: ignore
+        return self.calendar.next_open(ts).to_pydatetime()
 
     def seconds_until_open(self, timestamp: datetime | None = None) -> float:
         """
@@ -186,5 +186,5 @@ class MarketSchedule:
 
         ts = timestamp or datetime.now(UTC)
         if self.is_market_open(ts):
-            return self.calendar.next_close(ts).to_pydatetime()  # type: ignore
+            return self.calendar.next_close(ts).to_pydatetime()
         return None

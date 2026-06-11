@@ -47,6 +47,9 @@ jobs:
       run: |
         uv run pre-commit run --all-files
 
+    - name: Type Check
+      run: uv run mypy src/orion
+
     - name: Check out Data-Gateway (for cross-repo contract tests)
       # tests/contracts/ verifies that Orion's GatewayTradingClient matches
       # Gateway's FastAPI signatures — see the 2026-05-22 incident

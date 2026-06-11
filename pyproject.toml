@@ -134,10 +134,18 @@ plugins = ["pydantic.mypy"]
 exclude = "(^archive/|^qlib-main/|^scripts/|^tests/|^alembic/)"
 follow_imports = "skip"
 
+# Type-checking tiers (later override wins on overlap):
+#   Tier 0 — blanket exempt: legacy/unchecked modules (ignore_errors=true).
+#   Tier 1 — full strict: known-clean greenfield modules.
+#   Tier 2 — pragmatic checked: safety-critical execution/core packages —
+#            real type checking (check_untyped_defs) minus strict flags that
+#            would only flood noise on legacy SQLAlchemy/pydantic models.
+# Tier 0: everything under orion.* is exempt unless a later override opts it in.
 [[tool.mypy.overrides]]
 module = ["orion.*"]
 ignore_errors = true
 
+# Tier 1: fully strict, must stay clean.
 [[tool.mypy.overrides]]
 module = [
     "orion.clients.heber_reader",
@@ -146,3 +154,21 @@ module = [
 ]
 ignore_errors = false
 strict = true
+
+# Tier 2: safety-critical packages — genuinely checked, pragmatically relaxed.
+[[tool.mypy.overrides]]
+module = [
+    "orion.execution.*",
+    "orion.core.*",
+]
+ignore_errors = false
+strict = false
+disallow_untyped_defs = false
+check_untyped_defs = true
+warn_return_any = false
+# follow_imports=skip (global) makes pydantic BaseModel / EmpireError / the
+# shared @db_* decorators resolve to Any. The two flags below suppress the
+# resulting "subclass of Any" and "untyped decorator" noise without masking
+# real type errors in this package's own code.
+disallow_subclassing_any = false
+disallow_untyped_decorators = false

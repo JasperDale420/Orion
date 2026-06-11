@@ -146,9 +146,12 @@ class ExecutionEngine:
 
         self.risk_manager = RiskManager()
 
-        # Data Gateway trading client
-        self._gateway_client = None
+        # Data Gateway trading client (lazy-initialized via _get_gateway_client)
+        self._gateway_client: Any = None
         self._gateway_available = False
+        # Lazy: set on first _check_gateway_available / market-open check.
+        self._gateway_check_ts: datetime | None = None
+        self._market_schedule: Any = None
 
         # Time-windowed broker-result history for the per-process circuit
         # breaker. Each entry is (monotonic_ts, success). Bounded by the
@@ -601,7 +604,7 @@ class ExecutionEngine:
 
         await self._execute_options_order(decision, candidate)
 
-    async def _remove_pending_order_compat(self, order_id: str) -> None:
+    async def _remove_pending_order_compat(self, order_id: str | None) -> None:
         """Support both sync and async remove_pending_order implementations."""
         if not order_id or not hasattr(self.risk_manager, "remove_pending_order"):
             return
@@ -834,7 +837,9 @@ class ExecutionEngine:
             return False
 
         now_utc = datetime.now(UTC)
-        lag = (now_utc - ensure_utc(candidate.timestamp_utc)).total_seconds()
+        cand_ts = ensure_utc(candidate.timestamp_utc)
+        assert cand_ts is not None  # candidate timestamp_utc is non-nullable
+        lag = (now_utc - cand_ts).total_seconds()
 
         if lag > system_settings.max_data_lag_seconds:
             logger.critical(
@@ -1129,7 +1134,7 @@ class ExecutionEngine:
         stop_loss_pct: float,
         take_profit_pct: float,
         side: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Place stop-loss and take-profit orders after a successful entry.
 
         Non-fatal at the broker level: bracket failures don't roll back the entry.
@@ -1142,7 +1147,7 @@ class ExecutionEngine:
         tp_price = round(entry_price * (1 + take_profit_pct), 2)
         sl_failure_reason: str | None = None
         tp_failure_reason: str | None = None
-        result: dict = {"stop_loss": None, "take_profit": None}
+        result: dict[str, Any] = {"stop_loss": None, "take_profit": None}
 
         # Bracket legs MUST be orion-attributed (orion_ client_order_id) and
         # reduce-only (adversarial review 2026-06-05). Without the orion_ id the
@@ -1962,6 +1967,7 @@ class ExecutionEngine:
             now = datetime.now(UTC)
             if status_record.last_updated_utc:
                 last_updated = ensure_utc(status_record.last_updated_utc)
+                assert last_updated is not None  # guarded non-None above
 
                 age = (now - last_updated).total_seconds()
                 if age > system_settings.ingestion_heartbeat_max_age:
