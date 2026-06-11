@@ -67,3 +67,24 @@ async def init_metrics() -> Metrics:
         Metrics.start_server(system_settings.metrics_port)
 
     return metrics
+
+
+def get_metrics_sync() -> Metrics | None:
+    """Return the Metrics singleton from synchronous code, creating it if needed.
+
+    ``Metrics.__init__`` is fully synchronous (prometheus collectors register at
+    construction; ``_async_init`` only logs), so sync callers like RiskManager
+    can safely materialise the singleton without an event loop. The instance is
+    registered in the AsyncSingleton registry so a later ``await
+    Metrics.get_instance()`` returns the same object. Returns None on any
+    failure — metrics must never break the risk path.
+    """
+    try:
+        instance = Metrics._instances.get(Metrics)
+        if instance is None:
+            instance = Metrics()
+            Metrics._instances[Metrics] = instance
+        return instance  # type: ignore[return-value]
+    except Exception:
+        logger.exception("get_metrics_sync failed; metrics disabled for this caller")
+        return None

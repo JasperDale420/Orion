@@ -24,7 +24,8 @@ from orion.shared.logger import setup_struct_logger
 
 if TYPE_CHECKING:
     from orion.execution.correlation_adjuster import CorrelationAdjuster
-    from orion.storage.models_execution import Position
+    from orion.shared.metrics import Metrics
+    from orion.storage.models_execution import Position  # type: ignore[attr-defined]
 
 logger = setup_struct_logger(__name__)
 
@@ -42,15 +43,24 @@ class FillOutcome:
     is_closing: bool = False
 
 
-# Initialize metrics
+# Lazily resolved Prometheus metrics. The previous module-level init called
+# the async Metrics.get_instance() without awaiting, so the gauges were
+# permanently inert (2026-06-10 audit, confirmed by adversarial review).
+# get_metrics_sync materialises the singleton synchronously on first use;
+# failures return None so metrics can never break the risk path.
 _metrics: "Metrics | None" = None
-try:
-    from orion.shared.metrics import Metrics
 
-    _maybe_metrics = Metrics.get_instance()
-    _metrics = _maybe_metrics if hasattr(_maybe_metrics, "risk_equity") else None
-except ImportError:
-    pass
+
+def _get_metrics() -> "Metrics | None":
+    global _metrics
+    if _metrics is None:
+        try:
+            from orion.shared.metrics import get_metrics_sync
+
+            _metrics = get_metrics_sync()
+        except ImportError:
+            return None
+    return _metrics
 
 
 class RiskManager:
@@ -351,9 +361,10 @@ class RiskManager:
     ) -> bool:
         abs_proj = abs(projected_signed)
         abs_curr = abs(effective_signed)
+        max_exposure_usd = getattr(cfg, "max_ticker_exposure_usd", None)
         limit = (
-            float(cfg.max_ticker_exposure_usd)
-            if getattr(cfg, "max_ticker_exposure_usd", None) is not None
+            float(max_exposure_usd)
+            if max_exposure_usd is not None
             else self.current_equity * cfg.max_ticker_exposure_pct
         )
 
@@ -479,7 +490,7 @@ class RiskManager:
         async def save_position(session: Any) -> None:
             from sqlalchemy import select
 
-            from orion.storage.models_execution import Position as PositionModel
+            from orion.storage.models_execution import Position as PositionModel  # type: ignore[attr-defined]
 
             stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
             result = await session.execute(stmt)
@@ -575,10 +586,11 @@ class RiskManager:
 
         await db_write(save_risk_state)
         logger.info("Risk state persisted to DB")
-        if _metrics and hasattr(_metrics, "risk_equity"):
-            _metrics.risk_equity.set(self.current_equity)
-            _metrics.risk_daily_loss.set(self.current_daily_loss)
-            _metrics.risk_open_positions.set(self.open_positions)
+        metrics = _get_metrics()
+        if metrics is not None:
+            metrics.risk_equity.set(self.current_equity)
+            metrics.risk_daily_loss.set(self.current_daily_loss)
+            metrics.risk_open_positions.set(self.open_positions)
 
     async def _evaluate_drawdown_kill_switch(self) -> None:
         if self.current_equity > self.peak_equity:
@@ -637,8 +649,9 @@ class RiskManager:
                     "side": side,
                 },
             )
-            if _metrics and hasattr(_metrics, "slippage_bps"):
-                _metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
+            metrics = _get_metrics()
+            if metrics is not None and hasattr(metrics, "slippage_bps"):
+                metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
 
         sign = 1 if side.lower() == OrderSide.BUY else -1
         signed_fill_qty = abs(qty) * sign
@@ -729,8 +742,9 @@ class RiskManager:
 
         await self._save_state()
 
-        if _metrics and hasattr(_metrics, "risk_exposure"):
-            _metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
+        metrics = _get_metrics()
+        if metrics is not None:
+            metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
 
         return FillOutcome(realized_pnl=realized_pnl, is_closing=is_closing)
 
@@ -847,7 +861,8 @@ class RiskManager:
                 rows = list((await session.execute(select(PendingOrder))).scalars().all())
                 for row in rows:
                     created = row.created_at_utc
-                    if created is None or _ensure_utc(created) < cutoff:
+                    created_utc = _ensure_utc(created) if created is not None else None
+                    if created_utc is None or created_utc < cutoff:
                         self.pending_orders.pop(row.order_id, None)
                         await session.delete(row)
                         pruned += 1
@@ -896,7 +911,8 @@ class RiskManager:
                 stale_ids: list[str] = []
                 for row in rows:
                     created = row.created_at_utc
-                    if created is None or _ensure_utc(created) < cutoff:
+                    created_utc = _ensure_utc(created) if created is not None else None
+                    if created_utc is None or created_utc < cutoff:
                         stale_ids.append(row.order_id)
                         continue
                     self.pending_orders[row.order_id] = (row.ticker, row.signed_cost)
