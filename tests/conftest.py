@@ -110,3 +110,58 @@ def risk_manager_factory():
         return RiskManager(config=config)
 
     return _create
+
+
+# --- 4. Automatic marker application by directory ---
+# Audit found ~94% of tests carried no marker, making `-m unit/integration/e2e`
+# filters nearly useless. This hook auto-applies a marker based on the test's
+# directory so the filters become meaningful, without anyone hand-tagging 1600+
+# tests.
+#
+# Mapping (per the marker semantics in docs/testing-guide.md):
+#   - tests/unit/**        -> unit        (pure logic, no I/O)
+#   - tests/e2e/**         -> e2e         (full pipeline vs real TimescaleDB)
+#   - tests/integration/** -> integration (DB wiring, mocked third-parties)
+#   - tests/contracts/**   -> integration (cross-system contract tests)
+#   - everything else under tests/ (the component dirs: execution, ingestion,
+#     processing, jobs, agents, shared, connectors, ml, labeler, core, storage,
+#     api, clients, enrichment, rag) -> integration
+#
+# The component dirs map to `integration` rather than `unit` because every test
+# runs against the autouse in-memory SQLite DB fixture (setup_test_db above) and
+# exercises real component wiring / mocked third-parties — which is exactly the
+# `integration` definition in the testing guide, not the I/O-free `unit` one.
+#
+# Rules:
+#   - Skip any item that already carries an explicit unit/integration/e2e/slow
+#     marker (explicit markers win; never override or duplicate).
+#   - Never apply `slow` — that would change the default `-m "not slow"` run and
+#     the selected-test count must stay identical.
+_MARKER_NAMES = ("unit", "integration", "e2e", "slow")
+_TESTS_ROOT = Path(__file__).resolve().parent
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        # Respect any explicit marker already on the item/module.
+        if any(item.get_closest_marker(name) for name in _MARKER_NAMES):
+            continue
+
+        try:
+            rel = Path(item.fspath).resolve().relative_to(_TESTS_ROOT)
+        except ValueError:
+            continue
+        parts = rel.parts
+        if not parts:
+            continue
+        top = parts[0]
+
+        if top == "unit":
+            marker = "unit"
+        elif top == "e2e":
+            marker = "e2e"
+        else:
+            # integration/, contracts/, all component dirs, and any loose files
+            marker = "integration"
+
+        item.add_marker(getattr(pytest.mark, marker))

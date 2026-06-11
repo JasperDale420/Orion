@@ -604,7 +604,16 @@ async def run_smoke_test() -> dict[str, bool]:
             scorer = get_scorer()
             loaded_buckets = list(scorer.models.keys())
 
-            assert len(loaded_buckets) > 0, f"No models loaded from {MODEL_DIR}"
+            # models/*.pkl are untracked from git (they churn on retrain), so
+            # a CI checkout has an empty models/ dir. When pickles exist on
+            # disk (local runs) they MUST load; when absent, the scorer's
+            # heuristic fallback must engage so the scoring path is still
+            # exercised end-to-end.
+            pkl_on_disk = any(MODEL_DIR.glob("*.pkl"))
+            if pkl_on_disk:
+                assert len(loaded_buckets) > 0, f"No models loaded from {MODEL_DIR}"
+            else:
+                assert scorer.use_heuristic, f"No models in {MODEL_DIR} and heuristic fallback not engaged"
 
             # Score a test flow
             test_flow = {

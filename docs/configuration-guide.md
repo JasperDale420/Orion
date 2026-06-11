@@ -26,11 +26,15 @@ layers (config default, env-wrapper script default, RiskManager).
 
 ## Core endpoints
 
+Canonical names are listed first; the *(legacy alias)* form is still accepted
+so existing `.env` files keep working — prefer the recommended name in new config, and set only ONE name per pair: when both are set, the first-listed alias wins (`DB_URL` over `ORION_DB_URL`; `ORION_DISCORD_WEBHOOK_URL` over `DISCORD_WEBHOOK_URL`).
+
 | Variable | Default | Notes |
 |---|---|---|
-| `DB_URL` / `ORION_DB_URL` | `postgresql+asyncpg://orion@localhost:5432/orion_db` | Docker maps host `:5440` → container `:5432`. Native wrapper sets `:5440`. |
-| `DATA_GATEWAY_URL` / `GATEWAY_URL` | `http://data-gateway:8080` (container) / `http://localhost:8080` (native) | Data-Gateway base URL |
-| `DATA_GATEWAY_API_KEY` / `GATEWAY_API_KEY` | — | Gateway auth (wrapper defaults to `gw_orion_trading_key_55555` for local) |
+| `ORION_DB_URL` (recommended) / `DB_URL` *(alias — wins if both set)* | `postgresql+asyncpg://orion@localhost:5432/orion_db` | Docker maps host `:5440` → container `:5432`. Native wrapper sets `:5440`. |
+| `DATA_GATEWAY_URL` (recommended, wins if both set) / `GATEWAY_URL` *(alias)* | `http://data-gateway:8080` (container) / `http://localhost:8080` (native) | Data-Gateway base URL |
+| `DATA_GATEWAY_API_KEY` (recommended, wins if both set) / `GATEWAY_API_KEY` *(alias)* | — | Gateway auth (wrapper defaults to `gw_orion_trading_key_55555` for local) |
+| `DISCORD_WEBHOOK_URL` (recommended) / `ORION_DISCORD_WEBHOOK_URL` *(alias — wins if both set)* | — | Discord alert webhook |
 | `HEBER_CATALOG_URL` | `http://localhost:8085/api/v1` | Heber catalog health endpoint |
 | `HEBER_DATA_ROOT` | `/Volumes/heber/data` (container) / `~/.heber-cache/data` (native) | Parquet cache root |
 

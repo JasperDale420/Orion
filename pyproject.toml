@@ -112,7 +112,6 @@ extend = "ruff-base.toml"
 line-length = 120
 extend-exclude = [
     "archive",
-    "qlib-main",
     "scripts",
 ]
 
@@ -131,7 +130,7 @@ ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
 plugins = ["pydantic.mypy"]
-exclude = "(^archive/|^qlib-main/|^scripts/|^tests/|^alembic/)"
+exclude = "(^archive/|^scripts/|^tests/|^alembic/)"
 follow_imports = "skip"
 
 # Type-checking tiers (later override wins on overlap):

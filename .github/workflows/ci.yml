@@ -6,12 +6,47 @@ on:
   pull_request:
     branches: [ "master" ]
 
+env:
+  # setup-uv ships a Node 20 JS action; GitHub now warns Node 20 is deprecated.
+  # This flag forces JS actions onto Node 24 and clears the warning.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.12"]
+
+    services:
+      # Image choice: pgvector/pgvector:pg16, NOT timescale/timescaledb:latest-pg16.
+      #
+      # The e2e tests require the pgvector extension and do NOT use any
+      # TimescaleDB-specific features:
+      #   - `alembic upgrade head` runs migration 0004_add_pgvector_embedding_vec,
+      #     which executes `CREATE EXTENSION IF NOT EXISTS vector`. The stock
+      #     timescale/timescaledb image does not ship pgvector, so that migration
+      #     fails with "could not open extension control file .../vector.control",
+      #     taking the whole e2e step down before any test runs.
+      #   - src/orion/storage/db.py init_db() also does CREATE EXTENSION vector.
+      #   - tests/e2e/test_postgres_dialect.py exercises pgvector Vector(768) /
+      #     l2_distance directly.
+      #   - There are zero create_hypertable / TimescaleDB calls anywhere in
+      #     src/ or alembic/ (verified by grep), so nothing here needs Timescale.
+      # pgvector/pgvector:pg16 is plain Postgres 16 + pgvector, satisfying every
+      # path the tests actually touch.
+      timescaledb:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: orion
+          POSTGRES_PASSWORD: orion_password  # pragma: allowlist secret
+          POSTGRES_DB: orion_db
+        ports:
+          - 5440:5432
+        options: >-
+          --health-cmd "pg_isready -U orion -d orion_db"
+          --health-interval 5s
+          --health-retries 10
 
     steps:
     - uses: actions/checkout@v6
@@ -72,11 +107,12 @@ jobs:
     - name: Run Tests
       # Ensure coverage.xml is generated.
       #
-      # tests/e2e/ is excluded: those tests connect to a real TimescaleDB on
-      # port 5440 (and exercise the full migrated schema), which CI does not
-      # provision. They are local/real-infra verification — see
-      # docs/testing-guide.md. Follow-up: add a timescaledb service container +
-      # `alembic upgrade head` to run e2e in CI.
+      # tests/e2e/ is excluded here: those tests connect to a real Postgres on
+      # port 5440 (and exercise the full migrated schema), which the in-process
+      # SQLite test suite does not provision. They run in the dedicated
+      # "Run E2E smoke (real TimescaleDB)" step below, which provisions the
+      # `timescaledb` service container and applies `alembic upgrade head`
+      # first. See docs/testing-guide.md.
       env:
         # tests/contracts/test_create_order_contract.py reads this to locate
         # the Gateway repo. Set to the checkout path from the prior step.
@@ -87,6 +123,31 @@ jobs:
         ORION_CONTRACT_TESTS_REQUIRE_GATEWAY: "1"
       run: |
         uv run pytest -v --cov=src --cov-report=xml --junitxml=test-results.xml --ignore=tests/e2e
+
+    - name: Run E2E smoke (real TimescaleDB)
+      # Runs against the `timescaledb` service container (pgvector/pgvector:pg16,
+      # mapped to localhost:5440 — see services: block). Applies the full schema
+      # via `alembic upgrade head`, then runs the smoke + Postgres-dialect e2e
+      # tests. test_live_data_flow.py is deliberately NOT run: it is a
+      # live-market-data freshness check and is meaningless against an empty CI
+      # database.
+      #
+      # alembic reads its URL from alembic.ini's hardcoded
+      #   sqlalchemy.url = postgresql+asyncpg://orion:orion_password@127.0.0.1:5440/orion_db
+      # (alembic/env.py does NOT consult DB_URL), which already matches the
+      # service container's creds and port mapping. The smoke + dialect tests
+      # likewise hardcode REAL_DB_URL at localhost:5440 with the same creds.
+      #
+      # ORION_RUN_LIVE_DB_SMOKE=1 is REQUIRED: test_smoke_e2e_real_db skips
+      # itself unless this opt-in is set, so without it the smoke test would
+      # silently no-op. DB_URL is exported for parity (the smoke test rebinds
+      # the DB to REAL_DB_URL internally regardless).
+      env:
+        DB_URL: postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db  # pragma: allowlist secret
+        ORION_RUN_LIVE_DB_SMOKE: "1"
+      run: |
+        uv run alembic upgrade head
+        uv run pytest tests/e2e/test_smoke_e2e.py tests/e2e/test_postgres_dialect.py -v
 
     - name: SonarQube Analysis
       if: env.SONAR_TOKEN != ''

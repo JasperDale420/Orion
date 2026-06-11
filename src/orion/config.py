@@ -90,6 +90,17 @@ class HeuristicWeights(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ORION_HEURISTIC_")
 
 
+# Recommended environment variable names for the alias pairs below:
+#   ORION_DB_URL            (alias: DB_URL)
+#   DATA_GATEWAY_URL        (alias: GATEWAY_URL)
+#   DATA_GATEWAY_API_KEY    (alias: GATEWAY_API_KEY)
+#   DISCORD_WEBHOOK_URL     (alias: ORION_DISCORD_WEBHOOK_URL)
+# Prefer the recommended name in new config. PRECEDENCE WARNING: when BOTH
+# names of a pair are set, pydantic's AliasChoices order decides — the
+# FIRST-listed alias on each field wins, which is DB_URL (not ORION_DB_URL),
+# DATA_GATEWAY_URL, DATA_GATEWAY_API_KEY, and ORION_DISCORD_WEBHOOK_URL (not
+# DISCORD_WEBHOOK_URL). Set only one name per pair. The alias orders are
+# load-bearing for deployed .env files; do not reorder or remove them.
 class SystemSettings(BaseSettings):
     # API Keys
     uw_api_key: str | None = Field(default=None, validation_alias="UW_API_KEY")

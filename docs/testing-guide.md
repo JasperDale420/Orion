@@ -56,6 +56,11 @@ tests/
 `pyproject.toml`. Run them with `uv run pytest -m slow`, or include them
 alongside everything else with `uv run pytest -m ""`.
 
+Markers are auto-applied by directory (`tests/conftest.py`): `tests/unit/**` →
+`unit`, `tests/e2e/**` → `e2e`, and everything else (`integration/`,
+`contracts/`, and the component dirs) → `integration`; an explicit marker on a
+test or module still wins and is never overridden.
+
 Set the marker explicitly: `pytestmark = pytest.mark.unit` at module top, or
 `@pytest.mark.integration` per test. `addopts = --strict-markers` enforces it.
 
