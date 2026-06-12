@@ -493,7 +493,7 @@ class ExecutionEngine:
         """
         from orion.storage.models_execution import FillRecord
 
-        async def query_fills(session: Any) -> list:
+        async def query_fills(session: Any) -> list[FillRecord]:
             order_ts = func.coalesce(FillRecord.filled_at_utc, FillRecord.created_at_utc)
             stmt = (
                 select(FillRecord)
