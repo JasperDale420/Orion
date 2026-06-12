@@ -75,9 +75,11 @@ def test_baseline_creates_every_metadata_table() -> None:
     # imports). This mirrors alembic/env.py.
     from orion.storage import (  # noqa: F401
         models,
+        models_attribution,
         models_audit,
         models_dlq,
         models_execution,
+        models_flow_parity,
         models_gold,
         models_liveness,
         models_ml,
@@ -98,7 +100,13 @@ def test_baseline_creates_every_metadata_table() -> None:
     # migration test (e.g. test_liveness_migration.py for service_liveness).
     # They are excluded here so the baseline guard does not demand they be added
     # to the baseline (which would defeat the post-baseline-migration design).
-    POST_BASELINE_TABLES = {"service_liveness"}
+    POST_BASELINE_TABLES = {
+        "service_liveness",
+        "flow_push_parity",
+        "pnl_reconciliation",
+        "solver_pnl_attribution",
+        "rule_pnl_attribution",
+    }
 
     missing_from_baseline = metadata_tables - baseline_tables - POST_BASELINE_TABLES
     extra_in_baseline = baseline_tables - metadata_tables
@@ -112,6 +120,19 @@ def test_baseline_creates_every_metadata_table() -> None:
         f"removed without updating the baseline. Extra: {sorted(extra_in_baseline)}"
     )
 
+    # Columns added by post-baseline migrations to EXISTING tables. These are
+    # intentionally absent from the squashed baseline; each must have its own
+    # migration (see b4_journal_exit_legs.py). Register here to prevent the
+    # column-drift check from demanding they be folded into the baseline.
+    POST_BASELINE_COLUMN_ADDITIONS: dict[str, set[str]] = {
+        "trade_journal_entries": {
+            "exit_filled_qty",
+            "exit_filled_avg_price",
+            "exit_filled_at_utc",
+            "exit_broker_order_id",
+        },
+    }
+
     # Column-level parity (adversarial-review finding: table-name-only parity
     # false-passes on added/removed/renamed columns). Compare column-name sets
     # per table; types/indexes/FKs are covered by the live autogen-empty check
@@ -119,9 +140,11 @@ def test_baseline_creates_every_metadata_table() -> None:
     column_drift: dict[str, str] = {}
     for table_name in sorted(metadata_tables - POST_BASELINE_TABLES):
         model_cols = set(Base.metadata.tables[table_name].columns.keys())
+        post_baseline_cols = POST_BASELINE_COLUMN_ADDITIONS.get(table_name, set())
         migration_cols = baseline_columns.get(table_name, set())
-        if model_cols != migration_cols:
-            missing = sorted(model_cols - migration_cols)
-            extra = sorted(migration_cols - model_cols)
+        effective_model_cols = model_cols - post_baseline_cols
+        if effective_model_cols != migration_cols:
+            missing = sorted(effective_model_cols - migration_cols)
+            extra = sorted(migration_cols - effective_model_cols)
             column_drift[table_name] = f"missing={missing} extra={extra}"
     assert not column_drift, f"Baseline column drift vs Base.metadata — regenerate the baseline: {column_drift}"

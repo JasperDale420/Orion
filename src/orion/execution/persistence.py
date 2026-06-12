@@ -450,6 +450,8 @@ async def persist_realized_pnl_to_journal(
     realized_pnl: float,
     exit_broker_order_id: str | None = None,
     filled_at: datetime | None = None,
+    exit_qty: float | None = None,
+    exit_price: float | None = None,
 ) -> None:
     """Attribute realized PnL from a closing fill back to the originating
     entry's trade-journal row.
@@ -463,6 +465,11 @@ async def persist_realized_pnl_to_journal(
     ``realized_pnl`` NULL = not yet closed). Exact for the common single-fill
     full close; a multi-partial close attributes the first increment's PnL
     (acceptable — far better than recording nothing).
+
+    Exit data is written to the exit_* columns — entry fill fields
+    (filled_qty, filled_avg_price, filled_at_utc) are never touched here so
+    that entry provenance is preserved for cost-basis reconstruction and
+    round-trip audit (B3 RCA 2026-06-11).
 
     Defensive: any DB failure is logged, never raised — a journal side-write
     must not break fill processing or the risk/kill-switch path.
@@ -492,10 +499,15 @@ async def persist_realized_pnl_to_journal(
             )
             return
         row.realized_pnl = float(realized_pnl)
-        if filled_at is not None:
-            row.filled_at_utc = filled_at
         if exit_broker_order_id:
+            row.exit_broker_order_id = exit_broker_order_id
             row.notes = f"closed_by={exit_broker_order_id}"
+        if filled_at is not None:
+            row.exit_filled_at_utc = filled_at
+        if exit_qty is not None:
+            row.exit_filled_qty = exit_qty
+        if exit_price is not None:
+            row.exit_filled_avg_price = exit_price
 
     try:
         await db_write(write)

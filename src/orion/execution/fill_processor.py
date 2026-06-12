@@ -106,6 +106,8 @@ class FillProcessor:
                     ticker=ticker,
                     realized_pnl=fill_outcome.realized_pnl,
                     exit_broker_order_id=order_id,
+                    exit_qty=incremental_qty,
+                    exit_price=filled_avg_price,
                 )
 
             # Update sector exposure tracking
