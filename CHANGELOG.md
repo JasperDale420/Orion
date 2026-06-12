@@ -14,6 +14,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Flow-push design doc**: full discovery for replacing the 5-hop Heber polling path with Gateway WS push — event-id parity comes free (Gateway-minted ids flow through to Orion's dedup), implementation queued for Wave B.
 
 
+### Fixed
+
+- **Trade journal now preserves entry fill data after close**: closing a position previously overwrote the entry fill timestamp (`filled_at_utc`) with the exit fill time, destroying the entry price/qty/time needed for cost-basis reconstruction and round-trip audit. The journal row now carries dedicated `exit_filled_qty`, `exit_filled_avg_price`, `exit_filled_at_utc`, and `exit_broker_order_id` columns; entry columns are never touched during close. Migration `b4_journal_exit_legs` adds the columns to the live database.
+
+### Fixed (Redesign Wave A — 2026-06-11)
+
+- **PnL reconciliation now reconstructs realized PnL from a per-symbol lot book over Orion's own fills (O8)**: the prior approach summed same-day signed cashflow from a walk of the shared account's closed orders, which over-counted any multi-day SWING/POSITION close as its full sell proceeds instead of `proceeds − entry_cost`. The broker side is now a FIFO lot-book replay of Orion's own `fills` table (`client_order_id LIKE 'orion_%'`), so a close realizes against its actual earlier entry and is attributed to the closing fill's day. A close whose entry predates the lookback (default 90d) is flagged untrusted rather than silently counted, and forces `BROKER_UNAVAILABLE`. The journal-vs-fills comparison is now an independent internal cross-check (catches journal-derivation bugs; does not catch broker fills Orion never recorded).
+- **PnL reconciliation no longer trusts a missing or partial broker**: a fills-table read failure (DB outage) is no longer coerced into an empty broker result, so reconciliation can't "succeed" against nothing. Read failures and unbasis-able closes produce a distinct `BROKER_UNAVAILABLE` verdict that suppresses per-solver/per-rule attribution and demotion candidates, records the reason, and fires a Discord alert.
+
+
 ### Added (Wave 3 — 2026-06-10 audit remediation)
 
 - **E2E tests run in CI** against a real Postgres+pgvector service container: schema migration, the 9-stage pipeline smoke test, and the pgvector/ON-CONFLICT dialect tests now gate every push (live-freshness checks stay local-only).
