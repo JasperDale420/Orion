@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added (Redesign Wave B — 2026-06-11)
+
+- **Flow push behind a flag with shadow parity measurement**: `ORION_FLOW_SOURCE` selects `poll` (default, unchanged), `shadow` (push + poll run together, union deduped by Gateway-minted event id), or `push`. Shadow mode measures push-vs-poll event-id parity over a lag-tolerant rolling window (`ORION_FLOW_PARITY_WINDOW_SECONDS`, default 900s) and persists per-cycle rows to a new `flow_push_parity` table: matched/missed counts, median push latency lead, and unmatchable legacy-id counts. A matched id is finalized exactly once; an arrival later than the window counts as a miss charged to the late path. This is the measurement gate for the Wave C poll→push cutover.
+- **Per-solver / per-rule PnL attribution tables**: daily reconciliation now persists `pnl_reconciliation`, `solver_pnl_attribution`, and `rule_pnl_attribution` rows (migration `b3_pnl_attribution`). Attribution is recommendations-only — no solver stage changes — and is suppressed entirely on untrusted (`BROKER_UNAVAILABLE`) days; a rerun that flips a day to untrusted deletes that day's previously-persisted attribution rather than leaving stale demotion evidence.
+- **Typed SQLAlchemy models for safety-critical tables**: risk, gold, and DLQ models converted to SQLAlchemy 2.0 `Mapped[]` typed declarations (schema-identical, machine-verified by parity tests) and promoted to the strict mypy tier, so nullability and detached-instance bugs in the risk path now fail the build.
+
+### Fixed (Redesign Wave B — 2026-06-11)
+
+- **Reconciliation lot book seeds from the entire fills history**: the Wave A version seeded the FIFO lot book from a finite 90-day lookback, which could silently cost a close against the wrong (newer) lot when the true oldest open lot predated the window. The lot book now loads all orion-attributed fills through the target day, so FIFO always consumes the correct oldest lot; a close that exhausts recorded basis (in either direction, including short over-covers) routes the day to `BROKER_UNAVAILABLE` instead of producing a trusted-but-wrong total.
+- **Reconciliation refuses to trust a day with pending partial fills**: the `fills` table keeps one cumulative row per order (blended price, latest timestamp), so an order still partially filled at reconcile time — e.g. a GTC exit finishing tomorrow — would be double-counted across days. Any orion order in `partially_filled` status now routes the day to `BROKER_UNAVAILABLE` until the order completes.
+- **Multi-day closes reconcile on the close day on both sides**: the journal side now buckets realized PnL by the exit fill's day (matching the lot book's realization-day rule) instead of the preserved entry-fill day, and the live fill-processing path now stamps the closing fill's timestamp into `exit_filled_at_utc` — together eliminating a guaranteed false MISMATCH on every multi-day hold.
+- **EOD review analyzes the last closed trading session**: the EOD agent previously defaulted to "today" in UTC, which after midnight UTC (8pm ET) pointed at a day with no data. It now targets the most recently closed NYSE session via exchange calendars.
+- **Native launchd wrappers pin the Gateway endpoint correctly**: the wrappers now source `.env` first and then pin both `GATEWAY_URL` and `DATA_GATEWAY_URL` to `http://localhost:8080`, so a docker-only hostname left in `.env` can no longer point the native hot path at an unreachable Gateway (config resolves `DATA_GATEWAY_URL` first, which the previous fix missed).
+
 ### Added (Redesign Wave A — 2026-06-11)
 
 - **Unified service-liveness contract + dead-man watchdog**: every long-running loop publishes a heartbeat per successful cycle (errors record without advancing it); a 5-minute watchdog alerts Discord on *absence* of success per service-declared budget, plus market-hours per-stage freshness checks on real pipeline data. Built for this repo's dominant failure mode: the silent stall.

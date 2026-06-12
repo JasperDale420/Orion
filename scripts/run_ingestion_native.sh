@@ -49,12 +49,29 @@ mkdir -p "${LOG_DIR}"
 # so we have to set this explicitly.
 export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.local/bin:${PATH}"
 
+# Load operator overrides (DATA_GATEWAY_API_KEY, ORION_FLOW_SOURCE, etc.) from
+# the gitignored .env FIRST, so the pinned host endpoints exported just below
+# always win over any stray .env value (native must never point at docker-only
+# hostnames). DATA_GATEWAY_API_KEY still reaches the GATEWAY_API_KEY expansion.
+if [ -f "${PROJECT_ROOT}/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "${PROJECT_ROOT}/.env"
+  set +a
+fi
+
 # --- Service-to-service connection strings -----------------------------
 # Docker-side hostnames (`timescaledb`, `data-gateway`) are unreachable
 # from the host; use the host-exposed ports instead. The compose file
 # maps them to localhost:5440 and localhost:8080 respectively.
 export DB_URL="postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db"  # pragma: allowlist secret
 export GATEWAY_URL="http://localhost:8080"
+# Pin the CANONICAL alias too: Orion config resolves data_gateway_url
+# via AliasChoices(DATA_GATEWAY_URL, GATEWAY_URL) — DATA_GATEWAY_URL wins,
+# so a stray DATA_GATEWAY_URL in .env would otherwise point native runs at
+# the docker-only data-gateway host. Pinning it here (after .env sourcing)
+# guarantees the host endpoint for native execution.
+export DATA_GATEWAY_URL="http://localhost:8080"
 export GATEWAY_API_KEY="${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}"
 
 # Heber parquet cache on the host. Inside the container this path is
