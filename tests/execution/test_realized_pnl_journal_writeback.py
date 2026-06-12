@@ -78,6 +78,79 @@ async def test_closing_fill_writes_realized_pnl_to_entry_journal_row():
 
 
 @pytest.mark.asyncio
+async def test_closing_fill_stamps_exit_timestamp_for_multi_day_bucketing():
+    """Round-7: the LIVE fill path must write the close fill's timestamp to
+    ``exit_filled_at_utc``. ``filled_at_utc`` is the preserved ENTRY time (B3),
+    so leaving the exit stamp NULL makes the PnL reconciliation fall back to the
+    entry day — putting a multi-day close on the wrong day. No manual seeding of
+    exit_filled_at_utc here: the row must come out of FillProcessor itself.
+    """
+    from datetime import date
+
+    from orion.jobs import reconcile_pnl
+
+    await init_db()
+
+    rm = RiskManager()
+    await rm.initialize()
+    rm.positions["NVDA"] = {"qty": 2.0, "avg_entry": 5.0}
+
+    entry_ts = datetime(2026, 6, 9, 15, 0, tzinfo=UTC)
+    close_ts = datetime(2026, 6, 11, 15, 30, tzinfo=UTC)
+
+    async with async_session_factory() as session:
+        session.add(
+            TradeJournalEntry(
+                decision_id="dec_test_nvda",
+                signal_id="sig_test_nvda",
+                candidate_id="cand_nvda",
+                ticker="NVDA",
+                direction="LONG",
+                client_order_id="orion_entry_nvda",
+                broker_order_id="broker_entry_nvda",
+                filled_qty=2.0,
+                filled_avg_price=5.0,
+                filled_at_utc=entry_ts,
+                realized_pnl=None,
+            )
+        )
+        await session.commit()
+
+    fp = FillProcessor()
+    closing_fill = {
+        "id": "broker_exit_nvda",
+        "client_order_id": "orion_exit_nvda",
+        "symbol": "NVDA",
+        "side": "sell",
+        "qty": 2,
+        "filled_qty": 2,
+        "filled_avg_price": 8,
+        "filled_at": close_ts.isoformat(),
+    }
+    await fp.process_single_fill(closing_fill, rm, _noop_remove)
+
+    async with async_session_factory() as session:
+        row = (
+            (await session.execute(select(TradeJournalEntry).where(TradeJournalEntry.ticker == "NVDA")))
+            .scalars()
+            .first()
+        )
+
+    assert row is not None
+    assert row.realized_pnl == pytest.approx(6.0)
+    # Exit stamp written by the live path; entry provenance preserved.
+    assert row.exit_filled_at_utc is not None
+    assert row.exit_filled_at_utc.replace(tzinfo=UTC) == close_ts
+    assert row.filled_at_utc.replace(tzinfo=UTC) == entry_ts
+
+    # And the reconciliation buckets this row on the CLOSE day, not entry day.
+    close_day_rows = await reconcile_pnl._load_journal_closed_trades(date(2026, 6, 11))
+    assert [r["realized_pnl"] for r in close_day_rows] == [pytest.approx(6.0)]
+    entry_day_rows = await reconcile_pnl._load_journal_closed_trades(date(2026, 6, 9))
+    assert entry_day_rows == []
+
+
+@pytest.mark.asyncio
 async def test_entry_fill_does_not_write_realized_pnl():
     """An opening fill must NOT touch realized_pnl (nothing realized yet)."""
     await init_db()

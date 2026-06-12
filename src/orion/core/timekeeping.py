@@ -1,12 +1,40 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
+import pandas as pd
 
 _ET = ZoneInfo("America/New_York")
+
+
+def last_closed_trading_date(ts_utc: datetime | None = None, *, calendar_name: str = "XNYS") -> date:
+    """Return the US equity trading date of the most-recently-CLOSED session.
+
+    Computes the latest NYSE (``XNYS``) session whose regular-hours close is at
+    or before ``ts_utc`` (defaults to now, UTC). This is the correct target for
+    a post-close EOD run: a weekday trigger that fires shortly after midnight UTC
+    (i.e. the prior evening in ET) resolves to that just-closed ET session, and a
+    weekend/holiday trigger walks back to the last open session. Using the
+    exchange calendar — not UTC-today — means a Saturday 01:05 UTC trigger
+    reconciles Friday's session, not an empty "today".
+    """
+    if ts_utc is None:
+        ts_utc = datetime.now(UTC)
+    if ts_utc.tzinfo is None:
+        raise ValueError("ts_utc must be timezone-aware UTC datetime")
+
+    cal = xcals.get_calendar(calendar_name)
+    ts = pd.Timestamp(ts_utc)
+    # Start from the ET calendar day of the trigger, then walk back to the most
+    # recent session whose regular close is at/before the trigger instant.
+    et_day = pd.Timestamp(ts_utc.astimezone(_ET).date())
+    session = cal.date_to_session(et_day, direction="previous")
+    while cal.session_close(session) > ts:
+        session = cal.previous_session(session)
+    return session.date()
 
 
 @dataclass(frozen=True)

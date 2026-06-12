@@ -3,7 +3,7 @@ import json
 import math
 import os
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -34,6 +34,7 @@ from orion.agents.codex_client import (
 from orion.agents.proposal_builder import ProposalBuilder
 from orion.core.enums import DecisionAction
 from orion.core.id_utils import deterministic_solver_id
+from orion.core.timekeeping import last_closed_trading_date
 from orion.rag.vector_store import VectorStore
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.liveness import publish_liveness
@@ -56,6 +57,12 @@ logger = setup_struct_logger("orion.agents.eod_review_agent")
 # the dead-man is a backstop). Adversarial-review finding: 1.5d went stale
 # every Sunday.
 EOD_LIVENESS_CADENCE_BUDGET_SECONDS = int(86400 * 3.5)
+
+# RB.3 demotion-candidate gate (RECOMMENDATION ONLY — no stage flag is moved by
+# any code in this task; actual demotion is the separately-gated task RD.1).
+# A solver is *listed* as a demotion candidate when its reconciled realized-PnL
+# expectancy is non-positive AND it has at least this many closed trades.
+DEMOTION_MIN_SAMPLE = 20
 
 
 class EODReviewAgent:
@@ -85,9 +92,13 @@ class EODReviewAgent:
         result = await self.run_review(target_date)
         return {"status": "completed", **(result or {})}
 
-    async def run_review(self, target_date: datetime.date = None) -> dict[str, Any]:
+    async def run_review(self, target_date: date | None = None) -> dict[str, Any]:
         if not target_date:
-            target_date = datetime.now(UTC).date()
+            # Default to the most-recently-CLOSED NYSE session, NOT "UTC today".
+            # A post-close trigger fires shortly after midnight UTC (the prior
+            # evening in ET); UTC-today would be the next calendar day and the
+            # just-closed session would never be reconciled.
+            target_date = last_closed_trading_date()
 
         logger.info(f"Starting EOD Review for {target_date}...")
         run_id = str(uuid.uuid4())
@@ -100,6 +111,15 @@ class EODReviewAgent:
 
         # 1. Gather Data
         data, input_snapshot_path = await self._gather_data(target_date, run_id=run_id, reports_dir=reports_dir)
+
+        # 1b. RB.3: journal-vs-broker PnL reconciliation + per-solver/per-rule
+        # attribution. Runs INSIDE the EOD trigger (no standalone daemon), so the
+        # EOD agent's own liveness publish covers it. Recommendations-only — no
+        # solver stage flags are touched here. Self-isolating: any failure logs
+        # and yields None so the rest of the review still completes.
+        reconcile_result = await self._run_pnl_reconciliation(target_date)
+        if reconcile_result is not None:
+            data["pnl_reconciliation"] = self._reconcile_snapshot_for_llm(reconcile_result)
 
         # 2. RAG Context Lookup (VS5)
         # Search for recent similar performance issues or strategy docs
@@ -124,6 +144,20 @@ class EODReviewAgent:
                 f.write(report_text)
 
         await asyncio.to_thread(_write_report)
+
+        # 4b. RB.3: append the DETERMINISTIC reconciliation + attribution +
+        # demotion-candidate sections to the report. These are computed in code
+        # (not LLM-generated) so the reconciliation verdict, drift, and sample
+        # sizes are always present and exact, regardless of LLM output.
+        if reconcile_result is not None:
+            recon_md = self._render_reconciliation_report(reconcile_result)
+
+            def _append_report():
+                with open(file_path, "a") as f:
+                    f.write("\n\n" + recon_md)
+
+            await asyncio.to_thread(_append_report)
+            await self._maybe_alert_reconciliation_mismatch(reconcile_result)
 
         # Save Proposals
         proposals = analysis_json.get("proposals", [])
@@ -158,6 +192,157 @@ class EODReviewAgent:
             "proposals_count": len(proposals),
             "solver_edit_proposals": [p for p in proposals if p.get("type") == "solver_edit"],
         }
+
+    # ── RB.3: PnL reconciliation + attribution ───────────────────────────
+
+    async def _run_pnl_reconciliation(self, target_date: datetime.date) -> Any | None:
+        """Compute + persist the journal-vs-broker reconciliation for the day.
+
+        Returns the ``ReconcileResult`` (used to render the report section and
+        drive the mismatch alert), or ``None`` on any failure — a reconciliation
+        problem must never abort the EOD review.
+        """
+        try:
+            from orion.jobs.reconcile_pnl import run_reconciliation
+
+            # publish_liveness_row=False: the EOD agent's own liveness publish
+            # (end of run_review) already covers this work; we do not register a
+            # second service row in the dead-man watchdog.
+            return await run_reconciliation(target_date, publish_liveness_row=False)
+        except Exception:
+            logger.error("eod_pnl_reconciliation_failed", exc_info=True)
+            return None
+
+    @staticmethod
+    def _reconcile_snapshot_for_llm(result: Any) -> dict[str, Any]:
+        """Compact, JSON-safe view of the reconciliation for the LLM snapshot."""
+        return {
+            "status": result.status,
+            "journal_total": result.journal.total,
+            "broker_total": result.broker.total,
+            "drift_abs": result.drift_abs,
+            "drift_pct": result.drift_pct,
+            "journal_trade_count": result.journal.trade_count,
+            "broker_order_count": result.broker.order_count,
+            "tolerance_usd": result.tolerance_usd,
+            "consecutive_mismatch_days": result.consecutive_mismatch_days,
+            "note": "Journal realized-PnL has NOT been broker-trusted historically; "
+            "this line is the verification gate. Recommendations only — no solver "
+            "stage flags change.",
+        }
+
+    @staticmethod
+    def _render_reconciliation_report(result: Any) -> str:
+        """Render the deterministic markdown: reconciliation verdict, per-solver
+        and per-rule PnL tables (sample sizes ALWAYS shown), and the
+        demotion-candidates section (clearly labeled recommendation-only)."""
+        status_marker = {"MATCH": "OK", "MISMATCH": "MISMATCH", "NO_DATA": "no data"}.get(result.status, result.status)
+        drift_pct = f"{result.drift_pct:.2f}%" if result.drift_pct is not None else "n/a"
+        lines: list[str] = []
+        lines.append("## PnL Reconciliation (journal vs broker) — RB.3")
+        lines.append("")
+        lines.append(f"**Result: {status_marker}** — drift ${result.drift_abs:.2f} ({drift_pct})")
+        lines.append("")
+        lines.append(
+            f"- Journal realized PnL (orion-attributed, closed): ${result.journal.total:.2f} "
+            f"across {result.journal.trade_count} trades"
+        )
+        lines.append(
+            f"- Broker realized PnL (orion fills, reconstructed): ${result.broker.total:.2f} "
+            f"across {result.broker.order_count} filled orders"
+        )
+        lines.append(f"- Tolerance: ${result.tolerance_usd:.2f}/trade")
+        if result.broker.non_flat_symbols:
+            lines.append(
+                f"- NOTE: symbols not flat at day end (cashflow includes open exposure): "
+                f"{', '.join(result.broker.non_flat_symbols)}"
+            )
+        if result.status == "MISMATCH":
+            lines.append(
+                f"- ESCALATION: MISMATCH for {result.consecutive_mismatch_days} consecutive day(s). "
+                "Journal PnL is NOT trustworthy until this reconciles — do NOT act on attribution below."
+            )
+        lines.append("")
+
+        lines.append("### Per-solver realized PnL (sample sizes shown)")
+        lines.append("")
+        lines.append("| solver_id | n_trades | realized_pnl | expectancy | wins |")
+        lines.append("|---|---:|---:|---:|---:|")
+        if result.solver_rows:
+            for row in result.solver_rows:
+                exp = f"{row.expectancy:.2f}" if row.expectancy is not None else "n/a"
+                lines.append(f"| {row.key} | {row.n_trades} | {row.realized_pnl_total:.2f} | {exp} | {row.win_count} |")
+        else:
+            lines.append("| _(no closed orion trades)_ | 0 | 0.00 | n/a | 0 |")
+        lines.append("")
+
+        lines.append("### Per-rule realized PnL (sample sizes shown)")
+        lines.append("")
+        lines.append("| rule_id | n_trades | realized_pnl | expectancy | wins |")
+        lines.append("|---|---:|---:|---:|---:|")
+        if result.rule_rows:
+            for row in result.rule_rows:
+                exp = f"{row.expectancy:.2f}" if row.expectancy is not None else "n/a"
+                lines.append(f"| {row.key} | {row.n_trades} | {row.realized_pnl_total:.2f} | {exp} | {row.win_count} |")
+        else:
+            lines.append("| _(no closed orion trades)_ | 0 | 0.00 | n/a | 0 |")
+        lines.append("")
+
+        candidates = [
+            row
+            for row in result.solver_rows
+            if row.n_trades >= DEMOTION_MIN_SAMPLE and (row.expectancy is None or row.expectancy <= 0.0)
+        ]
+        lines.append("### Demotion candidates — RECOMMENDATION ONLY (no stage flags changed)")
+        lines.append("")
+        lines.append(
+            f"Solvers with non-positive reconciled expectancy AND n>={DEMOTION_MIN_SAMPLE} closed trades. "
+            "This is a recommendation for human review (task RD.1); NO solver stage is modified by this report."
+        )
+        lines.append("")
+        if result.status != "MATCH":
+            lines.append(
+                "_Reconciliation is not MATCH today — the attribution above is NOT broker-trusted, "
+                "so no demotion candidates are listed._"
+            )
+        elif candidates:
+            lines.append("| solver_id | n_trades | realized_pnl | expectancy |")
+            lines.append("|---|---:|---:|---:|")
+            for row in candidates:
+                exp = f"{row.expectancy:.2f}" if row.expectancy is not None else "n/a"
+                lines.append(f"| {row.key} | {row.n_trades} | {row.realized_pnl_total:.2f} | {exp} |")
+        else:
+            lines.append(f"_None — no solver has non-positive expectancy with n>={DEMOTION_MIN_SAMPLE}._")
+        lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    async def _maybe_alert_reconciliation_mismatch(result: Any) -> None:
+        """Send a Discord alert; escalate when MISMATCH persists 2+ days.
+
+        A single-day mismatch is logged but not paged (could be a one-off
+        reconstruction edge). 2+ consecutive MISMATCH days is an escalation —
+        the journal PnL write-back is systematically wrong and nothing may act
+        on it. Uses dedupe_key='pnl_reconcile_mismatch' to avoid in-run spam.
+        """
+        if result.status != "MISMATCH":
+            return
+        from orion.shared.alerts import send_discord_alert
+
+        if result.consecutive_mismatch_days >= 2:
+            msg = (
+                f"PnL reconciliation MISMATCH {result.consecutive_mismatch_days} days running "
+                f"({result.trade_date}): journal ${result.journal.total:.2f} vs broker "
+                f"${result.broker.total:.2f}, drift ${result.drift_abs:.2f}. "
+                "Journal realized-PnL is NOT broker-trusted — block any action on attribution."
+            )
+            await send_discord_alert(msg, dedupe_key="pnl_reconcile_mismatch")
+        else:
+            logger.warning(
+                "pnl_reconcile_mismatch_first_day",
+                trade_date=str(result.trade_date),
+                drift_abs=result.drift_abs,
+            )
 
     async def _fetch_valid_solver_ids(self) -> list[str]:
         """Return the solver ids the LLM may legally target as parent/base.

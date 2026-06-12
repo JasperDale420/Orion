@@ -248,3 +248,36 @@ async def test_get_option_quote_caches_chain_per_underlying() -> None:
     b = await client.get_option_quote("MU260612C00800000")
     assert a["bid"] == 6.4 and b["bid"] == 2.1
     client.get_option_chain.assert_awaited_once()  # one fetch served both
+
+
+@pytest.mark.asyncio
+async def test_get_orders_forwards_submitted_at_window_params() -> None:
+    """``get_orders`` serializes the additive after/until/nested params other
+    callers depend on (tz-aware ISO-8601, nested flag)."""
+    from datetime import UTC, datetime
+
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+    captured: dict[str, object] = {}
+
+    async def fake_request(method, path, *, params=None, json_body=None):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = params
+        return []
+
+    client._request = fake_request  # type: ignore[assignment]
+
+    await client.get_orders(
+        status="all",
+        limit=500,
+        direction="asc",
+        after=datetime(2026, 3, 13, tzinfo=UTC),
+        until=datetime(2026, 6, 12, tzinfo=UTC),
+        nested=True,
+    )
+    params = captured["params"]
+    assert params["status"] == "all"
+    assert params["direction"] == "asc"
+    assert params["after"] == "2026-03-13T00:00:00+00:00"
+    assert params["until"] == "2026-06-12T00:00:00+00:00"
+    assert params["nested"] is True

@@ -6,6 +6,7 @@ Routes all order management, position tracking, and account queries through
 the centralized Data Gateway REST API.
 """
 
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -188,12 +189,34 @@ class GatewayTradingClient:
             params["position_intent"] = position_intent
         return await self._request("POST", "/api/v1/alpaca/orders", params=params)
 
-    async def get_orders(self, status: str = "open", limit: int = 50) -> list[dict[str, Any]]:
-        """List orders with optional status filter."""
+    async def get_orders(
+        self,
+        status: str = "open",
+        limit: int = 50,
+        direction: str = "desc",
+        *,
+        after: datetime | None = None,
+        until: datetime | None = None,
+        nested: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List orders with optional status + submitted_at date-window filter.
+
+        ``after``/``until`` filter by SUBMITTED_AT (Alpaca behaviour — NOT
+        filled_at), tz-aware datetimes serialized as ISO-8601. ``nested=True``
+        nests bracket child fills under each parent's ``legs``. ``direction``
+        is "asc" (oldest-first) or "desc" (newest-first).
+        """
+        params: dict[str, Any] = {"status": status, "limit": limit, "direction": direction}
+        if after is not None:
+            params["after"] = after.isoformat()
+        if until is not None:
+            params["until"] = until.isoformat()
+        if nested:
+            params["nested"] = True
         result = await self._request(
             "GET",
             "/api/v1/alpaca/orders",
-            params={"status": status, "limit": limit},
+            params=params,
         )
         if isinstance(result, list):
             return result
@@ -212,6 +235,42 @@ class GatewayTradingClient:
             response_preview=repr(result)[:500],
         )
         raise GatewayTradingClientError("Gateway orders response was not a list")
+
+    async def get_account_activities(self, activity_types: str | None = None) -> list[dict[str, Any]]:
+        """List Alpaca account activities (broker truth of money moved).
+
+        Proxies ``GET /api/v1/alpaca/account/activities``. ``activity_types`` is
+        a comma-separated filter (e.g. ``"FILL"``); ``None`` returns all types.
+
+        Limitation: the Gateway endpoint exposes neither date filtering nor
+        pagination and the Alpaca FILL activity carries ``order_id`` + ``symbol``
+        but NOT ``client_order_id`` — so orion attribution of an activity would
+        require joining its ``order_id`` back to a known orion-minted order. The
+        PnL-reconciliation job therefore does NOT use this surface; it
+        reconstructs realized PnL from orion's own ``fills`` table instead (see
+        ``jobs/reconcile_pnl.py``).
+        """
+        result = await self._request(
+            "GET",
+            "/api/v1/alpaca/account/activities",
+            params={"activity_types": activity_types} if activity_types else None,
+        )
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict) and "error" in result:
+            logger.error(
+                "gateway_trading_activities_request_failed",
+                event_type="GATEWAY_ACTIVITIES_REQUEST_FAILED",
+                error=result["error"],
+            )
+            raise GatewayTradingClientError(f"Gateway activities request failed: {result['error']}")
+        logger.error(
+            "gateway_trading_activities_malformed_response",
+            event_type="GATEWAY_ACTIVITIES_MALFORMED_RESPONSE",
+            response_type=type(result).__name__,
+            response_preview=repr(result)[:500],
+        )
+        raise GatewayTradingClientError("Gateway activities response was not a list")
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         """Get a specific order by ID."""
