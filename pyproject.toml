@@ -150,6 +150,14 @@ module = [
     "orion.clients.heber_reader",
     "orion.main_feature_enrichment",
     "orion.jobs.gateway_contract_probe",
+    # SQLAlchemy 2.0 typed-declarative models (R6 phase 1): every column is a
+    # Mapped[...] annotation, so these are fully strict-clean. Keeping them at
+    # tier 1 makes the detached-instance / nullability bug class statically
+    # enforced — a Column-vs-value mismatch now fails the build.
+    "orion.storage.models_execution",
+    "orion.storage.models_risk",
+    "orion.storage.models_gold",
+    "orion.storage.models_dlq",
 ]
 ignore_errors = false
 strict = true

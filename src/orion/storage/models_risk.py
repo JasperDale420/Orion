@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column
 
 from orion.storage.db import Base
 
@@ -13,21 +16,21 @@ class RiskState(Base):
 
     __tablename__ = "risk_state"
 
-    id = Column(String, primary_key=True)  # e.g. "global_risk_v1"
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # e.g. "global_risk_v1"
     # timezone=True so SQLAlchemy emits `TIMESTAMP WITH TIME ZONE` and the
     # asyncpg driver accepts the tz-aware datetime produced by
     # `datetime.now(UTC)`. Without it, an INSERT with a tz-aware default
     # raises asyncpg.DataError ("can't subtract offset-naive and
     # offset-aware datetimes") because the column is bound as
     # `TIMESTAMP WITHOUT TIME ZONE`.
-    updated_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
-    current_daily_loss = Column(Float, default=0.0)
-    current_equity = Column(Float, default=0.0)
-    starting_equity = Column(Float, default=0.0)
-    peak_equity = Column(Float, default=0.0)
+    current_daily_loss: Mapped[float | None] = mapped_column(Float, default=0.0)
+    current_equity: Mapped[float | None] = mapped_column(Float, default=0.0)
+    starting_equity: Mapped[float | None] = mapped_column(Float, default=0.0)
+    peak_equity: Mapped[float | None] = mapped_column(Float, default=0.0)
 
-    open_positions_count = Column(Integer, default=0)
+    open_positions_count: Mapped[int | None] = mapped_column(Integer, default=0)
 
 
 class ProcessedFill(Base):
@@ -37,12 +40,14 @@ class ProcessedFill(Base):
 
     __tablename__ = "processed_fills"
 
-    fill_id = Column(String, primary_key=True)  # Unique ID from broker (or deduped ID)
-    client_order_id = Column(String, index=True, nullable=True)
-    processed_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    fill_id: Mapped[str] = mapped_column(String, primary_key=True)  # Unique ID from broker (or deduped ID)
+    client_order_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
+    processed_at_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
-    ticker = Column(String, nullable=True)
-    qty = Column(Float, nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String, nullable=True)
+    qty: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class PendingOrder(Base):
@@ -61,7 +66,7 @@ class PendingOrder(Base):
 
     __tablename__ = "pending_orders"
 
-    order_id = Column(String, primary_key=True)
-    ticker = Column(String, nullable=False, index=True)
-    signed_cost = Column(Float, nullable=False)  # +cost on BUY, -cost on SELL
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    order_id: Mapped[str] = mapped_column(String, primary_key=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    signed_cost: Mapped[float] = mapped_column(Float, nullable=False)  # +cost on BUY, -cost on SELL
+    created_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
