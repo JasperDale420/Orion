@@ -57,6 +57,23 @@ async def test_send_discord_alert_noop_when_unset():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_send_discord_alert_blocks_real_webhook_during_pytest(monkeypatch):
+    """Pytest must never post to a real operator Discord webhook by default."""
+    post = AsyncMock()
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/shared/test_alerts.py::test")
+    monkeypatch.delenv("ORION_ALLOW_DISCORD_IN_TESTS", raising=False)
+    with (
+        patch.object(alerts.system_settings, "discord_webhook_url", "https://discord.com/api/webhooks/real"),
+        patch.object(alerts, "create_async_http_client", return_value=_mock_client_cm(post)),
+    ):
+        result = await alerts.send_discord_alert("fixture alert")
+
+    assert result is False
+    post.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_send_discord_alert_dedupes_within_window():
     post = AsyncMock(return_value=MagicMock(raise_for_status=MagicMock()))
     with (

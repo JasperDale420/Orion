@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Pytest cannot post fixture alerts to the real Discord channel by accident**: alert tests and execution fixtures use symbols like `AAPL260418C00150000`; if a developer shell inherited `DISCORD_WEBHOOK_URL`, those fake unprotected-position alerts were sent to operators. `send_discord_alert()` now blocks real webhook hosts while pytest is running unless `ORION_ALLOW_DISCORD_IN_TESTS=1` is explicitly set, while still allowing reserved `.test`/localhost webhook URLs for unit tests.
 - **Trade journal now preserves entry fill data after close**: closing a position previously overwrote the entry fill timestamp (`filled_at_utc`) with the exit fill time, destroying the entry price/qty/time needed for cost-basis reconstruction and round-trip audit. The journal row now carries dedicated `exit_filled_qty`, `exit_filled_avg_price`, `exit_filled_at_utc`, and `exit_broker_order_id` columns; entry columns are never touched during close. Migration `b4_journal_exit_legs` adds the columns to the live database.
 
 ### Fixed (2026-06-12)

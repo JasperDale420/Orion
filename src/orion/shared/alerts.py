@@ -9,7 +9,9 @@ not spam the channel every cycle.
 
 from __future__ import annotations
 
+import os
 import time
+from urllib.parse import urlparse
 
 from empire_core.http_client import create_async_http_client
 
@@ -21,6 +23,7 @@ logger = setup_struct_logger("orion.alerts")
 _ALERT_TIMEOUT_SECONDS = 10.0
 _DEDUPE_WINDOW_SECONDS = 15 * 60
 _MESSAGE_PREFIX = "[Orion] "
+_ALLOW_DISCORD_IN_TESTS_ENV = "ORION_ALLOW_DISCORD_IN_TESTS"
 
 # Module-level dedupe state: dedupe_key -> monotonic timestamp of last send.
 _last_sent: dict[str, float] = {}
@@ -37,6 +40,21 @@ def _is_duplicate(dedupe_key: str | None) -> bool:
     return False
 
 
+def _is_safe_test_webhook_url(webhook_url: str) -> bool:
+    """Return True for reserved/local webhook hosts used by alert unit tests."""
+    hostname = (urlparse(webhook_url).hostname or "").lower()
+    return hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".test")
+
+
+def _blocks_real_webhook_during_pytest(webhook_url: str) -> bool:
+    """Protect the operator Discord channel when tests inherit local env."""
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        return False
+    if os.environ.get(_ALLOW_DISCORD_IN_TESTS_ENV, "").lower() in {"1", "true", "yes"}:
+        return False
+    return not _is_safe_test_webhook_url(webhook_url)
+
+
 async def send_discord_alert(message: str, *, dedupe_key: str | None = None) -> bool:
     """Send a Discord alert. Returns True on a successful POST, else False.
 
@@ -47,6 +65,14 @@ async def send_discord_alert(message: str, *, dedupe_key: str | None = None) -> 
     webhook_url = system_settings.discord_webhook_url
     if not webhook_url:
         logger.debug("discord_alert_skipped_no_webhook", message=message)
+        return False
+
+    if _blocks_real_webhook_during_pytest(str(webhook_url)):
+        logger.warning(
+            "discord_alert_skipped_pytest_real_webhook",
+            dedupe_key=dedupe_key,
+            allow_env=_ALLOW_DISCORD_IN_TESTS_ENV,
+        )
         return False
 
     if _is_duplicate(dedupe_key):
