@@ -177,3 +177,102 @@ async def test_restart_returns_false_when_reconnect_fails(monkeypatch) -> None:
 
     assert result is False
     assert client.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_processes_gateway_flow_message() -> None:
+    """A pushed UW flow envelope becomes a UW_FLOW BronzeEvent matching the poll shape."""
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+
+    msg = {
+        "type": "data",
+        "feed": "flow_alerts",
+        "symbol": "AAPL",
+        "event_id": "uwblake2b-abc",
+        "envelope": {
+            "event_id": "uwblake2b-abc",
+            "instrument_key": "option:OCC:AAPL240119C00190000",
+            "ts_event": "2026-02-05T14:31:00Z",
+        },
+        "data": {
+            "ticker": "AAPL",
+            "underlying": "AAPL",
+            "option_chain": "AAPL240119C00190000",
+            "expiry": "2024-01-19",
+            "strike": 190.0,
+            "put_call": "call",
+            "premium": 125000.0,
+            "volume": 500,
+            "timestamp": "2026-02-05T14:31:00Z",
+        },
+    }
+
+    assert client._is_flow_message(msg) is True
+    await client._process_flow_message(msg)
+
+    events = client.drain_flow_events()
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_id == "uwblake2b-abc"
+    assert event.event_type == "UW_FLOW"
+    assert event.source == "UW"
+    assert event.ticker == "AAPL"
+    # Shared enrichment applied (same keys as the poll path).
+    assert event.payload["ticker"] == "AAPL"
+    assert event.payload["put_call"] == "C"
+    assert event.payload["premium_usd"] == 125000.0
+    assert "aggressor_ind" in event.payload
+    assert event.event_ts_utc == datetime(2026, 2, 5, 14, 31, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_flow_message_prefers_envelope_event_id() -> None:
+    """event_id precedence matches bars: top-level > envelope > payload."""
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+    msg = {
+        "type": "data",
+        "feed": "flow_alerts",
+        "symbol": "TSLA",
+        "envelope": {"event_id": "from-envelope", "ts_event": "2026-02-05T14:31:00Z"},
+        "data": {"ticker": "TSLA", "timestamp": "2026-02-05T14:31:00Z", "event_id": "from-payload"},
+    }
+    await client._process_flow_message(msg)
+    events = client.drain_flow_events()
+    assert len(events) == 1
+    assert events[0].event_id == "from-envelope"
+
+
+@pytest.mark.asyncio
+async def test_flow_message_without_event_id_dropped() -> None:
+    """A flow message lacking any event_id is dropped (cannot dedup safely)."""
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+    msg = {
+        "type": "data",
+        "feed": "flow_alerts",
+        "symbol": "NVDA",
+        "data": {"ticker": "NVDA", "timestamp": "2026-02-05T14:31:00Z"},
+    }
+    await client._process_flow_message(msg)
+    assert client.drain_flow_events() == []
+
+
+def test_bar_message_not_treated_as_flow() -> None:
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+    bar = {"type": "data", "feed": "bars", "symbol": "AAPL"}
+    assert client._is_flow_message(bar) is False
+
+
+def test_subscription_ack_not_treated_as_flow() -> None:
+    """subscription_ack carries `feeds` (plural) and must not match the flow filter."""
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+    ack = {"type": "subscription_ack", "feeds": ["flow_alerts"], "symbol": "AAPL"}
+    assert client._is_flow_message(ack) is False
+
+
+@pytest.mark.asyncio
+async def test_subscribe_flow_tracks_state_before_connection() -> None:
+    """subscribe_flow records desired state even before the socket is live."""
+    client = GatewayStreamClient(gateway_url="http://localhost:8000", api_key="test-key")
+    await client.subscribe_flow([])  # ALL
+    assert client._flow_subscribed is True
+    assert client._subscribed_flow_symbols == set()

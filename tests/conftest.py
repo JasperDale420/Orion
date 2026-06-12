@@ -14,6 +14,11 @@ collect_ignore = [
 # Must happen before any orion modules are imported to ensure Settings pick these up.
 os.environ["ORION_STAGE"] = "test"
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
+# Pin the flow source to the code default: the deployment .env may set
+# ORION_FLOW_SOURCE=shadow/push (live shadow rollout), and load_dotenv would
+# otherwise leak that into the suite — tests that exercise shadow/push set it
+# explicitly on the settings object.
+os.environ["ORION_FLOW_SOURCE"] = "poll"
 os.environ["ALPACA_API_KEY"] = "mock_key"
 os.environ["ALPACA_SECRET_KEY"] = "mock_secret"
 os.environ["ALPACA_PAPER"] = "True"

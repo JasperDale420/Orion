@@ -5,7 +5,7 @@ import signal
 import traceback
 import hashlib
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -16,10 +16,11 @@ from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
 from orion.core.service_lease import acquire_service_lease, renew_service_lease
-from orion.core.timekeeping import derive_trading_date_and_session
+from orion.core.timekeeping import derive_trading_date_and_session, last_closed_trading_date
 from orion.core.universe_manager import UniverseManager
 from orion.processing.deduper import DeduplicationEngine
 from orion.processing.feature_engine import FeatureEngine
+from orion.processing.flow_enrich import enrich_flow_payload
 from orion.processing.normalizer import NormalizationEngine
 from orion.processing.persistence import (
     persist_bronze_events,
@@ -35,6 +36,7 @@ from orion.shared.utils import make_json_safe
 from orion.storage.db import async_session_factory, init_db, wait_for_db
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
+from orion.storage.models_flow_parity import FlowPushParity
 from orion.storage.models_gold import CandidateTrade
 from orion.storage.models_silver import SilverSignal
 
@@ -82,7 +84,23 @@ class IngestionService:
         # re-hydration by one interval rather than re-querying immediately.
         self._last_universe_rehydrate_ts: datetime = datetime.now(UTC)
         self._eod_task: asyncio.Task[None] | None = None
+        self._parity_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
+
+        # Lag-tolerant shadow-parity reconciliation state (finding O3).
+        # Push and Heber-poll legitimately surface the same event in DIFFERENT
+        # cycles: push delivers in cycle N, Silver lands it so poll reads it in
+        # cycle N+1 (rsync + silver lag). A same-cycle set intersection records
+        # that delivered event as missed_by_push — systematically false-failing
+        # the cutover gate. Instead we reconcile over a rolling window: each id's
+        # first-seen time per path is remembered, and a poll id is only counted
+        # missed_by_push once the window has fully elapsed with no matching push
+        # delivery (symmetric for missed_by_poll). Maps are pruned to the window
+        # each cycle so they stay bounded on the live ingestion hot path.
+        # value = (first_seen_ts, received_ts) — received_ts feeds latency calc.
+        self._parity_window_s: float = float(os.getenv("ORION_FLOW_PARITY_WINDOW_SECONDS", "900"))
+        self._push_seen: dict[str, tuple[datetime, datetime | None]] = {}
+        self._poll_seen: dict[str, tuple[datetime, datetime | None]] = {}
 
         # Gateway WS degrade-mode state. `_ws_ever_connected` guards against
         # tripping DEGRADED during the *initial* connection backoff — we only
@@ -155,6 +173,14 @@ class IngestionService:
             self._ws_ever_connected = True
             initial_tickers = list(system_settings.static_watchlist)
             await self.gateway_stream.subscribe(initial_tickers)
+            # In shadow/push flow modes, also subscribe to the UW flow channel
+            # (ALL flow / firehose). Resubscribed automatically on reconnect.
+            if system_settings.flow_source in ("shadow", "push"):
+                await self.gateway_stream.subscribe_flow([])
+                logger.info(
+                    "Subscribed to UW flow push channel",
+                    extra={"flow_source": system_settings.flow_source},
+                )
             logger.info(
                 "Gateway stream started and subscribed to initial tickers",
                 extra={"ticker_count": len(initial_tickers), "tickers": initial_tickers},
@@ -281,8 +307,8 @@ class IngestionService:
         for event in all_events:
             self._tag_ingest_metadata(event, trace_id, "gateway_stream")
 
-        # Poll Heber for new UW flow alerts
-        flow_events = await self._poll_heber_flow(trace_id)
+        # Assemble UW flow events per ORION_FLOW_SOURCE (poll / shadow / push).
+        flow_events = await self._collect_flow_events(trace_id)
         all_events.extend(flow_events)
 
         # Universe updates are deferred to _run_pipeline — only tickers
@@ -475,12 +501,23 @@ class IngestionService:
                 await self._update_health_status()
 
     def _active_event_source_profile(self) -> dict[str, str | bool | list[str]]:
+        # flow_source reflects the active ORION_FLOW_SOURCE mode:
+        #   poll   → Heber-Silver poll only
+        #   shadow → Gateway WS push + Heber poll (parity logged)
+        #   push   → Gateway WS push primary, Heber poll as gap-filler
+        flow_mode = system_settings.flow_source
+        flow_source_label = {
+            "poll": "heber_silver",
+            "shadow": "gateway_push+heber_silver",
+            "push": "gateway_push",
+        }.get(flow_mode, "heber_silver")
         return {
             "data_source": "gateway_stream+heber_flow",
             "gateway_connected": self.gateway_stream.is_running,
             "subscribed_symbols": sorted(self.gateway_stream.subscribed_symbols),
             "produced_event_types": ["ALPACA_BAR_1M", "UW_FLOW"],
-            "flow_source": "heber_silver",
+            "flow_source": flow_source_label,
+            "flow_mode": flow_mode,
         }
 
     async def _poll_heber_flow(self, trace_id: str) -> list[BronzeEvent]:
@@ -559,6 +596,215 @@ class IngestionService:
             logger.error(f"Heber flow poll failed: {e}", exc_info=True)
             return []
 
+    async def _collect_flow_events(self, trace_id: str) -> list[BronzeEvent]:
+        """Assemble the cycle's UW flow events per ORION_FLOW_SOURCE.
+
+        - ``poll``   — Heber-Silver poll only (today's behavior).
+        - ``shadow`` — drain push AND poll; record parity; return the UNION so
+          the deduper collapses the overlap (each event reaches the pipeline
+          once — no double candidates).
+        - ``push``   — push primary; poll retained as the degrade/replay
+          gap-filler, fed through the same born-stale + dedup path so a WS gap
+          is silently back-filled. Returns the union.
+
+        Push events get the SAME born-stale freshness drop as poll events so a
+        Gateway backlog flush cannot resurrect stale candidates.
+        """
+        source = system_settings.flow_source
+
+        if source == "poll":
+            return await self._poll_heber_flow(trace_id)
+
+        # shadow / push both consume the push queue.
+        push_events = self._drain_push_flow_events(trace_id)
+        poll_events = await self._poll_heber_flow(trace_id)
+
+        if source == "shadow":
+            await self._record_flow_parity(push_events, poll_events, trace_id)
+
+        # Union both paths; dedup downstream collapses the overlap on event_id.
+        return push_events + poll_events
+
+    def _drain_push_flow_events(self, trace_id: str) -> list[BronzeEvent]:
+        """Drain pushed flow events, applying the same born-stale drop as poll.
+
+        A long WS gap followed by a Gateway backlog flush must not dump a stale
+        catch-up burst — the freshness cutoff (computed against the same
+        ``now``/``max_data_lag_seconds`` as the poll path) discards anything
+        already past the data-lag budget at ingest.
+        """
+        raw = self.gateway_stream.drain_flow_events()
+        if not raw:
+            return []
+        now = datetime.now(UTC)
+        freshness_cutoff = now - timedelta(seconds=system_settings.max_data_lag_seconds)
+        events: list[BronzeEvent] = []
+        stale_dropped = 0
+        for event in raw:
+            event_ts = event.event_ts_utc
+            if event_ts is not None and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=UTC)
+            if event_ts is not None and event_ts < freshness_cutoff:
+                stale_dropped += 1
+                continue
+            self._tag_ingest_metadata(event, trace_id, "gateway_flow_push")
+            events.append(event)
+        if stale_dropped:
+            logger.info(
+                f"Dropped {stale_dropped} stale UW flow push events at ingest "
+                f"(older than {system_settings.max_data_lag_seconds}s data-lag budget)",
+                extra={"stale_dropped": stale_dropped, "fresh_kept": len(events)},
+            )
+        return events
+
+    async def _record_flow_parity(
+        self, push_events: list[BronzeEvent], poll_events: list[BronzeEvent], trace_id: str
+    ) -> None:
+        """Compute and persist lag-tolerant push/poll parity (shadow mode).
+
+        Push and Heber-poll legitimately surface the same event in DIFFERENT
+        cycles (push leads; Silver lands it a cycle or more later). Classifying
+        matched/missed on a same-cycle set intersection therefore mislabels
+        every lag-delayed event as ``missed_by_push`` and the cutover gate would
+        never legitimately reach 0. Instead we reconcile over a rolling window:
+        each id's first-seen time per path is remembered, and a poll id is only
+        counted ``missed_by_push`` once the window has fully elapsed with no
+        matching push delivery (symmetric for ``missed_by_poll``).
+
+        Best-effort: a parity-logging failure must never take down ingestion.
+        """
+        try:
+            now = datetime.now(UTC)
+            window = self._parity_window_s
+
+            # Ingest this cycle's ids into the rolling maps (first-seen wins, so
+            # the lag window is measured from earliest delivery on each path).
+            self._record_seen(self._push_seen, push_events, now)
+            self._record_seen(self._poll_seen, poll_events, now)
+
+            cutoff = now - timedelta(seconds=window)
+
+            # Finalize ids now present on BOTH paths: count each exactly once,
+            # then REMOVE them from both maps. Without removal a later ONE-SIDED
+            # expiry would recount an already-matched id as missed (round-4
+            # finding), and the same id would be recounted matched every cycle
+            # both sides stayed live. A pair only counts MATCHED if both sides
+            # arrived within the window of each other: if one side's first-seen
+            # already predates the cutoff, the other side arrived LATE — per the
+            # parity contract that is a miss charged to the late path, and its
+            # over-window latency is excluded from the sample (round-5 finding).
+            both = set(self._push_seen) & set(self._poll_seen)
+            matched: set[str] = set()
+            missed_by_push: set[str] = set()
+            missed_by_poll: set[str] = set()
+            deltas: list[float] = []
+            for eid in both:
+                push_first, push_recv = self._push_seen.pop(eid)
+                poll_first, poll_recv = self._poll_seen.pop(eid)
+                if push_first < cutoff:
+                    missed_by_poll.add(eid)  # poll arrived past push's window
+                    continue
+                if poll_first < cutoff:
+                    missed_by_push.add(eid)  # push arrived past poll's window
+                    continue
+                matched.add(eid)
+                if push_recv is None or poll_recv is None:
+                    continue
+                if push_recv.tzinfo is None:
+                    push_recv = push_recv.replace(tzinfo=UTC)
+                if poll_recv.tzinfo is None:
+                    poll_recv = poll_recv.replace(tzinfo=UTC)
+                deltas.append((poll_recv - push_recv).total_seconds())
+            median_improvement = self._median(deltas) if deltas else None
+
+            # Evict entries older than the window so the maps stay bounded on the
+            # hot path. Matched/late ids are already gone, so what expires here is
+            # genuinely one-sided: a poll id aged out with no push delivery at all
+            # is ``missed_by_push`` (symmetric for ``missed_by_poll``). Each missed
+            # id is finalized exactly once, on the cycle its window elapses.
+            missed_by_poll |= self._prune_seen(self._push_seen, cutoff)
+            missed_by_push |= self._prune_seen(self._poll_seen, cutoff)
+
+            # uwflow_* fallback ids can never match a push blake2b id (§4.2) —
+            # count those unmatchable separately so they don't false-fail the gate.
+            unmatchable = {eid for eid in missed_by_push if eid.startswith("uwflow_")}
+
+            # Per-cycle path counts (distinct ids each path delivered this cycle).
+            push_count = len({e.event_id for e in push_events})
+            poll_count = len({e.event_id for e in poll_events})
+
+            row = FlowPushParity(
+                cycle_ts_utc=now,
+                push_count=push_count,
+                poll_count=poll_count,
+                matched_count=len(matched),
+                missed_by_push_count=len(missed_by_push),
+                missed_by_poll_count=len(missed_by_poll),
+                parity_unmatchable_count=len(unmatchable),
+                median_latency_improvement_s=median_improvement,
+                window_seconds=int(window),
+                missed_by_push_ids=sorted(missed_by_push)[:50] or None,
+                trace_id=trace_id,
+            )
+
+            async def _persist(session: Any) -> None:
+                session.add(row)
+
+            await db_write(_persist)
+
+            logger.info(
+                "flow_push_parity",
+                extra={
+                    "event_type": "FLOW_PUSH_PARITY",
+                    "push_count": push_count,
+                    "poll_count": poll_count,
+                    "matched": len(matched),
+                    "missed_by_push": len(missed_by_push),
+                    "missed_by_poll": len(missed_by_poll),
+                    "parity_unmatchable": len(unmatchable),
+                    "median_latency_improvement_s": median_improvement,
+                    "window_seconds": int(window),
+                },
+            )
+        except Exception as e:
+            logger.error(f"flow_push_parity logging failed: {e}", exc_info=True)
+
+    @staticmethod
+    def _record_seen(
+        seen: dict[str, tuple[datetime, datetime | None]],
+        events: list[BronzeEvent],
+        now: datetime,
+    ) -> None:
+        """Stamp this cycle's event_ids into a rolling first-seen map.
+
+        First-seen wins: re-seeing an id (e.g. the poll overlap window re-reads a
+        row) does not reset its window, so the reconciliation measures from the
+        earliest delivery on that path.
+        """
+        for e in events:
+            if e.event_id not in seen:
+                seen[e.event_id] = (now, e.received_ts_utc)
+
+    @staticmethod
+    def _prune_seen(
+        seen: dict[str, tuple[datetime, datetime | None]],
+        cutoff: datetime,
+    ) -> set[str]:
+        """Drop entries first-seen before ``cutoff``; return the evicted ids."""
+        expired = {eid for eid, (first_seen, _) in seen.items() if first_seen < cutoff}
+        for eid in expired:
+            del seen[eid]
+        return expired
+
+    @staticmethod
+    def _median(values: list[float]) -> float:
+        ordered = sorted(values)
+        n = len(ordered)
+        mid = n // 2
+        if n % 2 == 1:
+            return ordered[mid]
+        return (ordered[mid - 1] + ordered[mid]) / 2.0
+
     @staticmethod
     def _make_json_safe(value: Any) -> Any:
         """Convert Parquet-native types and NaN/Inf to JSON-serializable Python types."""
@@ -579,22 +825,9 @@ class IngestionService:
             if v is not None and not (hasattr(v, "__class__") and v.__class__.__name__ == "NaTType")
         }
 
-        ticker = str(payload.get("underlying") or payload.get("symbol") or "")
+        ticker = enrich_flow_payload(payload, now)
         if not ticker:
             return None
-
-        payload["ticker"] = ticker
-        if "put_call" in payload:
-            pc = str(payload["put_call"]).upper()
-            payload["put_call"] = pc[0] if pc else ""
-        if "premium" in payload:
-            payload["premium_usd"] = float(payload["premium"])
-        if "expiry" in payload:
-            payload["expiry"] = str(payload["expiry"])
-            dte = IngestionService._compute_dte(payload["expiry"], now)
-            if dte is not None:
-                payload["dte"] = dte
-        payload["aggressor_ind"] = IngestionService._infer_aggressor(payload)
 
         raw_event_id = payload.get("event_id")
         if raw_event_id:
@@ -629,31 +862,6 @@ class IngestionService:
             ticker=ticker,
             payload=payload,
         )
-
-    @staticmethod
-    def _compute_dte(expiry_str: str, now: datetime) -> int | None:
-        """Compute days-to-expiry from expiry string."""
-        try:
-            from datetime import date as _date
-
-            exp = _date.fromisoformat(expiry_str[:10])
-            return max(0, (exp - now.date()).days)
-        except (ValueError, TypeError):
-            return None
-
-    @staticmethod
-    def _infer_aggressor(payload: dict) -> str:
-        """Infer aggressor from raw field or ask/bid side premium."""
-        raw = payload.get("aggressor")
-        if raw:
-            return str(raw).upper()
-        ask = float(payload.get("total_ask_side_prem") or 0)
-        bid = float(payload.get("total_bid_side_prem") or 0)
-        if ask > bid and ask > 0:
-            return "ASK"
-        if bid > ask and bid > 0:
-            return "BID"
-        return "MID"
 
     async def _normalize_and_dedupe(self, events: list[BronzeEvent], trace_id: str) -> list[BronzeEvent]:
         normalized = []
@@ -725,20 +933,77 @@ class IngestionService:
         if now_utc.hour == 1 and now_utc.minute >= 5:
             today_str = now_utc.date().isoformat()
             if self.eod_trigger_last_run != today_str:
-                logger.info("Triggering EOD Review Agent...")
+                # The trigger fires ~01:05 UTC, which is the prior evening in ET
+                # (post-close). Reconcile the just-closed NYSE session, NOT
+                # UTC-today — otherwise the EOD run executes as the next calendar
+                # day and reconcile_pnl filters fills to an empty wrong day.
+                trading_date = last_closed_trading_date(now_utc)
+                logger.info(f"Triggering EOD Review Agent for trading date {trading_date}...")
                 # Save task to prevent garbage collection
-                self._eod_task = asyncio.create_task(self._run_eod_task())
+                self._eod_task = asyncio.create_task(self._run_eod_task(trading_date))
                 self.eod_trigger_last_run = today_str
+                # Shadow-mode daily parity summary rides the EOD trigger.
+                if system_settings.flow_source == "shadow":
+                    self._parity_task = asyncio.create_task(self._post_flow_parity_summary())
 
     @staticmethod
-    async def _run_eod_task() -> None:
+    async def _run_eod_task(trading_date: date | None = None) -> None:
         try:
             from orion.agents.eod_review_agent import EODReviewAgent
 
             agent = EODReviewAgent()
-            await agent.run_review()
+            await agent.run_review(target_date=trading_date)
         except Exception as e:
             logger.error(f"EOD Agent Failed: {e}")
+
+    async def _post_flow_parity_summary(self) -> None:
+        """Aggregate the day's flow_push_parity rows and post a Discord summary.
+
+        Reports total push vs poll counts, total missed-by-push (the cutover
+        gate, excluding the uwflow_* unmatchable class), median latency
+        improvement, and a GREEN/RED verdict against the cutover gate. Swallows
+        its own errors so it can never disturb ingestion.
+        """
+        try:
+            from sqlalchemy import func as sa_func
+            from sqlalchemy import select
+
+            day_start = datetime.now(UTC) - timedelta(hours=24)
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(
+                        sa_func.count(FlowPushParity.id),
+                        sa_func.coalesce(sa_func.sum(FlowPushParity.push_count), 0),
+                        sa_func.coalesce(sa_func.sum(FlowPushParity.poll_count), 0),
+                        sa_func.coalesce(sa_func.sum(FlowPushParity.missed_by_push_count), 0),
+                        sa_func.coalesce(sa_func.sum(FlowPushParity.parity_unmatchable_count), 0),
+                        sa_func.avg(FlowPushParity.median_latency_improvement_s),
+                        sa_func.max(FlowPushParity.window_seconds),
+                    ).where(FlowPushParity.cycle_ts_utc >= day_start)
+                )
+                cycles, push_total, poll_total, missed_total, unmatchable_total, latency_avg, window_s = result.one()
+
+            if not cycles:
+                logger.info("flow_push_parity_summary_skipped_no_rows")
+                return
+
+            # Cutover gate: push must miss nothing poll caught (excluding the
+            # uwflow_* unmatchable class) and demonstrably lead poll.
+            true_missed = max(0, int(missed_total) - int(unmatchable_total))
+            green = true_missed == 0 and (latency_avg or 0) > 0 and int(unmatchable_total) == 0
+            verdict = "GREEN" if green else "RED"
+            latency_str = f"{latency_avg:.1f}s" if latency_avg is not None else "n/a"
+
+            await send_discord_alert(
+                f"Flow-push shadow parity ({verdict}) — cycles={cycles}, "
+                f"push={int(push_total)}, poll={int(poll_total)}, "
+                f"missed_by_push={true_missed} (unmatchable={int(unmatchable_total)}), "
+                f"median_latency_improvement={latency_str}, "
+                f"reconcile_window={int(window_s or 0)}s",
+                dedupe_key="flow_push_parity_daily",
+            )
+        except Exception as e:
+            logger.error(f"flow_push_parity summary failed: {e}", exc_info=True)
 
     # --- Helpers ---
 

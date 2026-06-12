@@ -18,6 +18,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from orion.config import system_settings
+from orion.processing.flow_enrich import enrich_flow_payload
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
 
@@ -46,20 +47,28 @@ class GatewayStreamClient:
         gateway_url: str,
         api_key: str,
         on_bar_callback: Callable[[BronzeEvent], None] | None = None,
+        on_flow_callback: Callable[[BronzeEvent], None] | None = None,
     ):
         self.ws_url = self._normalize_ws_url(gateway_url)
 
         self.api_key = api_key
         self.on_bar_callback = on_bar_callback
+        self.on_flow_callback = on_flow_callback
 
         # Connection state
         self._websocket: websockets.WebSocketClientProtocol | None = None
         self._subscribed_symbols: set[str] = set()
+        # Flow subscription state. None means "not subscribed to flow at all";
+        # an empty set means subscribed to ALL flow (firehose). A non-empty set
+        # tracks the specific underlyings requested.
+        self._flow_subscribed: bool = False
+        self._subscribed_flow_symbols: set[str] = set()
         self._running = False
         self._authenticated = False
 
         # Event queue for buffering
         self._event_queue: asyncio.Queue[BronzeEvent] = asyncio.Queue()
+        self._flow_event_queue: asyncio.Queue[BronzeEvent] = asyncio.Queue()
 
         # Background tasks
         self._receive_task: asyncio.Task | None = None
@@ -184,6 +193,10 @@ class GatewayStreamClient:
                 # Resubscribe to previous symbols
                 if self._subscribed_symbols:
                     await self._send_subscribe(list(self._subscribed_symbols))
+                # Re-send the flow subscription (ALL or specific underlyings)
+                # so a reconnect restores push delivery.
+                if self._flow_subscribed:
+                    await self._send_subscribe_flow(list(self._subscribed_flow_symbols))
                 return True
 
             delay = min(delay * 2, MAX_RECONNECT_DELAY)
@@ -243,6 +256,44 @@ class GatewayStreamClient:
         except Exception as e:
             logger.error(f"Unsubscribe failed: {e}", exc_info=True)
             return False
+
+    async def _send_subscribe_flow(self, symbols: list[str]) -> bool:
+        """Send the UW flow subscribe message (empty symbols ⇒ ALL flow)."""
+        if not self._websocket or not self._authenticated:
+            logger.warning("Cannot subscribe flow: not connected or authenticated")
+            return False
+        try:
+            await self._websocket.send(
+                json.dumps(
+                    {
+                        "action": "subscribe",
+                        "provider": "uw",
+                        "feeds": ["flow_alerts"],
+                        "symbols": symbols,
+                    }
+                )
+            )
+            logger.info(
+                "Sent UW flow subscribe via Gateway",
+                extra={"flow_symbols": len(symbols) or "ALL"},
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Flow subscribe failed: {e}", exc_info=True)
+            return False
+
+    async def subscribe_flow(self, symbols: list[str] | None = None) -> None:
+        """Subscribe to UW flow push (empty/None ⇒ ALL flow / firehose).
+
+        Tracks the desired subscription even before the connection is live so it
+        is (re)sent by ``start``/reconnect/``restart``.
+        """
+        self._flow_subscribed = True
+        self._subscribed_flow_symbols = {s for s in (symbols or []) if s}
+        if self._websocket and self._authenticated:
+            await self._send_subscribe_flow(list(self._subscribed_flow_symbols))
+        else:
+            logger.debug("Queued UW flow subscription until Gateway connection is ready")
 
     async def subscribe(self, symbols: list[str]) -> None:
         """Subscribe to bar updates for the given symbols."""
@@ -310,6 +361,23 @@ class GatewayStreamClient:
         return False
 
     @staticmethod
+    def _is_flow_message(data: dict[str, Any]) -> bool:
+        """Return True when message carries a UW flow envelope.
+
+        The Gateway flow fan-out wraps the envelope as
+        ``{"type":"data","feed":"flow_alerts",...}`` (mirrors the bars shape).
+        ``feeds`` (plural, on subscription_ack) intentionally does not match.
+        """
+        msg_type = str(data.get("type") or data.get("event_type") or "").lower()
+        feed = str(data.get("feed") or "").lower()
+        if feed not in ("flow", "flow_alerts"):
+            return False
+        if msg_type == "data":
+            return True
+        # Bare envelope fallback: no top-level type, flow feed + envelope fields.
+        return not msg_type and ("instrument_key" in data or "symbol" in data or "envelope" in data)
+
+    @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
         """Parse provider timestamp values to UTC datetime."""
         if isinstance(value, datetime):
@@ -355,6 +423,8 @@ class GatewayStreamClient:
                 # Handle market data
                 if self._is_bar_message(data):
                     await self._process_bar_message(data)
+                elif self._is_flow_message(data):
+                    await self._process_flow_message(data)
 
             except ConnectionClosed:
                 logger.warning("Gateway WebSocket connection closed")
@@ -436,6 +506,76 @@ class GatewayStreamClient:
         except Exception as e:
             logger.error(f"Error processing bar message: {e}", exc_info=True)
 
+    async def _process_flow_message(self, data: dict[str, Any]) -> None:
+        """Process a pushed UW flow envelope into a BronzeEvent.
+
+        The output is shape-identical to the Heber-poll path's
+        ``_heber_row_to_event`` (same event_id precedence, event_type, source,
+        enriched payload keys via the shared ``enrich_flow_payload`` helper) so
+        the two delivery paths are interchangeable and Orion's deduper collapses
+        a push+poll duplicate pair on the Gateway-minted ``event_id``.
+        """
+        try:
+            envelope = data.get("envelope", {})
+            if not isinstance(envelope, dict):
+                envelope = {}
+
+            payload = data.get("data")
+            if not isinstance(payload, dict):
+                payload = envelope.get("payload")
+            if not isinstance(payload, dict):
+                payload = data
+            payload = dict(payload)
+
+            # The Gateway flow envelope's top-level `symbol` IS the underlying
+            # ticker (wrap_event resolves underlying/ticker → symbol). Seed it so
+            # the shared enrichment resolves the same ticker the poll path does
+            # (underlying/symbol), even when the inner record only carries
+            # `ticker`.
+            top_symbol = data.get("symbol") or envelope.get("symbol")
+            if top_symbol and not (payload.get("underlying") or payload.get("symbol")):
+                payload["symbol"] = top_symbol
+
+            now = datetime.now(UTC)
+            ticker = enrich_flow_payload(payload, now)
+            if not ticker:
+                return
+
+            # Same id precedence as bars: prefer the Gateway envelope id (the id
+            # Heber writes to Silver), so push and poll carry byte-identical ids.
+            event_id = data.get("event_id") or envelope.get("event_id") or payload.get("event_id")
+            if not event_id:
+                logger.warning(f"Dropping flow event without event_id for {ticker}")
+                return
+            event_id = str(event_id)
+
+            # ts_event from the envelope (the same value Heber writes to the
+            # Silver ts_event column the poll path reads).
+            ts_value = (
+                payload.get("timestamp") or envelope.get("ts_event") or data.get("ts_event") or payload.get("ts_event")
+            )
+            event_ts = self._parse_timestamp(ts_value)
+
+            event = BronzeEvent(
+                event_id=event_id,
+                source="UW",
+                event_type="UW_FLOW",
+                event_ts_utc=event_ts,
+                received_ts_utc=now,
+                ticker=ticker,
+                payload=payload,
+            )
+
+            if self.on_flow_callback:
+                self.on_flow_callback(event)
+            else:
+                await self._flow_event_queue.put(event)
+
+            logger.debug(f"Received UW flow push for {ticker} via Gateway")
+
+        except Exception as e:
+            logger.error(f"Error processing flow message: {e}", exc_info=True)
+
     async def start(self) -> None:
         """Start the WebSocket client."""
         if self._running:
@@ -452,6 +592,8 @@ class GatewayStreamClient:
         # Flush queued subscriptions that were requested before startup.
         if self._subscribed_symbols:
             await self._send_subscribe(list(self._subscribed_symbols))
+        if self._flow_subscribed:
+            await self._send_subscribe_flow(list(self._subscribed_flow_symbols))
 
         self._receive_task = asyncio.create_task(self._receive_loop())
         logger.info("Gateway stream client started")
@@ -505,11 +647,22 @@ class GatewayStreamClient:
             self._websocket = None
 
     def drain_events(self, max_events: int = 1000) -> list[BronzeEvent]:
-        """Drain buffered events from the queue."""
+        """Drain buffered bar events from the queue."""
         events = []
         while len(events) < max_events:
             try:
                 event = self._event_queue.get_nowait()
+                events.append(event)
+            except asyncio.QueueEmpty:
+                break
+        return events
+
+    def drain_flow_events(self, max_events: int = 5000) -> list[BronzeEvent]:
+        """Drain buffered UW flow push events from the queue."""
+        events = []
+        while len(events) < max_events:
+            try:
+                event = self._flow_event_queue.get_nowait()
                 events.append(event)
             except asyncio.QueueEmpty:
                 break
@@ -526,6 +679,7 @@ class GatewayStreamClient:
 
 def create_gateway_stream_client(
     on_bar_callback: Callable[[BronzeEvent], None] | None = None,
+    on_flow_callback: Callable[[BronzeEvent], None] | None = None,
 ) -> GatewayStreamClient:
     """Create GatewayStreamClient from centralized system settings."""
     gateway_url = system_settings.data_gateway_url
@@ -540,4 +694,5 @@ def create_gateway_stream_client(
         gateway_url=gateway_url,
         api_key=api_key,
         on_bar_callback=on_bar_callback,
+        on_flow_callback=on_flow_callback,
     )

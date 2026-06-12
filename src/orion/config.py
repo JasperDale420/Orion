@@ -4,6 +4,7 @@ load_dotenv()  # Load .env file if present
 
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -235,6 +236,17 @@ class SystemSettings(BaseSettings):
     flow_poll_overlap_seconds: int = Field(
         default=120,
         validation_alias="ORION_FLOW_POLL_OVERLAP_SECONDS",
+    )
+    # UW flow delivery path (redesign R1 / B1). Default `poll` in code is
+    # today's exact Heber-Silver poll behavior; deploy sets `shadow`.
+    #   poll   — Heber-Silver poll only (unchanged).
+    #   shadow — consume push (Gateway WS) AND poll; log per-cycle parity to
+    #            flow_push_parity. Dedup collapses the overlap so the pipeline
+    #            sees each event once (no double candidates).
+    #   push   — push primary; poll retained as the degrade/replay gap-filler.
+    flow_source: Literal["poll", "shadow", "push"] = Field(
+        default="poll",
+        validation_alias="ORION_FLOW_SOURCE",
     )
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000

@@ -312,6 +312,64 @@ class TestCheckEodTrigger:
         assert svc.eod_trigger_last_run == "2025-03-10"
 
     @pytest.mark.unit
+    def test_eod_target_is_just_closed_session_edt(self):
+        """Tue 01:05 UTC (EDT) reconciles Monday's just-closed NYSE session,
+        not UTC-today (Tuesday)."""
+        svc = self._make_service()
+        svc.eod_trigger_last_run = None
+
+        # 2026-06-09 (Tue) 01:05 UTC == Mon 2026-06-08 21:05 ET, post-close.
+        mock_now = datetime(2026, 6, 9, 1, 5, 0, tzinfo=UTC)
+        with patch("orion.ingestion.service.datetime") as mock_dt:
+            mock_dt.now.return_value = mock_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            with patch.object(svc, "_run_eod_task", new=MagicMock(return_value=None)) as mock_eod:
+                with patch("orion.ingestion.service.asyncio") as mock_asyncio:
+                    mock_asyncio.create_task.return_value = MagicMock()
+                    svc._check_eod_trigger()
+
+        # Threaded into _run_eod_task as the explicit just-closed trading date.
+        mock_eod.assert_called_once_with(date(2026, 6, 8))
+        # Dedup guard still keys off the UTC calendar day.
+        assert svc.eod_trigger_last_run == "2026-06-09"
+
+    @pytest.mark.unit
+    def test_eod_target_is_just_closed_session_est(self):
+        """Winter (EST) weekday trigger resolves the prior ET session."""
+        svc = self._make_service()
+        svc.eod_trigger_last_run = None
+
+        # 2026-01-14 (Wed) 01:05 UTC == Tue 2026-01-13 20:05 ET, post-close.
+        mock_now = datetime(2026, 1, 14, 1, 5, 0, tzinfo=UTC)
+        with patch("orion.ingestion.service.datetime") as mock_dt:
+            mock_dt.now.return_value = mock_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            with patch.object(svc, "_run_eod_task", new=MagicMock(return_value=None)) as mock_eod:
+                with patch("orion.ingestion.service.asyncio") as mock_asyncio:
+                    mock_asyncio.create_task.return_value = MagicMock()
+                    svc._check_eod_trigger()
+
+        mock_eod.assert_called_once_with(date(2026, 1, 13))
+
+    @pytest.mark.unit
+    def test_eod_target_on_weekend_resolves_to_friday(self):
+        """A Saturday 01:05 UTC trigger reconciles Friday's session, not 'today'."""
+        svc = self._make_service()
+        svc.eod_trigger_last_run = None
+
+        # 2026-06-06 is a Saturday; 01:05 UTC == Fri 2026-06-05 21:05 ET.
+        mock_now = datetime(2026, 6, 6, 1, 5, 0, tzinfo=UTC)
+        with patch("orion.ingestion.service.datetime") as mock_dt:
+            mock_dt.now.return_value = mock_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            with patch.object(svc, "_run_eod_task", new=MagicMock(return_value=None)) as mock_eod:
+                with patch("orion.ingestion.service.asyncio") as mock_asyncio:
+                    mock_asyncio.create_task.return_value = MagicMock()
+                    svc._check_eod_trigger()
+
+        mock_eod.assert_called_once_with(date(2026, 6, 5))
+
+    @pytest.mark.unit
     def test_does_not_trigger_if_already_run_today(self):
         svc = self._make_service()
         svc.eod_trigger_last_run = "2025-03-10"
@@ -1284,3 +1342,175 @@ class TestUniverseSelfHealing:
         assert len(subscribed) > len(initial)
         assert "TKR0" in subscribed
         assert "TKR49" in subscribed
+
+
+# ---------------------------------------------------------------------------
+# _collect_flow_events (ORION_FLOW_SOURCE poll / shadow / push)
+# ---------------------------------------------------------------------------
+class TestCollectFlowEvents:
+    """Source-aware flow assembly + shadow parity."""
+
+    def _make_service(self, flow_running=True):
+        with (
+            patch("orion.ingestion.service.HealthMonitor"),
+            patch("orion.ingestion.service.UniverseManager"),
+            patch("orion.ingestion.service.FeatureEngine"),
+            patch("orion.ingestion.service.RuleEngine"),
+            patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client") as mock_factory,
+        ):
+            mock_client = MagicMock()
+            mock_client.is_running = flow_running
+            mock_client.subscribed_symbols = set()
+            mock_factory.return_value = mock_client
+            from orion.ingestion.service import IngestionService
+
+            return IngestionService()
+
+    def _flow_event(self, event_id, ts=None):
+        from orion.storage.models import BronzeEvent
+
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            event_type="UW_FLOW",
+            event_ts_utc=ts or datetime.now(UTC),
+            received_ts_utc=datetime.now(UTC),
+            ticker="AAPL",
+            payload={"ticker": "AAPL"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_poll_mode_uses_only_poll(self):
+        svc = self._make_service()
+        with patch("orion.ingestion.service.system_settings") as ss:
+            ss.flow_source = "poll"
+            svc._poll_heber_flow = AsyncMock(return_value=[self._flow_event("p1")])
+            svc.gateway_stream.drain_flow_events = MagicMock(return_value=[self._flow_event("push1")])
+            events = await svc._collect_flow_events("trace")
+        assert [e.event_id for e in events] == ["p1"]
+        # Push queue was never drained in poll mode.
+        svc.gateway_stream.drain_flow_events.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shadow_mode_unions_push_and_poll_and_records_parity(self):
+        svc = self._make_service()
+        shared = self._flow_event("shared-id")
+        push_only = self._flow_event("push-only")
+        poll_only = self._flow_event("poll-only")
+        with patch("orion.ingestion.service.system_settings") as ss:
+            ss.flow_source = "shadow"
+            ss.max_data_lag_seconds = 600
+            svc._poll_heber_flow = AsyncMock(return_value=[shared, poll_only])
+            svc.gateway_stream.drain_flow_events = MagicMock(return_value=[shared, push_only])
+            svc._record_flow_parity = AsyncMock()
+            events = await svc._collect_flow_events("trace")
+
+        ids = sorted(e.event_id for e in events)
+        # Union returned (dedup downstream collapses the shared overlap).
+        assert ids == ["poll-only", "push-only", "shared-id", "shared-id"]
+        svc._record_flow_parity.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_push_mode_keeps_poll_as_gap_filler(self):
+        svc = self._make_service()
+        with patch("orion.ingestion.service.system_settings") as ss:
+            ss.flow_source = "push"
+            ss.max_data_lag_seconds = 600
+            svc._poll_heber_flow = AsyncMock(return_value=[self._flow_event("gap-fill")])
+            svc.gateway_stream.drain_flow_events = MagicMock(return_value=[self._flow_event("pushed")])
+            svc._record_flow_parity = AsyncMock()
+            events = await svc._collect_flow_events("trace")
+        assert sorted(e.event_id for e in events) == ["gap-fill", "pushed"]
+        # No parity logging in push mode.
+        svc._record_flow_parity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_push_events_get_born_stale_drop(self):
+        svc = self._make_service()
+        fresh = self._flow_event("fresh", ts=datetime.now(UTC))
+        stale = self._flow_event("stale", ts=datetime.now(UTC) - timedelta(seconds=3600))
+        with patch("orion.ingestion.service.system_settings") as ss:
+            ss.flow_source = "push"
+            ss.max_data_lag_seconds = 600
+            svc._poll_heber_flow = AsyncMock(return_value=[])
+            svc.gateway_stream.drain_flow_events = MagicMock(return_value=[fresh, stale])
+            events = await svc._collect_flow_events("trace")
+        assert [e.event_id for e in events] == ["fresh"]
+
+
+class TestRecordFlowParity:
+    """Parity metric computation (shadow mode)."""
+
+    def _make_service(self):
+        with (
+            patch("orion.ingestion.service.HealthMonitor"),
+            patch("orion.ingestion.service.UniverseManager"),
+            patch("orion.ingestion.service.FeatureEngine"),
+            patch("orion.ingestion.service.RuleEngine"),
+            patch("orion.ingestion.service.xcals"),
+            patch("orion.ingestion.service.create_gateway_stream_client"),
+        ):
+            from orion.ingestion.service import IngestionService
+
+            return IngestionService()
+
+    def _ev(self, event_id, recv):
+        from orion.storage.models import BronzeEvent
+
+        return BronzeEvent(
+            event_id=event_id,
+            source="UW",
+            event_type="UW_FLOW",
+            event_ts_utc=datetime.now(UTC),
+            received_ts_utc=recv,
+            ticker="AAPL",
+            payload={},
+        )
+
+    @pytest.mark.asyncio
+    async def test_parity_row_fields(self):
+        """Per-cycle counts plus lag-tolerant classification (O3).
+
+        Within a single cycle nothing has aged past the reconciliation window,
+        so push-only / poll-only ids are NOT yet finalized as missed — only the
+        per-cycle path counts and the matched overlap are reported.
+        """
+        svc = self._make_service()
+        base = datetime(2026, 2, 5, 14, 31, tzinfo=UTC)
+        # shared id: push received 10s before poll → +10s improvement.
+        push = [self._ev("shared", base), self._ev("push-only", base)]
+        poll = [
+            self._ev("shared", base + timedelta(seconds=10)),
+            self._ev("poll-only", base),
+            self._ev("uwflow_abc", base),  # unmatchable fallback id
+        ]
+        captured = {}
+
+        async def _fake_db_write(fn):
+            class _Sess:
+                def add(self, row):
+                    captured["row"] = row
+
+            await fn(_Sess())
+
+        with patch("orion.ingestion.service.db_write", _fake_db_write):
+            await svc._record_flow_parity(push, poll, "trace")
+
+        row = captured["row"]
+        assert row.push_count == 2
+        assert row.poll_count == 3
+        assert row.matched_count == 1  # only "shared"
+        # Window has not elapsed this cycle → nothing finalized as missed yet.
+        assert row.missed_by_push_count == 0
+        assert row.parity_unmatchable_count == 0
+        assert row.missed_by_poll_count == 0
+        assert row.median_latency_improvement_s == 10.0
+        assert row.window_seconds == int(svc._parity_window_s)
+
+    @pytest.mark.asyncio
+    async def test_parity_logging_never_raises(self):
+        svc = self._make_service()
+        with patch("orion.ingestion.service.db_write", side_effect=RuntimeError("db down")):
+            # Must not propagate.
+            await svc._record_flow_parity([], [], "trace")
