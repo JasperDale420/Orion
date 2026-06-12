@@ -32,9 +32,11 @@ from orion.storage.models import Base  # noqa: E402
 # own tables; the remaining tables live in these sibling modules (the same set
 # init_db() imports). Without these imports autogen sees a partial schema.
 from orion.storage import (  # noqa: E402, F401
+    models_attribution,
     models_audit,
     models_dlq,
     models_execution,
+    models_flow_parity,
     models_gold,
     models_liveness,
     models_ml,

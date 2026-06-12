@@ -136,9 +136,11 @@ async def init_db() -> None:
     # Ensure all models are imported so Base.metadata is complete for create_all().
     from orion.storage import (  # noqa: F401
         models,
+        models_attribution,
         models_audit,
         models_dlq,
         models_execution,
+        models_flow_parity,
         models_gold,
         models_liveness,
         models_ml,
