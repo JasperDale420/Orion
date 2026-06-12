@@ -477,6 +477,80 @@ class ExecutionEngine:
             )
             return None
 
+    async def _compute_cost_basis_from_fills(self) -> dict[str, dict[str, float]]:
+        """Return Orion-only per-position cost basis by replaying FillRecord.
+
+        On the shared Alpaca paper account, the broker's ``avg_entry_price``
+        is blended across all systems holding the same instrument.  This method
+        re-derives ``avg_entry`` purely from fills with an ``orion_``-prefixed
+        ``client_order_id``, using the same weighted-average logic as
+        ``RiskManager.process_fill``, so restarts always get an uncontaminated
+        cost basis.
+
+        Returns ``{symbol: {"qty": float, "avg_entry": float}}`` for every
+        symbol with a non-zero computed quantity.  Returns an empty dict on
+        any DB failure (caller falls back to broker value).
+        """
+        from orion.storage.models_execution import FillRecord
+
+        async def query_fills(session: Any) -> list:
+            order_ts = func.coalesce(FillRecord.filled_at_utc, FillRecord.created_at_utc)
+            stmt = (
+                select(FillRecord)
+                .where(FillRecord.client_order_id.like(orion_order_id_sql_pattern()))
+                # Secondary sort by id for determinism when two fills share a timestamp
+                # (possible when partial fills are upserted — filled_at_utc reflects the
+                # first partial, not the final fill event).
+                .order_by(order_ts, FillRecord.id)
+            )
+            result = await session.execute(stmt)
+            return result.scalars().all()
+
+        try:
+            fills = await db_query(query_fills)
+        except Exception as exc:
+            logger.error(
+                "Failed to compute cost basis from fills; will fall back to broker avg_entry_price",
+                extra={"event_type": "COST_BASIS_COMPUTE_FAILED", "error": str(exc)},
+                exc_info=True,
+            )
+            return {}
+
+        positions: dict[str, dict[str, float]] = {}
+        for fill in fills:
+            ticker = fill.ticker
+            qty = float(fill.filled_qty or 0)
+            price = float(fill.filled_avg_price or 0)
+            side = (fill.side or "").lower()
+
+            if qty <= 0 or price <= 0:
+                continue
+
+            sign = 1 if side == "buy" else -1
+            # abs() mirrors process_fill's own defensive coding (line 682 in manager.py);
+            # guards against any broker-side event that delivers a signed filled_qty.
+            signed_qty = abs(qty) * sign
+
+            current = positions.get(ticker, {"qty": 0.0, "avg_entry": 0.0})
+            old_qty = current["qty"]
+            old_entry = current["avg_entry"]
+            new_qty = old_qty + signed_qty
+            is_closing = (old_qty > 0 and signed_qty < 0) or (old_qty < 0 and signed_qty > 0)
+
+            if not is_closing:
+                total_val = (old_qty * old_entry) + (signed_qty * price)
+                new_avg = total_val / new_qty if abs(new_qty) > 1e-9 else 0.0
+                positions[ticker] = {"qty": new_qty, "avg_entry": new_avg}
+            elif abs(signed_qty) > abs(old_qty):
+                # Overshoot / flip
+                positions[ticker] = {"qty": new_qty, "avg_entry": price}
+            elif math.isclose(new_qty, 0, abs_tol=1e-9):
+                positions[ticker] = {"qty": 0.0, "avg_entry": 0.0}
+            else:
+                positions[ticker] = {"qty": new_qty, "avg_entry": old_entry}
+
+        return positions
+
     async def _sync_risk_from_gateway(self) -> None:
         """Sync risk manager state from Data Gateway (account + positions).
 
@@ -559,6 +633,11 @@ class ExecutionEngine:
                 return
 
             positions = await client.get_positions()
+            # Derive Orion-only cost basis from fills before clearing the
+            # positions dict.  The broker's avg_entry_price is blended across
+            # all systems on the shared paper account; using it after restart
+            # corrupts realized-PnL and kill-switch accounting.
+            cost_basis = await self._compute_cost_basis_from_fills()
             # CRITICAL: This block ALWAYS runs, including when `positions` is
             # an empty list. The previous `if positions:` guard meant that
             # when the broker returned 0 orion-attributable positions, the
@@ -591,7 +670,16 @@ class ExecutionEngine:
                     continue
 
                 qty = float(p.get("qty", 0) or 0)
-                avg_entry = float(p.get("avg_entry_price", 0) or 0)
+                # Use fill-derived cost basis; fall back to broker value only
+                # when no orion fills exist for this symbol.
+                # Prefer fill-derived cost basis (Orion-only, uncontaminated).
+                # Falls back to broker avg_entry_price when:
+                #   (a) no orion fills exist for this symbol yet, OR
+                #   (b) replay yields avg_entry=0.0 (position closed in FillRecord but
+                #       broker still shows it — likely a timing gap or another system's
+                #       position leaking through _fetch_orion_tickers; using 0.0 entry
+                #       would make PnL worse, so broker value is the lesser evil here).
+                avg_entry = cost_basis.get(symbol, {}).get("avg_entry") or float(p.get("avg_entry_price", 0) or 0)
                 market_value = float(p.get("market_value", 0) or 0)
 
                 self.risk_manager.positions[symbol] = {"qty": qty, "avg_entry": avg_entry}
