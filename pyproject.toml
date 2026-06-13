@@ -158,6 +158,21 @@ module = [
     "orion.storage.models_risk",
     "orion.storage.models_gold",
     "orion.storage.models_dlq",
+    # R6 phase 2 (RC.3): remaining legacy modules converted to typed-declarative.
+    "orion.storage.models_ml",
+    "orion.storage.models_silver",
+    "orion.storage.models_rag",
+    # Already-converted-but-unpromoted modules that pass strict cleanly.
+    "orion.storage.models",
+    "orion.storage.models_attribution",
+    "orion.storage.models_audit",
+    "orion.storage.models_flow_parity",
+    "orion.storage.models_liveness",
+    "orion.storage.models_signals",
+    "orion.storage.models_trade_journal",
+    # models_solvers left UNPROMOTED: MetaExperiment.prd_id returns Any
+    # (`self.id or self.experiment_id`, no-any-return under follow_imports=skip)
+    # — a real code change, out of scope for the mechanical conversion task.
 ]
 ignore_errors = false
 strict = true

@@ -24,13 +24,21 @@ import typing
 import pytest
 from sqlalchemy.orm import Mapped
 
-from orion.storage import models_dlq, models_execution, models_gold, models_risk
+from orion.storage import (
+    models_dlq,
+    models_execution,
+    models_gold,
+    models_ml,
+    models_rag,
+    models_risk,
+    models_silver,
+)
 from orion.storage.db import Base
 
 pytestmark = pytest.mark.unit
 
 
-# (module, ORM class) pairs for the four converted modules.
+# (module, ORM class) pairs for the converted modules.
 CONVERTED_MODELS = [
     models_execution.OrderRecord,
     models_execution.FillRecord,
@@ -48,15 +56,29 @@ CONVERTED_MODELS = [
     models_gold.LabelWindow,
     models_gold.GoldFeatureEvent,
     models_dlq.DeadLetterQueue,
+    models_ml.MLPatternInsight,
+    models_ml.MLFeatureImportanceHistory,
+    models_ml.MLPrediction,
+    models_silver.SilverSignal,
+    models_rag.VectorDocument,
 ]
 
 
 def _annotation_is_optional(annotation: object) -> bool:
-    """True if a ``Mapped[...]`` inner type permits ``None`` (Optional / `| None`)."""
+    """True if a ``Mapped[...]`` inner type permits ``None`` (Optional / `| None`).
+
+    ``Mapped[Any]`` is treated as permitting ``None``: ``Any`` is the top type
+    and includes ``None``. This is the deliberate annotation for the pgvector
+    ``embedding_vec`` column, whose Python-side value is a list/ndarray (or
+    ``None``) depending on the driver — so the static type cannot lie about
+    nullability the way a concrete ``Mapped[T]`` would.
+    """
     args = typing.get_args(annotation)
     if not args:
         return False
     inner = args[0]
+    if inner is typing.Any:
+        return True
     inner_args = typing.get_args(inner)
     return type(None) in inner_args
 
