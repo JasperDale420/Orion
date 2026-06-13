@@ -57,7 +57,13 @@ BRONZE_FRESHNESS_SQL = "SELECT max(received_ts_utc) FROM bronze_events;"
 
 # Gateway account endpoint — a cheap 200/!=200 liveness probe.
 GATEWAY_ACCOUNT_URL = "http://localhost:8080/api/v1/alpaca/account"
-GATEWAY_KEY = "gw_orion_trading_key_55555"
+# Read the gateway key from the environment (the wrapper sources .env first and
+# fail-fasts if neither name is set). No literal fallback: the legacy plaintext
+# key was revoked 2026-06-11, so any baked-in default could only produce a 401
+# -> a false "gateway down" CRITICAL during market hours. A bare `python -m ...`
+# invocation without a key probes with an empty key and fails the same loud way.
+# DATA_GATEWAY_API_KEY is canonical; GATEWAY_API_KEY is the wrapper's alias.
+GATEWAY_KEY = os.environ.get("DATA_GATEWAY_API_KEY") or os.environ.get("GATEWAY_API_KEY") or ""
 
 
 class Severity(str, Enum):

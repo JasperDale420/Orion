@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from orion.agents.solver_mutation_processor import EOD_MUTATION_SOURCE
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory
 from orion.storage.models_solvers import PromotionRecommendation, Solver, SolverMetrics
@@ -92,6 +93,23 @@ async def run_solver_promotions() -> dict[str, Any]:
                     "current_stage": rec.current_stage,
                     "target_stage": rec.recommended_stage,
                 }
+
+                # RC.1: EOD-sourced recommendations are recommendations-only and
+                # must be human-approved — never auto-promoted by the Friday job.
+                # Leave PENDING (do NOT reject); the solver stage is untouched.
+                snapshot = rec.metrics_snapshot or {}
+                if snapshot.get("source") == EOD_MUTATION_SOURCE:
+                    logger.info(
+                        "Skipping EOD-sourced recommendation — requires manual approval",
+                        solver_id=rec.solver_id,
+                        recommendation_id=rec.id,
+                        target_stage=rec.recommended_stage,
+                    )
+                    manual_required += 1
+                    rec_detail["action"] = "manual_required"
+                    rec_detail["reason"] = "EOD-sourced recommendation requires manual approval"
+                    details.append(rec_detail)
+                    continue
 
                 # Safety: require manual approval for live stages
                 if rec.recommended_stage not in AUTO_PROMOTABLE_STAGES:

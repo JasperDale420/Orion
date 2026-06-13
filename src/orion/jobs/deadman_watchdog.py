@@ -20,9 +20,10 @@ Runs as a standalone launchd one-shot every 5 minutes. Two independent checks:
    matching the ``market_open_dataflow_check`` convention.
 
 The job must work even when the main stack is wedged, so it opens its own
-lightweight async engine for the reads (a separate process) and reuses the
-pure ``is_market_open`` helper from ``market_open_dataflow_check`` rather than
-importing the heavyweight service modules.
+lightweight async engine for the reads (a separate process). Session awareness
+is calendar-aware (``exchange_calendars`` XNYS via ``is_nyse_session_open``) so
+holidays and early closes never produce overnight false alerts — the reason
+the watchdog was booted out 2026-06-11.
 """
 
 from __future__ import annotations
@@ -36,11 +37,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 
+import exchange_calendars as xcals
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from orion.config import system_settings
-from orion.jobs.market_open_dataflow_check import is_market_open
 from orion.shared.alerts import send_discord_alert
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
@@ -55,6 +56,24 @@ logger = setup_struct_logger("orion.deadman")
 BRONZE_BUDGET_SECONDS = 300
 SILVER_BUDGET_SECONDS = 600
 FEATURES_BUDGET_SECONDS = 1200
+
+_NYSE_CALENDAR = "XNYS"
+
+
+def is_nyse_session_open(now_utc: datetime, *, calendar_name: str = _NYSE_CALENDAR) -> bool:
+    """True iff ``now_utc`` is inside a live NYSE regular session.
+
+    Calendar-aware (``exchange_calendars``), so market holidays and early
+    closes are respected — the reason the deadman was booted out 2026-06-11
+    was overnight/holiday false alerts from a weekday-only heuristic. Outside
+    a real session this returns False and the per-stage pipeline freshness
+    checks are suppressed entirely; only service-liveness budgets still alert.
+    ``now_utc`` must be timezone-aware.
+    """
+    if now_utc.tzinfo is None:
+        raise ValueError("now_utc must be timezone-aware")
+    cal = xcals.get_calendar(calendar_name)
+    return bool(cal.is_open_on_minute(now_utc))
 
 
 class Severity(str, Enum):
@@ -204,7 +223,9 @@ async def run_watchdog(
         alerts.extend(evaluate_service_liveness(rows, now))
 
         # 2. Pipeline-depth stage freshness — REAL data, market-hours gated.
-        market_open = is_market_open(now)
+        # Calendar-aware: outside a live NYSE session (nights, weekends,
+        # holidays, early closes) the stage checks are suppressed entirely.
+        market_open = is_nyse_session_open(now)
         bronze_max = await _read_stage_max_ts(sessionmaker, BronzeEvent.received_ts_utc)
         silver_max = await _read_stage_max_ts(sessionmaker, SilverSignal.created_at_utc)
         features_max = await _read_stage_max_ts(sessionmaker, GoldFeatureEvent.created_at_utc)

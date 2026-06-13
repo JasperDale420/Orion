@@ -9,7 +9,8 @@ from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from orion.agents.eod_metrics import (
     adverse_slippage_bps,
@@ -58,6 +59,11 @@ logger = setup_struct_logger("orion.agents.eod_review_agent")
 # every Sunday.
 EOD_LIVENESS_CADENCE_BUDGET_SECONDS = int(86400 * 3.5)
 
+# RC.1 atomic-claim staleness TTL. A RUNNING claim older than this is assumed to
+# belong to a crashed run and may be taken over by a fresh trigger. 6h comfortably
+# exceeds a healthy EOD run (minutes) while still allowing a same-night retry.
+EOD_REVIEW_STALE_TTL = timedelta(hours=6)
+
 # RB.3 demotion-candidate gate (RECOMMENDATION ONLY — no stage flag is moved by
 # any code in this task; actual demotion is the separately-gated task RD.1).
 # A solver is *listed* as a demotion candidate when its reconciled realized-PnL
@@ -89,10 +95,11 @@ class EODReviewAgent:
         Satisfies BaseAgent interface. Wraps run_review.
         """
         target_date = context.get("date")
-        result = await self.run_review(target_date)
+        force = bool(context.get("force", False))
+        result = await self.run_review(target_date, force=force)
         return {"status": "completed", **(result or {})}
 
-    async def run_review(self, target_date: date | None = None) -> dict[str, Any]:
+    async def run_review(self, target_date: date | None = None, *, force: bool = False) -> dict[str, Any]:
         if not target_date:
             # Default to the most-recently-CLOSED NYSE session, NOT "UTC today".
             # A post-close trigger fires shortly after midnight UTC (the prior
@@ -100,9 +107,62 @@ class EODReviewAgent:
             # just-closed session would never be reconciled.
             target_date = last_closed_trading_date()
 
-        logger.info(f"Starting EOD Review for {target_date}...")
+        # RC.1 idempotency guard: exactly ONE canonical EOD run per trading
+        # date. The native ingestion trigger (01:05 UTC) is canonical, but ANY
+        # second scheduler (a manual run, a future daemon) — even two firing at
+        # the same instant — must be short-circuited unless force=True. The
+        # claim is ATOMIC: a fresh row is an INSERT-or-conflict on the cursor PK,
+        # and every reclaim of an existing row is a COMPARE-AND-SWAP (UPDATE
+        # gated on the exact observed last_seen_id), so two concurrent callers
+        # that both observe a reclaimable state cannot both win — the CAS
+        # rowcount picks one. A SUCCESS row blocks reruns (force=True bypasses);
+        # a FAILED row allows retry; a stale RUNNING row (crashed mid-run) is
+        # taken over after EOD_REVIEW_STALE_TTL; force=True may reclaim ANY state
+        # (including fresh RUNNING — operator override for a wedged run).
+        #
+        # The claim machinery must NOT fail open: if it raises, run_review
+        # propagates the error and does NOT enter the review body (two runs
+        # proceeding because the guard silently degraded is the worse failure).
         run_id = str(uuid.uuid4())
+        claimed, reason = await self._claim_review(target_date, run_id, force=force)
+        if not claimed:
+            logger.info(
+                "eod_review_skipped_duplicate",
+                date=str(target_date),
+                reason=reason,
+                note="already claimed for this trading date; pass force=True to re-run a SUCCESS",
+            )
+            return {
+                "date": str(target_date),
+                "skipped": True,
+                "reason": reason,
+                "proposals_count": 0,
+                "solver_edit_proposals": [],
+            }
 
+        logger.info(f"Starting EOD Review for {target_date}...")
+
+        try:
+            result = await self._perform_review(target_date, run_id)
+        except Exception:
+            # The claim is marked FAILED so a later trigger can retry (a FAILED
+            # row is treated like an absent claim). Then re-raise — failures must
+            # be loud, never silently recorded as a clean run.
+            await self._finish_review(target_date, run_id, "FAILED")
+            logger.error("eod_review_failed", date=str(target_date), exc_info=True)
+            raise
+
+        # Mark the claim SUCCESS so a duplicate same-date trigger is skipped.
+        await self._finish_review(target_date, run_id, "SUCCESS")
+
+        # Liveness: one publish per completed review (swallows its own errors).
+        await publish_liveness("eod_agent", cadence_budget_seconds=EOD_LIVENESS_CADENCE_BUDGET_SECONDS)
+
+        return result
+
+    async def _perform_review(self, target_date: date, run_id: str) -> dict[str, Any]:
+        """Run the actual review body (post-claim). Raises on any hard failure so
+        the caller can mark the claim FAILED and re-raise."""
         # Ensure artifacts directory exists
         from orion.config import system_settings
 
@@ -178,10 +238,36 @@ class EODReviewAgent:
             if path:
                 saved_paths.append(path)
 
-        logger.info(f"EOD Review Complete. Report: {file_path}. Proposals: {len(saved_paths)}")
+        # RC.1: solver mutation proposals are processed INSIDE run_review so the
+        # behavior is caller-independent — the native ingestion trigger and any
+        # manual/standalone run both produce the same recommendations. This path
+        # is recommendations-only: it persists PromotionRecommendation rows and
+        # NEVER changes a solver stage (see solver_mutation_processor). Failure
+        # here is isolated so it can never abort the review.
+        mutation_proposals = [p for p in proposals if p.get("type") == "solver_edit"]
+        mutation_counts: dict[str, int] = {"processed": 0, "recommended": 0, "skipped": 0, "failed": 0}
+        if mutation_proposals:
+            try:
+                from orion.agents.solver_mutation_processor import process_solver_mutations
 
-        # Liveness: one publish per completed review (swallows its own errors).
-        await publish_liveness("eod_agent", cadence_budget_seconds=EOD_LIVENESS_CADENCE_BUDGET_SECONDS)
+                mutation_counts = await process_solver_mutations(mutation_proposals)
+            except Exception:
+                logger.error("eod_solver_mutation_processing_failed", exc_info=True)
+            else:
+                # Surface the outcome on the EOD run itself. Every proposal being
+                # dropped before backtest (shape mismatch) is an ERROR, not a
+                # silent success — the processor logs it too, but the EOD run
+                # must not record a clean success while writing zero rows.
+                logger.info("eod_solver_mutations_summary", date=str(target_date), **mutation_counts)
+                if mutation_counts["processed"] == 0 and mutation_counts["failed"] == 0:
+                    logger.error(
+                        "eod_solver_mutations_all_skipped",
+                        date=str(target_date),
+                        proposals=len(mutation_proposals),
+                        **mutation_counts,
+                    )
+
+        logger.info(f"EOD Review Complete. Report: {file_path}. Proposals: {len(saved_paths)}")
 
         return {
             "run_id": run_id,
@@ -190,8 +276,205 @@ class EODReviewAgent:
             "input_snapshot_path": input_snapshot_path,
             "proposal_paths": saved_paths,
             "proposals_count": len(proposals),
-            "solver_edit_proposals": [p for p in proposals if p.get("type") == "solver_edit"],
+            "solver_edit_proposals": mutation_proposals,
+            "mutation_counts": mutation_counts,
         }
+
+    # ── RC.1 idempotency guard (atomic claim) ─────────────────────────────
+
+    @staticmethod
+    def _cursor_key(target_date: date) -> str:
+        return f"eod_review:{target_date.isoformat()}"
+
+    @staticmethod
+    def _encode_state(state: str, run_id: str) -> str:
+        """Pack ``state`` + ``run_id`` into the cursor's ``last_seen_id`` column.
+
+        The ``job_cursor_state`` schema has no dedicated state column, so the
+        run state (RUNNING/SUCCESS/FAILED) is prefixed onto the run id. The claim
+        timestamp lives in ``last_seen_ts_utc`` (used for the stale-RUNNING TTL).
+        """
+        return f"{state}:{run_id}"
+
+    @staticmethod
+    def _decode_state(last_seen_id: str | None) -> str:
+        if not last_seen_id or ":" not in last_seen_id:
+            # Legacy rows (written by the old success-only recorder) have a bare
+            # run_id and mean "a run completed" — treat as SUCCESS.
+            return "SUCCESS"
+        return last_seen_id.split(":", 1)[0]
+
+    async def _claim_review(self, target_date: date, run_id: str, *, force: bool) -> tuple[bool, str | None]:
+        """Atomically claim the EOD run for ``target_date``.
+
+        Returns ``(claimed, reason)``. ``claimed=True`` means this caller owns
+        the run and must proceed (and later call ``_finish_review``). When
+        ``claimed=False``, ``reason`` is the skip reason:
+        - 'duplicate_run' — a completed SUCCESS row (no force).
+        - 'in_progress'   — a fresh (non-stale) concurrent RUNNING claim.
+        - 'lost_claim_race' — this caller read a reclaimable row but a
+          concurrent caller reclaimed it first (the CAS UPDATE matched 0 rows).
+
+        The claim is atomic in two layers, both of which work identically on
+        Postgres (live) and SQLite (tests):
+
+        1. Fresh INSERT of the cursor row races on the primary key. Two callers
+           that both find no row both try to INSERT; one commits, the loser gets
+           ``IntegrityError`` and falls through to the reclaim path.
+        2. Every reclaim of an EXISTING row is a COMPARE-AND-SWAP: an UPDATE
+           gated on ``last_seen_id == <the exact value we observed>``. Two
+           callers that both observe the same reclaimable value both issue the
+           CAS; only the first matches (rowcount==1) and claims, the second
+           matches 0 rows and returns ('lost_claim_race'). This closes the
+           read-modify-write window where two callers could both proceed.
+
+        Takeover rules for an existing row:
+        - SUCCESS  -> skip ('duplicate_run'), unless ``force`` (then CAS-reclaim).
+        - FAILED   -> CAS-reclaim (retry allowed).
+        - RUNNING, stale (> ``EOD_REVIEW_STALE_TTL``) -> CAS-reclaim (takeover).
+        - RUNNING, fresh -> skip ('in_progress'), unless ``force`` (operator
+          override for a wedged claim -> CAS-reclaim).
+
+        DB errors are NOT swallowed: any unexpected exception propagates to
+        ``run_review``, which must not enter the review body on a degraded guard.
+        """
+        from orion.storage.models import JobCursorState
+
+        key = self._cursor_key(target_date)
+        now = datetime.now(UTC)
+        new_running = self._encode_state("RUNNING", run_id)
+
+        # 1. Try a fresh atomic insert. If it commits, we own the claim.
+        async def _insert(session: Any) -> None:
+            session.add(
+                JobCursorState(
+                    key=key,
+                    last_seen_ts_utc=now,
+                    last_seen_id=new_running,
+                )
+            )
+
+        try:
+            await db_write(_insert)
+            return True, None
+        except IntegrityError:
+            pass  # A row already exists — fall through to CAS-reclaim it.
+
+        # 2. A row exists. Read it, decide, then COMPARE-AND-SWAP on the exact
+        #    observed last_seen_id so a concurrent reclaim cannot also win.
+        def _is_stale(ts: datetime | None) -> bool:
+            if ts is None:
+                return True
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            return (now - ts) > EOD_REVIEW_STALE_TTL
+
+        async def _reclaim(session: Any) -> tuple[bool, str | None]:
+            row = await session.get(JobCursorState, key)
+            if row is None:
+                # The other claimant rolled back between our insert and this read;
+                # re-insert to claim (PK conflict here would re-raise IntegrityError
+                # and be retried by the caller below).
+                session.add(JobCursorState(key=key, last_seen_ts_utc=now, last_seen_id=new_running))
+                return True, None
+
+            observed = row.last_seen_id
+            state = self._decode_state(observed)
+            if not force:
+                if state == "SUCCESS":
+                    return False, "duplicate_run"
+                if state == "RUNNING" and not _is_stale(row.last_seen_ts_utc):
+                    return False, "in_progress"
+
+            # Reclaimable (FAILED / stale RUNNING / any state under force).
+            # CAS: only succeeds if last_seen_id is still exactly what we read.
+            # Expire the in-session row first so the UPDATE hits the DB and the
+            # rowcount reflects the real swap, not a stale identity-map state.
+            session.expire(row)
+            cas_predicate = (
+                JobCursorState.last_seen_id.is_(None) if observed is None else JobCursorState.last_seen_id == observed
+            )
+            result = await session.execute(
+                update(JobCursorState)
+                .where(JobCursorState.key == key, cas_predicate)
+                .values(last_seen_ts_utc=now, last_seen_id=new_running)
+            )
+            if result.rowcount == 1:
+                return True, None
+            # rowcount == 0: a concurrent caller reclaimed the row first.
+            return False, "lost_claim_race"
+
+        return await db_write(_reclaim)
+
+    # Retry budget for terminal-state finalization. A failed FAILED write is the
+    # dangerous case: the row stays a fresh RUNNING claim and (absent force) a
+    # same-night retry is blocked for the whole stale TTL. So finalization is
+    # retried once after a short delay; a persistent failure is logged LOUDLY at
+    # ERROR — the documented operator recovery is a force=True re-run.
+    _FINISH_RETRY_DELAY_SECONDS = 0.5
+
+    async def _finish_review(self, target_date: date, run_id: str, state: str) -> None:
+        """Mark this run's claim terminal (``SUCCESS`` or ``FAILED``).
+
+        A FAILED row is treated like an absent claim by ``_claim_review`` so a
+        later trigger can retry. Finalization is retried once on exception; if it
+        still fails it logs at ERROR (not WARNING) because a wedged-RUNNING row
+        blocks same-night retries until the stale TTL elapses — the operator
+        recovery is ``force=True``.
+        """
+        from orion.storage.models import JobCursorState
+
+        key = self._cursor_key(target_date)
+
+        async def save(session: Any) -> None:
+            now = datetime.now(UTC)
+            encoded = self._encode_state(state, run_id)
+            # Finalize with the same CAS discipline as claiming (round-3 review):
+            # the terminal write only lands if this run STILL owns the claim
+            # (last_seen_id == RUNNING:{run_id}). A PK-keyed write here could
+            # stamp SUCCESS over a force/stale takeover's fresh RUNNING claim,
+            # making future same-date runs skip while the replacement is still
+            # running. rowcount==0 ⇒ ownership lost ⇒ leave the row alone.
+            expected_running = self._encode_state("RUNNING", run_id)
+            result = await session.execute(
+                update(JobCursorState)
+                .where(JobCursorState.key == key, JobCursorState.last_seen_id == expected_running)
+                .values(last_seen_ts_utc=now, last_seen_id=encoded)
+            )
+            if result.rowcount == 0:
+                logger.warning(
+                    "eod_review_finalize_lost_ownership",
+                    date=str(target_date),
+                    run_id=run_id,
+                    state=state,
+                )
+
+        try:
+            await db_write(save)
+            return
+        except Exception:
+            logger.warning(
+                "eod_review_cursor_write_failed_retrying",
+                date=str(target_date),
+                state=state,
+                exc_info=True,
+            )
+
+        await asyncio.sleep(self._FINISH_RETRY_DELAY_SECONDS)
+        try:
+            await db_write(save)
+        except Exception:
+            logger.error(
+                "eod_review_cursor_finalize_failed",
+                date=str(target_date),
+                state=state,
+                run_id=run_id,
+                note=(
+                    "claim left in RUNNING state; same-night retry is blocked until the "
+                    "stale TTL elapses — recover with a force=True re-run"
+                ),
+                exc_info=True,
+            )
 
     # ── RB.3: PnL reconciliation + attribution ───────────────────────────
 

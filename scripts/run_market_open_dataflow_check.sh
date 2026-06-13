@@ -21,6 +21,37 @@ UV_BIN="${HOME}/.local/bin/uv"
 
 export PATH="/bin:/usr/bin:/opt/homebrew/bin:/usr/local/bin:${HOME}/.local/bin:${PATH}"
 
+# Source the gitignored .env FIRST (same discipline as run_ingestion_native.sh)
+# so the check picks up SLACK_WEBHOOK_URL / DISCORD_WEBHOOK_URL and the gateway
+# key. Then pin the canonical host endpoints AFTER sourcing so a stray .env
+# value (e.g. a docker-only hostname) can never point the check at an
+# unreachable host — the check shells out to `docker exec ... psql` for bronze
+# freshness and curls the gateway on localhost:8080.
+if [ -f "${PROJECT_ROOT}/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "${PROJECT_ROOT}/.env"
+  set +a
+fi
+
+export GATEWAY_URL="http://localhost:8080"
+export DATA_GATEWAY_URL="http://localhost:8080"
+# Expose the rotated gateway key under whichever alias .env set, preserving
+# the other. Orion/the check accept BOTH names; an operator who set only
+# GATEWAY_API_KEY must not have it clobbered by a default. Never substitute a
+# hardcoded literal — the account rotated to a hashed key (2026-06-11), so a
+# stale plaintext literal returns 401 and would false-alert "gateway down".
+# FAIL FAST on a missing key (round-4 review): this check authenticates its
+# gateway probe, and probing with an empty key turns an auth misconfiguration
+# into a market-hours CRITICAL "Data-Gateway unreachable" page — the exact
+# false-alert class the key rotation cleanup is eliminating.
+_gw_key="${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}"
+if [ -z "$_gw_key" ]; then
+  echo "FATAL: no gateway key (set DATA_GATEWAY_API_KEY or GATEWAY_API_KEY in .env)" >&2
+  exit 78
+fi
+export DATA_GATEWAY_API_KEY="$_gw_key" GATEWAY_API_KEY="$_gw_key"
+
 cd "${PROJECT_ROOT}"
 
 exec "${UV_BIN}" run python -m orion.jobs.market_open_dataflow_check

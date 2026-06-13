@@ -26,6 +26,20 @@ fi
 PSQL="psql -h localhost -p 5440 -U orion -d orion_db"
 export PGPASSWORD=orion_password  # pragma: allowlist secret
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+if [ -f "${PROJECT_ROOT}/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "${PROJECT_ROOT}/.env"
+  set +a
+fi
+_gw_key="${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}"
+if [ -z "$_gw_key" ]; then
+  echo "FATAL: no gateway key (set DATA_GATEWAY_API_KEY or GATEWAY_API_KEY in .env)" >&2
+  exit 78
+fi
+
 echo "============================================================"
 echo "  TRADE ATTRIBUTION REPORT  ($SCOPE)"
 echo "  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -34,7 +48,7 @@ echo "============================================================"
 # ── Account-level reality from Alpaca ────────────────────────────
 echo
 echo "── ACCOUNT (shared Alpaca paper) ──"
-curl -s -H "X-Gateway-Key: gw_orion_trading_key_55555" \
+curl -s -H "X-Gateway-Key: ${_gw_key}" \
   "http://localhost:8080/api/v1/alpaca/account" | \
   /usr/bin/python3 -c '
 import sys, json
@@ -86,7 +100,7 @@ SQL
 # ── Open positions: unrealized P&L per rule via broker join ─────
 echo
 echo "── UNREALIZED P&L by rule (open Orion positions) ──"
-curl -s -H "X-Gateway-Key: gw_orion_trading_key_55555" \
+curl -s -H "X-Gateway-Key: ${_gw_key}" \
   "http://localhost:8080/api/v1/alpaca/positions" | \
   /usr/bin/python3 -c '
 import sys, json, re

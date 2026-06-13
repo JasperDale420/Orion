@@ -58,6 +58,7 @@ import re
 import sys
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 # Allow `python scripts/close_orphaned_positions.py` to find the project.
@@ -250,7 +251,18 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     os.environ.setdefault("DB_URL", "postgresql+asyncpg://orion:orion_password@localhost:5440/orion_db")  # pragma: allowlist secret
     os.environ.setdefault("GATEWAY_URL", "http://localhost:8080")
-    os.environ.setdefault("GATEWAY_API_KEY", "gw_orion_trading_key_55555")
+    # Emergency tool: load the repo .env BEFORE the fail-fast key check (round-3
+    # review) — orion config's own dotenv load happens too late, after this
+    # guard, and an operator mid-incident must not need a manual export.
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+    _gw_key = os.environ.get("DATA_GATEWAY_API_KEY") or os.environ.get("GATEWAY_API_KEY") or ""
+    if not _gw_key:
+        print("FATAL: no gateway key (set DATA_GATEWAY_API_KEY or GATEWAY_API_KEY in .env)", file=sys.stderr)
+        sys.exit(78)
+    os.environ["DATA_GATEWAY_API_KEY"] = _gw_key
+    os.environ["GATEWAY_API_KEY"] = _gw_key
     args = parse_args()
     print(f"# close_orphaned_positions  {datetime.now(UTC).isoformat()}")
     print(f"# dry_run={args.dry_run}  ticker={args.ticker}  min_value=${args.min_value}")

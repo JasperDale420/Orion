@@ -31,6 +31,7 @@ from orion.jobs.deadman_watchdog import (
     BRONZE_BUDGET_SECONDS,
     evaluate_service_liveness,
     evaluate_stage_freshness,
+    is_nyse_session_open,
     run_watchdog,
 )
 from orion.shared.liveness import publish_liveness
@@ -107,6 +108,53 @@ def test_stage_no_rows_alerts():
     alert = evaluate_stage_freshness("silver", None, 600, now)
     assert alert is not None
     assert "NO rows" in alert.message
+
+
+# ---- calendar-aware session gate --------------------------------------------
+
+
+def test_session_open_during_regular_hours():
+    # 2026-06-11 is a Thursday; 15:00 UTC == 11:00 ET, inside the cash session.
+    assert is_nyse_session_open(datetime(2026, 6, 11, 15, 0, tzinfo=UTC)) is True
+
+
+def test_session_closed_overnight():
+    # 02:00 UTC == 22:00 ET the prior evening — closed.
+    assert is_nyse_session_open(datetime(2026, 6, 11, 2, 0, tzinfo=UTC)) is False
+
+
+def test_session_closed_on_market_holiday():
+    # 2026-01-01 (New Year's Day) is an NYSE holiday — even at 15:00 UTC
+    # (a normal session minute) the calendar reports closed, which the old
+    # weekday-only heuristic could not do.
+    assert is_nyse_session_open(datetime(2026, 1, 1, 15, 0, tzinfo=UTC)) is False
+
+
+def test_session_closed_on_weekend():
+    # 2026-06-13 is a Saturday.
+    assert is_nyse_session_open(datetime(2026, 6, 13, 15, 0, tzinfo=UTC)) is False
+
+
+def test_session_naive_datetime_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        is_nyse_session_open(datetime(2026, 6, 11, 15, 0))
+
+
+async def test_stage_checks_suppressed_on_holiday(monkeypatch):
+    """Calendar-aware suppression: on a market holiday during what a naive
+    clock would call 'market hours', the stale-bronze stage check is suppressed
+    (no stage alert) even though service-liveness checks still run."""
+    holiday_market_minute = datetime(2026, 1, 1, 15, 0, tzinfo=UTC)
+    await _add_bronze(received_age_seconds=BRONZE_BUDGET_SECONDS + 600, now=holiday_market_minute)
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=holiday_market_minute)
+
+    # No stage alerts on the holiday despite stale bronze.
+    assert [a for a in alerts if a.kind == "stage"] == []
 
 
 # ---- run_watchdog integration (in-memory SQLite via conftest) ---------------
