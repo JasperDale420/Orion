@@ -90,16 +90,21 @@ Key models: `SolverConfig` (Pydantic DSL with risk, features, exit logic), `Solv
 
 ### Docker Compose Services
 
+launchd is canonical for the trading/scheduling roles; the docker copies below
+are profile-gated. The compose default profile carries only stateless support
+services.
+
 | Service | Module | Profile |
 |---------|--------|---------|
-| `timescaledb` | TimescaleDB:latest-pg16 | default |
-| `ingestion` | `orion.ingestion` | default |
+| `timescaledb` | pgvector/pgvector:pg16 | default |
 | `feature_enrichment` | `orion.main_feature_enrichment` | default |
-| `execution` | `orion.main_execution` | default |
-| `position-monitor` | `orion.main_position_monitor` | default |
-| `eod-agent` | `orion.main_eod` | default |
 | `indexer` | `orion.rag.indexer` | default |
 | `mcp-server` | Shared-MCP-Server | default |
+| `ingestion` | `orion.ingestion` | docker (native canonical) |
+| `execution` | `orion.main_execution` | docker (native canonical) |
+| `position-monitor` | `orion.main_position_monitor` | docker (native canonical) |
+| `data-quality` | `orion.main_data_quality` | docker (native canonical) |
+| `eod-agent` | `orion.main_eod` | docker (retired; native ingestion trigger is canonical) |
 | `price_target_labeler` | `orion.main_price_target_labeler` | legacy-labels |
 | `pattern-miner` | `orion.main_pattern_miner` | legacy-labels |
 | `nightly-backfill` | `orion.jobs.nightly_backfill` | legacy-labels |

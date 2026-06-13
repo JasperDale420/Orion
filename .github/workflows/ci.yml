@@ -19,22 +19,10 @@ jobs:
         python-version: ["3.12"]
 
     services:
-      # Image choice: pgvector/pgvector:pg16, NOT timescale/timescaledb:latest-pg16.
-      #
-      # The e2e tests require the pgvector extension and do NOT use any
-      # TimescaleDB-specific features:
-      #   - `alembic upgrade head` runs migration 0004_add_pgvector_embedding_vec,
-      #     which executes `CREATE EXTENSION IF NOT EXISTS vector`. The stock
-      #     timescale/timescaledb image does not ship pgvector, so that migration
-      #     fails with "could not open extension control file .../vector.control",
-      #     taking the whole e2e step down before any test runs.
-      #   - src/orion/storage/db.py init_db() also does CREATE EXTENSION vector.
-      #   - tests/e2e/test_postgres_dialect.py exercises pgvector Vector(768) /
-      #     l2_distance directly.
-      #   - There are zero create_hypertable / TimescaleDB calls anywhere in
-      #     src/ or alembic/ (verified by grep), so nothing here needs Timescale.
-      # pgvector/pgvector:pg16 is plain Postgres 16 + pgvector, satisfying every
-      # path the tests actually touch.
+      # Postgres 16 + pgvector — matches production (RC.2). Orion uses no
+      # TimescaleDB-specific features; the only extension that matters is pgvector
+      # (RAG embeddings, Vector(768)). The `timescaledb` service key is retained
+      # for parity with docker-compose's service name.
       timescaledb:
         image: pgvector/pgvector:pg16
         env:
@@ -50,6 +38,18 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+
+    - name: Validate docker-compose profiles
+      # Cheap, no docker daemon needed — `docker compose config` is pure YAML
+      # rendering + interpolation + profile resolution. ubuntu-latest ships the
+      # Compose v2 plugin. Catches invalid renders like a depends_on targeting a
+      # service in a different profile (Finding 5: meta-weekly → eod-agent). All
+      # four profile renders Orion actually deploys must exit 0.
+      run: |
+        docker compose config -q
+        docker compose --profile docker config -q
+        docker compose --profile scheduled config -q
+        docker compose --profile legacy-labels config -q
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v6

@@ -75,7 +75,7 @@ flowchart LR
     EOD --> META
     META --> SOL
 
-    subgraph storage[TimescaleDB + pgvector]
+    subgraph storage[Postgres 16 + pgvector]
         TS[("orion_db")]
     end
 
@@ -91,7 +91,7 @@ flowchart LR
 ## Layered pipeline
 
 The pipeline is the textbook **Bronze → Silver → Gold** model, all materialized in
-TimescaleDB hypertables.
+plain Postgres 16 tables (no hypertables — see Storage topology).
 
 ### Bronze — raw events
 
@@ -186,8 +186,8 @@ existence of the `launchd-health` probe and the one-shot orphan-close plist.
 ## Storage topology
 
 ```
-TimescaleDB (postgres + pgvector)  ──  authoritative state
-    ├── Bronze / Silver / Gold tables (hypertables, time-partitioned)
+Postgres 16 + pgvector  ──  authoritative state
+    ├── Bronze / Silver / Gold tables (plain Postgres tables)
     ├── Execution state (orders, fills, positions, risk_snapshots)
     ├── Solver lifecycle (solvers, solver_metrics, meta_experiments, …)
     ├── Operational (system_status, ingest_watermarks, dead_letter_queue,

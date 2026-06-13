@@ -1,16 +1,36 @@
 # Orion — Deployment Guide
 
-How Orion is started, stopped, restarted, and monitored. Two coexistent modes:
+How Orion is started, stopped, restarted, and monitored.
 
-- **Native (launchd)** — preferred for `execution` and `ingestion`. Bypasses the
-  Docker Desktop 16 GiB VM ceiling that caused OOMs as Heber Gold grew.
-- **Docker Compose** — TimescaleDB, ingestion (alternative), feature
-  enrichment, position monitor, EOD agent, RAG indexer, MCP server, and
-  optional profile services (`legacy-labels`, `tools`, `scheduled`).
+**launchd is canonical.** The trading-critical and scheduling-critical roles run
+native via launchd; Docker Compose runs only the stateless support services in
+its default profile, with the native roles' docker copies gated behind
+`--profile docker` so a stray `docker compose up -d` can never start a second
+instance.
 
-Only one mode at a time per role. Mutual exclusion is enforced by Orion's
-service-lease table; the lease owner-IDs differ
-(`*_native` vs `*_compose`) so the second to start always loses.
+| Role | Canonical runner | Notes |
+|---|---|---|
+| `ingestion` | **native** (launchd) | also fires the single canonical EOD review at 01:05 UTC |
+| `execution` | **native** (launchd) | |
+| `meta-search` | **native** (launchd) | daily solver evolution, self-fires 18:00 ET |
+| `meta-weekly` | **native** (launchd) | weekly evolution + promotions, Fri 17:30 ET |
+| `position-monitor` | **native** (launchd) | RB.4 — close-executor for the shared Alpaca account |
+| `data-quality` | **native** (launchd) | RB.4 — `--scheduled` market-hours loop |
+| `timescaledb` | docker (default profile) | Postgres 16 + pgvector |
+| `feature_enrichment` | docker (default profile) | |
+| `pattern-miner` | docker (default profile) | |
+| `indexer` | docker (default profile) | RAG indexer |
+| `heber-sync` | docker (default profile) | host-cache rsync sidecar |
+| `eod-agent` | **profile-gated** (`docker`) | retired from default; manual runs only |
+| `ingestion`/`execution`/`position-monitor`/`data-quality` docker copies | **profile-gated** (`docker`) | escalation/fallback only |
+
+Native and docker copies of the same role are mutually exclusive: Orion's
+service-lease table enforces it, and the lease owner-IDs differ (`*_native` vs
+`*_compose`) so the second to start always loses. The docker copies live behind
+`--profile docker` precisely so they cannot start by accident.
+
+- **Why native:** bypasses the Docker Desktop 16 GiB VM ceiling that caused OOMs
+  as Heber Gold grew.
 
 > **Live-trading reminder:** Orion places real options orders. Verify
 > `ALPACA_PAPER=true` and `ORION_STAGE=paper` (the defaults) before any
@@ -28,8 +48,11 @@ All plists live in `scripts/launchd/` and install into
 | `com.empire.orion.ingestion.plist` | `scripts/run_ingestion_native.sh` | `orion.ingestion` |
 | `com.empire.orion.meta-search.plist` | `scripts/run_meta_search.sh` | `orion.main_meta --scheduled` — daily solver evolution, self-fires 18:00 ET weekdays |
 | `com.empire.orion.meta-weekly.plist` | `scripts/run_meta_weekly.sh` | `orion.main_meta_weekly --scheduled` — weekly evolution + promotions, self-fires Fri 17:30 ET |
+| `com.empire.orion.position-monitor.plist` | `scripts/run_position_monitor_native.sh` | `orion.main_position_monitor` — RB.4 close-executor (KeepAlive) |
+| `com.empire.orion.data-quality.plist` | `scripts/run_data_quality_native.sh` | `orion.main_data_quality --scheduled` — RB.4 data-quality loop (KeepAlive) |
 | `com.empire.orion.launchd-health.plist` | `scripts/run_launchd_health_probe.sh` | Once-per-minute audit of all `com.empire.orion.*` jobs |
-| `com.empire.orion.deadman.plist` | `scripts/run_deadman_watchdog.sh` | Every-5-min dead-man watchdog — service-liveness absence + pipeline-depth stage freshness |
+| `com.empire.orion.market-open-dataflow-check.plist` | `scripts/run_market_open_dataflow_check.sh` | Bronze-freshness guard a few minutes after the cash open |
+| `com.empire.orion.deadman.plist` | `scripts/run_deadman_watchdog.sh` | Every-5-min dead-man watchdog — service-liveness absence + pipeline-depth stage freshness (calendar-aware) |
 | `com.empire.orion.orphan-close.plist.DISABLED-260526` | inline bash | **Disabled.** One-shot orphan-position closer; preserved as a reference (see [Orphan-close history](#orphan-close-history)) |
 
 ### Install / status / stop
@@ -193,16 +216,20 @@ It performs two independent checks:
    watchdog has never seen is never alerted on** — registration happens on
    first publish, so absence it cannot attribute stays silent.
 
-2. **Pipeline-depth stage freshness (market-hours-gated, REAL data).** During
-   the 09:30-16:00 ET cash session it asserts per-stage freshness on the actual
+2. **Pipeline-depth stage freshness (NYSE-session-gated, REAL data).** During a
+   live NYSE regular session it asserts per-stage freshness on the actual
    pipeline tables — `max(bronze_events.received_ts_utc)` (budget 300s),
    `max(silver_signals.created_at_utc)` (600s),
    `max(gold_feature_events.created_at_utc)` (1200s) — and logs today's
    `candidate_trades` count (informational only, never an alert). This catches
    every stall class in the incident history (redis flap, gold-poller OOM,
    born-stale, WS death) with **zero contamination risk**: no synthetic events
-   are ever injected. Outside market hours the stage checks are informational
-   only — same convention as the market-open data-flow check.
+   are ever injected. The session gate is **calendar-aware**
+   (`exchange_calendars` XNYS via `is_nyse_session_open`), so market holidays
+   and early closes suppress the stage checks — this is what fixed the overnight
+   false-alert that got the watchdog booted out on 2026-06-11. Outside a live
+   session the stage checks are informational only; service-liveness checks
+   (#1) still run.
 
 The job runs in a **separate process with its own lightweight async engine**, so
 it still reads liveness/pipeline state even when the main stack is wedged. It is
@@ -231,15 +258,22 @@ scripts/run_deadman_watchdog.sh
 ## Docker Compose
 
 ```bash
-# Database only
+# Database only (Postgres 16 + pgvector)
 docker compose up timescaledb -d
 
-# Default profile (ingestion, feature_enrichment, execution, position-monitor,
-# eod-agent, indexer, mcp-server, timescaledb, heber-sync)
+# Default profile — stateless support services only:
+# timescaledb, feature_enrichment, pattern-miner, indexer, mcp-server, heber-sync.
+# The trading/scheduling roles (ingestion, execution, meta-search, meta-weekly,
+# position-monitor, data-quality) run NATIVE via launchd and are NOT here.
 docker compose up -d
 
-# Include legacy labeling profile (pattern-miner, nightly-backfill,
-# quality-guardrails, option_quote_tracker)
+# Profile-gated docker copies of the native roles + the retired eod-agent.
+# Use only for escalation/fallback when the native runner is down; the service
+# leases prevent co-execution with the native instance.
+docker compose --profile docker up -d
+
+# Include legacy labeling profile (nightly-backfill, quality-guardrails,
+# option_quote_tracker)
 docker compose --profile legacy-labels up -d
 
 # Include meta-search profile
@@ -263,7 +297,34 @@ docker compose down
 If running execution natively, **do not** also bring up the docker `execution`
 service. The native wrapper sets `ORION_LEASE_OWNER_ID=orion_execution_native`;
 the compose stanza sets `orion_execution_compose`. The second one to start
-exits non-zero with a lease-conflict error.
+exits non-zero with a lease-conflict error. The same applies to `ingestion`,
+`position-monitor`, and `data-quality`; their docker copies are profile-gated
+(`--profile docker`) so they cannot start without an explicit opt-in.
+
+## RB.4 native-migration parity checklist
+
+Before stopping a docker copy and cutting a role (`position-monitor`,
+`data-quality`) over to its native launchd runner, verify parity. **Never run
+two live close-executors at once** — the `--dry-run --once` flags exist exactly
+so the parity check can run read-only while the docker copy still holds the
+lease:
+
+1. **Capture the docker baseline first** (while it is still running): the docker
+   copy's tracked-position snapshot (tickers / qty / avg_entry) to a dated file.
+2. Plist loaded and last exit status clean; label present in `launchctl list`.
+3. Lease owner identity correct (`*_native`, not `*_compose`).
+4. `DB_URL` points at `localhost:5440`; same gateway account identity;
+   `ORION_STAGE=paper`.
+5. **Run the native runner once as `--dry-run --once`** (no lease, no daemon,
+   cannot submit closes) and compare its tracked-position snapshot against the
+   docker baseline from step 1. Same tickers/qty → parity holds.
+6. A forced Discord test alert is delivered.
+7. Only after parity holds: stop the docker copy, bootstrap the native live
+   daemon, and confirm `docker ps` shows no orion copy and the native
+   `service_liveness` rows keep advancing.
+
+Mismatch at step 5 → abort the cutover: leave the role docker-profile-runnable
+and investigate before retrying.
 
 ## Database migrations
 
@@ -308,7 +369,10 @@ For end-to-end pipeline freshness use `tests/e2e/test_live_data_flow.py` (see
 |---|---|
 | `run_execution_native.sh` | Wrapper for `com.empire.orion.execution` |
 | `run_ingestion_native.sh` | Wrapper for `com.empire.orion.ingestion` |
+| `run_position_monitor_native.sh` | Wrapper for `com.empire.orion.position-monitor` (RB.4) |
+| `run_data_quality_native.sh` | Wrapper for `com.empire.orion.data-quality` (RB.4) |
 | `run_launchd_health_probe.sh` | Wrapper for the launchd-health probe |
+| `run_market_open_dataflow_check.sh` | Wrapper for the market-open bronze-freshness check |
 | `close_orphaned_positions.py` | Emergency orphan-position closer (one-shot) |
 | `reset_circuit_breaker.py` | Manually close a stuck circuit breaker |
 | `backfill_features.py`, `backfill_fills_from_alpaca.py` | Historical backfills |

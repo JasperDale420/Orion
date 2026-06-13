@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added (Redesign Wave C — 2026-06-12)
+
+- **Single canonical end-of-day path**: the native ingestion EOD trigger (01:05 UTC, after the day's fills and journal write-backs settle) is now the one and only EOD review. The standalone docker `eod-agent` is retired from the default compose profile (still runnable via `--profile docker` for manual runs). `run_review` is idempotent per trading date — a second run for the same date is skipped unless `force=True` — so even a manual run can no longer double-process a session.
+- **Solver mutation proposals are recommendations-only**: the EOD path no longer auto-promotes solvers to paper. A qualifying mutation variant (same backtest qualification bar as before) now persists a PENDING `PromotionRecommendation` (research → paper) carrying its backtest metrics as evidence, and applies zero stage changes. Promotions happen through the existing manual recommendation-approval workflow. This strictly preserves more signal than the prior native path, which silently dropped proposals.
+- **Native migration scaffolding for position-monitor and data-quality**: their docker copies are now profile-gated (`--profile docker`) so a stray `docker compose up -d` cannot start a second close-executor or data-quality loop against the shared Alpaca account. The deployment guide documents the RB.4 functional-parity cutover checklist (capture docker baseline → compare a `--dry-run --once` native snapshot → only then stop the docker copy).
+
+### Changed (Redesign Wave C — 2026-06-12)
+
+- **Database image is plain Postgres 16 + pgvector**: the `timescaledb` compose service now uses `pgvector/pgvector:pg16` instead of the TimescaleDB image. Orion uses no hypertables or continuous aggregates; only pgvector (RAG embeddings) matters. Service name, container name, volume, port (5440), and healthcheck are unchanged, so every connection string and the CI image stay identical. Architecture and deployment docs drop the stale "hypertables / time-partitioned" claims.
+- **Dead-man watchdog is calendar-aware**: per-stage pipeline-freshness checks are now gated by the NYSE exchange calendar (`exchange_calendars`) rather than a weekday-only clock, so market holidays and early closes no longer produce overnight false alerts. Service-liveness checks still run around the clock. This is the fix that allows the watchdog to be re-enabled.
+
+### Fixed (Redesign Wave C — 2026-06-12)
+
+- **Market-open data-flow check reads the rotated Gateway key**: the check hardcoded the revoked plaintext Gateway key and reported a false "Gateway down" CRITICAL (HTTP 401) after the 2026-06-11 key rotation. It now reads `DATA_GATEWAY_API_KEY` / `GATEWAY_API_KEY` from the environment, and its launchd wrapper sources `.env` and pins the host Gateway endpoint — same discipline as the ingestion wrapper. The launchd-health probe wrapper likewise sources `.env` so its alert webhook resolves.
+
 ### Added (Redesign Wave B — 2026-06-11)
 
 - **Flow push behind a flag with shadow parity measurement**: `ORION_FLOW_SOURCE` selects `poll` (default, unchanged), `shadow` (push + poll run together, union deduped by Gateway-minted event id), or `push`. Shadow mode measures push-vs-poll event-id parity over a lag-tolerant rolling window (`ORION_FLOW_PARITY_WINDOW_SECONDS`, default 900s) and persists per-cycle rows to a new `flow_push_parity` table: matched/missed counts, median push latency lead, and unmatchable legacy-id counts. A matched id is finalized exactly once; an arrival later than the window counts as a miss charged to the late path. This is the measurement gate for the Wave C poll→push cutover.

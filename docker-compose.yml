@@ -16,7 +16,15 @@ networks:
 
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    # RC.2 (2026-06-12): swapped from timescale/timescaledb:latest-pg16 to plain
+    # Postgres 16 + pgvector. Orion uses ZERO hypertables / continuous aggregates;
+    # the only extension that matters is pgvector (RAG embeddings). The volume is
+    # reused IN PLACE — at deploy time the timescaledb extension is dropped and the
+    # shared_preload_libraries preload is cleared first, and a pg_dump rollback
+    # artifact is taken before the swap. Service name / container_name / volume /
+    # port / healthcheck are unchanged so every consumer's connection string and
+    # CI image stay identical.
+    image: pgvector/pgvector:pg16
     container_name: orion_timescaledb
     restart: unless-stopped
     environment:
@@ -69,7 +77,7 @@ services:
       # non-zero — see orion.core.service_lease.
       ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_ingestion_compose}
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
     command: [ "python", "-m", "orion.ingestion" ]
     # Bound memory: turns a runaway pyarrow/Heber scan into a visible
     # OOMKilled=true exit 137 instead of Docker Desktop VM-level silent
@@ -111,7 +119,7 @@ services:
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       ORION_RUN_ID: docker_persistent
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
       # Re-enabled with staggered-init connector startup in
       # main_feature_enrichment.py (t=5/75/145/215s offsets). Without UW
       # connector writes, the ML scorer sees null features and rejects every
@@ -198,7 +206,7 @@ services:
       ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED: ${ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED:-false}
       ORION_ML_PREFILTER_THRESHOLD: ${ORION_ML_PREFILTER_THRESHOLD:-0.05}
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
     command: [ "python", "-m", "orion.main_execution" ]
     # Sized for FeatureEngine hydration + ML model RSS (~1.6GB observed)
     # plus headroom for candidate processing batches. Bumped from 3G to 5G
@@ -230,6 +238,11 @@ services:
     <<: *orion-common
     container_name: orion_position_monitor
     restart: unless-stopped
+    # RB.4/RC.1: native via launchd (com.empire.orion.position-monitor) is the
+    # canonical runner. This docker copy is profile-gated so a stray
+    # `docker compose up -d` cannot start a second close-executor against the
+    # shared Alpaca account. Bring it up explicitly with `--profile docker`.
+    profiles: [ "docker" ]
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -242,9 +255,10 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_position_monitor
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_position_monitor_compose}
       ORION_MODEL_DIR: /app/models
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
     mem_limit: 1500m
     memswap_limit: 1500m
@@ -263,6 +277,12 @@ services:
     <<: *orion-common
     container_name: orion_eod_agent
     restart: unless-stopped
+    # RC.1: the native ingestion trigger (01:05 UTC ≈ 20:05 ET) is the single
+    # canonical EOD path. This standalone docker eod-agent is retired from the
+    # default profile to remove the dual-EOD double-run; the service definition
+    # is kept for manual runs via `--profile docker`. run_review is idempotent
+    # per trading date, so even a manual run cannot double-process the same day.
+    profiles: [ "docker" ]
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -320,6 +340,10 @@ services:
     <<: *orion-common
     container_name: orion_data_quality
     restart: unless-stopped
+    # RB.4: native via launchd (com.empire.orion.data-quality) is canonical.
+    # Profile-gated so a stray `docker compose up -d` cannot run a second
+    # scheduled data-quality loop. Bring up explicitly with `--profile docker`.
+    profiles: [ "docker" ]
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -330,6 +354,7 @@ services:
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_data_quality_compose}
     command: [ "python", "-m", "orion.main_data_quality", "--scheduled" ]
     # Bumped 2500m → 5g on 2026-05-13. With Heber gold partition growth,
     # `run_quality_checks` peaked above 2.5G and entered a cgroup-OOM
@@ -358,11 +383,13 @@ services:
     container_name: orion_meta_weekly
     profiles: [ "scheduled" ]
     restart: unless-stopped
+    # meta-weekly is native-canonical; this compose service is a dormant
+    # fallback. eod-agent moved to the `docker` profile, so a `depends_on:
+    # eod-agent` here makes `--profile scheduled config` invalid (a dependency
+    # that isn't rendered in the same profile). Drop it.
     depends_on:
       timescaledb:
         condition: service_healthy
-      eod-agent:
-        condition: service_started
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db

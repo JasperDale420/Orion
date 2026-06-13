@@ -116,7 +116,7 @@ tables.
 Requirements:
 
 ```bash
-docker compose up timescaledb -d    # TimescaleDB on host port 5440
+docker compose up timescaledb -d    # Postgres 16 + pgvector on host port 5440
 uv run pytest tests/e2e -v -s
 # or standalone diagnostic:
 uv run python tests/e2e/test_live_data_flow.py
