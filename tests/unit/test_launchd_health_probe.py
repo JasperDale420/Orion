@@ -29,9 +29,9 @@ from orion.jobs.launchd_health_probe import (
 
 
 # `launchctl list` output with all always-on daemons (execution, ingestion,
-# meta-search, meta-weekly) present and healthy, plus caller-supplied rows for
-# any extras. Keeps the missing-job detector quiet so run_probe tests can
-# isolate the fault they actually exercise.
+# meta-search, meta-weekly, position-monitor, data-quality) present and healthy,
+# plus caller-supplied rows for any extras. Keeps the missing-job detector quiet
+# so run_probe tests can isolate the fault they actually exercise.
 def _required_with(*job_lines: str) -> str:
     lines = [
         "PID\tStatus\tLabel",
@@ -39,6 +39,8 @@ def _required_with(*job_lines: str) -> str:
         "12345\t0\tcom.empire.orion.ingestion",
         "23456\t0\tcom.empire.orion.meta-search",
         "34567\t0\tcom.empire.orion.meta-weekly",
+        "45678\t0\tcom.empire.orion.position-monitor",
+        "56789\t0\tcom.empire.orion.data-quality",
         *job_lines,
     ]
     return "\n".join(lines) + "\n"
@@ -260,6 +262,8 @@ class TestDetectMissingJobs:
             LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
             LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
             LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
+            LaunchctlEntry(pid=5, exit_code=0, label="com.empire.orion.position-monitor"),
+            LaunchctlEntry(pid=6, exit_code=0, label="com.empire.orion.data-quality"),
             LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
         ]
         assert detect_missing_jobs(entries) == []
@@ -271,6 +275,8 @@ class TestDetectMissingJobs:
             LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
             LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
             LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
+            LaunchctlEntry(pid=5, exit_code=0, label="com.empire.orion.position-monitor"),
+            LaunchctlEntry(pid=6, exit_code=0, label="com.empire.orion.data-quality"),
             LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
         ]
         alerts = detect_missing_jobs(entries)
@@ -287,10 +293,12 @@ class TestDetectMissingJobs:
         entries = [LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close")]
         alerts = detect_missing_jobs(entries)
         assert [a.label for a in alerts] == [
+            "com.empire.orion.data-quality",
             "com.empire.orion.execution",
             "com.empire.orion.ingestion",
             "com.empire.orion.meta-search",
             "com.empire.orion.meta-weekly",
+            "com.empire.orion.position-monitor",
         ]
 
     def test_one_shot_orphan_close_absence_is_not_required(self) -> None:
@@ -301,6 +309,8 @@ class TestDetectMissingJobs:
             LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
             LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
             LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
+            LaunchctlEntry(pid=5, exit_code=0, label="com.empire.orion.position-monitor"),
+            LaunchctlEntry(pid=6, exit_code=0, label="com.empire.orion.data-quality"),
         ]
         assert detect_missing_jobs(entries) == []
 
@@ -358,6 +368,8 @@ class TestProbeSelfExclusion:
                 "50960\t0\tcom.empire.orion.execution\n"
                 "23456\t0\tcom.empire.orion.meta-search\n"
                 "34567\t0\tcom.empire.orion.meta-weekly\n"
+                "45678\t0\tcom.empire.orion.position-monitor\n"
+                "56789\t0\tcom.empire.orion.data-quality\n"
             ),
             notifier=notifications.append,
             log_path=log_path,

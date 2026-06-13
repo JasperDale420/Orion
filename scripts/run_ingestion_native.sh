@@ -72,7 +72,18 @@ export GATEWAY_URL="http://localhost:8080"
 # the docker-only data-gateway host. Pinning it here (after .env sourcing)
 # guarantees the host endpoint for native execution.
 export DATA_GATEWAY_URL="http://localhost:8080"
-export GATEWAY_API_KEY="${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}"
+# Resolve the gateway key alias-preservingly AFTER sourcing .env. Orion config
+# accepts BOTH env names via AliasChoices(DATA_GATEWAY_API_KEY, GATEWAY_API_KEY),
+# so an operator who set only GATEWAY_API_KEY must not have it clobbered. Prefer
+# DATA_GATEWAY_API_KEY, fall back to GATEWAY_API_KEY, then fail fast — never
+# substitute a hardcoded default (a revoked literal here would launch the
+# service but leave it unable to auth).
+_gw_key="${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}"
+if [ -z "$_gw_key" ]; then
+  echo "FATAL: no gateway key (set DATA_GATEWAY_API_KEY or GATEWAY_API_KEY in .env)" >&2
+  exit 78
+fi
+export DATA_GATEWAY_API_KEY="$_gw_key" GATEWAY_API_KEY="$_gw_key"
 
 # Heber parquet cache on the host. Inside the container this path is
 # the bind-mount target /Volumes/heber/data; natively we point at the

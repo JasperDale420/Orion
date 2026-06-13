@@ -62,6 +62,8 @@ REQUIRED_LABELS = frozenset(
         DEFAULT_PREFIX + "ingestion",
         DEFAULT_PREFIX + "meta-search",
         DEFAULT_PREFIX + "meta-weekly",
+        DEFAULT_PREFIX + "position-monitor",
+        DEFAULT_PREFIX + "data-quality",
     }
 )
 
