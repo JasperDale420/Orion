@@ -52,14 +52,15 @@ AFTER_HOURS_UTC = datetime(2026, 6, 11, 2, 0, tzinfo=UTC)  # 22:00 ET prev day â
 # ---- pure decision functions -------------------------------------------------
 
 
-def _row(service: str, age_seconds: float, budget: int) -> ServiceLiveness:
+def _row(service: str, age_seconds: float, budget: int, *, now: datetime | None = None) -> ServiceLiveness:
+    row_now = now or datetime.now(UTC)
     return ServiceLiveness(
         service=service,
-        last_success_ts_utc=datetime.now(UTC) - timedelta(seconds=age_seconds),
+        last_success_ts_utc=row_now - timedelta(seconds=age_seconds),
         cycle_count=5,
         last_error=None,
         cadence_budget_seconds=budget,
-        updated_at=datetime.now(UTC),
+        updated_at=row_now,
     )
 
 
@@ -86,6 +87,20 @@ def test_each_service_judged_against_its_own_budget():
     ]
     alerts = evaluate_service_liveness(rows, now)
     assert [a.name for a in alerts] == ["execution"]
+
+
+def test_market_bound_service_is_informational_when_market_closed():
+    rows = [_row("ingestion", age_seconds=900, budget=300, now=AFTER_HOURS_UTC)]
+
+    assert evaluate_service_liveness(rows, AFTER_HOURS_UTC, market_open=False) == []
+
+
+def test_always_on_service_still_alerts_when_market_closed():
+    rows = [_row("meta_weekly", age_seconds=900, budget=300, now=AFTER_HOURS_UTC)]
+
+    alerts = evaluate_service_liveness(rows, AFTER_HOURS_UTC, market_open=False)
+
+    assert [a.name for a in alerts] == ["meta_weekly"]
 
 
 def test_stage_fresh_no_alert():
@@ -193,10 +208,28 @@ async def test_run_watchdog_never_registered_service_is_silent():
     sent.assert_not_awaited()
 
 
-async def test_run_watchdog_stale_service_alerts_and_dispatches():
+async def test_run_watchdog_stale_market_service_alerts_during_market_hours_and_dispatches():
     # Publish a row, then age it past its budget.
     await publish_liveness("ingestion", cadence_budget_seconds=300)
     # Age the row relative to the evaluation clock we pass to run_watchdog.
+    async with _test_sessionmaker()() as session:
+        row = await session.get(ServiceLiveness, "ingestion")
+        row.last_success_ts_utc = MARKET_HOURS_UTC - timedelta(seconds=1000)
+        await session.commit()
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=MARKET_HOURS_UTC)
+
+    names = [a.name for a in alerts]
+    assert "ingestion" in names
+    sent.assert_awaited()
+    # Dispatched with the per-service dedupe key.
+    assert any(kwargs["dedupe_key"] == "deadman_ingestion" for _, kwargs in sent.call_args_list)
+
+
+async def test_run_watchdog_stale_market_service_is_quiet_after_hours():
+    await publish_liveness("ingestion", cadence_budget_seconds=300)
     async with _test_sessionmaker()() as session:
         row = await session.get(ServiceLiveness, "ingestion")
         row.last_success_ts_utc = AFTER_HOURS_UTC - timedelta(seconds=1000)
@@ -206,12 +239,23 @@ async def test_run_watchdog_stale_service_alerts_and_dispatches():
     with patch.object(dw, "send_discord_alert", sent):
         alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
 
-    names = [a.name for a in alerts]
-    assert "ingestion" in names
+    assert [a for a in alerts if a.kind == "service"] == []
+    sent.assert_not_awaited()
+
+
+async def test_run_watchdog_stale_always_on_service_alerts_after_hours():
+    await publish_liveness("meta_weekly", cadence_budget_seconds=300)
+    async with _test_sessionmaker()() as session:
+        row = await session.get(ServiceLiveness, "meta_weekly")
+        row.last_success_ts_utc = AFTER_HOURS_UTC - timedelta(seconds=1000)
+        await session.commit()
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert [a.name for a in alerts if a.kind == "service"] == ["meta_weekly"]
     sent.assert_awaited()
-    # Dispatched with the per-service dedupe key.
-    _, kwargs = sent.call_args
-    assert kwargs["dedupe_key"] == "deadman_ingestion"
 
 
 async def test_run_watchdog_stage_alerts_only_during_market_hours():

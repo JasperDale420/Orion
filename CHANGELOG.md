@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dead-man Discord alerts now respect market closure for market-session services**: stale `ingestion`, `execution`, `feature_enrichment`, and `position_monitor` heartbeats are informational outside the NYSE cash session, while scheduled always-on jobs still alert around the clock. This stops closed-market Discord pages for stale market-loop heartbeats without muting real scheduled-job failures.
+
 ### Added (Redesign Wave C — 2026-06-12)
 
 - **Single canonical end-of-day path**: the native ingestion EOD trigger (01:05 UTC, after the day's fills and journal write-backs settle) is now the one and only EOD review. The standalone docker `eod-agent` is retired from the default compose profile (still runnable via `--profile docker` for manual runs). `run_review` is idempotent per trading date — a second run for the same date is skipped unless `force=True` — so even a manual run can no longer double-process a session.
