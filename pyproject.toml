@@ -34,7 +34,7 @@ dependencies = [
     "fastapi>=0.129.0",
     "uvicorn>=0.46.0",
     "exchange-calendars>=4.13.1",
-    "pandera>=0.29.0",
+    "pandera>=0.31.1",
     "litellm>=1.80.11",
     "scipy>=1.16.3",
     "numpy<3",
