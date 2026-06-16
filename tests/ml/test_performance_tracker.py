@@ -3,6 +3,18 @@ Tests for ML Performance Tracker.
 
 Covers prediction logging (entry/exit), outcome recording,
 daily accuracy queries, weekly performance, and error handling.
+
+Note on the helper below: pre-2026-05-20 the inner `write` callbacks in
+`log_entry_prediction` / `log_exit_prediction` were SYNC functions that
+returned `None`. The real `db_write` → `db_transaction` does
+`await operation(session)`, which raised `TypeError: object NoneType can't
+be used in 'await' expression` on every call — caught by the broad
+except and silently logged. The existing mock-based tests passed despite
+this because `_make_db_write_side_effect` called `write_fn` synchronously
+without awaiting. After the fix the write callbacks are async; the helper
+now awaits them. See `test_real_db_write_*` below for a real-DB
+integration test that exercises the actual await chain and would have
+caught the regression.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,19 +36,32 @@ from orion.ml.performance_tracker import (
 
 
 def _make_db_write_side_effect():
-    """Create a side effect that calls the write_fn with a mock session.
+    """Create a side effect that calls the (async) write_fn with a mock session.
 
-    db_write takes a sync callable ``write_fn(session)`` and awaits it inside
-    a transaction. Our mock must replicate that: call the function with a fake
-    session so the internal ``session.execute(...)`` is exercised.
+    db_write takes an async callable ``write_fn(session)`` and awaits it
+    inside a transaction. The mock replicates that: call the function with
+    a fake session and await the result so the internal
+    ``await session.execute(...)`` is exercised.
     """
 
     async def _side_effect(write_fn):
         mock_session = MagicMock()
-        write_fn(mock_session)
+        # AsyncMock so write_fn's `await session.execute(...)` resolves.
+        mock_session.execute = AsyncMock()
+        await write_fn(mock_session)
         return None
 
     return _side_effect
+
+
+async def _await_write_fn(write_fn, mock_session=None):
+    """Test helper to invoke an async write callback and return the session
+    used so callers can inspect `mock_session.execute.call_args`."""
+    if mock_session is None:
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock()
+    await write_fn(mock_session)
+    return mock_session
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +106,7 @@ class TestLogEntryPrediction:
         # Extract the parameters passed to session.execute
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         params = mock_session.execute.call_args[0][1]
         assert params["pred_class"] == 1
 
@@ -102,8 +126,7 @@ class TestLogEntryPrediction:
 
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         params = mock_session.execute.call_args[0][1]
         assert params["pred_class"] == 0
 
@@ -123,8 +146,7 @@ class TestLogEntryPrediction:
 
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         params = mock_session.execute.call_args[0][1]
         assert params["pred_class"] == 0
 
@@ -144,8 +166,7 @@ class TestLogEntryPrediction:
 
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         params = mock_session.execute.call_args[0][1]
         assert params["pred_class"] == 1
 
@@ -167,8 +188,7 @@ class TestLogEntryPrediction:
 
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         params = mock_session.execute.call_args[0][1]
         assert params["confidence"] == 0.8
         assert params["position_id"] == "pos-123"
@@ -243,8 +263,7 @@ class TestLogExitPrediction:
 
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         # The model_type 'exit_score' is embedded in the SQL text, not a param.
         # Verify the SQL text contains 'exit_score'.
         sql_text = str(mock_session.execute.call_args[0][0].text)
@@ -261,8 +280,7 @@ class TestLogExitPrediction:
 
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         params = mock_session.execute.call_args[0][1]
         assert params["pred_class"] == 1
 
@@ -280,6 +298,95 @@ class TestLogExitPrediction:
 # ---------------------------------------------------------------------------
 # log_outcome
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Real-DB integration — catches the sync-vs-async regression that all the
+# mock-based tests above missed.
+# ---------------------------------------------------------------------------
+
+
+class TestPerformanceTrackerRealDB:
+    """Integration tests that exercise the actual await chain through
+    db_write → db_transaction → session.execute on in-memory SQLite.
+
+    Pre-fix (2026-05-20), the inner `write` callbacks were sync and
+    returned None. `db_transaction` does `await operation(session)` which
+    raised `TypeError: object NoneType can't be used in 'await' expression`,
+    caught by the broad except in log_*_prediction, swallowed, and the
+    callers got None back. The mock-based tests above missed this because
+    their `_make_db_write_side_effect` (pre-fix) called write_fn
+    SYNCHRONOUSLY. These tests use the real db_write to prove the await
+    chain actually completes.
+    """
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_log_exit_prediction_writes_to_real_db(self) -> None:
+        from sqlalchemy import text
+
+        from orion.storage.db import async_session_factory, init_db
+
+        await init_db()
+
+        # SQLAlchemy's metadata.create_all (run by init_db) covers the
+        # full Orion schema including ml_predictions.
+        prediction_id = await log_exit_prediction(
+            symbol="AAPL",
+            option_chain="AAPL260522C00200000",
+            bucket="SWING",
+            prediction_score=0.73,
+            position_id="pos-real-1",
+        )
+
+        # Pre-fix: returned None because TypeError fell through the except.
+        assert prediction_id is not None, "log_exit_prediction must return a UUID, not None"
+        assert len(prediction_id) == 36
+
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT id, model_type, prediction_score FROM ml_predictions WHERE id = :id"),
+                    {"id": prediction_id},
+                )
+            ).fetchone()
+
+        assert row is not None, "ml_predictions row was not written"
+        assert row[1] == "exit_score"
+        assert abs(row[2] - 0.73) < 1e-9
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_log_entry_prediction_writes_to_real_db(self) -> None:
+        """Same bug shape in log_entry_prediction — exercise it too."""
+        from sqlalchemy import text
+
+        from orion.storage.db import async_session_factory, init_db
+
+        await init_db()
+
+        prediction_id = await log_entry_prediction(
+            symbol="AAPL",
+            option_chain="AAPL260522C00200000",
+            bucket="SWING",
+            prediction_score=0.65,
+            confidence=0.8,
+            position_id="pos-real-2",
+        )
+
+        assert prediction_id is not None
+
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT id, model_type, confidence FROM ml_predictions WHERE id = :id"),
+                    {"id": prediction_id},
+                )
+            ).fetchone()
+
+        assert row is not None
+        assert row[1] == "entry_score"
+        assert abs(row[2] - 0.8) < 1e-9
 
 
 class TestLogOutcome:
@@ -317,8 +424,7 @@ class TestLogOutcome:
 
         call_args = mock_db_write.call_args
         write_fn = call_args[0][0]
-        mock_session = MagicMock()
-        write_fn(mock_session)
+        mock_session = await _await_write_fn(write_fn)
         params = mock_session.execute.call_args[0][1]
         assert params["position_id"] == "pos-xyz"
         assert params["return_pct"] == -2.5

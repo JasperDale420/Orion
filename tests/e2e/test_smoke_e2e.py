@@ -324,8 +324,11 @@ async def _execute_mock_smoke_order(*, run_tag: str, decision, candidate) -> Non
 
     mock_client = AsyncMock()
     mock_client.get_clock.return_value = {"is_open": True}
+    # The engine's price fetch matches on contract_symbol (not symbol) and
+    # reads bid/ask (not mid) — same contract the dedicated integration test
+    # exercises; a stale shape here aborts with options_price_fetch_failed.
     mock_client.get_option_chain.return_value = {
-        "contracts": [{"symbol": candidate.option_symbol, "mid": 3.50, "ask": 3.70}]
+        "contracts": [{"contract_symbol": candidate.option_symbol, "bid": 3.30, "ask": 3.70}]
     }
     mock_client.create_order.return_value = {"id": _smoke_order_id(run_tag), "status": "accepted"}
     execution_engine._get_gateway_client = lambda: mock_client
@@ -341,7 +344,11 @@ async def _execute_mock_smoke_order(*, run_tag: str, decision, candidate) -> Non
     execution_engine.risk_manager.update_post_trade = AsyncMock()
     execution_engine.risk_manager.remove_pending_order = AsyncMock()
 
-    with patch("orion.execution.execution_engine.persist_order_record", new=AsyncMock()) as persist_mock:
+    # Two-phase persistence: persist_pending_order fires BEFORE the Gateway
+    # round-trip, persist_order_finalize after. Asserting only the pending
+    # call is enough for the smoke check — finalize is exercised by the
+    # dedicated forensic regression tests.
+    with patch("orion.execution.execution_engine.persist_pending_order", new=AsyncMock()) as persist_mock:
         await execution_engine.execute_order(decision, candidate)
         persist_mock.assert_awaited()
 
@@ -600,7 +607,16 @@ async def run_smoke_test() -> dict[str, bool]:
             scorer = get_scorer()
             loaded_buckets = list(scorer.models.keys())
 
-            assert len(loaded_buckets) > 0, f"No models loaded from {MODEL_DIR}"
+            # models/*.pkl are untracked from git (they churn on retrain), so
+            # a CI checkout has an empty models/ dir. When pickles exist on
+            # disk (local runs) they MUST load; when absent, the scorer's
+            # heuristic fallback must engage so the scoring path is still
+            # exercised end-to-end.
+            pkl_on_disk = any(MODEL_DIR.glob("*.pkl"))
+            if pkl_on_disk:
+                assert len(loaded_buckets) > 0, f"No models loaded from {MODEL_DIR}"
+            else:
+                assert scorer.use_heuristic, f"No models in {MODEL_DIR} and heuristic fallback not engaged"
 
             # Score a test flow
             test_flow = {

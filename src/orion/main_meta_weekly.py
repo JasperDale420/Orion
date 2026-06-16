@@ -21,9 +21,16 @@ import aiofiles
 
 from orion.agents.meta_search_agent import MetaSearchAgent
 from orion.jobs.solver_promoter import run_solver_promotions
+from orion.shared.alerts import send_discord_alert
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.meta_weekly")
+
+# Liveness cadence budget. Meta-weekly self-fires once per week (Friday 17:30
+# ET), so a successful cycle is weekly; 8 days bridges a normal week plus a
+# day of slack before the dead-man watchdog flags a stuck scheduler loop.
+LIVENESS_CADENCE_BUDGET_SECONDS = 86400 * 8
 
 
 async def _save_summary(output_path: str, summary: dict[str, object]) -> None:
@@ -146,9 +153,14 @@ async def run_scheduled() -> None:
 
                 logger.info(f"Weekly evolution completed. Summary saved to {output_path}")
 
+                reports = summary.get("eod_summary", {}).get("reports_analyzed", 0)
+                mutations = len(summary.get("mutations_applied", []))
+
                 # Process pending solver promotions after evolution
+                promoted = 0
                 try:
                     promo_result = await run_solver_promotions()
+                    promoted = promo_result["promoted"]
                     logger.info(
                         "Solver promotion sweep completed",
                         promoted=promo_result["promoted"],
@@ -158,8 +170,18 @@ async def run_scheduled() -> None:
                 except Exception as promo_err:
                     logger.error(f"Solver promotion sweep failed: {promo_err}", exc_info=True)
 
+                await publish_liveness("meta_weekly", cadence_budget_seconds=LIVENESS_CADENCE_BUDGET_SECONDS)
+                await send_discord_alert(
+                    f"Meta-weekly evolution completed ({now.strftime('%Y-%m-%d')}): "
+                    f"{reports} EOD reports analyzed, {mutations} mutations applied, "
+                    f"{promoted} solvers promoted."
+                )
+
             except Exception as e:
                 logger.error(f"Weekly evolution failed: {e}", exc_info=True)
+                await send_discord_alert(
+                    f"Meta-weekly evolution FAILED ({now.strftime('%Y-%m-%d')}): {type(e).__name__}: {e}"
+                )
 
             # Wait 1 hour to avoid re-triggering
             await asyncio.sleep(3600)

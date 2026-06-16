@@ -3,13 +3,14 @@ import json
 import math
 import os
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from orion.agents.eod_metrics import (
     adverse_slippage_bps,
@@ -34,8 +35,10 @@ from orion.agents.codex_client import (
 from orion.agents.proposal_builder import ProposalBuilder
 from orion.core.enums import DecisionAction
 from orion.core.id_utils import deterministic_solver_id
+from orion.core.timekeeping import last_closed_trading_date
 from orion.rag.vector_store import VectorStore
 from orion.shared.db_utils import db_query, db_write
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import BronzeEvent
 from orion.storage.models_dlq import DeadLetterQueue
@@ -47,6 +50,25 @@ from orion.storage.models_solvers import Solver, SolverEdits
 from orion.storage.models_trade_journal import TradeJournalEntry
 
 logger = setup_struct_logger("orion.agents.eod_review_agent")
+
+# Liveness cadence budget. The EOD review runs once per trading day; 1.5 days
+# bridges a normal weekday gap before the dead-man watchdog flags a missed run.
+# 3.5 days: survives weekends + a Monday holiday without false dead-man
+# alerts (the run's own Discord success/failure alert is the primary signal;
+# the dead-man is a backstop). Adversarial-review finding: 1.5d went stale
+# every Sunday.
+EOD_LIVENESS_CADENCE_BUDGET_SECONDS = int(86400 * 3.5)
+
+# RC.1 atomic-claim staleness TTL. A RUNNING claim older than this is assumed to
+# belong to a crashed run and may be taken over by a fresh trigger. 6h comfortably
+# exceeds a healthy EOD run (minutes) while still allowing a same-night retry.
+EOD_REVIEW_STALE_TTL = timedelta(hours=6)
+
+# RB.3 demotion-candidate gate (RECOMMENDATION ONLY — no stage flag is moved by
+# any code in this task; actual demotion is the separately-gated task RD.1).
+# A solver is *listed* as a demotion candidate when its reconciled realized-PnL
+# expectancy is non-positive AND it has at least this many closed trades.
+DEMOTION_MIN_SAMPLE = 20
 
 
 class EODReviewAgent:
@@ -73,16 +95,74 @@ class EODReviewAgent:
         Satisfies BaseAgent interface. Wraps run_review.
         """
         target_date = context.get("date")
-        result = await self.run_review(target_date)
+        force = bool(context.get("force", False))
+        result = await self.run_review(target_date, force=force)
         return {"status": "completed", **(result or {})}
 
-    async def run_review(self, target_date: datetime.date = None) -> dict[str, Any]:
+    async def run_review(self, target_date: date | None = None, *, force: bool = False) -> dict[str, Any]:
         if not target_date:
-            target_date = datetime.now(UTC).date()
+            # Default to the most-recently-CLOSED NYSE session, NOT "UTC today".
+            # A post-close trigger fires shortly after midnight UTC (the prior
+            # evening in ET); UTC-today would be the next calendar day and the
+            # just-closed session would never be reconciled.
+            target_date = last_closed_trading_date()
+
+        # RC.1 idempotency guard: exactly ONE canonical EOD run per trading
+        # date. The native ingestion trigger (01:05 UTC) is canonical, but ANY
+        # second scheduler (a manual run, a future daemon) — even two firing at
+        # the same instant — must be short-circuited unless force=True. The
+        # claim is ATOMIC: a fresh row is an INSERT-or-conflict on the cursor PK,
+        # and every reclaim of an existing row is a COMPARE-AND-SWAP (UPDATE
+        # gated on the exact observed last_seen_id), so two concurrent callers
+        # that both observe a reclaimable state cannot both win — the CAS
+        # rowcount picks one. A SUCCESS row blocks reruns (force=True bypasses);
+        # a FAILED row allows retry; a stale RUNNING row (crashed mid-run) is
+        # taken over after EOD_REVIEW_STALE_TTL; force=True may reclaim ANY state
+        # (including fresh RUNNING — operator override for a wedged run).
+        #
+        # The claim machinery must NOT fail open: if it raises, run_review
+        # propagates the error and does NOT enter the review body (two runs
+        # proceeding because the guard silently degraded is the worse failure).
+        run_id = str(uuid.uuid4())
+        claimed, reason = await self._claim_review(target_date, run_id, force=force)
+        if not claimed:
+            logger.info(
+                "eod_review_skipped_duplicate",
+                date=str(target_date),
+                reason=reason,
+                note="already claimed for this trading date; pass force=True to re-run a SUCCESS",
+            )
+            return {
+                "date": str(target_date),
+                "skipped": True,
+                "reason": reason,
+                "proposals_count": 0,
+                "solver_edit_proposals": [],
+            }
 
         logger.info(f"Starting EOD Review for {target_date}...")
-        run_id = str(uuid.uuid4())
 
+        try:
+            result = await self._perform_review(target_date, run_id)
+        except Exception:
+            # The claim is marked FAILED so a later trigger can retry (a FAILED
+            # row is treated like an absent claim). Then re-raise — failures must
+            # be loud, never silently recorded as a clean run.
+            await self._finish_review(target_date, run_id, "FAILED")
+            logger.error("eod_review_failed", date=str(target_date), exc_info=True)
+            raise
+
+        # Mark the claim SUCCESS so a duplicate same-date trigger is skipped.
+        await self._finish_review(target_date, run_id, "SUCCESS")
+
+        # Liveness: one publish per completed review (swallows its own errors).
+        await publish_liveness("eod_agent", cadence_budget_seconds=EOD_LIVENESS_CADENCE_BUDGET_SECONDS)
+
+        return result
+
+    async def _perform_review(self, target_date: date, run_id: str) -> dict[str, Any]:
+        """Run the actual review body (post-claim). Raises on any hard failure so
+        the caller can mark the claim FAILED and re-raise."""
         # Ensure artifacts directory exists
         from orion.config import system_settings
 
@@ -92,12 +172,26 @@ class EODReviewAgent:
         # 1. Gather Data
         data, input_snapshot_path = await self._gather_data(target_date, run_id=run_id, reports_dir=reports_dir)
 
+        # 1b. RB.3: journal-vs-broker PnL reconciliation + per-solver/per-rule
+        # attribution. Runs INSIDE the EOD trigger (no standalone daemon), so the
+        # EOD agent's own liveness publish covers it. Recommendations-only — no
+        # solver stage flags are touched here. Self-isolating: any failure logs
+        # and yields None so the rest of the review still completes.
+        reconcile_result = await self._run_pnl_reconciliation(target_date)
+        if reconcile_result is not None:
+            data["pnl_reconciliation"] = self._reconcile_snapshot_for_llm(reconcile_result)
+
         # 2. RAG Context Lookup (VS5)
         # Search for recent similar performance issues or strategy docs
         rag_context = await self._fetch_rag_context("performance drift strategy issues")
 
+        # 2b. Resolve the real, valid solver ids the LLM may target. The prompt
+        # must never hardcode an id (e.g. 'paper_v1') that isn't seeded, or the
+        # derived-solver insert FK-violates and aborts the run.
+        valid_solver_ids = await self._fetch_valid_solver_ids()
+
         # 3. LLM Analysis & Proposal Generation
-        analysis_json = await self._generate_analysis(data, rag_context)
+        analysis_json = await self._generate_analysis(data, rag_context, valid_solver_ids)
 
         # 4. Save Artifacts
         # Save Markdown Report
@@ -110,6 +204,20 @@ class EODReviewAgent:
                 f.write(report_text)
 
         await asyncio.to_thread(_write_report)
+
+        # 4b. RB.3: append the DETERMINISTIC reconciliation + attribution +
+        # demotion-candidate sections to the report. These are computed in code
+        # (not LLM-generated) so the reconciliation verdict, drift, and sample
+        # sizes are always present and exact, regardless of LLM output.
+        if reconcile_result is not None:
+            recon_md = self._render_reconciliation_report(reconcile_result)
+
+            def _append_report():
+                with open(file_path, "a") as f:
+                    f.write("\n\n" + recon_md)
+
+            await asyncio.to_thread(_append_report)
+            await self._maybe_alert_reconciliation_mismatch(reconcile_result)
 
         # Save Proposals
         proposals = analysis_json.get("proposals", [])
@@ -130,7 +238,37 @@ class EODReviewAgent:
             if path:
                 saved_paths.append(path)
 
+        # RC.1: solver mutation proposals are processed INSIDE run_review so the
+        # behavior is caller-independent — the native ingestion trigger and any
+        # manual/standalone run both produce the same recommendations. This path
+        # is recommendations-only: it persists PromotionRecommendation rows and
+        # NEVER changes a solver stage (see solver_mutation_processor). Failure
+        # here is isolated so it can never abort the review.
+        mutation_proposals = [p for p in proposals if p.get("type") == "solver_edit"]
+        mutation_counts: dict[str, int] = {"processed": 0, "recommended": 0, "skipped": 0, "failed": 0}
+        if mutation_proposals:
+            try:
+                from orion.agents.solver_mutation_processor import process_solver_mutations
+
+                mutation_counts = await process_solver_mutations(mutation_proposals)
+            except Exception:
+                logger.error("eod_solver_mutation_processing_failed", exc_info=True)
+            else:
+                # Surface the outcome on the EOD run itself. Every proposal being
+                # dropped before backtest (shape mismatch) is an ERROR, not a
+                # silent success — the processor logs it too, but the EOD run
+                # must not record a clean success while writing zero rows.
+                logger.info("eod_solver_mutations_summary", date=str(target_date), **mutation_counts)
+                if mutation_counts["processed"] == 0 and mutation_counts["failed"] == 0:
+                    logger.error(
+                        "eod_solver_mutations_all_skipped",
+                        date=str(target_date),
+                        proposals=len(mutation_proposals),
+                        **mutation_counts,
+                    )
+
         logger.info(f"EOD Review Complete. Report: {file_path}. Proposals: {len(saved_paths)}")
+
         return {
             "run_id": run_id,
             "date": str(target_date),
@@ -138,58 +276,455 @@ class EODReviewAgent:
             "input_snapshot_path": input_snapshot_path,
             "proposal_paths": saved_paths,
             "proposals_count": len(proposals),
-            "solver_edit_proposals": [p for p in proposals if p.get("type") == "solver_edit"],
+            "solver_edit_proposals": mutation_proposals,
+            "mutation_counts": mutation_counts,
         }
+
+    # ── RC.1 idempotency guard (atomic claim) ─────────────────────────────
+
+    @staticmethod
+    def _cursor_key(target_date: date) -> str:
+        return f"eod_review:{target_date.isoformat()}"
+
+    @staticmethod
+    def _encode_state(state: str, run_id: str) -> str:
+        """Pack ``state`` + ``run_id`` into the cursor's ``last_seen_id`` column.
+
+        The ``job_cursor_state`` schema has no dedicated state column, so the
+        run state (RUNNING/SUCCESS/FAILED) is prefixed onto the run id. The claim
+        timestamp lives in ``last_seen_ts_utc`` (used for the stale-RUNNING TTL).
+        """
+        return f"{state}:{run_id}"
+
+    @staticmethod
+    def _decode_state(last_seen_id: str | None) -> str:
+        if not last_seen_id or ":" not in last_seen_id:
+            # Legacy rows (written by the old success-only recorder) have a bare
+            # run_id and mean "a run completed" — treat as SUCCESS.
+            return "SUCCESS"
+        return last_seen_id.split(":", 1)[0]
+
+    async def _claim_review(self, target_date: date, run_id: str, *, force: bool) -> tuple[bool, str | None]:
+        """Atomically claim the EOD run for ``target_date``.
+
+        Returns ``(claimed, reason)``. ``claimed=True`` means this caller owns
+        the run and must proceed (and later call ``_finish_review``). When
+        ``claimed=False``, ``reason`` is the skip reason:
+        - 'duplicate_run' — a completed SUCCESS row (no force).
+        - 'in_progress'   — a fresh (non-stale) concurrent RUNNING claim.
+        - 'lost_claim_race' — this caller read a reclaimable row but a
+          concurrent caller reclaimed it first (the CAS UPDATE matched 0 rows).
+
+        The claim is atomic in two layers, both of which work identically on
+        Postgres (live) and SQLite (tests):
+
+        1. Fresh INSERT of the cursor row races on the primary key. Two callers
+           that both find no row both try to INSERT; one commits, the loser gets
+           ``IntegrityError`` and falls through to the reclaim path.
+        2. Every reclaim of an EXISTING row is a COMPARE-AND-SWAP: an UPDATE
+           gated on ``last_seen_id == <the exact value we observed>``. Two
+           callers that both observe the same reclaimable value both issue the
+           CAS; only the first matches (rowcount==1) and claims, the second
+           matches 0 rows and returns ('lost_claim_race'). This closes the
+           read-modify-write window where two callers could both proceed.
+
+        Takeover rules for an existing row:
+        - SUCCESS  -> skip ('duplicate_run'), unless ``force`` (then CAS-reclaim).
+        - FAILED   -> CAS-reclaim (retry allowed).
+        - RUNNING, stale (> ``EOD_REVIEW_STALE_TTL``) -> CAS-reclaim (takeover).
+        - RUNNING, fresh -> skip ('in_progress'), unless ``force`` (operator
+          override for a wedged claim -> CAS-reclaim).
+
+        DB errors are NOT swallowed: any unexpected exception propagates to
+        ``run_review``, which must not enter the review body on a degraded guard.
+        """
+        from orion.storage.models import JobCursorState
+
+        key = self._cursor_key(target_date)
+        now = datetime.now(UTC)
+        new_running = self._encode_state("RUNNING", run_id)
+
+        # 1. Try a fresh atomic insert. If it commits, we own the claim.
+        async def _insert(session: Any) -> None:
+            session.add(
+                JobCursorState(
+                    key=key,
+                    last_seen_ts_utc=now,
+                    last_seen_id=new_running,
+                )
+            )
+
+        try:
+            await db_write(_insert)
+            return True, None
+        except IntegrityError:
+            pass  # A row already exists — fall through to CAS-reclaim it.
+
+        # 2. A row exists. Read it, decide, then COMPARE-AND-SWAP on the exact
+        #    observed last_seen_id so a concurrent reclaim cannot also win.
+        def _is_stale(ts: datetime | None) -> bool:
+            if ts is None:
+                return True
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            return (now - ts) > EOD_REVIEW_STALE_TTL
+
+        async def _reclaim(session: Any) -> tuple[bool, str | None]:
+            row = await session.get(JobCursorState, key)
+            if row is None:
+                # The other claimant rolled back between our insert and this read;
+                # re-insert to claim (PK conflict here would re-raise IntegrityError
+                # and be retried by the caller below).
+                session.add(JobCursorState(key=key, last_seen_ts_utc=now, last_seen_id=new_running))
+                return True, None
+
+            observed = row.last_seen_id
+            state = self._decode_state(observed)
+            if not force:
+                if state == "SUCCESS":
+                    return False, "duplicate_run"
+                if state == "RUNNING" and not _is_stale(row.last_seen_ts_utc):
+                    return False, "in_progress"
+
+            # Reclaimable (FAILED / stale RUNNING / any state under force).
+            # CAS: only succeeds if last_seen_id is still exactly what we read.
+            # Expire the in-session row first so the UPDATE hits the DB and the
+            # rowcount reflects the real swap, not a stale identity-map state.
+            session.expire(row)
+            cas_predicate = (
+                JobCursorState.last_seen_id.is_(None) if observed is None else JobCursorState.last_seen_id == observed
+            )
+            result = await session.execute(
+                update(JobCursorState)
+                .where(JobCursorState.key == key, cas_predicate)
+                .values(last_seen_ts_utc=now, last_seen_id=new_running)
+            )
+            if result.rowcount == 1:
+                return True, None
+            # rowcount == 0: a concurrent caller reclaimed the row first.
+            return False, "lost_claim_race"
+
+        return await db_write(_reclaim)
+
+    # Retry budget for terminal-state finalization. A failed FAILED write is the
+    # dangerous case: the row stays a fresh RUNNING claim and (absent force) a
+    # same-night retry is blocked for the whole stale TTL. So finalization is
+    # retried once after a short delay; a persistent failure is logged LOUDLY at
+    # ERROR — the documented operator recovery is a force=True re-run.
+    _FINISH_RETRY_DELAY_SECONDS = 0.5
+
+    async def _finish_review(self, target_date: date, run_id: str, state: str) -> None:
+        """Mark this run's claim terminal (``SUCCESS`` or ``FAILED``).
+
+        A FAILED row is treated like an absent claim by ``_claim_review`` so a
+        later trigger can retry. Finalization is retried once on exception; if it
+        still fails it logs at ERROR (not WARNING) because a wedged-RUNNING row
+        blocks same-night retries until the stale TTL elapses — the operator
+        recovery is ``force=True``.
+        """
+        from orion.storage.models import JobCursorState
+
+        key = self._cursor_key(target_date)
+
+        async def save(session: Any) -> None:
+            now = datetime.now(UTC)
+            encoded = self._encode_state(state, run_id)
+            # Finalize with the same CAS discipline as claiming (round-3 review):
+            # the terminal write only lands if this run STILL owns the claim
+            # (last_seen_id == RUNNING:{run_id}). A PK-keyed write here could
+            # stamp SUCCESS over a force/stale takeover's fresh RUNNING claim,
+            # making future same-date runs skip while the replacement is still
+            # running. rowcount==0 ⇒ ownership lost ⇒ leave the row alone.
+            expected_running = self._encode_state("RUNNING", run_id)
+            result = await session.execute(
+                update(JobCursorState)
+                .where(JobCursorState.key == key, JobCursorState.last_seen_id == expected_running)
+                .values(last_seen_ts_utc=now, last_seen_id=encoded)
+            )
+            if result.rowcount == 0:
+                logger.warning(
+                    "eod_review_finalize_lost_ownership",
+                    date=str(target_date),
+                    run_id=run_id,
+                    state=state,
+                )
+
+        try:
+            await db_write(save)
+            return
+        except Exception:
+            logger.warning(
+                "eod_review_cursor_write_failed_retrying",
+                date=str(target_date),
+                state=state,
+                exc_info=True,
+            )
+
+        await asyncio.sleep(self._FINISH_RETRY_DELAY_SECONDS)
+        try:
+            await db_write(save)
+        except Exception:
+            logger.error(
+                "eod_review_cursor_finalize_failed",
+                date=str(target_date),
+                state=state,
+                run_id=run_id,
+                note=(
+                    "claim left in RUNNING state; same-night retry is blocked until the "
+                    "stale TTL elapses — recover with a force=True re-run"
+                ),
+                exc_info=True,
+            )
+
+    # ── RB.3: PnL reconciliation + attribution ───────────────────────────
+
+    async def _run_pnl_reconciliation(self, target_date: datetime.date) -> Any | None:
+        """Compute + persist the journal-vs-broker reconciliation for the day.
+
+        Returns the ``ReconcileResult`` (used to render the report section and
+        drive the mismatch alert), or ``None`` on any failure — a reconciliation
+        problem must never abort the EOD review.
+        """
+        try:
+            from orion.jobs.reconcile_pnl import run_reconciliation
+
+            # publish_liveness_row=False: the EOD agent's own liveness publish
+            # (end of run_review) already covers this work; we do not register a
+            # second service row in the dead-man watchdog.
+            return await run_reconciliation(target_date, publish_liveness_row=False)
+        except Exception:
+            logger.error("eod_pnl_reconciliation_failed", exc_info=True)
+            return None
+
+    @staticmethod
+    def _reconcile_snapshot_for_llm(result: Any) -> dict[str, Any]:
+        """Compact, JSON-safe view of the reconciliation for the LLM snapshot."""
+        return {
+            "status": result.status,
+            "journal_total": result.journal.total,
+            "broker_total": result.broker.total,
+            "drift_abs": result.drift_abs,
+            "drift_pct": result.drift_pct,
+            "journal_trade_count": result.journal.trade_count,
+            "broker_order_count": result.broker.order_count,
+            "tolerance_usd": result.tolerance_usd,
+            "consecutive_mismatch_days": result.consecutive_mismatch_days,
+            "note": "Journal realized-PnL has NOT been broker-trusted historically; "
+            "this line is the verification gate. Recommendations only — no solver "
+            "stage flags change.",
+        }
+
+    @staticmethod
+    def _render_reconciliation_report(result: Any) -> str:
+        """Render the deterministic markdown: reconciliation verdict, per-solver
+        and per-rule PnL tables (sample sizes ALWAYS shown), and the
+        demotion-candidates section (clearly labeled recommendation-only)."""
+        status_marker = {"MATCH": "OK", "MISMATCH": "MISMATCH", "NO_DATA": "no data"}.get(result.status, result.status)
+        drift_pct = f"{result.drift_pct:.2f}%" if result.drift_pct is not None else "n/a"
+        lines: list[str] = []
+        lines.append("## PnL Reconciliation (journal vs broker) — RB.3")
+        lines.append("")
+        lines.append(f"**Result: {status_marker}** — drift ${result.drift_abs:.2f} ({drift_pct})")
+        lines.append("")
+        lines.append(
+            f"- Journal realized PnL (orion-attributed, closed): ${result.journal.total:.2f} "
+            f"across {result.journal.trade_count} trades"
+        )
+        lines.append(
+            f"- Broker realized PnL (orion fills, reconstructed): ${result.broker.total:.2f} "
+            f"across {result.broker.order_count} filled orders"
+        )
+        lines.append(f"- Tolerance: ${result.tolerance_usd:.2f}/trade")
+        if result.broker.non_flat_symbols:
+            lines.append(
+                f"- NOTE: symbols not flat at day end (cashflow includes open exposure): "
+                f"{', '.join(result.broker.non_flat_symbols)}"
+            )
+        if result.status == "MISMATCH":
+            lines.append(
+                f"- ESCALATION: MISMATCH for {result.consecutive_mismatch_days} consecutive day(s). "
+                "Journal PnL is NOT trustworthy until this reconciles — do NOT act on attribution below."
+            )
+        lines.append("")
+
+        lines.append("### Per-solver realized PnL (sample sizes shown)")
+        lines.append("")
+        lines.append("| solver_id | n_trades | realized_pnl | expectancy | wins |")
+        lines.append("|---|---:|---:|---:|---:|")
+        if result.solver_rows:
+            for row in result.solver_rows:
+                exp = f"{row.expectancy:.2f}" if row.expectancy is not None else "n/a"
+                lines.append(f"| {row.key} | {row.n_trades} | {row.realized_pnl_total:.2f} | {exp} | {row.win_count} |")
+        else:
+            lines.append("| _(no closed orion trades)_ | 0 | 0.00 | n/a | 0 |")
+        lines.append("")
+
+        lines.append("### Per-rule realized PnL (sample sizes shown)")
+        lines.append("")
+        lines.append("| rule_id | n_trades | realized_pnl | expectancy | wins |")
+        lines.append("|---|---:|---:|---:|---:|")
+        if result.rule_rows:
+            for row in result.rule_rows:
+                exp = f"{row.expectancy:.2f}" if row.expectancy is not None else "n/a"
+                lines.append(f"| {row.key} | {row.n_trades} | {row.realized_pnl_total:.2f} | {exp} | {row.win_count} |")
+        else:
+            lines.append("| _(no closed orion trades)_ | 0 | 0.00 | n/a | 0 |")
+        lines.append("")
+
+        candidates = [
+            row
+            for row in result.solver_rows
+            if row.n_trades >= DEMOTION_MIN_SAMPLE and (row.expectancy is None or row.expectancy <= 0.0)
+        ]
+        lines.append("### Demotion candidates — RECOMMENDATION ONLY (no stage flags changed)")
+        lines.append("")
+        lines.append(
+            f"Solvers with non-positive reconciled expectancy AND n>={DEMOTION_MIN_SAMPLE} closed trades. "
+            "This is a recommendation for human review (task RD.1); NO solver stage is modified by this report."
+        )
+        lines.append("")
+        if result.status != "MATCH":
+            lines.append(
+                "_Reconciliation is not MATCH today — the attribution above is NOT broker-trusted, "
+                "so no demotion candidates are listed._"
+            )
+        elif candidates:
+            lines.append("| solver_id | n_trades | realized_pnl | expectancy |")
+            lines.append("|---|---:|---:|---:|")
+            for row in candidates:
+                exp = f"{row.expectancy:.2f}" if row.expectancy is not None else "n/a"
+                lines.append(f"| {row.key} | {row.n_trades} | {row.realized_pnl_total:.2f} | {exp} |")
+        else:
+            lines.append(f"_None — no solver has non-positive expectancy with n>={DEMOTION_MIN_SAMPLE}._")
+        lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    async def _maybe_alert_reconciliation_mismatch(result: Any) -> None:
+        """Send a Discord alert; escalate when MISMATCH persists 2+ days.
+
+        A single-day mismatch is logged but not paged (could be a one-off
+        reconstruction edge). 2+ consecutive MISMATCH days is an escalation —
+        the journal PnL write-back is systematically wrong and nothing may act
+        on it. Uses dedupe_key='pnl_reconcile_mismatch' to avoid in-run spam.
+        """
+        if result.status != "MISMATCH":
+            return
+        from orion.shared.alerts import send_discord_alert
+
+        if result.consecutive_mismatch_days >= 2:
+            msg = (
+                f"PnL reconciliation MISMATCH {result.consecutive_mismatch_days} days running "
+                f"({result.trade_date}): journal ${result.journal.total:.2f} vs broker "
+                f"${result.broker.total:.2f}, drift ${result.drift_abs:.2f}. "
+                "Journal realized-PnL is NOT broker-trusted — block any action on attribution."
+            )
+            await send_discord_alert(msg, dedupe_key="pnl_reconcile_mismatch")
+        else:
+            logger.warning(
+                "pnl_reconcile_mismatch_first_day",
+                trade_date=str(result.trade_date),
+                drift_abs=result.drift_abs,
+            )
+
+    async def _fetch_valid_solver_ids(self) -> list[str]:
+        """Return the solver ids the LLM may legally target as parent/base.
+
+        A proposal's target_solver_id becomes the parent_solver_id of an
+        auto-derived solver, which is FK-constrained to ``solvers.solver_id``.
+        Surfacing the real list to the prompt (and validating against it before
+        insert) prevents the FK violation that aborts the run.
+        """
+
+        async def query(session: Any) -> list[str]:
+            result = await session.execute(select(Solver.solver_id, Solver.stage))
+            rows = result.all()
+            # Prefer non-research solvers (paper/live/shadow) as edit targets, but
+            # return all ids so validation never rejects a real solver.
+            return [str(r[0]) for r in rows]
+
+        try:
+            return await db_query(query)
+        except Exception:
+            logger.warning("eod_valid_solver_fetch_failed", exc_info=True)
+            return []
 
     async def _persist_solver_edits(self, proposals: list[dict[str, Any]], run_id: str) -> None:
         if not proposals:
             return
 
-        async def save_edits(session: Any) -> None:
-            for p in proposals:
-                if p.get("type") != "solver_edit":
-                    continue
+        for p in proposals:
+            if p.get("type") != "solver_edit":
+                continue
 
-                base_id = p.get("target_solver_id")
-                ops_data = p.get("ops", [])
-                if not base_id or not isinstance(ops_data, list) or not ops_data:
-                    continue
+            base_id = p.get("target_solver_id")
+            ops_data = p.get("ops", [])
+            if not base_id or not isinstance(ops_data, list) or not ops_data:
+                continue
 
-                new_solver_id = deterministic_solver_id(
-                    base_solver_id=str(base_id),
-                    edit_ops={"ops": ops_data},
-                    prefix="eod",
+            try:
+                await self._persist_one_solver_edit(str(base_id), ops_data, run_id)
+            except Exception as e:
+                # Isolate failures so one bad proposal cannot abort the whole run
+                # (report + remaining YAML artifacts must still be saved).
+                logger.error(
+                    "eod_proposal_persist_failed",
+                    target_solver_id=str(base_id),
+                    run_id=run_id,
+                    error=str(e),
+                    exc_info=True,
                 )
 
-                # Check if solver already exists
-                existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
-                if existing.scalars().first() is None:
-                    # Create solver stub in research stage
-                    session.add(
-                        Solver(
-                            solver_id=new_solver_id,
-                            family_name="eod_derived",
-                            parent_solver_id=str(base_id),
-                            created_by="llm_eod_agent",
-                            stage="research",
-                            config={"derived_from": str(base_id), "ops": ops_data},
-                            notes=f"Auto-generated from EOD review run {run_id}",
-                        )
-                    )
+    async def _persist_one_solver_edit(self, base_id: str, ops_data: list[Any], run_id: str) -> None:
+        new_solver_id = deterministic_solver_id(
+            base_solver_id=base_id,
+            edit_ops={"ops": ops_data},
+            prefix="eod",
+        )
 
+        async def save_edit(session: Any) -> None:
+            # Validate the parent/target solver exists before inserting a
+            # derived solver (whose parent_solver_id is FK-constrained). An
+            # invalid id (e.g. a hallucinated 'paper_v1') is skipped, not raised.
+            parent_exists = (
+                await session.execute(select(Solver.solver_id).where(Solver.solver_id == base_id))
+            ).scalars().first() is not None
+            if not parent_exists:
+                logger.warning(
+                    "eod_proposal_invalid_solver",
+                    target_solver_id=base_id,
+                    run_id=run_id,
+                )
+                return
+
+            existing = await session.execute(select(Solver).where(Solver.solver_id == new_solver_id))
+            if existing.scalars().first() is None:
+                # Create solver stub in research stage
                 session.add(
-                    SolverEdits(
-                        id=str(uuid.uuid4()),
-                        experiment_id=None,
-                        base_solver_id=str(base_id),
-                        new_solver_id=new_solver_id,
-                        edit_json={"ops": ops_data, "run_id": run_id},
-                        generated_by="llm_eod_agent",
-                        reward=None,
+                    Solver(
+                        solver_id=new_solver_id,
+                        family_name="eod_derived",
+                        parent_solver_id=base_id,
+                        created_by="llm_eod_agent",
+                        stage="research",
+                        config={"derived_from": base_id, "ops": ops_data},
+                        notes=f"Auto-generated from EOD review run {run_id}",
                     )
                 )
 
-        await db_write(save_edits)
+            session.add(
+                SolverEdits(
+                    id=str(uuid.uuid4()),
+                    experiment_id=None,
+                    base_solver_id=base_id,
+                    new_solver_id=new_solver_id,
+                    edit_json={"ops": ops_data, "run_id": run_id},
+                    generated_by="llm_eod_agent",
+                    reward=None,
+                )
+            )
+
+        await db_write(save_edit)
 
     def _day_bounds_utc(self, date: datetime.date) -> tuple[datetime, datetime]:
         start_ts = datetime.combine(date, datetime.min.time()).replace(tzinfo=UTC)
@@ -812,7 +1347,10 @@ class EODReviewAgent:
             logger.debug(f"TradingRAG context fetch failed (non-fatal): {e}")
             return ""
 
-    async def _generate_analysis(self, data: dict[str, Any], rag_context: str) -> dict[str, Any]:
+    async def _generate_analysis(
+        self, data: dict[str, Any], rag_context: str, valid_solver_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        valid_solver_ids = valid_solver_ids or []
         system_prompt = """You are the Orion EOD Review Agent - analyzing today's trading performance.
 ## Your Capabilities
 - You have access to codebase tools: `read_file`, `write_file`, and `run_command`.
@@ -851,7 +1389,7 @@ Analyze today's performance and identify:
       "rationale": "Brief reason with data reference",
       "evidence_pointers": {"ml_insight": "AUC=0.85 for iv_rank feature", "drift_psi": 0.02},
       "test_plan": ["Backtest with 30-day window", "Verify win_rate improvement"],
-      "target_solver_id": "paper_v1",
+      "target_solver_id": "<MUST be one of the valid solver ids listed below>",
       "ops": [
         {"op": "modify_param", "param_name": "exit_logic.take_profit_atr_multiple", "new_value": 2.5, "reasoning": "..."},
         {"op": "add_rule", "new_value": "rule_iv_rank_v1", "reasoning": "ML shows IV rank is predictive"},
@@ -881,7 +1419,7 @@ Analyze today's performance and identify:
 - When a pattern works well for specific bucket (e.g., 0DTE) but current solver doesn't exploit it
 - When win rate could improve with tighter/looser exit logic based on today's data
 - Edits start in 'research' stage - they gather data but don't trade live until promoted
-- Use target_solver_id='paper_v1' to mutate the active paper solver
+- target_solver_id MUST be one of the valid solver ids listed below — do NOT invent ids
 
 ## Rules
 - Ground ALL proposals in data from the input - no speculation
@@ -890,6 +1428,19 @@ Analyze today's performance and identify:
 - If nothing actionable, say so clearly
 - REQUIRED fields for all proposals: type, rationale, evidence_pointers (dict), test_plan (list)
 - For solver_edit: also need target_solver_id, ops (list)"""
+
+        if valid_solver_ids:
+            valid_ids_block = ", ".join(valid_solver_ids)
+            system_prompt += (
+                "\n\n## Valid solver ids (for target_solver_id)\n"
+                f"target_solver_id MUST be EXACTLY one of: {valid_ids_block}.\n"
+                "Any other value (including 'paper_v1') is invalid and the proposal will be discarded."
+            )
+        else:
+            system_prompt += (
+                "\n\n## Valid solver ids (for target_solver_id)\n"
+                "No solvers are currently available — do NOT emit any solver_edit proposals."
+            )
 
         user_prompt = f"## Today's Snapshot\n```json\n{json.dumps(data, indent=2, default=str)}\n```\n\n{rag_context}"
 

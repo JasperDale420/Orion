@@ -6,10 +6,9 @@ Runs as a background service to populate feature tables for ML.
 
 import asyncio
 import os
-import signal
 from datetime import UTC, datetime, timedelta
-from functools import partial
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -27,12 +26,20 @@ from orion.enrichment.heber_context import (
     get_latest_market_tide,
     get_latest_vix_data,
     get_spy_cumulative_return,
+    persist_discovery_status,
     persist_regime_snapshot,
 )
+from orion.shared.async_main import run_service
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
 logger = setup_struct_logger("orion.feature_enrichment")
+
+# Liveness cadence budget. The loop ticks every ~30s but its heaviest sub-poll
+# (regime/connector intervals) is up to 15 min; 900s gives the dead-man watchdog
+# headroom over the longest legitimate gap between successful cycles.
+LIVENESS_CADENCE_BUDGET_SECONDS = 900
 
 # Poll intervals
 MARKET_TIDE_INTERVAL = 300  # Every 5 minutes (reduced from 60s to save API calls)
@@ -48,6 +55,29 @@ DEFAULT_ZERO_WRITE_WARN_STREAK = 3
 DEFAULT_LOOP_SLEEP_SECONDS = 30.0
 DEFAULT_LOOP_ERROR_WARN_STREAK = 3
 DEFAULT_NON_HEBER_WARN_STREAK = 3
+
+# Market-hours gate for UW connector polls. UW's spot-exposures /
+# market-tide / max-pain endpoints return empty payloads outside
+# regular+extended trading hours, and the VIX-proxy bars only stream
+# when VIXY is trading. Polling outside this window burns API budget
+# and triggers `feature_enrichment_zero_write_streak` warnings on
+# expected-empty data. Matches the gate already used in
+# main_data_quality.py.
+ET_TZ = ZoneInfo("America/New_York")
+MARKET_HOURS_GATE_FEEDS = ("market_tide", "greek_exposure", "max_pain", "iv_rank", "vix_proxy")
+MARKET_HOURS_START_HOUR = 7  # 7 AM ET — pre-market open
+MARKET_HOURS_END_HOUR = 20  # 8 PM ET — post-market close
+
+
+def _is_extended_market_hours(now_utc: datetime | None = None) -> bool:
+    """Return True if `now_utc` falls in extended trading hours (Mon-Fri,
+    07:00-20:00 ET). Outside this window UW endpoints return empty.
+    """
+    now = (now_utc or datetime.now(UTC)).astimezone(ET_TZ)
+    if now.weekday() >= 5:  # Saturday/Sunday
+        return False
+    return MARKET_HOURS_START_HOUR <= now.hour < MARKET_HOURS_END_HOUR
+
 
 _T = int | float
 
@@ -166,15 +196,20 @@ def _note_ticker_source_streak(
     warn_streak: int,
     tickers_count: int,
 ) -> int:
-    if source == "heber":
+    # Per docs/rca/feature_enrichment_crash_loop.md (2026-04-22), bronze_db
+    # is the canonical primary ticker-discovery source; "heber" is now a
+    # fallback. Both are healthy outcomes — only "static_fallback" or an
+    # unknown source indicates real degradation, so reset the streak for
+    # the recognized data-backed sources.
+    if source in ("bronze_db", "heber"):
         return 0
 
     streak = non_heber_streak + 1
     if streak >= warn_streak:
         logger.warning(
-            "Ticker discovery has consecutive non-Heber source cycles",
+            "Ticker discovery fell back to static list",
             extra={
-                "event": "feature_enrichment_non_heber_streak",
+                "event": "feature_enrichment_static_fallback_streak",
                 "source": source,
                 "streak": streak,
                 "warn_streak": warn_streak,
@@ -297,10 +332,42 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     warn_streak=non_heber_warn_streak,
                     tickers_count=len(tickers),
                 )
+                # Surface degradation to ExecutionEngine via SystemStatus so a
+                # stale-discovery state hard-blocks new trades; persisted every
+                # cycle (including healthy ones) so last_updated_utc doubles
+                # as a liveness signal.
+                await persist_discovery_status(
+                    source=ticker_source,
+                    streak=non_heber_streak,
+                    warn_streak=non_heber_warn_streak,
+                )
                 last_ticker_refresh = now
 
             # --- UW Connector fetches (parallelized via asyncio.gather) ---
-            if gateway_fetch_enabled:
+            # Skip outside extended trading hours (Mon-Fri 07:00-20:00 ET).
+            # UW endpoints return empty payloads at all other times, which
+            # otherwise trigger feature_enrichment_zero_write_streak warnings
+            # and burn API budget. Reset gated-feed streaks on entry to off-
+            # hours so the streak doesn't carry over to the next session.
+            in_market_hours = _is_extended_market_hours(now)
+            if not in_market_hours:
+                for feed in MARKET_HOURS_GATE_FEEDS:
+                    zero_write_streaks[feed] = 0
+                if not getattr(run_feature_loop, "_off_hours_logged", False):
+                    logger.info(
+                        "Skipping UW connector polls outside extended market hours",
+                        extra={
+                            "event": "feature_enrichment_off_hours_skip",
+                            "feeds": list(MARKET_HOURS_GATE_FEEDS),
+                            "et_hour": datetime.now(ET_TZ).hour,
+                            "weekday": datetime.now(ET_TZ).weekday(),
+                        },
+                    )
+                    run_feature_loop._off_hours_logged = True  # type: ignore[attr-defined]
+            else:
+                run_feature_loop._off_hours_logged = False  # type: ignore[attr-defined]
+
+            if gateway_fetch_enabled and in_market_hours:
                 uw_tasks: list[Any] = []  # list of coroutines for asyncio.gather
                 uw_task_meta: list[dict[str, Any]] = []  # name, feed_name, has_tickers
 
@@ -362,8 +429,9 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     if "iv_rank" in succeeded_feeds:
                         last_iv = now
 
-            # VIX Data
-            if (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
+            # VIX Data — gated on extended market hours (VIXY only streams
+            # bars when the underlying ETF is trading).
+            if in_market_hours and (now - last_vix).total_seconds() >= VIX_DATA_INTERVAL:
                 try:
                     count = await vix_connector.fetch_and_store()
                     logger.info(f"VIX Proxy: stored {count} records")
@@ -399,6 +467,9 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     logger.error(f"Regime snapshot error: {e}", exc_info=True)
             loop_error_streak = 0
 
+            # Liveness: one publish per successful cycle (swallows its own errors).
+            await publish_liveness("feature_enrichment", cadence_budget_seconds=LIVENESS_CADENCE_BUDGET_SECONDS)
+
         except Exception as e:
             logger.error(f"Feature enrichment error: {e}", exc_info=True)
             loop_error_streak = _note_loop_error(
@@ -417,31 +488,8 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     logger.info("Feature Enrichment Service stopped")
 
 
-async def main() -> None:
-    """Main entry point."""
-    shutdown_event = asyncio.Event()
-    loop = asyncio.get_event_loop()
-
-    def handle_signal(sig: int) -> None:
-        logger.info(f"Received signal {sig}. Shutting down...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, partial(handle_signal, sig))
-
-    # Log any unhandled exit so silent crash-loops (e.g. OOM killing child
-    # processes that raise past the inner try/except) leave a traceable line
-    # before the process dies. Re-raise so the container still exits non-zero.
-    try:
-        await run_feature_loop(shutdown_event)
-    except BaseException as exc:
-        logger.error(
-            "Feature enrichment service terminated unexpectedly",
-            exc_info=True,
-            extra={"event": "feature_enrichment_unexpected_exit", "error": repr(exc)},
-        )
-        raise
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    # run_feature_loop() calls init_db() itself, so skip the helper's init.
+    # The helper installs SIGINT/SIGTERM handlers, logs any unhandled crash as
+    # CRITICAL, and exits non-zero so OOM/restart loops stay visible.
+    run_service("orion.feature_enrichment", run_feature_loop, init_database=False)

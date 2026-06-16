@@ -24,9 +24,9 @@ class DeadLetterQueue(Base):
     run_id: Mapped[str | None] = mapped_column(String, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=True)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str] = mapped_column(String, nullable=False)
-    stack_trace: Mapped[str] = mapped_column(String, nullable=True)
+    stack_trace: Mapped[str | None] = mapped_column(String, nullable=True)
     timestamp_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String, default="FAILED")  # FAILED, REPLAYED, IGNORED

@@ -83,7 +83,7 @@ async def test_risk_manager_pending_orders(risk_manager):
 
     assert "order_123" in risk_manager.pending_orders
 
-    risk_manager.remove_pending_order("order_123")
+    await risk_manager.remove_pending_order("order_123")
 
     assert "order_123" not in risk_manager.pending_orders
 

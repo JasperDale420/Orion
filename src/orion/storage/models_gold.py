@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import enum
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import JSON, Column, DateTime, Float, Index, String
+from sqlalchemy import JSON, DateTime, Float, Index, String
+from sqlalchemy.orm import Mapped, mapped_column
 
 from orion.storage.db import Base
 
@@ -16,35 +20,37 @@ class CandidateTrade(Base):
     __tablename__ = "candidate_trades"
 
     # Deterministic ID: sha256(ticker + timestamp + rule_id)
-    candidate_id = Column(String, primary_key=True)
+    candidate_id: Mapped[str] = mapped_column(String, primary_key=True)
 
-    ticker = Column(String, nullable=False, index=True)
-    timestamp_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    timestamp_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
-    rule_id = Column(String, nullable=False, index=True)
-    direction = Column(String, nullable=False)  # LONG/SHORT
+    rule_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String, nullable=False)  # LONG/SHORT
 
     # Confidence score (0.0 - 1.0) output by rule or ML meta-layer
-    confidence = Column(Float, nullable=False, default=1.0)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 
     # Source of the signal (e.g. "UW", "ALPACA")
-    source = Column(String, nullable=True)  # Added for SolverRouter context
+    source: Mapped[str | None] = mapped_column(String, nullable=True)  # Added for SolverRouter context
 
     # Options-specific fields (nullable for backward compatibility)
-    option_symbol = Column(String, nullable=True, index=True)  # OCC format: AAPL240419C00190000
-    strike_price = Column(Float, nullable=True)
-    expiration_date = Column(DateTime(timezone=True), nullable=True)
-    option_type = Column(String, nullable=True)  # CALL or PUT
-    underlying_price = Column(Float, nullable=True)  # Price at signal time
-    premium = Column(Float, nullable=True)  # Contract premium from UW flow
+    option_symbol: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )  # OCC format: AAPL240419C00190000
+    strike_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expiration_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    option_type: Mapped[str | None] = mapped_column(String, nullable=True)  # CALL or PUT
+    underlying_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # Price at signal time
+    premium: Mapped[float | None] = mapped_column(Float, nullable=True)  # Contract premium from UW flow
 
     # Execution Params (Limit Price, etc) - Added for PolicyEngine
-    execution_params = Column(JSON, nullable=True)
+    execution_params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # Pointers to evidence (signal_ids, event_ids)
-    evidence = Column(JSON, nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("ix_candidate_ticker_time", "ticker", "timestamp_utc"),
@@ -58,26 +64,26 @@ class ExitDecision(Base):
 
     __tablename__ = "exit_decisions"
 
-    exit_id = Column(String, primary_key=True)
-    ticker = Column(String, nullable=False, index=True)
-    candidate_id = Column(String, nullable=True, index=True)  # Links to entry
+    exit_id: Mapped[str] = mapped_column(String, primary_key=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    candidate_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # Links to entry
 
     # Exit rule info
-    rule_id = Column(String, nullable=False)  # Which exit rule triggered
-    exit_reason = Column(String, nullable=False)
-    urgency = Column(String, nullable=True)  # IMMEDIATE, SOON, CONSIDER
-    confidence = Column(Float, nullable=True)
-    details = Column(JSON, nullable=True)
+    rule_id: Mapped[str] = mapped_column(String, nullable=False)  # Which exit rule triggered
+    exit_reason: Mapped[str] = mapped_column(String, nullable=False)
+    urgency: Mapped[str | None] = mapped_column(String, nullable=True)  # IMMEDIATE, SOON, CONSIDER
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # Execution
-    broker_order_id = Column(String, nullable=True)
-    exit_ts_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
-    exit_price = Column(Float, nullable=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    exit_ts_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # P&L tracking
-    entry_price = Column(Float, nullable=True)
-    pnl_usd = Column(Float, nullable=True)
-    pnl_pct = Column(Float, nullable=True)
+    entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pnl_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     __table_args__ = (Index("ix_exit_decision_exit_ts", "exit_ts_utc"),)
 
@@ -85,26 +91,28 @@ class ExitDecision(Base):
 class StrategyDecision(Base):
     __tablename__ = "strategy_decisions"
 
-    decision_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    candidate_id = Column(String, index=True, nullable=False)
-    timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    decision_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    candidate_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    timestamp_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     # Context
-    ticker = Column(String, nullable=False)
-    strategy_version_id = Column(String, nullable=False)
-    model_version = Column(String, nullable=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False)
+    strategy_version_id: Mapped[str] = mapped_column(String, nullable=False)
+    model_version: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Decision
-    decision = Column(String, nullable=False)  # EXECUTE, SKIP
-    p_take = Column(Float, nullable=True)
-    execution_params = Column(JSON, nullable=True)  # Limit price logic, TIF, etc.
+    decision: Mapped[str] = mapped_column(String, nullable=False)  # EXECUTE, SKIP
+    p_take: Mapped[float | None] = mapped_column(Float, nullable=True)
+    execution_params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)  # Limit price logic, TIF, etc.
 
-    reason = Column(String, nullable=True)  # Explanation
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)  # Explanation
 
-    executed_successfully = Column(String, nullable=True)  # "TRUE", "FALSE", "SKIPPED", "PENDING"
+    executed_successfully: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )  # "TRUE", "FALSE", "SKIPPED", "PENDING"
 
     # PRD 11.2 Trace
-    decision_trace_json = Column(JSON, nullable=True)
+    decision_trace_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (Index("ix_strategy_decision_ticker_ts", "ticker", "timestamp_utc"),)
 
@@ -117,18 +125,18 @@ class GoldTickerRollup(Base):
     __tablename__ = "gold_ticker_rollup"
 
     # Composite PK: ticker + period + timestamp
-    ticker = Column(String, primary_key=True)
-    period = Column(String, primary_key=True)  # 5m, 1h, 1d
-    timestamp_utc = Column(DateTime(timezone=True), primary_key=True)
+    ticker: Mapped[str] = mapped_column(String, primary_key=True)
+    period: Mapped[str] = mapped_column(String, primary_key=True)  # 5m, 1h, 1d
+    timestamp_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
 
-    open = Column(Float, nullable=False)
-    high = Column(Float, nullable=False)
-    low = Column(Float, nullable=False)
-    close = Column(Float, nullable=False)
-    volume = Column(Float, nullable=False)
-    vwap = Column(Float, nullable=False)
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    volume: Mapped[float] = mapped_column(Float, nullable=False)
+    vwap: Mapped[float] = mapped_column(Float, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("ix_gold_rollup_ticker_period_ts", "ticker", "period", "timestamp_utc"),)
 
@@ -140,26 +148,26 @@ class CandidateLabel(Base):
 
     __tablename__ = "candidate_labels"
 
-    candidate_id = Column(String, primary_key=True)  # FK to candidate_trades
-    timestamp_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    candidate_id: Mapped[str] = mapped_column(String, primary_key=True)  # FK to candidate_trades
+    timestamp_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
-    label = Column(Float, nullable=False)  # 1 (PT), -1 (SL), 0 (Time)
-    ret = Column(Float, nullable=False)  # Return at barrier
-    barrier_hit_ts = Column(DateTime(timezone=True), nullable=False)
+    label: Mapped[float] = mapped_column(Float, nullable=False)  # 1 (PT), -1 (SL), 0 (Time)
+    ret: Mapped[float] = mapped_column(Float, nullable=False)  # Return at barrier
+    barrier_hit_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # PRD 8.2 required diagnostics
-    time_to_hit_seconds = Column(Float, nullable=True)
-    mfe = Column(Float, nullable=True)
-    mae = Column(Float, nullable=True)
+    time_to_hit_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mfe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mae: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Temporal excursion fields
-    ts_mfe = Column(DateTime(timezone=True), nullable=True)
-    ts_mae = Column(DateTime(timezone=True), nullable=True)
-    time_to_mfe_seconds = Column(Float, nullable=True)
-    time_to_mae_seconds = Column(Float, nullable=True)
-    mfe_mae_ratio = Column(Float, nullable=True)
-    excursion_velocity = Column(Float, nullable=True)
-    capture_efficiency = Column(Float, nullable=True)
+    ts_mfe: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ts_mae: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    time_to_mfe_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    time_to_mae_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mfe_mae_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    excursion_velocity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    capture_efficiency: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class LabelEvent(Base):
@@ -170,34 +178,34 @@ class LabelEvent(Base):
 
     __tablename__ = "labels_event"
 
-    candidate_id = Column(String, primary_key=True)
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    candidate_id: Mapped[str] = mapped_column(String, primary_key=True)
+    created_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
-    ticker = Column(String, nullable=False, index=True)
-    event_ts_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    event_ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
     # Forward returns (configurable horizons). Keys like "1m", "5m", "60m", ...
-    forward_returns = Column(JSON, nullable=False, default=dict)
+    forward_returns: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     # Triple-barrier outputs (mirror CandidateLabel)
-    label = Column(Float, nullable=True)
-    ret = Column(Float, nullable=True)
-    barrier_hit_ts = Column(DateTime(timezone=True), nullable=True)
-    time_to_hit_seconds = Column(Float, nullable=True)
-    mfe = Column(Float, nullable=True)
-    mae = Column(Float, nullable=True)
+    label: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ret: Mapped[float | None] = mapped_column(Float, nullable=True)
+    barrier_hit_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    time_to_hit_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mfe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mae: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Temporal excursion fields
-    ts_mfe = Column(DateTime(timezone=True), nullable=True)
-    ts_mae = Column(DateTime(timezone=True), nullable=True)
-    time_to_mfe_seconds = Column(Float, nullable=True)
-    time_to_mae_seconds = Column(Float, nullable=True)
-    mfe_mae_ratio = Column(Float, nullable=True)
-    excursion_velocity = Column(Float, nullable=True)
-    capture_efficiency = Column(Float, nullable=True)
+    ts_mfe: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ts_mae: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    time_to_mfe_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    time_to_mae_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mfe_mae_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    excursion_velocity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    capture_efficiency: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Auditability: labeling parameters + provenance
-    label_config = Column(JSON, nullable=False, default=dict)
+    label_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (Index("ix_labels_event_ticker_ts", "ticker", "event_ts_utc"),)
 
@@ -210,14 +218,14 @@ class LabelWindow(Base):
 
     __tablename__ = "labels_window"
 
-    ticker = Column(String, primary_key=True)
-    period = Column(String, primary_key=True)  # e.g. "5m", "1h", "1d"
-    window_end_ts_utc = Column(DateTime(timezone=True), primary_key=True)
+    ticker: Mapped[str] = mapped_column(String, primary_key=True)
+    period: Mapped[str] = mapped_column(String, primary_key=True)  # e.g. "5m", "1h", "1d"
+    window_end_ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
-    forward_returns = Column(JSON, nullable=False, default=dict)
-    label_config = Column(JSON, nullable=False, default=dict)
+    forward_returns: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    label_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (Index("ix_labels_window_ticker_period_ts", "ticker", "period", "window_end_ts_utc"),)
 
@@ -231,13 +239,13 @@ class GoldFeatureEvent(Base):
     __tablename__ = "gold_feature_events"
 
     # Composite PK
-    ticker = Column(String, primary_key=True)
-    event_ts_utc = Column(DateTime(timezone=True), primary_key=True)
-    feature_set_id = Column(String, primary_key=True)  # e.g. "v1_legacy"
+    ticker: Mapped[str] = mapped_column(String, primary_key=True)
+    event_ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    feature_set_id: Mapped[str] = mapped_column(String, primary_key=True)  # e.g. "v1_legacy"
 
     # The actual feature vector
-    features = Column(JSON, nullable=False)
+    features: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("ix_gold_feat_event_ticker_ts", "ticker", "event_ts_utc"),)

@@ -10,11 +10,13 @@ Runs hourly to check for:
 6. ML Features population status
 
 Usage:
-    docker-compose run --rm price_target_labeler python -m orion.jobs.data_quality_checker
+    python -m orion.jobs.data_quality_checker
 """
 
 import asyncio
+import gc
 import logging
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
@@ -35,6 +37,51 @@ CRITICAL_TICKERS = ["SPY", "QQQ", "IWM", "NVDA", "AAPL", "TSLA"]
 # Market hours (Eastern Time, simplified as UTC-5)
 MARKET_OPEN_HOUR = 14  # 9:30 ET = 14:30 UTC
 MARKET_CLOSE_HOUR = 21  # 4:00 PM ET = 21:00 UTC
+
+# Per-run Heber DataFrame cache. Set by `run_quality_checks` for the
+# duration of one invocation; read by the `_read_heber_*` helpers so
+# duplicate consumers within a single run (e.g. flow summary + flow
+# staleness, ML features + recent labels) share one materialization
+# instead of pulling parquet twice. Default `None` means "no caching" —
+# unit tests that call public per-check functions directly see the
+# original behavior. ContextVar (not module-global) so concurrent
+# `run_quality_checks` tasks each get their own dict.
+#
+# Closes FOLLOWUPS #6: the May 13 cgroup-OOM cascade traced back to
+# data_quality holding ~5 GiB across consecutive redundant Heber reads.
+_run_cache: ContextVar[dict[str, Any] | None] = ContextVar("data_quality_run_cache", default=None)
+
+
+def _cache_get(key: str) -> Any | None:
+    cache = _run_cache.get()
+    if cache is None:
+        return None
+    return cache.get(key)
+
+
+def _cache_set(key: str, value: Any) -> None:
+    cache = _run_cache.get()
+    if cache is not None:
+        cache[key] = value
+
+
+def _cache_evict_prefix(prefix: str) -> None:
+    """Drop all cached entries whose key starts with ``prefix`` and
+    request a GC pass.
+
+    Called between logical phases of `run_quality_checks` (bars → flow
+    → darkpool → ml) so a phase's large DataFrames become eligible for
+    collection before the next phase's read allocates more memory.
+    pyarrow-backed DataFrames don't always release C-extension memory
+    back to the OS immediately on ref-drop, but at least the Python
+    references are gone and the next allocation can reuse the slot.
+    """
+    cache = _run_cache.get()
+    if cache is None:
+        return
+    for k in [k for k in cache if k.startswith(prefix)]:
+        del cache[k]
+    gc.collect()
 
 
 def _is_market_hours(now: datetime | None = None) -> bool:
@@ -246,145 +293,188 @@ async def check_recent_labels_features() -> dict:
 
 
 async def run_quality_checks():
-    """Run all data quality checks and log results."""
+    """Run all data quality checks and log results.
+
+    Sets a per-run Heber DataFrame cache via the `_run_cache`
+    ContextVar so duplicate consumers (flow summary + staleness,
+    darkpool summary + staleness, ML features + recent labels) share
+    one materialization. Caches are evicted between phases
+    (`_cache_evict_prefix`) so a phase's large DataFrames become
+    eligible for collection before the next phase allocates.
+    """
     await init_db()
 
     logger.info("=" * 60)
     logger.info("STARTING DATA QUALITY CHECKS")
     logger.info("=" * 60)
 
-    results = {}
+    results: dict[str, Any] = {}
+    cache: dict[str, Any] = {}
+    token = _run_cache.set(cache)
+    try:
+        # 1. Alpaca Bars Summary — full 24h all-symbols read.
+        bars_summary = await get_bars_summary()
+        results["bars"] = bars_summary
+        logger.info(
+            f"[BARS] 24h: {bars_summary['total_bars_24h']} bars, "
+            f"{bars_summary['validity_pct']}% valid, "
+            f"{bars_summary['unique_tickers']} tickers"
+        )
+        # Free the 24h-all-symbols DataFrame *immediately* so the next
+        # bars consumer's allocation doesn't stack on top. Each bars
+        # read shape is unique (no other consumer in this run uses the
+        # same cache key), so eviction here doesn't break dedup.
+        _cache_evict_prefix("bars_24h_*")
 
-    # 1. Alpaca Bars Summary
-    bars_summary = await get_bars_summary()
-    results["bars"] = bars_summary
-    logger.info(
-        f"[BARS] 24h: {bars_summary['total_bars_24h']} bars, "
-        f"{bars_summary['validity_pct']}% valid, "
-        f"{bars_summary['unique_tickers']} tickers"
-    )
+        # 2. Zero-valued bars — fresh 1h all-symbols read.
+        zero_bars = await check_zero_valued_bars(lookback_hours=1)
+        results["zero_bars"] = zero_bars
+        if zero_bars:
+            logger.warning(f"[BARS] ALERT: {len(zero_bars)} tickers with zero-valued bars!")
+        else:
+            logger.info("[BARS] No zero-valued bars in last hour ✓")
+        _cache_evict_prefix("bars_1h_*")
 
-    # 2. Zero-valued bars
-    zero_bars = await check_zero_valued_bars(lookback_hours=1)
-    results["zero_bars"] = zero_bars
-    if zero_bars:
-        logger.warning(f"[BARS] ALERT: {len(zero_bars)} tickers with zero-valued bars!")
-    else:
-        logger.info("[BARS] No zero-valued bars in last hour ✓")
+        # 3. Bar Staleness — 24h CRITICAL_TICKERS read.
+        stale = await check_data_staleness(stale_minutes=15)
+        results["stale_bars"] = stale
+        if stale:
+            logger.warning(f"[BARS] ALERT: {len(stale)} critical tickers stale!")
+        else:
+            logger.info("[BARS] All critical tickers fresh ✓")
+        critical_key = ",".join(sorted(s.upper() for s in CRITICAL_TICKERS))
+        _cache_evict_prefix(f"bars_24h_{critical_key}")
 
-    # 3. Bar Staleness
-    stale = await check_data_staleness(stale_minutes=15)
-    results["stale_bars"] = stale
-    if stale:
-        logger.warning(f"[BARS] ALERT: {len(stale)} critical tickers stale!")
-    else:
-        logger.info("[BARS] All critical tickers fresh ✓")
+        # 4. SPY Gaps — 24h SPY-only read.
+        gaps = await check_bar_gaps("SPY", gap_minutes=5)
+        results["spy_gaps"] = gaps
+        if gaps:
+            logger.warning(f"[BARS] ALERT: {len(gaps)} gaps in SPY bars")
+        else:
+            logger.info("[BARS] No SPY gaps ✓")
+        _cache_evict_prefix("bars_24h_SPY")
 
-    # 4. SPY Gaps
-    gaps = await check_bar_gaps("SPY", gap_minutes=5)
-    results["spy_gaps"] = gaps
-    if gaps:
-        logger.warning(f"[BARS] ALERT: {len(gaps)} gaps in SPY bars")
-    else:
-        logger.info("[BARS] No SPY gaps ✓")
+        # Belt-and-braces sweep: any straggler bars entry we forgot
+        # about above also gets dropped here before flow allocates.
+        _cache_evict_prefix("bars_")
 
-    # 5. UW Flow Summary
-    flow_summary = await get_flow_summary()
-    results["flow"] = flow_summary
-    flow_backend = str(flow_summary.get("backend") or "unknown")
-    flow_summary_message = (
-        f"[FLOW] 24h: {flow_summary['total_flows_24h']} flows, "
-        f"{flow_summary['validity_pct']}% valid premium, "
-        f"{flow_summary['unique_tickers']} tickers"
-    )
-    if flow_backend == "heber":
-        logger.info(flow_summary_message)
-    else:
-        logger.warning(
-            f"[FLOW] Source unavailable ({flow_backend}); zero counts do not mean the market was quiet",
-            extra={"event_type": "FLOW_SOURCE_UNAVAILABLE", "backend": flow_backend},
+        # 5. UW Flow Summary
+        flow_summary = await get_flow_summary()
+        results["flow"] = flow_summary
+        flow_backend = str(flow_summary.get("backend") or "unknown")
+        flow_summary_message = (
+            f"[FLOW] 24h: {flow_summary['total_flows_24h']} flows, "
+            f"{flow_summary['validity_pct']}% valid premium, "
+            f"{flow_summary['unique_tickers']} tickers"
+        )
+        if flow_backend == "heber":
+            logger.info(flow_summary_message)
+        else:
+            logger.warning(
+                f"[FLOW] Source unavailable ({flow_backend}); zero counts do not mean the market was quiet",
+                extra={"event_type": "FLOW_SOURCE_UNAVAILABLE", "backend": flow_backend},
+            )
+
+        flow_stale = await check_flow_staleness(stale_minutes=30)
+        if flow_stale is None:
+            logger.warning(
+                "[FLOW] Flow freshness unknown because the source could not be read",
+                extra={"event_type": "FLOW_FRESHNESS_UNKNOWN", "backend": flow_backend},
+            )
+        elif flow_stale:
+            logger.warning("[FLOW] ALERT: Flow data is stale (>30 min)")
+        else:
+            logger.info("[FLOW] Flow data fresh ✓")
+
+        # Flow phase complete — drop the cached flow DataFrame.
+        _cache_evict_prefix("flow_")
+
+        # 6. Darkpool Summary
+        dp_summary = await get_darkpool_summary()
+        results["darkpool"] = dp_summary
+        logger.info(
+            f"[DARKPOOL] 24h: {dp_summary['total_trades_24h']} trades, "
+            f"{dp_summary['validity_pct']}% valid, "
+            f"{dp_summary['unique_tickers']} tickers"
         )
 
-    flow_stale = await check_flow_staleness(stale_minutes=30)
-    if flow_stale is None:
-        logger.warning(
-            "[FLOW] Flow freshness unknown because the source could not be read",
-            extra={"event_type": "FLOW_FRESHNESS_UNKNOWN", "backend": flow_backend},
+        dp_stale = await check_darkpool_staleness(stale_minutes=60)
+        if dp_stale:
+            logger.warning("[DARKPOOL] ALERT: Darkpool data is stale (>60 min)")
+        else:
+            logger.info("[DARKPOOL] Darkpool data fresh ✓")
+
+        # Darkpool phase complete — drop the cached darkpool DataFrame.
+        _cache_evict_prefix("darkpool_")
+
+        # 7. ML Features Summary - Comprehensive coverage check
+        ml_summary = await get_ml_features_summary()
+        results["ml_features"] = ml_summary
+        logger.info(f"[ML] Total labels: {ml_summary['total_labels']}, ML-ready: {ml_summary['ml_ready_count']}")
+
+        # Log all features by category
+        logger.info(
+            f"[ML] Greeks: delta={ml_summary['delta_pct']}%, gamma={ml_summary['gamma_pct']}%, "
+            f"iv={ml_summary['iv_pct']}%, iv_rank={ml_summary['iv_rank_pct']}%"
         )
-    elif flow_stale:
-        logger.warning("[FLOW] ALERT: Flow data is stale (>30 min)")
-    else:
-        logger.info("[FLOW] Flow data fresh ✓")
+        logger.info(
+            f"[ML] Context: sector={ml_summary['sector_pct']}%, vix={ml_summary['vix_pct']}%, "
+            f"trend={ml_summary['trend_regime_pct']}%, gex={ml_summary['gex_pct']}%"
+        )
+        logger.info(
+            f"[ML] Volume: vol={ml_summary['volume_pct']}%, oi={ml_summary['oi_pct']}%, "
+            f"rvol={ml_summary['rvol_pct']}%, darkpool={ml_summary['darkpool_pct']}%"
+        )
+        logger.info(
+            f"[ML] Checkpoints: 1h={ml_summary['return_1h_pct']}%, 2h={ml_summary['return_2h_pct']}%, "
+            f"4h={ml_summary['return_4h_pct']}%, eod={ml_summary['return_eod_pct']}%"
+        )
 
-    # 6. Darkpool Summary
-    dp_summary = await get_darkpool_summary()
-    results["darkpool"] = dp_summary
-    logger.info(
-        f"[DARKPOOL] 24h: {dp_summary['total_trades_24h']} trades, "
-        f"{dp_summary['validity_pct']}% valid, "
-        f"{dp_summary['unique_tickers']} tickers"
-    )
+        # Alert on ANY feature below threshold (comprehensive check)
+        threshold = 90.0
+        critical_threshold = 95.0
+        alerts = []
+        for key, val in ml_summary.items():
+            if key.endswith("_pct") and isinstance(val, (int, float)):
+                if val < threshold:
+                    alerts.append(f"{key.replace('_pct', '')}={val}%")
 
-    dp_stale = await check_darkpool_staleness(stale_minutes=60)
-    if dp_stale:
-        logger.warning("[DARKPOOL] ALERT: Darkpool data is stale (>60 min)")
-    else:
-        logger.info("[DARKPOOL] Darkpool data fresh ✓")
+        if alerts:
+            logger.warning(f"[ML] ALERT: Features below {threshold}%: {', '.join(alerts)}")
+        else:
+            logger.info(f"[ML] All features above {threshold}% ✓")
 
-    # 7. ML Features Summary - Comprehensive coverage check
-    ml_summary = await get_ml_features_summary()
-    results["ml_features"] = ml_summary
-    logger.info(f"[ML] Total labels: {ml_summary['total_labels']}, ML-ready: {ml_summary['ml_ready_count']}")
+        # 8. Recent Labels Features (reuses the cached gold DataFrames
+        # from step 7 — single read of both `labels_alert_barriers`
+        # and `meta_label_features` services both ML phases).
+        recent = await check_recent_labels_features()
+        results["recent_labels"] = recent
+        if recent["recent_labels"] > 0:
+            logger.info(f"[ML] Recent 24h: {recent['recent_labels']} labels, ML-ready: {recent['ml_ready']}")
 
-    # Log all features by category
-    logger.info(
-        f"[ML] Greeks: delta={ml_summary['delta_pct']}%, gamma={ml_summary['gamma_pct']}%, "
-        f"iv={ml_summary['iv_pct']}%, iv_rank={ml_summary['iv_rank_pct']}%"
-    )
-    logger.info(
-        f"[ML] Context: sector={ml_summary['sector_pct']}%, vix={ml_summary['vix_pct']}%, "
-        f"trend={ml_summary['trend_regime_pct']}%, gex={ml_summary['gex_pct']}%"
-    )
-    logger.info(
-        f"[ML] Volume: vol={ml_summary['volume_pct']}%, oi={ml_summary['oi_pct']}%, "
-        f"rvol={ml_summary['rvol_pct']}%, darkpool={ml_summary['darkpool_pct']}%"
-    )
-    logger.info(
-        f"[ML] Checkpoints: 1h={ml_summary['return_1h_pct']}%, 2h={ml_summary['return_2h_pct']}%, "
-        f"4h={ml_summary['return_4h_pct']}%, eod={ml_summary['return_eod_pct']}%"
-    )
+            # Alert on recent label gaps
+            for feat in ["delta", "gamma", "sector", "vix", "iv_rank"]:
+                pct = recent.get(f"{feat}_pct", 100)
+                if pct < critical_threshold:
+                    logger.warning(f"[ML] ALERT: Recent {feat} coverage at {pct}% (below {critical_threshold}%)")
 
-    # Alert on ANY feature below threshold (comprehensive check)
-    threshold = 90.0
-    critical_threshold = 95.0
-    alerts = []
-    for key, val in ml_summary.items():
-        if key.endswith("_pct") and isinstance(val, (int, float)):
-            if val < threshold:
-                alerts.append(f"{key.replace('_pct', '')}={val}%")
+        # ML phase complete — drop cached gold DataFrames before return
+        # so a long-lived caller of `run_quality_checks` doesn't hold
+        # the parquet payloads in the ContextVar.
+        _cache_evict_prefix("gold:")
 
-    if alerts:
-        logger.warning(f"[ML] ALERT: Features below {threshold}%: {', '.join(alerts)}")
-    else:
-        logger.info(f"[ML] All features above {threshold}% ✓")
+        logger.info("=" * 60)
+        logger.info("DATA QUALITY CHECKS COMPLETE")
+        logger.info("=" * 60)
 
-    # 8. Recent Labels Features
-    recent = await check_recent_labels_features()
-    results["recent_labels"] = recent
-    if recent["recent_labels"] > 0:
-        logger.info(f"[ML] Recent 24h: {recent['recent_labels']} labels, ML-ready: {recent['ml_ready']}")
-
-        # Alert on recent label gaps
-        for feat in ["delta", "gamma", "sector", "vix", "iv_rank"]:
-            pct = recent.get(f"{feat}_pct", 100)
-            if pct < critical_threshold:
-                logger.warning(f"[ML] ALERT: Recent {feat} coverage at {pct}% (below {critical_threshold}%)")
-
-    logger.info("=" * 60)
-    logger.info("DATA QUALITY CHECKS COMPLETE")
-    logger.info("=" * 60)
-
-    return results
+        return results
+    finally:
+        # Drop any straggler entries and reset the ContextVar so the
+        # cache dict becomes eligible for collection. `reset()` also
+        # restores the prior token (None) so nested or sibling
+        # invocations don't see this cache.
+        cache.clear()
+        _run_cache.reset(token)
 
 
 def _prefer_heber_source() -> bool:
@@ -480,6 +570,10 @@ def _coerce_dataframe_payload(payload: Any) -> pd.DataFrame:
 
 
 async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame | None:
+    cache_key = f"gold:{dataset}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     now = datetime.now(UTC)
     reader = get_heber_reader()
     try:
@@ -494,7 +588,9 @@ async def _read_heber_gold_dataset(dataset: str) -> pd.DataFrame | None:
             extra={"event_type": "HEBER_GOLD_READ_FAILED", "dataset": dataset, "error": str(exc)},
         )
         return None
-    return _coerce_dataframe_payload(payload)
+    df = _coerce_dataframe_payload(payload)
+    _cache_set(cache_key, df)
+    return df
 
 
 def _resolve_join_key_column(df: pd.DataFrame) -> str | None:
@@ -653,11 +749,15 @@ async def _get_recent_labels_features_from_heber() -> dict[str, Any] | None:
 
 
 async def _read_heber_flow_24h() -> pd.DataFrame | None:
+    cache_key = "flow_24h"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     now = datetime.now(UTC)
     start = now - pd.Timedelta(hours=24)
     reader = get_heber_reader()
     try:
-        return await asyncio.to_thread(reader.read_flow, start_time=start, asof_time=now)
+        df = await asyncio.to_thread(reader.read_flow, start_time=start, asof_time=now)
     except Exception as exc:
         logger.warning(
             "flow_heber_read_failed",
@@ -665,20 +765,28 @@ async def _read_heber_flow_24h() -> pd.DataFrame | None:
             exc_info=True,
         )
         return None
+    _cache_set(cache_key, df)
+    return df
 
 
 async def _read_heber_darkpool_24h() -> pd.DataFrame | None:
+    cache_key = "darkpool_24h"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     now = datetime.now(UTC)
     start = now - pd.Timedelta(hours=24)
     reader = get_heber_reader()
     try:
-        return await asyncio.to_thread(reader.read_darkpool, start_time=start, asof_time=now)
+        df = await asyncio.to_thread(reader.read_darkpool, start_time=start, asof_time=now)
     except Exception as exc:
         logger.warning(
             "darkpool_heber_read_failed",
             extra={"event_type": "DARKPOOL_HEBER_READ_FAILED", "error": str(exc)},
         )
         return None
+    _cache_set(cache_key, df)
+    return df
 
 
 async def _get_flow_summary_from_heber() -> dict | None:
@@ -775,11 +883,25 @@ async def _check_darkpool_staleness_from_heber(stale_minutes: int) -> bool | Non
 
 
 async def _read_heber_bars_24h(symbols: list[str] | None = None, lookback_hours: int = 24) -> pd.DataFrame | None:
+    # Cache key encodes both arguments so the 4 distinct bar-read shapes
+    # in `run_quality_checks` (full-24h-all-symbols, 1h-all-symbols,
+    # 24h-CRITICAL_TICKERS, 24h-SPY) don't collide. Tuple→str so the
+    # `_cache_evict_prefix("bars_")` sweep at the end of the bars phase
+    # catches everything in one pass. Symbols are upper-cased (matches
+    # what `HeberReader._to_instrument_keys` does internally) so callers
+    # that pass `["spy"]` and `["SPY"]` share the cache slot.
+    # `symbols=[]` and `symbols=None` both collapse to `"*"` because the
+    # reader treats them identically (`instrument_keys=None`).
+    sym_key = ",".join(sorted(s.upper() for s in symbols)) if symbols else "*"
+    cache_key = f"bars_{lookback_hours}h_{sym_key}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     now = datetime.now(UTC)
     start = now - pd.Timedelta(hours=lookback_hours)
     reader = get_heber_reader()
     try:
-        return await asyncio.to_thread(
+        df = await asyncio.to_thread(
             reader.read_bars,
             symbols=symbols or [],
             asof_time=now,
@@ -788,6 +910,8 @@ async def _read_heber_bars_24h(symbols: list[str] | None = None, lookback_hours:
     except Exception as exc:
         logger.warning("bars_heber_read_failed", extra={"event_type": "BARS_HEBER_READ_FAILED", "error": str(exc)})
         return None
+    _cache_set(cache_key, df)
+    return df
 
 
 def _coerce_bar_time_series(df: pd.DataFrame) -> pd.Series:

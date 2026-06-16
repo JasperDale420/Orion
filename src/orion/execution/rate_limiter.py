@@ -48,7 +48,7 @@ class OrderRateLimiter:
         self.window_seconds = window_seconds
 
         # Track request timestamps
-        self._request_times: deque = deque()
+        self._request_times: deque[float] = deque()
         self._lock = asyncio.Lock()
 
     @property
@@ -77,35 +77,44 @@ class OrderRateLimiter:
 
         Returns:
             True if slot acquired, False if timed out
+
+        The lock is held only while inspecting / mutating the in-window deque
+        and is released before sleeping. Holding the lock across `await
+        asyncio.sleep` would serialize N contending callers — each would wait
+        the full wait_time of the previous holder, turning a 100ms slot wait
+        into N×100ms wall-clock under contention. Releasing the lock between
+        wait windows lets all contenders share the same sleep period and
+        race for the next available slot.
         """
         start_time = time.monotonic()
 
-        async with self._lock:
-            while True:
+        while True:
+            async with self._lock:
                 self._cleanup_old_requests()
 
                 if len(self._request_times) < self.max_per_minute:
-                    # Slot available
+                    # Slot available — claim it atomically under the lock.
                     self._request_times.append(time.monotonic())
                     return True
 
-                # Calculate wait time until oldest request expires
+                # Compute how long until the oldest request expires. This must
+                # also happen under the lock so the deque isn't mutated mid-read.
                 oldest = self._request_times[0]
                 wait_time = (oldest + self.window_seconds) - time.monotonic()
+                requests_in_window = len(self._request_times)
 
-                if wait_time <= 0:
-                    # Window has passed, retry
-                    continue
+            # Lock released — sleep without serializing other contenders.
+            elapsed = time.monotonic() - start_time
 
-                if time.monotonic() - start_time + wait_time > timeout:
-                    # Would exceed timeout
-                    logger.warning(
-                        f"Rate limit timeout: {self.requests_in_window}/{self.max_per_minute} requests in window"
-                    )
-                    return False
+            if wait_time <= 0:
+                # Window expired between lock-release and now; retry immediately.
+                continue
 
-                # Wait for slot
-                await asyncio.sleep(min(wait_time, timeout - (time.monotonic() - start_time)))
+            if elapsed + wait_time > timeout:
+                logger.warning(f"Rate limit timeout: {requests_in_window}/{self.max_per_minute} requests in window")
+                return False
+
+            await asyncio.sleep(min(wait_time, timeout - elapsed))
 
     async def acquire_or_raise(self, timeout: float = 5.0) -> None:
         """Acquire a slot or raise RateLimitExceededError."""

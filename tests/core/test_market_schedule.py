@@ -70,3 +70,61 @@ def test_seconds_until_open(schedule):
     # During market: 0
     ts_open = datetime(2023, 12, 27, 15, 0, 0, tzinfo=UTC)
     assert schedule.seconds_until_open(ts_open) == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# is_market_open_for_options — Phase 2 of exit-pipeline RCA
+# ---------------------------------------------------------------------------
+
+
+def test_options_market_open_during_rth(schedule):
+    """Tuesday 2026-05-19 14:30 UTC = 10:30 AM ET (during RTH)."""
+    if not schedule.calendar:
+        pytest.skip("Calendar not loaded")
+    in_rth = datetime(2026, 5, 19, 14, 30, 0, tzinfo=UTC)
+    assert schedule.is_market_open_for_options(in_rth) is True
+
+
+def test_options_market_closed_pre_market(schedule):
+    """Tuesday 2026-05-19 12:00 UTC = 8:00 AM ET (pre-market).
+
+    Equity *might* count this as open if the calendar config includes
+    pre-market, but Alpaca rejects options orders here with 42210000.
+    """
+    if not schedule.calendar:
+        pytest.skip("Calendar not loaded")
+    pre = datetime(2026, 5, 19, 12, 0, 0, tzinfo=UTC)
+    assert schedule.is_market_open_for_options(pre) is False
+
+
+def test_options_market_closed_after_hours(schedule):
+    """Tuesday 2026-05-19 22:00 UTC = 6:00 PM ET (after-hours)."""
+    if not schedule.calendar:
+        pytest.skip("Calendar not loaded")
+    after = datetime(2026, 5, 19, 22, 0, 0, tzinfo=UTC)
+    assert schedule.is_market_open_for_options(after) is False
+
+
+def test_options_market_closed_weekend(schedule):
+    """Saturday 2026-05-23 14:30 UTC — no trading at all."""
+    if not schedule.calendar:
+        pytest.skip("Calendar not loaded")
+    sat = datetime(2026, 5, 23, 14, 30, 0, tzinfo=UTC)
+    assert schedule.is_market_open_for_options(sat) is False
+
+
+def test_options_market_open_at_open_bell(schedule):
+    """Exactly at 9:30 AM ET = 14:30 UTC, options trading is open."""
+    if not schedule.calendar:
+        pytest.skip("Calendar not loaded")
+    open_bell = datetime(2026, 5, 19, 14, 30, 0, tzinfo=UTC)
+    assert schedule.is_market_open_for_options(open_bell) is True
+
+
+def test_options_market_closed_at_close_bell(schedule):
+    """Exactly at 4:00 PM ET = 20:00 UTC, options trading is closed
+    (the [open, close) half-open interval is what Alpaca enforces)."""
+    if not schedule.calendar:
+        pytest.skip("Calendar not loaded")
+    close_bell = datetime(2026, 5, 19, 20, 0, 0, tzinfo=UTC)
+    assert schedule.is_market_open_for_options(close_bell) is False

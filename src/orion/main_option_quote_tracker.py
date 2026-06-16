@@ -8,7 +8,6 @@ for accurate ML training labels.
 import asyncio
 import os
 import re
-import signal
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -16,6 +15,7 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.alpaca_option_greeks_connector import AlpacaOptionGreeksConnector
+from orion.shared.async_main import run_service
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.legacy_flags import is_legacy_pipeline_enabled, legacy_pipeline_control
 from orion.shared.logger import setup_struct_logger
@@ -44,7 +44,6 @@ BATCH_SIZE = 100
 POLL_INTERVAL_SECONDS = 60
 _PREFER_HEBER_FALSE_VALUES = {"0", "false", "no", "off", "n"}
 
-shutdown_event = asyncio.Event()
 _quote_checkpoint_cache: dict[str, set[str]] = {}
 
 _LEGACY_KEY = "ORION_ENABLE_LEGACY_OPTION_QUOTE_TRACKER"
@@ -56,12 +55,6 @@ def _legacy_label_pipeline_control() -> tuple[bool, str, str]:
 
 def _legacy_label_pipelines_enabled() -> bool:
     return is_legacy_pipeline_enabled(_LEGACY_KEY)
-
-
-def handle_shutdown(signum: int, frame: Any) -> None:
-    """Handle shutdown signals."""
-    logger.info(f"Received signal {signum}, initiating shutdown...")
-    shutdown_event.set()
 
 
 def extract_underlying_ticker(option_symbol: str) -> str:
@@ -245,11 +238,8 @@ async def store_quote(
     checkpoints.add(checkpoint)
 
 
-async def run_quote_tracker() -> None:
+async def run_quote_tracker(shutdown_event: asyncio.Event) -> None:
     """Main quote tracking loop."""
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    signal.signal(signal.SIGINT, handle_shutdown)
-
     logger.warning(
         "Legacy local option quote tracker is active",
         extra={
@@ -372,10 +362,5 @@ async def run_quote_tracker() -> None:
     logger.info("Option Quote Tracker stopped")
 
 
-def main() -> None:
-    """Entry point."""
-    asyncio.run(run_quote_tracker())
-
-
 if __name__ == "__main__":
-    main()
+    run_service("orion.option_quote_tracker", run_quote_tracker, init_database=False)

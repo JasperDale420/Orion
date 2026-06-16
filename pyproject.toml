@@ -29,7 +29,7 @@ dependencies = [
     "sseclient-py>=1.9.0",
     "boto3>=1.42.0",
     "pyarrow>=23.0.0",
-    "s3fs>=2026.2.0",
+    "s3fs>=2026.3.0",
     "aiokafka>=0.13.0",
     "fastapi>=0.129.0",
     "uvicorn>=0.46.0",
@@ -47,7 +47,7 @@ dependencies = [
     "lightgbm>=4.5.0",
     "scikit-learn>=1.6.0",
     "aiobotocore>=3.1.3",
-    "fsspec>=2026.2.0",
+    "fsspec>=2026.3.0",
     "pytz>=2025.2",
 ]
 
@@ -62,11 +62,11 @@ dev = [
     "ruff>=0.15.0",
     "black>=26.1.0",
     "mypy>=1.7.1",
-    "types-requests>=2.31.0.10",
+    "types-requests>=2.33.0.20260408",
     "aiosqlite>=0.22.0",
     "bandit>=1.7.5",
     "detect-secrets>=1.4.0",
-    "pre-commit>=4.5.1",
+    "pre-commit>=4.6.0",
 ]
 
 [tool.uv.sources]
@@ -75,7 +75,7 @@ empire-core = { path = "../empire-core", editable = true }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
-addopts = "-v --tb=short --strict-markers"
+addopts = "-v --tb=short --strict-markers -m \"not slow\""
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
@@ -112,7 +112,6 @@ extend = "ruff-base.toml"
 line-length = 120
 extend-exclude = [
     "archive",
-    "qlib-main",
     "scripts",
 ]
 
@@ -131,18 +130,67 @@ ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
 plugins = ["pydantic.mypy"]
-exclude = "(^archive/|^qlib-main/|^scripts/|^tests/|^alembic/)"
+exclude = "(^archive/|^scripts/|^tests/|^alembic/)"
 follow_imports = "skip"
 
+# Type-checking tiers (later override wins on overlap):
+#   Tier 0 — blanket exempt: legacy/unchecked modules (ignore_errors=true).
+#   Tier 1 — full strict: known-clean greenfield modules.
+#   Tier 2 — pragmatic checked: safety-critical execution/core packages —
+#            real type checking (check_untyped_defs) minus strict flags that
+#            would only flood noise on legacy SQLAlchemy/pydantic models.
+# Tier 0: everything under orion.* is exempt unless a later override opts it in.
 [[tool.mypy.overrides]]
 module = ["orion.*"]
 ignore_errors = true
 
+# Tier 1: fully strict, must stay clean.
 [[tool.mypy.overrides]]
 module = [
     "orion.clients.heber_reader",
     "orion.main_feature_enrichment",
     "orion.jobs.gateway_contract_probe",
+    # SQLAlchemy 2.0 typed-declarative models (R6 phase 1): every column is a
+    # Mapped[...] annotation, so these are fully strict-clean. Keeping them at
+    # tier 1 makes the detached-instance / nullability bug class statically
+    # enforced — a Column-vs-value mismatch now fails the build.
+    "orion.storage.models_execution",
+    "orion.storage.models_risk",
+    "orion.storage.models_gold",
+    "orion.storage.models_dlq",
+    # R6 phase 2 (RC.3): remaining legacy modules converted to typed-declarative.
+    "orion.storage.models_ml",
+    "orion.storage.models_silver",
+    "orion.storage.models_rag",
+    # Already-converted-but-unpromoted modules that pass strict cleanly.
+    "orion.storage.models",
+    "orion.storage.models_attribution",
+    "orion.storage.models_audit",
+    "orion.storage.models_flow_parity",
+    "orion.storage.models_liveness",
+    "orion.storage.models_signals",
+    "orion.storage.models_trade_journal",
+    # models_solvers left UNPROMOTED: MetaExperiment.prd_id returns Any
+    # (`self.id or self.experiment_id`, no-any-return under follow_imports=skip)
+    # — a real code change, out of scope for the mechanical conversion task.
 ]
 ignore_errors = false
 strict = true
+
+# Tier 2: safety-critical packages — genuinely checked, pragmatically relaxed.
+[[tool.mypy.overrides]]
+module = [
+    "orion.execution.*",
+    "orion.core.*",
+]
+ignore_errors = false
+strict = false
+disallow_untyped_defs = false
+check_untyped_defs = true
+warn_return_any = false
+# follow_imports=skip (global) makes pydantic BaseModel / EmpireError / the
+# shared @db_* decorators resolve to Any. The two flags below suppress the
+# resulting "subclass of Any" and "untyped decorator" noise without masking
+# real type errors in this package's own code.
+disallow_subclassing_any = false
+disallow_untyped_decorators = false

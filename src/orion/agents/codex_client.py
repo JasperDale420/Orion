@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 from typing import Any
 
 import aiohttp
@@ -67,6 +68,36 @@ AGENT_TOOLS = [
 ]
 
 
+# Allowlist of program basenames the diagnostic agent may invoke. Conservative
+# set for a read-mostly EOD/meta agent: inspection, search, and read-only DB/HTTP
+# probes. Anything outside this set is rejected back to the LLM as a tool error.
+ALLOWED_COMMANDS = frozenset(
+    {
+        "git",
+        "ls",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "rg",
+        "find",
+        "wc",
+        "python",
+        "python3",
+        "uv",
+        "pytest",
+        "docker",
+        "psql",
+        "curl",
+        "jq",
+    }
+)
+
+# Shell metacharacters that create_subprocess_exec cannot honor (no shell parses
+# them). Reject rather than silently mangle, so the model reissues single commands.
+_SHELL_METACHARACTERS = ("|", ";", "&", ">", "<", "`", "$(")
+
+
 async def execute_tool(name: str, args: dict) -> str:
     """Execute local tools on behalf of the agent."""
     try:
@@ -94,8 +125,46 @@ async def execute_tool(name: str, args: dict) -> str:
 
         if name == "run_command":
             cmd = args.get("command", "")
-            proc = await asyncio.create_subprocess_shell(
-                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+
+            # Reject shell metacharacters: exec cannot honor them, so silently
+            # splitting would mangle the command. Tell the model to reissue.
+            if any(meta in cmd for meta in _SHELL_METACHARACTERS):
+                logger.warning("codex_command_rejected", command=cmd, reason="shell_metacharacter")
+                return (
+                    "Error: command contains shell metacharacters (one of | ; & > < ` $() ), "
+                    "which are not supported. Issue a single command without pipes, "
+                    "redirection, or chaining."
+                )
+
+            try:
+                argv = shlex.split(cmd)
+            except ValueError as exc:
+                logger.warning("codex_command_rejected", command=cmd, reason=f"unparseable: {exc}")
+                return f"Error: could not parse command ({exc}). Issue a single, well-formed command."
+
+            if not argv:
+                logger.warning("codex_command_rejected", command=cmd, reason="empty")
+                return "Error: empty command."
+
+            # Require a bare program name. Reject any path component so an
+            # allowlisted basename can't smuggle a different binary
+            # (e.g. /tmp/python3, ./git) past the check.
+            if "/" in argv[0] or os.sep in argv[0] or (os.altsep and os.altsep in argv[0]):
+                logger.warning("codex_command_rejected", command=cmd, reason="path_in_program", program=argv[0])
+                return (
+                    f"Error: command must be a bare program name, not a path ('{argv[0]}'). "
+                    f"Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}."
+                )
+            program = argv[0]
+            if program not in ALLOWED_COMMANDS:
+                logger.warning("codex_command_rejected", command=cmd, reason="not_allowed", program=program)
+                return (
+                    f"Error: command '{program}' is not allowed. "
+                    f"Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}."
+                )
+
+            proc = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
 
@@ -104,6 +173,8 @@ async def execute_tool(name: str, args: dict) -> str:
                 output += f"STDOUT:\n{stdout.decode('utf-8', errors='replace')}\n"
             if stderr:
                 output += f"STDERR:\n{stderr.decode('utf-8', errors='replace')}\n"
+
+            logger.info("codex_command_executed", command=cmd, output_bytes=len(output))
 
             return output if output else f"Command completed with exit code {proc.returncode} and no output."
 

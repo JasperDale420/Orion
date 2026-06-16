@@ -143,11 +143,9 @@ class EODService:
                 },
             )
 
-            # Process solver mutations if any (pre-filtered by EODReviewAgent)
-            mutation_proposals = result.get("solver_edit_proposals", [])
-
-            if mutation_proposals:
-                await self._process_solver_mutations(mutation_proposals)
+            # Solver mutation proposals are processed INSIDE run_review (RC.1) so
+            # the native ingestion trigger and this standalone service produce
+            # identical recommendations-only output. No separate call needed.
 
         except Exception as e:
             logger.error(
@@ -156,12 +154,6 @@ class EODService:
                 exc_info=True,
             )
             raise
-
-    async def _process_solver_mutations(self, proposals: list) -> None:
-        """Delegate solver mutation processing to dedicated module."""
-        from orion.agents.solver_mutation_processor import process_solver_mutations
-
-        await process_solver_mutations(proposals)
 
     async def _interruptible_sleep(self, seconds: float) -> None:
         """
