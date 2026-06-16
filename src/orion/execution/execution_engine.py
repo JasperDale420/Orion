@@ -1,7 +1,9 @@
 import asyncio
 import math
+import random
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -24,6 +26,7 @@ from orion.execution.persistence import (
     persist_pending_order,
 )
 from orion.execution.rate_limiter import get_order_rate_limiter
+from orion.shared.alerts import send_discord_alert
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
@@ -63,15 +66,70 @@ class _SkipLeg(Exception):
     """Internal sentinel: a bracket leg was intentionally not placed."""
 
 
+@dataclass
+class _CancelState:
+    """Per-order backoff state for the stale-entry-cancel sweep.
+
+    Stops the self-inflicted 429 storm: a rejected cancel used to be re-issued
+    every 5s forever. We now back off (transient) or give up (permanent) per
+    order, keyed by broker_order_id on the engine instance.
+    """
+
+    attempts: int = 0
+    next_eligible: float = 0.0  # time.monotonic() value before which we skip
+    last_code: int | None = None
+    gave_up: bool = False
+    alerted: bool = False
+
+
+# Permanent (non-retryable) Gateway/Alpaca markers for a rejected cancel. If any
+# appears in the error/detail/code body, the order can never be cancelled via
+# this path, so we give up immediately rather than backing off forever.
+_CANCEL_PERMANENT_MARKERS: tuple[str, ...] = (
+    "gw-e2009",
+    "trading capability required",
+)
+
+
+def _cancel_backoff_jitter() -> float:
+    """Random 0–1s jitter added to each backoff window so many stale orders that
+    failed in the same sweep don't all retry on the same later tick (a fresh
+    thundering herd). Isolated as a function so tests can monkeypatch it to 0."""
+    return random.uniform(0.0, 1.0)
+
+
+def _is_permanent_cancel_rejection(result: dict[str, Any]) -> bool:
+    """True ONLY when a rejected cancel can never succeed — a known permanent
+    Gateway/Alpaca marker (GW-E2009 / "trading capability required") in the
+    error / detail / code body.
+
+    Everything else — a 429, a 5xx, a generic 4xx, a timeout, an unknown shape —
+    is treated as TRANSIENT: it still gives up after ``_CANCEL_MAX_ATTEMPTS``
+    backed-off attempts, but is never stranded after a SINGLE attempt. Defaulting
+    unknown rejections to transient is the safe bias: wrongly retrying a truly
+    permanent reject wastes a few bounded calls, whereas wrongly declaring a
+    transient reject permanent strands the order's day-trading buying power for
+    the whole session after one attempt (a generic 408/409 can be retryable).
+    Permanence is asserted only from explicit, known broker codes.
+    """
+    blob = f"{result.get('detail') or ''} {result.get('error') or ''} {result.get('code') or ''}".lower()
+    return any(marker in blob for marker in _CANCEL_PERMANENT_MARKERS)
+
+
 def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejection", "ambiguous"]:
     """Classify a failed close-order Gateway response for escalation routing.
 
-    Only a CONFIRMED broker rejection (HTTP 4xx) means the limit definitively
-    did not rest, so escalating to a native flatten is safe. Anything else —
-    a 5xx, a sub-400 code, a missing/None status_code, or a non-int shape — is
-    AMBIGUOUS: the limit may have been accepted and be resting, so we must
-    defer (never escalate), or a double-close could re-open a naked-short hole
-    (the reverted-a388337 class of bug).
+    Only a CONFIRMED broker rejection (HTTP 4xx, EXCLUDING 429) means the limit
+    definitively did not rest, so escalating to a native flatten is safe.
+    Anything else — a 429, a 5xx, a sub-400 code, a missing/None status_code, or
+    a non-int shape — is AMBIGUOUS: the limit may have been accepted and be
+    resting, so we must defer (never escalate), or a double-close could re-open
+    a naked-short hole (the reverted-a388337 class of bug).
+
+    A 429 is a TRANSIENT rate-limit (the self-inflicted storm), not a real
+    rejection: the limit may rest fine once the storm clears. Escalating a 429
+    to a NATIVE flatten would blind the daily-loss/drawdown kill switch (native
+    closes aren't Orion-attributed), so 429 must defer-and-retry, never escalate.
 
     ``bool`` is an ``int`` subclass in Python, but a boolean status_code is a
     shape error, not a real HTTP status — treated as ambiguous and logged.
@@ -89,6 +147,9 @@ def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejecti
         return "ambiguous"
 
     if isinstance(status_code, int):
+        # 429 (rate limit) is transient — defer, never escalate to native.
+        if status_code == 429:
+            return "ambiguous"
         if 400 <= status_code < 500:
             return "confirmed_rejection"
         # 5xx, or any sub-400 code — server-side / transport-ambiguous.
@@ -214,6 +275,10 @@ class ExecutionEngine:
         self._last_fill_poll_ts: datetime | None = None
         self._last_order_poll_ts: datetime | None = None
         self._last_position_sync_ts: datetime | None = None
+
+        # Per-order backoff/give-up state for the stale-entry-cancel sweep,
+        # keyed by broker_order_id. Pruned each sweep to orders still stale.
+        self._cancel_attempts: dict[str, _CancelState] = {}
 
         # TTL cache for _check_system_health (avoids N identical DB queries per cycle)
         self._health_cache: tuple[bool, float] | None = None
@@ -1936,11 +2001,23 @@ class ExecutionEngine:
 
         Frees the day-trading buying power they reserve on the shared account
         and prevents a late fill on an hours-old signal. Best-effort: the
-        Gateway surfaces failures as ``{"error": ...}`` (not exceptions), so a
-        rejected cancel is logged and skipped rather than counted. On a clean
-        cancel the order is dropped from risk pending exposure so it isn't
-        double-counted until the hourly prune. Returns the number cancelled.
+        Gateway surfaces failures as ``{"error": ...}`` (not exceptions). On a
+        clean cancel the order is dropped from risk pending exposure so it isn't
+        double-counted until the hourly prune, and its backoff state is cleared.
+
+        A rejected cancel no longer re-fires every 5s forever (the self-inflicted
+        429 storm): a PERMANENT reject (only a known broker marker — GW-E2009 /
+        "trading capability required") gives up after a single attempt with a
+        durable error log + one alert and is never retried; every other reject
+        (429 / 5xx / timeout / a generic 4xx) is TRANSIENT — it arms exponential
+        backoff with jitter, is skipped until it elapses, and gives up only after
+        ``_CANCEL_MAX_ATTEMPTS``. At most ``_CANCEL_MAX_PER_CYCLE`` cancels are
+        attempted per sweep. Returns the number cancelled.
         """
+        # __new__-constructed instances (some tests) skip __init__; seed lazily.
+        if not hasattr(self, "_cancel_attempts"):
+            self._cancel_attempts = {}
+
         try:
             stale = await self._fetch_stale_entry_orders()
         except Exception as e:
@@ -1950,52 +2027,149 @@ class ExecutionEngine:
             )
             return 0
 
+        # Prune state for orders no longer stale (filled / canceled / terminal),
+        # so the dict can't grow unbounded over a long-running process.
+        still_stale_ids = {str(r["broker_order_id"]) for r in stale if r.get("broker_order_id")}
+        for known_id in list(self._cancel_attempts):
+            if known_id not in still_stale_ids:
+                del self._cancel_attempts[known_id]
+
+        now = time.monotonic()
         cancelled = 0
+        attempted = 0
         for row in stale:
             broker_id = row.get("broker_order_id")
             coid = row.get("client_order_id")
             ticker = row.get("ticker")
             if not broker_id:
                 continue
+            bid = str(broker_id)
+
+            state = self._cancel_attempts.get(bid)
+            # Skip orders that have given up or are still inside their backoff.
+            if state is not None and (state.gave_up or now < state.next_eligible):
+                continue
+
+            # Per-sweep cap: bound Gateway load even when many orders are stale.
+            if attempted >= self._CANCEL_MAX_PER_CYCLE:
+                break
+            attempted += 1
+
             try:
-                result = await client.cancel_order(str(broker_id))
+                result = await client.cancel_order(bid)
             except Exception as e:
+                # A raised transport error is transient — back off like a 5xx.
                 logger.warning(
-                    f"Failed to cancel stale entry order {broker_id} on {ticker}: {e}",
-                    extra={"event_type": "STALE_ENTRY_CANCEL_FAILED", "ticker": ticker, "order_id": str(broker_id)},
+                    f"Failed to cancel stale entry order {bid} on {ticker}: {e}",
+                    extra={"event_type": "STALE_ENTRY_CANCEL_FAILED", "ticker": ticker, "order_id": bid},
                 )
+                await self._record_cancel_failure(bid, ticker, {"error": str(e)}, permanent=False)
                 continue
+
             if isinstance(result, dict) and "error" in result:
+                permanent = _is_permanent_cancel_rejection(result)
                 logger.warning(
-                    f"Cancel rejected for stale entry order {broker_id} on {ticker}: "
+                    f"Cancel rejected for stale entry order {bid} on {ticker}: "
                     f"{result.get('detail') or result.get('error')}",
-                    extra={"event_type": "STALE_ENTRY_CANCEL_REJECTED", "ticker": ticker, "order_id": str(broker_id)},
+                    extra={
+                        "event_type": "STALE_ENTRY_CANCEL_REJECTED",
+                        "ticker": ticker,
+                        "order_id": bid,
+                        "permanent": permanent,
+                    },
                 )
+                await self._record_cancel_failure(bid, ticker, result, permanent=permanent)
                 continue
+
+            # Success: clear backoff state and drop the pending reservation.
+            self._cancel_attempts.pop(bid, None)
             await self._remove_pending_order_compat(coid)
             # Optimistically flip the DB row out of the open-status set so this
-            # sweep doesn't re-issue a (rejected) cancel for it every cycle when
-            # the row falls outside the next status-poll's 200-row window — the
-            # exact high-order-volume day this fix targets. The next poll
-            # reconciles to the broker's real terminal status.
+            # sweep doesn't re-issue a cancel for it every cycle when the row
+            # falls outside the next status-poll's 200-row window — the exact
+            # high-order-volume day this fix targets. The next poll reconciles
+            # to the broker's real terminal status.
             try:
-                await persist_order_status_update(broker_order_id=str(broker_id), status="canceled")
+                await persist_order_status_update(broker_order_id=bid, status="canceled")
             except Exception as e:
                 logger.warning(
                     "Could not mark cancelled stale entry order in DB",
                     extra={
                         "event_type": "STALE_ENTRY_STATUS_UPDATE_FAILED",
-                        "order_id": str(broker_id),
+                        "order_id": bid,
                         "error": str(e),
                     },
                 )
             cancelled += 1
             logger.info(
-                f"Cancelled stale entry order {broker_id} on {ticker} "
+                f"Cancelled stale entry order {bid} on {ticker} "
                 f"(unfilled > {self._STALE_ENTRY_ORDER_TTL_SECONDS:.0f}s)",
-                extra={"event_type": "STALE_ENTRY_CANCELLED", "ticker": ticker, "order_id": str(broker_id)},
+                extra={"event_type": "STALE_ENTRY_CANCELLED", "ticker": ticker, "order_id": bid},
             )
         return cancelled
+
+    async def _record_cancel_failure(
+        self, broker_id: str, ticker: Any, result: dict[str, Any], *, permanent: bool
+    ) -> None:
+        """Update per-order backoff/give-up state after a rejected cancel.
+
+        Permanent rejections give up after one attempt; transient ones back off
+        exponentially with jitter and give up after ``_CANCEL_MAX_ATTEMPTS``.
+        A give-up is always recorded with a durable ERROR log (the operator's
+        guaranteed signal that an order is stuck reserving DTBP) and then a
+        best-effort, deduped Discord alert.
+        """
+        state = self._cancel_attempts.get(broker_id)
+        if state is None:
+            state = _CancelState()
+            self._cancel_attempts[broker_id] = state
+
+        state.attempts += 1
+        status_code = result.get("status_code")
+        state.last_code = status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else None
+
+        give_up = permanent or state.attempts >= self._CANCEL_MAX_ATTEMPTS
+        if give_up:
+            state.gave_up = True
+            if not state.alerted:
+                state.alerted = True
+                detail = str(result.get("detail") or result.get("error") or "")[:200]
+                kind = "permanent" if permanent else f"transient ({state.attempts} attempts)"
+                # Durable record FIRST: send_discord_alert never raises and returns
+                # False (no webhook / dedupe / delivery failure) without surfacing,
+                # so the give-up must land in the error log regardless of whether
+                # the page is delivered — the order keeps reserving DTBP until it
+                # expires at the close and the operator has to be able to see it.
+                logger.error(
+                    "stale_cancel_gave_up",
+                    event_type="STALE_ENTRY_CANCEL_GAVE_UP",
+                    order_id=broker_id,
+                    ticker=str(ticker),
+                    permanent=permanent,
+                    attempts=state.attempts,
+                    last_code=state.last_code,
+                    detail=detail,
+                )
+                try:
+                    delivered = await send_discord_alert(
+                        f"Stale entry-order cancel GAVE UP ({kind}): {ticker} order {broker_id} "
+                        f"will keep reserving DTBP until it expires at the close. "
+                        f"Last error: {detail}",
+                        dedupe_key=f"stale_cancel_giveup_{broker_id}",
+                    )
+                except Exception as e:
+                    logger.error("stale_cancel_giveup_alert_failed", order_id=broker_id, error=str(e))
+                    delivered = False
+                if not delivered:
+                    logger.warning("stale_cancel_giveup_alert_undelivered", order_id=broker_id)
+            return
+
+        # Transient: arm exponential backoff with jitter, capped.
+        backoff = min(
+            self._CANCEL_BACKOFF_BASE_SECONDS * (2 ** (state.attempts - 1)),
+            self._CANCEL_BACKOFF_CAP_SECONDS,
+        )
+        state.next_eligible = time.monotonic() + backoff + _cancel_backoff_jitter()
 
     async def _fresh_close_limit(self, client: Any, ticker: str, held_short: bool) -> float | None:
         """Marketable options close limit from a FRESH chain quote, or ``None``
@@ -2279,6 +2453,15 @@ class ExecutionEngine:
     # (2026-06-09: EWY/XHB entries sat unfilled all session, then expired).
     # poll_fills cancels it once past this TTL.
     _STALE_ENTRY_ORDER_TTL_SECONDS: float = 180.0
+
+    # Stale-entry-cancel storm controls. A rejected cancel used to be re-issued
+    # every _ORDER_POLL_MIN_INTERVAL_SECONDS (5s) forever — 68k+ self-inflicted
+    # Gateway 429s/day. Now each order backs off exponentially with jitter on a
+    # transient reject, or gives up immediately on a permanent one.
+    _CANCEL_BACKOFF_BASE_SECONDS: float = 30.0
+    _CANCEL_BACKOFF_CAP_SECONDS: float = 300.0
+    _CANCEL_MAX_ATTEMPTS: int = 6
+    _CANCEL_MAX_PER_CYCLE: int = 20
 
     async def poll_fills(self) -> None:
         """Polls Data Gateway for account equity and updates RiskManager.
