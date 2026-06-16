@@ -281,3 +281,48 @@ async def test_get_orders_forwards_submitted_at_window_params() -> None:
     assert params["after"] == "2026-03-13T00:00:00+00:00"
     assert params["until"] == "2026-06-12T00:00:00+00:00"
     assert params["nested"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_orders_strips_gateway_ownership_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gateway per-client isolation wraps Orion's ``orion_<uuid>`` ids as
+    ``c-orion-orion_<uuid>`` on broker orders. ``get_orders`` must strip that
+    wrapper (incl. nested bracket legs) so Orion's ``orion_``-prefix attribution
+    (fill_processor, position_monitor, reconcile_pnl) keeps matching. Legacy
+    un-wrapped ids pass through untouched."""
+    from orion.execution.attribution import is_orion_owned
+
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+    broker_orders = [
+        {
+            "id": "brk-1",
+            "client_order_id": "c-orion-orion_abc123",
+            "legs": [{"id": "leg-1", "client_order_id": "c-orion-orion_abc123-tp"}],
+        },
+        {"id": "brk-2", "client_order_id": "orion_legacy_unwrapped"},  # pre-prefix order
+        {"id": "brk-3", "client_order_id": None},  # missing coid tolerated
+    ]
+    monkeypatch.setattr(client, "_request", AsyncMock(return_value=broker_orders))
+
+    orders = await client.get_orders(status="all")
+
+    assert orders[0]["client_order_id"] == "orion_abc123"
+    assert orders[0]["legs"][0]["client_order_id"] == "orion_abc123-tp"
+    assert orders[1]["client_order_id"] == "orion_legacy_unwrapped"
+    assert orders[2]["client_order_id"] is None
+    # The whole point: stripped ids attribute back to Orion.
+    assert is_orion_owned(orders[0]["client_order_id"])
+    assert is_orion_owned(orders[1]["client_order_id"])
+
+
+@pytest.mark.asyncio
+async def test_get_order_strips_gateway_ownership_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Single-order lookup applies the same ownership-prefix normalization."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+    monkeypatch.setattr(
+        client,
+        "_request",
+        AsyncMock(return_value={"id": "brk-9", "client_order_id": "c-orion-orion_xyz"}),
+    )
+    order = await client.get_order("brk-9")
+    assert order["client_order_id"] == "orion_xyz"
