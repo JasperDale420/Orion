@@ -36,7 +36,7 @@ import os
 from pathlib import Path
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 import exchange_calendars as xcals
@@ -58,6 +58,12 @@ logger = setup_struct_logger("orion.deadman")
 BRONZE_BUDGET_SECONDS = 300
 SILVER_BUDGET_SECONDS = 600
 FEATURES_BUDGET_SECONDS = 1200
+
+# A stage's newest row should never be in the future. A small forward tolerance
+# absorbs benign clock skew between the writer host and the watchdog; anything
+# beyond it is a clock/data-quality bug that silently blinds the freshness check
+# (a negative age can never exceed the budget), so we alert on it explicitly.
+FUTURE_SKEW_SECONDS = 120
 
 _NYSE_CALENDAR = "XNYS"
 MARKET_HOURS_SERVICE_NAMES = frozenset(
@@ -100,10 +106,14 @@ class LivenessAlert:
     age_seconds: float | None  # None = never seen / no rows
     budget_seconds: int
     message: str
+    # Distinguishes alert variants for the same stage/service so a distinct
+    # failure mode (e.g. future-dated rows vs ordinary staleness) gets its own
+    # cross-process suppression key instead of masking the other for 15 min.
+    dedupe_suffix: str = ""
 
     @property
     def dedupe_key(self) -> str:
-        return f"deadman_{self.name}"
+        return f"deadman_{self.name}{self.dedupe_suffix}"
 
 
 def evaluate_service_liveness(
@@ -182,6 +192,21 @@ def evaluate_stage_freshness(
     if max_ts.tzinfo is None:
         max_ts = max_ts.replace(tzinfo=UTC)
     age = (now_utc - max_ts).total_seconds()
+    if max_ts > now_utc + timedelta(seconds=FUTURE_SKEW_SECONDS):
+        return LivenessAlert(
+            kind="stage",
+            name=stage_name,
+            age_seconds=age,
+            budget_seconds=budget_seconds,
+            dedupe_suffix="_future_ts",
+            message=(
+                f"pipeline stage '{stage_name}' has FUTURE-DATED rows — newest row is "
+                f"{-age:.0f}s in the future (tolerance {FUTURE_SKEW_SECONDS}s); "
+                "this indicates a clock or data-quality bug. The freshness check is "
+                "UNRELIABLE for this stage because a negative age can never exceed the "
+                "staleness budget — the stale-data alarm is effectively disabled until fixed"
+            ),
+        )
     if age > budget_seconds:
         return LivenessAlert(
             kind="stage",

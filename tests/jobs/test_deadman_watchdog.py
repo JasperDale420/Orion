@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from orion.jobs import deadman_watchdog as dw
 from orion.jobs.deadman_watchdog import (
     BRONZE_BUDGET_SECONDS,
+    FUTURE_SKEW_SECONDS,
     evaluate_service_liveness,
     evaluate_stage_freshness,
     is_nyse_session_open,
@@ -123,6 +124,49 @@ def test_stage_no_rows_alerts():
     alert = evaluate_stage_freshness("silver", None, 600, now)
     assert alert is not None
     assert "NO rows" in alert.message
+
+
+def test_stage_future_timestamp_alerts():
+    """A max_ts well beyond now+skew is a clock/data-quality bug: a negative age
+    can never exceed the budget, so without this guard the stage would NEVER
+    alert. The watchdog must surface the future-dated rows instead of going
+    blind (the 2026-07-11 bronze_max smoke-test residue)."""
+    now = datetime.now(UTC)
+    max_ts = now + timedelta(seconds=FUTURE_SKEW_SECONDS + 3600)
+    alert = evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now)
+    assert alert is not None
+    assert alert.name == "bronze"
+    assert "FUTURE" in alert.message
+    assert alert.age_seconds is not None
+    assert alert.age_seconds < 0
+    # A future-dated alert must NOT share the suppression key of an ordinary
+    # stale alert for the same stage, or one would mask the other for 15 min.
+    assert alert.dedupe_key == "deadman_bronze_future_ts"
+
+
+def test_stage_minor_future_skew_does_not_alert():
+    """A timestamp slightly in the future but within FUTURE_SKEW tolerance is
+    benign clock skew, not a data-quality bug — no alert."""
+    now = datetime.now(UTC)
+    max_ts = now + timedelta(seconds=FUTURE_SKEW_SECONDS - 10)
+    assert evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now) is None
+
+
+def test_stage_exact_future_skew_boundary_does_not_alert():
+    """Exactly now+skew is tolerated (strict > comparison): boundary is benign."""
+    now = datetime.now(UTC)
+    max_ts = now + timedelta(seconds=FUTURE_SKEW_SECONDS)
+    assert evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now) is None
+
+
+def test_stage_ordinary_stale_keeps_plain_dedupe_key():
+    """An ordinary stale alert keeps the unsuffixed key so the future-ts variant
+    stays distinct from it."""
+    now = datetime.now(UTC)
+    max_ts = now - timedelta(seconds=BRONZE_BUDGET_SECONDS + 60)
+    alert = evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now)
+    assert alert is not None
+    assert alert.dedupe_key == "deadman_bronze"
 
 
 # ---- calendar-aware session gate --------------------------------------------
