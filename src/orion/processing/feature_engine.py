@@ -136,6 +136,7 @@ class FeatureEngine:
             close_col = self._first_existing_column(frame, ("close", "c"))
             volume_col = self._first_existing_column(frame, ("volume", "v"))
             vwap_col = self._first_existing_column(frame, ("vwap", "vw"))
+            avail_col = self._first_existing_column(frame, ("ts_available", "ts_available_utc", "ts_ingest"))
             required_cols = (ticker_col, ts_col, open_col, high_col, low_col, close_col, volume_col)
             if any(col is None for col in required_cols):
                 return
@@ -143,6 +144,8 @@ class FeatureEngine:
             selected_cols = [ticker_col, ts_col, open_col, high_col, low_col, close_col, volume_col]
             if vwap_col:
                 selected_cols.append(vwap_col)
+            if avail_col:
+                selected_cols.append(avail_col)
             rows = frame[selected_cols].copy()
             rows["ticker_norm"] = rows[ticker_col].map(self._normalize_ticker)
             rows = rows[rows["ticker_norm"] == ticker.upper()]
@@ -159,6 +162,33 @@ class FeatureEngine:
             rows = rows.dropna(subset=["ts", "open", "high", "low", "close", "volume"])
             if rows.empty:
                 return
+
+            # Collapse duplicate bar timestamps to one row per bar BEFORE indexing.
+            # Heber de-dupes by event_id, not by bar key (instrument_key, timeframe,
+            # bar_start_ts), so two revisions of the same bar can survive into
+            # read_bars; a non-unique index later crashes get_indexer with
+            # "Reindexing only valid with uniquely valued Index objects". Prefer the
+            # latest-available revision (ts_available) so the choice is principled
+            # rather than arbitrary row order.
+            dup_count = int(rows["ts"].duplicated().sum())
+            if dup_count:
+                if avail_col:
+                    rows["_avail"] = pd.to_datetime(rows[avail_col], utc=True, errors="coerce")
+                    rows = rows.sort_values(["ts", "_avail"])
+                    tie_breaker = "ts_available"
+                else:
+                    rows = rows.sort_values("ts")
+                    tie_breaker = "row-order (no availability column)"
+                rows = rows.drop_duplicates(subset="ts", keep="last")
+                logger.warning(
+                    f"Duplicate bar timestamps in {ticker} hydration ({dup_count}); kept latest by {tie_breaker}",
+                    extra={
+                        "event": "feature_hydrate_duplicate_bars",
+                        "ticker": ticker,
+                        "duplicates": dup_count,
+                        "tie_breaker": tie_breaker,
+                    },
+                )
 
             rows = rows.sort_values("ts").tail(self.max_history_len)
             df = rows[["ts", "open", "high", "low", "close", "volume", "vwap"]].copy()
@@ -683,6 +713,21 @@ class FeatureEngine:
         self.history.touch(ticker)
         df = self.history[ticker]
         try:
+            # Defensive belt-and-suspenders: hydration now de-dupes bar keys at the
+            # source (preferring the latest ts_available), so a duplicated index
+            # here means duplicates slipped in via another path. A non-unique index
+            # breaks get_indexer with "Reindexing only valid with uniquely valued
+            # Index objects". Surface it (don't silently drop conflicting market
+            # data) and keep the freshest revision (keep="last"), matching
+            # _update_history's dedupe.
+            if df.index.has_duplicates:
+                dup_n = int(df.index.duplicated().sum())
+                logger.warning(
+                    f"Duplicate bar timestamps in {ticker} history ({dup_n}); keeping latest revision",
+                    extra={"event": "feature_history_duplicate_index", "ticker": ticker, "duplicates": dup_n},
+                )
+                df = df[~df.index.duplicated(keep="last")]
+                self.history[ticker] = df
             idx = df.index.get_indexer([ts], method="pad")[0]
             if idx < 0:
                 return {}
