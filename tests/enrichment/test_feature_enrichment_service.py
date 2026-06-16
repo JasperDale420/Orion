@@ -534,6 +534,17 @@ class TestNoteTickerSourceStreak:
         assert result == 3
 
     @pytest.mark.unit
+    def test_bronze_db_resets_streak(self):
+        """Post-Apr-22 OOM redesign made bronze_db the canonical primary
+        source. It must reset the streak so the warning doesn't fire on
+        every cycle (which it did when the rule only recognized "heber").
+        """
+        from orion.main_feature_enrichment import _note_ticker_source_streak
+
+        result = _note_ticker_source_streak(source="bronze_db", non_heber_streak=99, warn_streak=3, tickers_count=20)
+        assert result == 0
+
+    @pytest.mark.unit
     def test_warns_at_threshold(self):
         from orion.main_feature_enrichment import _note_ticker_source_streak
 

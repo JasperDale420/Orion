@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -12,7 +12,13 @@ from orion.enrichment import heber_context
 
 
 @pytest.mark.asyncio
-async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_active_tickers_with_source_falls_back_to_heber_when_bronze_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bronze (TimescaleDB) is the primary discovery source after the
+    2026-04-22 OOM redesign; Heber flow is now a fallback that runs only
+    when the bronze path raises. See docs/rca/feature_enrichment_crash_loop.md.
+    """
     now = pd.Timestamp.now(tz="UTC")
     flow_df = pd.DataFrame(
         {
@@ -27,10 +33,10 @@ async def test_get_active_tickers_with_source_prefers_heber(monkeypatch: pytest.
         lambda **_kwargs: flow_df,
     )
 
-    async def _fail_db_query(_query_fn):
-        raise AssertionError("db_query fallback should not be called when Heber returns tickers")
+    async def _bronze_fails(_limit: int, lookback_hours: int = 24) -> list[str]:
+        raise RuntimeError("bronze ticker discovery unavailable")
 
-    monkeypatch.setattr(feature_enrichment, "db_query", _fail_db_query, raising=False)
+    monkeypatch.setattr(heber_context, "_get_active_tickers_from_bronze", _bronze_fails)
 
     tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
 
@@ -298,7 +304,7 @@ def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pyt
     )
     assert streak == 2
     assert warnings[-1] == {
-        "event": "feature_enrichment_non_heber_streak",
+        "event": "feature_enrichment_static_fallback_streak",
         "source": "local_db",
         "streak": 2,
         "warn_streak": 2,
@@ -312,6 +318,54 @@ def test_note_ticker_source_streak_warns_on_non_heber_threshold(monkeypatch: pyt
         tickers_count=5,
     )
     assert streak == 0
+
+
+@pytest.mark.parametrize(
+    "et_hour,weekday,expected",
+    [
+        (4, 1, False),  # 4 AM ET Tuesday — pre pre-market
+        (6, 1, False),  # 6 AM ET Tuesday — pre 7 AM gate
+        (7, 1, True),  # 7 AM ET Tuesday — gate opens
+        (10, 1, True),  # 10 AM ET Tuesday — regular hours
+        (16, 4, True),  # 4 PM ET Friday — regular close
+        (19, 4, True),  # 7 PM ET Friday — within post-market window
+        (20, 4, False),  # 8 PM ET Friday — gate closes
+        (10, 5, False),  # 10 AM ET Saturday — weekend
+        (10, 6, False),  # 10 AM ET Sunday — weekend
+    ],
+)
+def test_is_extended_market_hours(et_hour: int, weekday: int, expected: bool) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    # Pick a date with the desired weekday (2026-04-27 is a Monday).
+    base = datetime(2026, 4, 27, et_hour, 30, tzinfo=et)
+    test_dt = base + timedelta(days=weekday)
+    assert feature_enrichment._is_extended_market_hours(test_dt.astimezone(UTC)) is expected
+
+
+def test_note_ticker_source_streak_resets_on_bronze_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """bronze_db is the canonical primary source post-Apr-22 OOM redesign;
+    it must reset the non-heber streak so the warning doesn't fire on every
+    cycle in the new architecture.
+    """
+    warnings: list[dict[str, object]] = []
+
+    def _fake_warning(_msg: str, *args: object, extra: dict[str, object] | None = None, **_kw: object) -> None:
+        if extra:
+            warnings.append(extra)
+
+    monkeypatch.setattr(feature_enrichment.logger, "warning", _fake_warning, raising=False)
+
+    streak = feature_enrichment._note_ticker_source_streak(
+        source="bronze_db",
+        non_heber_streak=42,
+        warn_streak=2,
+        tickers_count=20,
+    )
+    assert streak == 0
+    assert warnings == []
 
 
 @pytest.mark.asyncio

@@ -80,9 +80,7 @@ def psi(baseline: list[float], current: list[float], *, bins: int = 10) -> float
     return float(psi_val)
 
 
-def adverse_slippage_bps(
-    *, side: str | None, limit_price: float | None, fill_price: float | None
-) -> float | None:
+def adverse_slippage_bps(*, side: str | None, limit_price: float | None, fill_price: float | None) -> float | None:
     """Compute adverse slippage in basis points."""
     if limit_price is None or fill_price is None:
         return None
@@ -102,16 +100,12 @@ def index_orders_by_broker(orders: list[Any]) -> dict[str, Any]:
     return {o.broker_order_id: o for o in orders if o.broker_order_id}
 
 
-def compute_baseline_slippage_rows(
-    fills: list[Any], orders_by_broker: dict[str, Any]
-) -> list[dict[str, Any]]:
+def compute_baseline_slippage_rows(fills: list[Any], orders_by_broker: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for f in fills:
         order = orders_by_broker.get(f.broker_order_id)
         limit_price = order.limit_price if order is not None else None
-        adverse_bps = adverse_slippage_bps(
-            side=f.side, limit_price=limit_price, fill_price=f.filled_avg_price
-        )
+        adverse_bps = adverse_slippage_bps(side=f.side, limit_price=limit_price, fill_price=f.filled_avg_price)
         rows.append({"adverse_slippage_bps": adverse_bps, "linked_order": order is not None})
     return rows
 

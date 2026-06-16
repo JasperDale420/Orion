@@ -59,9 +59,7 @@ class ZeroDteGuard:
 
         return (True, "Normal trading")
 
-    def get_zero_dte_size_multiplier(
-        self, cfg: RiskSettings, dte: int, timestamp: datetime | None = None
-    ) -> float:
+    def get_zero_dte_size_multiplier(self, cfg: RiskSettings, dte: int, timestamp: datetime | None = None) -> float:
         """Get size multiplier for 0DTE trades based on time-of-day.
 
         Args:

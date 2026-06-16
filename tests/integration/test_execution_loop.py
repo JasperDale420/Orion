@@ -185,8 +185,10 @@ async def test_execution_loop_flow():
 
     mock_client = AsyncMock()
     mock_client.get_clock.return_value = {"is_open": True}
+    # Engine matches on `contract_symbol` (not `symbol`, which is the underlying)
+    # and prices off `bid`/`ask`, so supply those keys for the target contract.
     mock_client.get_option_chain.return_value = {
-        "contracts": [{"symbol": "SPY260418C00500000", "mid": 1.0, "ask": 1.05}]
+        "contracts": [{"contract_symbol": "SPY260418C00500000", "bid": 0.95, "ask": 1.05}]
     }
     mock_client.create_order.return_value = {"id": "order-123", "status": "accepted"}
     execution._gateway_client = mock_client

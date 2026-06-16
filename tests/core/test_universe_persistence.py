@@ -45,6 +45,26 @@ async def test_hydrate_from_db():
     assert uni is not None
 
 
+@pytest.mark.asyncio
+async def test_hydrate_required_reraises_on_db_error():
+    """required=True (startup): a DB error propagates so the service fails loud
+    rather than silently starting pinned to the static watchlist (2026-06-01
+    near-outage). A wait_for_db-guarded restart then hydrates against a live DB."""
+    uni = UniverseManager()
+    with patch("orion.core.universe_manager.async_session_factory", side_effect=OSError("db down")):
+        with pytest.raises(OSError):
+            await uni.hydrate_from_db(required=True)
+
+
+@pytest.mark.asyncio
+async def test_hydrate_optional_swallows_db_error():
+    """required=False (default / periodic re-hydration): a DB error stays
+    non-fatal so a transient blip doesn't kill a running service."""
+    uni = UniverseManager()
+    with patch("orion.core.universe_manager.async_session_factory", side_effect=OSError("db down")):
+        await uni.hydrate_from_db(required=False)  # must NOT raise
+
+
 def test_update_from_event_expiry():
     """
     Verifies that incoming events update the expiry tracking.

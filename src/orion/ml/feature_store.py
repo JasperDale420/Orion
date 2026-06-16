@@ -22,6 +22,7 @@ from typing import Any
 import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
+from orion.config import system_settings
 from orion.ml.derived_features import compute_derived_features
 from orion.ml.pattern_miner import (
     ALERT_FLOW_CONTEXT_FEATURES,
@@ -161,6 +162,7 @@ async def get_scoring_features(
         reader.read_gold_features,
         dataset="meta_label_features",
         asof_time=entry_ts,
+        lookback_days=system_settings.gold_feature_lookback_days,
     )
     equity_task = _load_equity_gold_for_ticker(reader, ticker, entry_ts)
 
@@ -333,6 +335,7 @@ async def _load_equity_gold_for_ticker(
                 dataset=dataset_name,
                 asof_time=entry_ts,
                 symbols=symbols,
+                lookback_days=system_settings.gold_feature_lookback_days,
             )
             if df is None or df.empty:
                 continue
@@ -383,6 +386,7 @@ async def _load_alert_level_gold(
             reader.read_gold_features,
             dataset=dataset,
             asof_time=entry_ts,
+            lookback_days=system_settings.gold_feature_lookback_days,
         )
     except Exception as exc:
         logger.warning(

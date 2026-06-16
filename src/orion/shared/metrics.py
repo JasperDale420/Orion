@@ -38,6 +38,15 @@ class Metrics(AsyncSingleton):
         self.risk_exposure = Gauge("orion_risk_exposure", "Position exposure in USD", ["ticker"])
         self.risk_daily_loss = Gauge("orion_risk_daily_loss", "Current daily loss")
         self.risk_open_positions = Gauge("orion_risk_open_positions", "Number of open positions")
+        # Fill-quality: adverse slippage between limit and fill, in basis points.
+        # RiskManager.process_fill guards emission with hasattr(); this
+        # histogram was never defined, so slippage observability was silently
+        # dead even after the gauges were fixed.
+        self.slippage_bps = Histogram(
+            "orion_slippage_bps",
+            "Adverse fill slippage vs limit price in basis points",
+            ["ticker", "side"],
+        )
 
     async def _async_init(self) -> None:
         """Async initialization hook called once on first instantiation."""
@@ -67,3 +76,24 @@ async def init_metrics() -> Metrics:
         Metrics.start_server(system_settings.metrics_port)
 
     return metrics
+
+
+def get_metrics_sync() -> Metrics | None:
+    """Return the Metrics singleton from synchronous code, creating it if needed.
+
+    ``Metrics.__init__`` is fully synchronous (prometheus collectors register at
+    construction; ``_async_init`` only logs), so sync callers like RiskManager
+    can safely materialise the singleton without an event loop. The instance is
+    registered in the AsyncSingleton registry so a later ``await
+    Metrics.get_instance()`` returns the same object. Returns None on any
+    failure — metrics must never break the risk path.
+    """
+    try:
+        instance = Metrics._instances.get(Metrics)
+        if instance is None:
+            instance = Metrics()
+            Metrics._instances[Metrics] = instance
+        return instance  # type: ignore[return-value]
+    except Exception:
+        logger.exception("get_metrics_sync failed; metrics disabled for this caller")
+        return None

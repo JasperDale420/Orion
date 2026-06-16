@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 import enum
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import JSON, Column, DateTime, Index, String
+from sqlalchemy import JSON, DateTime, Index, String
+from sqlalchemy.orm import Mapped, mapped_column
 
 from orion.storage.db import Base
 
@@ -16,15 +20,15 @@ class SilverSignal(Base):
 
     # Composite PK: ticker + timestamp + type (+ version/run_id explicitly or implicitly)
     # We'll use a synthetic ID but enforce uniqueness on the business key
-    signal_id = Column(String, primary_key=True)  # Deterministic ID
+    signal_id: Mapped[str] = mapped_column(String, primary_key=True)  # Deterministic ID
 
-    ticker = Column(String, nullable=False, index=True)
-    signal_ts_utc = Column(DateTime(timezone=True), nullable=False, index=True)
-    signal_type = Column(String, nullable=False)  # Enum as string
+    ticker: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    signal_ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    signal_type: Mapped[str] = mapped_column(String, nullable=False)  # Enum as string
 
     # Store all calculated features here (open, close, rsi, vwap, etc.)
-    features = Column(JSON, nullable=False)
+    features: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
-    created_at_utc = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("ix_silver_ticker_time", "ticker", "signal_ts_utc"),)

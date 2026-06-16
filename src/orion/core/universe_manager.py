@@ -37,8 +37,17 @@ class UniverseManager:
         # These should remain active until the option expires.
         self.expiry_tickers: dict[str, date] = {}
 
-    async def hydrate_from_db(self) -> None:
-        """Hydrate universe from recent candidate trades so midday restarts retain active tickers."""
+    async def hydrate_from_db(self, required: bool = False) -> None:
+        """Hydrate universe from recent candidate trades so midday restarts retain active tickers.
+
+        ``required=True`` (startup): re-raise on a DB error instead of swallowing
+        it. A silent failure here let a DB-down/flapping start leave the WS
+        subscription pinned to the static watchlist for the whole session (the
+        2026-06-01 near-outage). Re-raising fails the startup loudly so the
+        wait_for_db-guarded restart re-establishes the DB and hydrates against a
+        live one. ``required=False`` keeps the non-fatal swallow for safe
+        periodic re-hydration. A successful-but-empty hydrate is NOT an error.
+        """
         try:
             cutoff = datetime.now(UTC) - timedelta(days=1)
             async with async_session_factory() as session:
@@ -64,6 +73,9 @@ class UniverseManager:
                             pass
                 logger.info(f"Universe hydrated from candidate_trades: {count} tickers")
         except Exception as e:
+            if required:
+                logger.error(f"Universe hydrate_from_db failed at startup (fatal): {e}")
+                raise
             logger.warning(f"Universe hydrate_from_db failed (non-fatal): {e}")
 
     def update_from_config(self, tickers: list[str]) -> None:

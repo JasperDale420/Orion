@@ -4,8 +4,9 @@ load_dotenv()  # Load .env file if present
 
 import uuid
 from pathlib import Path
+from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,12 @@ class RiskSettings(BaseSettings):
     # Legacy compatibility field used by older tests/callers.
     max_ticker_exposure_usd: float | None = None
     risk_per_trade_pct: float = 0.01
+    # Orion's allocated slice of the shared Alpaca paper account. The account
+    # (~$1M) is shared across multiple systems, so Gateway reports the full
+    # pooled equity. Sizing (max premium/order %) must compute off Orion's
+    # slice, not the pool — uncapped seeding was the root of the 5/26
+    # over-exposure. Caps the seeded equity baseline; None = no cap.
+    allocated_equity: float | None = 100_000.0
     enable_shorting: bool = False
     default_stop_loss_pct: float = 0.02
     time_of_day_bans: list[str] | None = None
@@ -84,12 +91,67 @@ class HeuristicWeights(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ORION_HEURISTIC_")
 
 
+# Recommended environment variable names for the alias pairs below:
+#   ORION_DB_URL            (alias: DB_URL)
+#   DATA_GATEWAY_URL        (alias: GATEWAY_URL)
+#   DATA_GATEWAY_API_KEY    (alias: GATEWAY_API_KEY)
+#   DISCORD_WEBHOOK_URL     (alias: ORION_DISCORD_WEBHOOK_URL)
+# Prefer the recommended name in new config. PRECEDENCE WARNING: when BOTH
+# names of a pair are set, pydantic's AliasChoices order decides — the
+# FIRST-listed alias on each field wins, which is DB_URL (not ORION_DB_URL),
+# DATA_GATEWAY_URL, DATA_GATEWAY_API_KEY, and ORION_DISCORD_WEBHOOK_URL (not
+# DISCORD_WEBHOOK_URL). Set only one name per pair. The alias orders are
+# load-bearing for deployed .env files; do not reorder or remove them.
 class SystemSettings(BaseSettings):
     # API Keys
     uw_api_key: str | None = Field(default=None, validation_alias="UW_API_KEY")
     alpaca_api_key: str | None = Field(default=None, validation_alias="ALPACA_API_KEY")
     alpaca_secret_key: str | None = Field(default=None, validation_alias="ALPACA_SECRET_KEY")
     alpaca_paper: bool = Field(default=True, validation_alias="ALPACA_PAPER")
+
+    # --- Dedicated Alpaca account scaffolding (DORMANT; A4 of the 2026-06-11
+    # redesign plan). These configure a future direct-to-Alpaca broker path for
+    # a dedicated paper account, replacing the shared-account attribution
+    # gymnastics. They are deliberately ORION_-prefixed so they never collide
+    # with the shared-account ALPACA_API_KEY / ALPACA_SECRET_KEY above. Nothing
+    # reads these yet — the direct broker client is a separate future task. See
+    # docs/configuration-guide.md "Enabling a dedicated Alpaca account".
+    orion_alpaca_api_key: str | None = Field(default=None, validation_alias="ORION_ALPACA_API_KEY")
+    orion_alpaca_secret_key: str | None = Field(default=None, validation_alias="ORION_ALPACA_SECRET_KEY")
+    orion_alpaca_paper: bool = Field(default=True, validation_alias="ORION_ALPACA_PAPER")
+    # Broker routing mode. "gateway" (default) routes orders through
+    # Data-Gateway → shared Alpaca account (today's behavior). "direct" is
+    # scaffolded but NOT implemented: it raises at settings load so a half-mode
+    # can never silently start. Flip to "direct" only after the direct client
+    # exists and a dedicated key is set (see the doc section above).
+    broker_mode: str = Field(default="gateway", validation_alias="ORION_BROKER_MODE")
+
+    @field_validator("broker_mode")
+    @classmethod
+    def _validate_broker_mode(cls, value: str) -> str:
+        # COERCE, never raise (adversarial-review finding): SystemSettings is
+        # instantiated at module import by every service INCLUDING the dead-man
+        # watchdog, so a raising validator turns a stray .env value into a
+        # fleet-wide boot kill switch with no surviving alerter. Given this
+        # repo's silent-stall history, log loudly and fall back to gateway.
+        if value == "direct":
+            import logging
+
+            logging.getLogger("orion.config").critical(
+                "ORION_BROKER_MODE=direct is scaffolded but not implemented — "
+                "falling back to 'gateway'. See docs/configuration-guide.md "
+                "'Enabling a dedicated Alpaca account'."
+            )
+            return "gateway"
+        if value not in {"gateway"}:
+            import logging
+
+            logging.getLogger("orion.config").critical(
+                "Unknown ORION_BROKER_MODE %r — falling back to 'gateway' (must be 'gateway' or 'direct').",
+                value,
+            )
+            return "gateway"
+        return value
 
     # Environment
     orion_stage: str = Field(default="paper", validation_alias="ORION_STAGE")
@@ -129,6 +191,10 @@ class SystemSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("DATA_GATEWAY_API_KEY", "GATEWAY_API_KEY"),
     )
+    discord_webhook_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ORION_DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK_URL"),
+    )
     heber_catalog_url: str = Field(
         default="http://localhost:8085/api/v1",
         validation_alias="HEBER_CATALOG_URL",
@@ -137,16 +203,71 @@ class SystemSettings(BaseSettings):
         default=Path("/Volumes/heber/data"),
         validation_alias="HEBER_DATA_ROOT",
     )
+    # Live ML scoring needs only the most recent Gold feature row per symbol
+    # as-of decision time, so it scans just the last N days of dt= partitions
+    # rather than the full (unbounded) dataset history. Bounds per-candidate
+    # read latency that was aging candidates past max_data_lag_seconds. A row
+    # last computed longer ago than this is treated as missing (scorer defaults
+    # to None). Training/backfill callers pass no lookback and read full history.
+    gold_feature_lookback_days: int = Field(
+        default=7,
+        validation_alias="ORION_GOLD_FEATURE_LOOKBACK_DAYS",
+    )
 
     # Universe
     universe_ttl_seconds: int = 28800  # 8 hours (Tracks alerts through EOD)
-    ingestion_heartbeat_max_age: int = 70
+    # Belt-and-suspenders alongside the overnight DB-heartbeat update in
+    # ingestion.service._check_overnight_sleep. 600s tolerates the longer
+    # cycle times we see in practice (rollups can run 30-60s on busy days).
+    ingestion_heartbeat_max_age: int = 600
     max_data_lag_seconds: int = 600  # Pre-market/post-market data can lag 300s+
+    # First flow poll on startup looks back this many minutes from `now` to
+    # seed `_last_flow_poll_ts` (was a hardcoded 15-minute literal).
+    initial_flow_lookback_minutes: int = Field(
+        default=15,
+        validation_alias="ORION_INITIAL_FLOW_LOOKBACK_MINUTES",
+    )
+    # Each periodic flow poll rewinds the watermark by this overlap before
+    # reading, so a Heber outage that recovers replays the gap window instead
+    # of jumping the watermark to `now` and silently dropping it. Re-delivered
+    # events are absorbed by the DeduplicationEngine + bronze ON CONFLICT; the
+    # born-stale drop in _poll_heber_flow still discards anything past the
+    # data-lag budget, so the overlap only resurfaces recent unseen events.
+    flow_poll_overlap_seconds: int = Field(
+        default=120,
+        validation_alias="ORION_FLOW_POLL_OVERLAP_SECONDS",
+    )
+    # UW flow delivery path (redesign R1 / B1). Default `poll` in code is
+    # today's exact Heber-Silver poll behavior; deploy sets `shadow`.
+    #   poll   — Heber-Silver poll only (unchanged).
+    #   shadow — consume push (Gateway WS) AND poll; log per-cycle parity to
+    #            flow_push_parity. Dedup collapses the overlap so the pipeline
+    #            sees each event once (no double candidates).
+    #   push   — push primary; poll retained as the degrade/replay gap-filler.
+    flow_source: Literal["poll", "shadow", "push"] = Field(
+        default="poll",
+        validation_alias="ORION_FLOW_SOURCE",
+    )
     alpaca_lookback_minutes: int = Field(default=15, validation_alias="ALPACA_LOOKBACK_MINUTES")
     uw_fetch_limit: int = 5000
     uw_base_url: str = Field(default="https://api.unusualwhales.com", validation_alias="UW_BASE_URL")
     static_watchlist: list[str] = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "AMZN", "GOOGL", "VIXY"]
     require_rollups_for_signals_live: bool = True
+    # Self-healing universe (2026-06-01 near-outage). A DB-down/sparse start
+    # previously pinned the WS subscription to the static watchlist for the
+    # whole session with no recovery. Re-hydrate from candidate_trades on this
+    # interval so a degraded start self-broadens within minutes. 0 disables.
+    universe_rehydrate_interval_seconds: int = Field(
+        default=300,
+        validation_alias="ORION_UNIVERSE_REHYDRATE_INTERVAL_SECONDS",
+    )
+    # Breadth alarm: page when subscribed Alpaca bar breadth collapses to
+    # ~static-watchlist size during market hours (06-01 was 314 -> 11). Sits
+    # above the 11-ticker static floor and below normal 100s+ breadth.
+    universe_breadth_min_tickers: int = Field(
+        default=30,
+        validation_alias="ORION_UNIVERSE_BREADTH_MIN_TICKERS",
+    )
 
     # Runtime / Observability
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()), validation_alias="ORION_RUN_ID")
@@ -171,6 +292,31 @@ class SystemSettings(BaseSettings):
         "'skip' = reject stale models (original behavior), "
         "'warn' = load stale models with warning, "
         "'bypass' = skip ML scoring entirely and pass candidates through",
+    )
+    # --- Exit fallback rules (deterministic, independent of exit classifier) ---
+    # Profit-target exit: close when position return crosses this threshold.
+    # 1.00 = +100% on the option premium. Conservative because options can
+    # continue running; 1.50 (i.e. +150%) is also reasonable. Set to 0 to disable.
+    exit_fallback_profit_target_pct: float = Field(
+        default=1.00,
+        ge=0.0,
+        validation_alias="ORION_EXIT_FALLBACK_PROFIT_TARGET_PCT",
+    )
+    # Time-to-expiry exit: close when DTE drops below this. Prevents pin risk
+    # and theta wipeout on the last day. 1 = exit at T-1. Set to 0 to disable.
+    exit_fallback_min_dte: int = Field(
+        default=1,
+        ge=0,
+        validation_alias="ORION_EXIT_FALLBACK_MIN_DTE",
+    )
+    # Drawdown exit: close when position has retraced this far from its peak.
+    # 0.50 = if max_return_so_far was +200% and current is +100%, that's a 50%
+    # retracement → exit. Protects unrealized gains. Set to 0 to disable.
+    exit_fallback_max_drawdown_from_peak_pct: float = Field(
+        default=0.50,
+        ge=0.0,
+        le=1.0,
+        validation_alias="ORION_EXIT_FALLBACK_MAX_DRAWDOWN_FROM_PEAK_PCT",
     )
     proposals_dir: str = Field(default="proposals", validation_alias="ORION_PROPOSALS_DIR")
 
@@ -204,6 +350,23 @@ class SystemSettings(BaseSettings):
     # Circuit breaker
     reset_circuit_breaker_on_start: bool = Field(default=False, validation_alias="ORION_RESET_CIRCUIT_BREAKER_ON_START")
     trip_circuit_breaker_on_lag: bool = Field(default=False, validation_alias="ORION_TRIP_CIRCUIT_BREAKER_ON_LAG")
+    # Master kill switches for both breakers. When false, the breaker still
+    # records events (so logs show what would have tripped) but trading is
+    # never blocked by it. Intended for forward-testing windows where a
+    # spurious trip is more costly than a real broker-error event.
+    circuit_breaker_enabled: bool = Field(default=True, validation_alias="ORION_CIRCUIT_BREAKER_ENABLED")
+    global_circuit_breaker_enabled: bool = Field(default=True, validation_alias="ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED")
+    # Per-process broker-result error-rate breaker (in ExecutionEngine).
+    # The previous deque[bool] with maxlen=20 had no time component: a single
+    # failure stayed in the deque all day during low-volume periods. The
+    # time-windowed version (failures within last N seconds) plus a minimum
+    # sample count avoids both the "stuck breaker" and the "first-failure
+    # after restart trips it" failure modes.
+    circuit_breaker_error_rate: float = Field(default=0.03, validation_alias="ORION_CIRCUIT_BREAKER_ERROR_RATE")
+    circuit_breaker_window_seconds: float = Field(
+        default=300.0, validation_alias="ORION_CIRCUIT_BREAKER_WINDOW_SECONDS"
+    )
+    circuit_breaker_min_samples: int = Field(default=5, validation_alias="ORION_CIRCUIT_BREAKER_MIN_SAMPLES")
 
     # Client URLs
     trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")
@@ -234,12 +397,35 @@ class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")
 
 
+def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSettings") -> list[str]:
+    """Log a WARNING when known default dev credentials are still active.
+
+    Returns the list of field names found using a default dev credential so
+    callers/tests can assert on it. Silent (no warning) when none are active.
+    """
+    from orion.shared.logger import setup_struct_logger
+
+    flagged: list[str] = []
+    if system.data_gateway_api_key == "gw_orion_trading_key_55555":  # pragma: allowlist secret
+        flagged.append("data_gateway_api_key")
+    if agent.ai_gateway_key == "empire-ai-gateway-key":  # pragma: allowlist secret
+        flagged.append("ai_gateway_key")
+
+    if flagged:
+        log = setup_struct_logger("orion.config")
+        for field in flagged:
+            log.warning("default_dev_credential_in_use", field=field)
+    return flagged
+
+
 # Singleton Instances
 risk_settings = RiskSettings()
 system_settings = SystemSettings()
 meta_settings = MetaSearchSettings()
 agent_settings = AgentSettings()
 heuristic_weights = HeuristicWeights()
+
+warn_on_default_dev_credentials(system_settings, agent_settings)
 
 # Exports for compatibility
 STATIC_WATCHLIST = system_settings.static_watchlist
