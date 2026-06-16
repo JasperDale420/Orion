@@ -90,16 +90,21 @@ Key models: `SolverConfig` (Pydantic DSL with risk, features, exit logic), `Solv
 
 ### Docker Compose Services
 
+launchd is canonical for the trading/scheduling roles; the docker copies below
+are profile-gated. The compose default profile carries only stateless support
+services.
+
 | Service | Module | Profile |
 |---------|--------|---------|
-| `timescaledb` | TimescaleDB:latest-pg16 | default |
-| `ingestion` | `orion.ingestion` | default |
+| `timescaledb` | pgvector/pgvector:pg16 | default |
 | `feature_enrichment` | `orion.main_feature_enrichment` | default |
-| `execution` | `orion.main_execution` | default |
-| `position-monitor` | `orion.main_position_monitor` | default |
-| `eod-agent` | `orion.main_eod` | default |
 | `indexer` | `orion.rag.indexer` | default |
 | `mcp-server` | Shared-MCP-Server | default |
+| `ingestion` | `orion.ingestion` | docker (native canonical) |
+| `execution` | `orion.main_execution` | docker (native canonical) |
+| `position-monitor` | `orion.main_position_monitor` | docker (native canonical) |
+| `data-quality` | `orion.main_data_quality` | docker (native canonical) |
+| `eod-agent` | `orion.main_eod` | docker (retired; native ingestion trigger is canonical) |
 | `price_target_labeler` | `orion.main_price_target_labeler` | legacy-labels |
 | `pattern-miner` | `orion.main_pattern_miner` | legacy-labels |
 | `nightly-backfill` | `orion.jobs.nightly_backfill` | legacy-labels |
@@ -144,17 +149,33 @@ Async engine via SQLAlchemy `create_async_engine` with `pool_pre_ping=True`, `po
 
 Orion depends on Data-Gateway for all external data and order routing:
 
-- **Market data**: `GatewayStreamClient` connects to Gateway WebSocket (`ws://localhost:8080/ws`) for real-time bars
+- **Market data**: `GatewayStreamClient` connects to Gateway WebSocket
+  (`ws://data-gateway:8080/ws` inside containers, `ws://localhost:8080/ws`
+  from the host) for real-time bars. Containers reach Gateway via the
+  external `data-gateway_default` network attached in `docker-compose.yml` —
+  do not revert to `host.docker.internal:8080` (Docker Desktop DNS is flaky
+  enough that we historically saw thousands of `[Errno -3] Temporary failure
+  in name resolution` events).
 - **UW connectors**: Greek exposure, IV rank, market tide, max pain, VIX proxy — all fetch via Gateway REST
 - **Order execution**: `ExecutionEngine` routes through `GatewayTradingClient` which proxies to Alpaca
 - **Earnings sync**: `sync_earnings` job fetches via Gateway
 
 ### Heber Dependency
 
-Orion reads Silver/Gold parquet data directly from Heber's disk layout (`/Volumes/heber/data`):
-- Bars (1m), flow alerts, darkpool, market tide, greek exposure, max pain, IV rank
-- `HeberReader` uses `pyarrow.parquet` for direct dataset reads
-- Catalog health checked via HTTP (`http://localhost:8085/api/v1`)
+Orion reads Silver/Gold parquet from a **host-side cache** at `~/.heber-cache/data`,
+bind-mounted into containers as `/Volumes/heber/data` (read-only). The cache is
+populated by the `heber-sync` sidecar in `docker-compose.yml`, which rsyncs:
+- Silver (today + yesterday) for: flow_alerts, bars, darkpool, market_tide,
+  greek_exposure, iv_rank, max_pain
+- Gold (last 30 days, all `dataset=*/project=*/version=*/dt=*`)
+
+`HeberReader` uses `pyarrow.parquet` for direct dataset reads; catalog health
+is checked via HTTP (`http://localhost:8085/api/v1`).
+
+If Orion's ML scorer or feature_enrichment is missing recent Gold data, check
+`docker logs orion_heber_sync` — Gold partitions older than the cutoff or
+missing entirely from `~/.heber-cache/data/gold/` mean the sync isn't running
+or hasn't caught up.
 
 ## Configuration
 
@@ -229,3 +250,67 @@ When modifying order submission or risk sync, preserve the `ORDER_ID_PREFIX` fil
 - Update `CHANGELOG.md` for every behavioral change, bug fix, or feature
 - Format: `## [Unreleased]` at top, entries grouped by `Added`, `Changed`, `Fixed`, `Removed`
 - Write entries from user perspective
+
+---
+
+## Karpathy Coding Guidelines
+
+_Source: [andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills) — behavioral guidelines to reduce common LLM coding mistakes. Bias toward caution over speed; for trivial tasks, use judgment._
+
+### 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

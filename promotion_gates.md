@@ -1,7 +1,7 @@
 ````markdown
 # promotion_gates.md
 
-This document defines **promotion gates** for moving a strategy from **research → shadow → paper → limited live → scaled live**.  
+This document defines **promotion gates** for moving a strategy from **research → shadow → paper → limited live → scaled live**.
 These gates are designed to prevent “backtest hallucinations” (overfitting/leakage) and to ensure the pipeline is operationally safe.
 
 > Not financial advice. This is an engineering + statistical safety checklist for deployment.
@@ -31,7 +31,7 @@ Trading MUST be disabled (or auto-kill) when any of these are true:
 - UW ingestion heartbeat missing for **> 60s** during PRE/REG/POST (polling mode)
 - Alpaca 1m bars missing for **> 2 consecutive minutes** for ≥ **10%** of tickers in universe
 - End-to-end lag exceeds:
-  - UW events: **> 60s** behind real time (polling)  
+  - UW events: **> 60s** behind real time (polling)
   - Alpaca bars: **> 10s** behind real time
 - Hot store writes failing for **> 30s** or lake writes failing for **> 5 min**
 - DLQ growth rate exceeds **N=100 events/min** for **> 5 min**
@@ -67,7 +67,7 @@ Promotion is **per Strategy Version**.
 ## 4) Stage 0 → Stage 1 (Research → Shadow) Gates
 
 ### 4.1 Data Sufficiency (Minimum)
-- At least **60 trading days** of stored events + Alpaca prices usable for labels  
+- At least **60 trading days** of stored events + Alpaca prices usable for labels
   (If only intraday signals: at least **120** full sessions recommended.)
 - At least:
   - **≥ 300 candidates** (rule fired) total, and
@@ -90,15 +90,15 @@ If your rules are very selective, reduce counts only with explicit justification
 Run **walk-forward** with ≥ **5 folds** (each test fold ≥ 10 trading days *or* ≥ 30 candidates).
 
 Require ALL:
-- **OOS mean trade return (net)** > 0  
+- **OOS mean trade return (net)** > 0
   (Net = after slippage/fees; for candidates that become trades after meta-model, evaluate trades.)
-- **OOS profit factor** ≥ **1.10**  
+- **OOS profit factor** ≥ **1.10**
   (gross wins / gross losses; net outcomes)
 - **Fold consistency**:
   - ≥ **3/5** folds have positive net expectancy
   - worst fold profit factor not below **0.90**
 - **Bootstrap confidence** (recommended):
-  - bootstrap 95% CI lower bound of mean net return ≥ **0**  
+  - bootstrap 95% CI lower bound of mean net return ≥ **0**
   (If sample is small, allow a tiny negative like -1 bp, but document it.)
 
 ### 4.4 Model-Specific (If Meta-Model Enabled)
@@ -118,7 +118,7 @@ If meta-model doesn’t help, keep it off.
 
 ## 5) Stage 1 → Stage 2 (Shadow → Paper) Gates
 
-Shadow runs live ingestion + live signal generation, but no orders.  
+Shadow runs live ingestion + live signal generation, but no orders.
 Goal: verify operational correctness.
 
 Minimum shadow duration:
@@ -126,7 +126,7 @@ Minimum shadow duration:
 
 Shadow gates:
 - Signal parity:
-  - live-produced signals must match offline replay for same inputs with **≥ 99%** agreement  
+  - live-produced signals must match offline replay for same inputs with **≥ 99%** agreement
     (Allow small differences only from polling timing; must be explainable and logged.)
 - Latency:
   - signal generation lag from event arrival ≤ **60s** (polling mode)
@@ -145,7 +145,7 @@ Minimum paper duration:
 - **20 trading days** OR **100 fills**, whichever is larger
 
 Paper performance gates (net of fees):
-- Net PnL ≥ **0** over the paper window  
+- Net PnL ≥ **0** over the paper window
   (If market regime is unusual, allow slight negative but require improvements documented.)
 - Max drawdown ≤ **2.5%** of equity (paper sizing should be conservative)
 - Profit factor ≥ **1.05**
@@ -183,9 +183,9 @@ Performance gates:
 - No single-day loss-trigger event more than **once** (daily pause threshold)
 
 Stability gates:
-- Performance by rule_id: no rule contributes > **80%** of profits  
+- Performance by rule_id: no rule contributes > **80%** of profits
   (avoid a single fragile “hero rule”)
-- Concentration: top ticker contributes < **50%** of profits over the window  
+- Concentration: top ticker contributes < **50%** of profits over the window
   (avoid one-name luck)
 
 ✅ If all pass → gradually increase risk caps (next section).
@@ -252,7 +252,7 @@ The EOD LLM agent may propose:
 
 **No proposal goes straight to Live.** The workflow is:
 
-1) Proposal → PR/config patch + test plan + expected impact  
+1) Proposal → PR/config patch + test plan + expected impact
 2) Automated checks:
    - unit tests
    - pipeline integration test (ingest → features → signal)

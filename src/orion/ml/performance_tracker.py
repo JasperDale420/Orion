@@ -5,6 +5,7 @@ Logs ML predictions and outcomes for performance evaluation.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -39,17 +40,33 @@ async def log_entry_prediction(
     prediction_id = str(uuid.uuid4())
     prediction_class = 1 if prediction_score >= 0.5 else 0
 
-    def write(session: Any) -> None:
-        session.execute(
+    # `write` is async because `db_transaction` (the call site behind
+    # `db_write`) does `await operation(session)`. Before 2026-05-20
+    # this was declared `def write(session) -> None`, returning None,
+    # which made `await None` raise `TypeError: object NoneType can't
+    # be used in 'await' expression`. The TypeError was caught by the
+    # broad except below, the call returned None, and the
+    # `ml_predictions` table never received a row. Mock-based unit
+    # tests missed this because their `db_write` mock invoked `write`
+    # synchronously — the bug only manifested against the real async
+    # session.
+    # Use raw text INSERT so we explicitly pass `prediction_ts`. The
+    # ORM-side `default=lambda: datetime.now(UTC)` on `MLPrediction.
+    # prediction_ts` only fires through the ORM, not through plain
+    # `session.execute(text(...))` — and the column is NOT NULL. Without
+    # this, the INSERT fails with `NOT NULL constraint failed`.
+    async def write(session: Any) -> None:
+        await session.execute(
             text("""
                 INSERT INTO ml_predictions
-                (id, symbol, option_chain, bucket, model_type, prediction_score,
-                 prediction_class, confidence, position_id)
-                VALUES (:id, :symbol, :option_chain, :bucket, 'entry_score',
+                (id, prediction_ts, symbol, option_chain, bucket, model_type,
+                 prediction_score, prediction_class, confidence, position_id)
+                VALUES (:id, :prediction_ts, :symbol, :option_chain, :bucket, 'entry_score',
                         :score, :pred_class, :confidence, :position_id)
             """),
             {
                 "id": prediction_id,
+                "prediction_ts": datetime.now(UTC),
                 "symbol": symbol,
                 "option_chain": option_chain,
                 "bucket": bucket,
@@ -80,17 +97,20 @@ async def log_exit_prediction(
     prediction_id = str(uuid.uuid4())
     prediction_class = 1 if prediction_score >= 0.5 else 0
 
-    def write(session: Any) -> None:
-        session.execute(
+    # See log_entry_prediction docstring for why `write` must be async
+    # and why `prediction_ts` must be explicit in the INSERT.
+    async def write(session: Any) -> None:
+        await session.execute(
             text("""
                 INSERT INTO ml_predictions
-                (id, symbol, option_chain, bucket, model_type, prediction_score,
-                 prediction_class, position_id)
-                VALUES (:id, :symbol, :option_chain, :bucket, 'exit_score',
+                (id, prediction_ts, symbol, option_chain, bucket, model_type,
+                 prediction_score, prediction_class, position_id)
+                VALUES (:id, :prediction_ts, :symbol, :option_chain, :bucket, 'exit_score',
                         :score, :pred_class, :position_id)
             """),
             {
                 "id": prediction_id,
+                "prediction_ts": datetime.now(UTC),
                 "symbol": symbol,
                 "option_chain": option_chain,
                 "bucket": bucket,
@@ -127,10 +147,11 @@ async def log_outcome(
         True if updated successfully
     """
 
-    def write(session: Any) -> None:
+    # See log_entry_prediction docstring for why `write` must be async.
+    async def write(session: Any) -> None:
         # Determine if prediction was correct
         # For entry: correct if hit_target and predicted 1, or didn't and predicted 0
-        session.execute(
+        await session.execute(
             text("""
                 UPDATE ml_predictions
                 SET outcome_ts = NOW(),

@@ -38,10 +38,21 @@ class SolverPipeline:
         rule_ids = [r if isinstance(r, str) else r.id for r in solver.rules]
 
         if rule_ids and "*" not in rule_ids and candidate.rule_id not in rule_ids:
+            # Explicit abstention marker — the ensemble uses this to
+            # distinguish "this solver doesn't apply" (excluded from
+            # consensus) from "this solver ran and votes 0.0" (counted
+            # as a strong NO). Codex review 2026-05-21 Important #3
+            # caught the previous code's reliance on p_take==0.0 as
+            # a proxy for both signals.
             return (
                 0.0,
                 0.0,
-                {"reason": "Rule Mismatch", "solver_rules": rule_ids, "candidate_rule": candidate.rule_id},
+                {
+                    "reason": "Rule Mismatch",
+                    "solver_rules": rule_ids,
+                    "candidate_rule": candidate.rule_id,
+                    "abstained": True,
+                },
             )
 
         # 2. Feature Generation
@@ -52,7 +63,7 @@ class SolverPipeline:
             logger.warning("FeatureEngine not provided to SolverPipeline; state/history will be lost.")
             feature_engine = FeatureEngine()
 
-        features = {}
+        features: dict[str, float] = {}
         try:
             features = await feature_engine.compute(candidate, solver.universe)
         except Exception as e:

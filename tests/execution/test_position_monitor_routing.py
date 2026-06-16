@@ -81,8 +81,17 @@ class TestPositionMonitorRouting:
         call_kwargs = engine.close_position.call_args.kwargs
         assert call_kwargs["ticker"] == "AAPL"
         assert call_kwargs["qty"] == 10.0
-        assert call_kwargs["use_market_order"] is True
+        # Phase 2 of exit-pipeline RCA: position_monitor now always
+        # passes `use_market_order=False` and lets close_position
+        # decide. For equity + IMMEDIATE urgency it still routes
+        # through the market path; for options it forces limit
+        # (otherwise Alpaca rejects with 42210000 outside RTH).
+        assert call_kwargs["use_market_order"] is False
         assert call_kwargs["direction"] == "LONG"
+        # current_price must be threaded through so close_position
+        # can derive an option-tick-rounded limit without a separate
+        # quote lookup.
+        assert "current_price" in call_kwargs
 
         # Connector should NOT have been called directly
         connector.close_position.assert_not_called()

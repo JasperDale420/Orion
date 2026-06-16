@@ -1,6 +1,6 @@
 # PRD: Real-Time UW + Alpaca Data Lake + Signal Engine + Live Trading + Daily Self-Improvement (RAG-first)
 
-**Status:** Draft v2 (adds signal generation, robust validation, live trading, and an LLM improvement loop)  
+**Status:** Draft v2 (adds signal generation, robust validation, live trading, and an LLM improvement loop)
 **Primary mode (v1):** UW polling + Alpaca market data (extended hours). Upgrade path to UW websocket streaming.
 
 ---
@@ -9,9 +9,9 @@
 
 Build a system that continuously ingests and stores **real-time Unusual Whales (UW)** + **Alpaca** data during **PRE/REG/POST** sessions, then:
 
-1) Produces **trading signals** from historically validated patterns (rule-first, ML-second).  
-2) Executes signals live via **Alpaca trading API** once promotion criteria are met.  
-3) Runs a daily **LLM review agent** that inspects trades/outcomes, proposes improvements (rules/features/models/risk/config/code), and creates auditable change proposals using a controlled workflow.  
+1) Produces **trading signals** from historically validated patterns (rule-first, ML-second).
+2) Executes signals live via **Alpaca trading API** once promotion criteria are met.
+3) Runs a daily **LLM review agent** that inspects trades/outcomes, proposes improvements (rules/features/models/risk/config/code), and creates auditable change proposals using a controlled workflow.
 4) Provides a **RAG search layer** so agents can query the dataset and the research outcomes with natural language + filters, with pointers back to raw evidence.
 
 This is a “massive dataset” system: **durable lakehouse** + **hot store**, with strong observability and statistical hygiene (no lookahead, no leakage, time-series validation, multiple-testing controls).
@@ -20,10 +20,10 @@ This is a “massive dataset” system: **durable lakehouse** + **hot store**, w
 
 ## 2) Guiding Principles (Anti-Overfitting Doctrine)
 
-1) **Rule-first vertical slice:** start with explicit hypotheses encoded as rules + engineered features; backtest brutally with costs.  
-2) **ML as a meta-layer:** once rules have some edge, train ML to decide when to follow a rule (meta-labeling).  
-3) **Robust stats before dopamine:** walk-forward testing, purged/embargoed CV, bootstrap/permutation checks, and multiple-hypothesis discipline.  
-4) **RAG is retrieval, not truth:** RAG returns **evidence + pointers**; execution logic is deterministic and fully logged.  
+1) **Rule-first vertical slice:** start with explicit hypotheses encoded as rules + engineered features; backtest brutally with costs.
+2) **ML as a meta-layer:** once rules have some edge, train ML to decide when to follow a rule (meta-labeling).
+3) **Robust stats before dopamine:** walk-forward testing, purged/embargoed CV, bootstrap/permutation checks, and multiple-hypothesis discipline.
+4) **RAG is retrieval, not truth:** RAG returns **evidence + pointers**; execution logic is deterministic and fully logged.
 5) **LLM can suggest, not silently deploy:** improvements become PRs/config proposals with tests + human/automated gates.
 
 ---
@@ -75,7 +75,7 @@ This is a “massive dataset” system: **durable lakehouse** + **hot store**, w
    - `alpaca_trading_connector` (orders/fills/positions snapshots; required once trading enabled)
 
 2) **Event Bus**
-   - Kafka/Redpanda recommended (durable, replayable).  
+   - Kafka/Redpanda recommended (durable, replayable).
    - Minimal mode: persistent queue + idempotent writers (acceptable but less robust).
 
 3) **Storage**
@@ -636,12 +636,12 @@ If you want to make this even tighter for the coding agent, the next file to add
 
 
 
-ADDENDUM: 
+ADDENDUM:
 # PRD: Poetiq-Style Meta-Solver Layer for UW Options Signal Platform
 
-**Codename:** “Orion-Poetiq”  
-**Base System:** Real-Time UW + Alpaca Data Lake + Signal Engine + Promotion Gates v1  
-**Date:** December 2025  
+**Codename:** “Orion-Poetiq”
+**Base System:** Real-Time UW + Alpaca Data Lake + Signal Engine + Promotion Gates v1
+**Date:** December 2025
 
 ---
 
@@ -649,9 +649,9 @@ ADDENDUM:
 
 The existing platform:
 
-- Ingests real-time **Unusual Whales** (UW) flow + **Alpaca** 1m bars into a lakehouse.  
-- Generates rule-first candidates, then uses ML meta-labeling, with strict **backtest & promotion gates** for Research → Shadow → Paper → Limited Live → Scaled Live.   
-- Runs a **daily LLM EOD Review Agent** that proposes config/code improvements as auditable artifacts.  [oai_citation:0‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
+- Ingests real-time **Unusual Whales** (UW) flow + **Alpaca** 1m bars into a lakehouse.
+- Generates rule-first candidates, then uses ML meta-labeling, with strict **backtest & promotion gates** for Research → Shadow → Paper → Limited Live → Scaled Live.
+- Runs a **daily LLM EOD Review Agent** that proposes config/code improvements as auditable artifacts.  [oai_citation:0‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
 
 This PRD adds a **Poetiq-style meta-solver layer**:
 
@@ -672,46 +672,46 @@ The live system still runs rule+ML pipelines, but now those pipelines are **disc
   - Execution & risk configs
   - Promotion stage
 - A **Solver Library & DSL** for defining and versioning solvers (backed by DB).
-- An **Evaluation Harness** that runs solvers against historical datasets, leveraging existing feature & label pipelines and backtest engine.  [oai_citation:1‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
+- An **Evaluation Harness** that runs solvers against historical datasets, leveraging existing feature & label pipelines and backtest engine.  [oai_citation:1‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
 - A **Meta-Search Orchestrator** that:
   - Generates solver variants (Poetiq-style edits).
   - Runs evaluation batches.
   - Scores & ranks solvers.
 - A **Runtime Solver Router** that selects which solver(s) to use for live signals, per context (ticker, regime, stage).
 - Integration with:
-  - Existing **promotion gates** (research → shadow → paper → live).  [oai_citation:2‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)  
+  - Existing **promotion gates** (research → shadow → paper → live).  [oai_citation:2‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)
   - Existing **EOD LLM Review Agent**.
 
 ### 1.2 Out of scope
 
-- Changes to underlying ingestion (UW/Alpaca connectors) or lakehouse plumbing.  [oai_citation:3‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
-- Changes to promotion thresholds in `promotion_gates.md` (numeric values remain configurable elsewhere).  [oai_citation:4‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)  
+- Changes to underlying ingestion (UW/Alpaca connectors) or lakehouse plumbing.  [oai_citation:3‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
+- Changes to promotion thresholds in `promotion_gates.md` (numeric values remain configurable elsewhere).  [oai_citation:4‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)
 - High-frequency microstructure modelling or fully autonomous code deployment (still forbidden).
 
 ---
 
 ## 2. Existing System Summary (Context)
 
-From the base PRD:  [oai_citation:5‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
+From the base PRD:  [oai_citation:5‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
 
 - **Connectors & Storage**
   - UW connectors for flow, dark pool, alerts.
   - Alpaca connectors for 1m bars + trading.
-  - Bronze/Silver/Gold tables; feature store (`features_window`, `features_event`) + labels (`labels_window`, `labels_event`).  
+  - Bronze/Silver/Gold tables; feature store (`features_window`, `features_event`) + labels (`labels_window`, `labels_event`).
 
 - **Signal Stack**
-  - **Rule-first hypotheses** → `candidates` (event-level).  [oai_citation:6‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
-  - **ML meta-labeling** to decide TRADE / SKIP / SIZE.  
-  - Robust time-series validation (walk-forward, purged/embargoed CV, cost/slippage, multiple hypothesis control).   
+  - **Rule-first hypotheses** → `candidates` (event-level).  [oai_citation:6‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
+  - **ML meta-labeling** to decide TRADE / SKIP / SIZE.
+  - Robust time-series validation (walk-forward, purged/embargoed CV, cost/slippage, multiple hypothesis control).
 
 - **Execution & Risk**
   - `signals_live` table with decision traces.
-  - Alpaca orders/fills/positions; kill-switches; daily/rolling drawdown limits.   
+  - Alpaca orders/fills/positions; kill-switches; daily/rolling drawdown limits.
 
 - **Governance**
-  - Stage model with explicit promotion gates and demotion rules.  [oai_citation:7‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)  
-  - EOD LLM Review Agent that produces Improvement Reports and PR/config proposals (never directly deploys).  [oai_citation:8‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
-  - RAG layer indexing backtest reports, trade journals, and daily recaps.  [oai_citation:9‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
+  - Stage model with explicit promotion gates and demotion rules.  [oai_citation:7‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)
+  - EOD LLM Review Agent that produces Improvement Reports and PR/config proposals (never directly deploys).  [oai_citation:8‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
+  - RAG layer indexing backtest reports, trade journals, and daily recaps.  [oai_citation:9‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
 
 This PRD plugs into **feature store, backtest engine, promotion gates, and LLM review**—no changes to raw data contracts.
 
@@ -723,20 +723,20 @@ This PRD plugs into **feature store, backtest engine, promotion gates, and LLM r
 
 A **Solver** is a versioned, declarative definition of a complete signal→decision pipeline:
 
-- `ruleset_id`: which rule(s) produce candidates (e.g. “Bullish Sweep + Confirming Dark”).  [oai_citation:10‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
-- `feature_set_id`: which features from `features_event` / `features_window` it uses.  
-- `model_version`: ML meta-model (or `null` for rule-only).  
-- `risk_profile_id`: sizing, max positions, symbol filters, time-of-day bans.   
-- `promotion_stage`: Research / Shadow / Paper / Limited Live / Scaled Live (mirrors promotion_gates).  [oai_citation:11‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)  
+- `ruleset_id`: which rule(s) produce candidates (e.g. “Bullish Sweep + Confirming Dark”).  [oai_citation:10‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
+- `feature_set_id`: which features from `features_event` / `features_window` it uses.
+- `model_version`: ML meta-model (or `null` for rule-only).
+- `risk_profile_id`: sizing, max positions, symbol filters, time-of-day bans.
+- `promotion_stage`: Research / Shadow / Paper / Limited Live / Scaled Live (mirrors promotion_gates).  [oai_citation:11‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)
 - `runtime_policy`: runtime-specific behavior (e.g. require strong confirmation vs moderate).
 
-In promotion_gates language, a **Strategy Version** is now an **instance of Solver**.  [oai_citation:12‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)  
+In promotion_gates language, a **Strategy Version** is now an **instance of Solver**.  [oai_citation:12‡promotion_gates.md](sediment://file_00000000c61471fdb4bc5ee54a804122)
 
 ### 3.2 TickerSnapshot / Evaluation Task
 
 A **Task** is “evaluate solver S on all candidate events within [t0, t1] and its corresponding labels”.
 
-We reuse existing **feature + label** generation and backtest engine infrastructure.  [oai_citation:13‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)  
+We reuse existing **feature + label** generation and backtest engine infrastructure.  [oai_citation:13‡PRD.md](sediment://file_0000000095f871fdb01d43f42975fb8c)
 
 ### 3.3 Meta-Experiment
 
@@ -753,7 +753,7 @@ The meta-layer is responsible for generating candidate solvers but **must obey p
 
 ## 4. Data Model Extensions
 
-We assume existing tables for events, features, labels, `candidates`, `signals_live`, model registry, experiment registry, and promotion-gate tracking.   
+We assume existing tables for events, features, labels, `candidates`, `signals_live`, model registry, experiment registry, and promotion-gate tracking.
 
 New or extended tables:
 
@@ -1214,5 +1214,3 @@ Goal: Convert EOD suggestions into structured SolverEdits and run them through m
 	•	Which meta-experiments led to that solver’s current form.
 
 ⸻
-
-

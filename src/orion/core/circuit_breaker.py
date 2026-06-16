@@ -69,7 +69,27 @@ class CircuitBreaker:
         """
         Checks if trading should be halted.
         Returns True if OPEN (Halted).
+
+        When ``global_circuit_breaker_enabled`` is False the breaker still
+        records OPEN events in the DB (so the operator can see what would
+        have tripped) but `is_open()` always returns False, so callers
+        treat trading as nominal. Intended for forward-testing windows.
         """
+
+        from orion.config import SystemSettings
+
+        if not SystemSettings().global_circuit_breaker_enabled:
+
+            async def fetch_state_for_log(session: Any) -> bool:
+                stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
+                result = await session.execute(stmt)
+                status_record = result.scalars().first()
+                return status_record is not None and status_record.status == "OPEN"
+
+            would_open = await db_query(fetch_state_for_log)
+            if would_open:
+                logger.warning("global_circuit_breaker_would_open_but_disabled")
+            return False
 
         async def check_status(session: Any) -> bool:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)

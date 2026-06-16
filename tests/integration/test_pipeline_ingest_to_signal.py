@@ -23,6 +23,7 @@ from orion.storage.models_signals import SignalLive
 from orion.storage.models_solvers import Solver, SolverMetrics
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_pipeline_ingest_to_signal_live_row(monkeypatch: pytest.MonkeyPatch):
     # Make risk permissive so preflight + sizing doesn't reject in tests.

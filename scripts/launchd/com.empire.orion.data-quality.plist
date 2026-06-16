@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd agent for orion.main_data_quality (--scheduled) running natively on macOS.
+
+Install:
+    cp scripts/launchd/com.empire.orion.data-quality.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.data-quality.plist
+
+Status:
+    launchctl print gui/$(id -u)/com.empire.orion.data-quality
+
+Stop:
+    launchctl bootout gui/$(id -u)/com.empire.orion.data-quality
+
+Logs:
+    tail -f logs/data_quality_native.log               # structured Python logs
+    tail -f logs/data_quality_native.stdout.log        # launchd-captured stdout
+    tail -f logs/data_quality_native.stderr.log        # launchd-captured stderr
+
+The service runs `--scheduled`: an always-on daemon that self-fires hourly
+during extended market hours (7 AM - 8 PM ET, weekdays) and otherwise sleeps,
+so RunAtLoad+KeepAlive is correct (the internal scheduler owns the cadence).
+
+Single-instance guarantee: Orion's own service-lease (`service_lease_data_quality`
+row in SystemStatus, claimed by `orion.core.service_lease.acquire_service_lease`
+from `orion.main_data_quality`'s scheduled daemon) keys on ORION_LEASE_OWNER_ID.
+The wrapper sets `orion_data_quality_native`, the docker-compose data-quality
+stanza sets `orion_data_quality_compose`; the two are distinct so whichever
+starts second raises RuntimeError and exits non-zero — start one or the other.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.data-quality</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Orion/scripts/run_data_quality_native.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Start when this LaunchAgent is loaded (login or `launchctl bootstrap`). -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on exit, regardless of exit code. Equivalent to docker
+         `restart: unless-stopped`. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Minimum seconds between restart attempts. Prevents a hard
+         crash-loop from saturating CPU; matches the implicit ~5s Docker
+         delay but a bit larger for safety. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Inherit user environment (login keychains, etc.) where possible. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+    </dict>
+
+    <!-- Send the process's own stdout/stderr (anything not redirected
+         inside the wrapper) to dedicated files so we never have to
+         rummage in /var/log/system.log. -->
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/data_quality_native.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/data_quality_native.stderr.log</string>
+
+    <!-- Don't elevate; runs as the operator user. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+One-shot launchd agent that closes orphaned options positions at the
+next market open (2026-05-22 9:35 AM ET = 13:35 UTC).
+
+INSTALL ONCE:
+    cp scripts/launchd/com.empire.orion.orphan-close.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.orphan-close.plist
+
+CHECK STATUS:
+    launchctl print gui/$(id -u)/com.empire.orion.orphan-close
+
+REMOVE AFTER USE (this is a ONE-SHOT — does not need to live in
+LaunchAgents permanently):
+    launchctl bootout gui/$(id -u)/com.empire.orion.orphan-close
+    rm ~/Library/LaunchAgents/com.empire.orion.orphan-close.plist
+
+CONTEXT — see scripts/close_orphaned_positions.py for the full incident
+write-up. 20 options positions worth ~$522K mark value, all expiring
+5/22, need to be closed at the 5/22 9:30 ET open.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.orphan-close</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <!-- uv lives at ~/.local/bin/uv on this host, NOT /opt/homebrew/bin/uv.
+             The previous path made every fire return exit-127 silently
+             (incident 2026-05-22: orphans bled an additional $67K because
+             the orphan-close that was supposed to fire at 6:35 AM PT
+             never ran). Use absolute path to the real binary. -->
+        <string>cd /Users/jacobmcmillan/Empire/Orion &amp;&amp; /Users/jacobmcmillan/.local/bin/uv run python scripts/close_orphaned_positions.py --min-value 50 >> logs/orphan_close.log 2>&amp;1</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- launchd interprets StartCalendarInterval in LOCAL TIME, not UTC
+         (verified against the host's PDT zone — codex review caught this
+         after the first version of this plist used Hour=13 thinking it
+         was UTC, which would have fired at 4:35 PM ET on 5/22, 35 minutes
+         after options-market close, missing the whole emergency window).
+         Target: 9:35 AM ET on 5/22 = 6:35 AM PT in the host's PDT zone. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>35</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/orphan_close.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/orphan_close.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

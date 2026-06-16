@@ -5,14 +5,18 @@ import sys
 from datetime import datetime
 
 from orion.agents.meta_search_agent import MetaSearchAgent
+from orion.shared.alerts import send_discord_alert
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 
 # Setup Logger
 logger = setup_struct_logger("orion.meta")
 
-# Run daily 2 hours after market close (6 PM ET = 22:00 UTC on regular days)
-SCHEDULED_HOUR_UTC = 22
-SCHEDULED_MINUTE = 0
+# Liveness cadence budget. Meta-search self-fires once per weekday at 18:00 ET,
+# so a successful cycle is daily; 1.5 days bridges a normal weekday gap without
+# alerting, while still catching a scheduler loop that has stopped firing.
+# 3.5 days: weekend-safe (see eod_review_agent budget note).
+LIVENESS_CADENCE_BUDGET_SECONDS = int(86400 * 3.5)
 
 
 async def main() -> None:
@@ -61,8 +65,16 @@ async def run_scheduled(base_solver: str) -> None:
                     experiment_name=f"Scheduled Daily {now.strftime('%Y-%m-%d')}",
                 )
                 logger.info("Daily scheduled meta-search evolution completed.")
+                await publish_liveness("meta_search", cadence_budget_seconds=LIVENESS_CADENCE_BUDGET_SECONDS)
+                await send_discord_alert(
+                    f"Meta-search daily evolution completed for {base_solver} ({now.strftime('%Y-%m-%d')})."
+                )
             except Exception as e:
                 logger.error(f"Daily meta-search evolution failed: {e}", exc_info=True)
+                await send_discord_alert(
+                    f"Meta-search daily evolution FAILED for {base_solver} "
+                    f"({now.strftime('%Y-%m-%d')}): {type(e).__name__}: {e}"
+                )
 
             # Wait 1 hour to avoid re-triggering
             await asyncio.sleep(3600)

@@ -56,6 +56,50 @@ class FillRecord(Base):
     __table_args__ = (Index("ux_fills_broker_order_id", "broker_order_id", unique=True),)
 
 
+class PositionRunningStats(Base):
+    """Persisted running-window stats per open position.
+
+    PositionMonitor.sync_positions accumulates `max_return_pct` and
+    `max_drawdown_pct` on the in-memory `TrackedPosition` dataclass on
+    every cycle, but those values were lost on container restart.
+    After a restart, `_track_new_position` re-seeded them as
+    `max(0, unrealized_pnl_pct)` / `min(0, ...)` — so a position
+    that had hit +200% and was now at +50% looked to the ML exit
+    classifier like it had a +50% max-return-so-far (no peak), and
+    the classifier saw the feature vector of a brand-new stable
+    trade. Together with several other defaults this kept the
+    classifier's exit probability below the 0.55 threshold for
+    every re-hydrated position (Bug #3 of exit-pipeline RCA — see
+    `docs/rca/exit_classifier/SYNTHESIS.md`).
+
+    This table is the durable side of those running stats. Upserted
+    on every `sync_positions` tick by symbol; consulted on new-
+    position tracking to rehydrate. Rows persist past the position
+    close — when the symbol next appears in broker positions, the
+    row primes the in-memory state. A symbol that's been closed
+    permanently leaves a stale row, which is fine: it only gets read
+    if/when a NEW position with the same symbol opens (and the next
+    `sync_positions` cycle will immediately update it with the
+    re-opened position's running window).
+    """
+
+    __tablename__ = "position_running_stats"
+
+    # Per-symbol PK (matches TrackedPosition.symbol — OCC option
+    # symbol for options, ticker for equity).
+    symbol: Mapped[str] = mapped_column(String, primary_key=True)
+
+    # Peak return and trough drawdown observed since the position
+    # was first tracked. Both in percent units (100.0 = +100%) to
+    # match TrackedPosition.max_return_pct / max_drawdown_pct.
+    max_return_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    max_drawdown_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    last_updated_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class PositionSnapshot(Base):
     """
     PRDv2 6.2/12.4: Persist positions snapshots once PAPER/LIVE is enabled.

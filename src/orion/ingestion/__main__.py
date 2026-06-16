@@ -11,16 +11,21 @@ This runs the modern IngestionService which:
 - Writes to Bronze/Silver layers
 """
 
-import asyncio
-
 from orion.ingestion.service import IngestionService
+from orion.shared.async_main import run_entrypoint
 
 
-def main() -> None:
-    """Start the ingestion service."""
+async def _main() -> None:
+    # Construct INSIDE the wrapped coroutine so constructor failures (e.g.
+    # Gateway stream client config errors) hit run_entrypoint's structured
+    # crash logging instead of escaping before the try.
     service = IngestionService()
-    asyncio.run(service.run())
+    await service.run()
 
 
 if __name__ == "__main__":
-    main()
+    # run_entrypoint owns asyncio.run, silent Ctrl-C exit, and structured
+    # crash logging with a non-zero exit code so docker restart_policy
+    # correctly reports failure (was previously ec=0 in restart-loop
+    # incidents when the loop returned silently).
+    run_entrypoint("orion.ingest", _main())

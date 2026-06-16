@@ -6,6 +6,7 @@ Routes all order management, position tracking, and account queries through
 the centralized Data Gateway REST API.
 """
 
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -41,6 +42,11 @@ class GatewayTradingClient:
         self.api_key = api_key or system_settings.data_gateway_api_key or ""
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        # Short-TTL cache of option chains keyed by underlying, so a burst of
+        # close attempts (multiple contracts on the same name, or a retry loop)
+        # doesn't refetch the multi-MB chain each time.
+        self._chain_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._chain_cache_ttl_s = 5.0
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -82,14 +88,23 @@ class GatewayTradingClient:
                 return body[_RESPONSE_DATA_KEY]
             return body
         except httpx.HTTPStatusError as exc:
+            # Surface the response BODY, not just the bare status line.
+            # The Gateway proxies Alpaca's error verbatim, so the body
+            # carries the actual reason code (40310000 insufficient
+            # day-trading buying power, 42210000 position-intent mismatch,
+            # "potential wash trade detected", …). `str(exc)` is only
+            # "Client error '403 Forbidden' for url …" — useless for
+            # operators and for the close-path intent retry. Callers that
+            # persist `error_message` or branch on the reason read `detail`.
+            body = exc.response.text
             logger.error(
                 "gateway_trading_http_error",
                 method=method,
                 path=path,
                 status=exc.response.status_code,
-                detail=exc.response.text[:500],
+                detail=body[:500],
             )
-            return {"error": str(exc)}
+            return {"error": str(exc), "detail": body, "status_code": exc.response.status_code}
         except Exception as exc:
             logger.error("gateway_trading_error", method=method, path=path, error=str(exc))
             return {"error": str(exc)}
@@ -145,9 +160,21 @@ class GatewayTradingClient:
         time_in_force: str = "day",
         limit_price: float | None = None,
         client_order_id: str | None = None,
+        position_intent: str | None = None,
     ) -> dict[str, Any]:
-        """Submit a new order through the Gateway."""
-        body: dict[str, Any] = {
+        """Submit a new order through the Gateway.
+
+        2026-05-22: Gateway's POST /api/v1/alpaca/orders signature declares
+        all fields as FastAPI Query parameters (no Body annotation), so they
+        must travel in the URL query string, not the JSON body. Sending them
+        as a JSON body returns 422 with
+            loc: ["query", "symbol"] / ["query", "side"]
+        — see incident write-up in scripts/close_orphaned_positions.py
+        (orphan-close, 5/22). This bug silently blocked 100% of Orion's
+        live order submissions until it was caught running the orphan-close
+        the morning after the launchd job mis-fired.
+        """
+        params: dict[str, Any] = {
             "symbol": symbol,
             "qty": qty,
             "side": side,
@@ -155,17 +182,41 @@ class GatewayTradingClient:
             "time_in_force": time_in_force,
         }
         if limit_price is not None:
-            body["limit_price"] = limit_price
+            params["limit_price"] = limit_price
         if client_order_id is not None:
-            body["client_order_id"] = client_order_id
-        return await self._request("POST", "/api/v1/alpaca/orders", json_body=body)
+            params["client_order_id"] = client_order_id
+        if position_intent is not None:
+            params["position_intent"] = position_intent
+        return await self._request("POST", "/api/v1/alpaca/orders", params=params)
 
-    async def get_orders(self, status: str = "open", limit: int = 50) -> list[dict[str, Any]]:
-        """List orders with optional status filter."""
+    async def get_orders(
+        self,
+        status: str = "open",
+        limit: int = 50,
+        direction: str = "desc",
+        *,
+        after: datetime | None = None,
+        until: datetime | None = None,
+        nested: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List orders with optional status + submitted_at date-window filter.
+
+        ``after``/``until`` filter by SUBMITTED_AT (Alpaca behaviour — NOT
+        filled_at), tz-aware datetimes serialized as ISO-8601. ``nested=True``
+        nests bracket child fills under each parent's ``legs``. ``direction``
+        is "asc" (oldest-first) or "desc" (newest-first).
+        """
+        params: dict[str, Any] = {"status": status, "limit": limit, "direction": direction}
+        if after is not None:
+            params["after"] = after.isoformat()
+        if until is not None:
+            params["until"] = until.isoformat()
+        if nested:
+            params["nested"] = True
         result = await self._request(
             "GET",
             "/api/v1/alpaca/orders",
-            params={"status": status, "limit": limit},
+            params=params,
         )
         if isinstance(result, list):
             return result
@@ -184,6 +235,42 @@ class GatewayTradingClient:
             response_preview=repr(result)[:500],
         )
         raise GatewayTradingClientError("Gateway orders response was not a list")
+
+    async def get_account_activities(self, activity_types: str | None = None) -> list[dict[str, Any]]:
+        """List Alpaca account activities (broker truth of money moved).
+
+        Proxies ``GET /api/v1/alpaca/account/activities``. ``activity_types`` is
+        a comma-separated filter (e.g. ``"FILL"``); ``None`` returns all types.
+
+        Limitation: the Gateway endpoint exposes neither date filtering nor
+        pagination and the Alpaca FILL activity carries ``order_id`` + ``symbol``
+        but NOT ``client_order_id`` — so orion attribution of an activity would
+        require joining its ``order_id`` back to a known orion-minted order. The
+        PnL-reconciliation job therefore does NOT use this surface; it
+        reconstructs realized PnL from orion's own ``fills`` table instead (see
+        ``jobs/reconcile_pnl.py``).
+        """
+        result = await self._request(
+            "GET",
+            "/api/v1/alpaca/account/activities",
+            params={"activity_types": activity_types} if activity_types else None,
+        )
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict) and "error" in result:
+            logger.error(
+                "gateway_trading_activities_request_failed",
+                event_type="GATEWAY_ACTIVITIES_REQUEST_FAILED",
+                error=result["error"],
+            )
+            raise GatewayTradingClientError(f"Gateway activities request failed: {result['error']}")
+        logger.error(
+            "gateway_trading_activities_malformed_response",
+            event_type="GATEWAY_ACTIVITIES_MALFORMED_RESPONSE",
+            response_type=type(result).__name__,
+            response_preview=repr(result)[:500],
+        )
+        raise GatewayTradingClientError("Gateway activities response was not a list")
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         """Get a specific order by ID."""
@@ -206,6 +293,57 @@ class GatewayTradingClient:
             f"/api/v1/alpaca/options/chain/{underlying}",
             params={"limit": limit},
         )
+
+    async def get_option_quote(self, option_symbol: str) -> dict[str, Any]:
+        """Return a fresh ``{bid, ask, last, timestamp}`` for a single OCC option
+        contract, sourced from its underlying's live chain.
+
+        The Gateway exposes no single-contract option-quote endpoint, so this
+        fetches the underlying chain (short-TTL cached) and locates the contract
+        by ``contract_symbol``. Returns ``{}`` if the symbol can't be parsed, the
+        chain is unavailable, or the contract isn't found — the caller must treat
+        an empty/biddless result as "no fresh quote" and fall back. Used to price
+        an options close at the live market instead of a possibly-stale tracked
+        mark.
+        """
+        import time
+
+        from orion.shared.utils import parse_occ_symbol
+
+        parsed = parse_occ_symbol(option_symbol)
+        underlying = parsed.get("underlying")
+        if not underlying or not isinstance(underlying, str):
+            return {}
+
+        cached = self._chain_cache.get(underlying)
+        now = time.monotonic()
+        if cached is not None and (now - cached[0]) < self._chain_cache_ttl_s:
+            contracts = cached[1]
+        else:
+            chain = await self.get_option_chain(underlying)
+            if not isinstance(chain, dict) or "error" in chain:
+                return {}
+            contracts = chain.get("contracts") or []
+            if not isinstance(contracts, list):
+                return {}
+            self._chain_cache[underlying] = (now, contracts)
+
+        for c in contracts:
+            if isinstance(c, dict) and c.get("contract_symbol") == option_symbol:
+
+                def _f(v: Any) -> float | None:
+                    try:
+                        return float(v) if v is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                return {
+                    "bid": _f(c.get("bid")),
+                    "ask": _f(c.get("ask")),
+                    "last": _f(c.get("last")),
+                    "timestamp": c.get("timestamp"),
+                }
+        return {}
 
     # ── Clock ────────────────────────────────────────────────
 
