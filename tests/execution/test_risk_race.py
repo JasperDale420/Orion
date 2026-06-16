@@ -36,7 +36,7 @@ async def test_risk_manager_race_condition():
     # - Process Fill (updates authoritative exposure)
     # - Remove Pending
     await rm.process_fill(ticker, qty1, price1, "BUY", fill_id="race_1")
-    rm.remove_pending_order(oid1)
+    await rm.remove_pending_order(oid1)
 
     # Verify authoritative state
     assert getattr(rm, "ticker_exposures", {}).get(ticker) == pytest.approx(1500.0)
@@ -65,7 +65,7 @@ async def test_risk_manager_pending_cleared_on_fill():
 
     # Fill happens
     await rm.process_fill(ticker, qty, price, "BUY", fill_id="race_2")
-    rm.remove_pending_order(oid)
+    await rm.remove_pending_order(oid)
 
     # Current Exposure should be 1000, not 2000
     current_exp = rm.ticker_exposures.get(ticker, 0.0)

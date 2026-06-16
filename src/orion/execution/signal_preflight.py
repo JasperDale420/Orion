@@ -26,7 +26,9 @@ def _parse_rollup_id(rollup_id: str) -> tuple[str, str, datetime] | None:
         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
     except Exception:
         return None
-    return ticker, period, _ensure_utc(ts)
+    ts_utc = _ensure_utc(ts)
+    assert ts_utc is not None  # ts is non-None here, so ensure_utc cannot return None
+    return ticker, period, ts_utc
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ async def preflight_live_signal(
 
     now = _ensure_utc(now_utc or datetime.now(UTC))
     cand_ts = _ensure_utc(candidate.timestamp_utc)
+    assert now is not None and cand_ts is not None  # both inputs are non-None here
 
     lag_seconds = (now - cand_ts).total_seconds()
     if lag_seconds > float(system_settings.max_data_lag_seconds):
@@ -142,10 +145,12 @@ async def preflight_live_signal(
             missing_rollups.append({"ticker": ticker, "period": period, "timestamp_utc": ts.isoformat()})
             continue
 
+        row_ts = _ensure_utc(row.timestamp_utc)
+        assert row_ts is not None  # rollup row timestamp_utc is non-nullable
         rollup_snapshot[period] = {
             "ticker": row.ticker,
             "period": row.period,
-            "timestamp_utc": _ensure_utc(row.timestamp_utc).isoformat(),
+            "timestamp_utc": row_ts.isoformat(),
             "open": row.open,
             "high": row.high,
             "low": row.low,

@@ -22,9 +22,15 @@ class UWGreekExposureConnector(BaseGatewayConnector):
         self._latest_exposures: list[dict[str, Any]] = []
 
     def _fetch_greek_exposure(self, ticker: str) -> dict[str, Any] | None:
-        """Fetch greek exposure for a ticker via Data Gateway."""
+        """Fetch greek exposure for a ticker via Data Gateway.
+
+        Uses the aggregate ``/gex/{ticker}`` route. The per-strike
+        ``/{ticker}/spot-exposures`` route returns empty data because the
+        vendored UW SDK's ``SpotGreekExposuresByStrike`` model is a single-row
+        model wrongly applied to a ``{"data":[...]}`` wrapper (2026-06-09 RCA).
+        """
         return self._gateway_get(
-            f"/api/v1/uw/{ticker}/spot-exposures",
+            f"/api/v1/uw/gex/{ticker}",
             label=f"greek_exposure:{ticker}",
         )
 
@@ -51,26 +57,23 @@ class UWGreekExposureConnector(BaseGatewayConnector):
                 if not exposure_data:
                     return 0
 
-                # Handle list response (multiple expiries) or single dict
                 # API returns: call_gamma, put_gamma, call_vanna, put_vanna, call_charm, put_charm
                 # GEX = call_gamma + put_gamma (net gamma exposure)
                 # VEX = call_vanna + put_vanna (net vanna exposure)
                 # CEX = call_charm + put_charm (net charm exposure)
                 if isinstance(exposure_data, list):
-                    total_gex_oi = sum(
-                        float(e.get("call_gamma") or 0) + float(e.get("put_gamma") or 0) for e in exposure_data
-                    )
+                    # /gex returns one aggregate row per day; upstream order is
+                    # NOT guaranteed, so pick the most recent by timestamp (do
+                    # not use [-1]). Summing across the series would be wrong.
+                    latest = max(exposure_data, key=lambda e: str(e.get("timestamp") or ""))
+                    total_gex_oi = float(latest.get("call_gamma") or 0) + float(latest.get("put_gamma") or 0)
                     total_gex_vol = 0
-                    total_vex_oi = sum(
-                        float(e.get("call_vanna") or 0) + float(e.get("put_vanna") or 0) for e in exposure_data
-                    )
+                    total_vex_oi = float(latest.get("call_vanna") or 0) + float(latest.get("put_vanna") or 0)
                     total_vex_vol = 0
-                    total_cex_oi = sum(
-                        float(e.get("call_charm") or 0) + float(e.get("put_charm") or 0) for e in exposure_data
-                    )
+                    total_cex_oi = float(latest.get("call_charm") or 0) + float(latest.get("put_charm") or 0)
                     total_cex_vol = 0
-                    call_delta = sum(float(e.get("call_delta") or 0) for e in exposure_data)
-                    put_delta = sum(float(e.get("put_delta") or 0) for e in exposure_data)
+                    call_delta = float(latest.get("call_delta") or 0)
+                    put_delta = float(latest.get("put_delta") or 0)
                     spot = 0
                 else:
                     total_gex_oi = float(exposure_data.get("call_gamma") or 0) + float(

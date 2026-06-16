@@ -8917,7 +8917,7 @@ info:
     [`/stock/{ticker}/net-prem-ticks`](https://api.unusualwhales.com/docs#/operations/PublicApi.TickerController.net_prem_ticks)
     endpoint to
 
-    include `call_volume`, `put_volume`, `call_volume_bid_side`, 
+    include `call_volume`, `put_volume`, `call_volume_bid_side`,
     `put_volume_bid_side`, `call_volume_ask_side`,  `put_volume_ask_side` &
     `net_delta`.
 
@@ -13939,7 +13939,7 @@ paths:
         The following channels are available:
 
         | Channel                     |
-        Description                                                                                                          
+        Description
         |
 
         |-----------------------------|-----------------------------------------------------------------------------------------------------------------------|
@@ -13958,11 +13958,11 @@ paths:
         |
 
         | price:TICKER                | Receive live price updates for the given
-        ticker.                                                                     
+        ticker.
         |
 
         | news                        | Receive live headline
-        news.                                                                                          
+        news.
         |
 
         | lit_trades                  | Receive live lit (exchange-based) trades
@@ -13974,7 +13974,7 @@ paths:
         session.                                                |
 
         | gex:TICKER                  | Receive live gex update for the given
-        ticker.                                                                        
+        ticker.
         |
 
         | gex_strike:TICKER           | Receive live gex strike updates for

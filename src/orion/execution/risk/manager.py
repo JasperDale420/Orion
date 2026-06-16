@@ -8,6 +8,7 @@ Delegates to focused sub-modules:
 """
 
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -23,19 +24,42 @@ from orion.shared.logger import setup_struct_logger
 
 if TYPE_CHECKING:
     from orion.execution.correlation_adjuster import CorrelationAdjuster
-    from orion.storage.models_execution import Position
+    from orion.shared.metrics import Metrics
 
 logger = setup_struct_logger(__name__)
 
-# Initialize metrics
-_metrics: "Metrics | None" = None
-try:
-    from orion.shared.metrics import Metrics
 
-    _maybe_metrics = Metrics.get_instance()
-    _metrics = _maybe_metrics if hasattr(_maybe_metrics, "risk_equity") else None
-except ImportError:
-    pass
+@dataclass(frozen=True)
+class FillOutcome:
+    """Result of ``RiskManager.process_fill``.
+
+    ``is_closing`` is True when the fill reduced/flattened an existing
+    position (so the caller can attribute ``realized_pnl`` to the trade
+    journal). ``realized_pnl`` is 0.0 for opening fills.
+    """
+
+    realized_pnl: float = 0.0
+    is_closing: bool = False
+
+
+# Lazily resolved Prometheus metrics. The previous module-level init called
+# the async Metrics.get_instance() without awaiting, so the gauges were
+# permanently inert (2026-06-10 audit, confirmed by adversarial review).
+# get_metrics_sync materialises the singleton synchronously on first use;
+# failures return None so metrics can never break the risk path.
+_metrics: "Metrics | None" = None
+
+
+def _get_metrics() -> "Metrics | None":
+    global _metrics
+    if _metrics is None:
+        try:
+            from orion.shared.metrics import get_metrics_sync
+
+            _metrics = get_metrics_sync()
+        except ImportError:
+            return None
+    return _metrics
 
 
 class RiskManager:
@@ -51,12 +75,40 @@ class RiskManager:
         self.current_equity = 100000.0
         self.starting_equity = self.current_equity
         self.peak_equity = self.current_equity
+        # Tracks whether peak_equity has been seeded from a real source (DB
+        # state on init, or the first Gateway-sync seed). Replaces the older
+        # `peak_equity == 100000.0` magic-default check, which broke when a
+        # legitimately-loaded peak just happened to equal the hardcoded
+        # default and got silently overwritten on next sync.
+        self._peak_equity_seeded = False
+        # Same one-shot seed pattern for current_equity: the paper Alpaca
+        # account is shared across 3Roses/Cerberus/Kairos/Orbit/WhaleHunter,
+        # so Gateway-account equity reflects ALL systems' P&L. Overwriting
+        # `current_equity` from that pool falsely trips Orion's drawdown
+        # kill switch when other systems lose. After the first seed we
+        # only mutate `current_equity` from Orion-attributed fills via
+        # `update_post_fill` (line 590).
+        self._equity_seeded = False
 
         # Track full position details (qty, avg_entry)
         self.positions: dict[str, dict[str, float]] = {}
 
+        # Projected position greeks stashed at order-submit time (share-
+        # equivalent units), applied to portfolio greeks when the fill lands.
+        self._intended_position_greeks: dict[str, dict[str, float]] = {}
+
         # Idempotency Tracking
         self.processed_fill_ids: set[str] = set()
+
+        # In-memory registry of positions whose protective bracket order(s)
+        # (stop-loss / take-profit) failed to place at entry. Keyed by
+        # option_symbol. This is a *secondary* signal for operators and the
+        # PositionMonitor's re-protection retry — NOT a durable record and
+        # NOT a gate on order flow. A process restart loses this registry;
+        # the durable record is the `position_unprotected` /
+        # `position_partial_protection` flags hoisted onto each
+        # StrategyDecision.execution_params at entry time.
+        self.unprotected_positions: dict[str, dict[str, Any]] = {}
 
         # Composed sub-modules
         self._greeks = GreeksTracker()
@@ -124,6 +176,29 @@ class RiskManager:
         if cfg.max_drawdown_pct <= 0:
             return False
         return self._current_drawdown_pct() >= cfg.max_drawdown_pct
+
+    # ── Equity baseline ──────────────────────────────────────────────────
+
+    def seed_equity_baseline(self, gateway_equity: float) -> None:
+        """Seed current/starting/peak equity ONCE from the Gateway account
+        equity, capped to Orion's allocated slice (`config.allocated_equity`).
+
+        The Alpaca paper account is shared across many systems, so Gateway
+        reports the full pooled equity. Sizing (max premium/order %) must
+        compute off Orion's slice, not the pool — uncapped seeding was the
+        root of the 5/26 over-exposure. After the one-shot seed, equity moves
+        only via Orion-attributed fills. `allocated_equity=None` disables the
+        cap.
+        """
+        allocated = getattr(self.config, "allocated_equity", None)
+        capped = min(gateway_equity, allocated) if allocated and allocated > 0 else gateway_equity
+        if not self._equity_seeded:
+            self.current_equity = capped
+            self.starting_equity = capped
+            self._equity_seeded = True
+        if not self._peak_equity_seeded:
+            self.peak_equity = capped
+            self._peak_equity_seeded = True
 
     # ── Order checking ───────────────────────────────────────────────────
 
@@ -295,9 +370,10 @@ class RiskManager:
     ) -> bool:
         abs_proj = abs(projected_signed)
         abs_curr = abs(effective_signed)
+        max_exposure_usd = getattr(cfg, "max_ticker_exposure_usd", None)
         limit = (
-            float(cfg.max_ticker_exposure_usd)
-            if getattr(cfg, "max_ticker_exposure_usd", None) is not None
+            float(max_exposure_usd)
+            if max_exposure_usd is not None
             else self.current_equity * cfg.max_ticker_exposure_pct
         )
 
@@ -333,6 +409,23 @@ class RiskManager:
 
     def clear_position_greeks(self, ticker: str) -> None:
         self._greeks.clear_position_greeks(ticker)
+
+    def set_intended_position_greeks(
+        self, ticker: str, delta: float, gamma: float, theta: float = 0.0, vega: float = 0.0
+    ) -> None:
+        """Record the projected position greeks for `ticker` at order-submit
+        time (share-equivalent units) so the matching fill can update portfolio
+        greeks. Overwrites any prior stash for the ticker."""
+        self._intended_position_greeks[ticker] = {
+            "delta": delta,
+            "gamma": gamma,
+            "theta": theta,
+            "vega": vega,
+        }
+
+    def clear_intended_position_greeks(self, ticker: str) -> None:
+        """Drop the stashed intended greeks for `ticker` (e.g. on submit failure)."""
+        self._intended_position_greeks.pop(ticker, None)
 
     # ── Delegated methods (Sector) ───────────────────────────────────────
 
@@ -397,35 +490,51 @@ class RiskManager:
         self._sizer.set_correlation_adjuster(adjuster)
         logger.info("Correlation adjuster configured for RiskManager")
 
+    # ── Unprotected-position registry ────────────────────────────────────
+    #
+    # First-class (in-memory) knowledge that a position is missing one or
+    # both protective bracket legs. The ExecutionEngine marks here when
+    # bracket placement fully/partially fails; the PositionMonitor reads it
+    # to prioritise re-protection and clears it on success. Purely
+    # advisory: it never blocks order flow. Lost on restart (see note in
+    # __init__ — the durable record lives in execution_params).
+
+    def mark_unprotected(
+        self,
+        ticker: str,
+        option_symbol: str,
+        reason: str,
+        missing_legs: list[str] | None = None,
+    ) -> None:
+        """Record that ``option_symbol`` is missing protective coverage.
+
+        ``missing_legs`` records exactly which bracket legs failed so
+        re-protection places only those (None = treat both as missing).
+        """
+        self.unprotected_positions[option_symbol] = {
+            "ticker": ticker,
+            "option_symbol": option_symbol,
+            "reason": reason,
+            "missing_legs": list(missing_legs) if missing_legs is not None else ["stop_loss", "take_profit"],
+            "marked_at_utc": datetime.now(UTC),
+        }
+        logger.warning(
+            "risk_position_marked_unprotected",
+            ticker=ticker,
+            option_symbol=option_symbol,
+            reason=reason,
+        )
+
+    def clear_unprotected(self, option_symbol: str) -> None:
+        """Drop a position from the unprotected registry (re-protection succeeded)."""
+        if self.unprotected_positions.pop(option_symbol, None) is not None:
+            logger.info("risk_position_unprotected_cleared", option_symbol=option_symbol)
+
+    def get_unprotected(self) -> dict[str, dict[str, Any]]:
+        """Return a snapshot copy of the unprotected-position registry."""
+        return dict(self.unprotected_positions)
+
     # ── Persistence ──────────────────────────────────────────────────────
-
-    @db_retry
-    async def upsert_position(self, position: "Position") -> None:
-        """Persist position to DB."""
-
-        async def save_position(session: Any) -> None:
-            from sqlalchemy import select
-
-            from orion.storage.models_execution import Position as PositionModel
-
-            stmt = select(PositionModel).where(PositionModel.ticker == position.ticker)
-            result = await session.execute(stmt)
-            existing = result.scalars().first()
-
-            if existing:
-                existing.qty = position.qty
-                existing.avg_price = position.avg_price
-                existing.updated_at_utc = datetime.now(UTC)
-            else:
-                session.add(
-                    PositionModel(
-                        ticker=position.ticker,
-                        qty=position.qty,
-                        avg_price=position.avg_price,
-                    )
-                )
-
-        await db_write(save_position)
 
     @db_retry
     async def initialize(self) -> None:
@@ -449,9 +558,23 @@ class RiskManager:
                         self.current_equity, self.starting_equity
                     )
                     self.open_positions = state.open_positions_count
+                    # Loaded peak from a real source — even if it happens to
+                    # numerically equal the $100K default, downstream syncs
+                    # must not overwrite it.
+                    self._peak_equity_seeded = True
+                    # Same: persisted current_equity is the Orion-only
+                    # running total; treat it as already seeded so the
+                    # Gateway sync doesn't clobber it with account-wide
+                    # equity on the next poll.
+                    self._equity_seeded = True
                     logger.info(f"Risk State Loaded: DailyLoss={self.current_daily_loss}")
                 else:
                     logger.info("No persisted Risk State found.")
+
+            # Restore in-flight orders so the first cycle after restart
+            # doesn't under-count exposure for orders submitted just before
+            # the crash. Stale rows (>TTL) are dropped on load.
+            await self._load_pending_orders()
 
             await self._evaluate_drawdown_kill_switch()
 
@@ -488,10 +611,11 @@ class RiskManager:
 
         await db_write(save_risk_state)
         logger.info("Risk state persisted to DB")
-        if _metrics and hasattr(_metrics, "risk_equity"):
-            _metrics.risk_equity.set(self.current_equity)
-            _metrics.risk_daily_loss.set(self.current_daily_loss)
-            _metrics.risk_open_positions.set(self.open_positions)
+        metrics = _get_metrics()
+        if metrics is not None:
+            metrics.risk_equity.set(self.current_equity)
+            metrics.risk_daily_loss.set(self.current_daily_loss)
+            metrics.risk_open_positions.set(self.open_positions)
 
     async def _evaluate_drawdown_kill_switch(self) -> None:
         if self.current_equity > self.peak_equity:
@@ -520,14 +644,18 @@ class RiskManager:
         side: str,
         fill_id: str,
         expected_price: float | None = None,
-    ) -> None:
+    ) -> FillOutcome:
         """Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
         Idempotent: Checks fill_id against in-memory history.
+
+        Returns a ``FillOutcome`` so the caller can persist realized PnL on a
+        closing fill. A duplicate (already-processed) fill returns a neutral
+        outcome.
         """
         if fill_id in self.processed_fill_ids:
             logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
-            return
+            return FillOutcome()
 
         self.processed_fill_ids.add(fill_id)
 
@@ -546,8 +674,9 @@ class RiskManager:
                     "side": side,
                 },
             )
-            if _metrics and hasattr(_metrics, "slippage_bps"):
-                _metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
+            metrics = _get_metrics()
+            if metrics is not None and hasattr(metrics, "slippage_bps"):
+                metrics.slippage_bps.labels(ticker=ticker, side=side).observe(slippage_bps)
 
         sign = 1 if side.lower() == OrderSide.BUY else -1
         signed_fill_qty = abs(qty) * sign
@@ -563,6 +692,27 @@ class RiskManager:
         is_closing = (old_qty > 0 and signed_fill_qty < 0) or (old_qty < 0 and signed_fill_qty > 0)
 
         if is_closing:
+            # Defensive guard against out-of-order partial-fill delivery. Under
+            # in-order delivery a closing fill can never exceed the known
+            # position. If it does (e.g. a later partial arrives before an
+            # earlier one), computing PnL off the oversized fill would
+            # mis-realize PnL into `current_daily_loss` — the kill-switch input.
+            # Clamp to the known position size (which `min(...)` below already
+            # does for the normal path) and log loudly so the reorder is
+            # visible. The normal-path math is unchanged.
+            if abs(signed_fill_qty) > abs(old_qty):
+                logger.error(
+                    f"Closing fill exceeds known position for {ticker}: "
+                    f"fill_qty={signed_fill_qty} old_qty={old_qty} (clamping PnL to old_qty)",
+                    extra={
+                        "event_type": "closing_fill_exceeds_position",
+                        "ticker": ticker,
+                        "fill_qty": signed_fill_qty,
+                        "old_qty": old_qty,
+                        "client_order_id": fill_id,
+                    },
+                )
+
             qty_closing = min(abs(old_qty), abs(signed_fill_qty))
 
             if old_qty > 0:
@@ -602,28 +752,219 @@ class RiskManager:
         self.ticker_exposures[ticker] = abs(new_qty * price)
         self.open_positions = sum(1 for p in self.positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
 
+        # Keep portfolio greeks tracking reality so the projected-greek gate on
+        # the next order is accurate. Intended greeks are stashed at submit time
+        # (set_intended_position_greeks); a flattened position clears them.
+        if math.isclose(self.positions[ticker]["qty"], 0, abs_tol=1e-9):
+            self.clear_position_greeks(ticker)
+            self._intended_position_greeks.pop(ticker, None)
+        else:
+            intended = self._intended_position_greeks.get(ticker)
+            if intended is not None:
+                self.update_position_greeks(
+                    ticker, intended["delta"], intended["gamma"], intended["theta"], intended["vega"]
+                )
+
         await self._save_state()
 
-        if _metrics and hasattr(_metrics, "risk_exposure"):
-            _metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
+        metrics = _get_metrics()
+        if metrics is not None:
+            metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
+
+        return FillOutcome(realized_pnl=realized_pnl, is_closing=is_closing)
 
     # ── Post-trade & pending order tracking ──────────────────────────────
+
+    # Pending-order rows older than this on `_load_pending_orders` are
+    # discarded as stale (almost certainly leftovers from a process that
+    # crashed between the DB write and the broker call). 1h is generous —
+    # most orders fill or fail within minutes.
+    PENDING_ORDER_LOAD_TTL_SECONDS = 3600
 
     async def update_post_trade(
         self, ticker: str, qty: float, price: float, side: str, order_id: str | None = None
     ) -> None:
-        """Updates internal risk state immediately after an order is sent (Optimistic)."""
+        """Updates internal risk state immediately after an order is sent (Optimistic).
+
+        Also persists the pending order to TimescaleDB so a restart between
+        submission and fill doesn't lose the in-flight exposure tracking
+        until the next Gateway sync.
+        """
         if not order_id:
             order_id = f"pending_{datetime.now(UTC).timestamp()}"
 
         cost = qty * price
         signed_cost = cost if side.lower() == OrderSide.BUY else -cost
         self.pending_orders[order_id] = (ticker, signed_cost)
+        await self._persist_pending_order(order_id, ticker, signed_cost)
 
-    def remove_pending_order(self, order_id: str) -> None:
-        """Removes a pending order from risk tracking."""
-        if order_id in self.pending_orders:
-            del self.pending_orders[order_id]
+    async def remove_pending_order(self, order_id: str) -> None:
+        """Removes a pending order from risk tracking (memory + DB).
+
+        `_remove_pending_order_compat` in execution_engine awaits coroutines
+        returned from this method, so making it async is safe even though
+        callers used to invoke it synchronously.
+        """
+        self.pending_orders.pop(order_id, None)
+        await self._remove_persisted_pending_order(order_id)
+
+    @db_retry
+    async def _persist_pending_order(self, order_id: str, ticker: str, signed_cost: float) -> None:
+        """Upsert a pending-order row keyed on order_id."""
+
+        async def _upsert(session: Any) -> None:
+            from sqlalchemy import select
+
+            from orion.storage.models_risk import PendingOrder
+
+            stmt = select(PendingOrder).where(PendingOrder.order_id == order_id)
+            existing = (await session.execute(stmt)).scalars().first()
+            if existing is not None:
+                existing.ticker = ticker
+                existing.signed_cost = signed_cost
+            else:
+                session.add(
+                    PendingOrder(
+                        order_id=order_id,
+                        ticker=ticker,
+                        signed_cost=signed_cost,
+                        created_at_utc=datetime.now(UTC),
+                    )
+                )
+
+        try:
+            await db_write(_upsert)
+        except Exception as exc:
+            logger.warning(
+                "pending_order_persist_failed",
+                extra={"event_type": "PENDING_ORDER_PERSIST_FAILED", "order_id": order_id, "error": str(exc)},
+            )
+
+    @db_retry
+    async def _remove_persisted_pending_order(self, order_id: str) -> None:
+        """Delete the persisted pending-order row, if it exists."""
+
+        async def _delete(session: Any) -> None:
+            from sqlalchemy import select
+
+            from orion.storage.models_risk import PendingOrder
+
+            stmt = select(PendingOrder).where(PendingOrder.order_id == order_id)
+            existing = (await session.execute(stmt)).scalars().first()
+            if existing is not None:
+                await session.delete(existing)
+
+        try:
+            await db_write(_delete)
+        except Exception as exc:
+            logger.warning(
+                "pending_order_delete_failed",
+                extra={"event_type": "PENDING_ORDER_DELETE_FAILED", "order_id": order_id, "error": str(exc)},
+            )
+
+    async def prune_stale_pending_orders(self) -> int:
+        """Drop pending orders older than the load TTL from memory + DB at runtime.
+
+        ``_load_pending_orders`` only prunes on startup. A day order that
+        EXPIRES unfilled never fires a fill, so ``remove_pending_order`` is
+        never called and the row lingers as phantom pending exposure until the
+        next process restart (RCA 2026-06-05: three expired 6/04 entries —
+        RBLX/ETSY/QURE — were still counted on 6/05 on a long-running native
+        process). Running the same TTL sweep on the periodic risk re-sync
+        bounds the staleness to the TTL. Returns the number pruned.
+        """
+        from sqlalchemy import select
+
+        from orion.shared.utils import ensure_utc as _ensure_utc
+        from orion.storage.db import async_session_factory
+        from orion.storage.models_risk import PendingOrder
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=self.PENDING_ORDER_LOAD_TTL_SECONDS)
+        pruned = 0
+        try:
+            async with async_session_factory() as session:
+                rows = list((await session.execute(select(PendingOrder))).scalars().all())
+                for row in rows:
+                    created = row.created_at_utc
+                    created_utc = _ensure_utc(created) if created is not None else None
+                    if created_utc is None or created_utc < cutoff:
+                        self.pending_orders.pop(row.order_id, None)
+                        await session.delete(row)
+                        pruned += 1
+                if pruned:
+                    await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "pending_orders_prune_failed",
+                extra={"event_type": "PENDING_ORDERS_PRUNE_FAILED", "error": str(exc)},
+            )
+            return 0
+        if pruned:
+            logger.info(
+                "pending_orders_pruned",
+                extra={
+                    "event_type": "PENDING_ORDERS_PRUNED",
+                    "pruned": pruned,
+                    "ttl_seconds": self.PENDING_ORDER_LOAD_TTL_SECONDS,
+                },
+            )
+        return pruned
+
+    async def _load_pending_orders(self) -> None:
+        """Restore the in-memory `pending_orders` dict from the DB.
+
+        Called from `initialize` so a restart picks up where the prior run
+        left off. Rows older than `PENDING_ORDER_LOAD_TTL_SECONDS` are
+        discarded — they are almost certainly stale (orphaned by an earlier
+        crash) and counting them would over-state pending exposure
+        indefinitely.
+        """
+        try:
+            from sqlalchemy import select
+
+            from orion.shared.utils import ensure_utc as _ensure_utc
+            from orion.storage.db import async_session_factory
+            from orion.storage.models_risk import PendingOrder
+
+            cutoff = datetime.now(UTC) - timedelta(seconds=self.PENDING_ORDER_LOAD_TTL_SECONDS)
+
+            async with async_session_factory() as session:
+                stmt = select(PendingOrder)
+                rows = list((await session.execute(stmt)).scalars().all())
+
+                fresh = 0
+                stale_ids: list[str] = []
+                for row in rows:
+                    created = row.created_at_utc
+                    created_utc = _ensure_utc(created) if created is not None else None
+                    if created_utc is None or created_utc < cutoff:
+                        stale_ids.append(row.order_id)
+                        continue
+                    self.pending_orders[row.order_id] = (row.ticker, row.signed_cost)
+                    fresh += 1
+
+                # Clean up stale rows so they don't accumulate
+                if stale_ids:
+                    for sid in stale_ids:
+                        stale = await session.get(PendingOrder, sid)
+                        if stale is not None:
+                            await session.delete(stale)
+                    await session.commit()
+
+            logger.info(
+                "pending_orders_loaded",
+                extra={
+                    "event_type": "PENDING_ORDERS_LOADED",
+                    "fresh": fresh,
+                    "stale_dropped": len(stale_ids),
+                    "ttl_seconds": self.PENDING_ORDER_LOAD_TTL_SECONDS,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "pending_orders_load_failed",
+                extra={"event_type": "PENDING_ORDERS_LOAD_FAILED", "error": str(exc)},
+            )
 
     def update_metrics(
         self, realized_pnl: float = 0.0, open_positions_count: int | None = None, open_pnl: float = 0.0

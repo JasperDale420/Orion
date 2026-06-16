@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd agent for the Orion dead-man watchdog — the unified liveness/ABSENCE
+guard (redesign R3 / task RA.1). Fires every 5 minutes and:
+  1. Alerts (Discord) on any registered service_liveness row whose newest
+     successful cycle is older than that service's declared cadence budget.
+  2. During the 09:30-16:00 ET cash session, asserts per-stage freshness on the
+     REAL pipeline tables (bronze / silver / gold_feature_events) and alerts on
+     a stalled stage. Outside market hours the stage checks are informational.
+
+SHAPE: periodic ONE-SHOT (StartInterval=300), NOT a KeepAlive daemon. The
+watchdog runs, evaluates, dispatches any alerts, and exits. KeepAlive is
+deliberately omitted: a non-zero exit (exit 2 == alert dispatched) must NOT
+trigger a launchd restart loop — the next 5-minute fire is sufficient. This is
+the same one-shot convention as market-open-dataflow-check / orphan-close, and
+the reason this label is intentionally NOT added to launchd_health_probe's
+REQUIRED_LABELS (that set is for always-on RunAtLoad+KeepAlive daemons only; a
+one-shot's idle/absent state is normal, so requiring it would false-alarm).
+
+Install (create the log dir FIRST — launchd opens StandardOutPath /
+StandardErrorPath before the wrapper runs, so a missing logs/ dir would stop
+the watchdog from launching at all, silently):
+    mkdir -p /Users/jacobmcmillan/Empire/Orion/logs
+    cp scripts/launchd/com.empire.orion.deadman.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.deadman.plist
+
+Status:
+    launchctl print gui/$(id -u)/com.empire.orion.deadman
+
+Stop / disable:
+    launchctl bootout gui/$(id -u)/com.empire.orion.deadman
+
+Run once manually:
+    scripts/run_deadman_watchdog.sh
+
+Logs:
+    tail -f logs/deadman_watchdog.stdout.log
+    tail -f logs/deadman_watchdog.stderr.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.deadman</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Orion/scripts/run_deadman_watchdog.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Fire every 5 minutes. The watchdog runs and exits; this is a periodic
+         one-shot, not a long-running daemon. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- Also run once when the agent is first loaded so a fresh bootstrap gets
+         an immediate evaluation instead of waiting up to 5 minutes. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- KeepAlive omitted (false): a non-zero exit (alert dispatched) must NOT
+         make launchd restart-loop this; the next StartInterval fire suffices. -->
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+        <!-- launchd defaults PATH to /usr/bin:/bin:/usr/sbin:/sbin only.
+             The wrapper re-exports this, but a reasonable base here makes
+             ad-hoc debugging easier. NEVER reference /opt/homebrew/bin/uv —
+             uv is at ~/.local/bin/uv on this host. -->
+        <key>PATH</key>
+        <string>/Users/jacobmcmillan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/deadman_watchdog.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/deadman_watchdog.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

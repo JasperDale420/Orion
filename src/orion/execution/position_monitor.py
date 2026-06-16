@@ -6,10 +6,11 @@ and rule-based exit signals.
 """
 
 import asyncio
+import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from orion.ml.exit_classifier import (
     BucketExitClassifier,
@@ -18,9 +19,71 @@ from orion.ml.exit_classifier import (
     get_exit_classifier,
 )
 from orion.shared.db_utils import db_query
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.execution.position_monitor")
+
+# Liveness cadence budget for the position-monitor loop (default 60s tick); the
+# dead-man watchdog alerts if no successful check lands within 300s.
+POSITION_MONITOR_LIVENESS_CADENCE_BUDGET_SECONDS = 300
+
+# OCC option-symbol pattern: ROOT (1-6 alphanumeric) + YYMMDD + C/P + 8-digit strike.
+# Example: QQQ260522P00721000, GDX260618C00086000.
+# OCC symbol detection now lives in `orion.execution.attribution`
+# (shared so `execution_engine.py` can use it without circular
+# imports). Re-exported here under the old private name so the rest
+# of this module's call sites continue to work.
+from orion.execution.attribution import is_occ_option_symbol as _is_occ_option_symbol  # noqa: E402
+from orion.execution.persistence import (  # noqa: E402
+    load_position_running_stats,
+    upsert_position_running_stats,
+)
+
+
+async def _fetch_orion_attributed_tickers() -> set[str]:
+    """Return the set of distinct broker symbols Orion has actually filled.
+
+    Sourced from the ``fills`` table (NOT ``orders``). For options,
+    ``fills.ticker`` stores the FULL OCC contract symbol
+    (e.g. ``AAPL260529P00315000``) — so the returned set lets the
+    adapter do per-contract attribution. For equity, ``fills.ticker``
+    is the underlying (e.g. ``AAPL``), which is also what the broker
+    reports as the position symbol. Both cases match directly without
+    any derivation.
+
+    Per-contract attribution is what closes codex review 2026-05-26's
+    CRITICAL finding on commit 39174f8: the previous implementation
+    queried ``orders.ticker`` (which stores the UNDERLYING for both
+    equity and options) and admitted ANY broker option whose
+    underlying ever appeared in Orion's order history. With sibling
+    systems trading on the shared Alpaca account, that meant
+    "Orion bought AAPL puts last week" allowed a sibling's
+    AAPL CALL today (different OCC contract) to be classified as
+    Orion-owned — and the position monitor would route it to
+    ``close_position``, closing a position Orion doesn't own.
+
+    Mirrors ``ExecutionEngine._fetch_orion_tickers``. Keeping the
+    implementation here as well (rather than importing from
+    execution_engine) avoids a circular import.
+
+    Returns an empty set if the query fails; callers MUST treat that
+    as "no orion attribution data" rather than "no positions to filter
+    out" — the latter would silently absorb other systems' positions
+    back into Orion's tracker.
+    """
+    from sqlalchemy import select
+
+    from orion.execution.attribution import orion_order_id_sql_pattern
+    from orion.shared.db_utils import db_query
+    from orion.storage.models_execution import FillRecord
+
+    async def query_tickers(session: Any) -> set[str]:
+        stmt = select(FillRecord.ticker).where(FillRecord.client_order_id.like(orion_order_id_sql_pattern())).distinct()
+        result = await session.execute(stmt)
+        return {row[0] for row in result.all()}
+
+    return await db_query(query_tickers)
 
 
 class GatewayPositionAdapter:
@@ -30,29 +93,93 @@ class GatewayPositionAdapter:
     sync_positions expects a connector with ``get_all_positions()`` returning
     objects that have ``.symbol``, ``.current_price``, ``.avg_entry_price``,
     ``.qty``, and ``.unrealized_plpc`` attributes.
+
+    SHARED-ACCOUNT FILTER — observed live 2026-05-21 — the Alpaca paper
+    account is shared by multiple Empire systems (3Roses, Cerberus, Kairos,
+    Orbit, WhaleHunter, Orion). Without filtering at this layer, the
+    position-monitor tracker absorbed every broker position
+    (30 of 30 entries were ghosts; ExecutionEngine separately reported
+    "open_positions=0 skipped_non_orion=38" using its own filter pattern).
+    `refresh()` now consults the orders table for distinct
+    `orion_`-prefixed `client_order_id` tickers and drops any broker
+    position whose symbol isn't in that set. Default-deny on DB failure.
     """
 
     def __init__(self, gateway_client: Any) -> None:
         self._client = gateway_client
+        self._cached_positions: list[SimpleNamespace] = []
 
     def get_all_positions(self) -> list[SimpleNamespace]:
-        """Synchronous wrapper — the actual fetch happens in _fetch_async, which
-        the monitor loop awaits before calling sync_positions."""
+        """Synchronous wrapper — the actual fetch happens in `refresh()`,
+        which the monitor loop awaits before calling sync_positions."""
         return self._cached_positions
 
     async def refresh(self) -> None:
-        """Fetch positions from Gateway and cache as SimpleNamespace objects."""
+        """Fetch positions from Gateway, filter to Orion-attributed only,
+        and cache as SimpleNamespace objects.
+
+        Default-deny semantics:
+          - DB query raises → cache empty list (NEVER fall back to
+            unfiltered raw positions).
+          - No orion-prefixed orders in DB → cache empty list.
+          - Gateway returns positions for tickers we don't have orders
+            for → those positions are excluded.
+
+        This is the same shape `ExecutionEngine._sync_risk_from_gateway`
+        uses for its risk-side filter, just at the position-monitor
+        layer too.
+        """
         raw = await self._client.get_positions()
-        self._cached_positions: list[SimpleNamespace] = []
+
+        try:
+            orion_tickers = await _fetch_orion_attributed_tickers()
+        except Exception as exc:
+            logger.error(
+                "Failed to fetch Orion-owned tickers for shared-account "
+                "position filtering; defaulting to EMPTY position list to "
+                "avoid absorbing other systems' positions",
+                extra={
+                    "event_type": "POSITION_ADAPTER_FILTER_FAILED",
+                    "error": str(exc),
+                    "raw_broker_position_count": len(raw),
+                },
+            )
+            self._cached_positions = []
+            return
+
+        filtered: list[SimpleNamespace] = []
         for p in raw:
-            self._cached_positions.append(
-                SimpleNamespace(
-                    symbol=p.get("symbol", ""),
-                    current_price=p.get("current_price", 0),
-                    avg_entry_price=p.get("avg_entry_price", 0),
-                    qty=p.get("qty", 0),
-                    unrealized_plpc=p.get("unrealized_plpc", 0),
+            symbol = p.get("symbol", "")
+            # `orion_tickers` now comes from `fills.ticker`, which stores
+            # the FULL OCC contract for options (e.g. AAPL260529P00315000)
+            # and the underlying for equity (e.g. AAPL). Both match the
+            # broker's position symbol verbatim, so a direct membership
+            # check is correct AND safe — a sibling system's AAPL option
+            # on a different contract won't be in the set even if Orion
+            # has traded other AAPL contracts. Codex review 2026-05-26.
+            if symbol in orion_tickers:
+                filtered.append(
+                    SimpleNamespace(
+                        symbol=symbol,
+                        current_price=p.get("current_price", 0),
+                        avg_entry_price=p.get("avg_entry_price", 0),
+                        qty=p.get("qty", 0),
+                        unrealized_plpc=p.get("unrealized_plpc", 0),
+                    )
                 )
+
+        self._cached_positions = filtered
+
+        if len(filtered) != len(raw):
+            logger.info(
+                f"PositionAdapter filtered {len(raw) - len(filtered)} non-Orion "
+                f"positions from shared account; kept {len(filtered)} Orion-attributed",
+                extra={
+                    "event_type": "POSITION_ADAPTER_FILTERED",
+                    "raw_count": len(raw),
+                    "kept_count": len(filtered),
+                    "skipped_count": len(raw) - len(filtered),
+                },
             )
 
 
@@ -86,6 +213,11 @@ class TrackedPosition:
     decision_id: str | None = None
     option_symbol: str | None = None  # For options positions
 
+    # Optional — populated by sync_positions when the parent decision/order
+    # carries it. TimeToExpiryRule no-ops when None (graceful), so it's
+    # safe to leave unset on positions where we don't have the data.
+    expiry_date: datetime | None = None
+
 
 class PositionMonitor:
     """
@@ -107,6 +239,21 @@ class PositionMonitor:
         self._last_check_time: datetime | None = None
         self._execution_engine = execution_engine
         self._position_manager = position_manager
+        # Per-symbol consecutive failed-close counter. Bounds retries so a
+        # single stuck position can't fire an unbounded stream of close
+        # attempts every cycle (2026-05-29: ~3,235 rejected order-creates/day).
+        # Paired with a per-symbol last-failure timestamp so abandonment is
+        # time-bounded, not permanent (RCA 2026-06-05: a +320% MU winner was
+        # stranded unclosable after 5 wash-trade rejections exhausted the
+        # counter and nothing ever reset it short of a process restart).
+        self._consecutive_close_failures: dict[str, int] = {}
+        self._close_failure_ts: dict[str, float] = {}
+        # Per-symbol entry-context cache. Populated lazily on first
+        # _fetch_entry_context call and reused for the lifetime of the
+        # PositionMonitor — entry-time market context (IV rank, VIX,
+        # GEX, market tide, premium, DTE-at-entry, …) is immutable
+        # post-entry, so a session-lifetime cache is correct.
+        self._entry_context_cache: dict[str, dict[str, Any]] = {}
 
     async def sync_positions(self, connector: Any) -> list[TrackedPosition]:
         """
@@ -131,6 +278,39 @@ class PositionMonitor:
                 extra={"event": "position_closed", "symbol": symbol},
             )
             del self.tracked_positions[symbol]
+            # Drop cached entry-context so a close+reopen of the same symbol
+            # in the same process doesn't reuse a stale decision_id / context.
+            self._entry_context_cache.pop(symbol, None)
+
+        # Pre-fetch entry-context for any newly-appearing symbols in parallel
+        # with a per-call timeout. On a cold container with ~200 positions and
+        # ~200ms per flow_enricher round-trip, doing this sequentially in the
+        # construction loop would block startup for tens of seconds before the
+        # first exit evaluation. Cached symbols short-circuit immediately.
+        new_symbols = [
+            p.symbol
+            for p in broker_positions
+            if p.symbol not in self.tracked_positions and p.symbol not in self._entry_context_cache
+        ]
+        if new_symbols:
+
+            async def _bounded_fetch(sym: str) -> None:
+                try:
+                    await asyncio.wait_for(self._fetch_entry_context(sym), timeout=2.0)
+                except TimeoutError:
+                    logger.warning(
+                        f"Entry-context fetch timed out for {sym}; using default context",
+                        extra={"event": "entry_context_timeout", "symbol": sym},
+                    )
+                    # Cache an empty-context default so the construction loop
+                    # below reads the same fallback and we don't re-hit the
+                    # slow path on the next sync tick.
+                    self._entry_context_cache.setdefault(sym, {"bucket": "SWING"})
+
+            await asyncio.gather(
+                *[_bounded_fetch(s) for s in new_symbols],
+                return_exceptions=True,
+            )
 
         # Update existing or add new positions
         for bp in broker_positions:
@@ -146,14 +326,60 @@ class PositionMonitor:
                 pos.current_price = current_price
                 pos.unrealized_pnl_pct = unrealized_pnl_pct
 
-                # Update tracking metrics
+                # Update tracking metrics — record whether we observed a
+                # new peak or trough so we can avoid the DB write on
+                # uneventful ticks (each cycle covers ~50 positions; 12
+                # cycles/min = 600 writes/min if we upserted on every
+                # tick. Most ticks are inside the running envelope and
+                # don't change anything; only the peak/trough deserves
+                # a durable update).
+                running_changed = False
                 if unrealized_pnl_pct > pos.max_return_pct:
                     pos.max_return_pct = unrealized_pnl_pct
+                    running_changed = True
                 if unrealized_pnl_pct < pos.max_drawdown_pct:
                     pos.max_drawdown_pct = unrealized_pnl_pct
+                    running_changed = True
+                if running_changed:
+                    # Phase 3 of exit-pipeline RCA: persist so the ML
+                    # branch sees a non-zero MFE/MAE on restart-loaded
+                    # positions, instead of a fresh `max(0, unrealized)`
+                    # seed.
+                    await upsert_position_running_stats(
+                        symbol=symbol,
+                        max_return_pct=pos.max_return_pct,
+                        max_drawdown_pct=pos.max_drawdown_pct,
+                    )
             else:
-                # New position - need to fetch entry context from DB
+                # New position — context was pre-fetched above and is in
+                # cache (either a real row or a default). _fetch_entry_context
+                # short-circuits on cache hit.
                 entry_context = await self._fetch_entry_context(symbol)
+
+                # Use the real entry timestamp from the decision row when
+                # available — falling back to now() approximated entry_time
+                # for every legacy position after restart, biasing the ML
+                # `time_held_hours` feature toward "hold longer".
+                entry_time = entry_context.get("entry_time") or datetime.now(UTC)
+
+                # Phase 3 of exit-pipeline RCA: rehydrate running-window
+                # stats from the durable `position_running_stats` table
+                # if a row exists. Falls back to the original
+                # `max(0, unrealized) / min(0, unrealized)` seed when
+                # no row is present (genuinely-new position or first
+                # ever sync_positions cycle).
+                persisted = await load_position_running_stats(symbol)
+                if persisted is not None:
+                    persisted_max, persisted_drawdown = persisted
+                    # Defensive: the current tick might have moved the
+                    # peak/trough past the persisted values. Take the
+                    # more-extreme of (persisted, current) so a hot
+                    # restart-during-spike doesn't shrink the envelope.
+                    seeded_max = max(persisted_max, unrealized_pnl_pct, 0)
+                    seeded_drawdown = min(persisted_drawdown, unrealized_pnl_pct, 0)
+                else:
+                    seeded_max = max(0, unrealized_pnl_pct)
+                    seeded_drawdown = min(0, unrealized_pnl_pct)
 
                 pos = TrackedPosition(
                     symbol=symbol,
@@ -161,11 +387,11 @@ class PositionMonitor:
                     entry_price=entry_price,
                     current_price=current_price,
                     unrealized_pnl_pct=unrealized_pnl_pct,
-                    entry_time=datetime.now(UTC),  # Approximate
+                    entry_time=entry_time,
                     bucket=entry_context.get("bucket", "SWING"),
                     direction=entry_context.get("direction", "LONG"),
-                    max_return_pct=max(0, unrealized_pnl_pct),
-                    max_drawdown_pct=min(0, unrealized_pnl_pct),
+                    max_return_pct=seeded_max,
+                    max_drawdown_pct=seeded_drawdown,
                     premium_usd=entry_context.get("premium_usd"),
                     dte_at_entry=entry_context.get("dte"),
                     is_sweep=entry_context.get("is_sweep", False),
@@ -175,8 +401,17 @@ class PositionMonitor:
                     market_tide_30m=entry_context.get("market_tide_30m"),
                     decision_id=entry_context.get("decision_id"),
                     option_symbol=entry_context.get("option_symbol"),
+                    expiry_date=entry_context.get("expiry_date"),
                 )
                 self.tracked_positions[symbol] = pos
+                # Initial upsert so the row exists for subsequent
+                # rehydration (e.g. if the container restarts before
+                # the next peak/trough event).
+                await upsert_position_running_stats(
+                    symbol=symbol,
+                    max_return_pct=pos.max_return_pct,
+                    max_drawdown_pct=pos.max_drawdown_pct,
+                )
 
                 logger.info(
                     f"New position tracked: {symbol} @ {entry_price}",
@@ -184,6 +419,16 @@ class PositionMonitor:
                         "event": "position_tracked",
                         "symbol": symbol,
                         "bucket": pos.bucket,
+                        "decision_id": pos.decision_id,
+                        "has_entry_context": any(
+                            v is not None
+                            for v in (
+                                pos.iv_rank_at_entry,
+                                pos.vix_at_entry,
+                                pos.gex_at_entry,
+                                pos.market_tide_30m,
+                            )
+                        ),
                     },
                 )
 
@@ -191,81 +436,305 @@ class PositionMonitor:
 
     async def _fetch_entry_context(self, symbol: str) -> dict[str, Any]:
         """
-        Fetch entry context from recent strategy decisions.
+        Fetch entry context for a position symbol.
+
+        Joins orders → strategy_decisions → candidate_trades to recover the
+        originating Orion decision (filtering by the ``orion_`` client_order_id
+        prefix to ignore positions opened by other systems on the shared
+        Alpaca account). From that decision row we pull:
+
+          - decision_id, entry_time, direction, premium_usd, dte, bucket,
+            option_symbol, expiry_date — all directly queryable from the join.
+          - is_sweep, event_id — extracted from ``candidate_trades.evidence``.
+          - iv_rank_at_entry, vix_at_entry, gex_at_entry, market_tide_30m —
+            fetched from the same flow_enricher pipeline the ML scorer uses,
+            so train/inference parity is preserved.
+
+        Results are cached per-symbol on the PositionMonitor instance for the
+        lifetime of the session — entry-time context is immutable post-entry,
+        so the cache never needs invalidation. Positions opened by other
+        systems on the shared account fall through to the default ``{"bucket":
+        "SWING"}`` payload (no Orion decision rows match), and the exit
+        classifier / fallback rules already handle None fields gracefully.
         """
-        query = """
+        if symbol in self._entry_context_cache:
+            return self._entry_context_cache[symbol]
+
+        # Match by option_symbol when the position symbol looks like an OCC
+        # contract (e.g. QQQ260522P00721000); otherwise match by underlying
+        # ticker. Alpaca returns option positions keyed by OCC, equity
+        # positions keyed by ticker.
+        is_option = _is_occ_option_symbol(symbol)
+        join_clause = "ct.option_symbol = :symbol" if is_option else "ct.ticker = :symbol"
+
+        # DTE is computed in Python from expiration_date - decision_ts to
+        # stay portable across PostgreSQL (production) and SQLite (tests).
+        query = f"""
             SELECT
                 sd.decision_id,
+                sd.timestamp_utc as decision_ts,
+                ct.ticker,
                 ct.option_symbol,
-                ct.premium,
+                ct.expiration_date,
                 ct.option_type,
+                ct.premium,
                 ct.direction,
-                CASE
-                    WHEN ct.expiration_date IS NOT NULL THEN
-                        EXTRACT(DAY FROM ct.expiration_date - NOW())::int
-                    ELSE NULL
-                END as dte
+                ct.evidence
             FROM strategy_decisions sd
             JOIN candidate_trades ct ON sd.candidate_id = ct.candidate_id
-            WHERE ct.ticker = :symbol
+            LEFT JOIN orders o ON o.decision_id = sd.decision_id
+            WHERE {join_clause}
             AND sd.decision = 'EXECUTE'
-            AND sd.executed_successfully = 'TRUE'
+            -- o.id IS NULL is the LEFT-JOIN miss sentinel (no orders row at
+            -- all for this decision, e.g. legacy pre-attribution rows). We
+            -- intentionally do NOT use `client_order_id IS NULL` here because
+            -- that would also match orders rows another system inserted with
+            -- a null client_order_id, falsely attributing them to Orion.
+            AND (o.client_order_id LIKE 'orion_%' OR o.id IS NULL)
             ORDER BY sd.timestamp_utc DESC
             LIMIT 1
         """
 
+        row: dict[str, Any] | None = None
         try:
 
-            async def run_query(session: Any) -> dict | None:
+            async def run_query(session: Any) -> dict[str, Any] | None:
                 from sqlalchemy import text
 
                 result = await session.execute(text(query), {"symbol": symbol})
-                row = result.mappings().first()
-                return dict(row) if row else None
+                row_ = result.mappings().first()
+                return dict(row_) if row_ else None
 
             row = await db_query(run_query)
-
-            if row:
-                # Classify bucket based on DTE
-                dte = row.get("dte") or 7
-                if dte == 0:
-                    bucket = "0DTE"
-                elif dte <= 3:
-                    bucket = "SHORT_SWING"
-                elif dte <= 14:
-                    bucket = "SWING"
-                else:
-                    bucket = "POSITION"
-
-                return {
-                    "decision_id": row.get("decision_id"),
-                    "option_symbol": row.get("option_symbol"),
-                    "premium_usd": row.get("premium"),
-                    "dte": dte,
-                    "bucket": bucket,
-                    "direction": row.get("direction", "LONG"),
-                }
         except Exception as e:
             logger.warning(f"Failed to fetch entry context for {symbol}: {e}")
 
-        # Default to SWING bucket if we can't determine
-        return {"bucket": "SWING"}
+        if not row:
+            # No matching Orion decision — either a non-Orion position on the
+            # shared account, or a legacy position pre-attribution. Cache the
+            # default so we don't re-hit the DB every 60s for the same symbol.
+            default = {"bucket": "SWING"}
+            self._entry_context_cache[symbol] = default
+            return default
+
+        # Compute DTE in Python (portable across Postgres/SQLite). Falls back
+        # to candidate.evidence["dte"] when expiration_date is missing.
+        def _coerce_dt(val: Any) -> datetime | None:
+            if val is None:
+                return None
+            if isinstance(val, datetime):
+                return val
+            if isinstance(val, str):
+                try:
+                    from dateutil.parser import parse as _parse  # type: ignore[import-untyped,unused-ignore]
+
+                    return _parse(val)
+                except Exception:
+                    return None
+            return None
+
+        dte: int | None = None
+        expiration_date = _coerce_dt(row.get("expiration_date"))
+        decision_ts_for_dte = _coerce_dt(row.get("decision_ts"))
+        if expiration_date is not None and decision_ts_for_dte is not None:
+            try:
+                delta = expiration_date - decision_ts_for_dte
+                dte = max(int(delta.days), 0)
+            except Exception:
+                dte = None
+
+        if dte is None:
+            try:
+                evidence_raw = row.get("evidence") or {}
+                if isinstance(evidence_raw, str):
+                    import json as _json
+
+                    evidence_raw = _json.loads(evidence_raw)
+                if isinstance(evidence_raw, dict) and evidence_raw.get("dte") is not None:
+                    dte = int(evidence_raw["dte"])
+            except Exception:
+                dte = None
+
+        if dte is None:
+            dte = 7
+
+        # Classify bucket based on DTE
+        if dte == 0:
+            bucket = "0DTE"
+        elif dte <= 3:
+            bucket = "SHORT_SWING"
+        elif dte <= 14:
+            bucket = "SWING"
+        else:
+            bucket = "POSITION"
+
+        # The decision row has the real entry timestamp; use it instead of
+        # now() so ML exit features (time_held_hours) are correct after a
+        # restart. Fall back to None so the caller can decide.
+        decision_ts = decision_ts_for_dte  # already coerced to datetime above
+        from orion.shared.utils import ensure_utc as _ensure_utc
+
+        entry_time = _ensure_utc(decision_ts) if decision_ts is not None else None
+
+        evidence = row.get("evidence") or {}
+        if isinstance(evidence, str):
+            try:
+                import json as _json
+
+                evidence = _json.loads(evidence)
+            except Exception:
+                evidence = {}
+
+        is_sweep = bool(evidence.get("is_sweep")) if isinstance(evidence, dict) else False
+        event_id = evidence.get("event_id") if isinstance(evidence, dict) else None
+        if not event_id and isinstance(evidence, dict):
+            ids = evidence.get("event_ids") or []
+            if isinstance(ids, list) and ids:
+                event_id = ids[0]
+
+        put_call_raw = row.get("option_type") or (evidence.get("put_call") if isinstance(evidence, dict) else None)
+        put_call = "C"
+        if put_call_raw:
+            normalized = str(put_call_raw).upper()
+            put_call = "C" if normalized in {"C", "CALL"} else ("P" if normalized in {"P", "PUT"} else "C")
+
+        ticker = row.get("ticker") or symbol
+
+        premium_usd = row.get("premium")
+        if (premium_usd in (None, 0)) and isinstance(evidence, dict):
+            premium_usd = evidence.get("premium_usd") or evidence.get("premium") or premium_usd
+
+        # Enrich with iv_rank / vix / gex / market_tide via the same path
+        # the ML scorer uses, so position-monitor features stay aligned
+        # with training. Failures here are non-fatal: we still return the
+        # DB-derived context and let the exit classifier / fallback rules
+        # cope with None enrichment fields (they already do).
+        enrichment: dict[str, Any] = {}
+        if entry_time is not None:
+            try:
+                from orion.ml.flow_enricher import enrich_flow_for_scoring
+
+                expiry_str = None
+                if expiration_date is not None:
+                    try:
+                        expiry_str = expiration_date.date().isoformat()
+                    except AttributeError:
+                        expiry_str = str(expiration_date)
+
+                enrichment = await enrich_flow_for_scoring(
+                    ticker=ticker,
+                    entry_ts=entry_time,
+                    put_call=put_call,
+                    dte=dte,
+                    premium_usd=float(premium_usd) if premium_usd is not None else None,
+                    event_id=event_id,
+                    option_chain=row.get("option_symbol"),
+                    aggressor=evidence.get("aggressor") if isinstance(evidence, dict) else None,
+                    is_sweep=is_sweep,
+                    expiry=expiry_str,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to enrich entry context for {symbol}: {e}",
+                    extra={"event": "entry_context_enrichment_failed", "symbol": symbol, "error": str(e)},
+                )
+                enrichment = {}
+
+        context = {
+            "decision_id": row.get("decision_id"),
+            "option_symbol": row.get("option_symbol"),
+            "premium_usd": premium_usd,
+            "dte": dte,
+            "bucket": bucket,
+            "direction": row.get("direction", "LONG"),
+            "entry_time": entry_time,
+            "expiry_date": expiration_date,
+            "is_sweep": is_sweep,
+            "iv_rank_at_entry": enrichment.get("iv_rank_at_entry"),
+            "vix_at_entry": enrichment.get("vix_at_entry"),
+            "gex_at_entry": enrichment.get("gex_at_entry"),
+            "market_tide_30m": enrichment.get("market_tide_30m"),
+        }
+
+        self._entry_context_cache[symbol] = context
+        return context
 
     def evaluate_exits(self) -> list[tuple[TrackedPosition, ExitPrediction]]:
-        """
-        Evaluate exit signals for all tracked positions.
+        """Evaluate exit signals for all tracked positions.
 
-        Returns list of (position, prediction) tuples for positions
-        that should be exited.
+        Returns list of (position, prediction) tuples for positions that
+        should be exited.
+
+        Fallback rules (profit / time-to-expiry / drawdown) are evaluated
+        FIRST and short-circuit the ML classifier when they fire. This
+        keeps the deterministic safety net in place even when the
+        classifier is degraded or returns low-confidence predictions
+        (see FOLLOWUPS.md #0).
         """
-        exit_signals = []
+        from orion.config import system_settings
+        from orion.execution.exit_fallback_rules import evaluate_fallback_rules
+
+        exit_signals: list[tuple[TrackedPosition, ExitPrediction]] = []
 
         for symbol, pos in self.tracked_positions.items():
-            # Calculate time held
+            # Fallback rules first — they're cheap and deterministic.
+            # Wrap in try/except so a future rule that raises (I/O,
+            # schema drift on expiry_date, etc.) doesn't kill the whole
+            # evaluate loop and starve the ML path for every remaining
+            # position this cycle. On failure: fall through to ML.
+            try:
+                fallback = evaluate_fallback_rules(
+                    pos,
+                    profit_target_pct=system_settings.exit_fallback_profit_target_pct,
+                    min_dte=system_settings.exit_fallback_min_dte,
+                    max_drawdown_pct=system_settings.exit_fallback_max_drawdown_from_peak_pct,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Exit fallback evaluation raised for {symbol}: {exc}",
+                    extra={
+                        "event": "exit_fallback_error",
+                        "symbol": symbol,
+                        "error": str(exc),
+                    },
+                    exc_info=True,
+                )
+                fallback = None  # fall through to ML branch
+
+            if fallback is not None:
+                logger.info(
+                    f"Exit fallback fired for {symbol}: {fallback.reason}",
+                    extra={
+                        "event": "exit_signal_fallback",
+                        "symbol": symbol,
+                        "rule_id": fallback.rule_id,
+                        "urgency": fallback.urgency,
+                        "pnl_pct": pos.unrealized_pnl_pct,
+                        "bucket": pos.bucket,
+                    },
+                )
+                # Wrap the ExitSignal as ExitPrediction-compatible so the
+                # downstream execute_exits path doesn't need to branch.
+                # ExitPrediction's consumer reads .should_exit, .confidence,
+                # .reasoning, and (optionally) .rule_id.
+                # Duck-typed as ExitPrediction: consumers only read .should_exit,
+                # .confidence, .reasoning, .rule_id (see comment above).
+                prediction = cast(
+                    "ExitPrediction",
+                    SimpleNamespace(
+                        should_exit=True,
+                        confidence=fallback.confidence,
+                        reasoning=fallback.reason,
+                        rule_id=fallback.rule_id,
+                    ),
+                )
+                exit_signals.append((pos, prediction))
+                continue
+
+            # ML classifier path — unchanged from before.
             time_held = datetime.now(UTC) - pos.entry_time
             time_held_hours = time_held.total_seconds() / 3600
 
-            # Build features for exit classifier
             features = ExitFeatures(
                 current_return_pct=pos.unrealized_pnl_pct,
                 time_held_hours=time_held_hours,
@@ -281,7 +750,6 @@ class PositionMonitor:
                 market_tide_30m=pos.market_tide_30m,
             )
 
-            # Get exit prediction
             prediction = self.exit_classifier.predict(features)
 
             if prediction.should_exit:
@@ -298,6 +766,62 @@ class PositionMonitor:
                 exit_signals.append((pos, prediction))
 
         return exit_signals
+
+    # After this many consecutive failed closes, a symbol is abandoned (with a
+    # CRITICAL alert) so a single stuck position can't hammer the Gateway every
+    # cycle. Abandonment is NOT permanent: after the cooldown below the symbol
+    # gets another attempt, because the cause is often transient (a stale mark,
+    # a day-trading-buying-power wall, a sibling's resting order on the shared
+    # account). Permanent abandonment stranded a +320% MU winner on 2026-06-05.
+    _MAX_CONSECUTIVE_CLOSE_FAILURES = 5
+    _CLOSE_ABANDON_COOLDOWN_SECONDS = 600.0
+
+    def _now(self) -> float:
+        """Monotonic clock for cooldown math (patchable in tests)."""
+        return time.monotonic()
+
+    def _close_attempts_exhausted(self, symbol: str) -> bool:
+        count = self._consecutive_close_failures.get(symbol, 0)
+        if count < self._MAX_CONSECUTIVE_CLOSE_FAILURES:
+            return False
+        # Abandoned — but give it another chance once the cooldown elapses so a
+        # transient cause can clear instead of stranding the position forever.
+        last = self._close_failure_ts.get(symbol)
+        if last is not None and (self._now() - last) >= self._CLOSE_ABANDON_COOLDOWN_SECONDS:
+            self._consecutive_close_failures.pop(symbol, None)
+            self._close_failure_ts.pop(symbol, None)
+            logger.warning(
+                f"Re-attempting close for {symbol} after abandon cooldown elapsed",
+                extra={
+                    "event": "close_abandon_cooldown_elapsed",
+                    "event_type": "CLOSE_ABANDON_RETRY",
+                    "symbol": symbol,
+                },
+            )
+            return False
+        return True
+
+    def _record_close_result(self, symbol: str, success: bool) -> None:
+        """Track consecutive close failures per symbol; reset on success."""
+        if success:
+            self._consecutive_close_failures.pop(symbol, None)
+            self._close_failure_ts.pop(symbol, None)
+            return
+        count = self._consecutive_close_failures.get(symbol, 0) + 1
+        self._consecutive_close_failures[symbol] = count
+        self._close_failure_ts[symbol] = self._now()
+        if count == self._MAX_CONSECUTIVE_CLOSE_FAILURES:
+            logger.critical(
+                f"Abandoning close for {symbol} after {count} consecutive failures — "
+                f"will retry after {int(self._CLOSE_ABANDON_COOLDOWN_SECONDS)}s; "
+                f"manual review recommended (position may be stuck/unclosable)",
+                extra={
+                    "event": "close_abandoned",
+                    "event_type": "CLOSE_ABANDONED",
+                    "symbol": symbol,
+                    "failures": count,
+                },
+            )
 
     async def execute_exits(
         self,
@@ -369,6 +893,12 @@ class PositionMonitor:
                     results.append(result)
                     continue
 
+                # Stop hammering a position that repeatedly fails to close.
+                if self._close_attempts_exhausted(pos.symbol):
+                    result["error"] = "close_abandoned_after_repeated_failures"
+                    results.append(result)
+                    continue
+
                 # Mark symbol as closing before submitting order
                 if self._position_manager:
                     if not self._position_manager.mark_closing(pos.symbol):
@@ -392,12 +922,20 @@ class PositionMonitor:
                             details={"bucket": pos.bucket, "pnl_pct": pos.unrealized_pnl_pct},
                         )
 
+                        # `use_market_order=False` for the options path —
+                        # close_position routes options through limit orders
+                        # regardless of urgency, because Alpaca rejects
+                        # options market orders outside RTH (42210000).
+                        # Pass `current_price` (the mark sync_positions
+                        # maintains on `TrackedPosition`) so the limit can
+                        # be derived without a separate quote lookup.
                         closed = await self._execution_engine.close_position(
                             ticker=pos.symbol,
                             qty=pos.qty,
                             exit_signal=exit_signal,
                             direction=pos.direction,
-                            use_market_order=True,
+                            use_market_order=False,
+                            current_price=pos.current_price,
                         )
                     else:
                         # Fallback: direct connector call (legacy path, no safety guards)
@@ -437,9 +975,78 @@ class PositionMonitor:
                     if self._position_manager:
                         self._position_manager.unmark_closing(pos.symbol)
 
+                # Bound retries: track consecutive failures so a stuck position
+                # is eventually abandoned instead of hammering every cycle.
+                self._record_close_result(pos.symbol, bool(result["executed"]))
+
             results.append(result)
 
         return results
+
+    async def _reprotect_unprotected_positions(self) -> None:
+        """Re-place missing protective bracket legs once per cycle.
+
+        Reads the risk manager's in-memory unprotected registry (populated
+        by ExecutionEngine when entry-time bracket placement failed) and asks
+        the execution engine to re-attempt protection for each entry that maps
+        to a currently-tracked position. On success the engine clears the
+        registry entry and emits a recovery alert. Best-effort: any per-symbol
+        failure is logged and skipped, never blocking the rest of the cycle.
+        """
+        engine = self._execution_engine
+        if engine is None:
+            return
+        risk_manager = getattr(engine, "risk_manager", None)
+        get_unprotected = getattr(risk_manager, "get_unprotected", None)
+        if not callable(get_unprotected):
+            return
+
+        unprotected = get_unprotected()
+        if not unprotected:
+            return
+
+        # An entry that no longer maps to a live position is stale: the
+        # position closed (exit/manual flatten) before re-protection landed.
+        # Clearing it prevents a later reopen of the same OCC contract from
+        # inheriting the old entry and getting spurious bracket orders. The
+        # grace window covers the entry-fill race (brackets are attempted at
+        # submit time, before the fill lands in tracked_positions).
+        stale_grace = timedelta(minutes=30)
+        now = datetime.now(UTC)
+
+        for option_symbol in list(unprotected.keys()):
+            pos = self.tracked_positions.get(option_symbol)
+            entry = unprotected[option_symbol]
+            if pos is None:
+                marked_at = entry.get("marked_at_utc")
+                if isinstance(marked_at, datetime) and now - marked_at > stale_grace:
+                    clear = getattr(risk_manager, "clear_unprotected", None)
+                    if callable(clear):
+                        clear(option_symbol)
+                    logger.info(
+                        "unprotected_entry_stale_cleared",
+                        extra={"option_symbol": option_symbol, "marked_at_utc": str(marked_at)},
+                    )
+                # Within the grace window: broker sync may not have surfaced
+                # the fill yet — leave it registered for a later cycle.
+                continue
+            ticker = entry.get("ticker") or option_symbol
+            try:
+                # Orion positions are always long options (entries are BUYs);
+                # reprotect_position hardcodes the side accordingly and places
+                # only the legs recorded missing at registration time.
+                await engine.reprotect_position(
+                    ticker=ticker,
+                    option_symbol=option_symbol,
+                    entry_price=pos.entry_price,
+                    qty=int(abs(pos.qty)),
+                    missing_legs=entry.get("missing_legs"),
+                )
+            except Exception as exc:
+                logger.error(
+                    "reprotect_attempt_failed",
+                    extra={"option_symbol": option_symbol, "error": str(exc)},
+                )
 
     async def run_check(
         self,
@@ -459,6 +1066,13 @@ class PositionMonitor:
 
         # Sync positions
         positions = await self.sync_positions(connector)
+
+        # Re-protection runs FIRST — before exit evaluation — so a position
+        # left naked by a failed entry-time bracket regains its stop/take-
+        # profit as early as possible in the cycle. dry_run skips it (no
+        # order submission). Runs even with no exit signals.
+        if not dry_run:
+            await self._reprotect_unprotected_positions()
 
         if not positions:
             return {
@@ -544,6 +1158,11 @@ async def run_position_monitor_loop(
             logger.debug(
                 "Position monitor cycle complete",
                 extra={"event": "monitor_cycle", **summary},
+            )
+            # Liveness: one publish per successful check (swallows its own errors).
+            await publish_liveness(
+                "position_monitor",
+                cadence_budget_seconds=POSITION_MONITOR_LIVENESS_CADENCE_BUDGET_SECONDS,
             )
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)

@@ -53,6 +53,12 @@ class RollupJob:
                     continue
 
                 await upsert_watermark(session, key=self._wm_key(ticker), last_seen_ts_utc=latest_ts)
+                # upsert_watermark only stages the row; without an explicit
+                # commit the session rollback on exit discarded it, so rollup
+                # watermarks never advanced and every run cold-started
+                # (build_rollups' internal commit only incidentally flushed
+                # earlier tickers' watermarks in multi-ticker runs).
+                await session.commit()
 
     async def run_forever(self) -> None:
         logger.info(
