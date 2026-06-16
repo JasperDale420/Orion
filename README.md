@@ -1,97 +1,148 @@
 # Orion
 
-Orion is a real-time trading backend in the Empire ecosystem. It ingests market data, stores normalized data, generates signals, and runs execution/risk workflows.
+Real-time data lake + signal engine for **US options trading** in the Empire
+monorepo. Ingests live market data via Data-Gateway, generates trade candidates
+through a solver ensemble, and **places options orders on Alpaca** (via the
+Data-Gateway trading proxy). Stores state in TimescaleDB; reads historical
+parquet from a host-side Heber cache.
 
-## Overview
+> **Live-trading system.** Default posture is paper (`ORION_STAGE=paper`,
+> `ALPACA_PAPER=true`). See [`docs/code-standards.md`](docs/code-standards.md#safety-critical-code)
+> before touching execution code.
 
-Orion sits downstream of Data Gateway and Heber migration work. It runs ingestion, enrichment, strategy evaluation, and execution services with strong logging and operational controls.
+## Documentation
 
-For architecture and operations details, use:
-- `/Users/jacobmcmillan/Empire/Orion/docs/ARCHITECTURE.md`
-- `/Users/jacobmcmillan/Empire/Orion/docs/RUNBOOK.md`
-- `/Users/jacobmcmillan/Empire/Orion/docs/API_REFERENCE.md`
+| Doc | Purpose |
+|---|---|
+| [`docs/project-overview-pdr.md`](docs/project-overview-pdr.md) | Mission, scope, solver lifecycle, runtime stages |
+| [`docs/codebase-summary.md`](docs/codebase-summary.md) | Module-by-module map of `src/orion/` |
+| [`docs/system-architecture.md`](docs/system-architecture.md) | Data flow, Mermaid diagram, execution boundary |
+| [`docs/code-standards.md`](docs/code-standards.md) | Conventions, safety-critical rules, position attribution |
+| [`docs/testing-guide.md`](docs/testing-guide.md) | Markers, E2E tests, mocking patterns |
+| [`docs/configuration-guide.md`](docs/configuration-guide.md) | Env-var matrix across the four Settings classes |
+| [`docs/deployment-guide.md`](docs/deployment-guide.md) | launchd, Docker Compose, orphan-close history |
+| [`docs/api-reference.md`](docs/api-reference.md) | FastAPI admin/dashboard endpoints |
+| [`PRD.md`](PRD.md) | Full product requirements |
+| [`CHANGELOG.md`](CHANGELOG.md) | Behavioural changes |
 
-## Tech Stack
+Older docs preserved under `docs/` (DATABASE_SCHEMA, DATA_CONTRACTS,
+DATA_RETENTION, ARCHITECTURE, API_REFERENCE, RUNBOOK, RUNBOOKS, ROLLBACK,
+alerting, disaster_recovery_runbook, `runbooks/`, `rca/`, `audits/`).
+
+## Tech stack
 
 - Python 3.12+
-- FastAPI + SQLAlchemy
-- TimescaleDB (Postgres), Redpanda, MinIO
-- Structlog for structured logs
-- Poetry for dependency management
-- Docker Compose for local orchestration
+- `uv` for env + dep management
+- FastAPI + SQLAlchemy (async)
+- TimescaleDB (Postgres + pgvector), Alembic migrations
+- structlog (via `empire_core.logger`)
+- Docker Compose for local orchestration; launchd for native execution/ingestion
+- pyarrow + pandas for Heber parquet reads
+- LightGBM for ML scoring
+- Alpaca + Unusual Whales (via Data-Gateway)
 
-## Prerequisites
-
-- Python 3.12+
-- Poetry
-- Docker + Docker Compose
-- API credentials for Unusual Whales and Alpaca (paper keys recommended)
-
-## Quick Start
+## Quick start
 
 ```bash
+cd /Users/jacobmcmillan/Empire/Orion
+
 # 1) Install dependencies
-poetry install
+uv sync
 
 # 2) Configure environment
-cp /Users/jacobmcmillan/Empire/Orion/.env.example /Users/jacobmcmillan/Empire/Orion/.env
+cp .env.example .env
+# edit .env — at minimum set DB_URL, UW_API_KEY, ALPACA_API_KEY,
+# ALPACA_SECRET_KEY, ORION_API_KEY
 
-# 3) Start infrastructure/services
-docker compose up -d --build
+# 3) Start TimescaleDB (+ optionally the full stack)
+docker compose up timescaledb -d
+docker compose up -d                        # full default profile
 
-# 4) Run tests
-poetry run pytest -q
+# 4) Run migrations
+uv run alembic upgrade head
+
+# 5) Run tests
+uv run pytest -m unit                       # fast
+uv run pytest                                # all (needs DB for e2e)
 ```
 
 Run a single service locally:
 
 ```bash
-poetry run python -m orion.ingestion
-poetry run python -m orion.main_execution
+uv run python -m orion.ingestion
+uv run python -m orion.main_execution
+uv run uvicorn orion.api.main:app --reload --port 8000
 ```
 
-## Configuration
+## Common commands
 
-All runtime settings are environment-driven via `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py`.
+```bash
+uv sync                       # install deps
+uv run pytest                 # all tests
+uv run pytest -m unit         # fast units only
+uv run pytest -k "test_name"  # single test
+ruff check .                  # lint
+ruff format .                 # format
+mypy .                        # type check (strict for selected modules)
+uv run alembic upgrade head   # apply migrations
+```
 
-Start with:
-- `/Users/jacobmcmillan/Empire/Orion/.env.example`
+Full quality gate:
 
-Core values you must set:
-- `DB_URL`
-- `UW_API_KEY`
-- `ALPACA_API_KEY`
-- `ALPACA_SECRET_KEY`
-- `ORION_API_KEY`
+```bash
+uv run pytest && ruff check . && mypy .
+```
 
-## Testing
+## Native (launchd) lifecycle
 
-- Guide: `/Users/jacobmcmillan/Empire/Orion/TESTING.md`
-- Fast run: `poetry run pytest -q`
-- Full quality gate: `poetry run pytest -q && poetry run ruff check . && poetry run mypy .`
+```bash
+# Install (idempotent)
+cp scripts/launchd/com.empire.orion.execution.plist        ~/Library/LaunchAgents/
+cp scripts/launchd/com.empire.orion.ingestion.plist        ~/Library/LaunchAgents/
+cp scripts/launchd/com.empire.orion.launchd-health.plist   ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.execution.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.ingestion.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.launchd-health.plist
 
-## Architecture
+# Hot restart
+launchctl kickstart -k gui/$(id -u)/com.empire.orion.execution
 
-Architecture document:
-- `/Users/jacobmcmillan/Empire/Orion/docs/ARCHITECTURE.md`
+# Status
+launchctl print gui/$(id -u)/com.empire.orion.execution
+```
 
-Data contracts:
-- `/Users/jacobmcmillan/Empire/Orion/docs/DATA_CONTRACTS.md`
+Don't run docker `execution`/`ingestion` simultaneously with the native
+agents — the service-lease guard will reject whichever started second. Full
+operational detail in [`docs/deployment-guide.md`](docs/deployment-guide.md).
 
-## Related Repos
+## Required environment
 
-- Data-Gateway (data access and request proxy)
-- Heber (storage/lakehouse)
-- Shared-MCP-Server (external service tools)
-- Empire dashboard (operations UI)
+Minimum `.env` (see [`.env.example`](.env.example) for full list and
+[`docs/configuration-guide.md`](docs/configuration-guide.md) for context):
 
-## Documentation Index
+- `DB_URL` — TimescaleDB connection string
+- `UW_API_KEY`, `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
+- `ALPACA_PAPER=true` (default — keep it)
+- `ORION_STAGE=paper` (default — keep it)
+- `ORION_API_KEY` — admin API auth
+- `DATA_GATEWAY_URL`, `DATA_GATEWAY_API_KEY`
+- `HEBER_DATA_ROOT`, `HEBER_CATALOG_URL`
 
-- Product requirements: `/Users/jacobmcmillan/Empire/Orion/PRD.md`
-- Architecture: `/Users/jacobmcmillan/Empire/Orion/docs/ARCHITECTURE.md`
-- Runbook: `/Users/jacobmcmillan/Empire/Orion/docs/RUNBOOK.md`
-- API reference: `/Users/jacobmcmillan/Empire/Orion/docs/API_REFERENCE.md`
-- Testing: `/Users/jacobmcmillan/Empire/Orion/TESTING.md`
-- Contributing: `/Users/jacobmcmillan/Empire/Orion/CONTRIBUTING.md`
-- Security: `/Users/jacobmcmillan/Empire/Orion/SECURITY.md`
-- Developer notes: `/Users/jacobmcmillan/Empire/Orion/DEVELOPER_NOTES.md`
+## Related repos
+
+- **Data-Gateway** — REST/WS proxy for UW + Alpaca and the order router
+- **Heber** — lakehouse Orion reads parquet from (`~/.heber-cache/data`)
+- **AI-Gateway** — LLM proxy used by EOD review and MetaSearchAgent
+- **EmpireUI** — dashboard that consumes Orion's admin API
+- **Athena** — post-trade analyst (consumes Orion's trade journal)
+
+## House rules
+
+- Use `uv`, never Poetry. (Older docs reference Poetry; they're stale.)
+- Default to paper mode. Never weaken risk guards or the `orion_`
+  `client_order_id` filter.
+- Commit small, atomic changes; update `CHANGELOG.md` with every behavioural
+  change.
+- Don't change LLM model IDs without explicit user permission (monorepo rule).
+
+See `CLAUDE.md` for the authoritative agent guidance.

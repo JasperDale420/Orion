@@ -10,52 +10,52 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_darkpool_metrics as get_labeler_darkpool_metrics,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_earnings_proximity as get_labeler_earnings_proximity,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_flow_aggression as get_labeler_flow_aggression,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_flow_greeks as get_labeler_flow_greeks,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_gex_at_entry as get_labeler_gex_at_entry,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_gex_rolling_averages as get_labeler_gex_rolling_averages,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_iv_rank_at_entry as get_labeler_iv_rank_at_entry,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_market_tide_before_entry as get_labeler_market_tide_before_entry,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_max_pain_distance as get_labeler_max_pain_distance,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_p2_features as get_labeler_p2_features,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_p3_features as get_labeler_p3_features,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_phase1_bucket_features as get_labeler_phase1_bucket_features,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_regime_at_entry as get_labeler_regime_at_entry,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_rvol_metrics as get_labeler_rvol_metrics,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_sector_correlation_features as get_labeler_sector_correlation_features,
 )
-from orion.main_price_target_labeler import (
+from orion.labeler.feature_extraction import (
     get_window_features_at_entry as get_labeler_window_features_at_entry,
 )
 from orion.shared.logger import setup_struct_logger

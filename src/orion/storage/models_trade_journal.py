@@ -33,9 +33,16 @@ class TradeJournalEntry(Base):
     client_order_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     broker_order_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
+    # Entry-leg fill data — written once on the opening fill, never overwritten.
     filled_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
     filled_avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     filled_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Exit-leg fill data — written on close via persist_realized_pnl_to_journal.
+    exit_filled_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_filled_avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_filled_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_broker_order_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)

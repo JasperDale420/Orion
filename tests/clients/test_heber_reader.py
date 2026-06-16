@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import httpx
 import pandas as pd
@@ -226,6 +227,158 @@ def test_read_gold_features_filters_asof_and_symbols(tmp_path: Path) -> None:
     assert len(result) == 1
     assert set(result["instrument_key"]) == {"equity:AAPL"}
     assert float(result.iloc[0]["momentum_5d"]) == 0.1
+
+
+def test_read_gold_features_prunes_dt_partitions_older_than_lookback(tmp_path: Path) -> None:
+    """With lookback_days set, rows in dt-partitions older than the window are
+    excluded even though their ts_available is at/before asof (so this isolates
+    dt-partition pruning from the existing as-of filter)."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    recent = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=1)],
+            "ts_available": [asof - timedelta(days=1)],
+            "momentum_5d": [0.42],
+        }
+    )
+    stale = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=20)],
+            "ts_available": [asof - timedelta(days=20)],
+            "momentum_5d": [0.11],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-06-04" / "part-0.parquet", recent)
+    _write_parquet(root / "dt=2026-05-16" / "part-0.parquet", stale)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["momentum_5d"]) == 0.42
+
+
+def test_read_gold_features_includes_partition_exactly_at_lookback_cutoff(tmp_path: Path) -> None:
+    """The cutoff (asof_date - lookback_days) is inclusive: a partition dated
+    exactly on the cutoff is kept; one day earlier is pruned."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)  # cutoff = 2026-05-29 with lookback 7
+    on_cutoff = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [datetime(2026, 5, 29, 12, 0, tzinfo=UTC)],
+            "ts_available": [datetime(2026, 5, 29, 12, 0, tzinfo=UTC)],
+            "momentum_5d": [0.29],
+        }
+    )
+    before_cutoff = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [datetime(2026, 5, 28, 12, 0, tzinfo=UTC)],
+            "ts_available": [datetime(2026, 5, 28, 12, 0, tzinfo=UTC)],
+            "momentum_5d": [0.28],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-05-29" / "part-0.parquet", on_cutoff)
+    _write_parquet(root / "dt=2026-05-28" / "part-0.parquet", before_cutoff)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["momentum_5d"]) == 0.29
+
+
+def test_read_gold_features_reads_all_partitions_without_lookback(tmp_path: Path) -> None:
+    """Default (no lookback_days) preserves full-history reads for training/backfill."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    recent = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=1)],
+            "ts_available": [asof - timedelta(days=1)],
+            "momentum_5d": [0.42],
+        }
+    )
+    stale = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [asof - timedelta(days=20)],
+            "ts_available": [asof - timedelta(days=20)],
+            "momentum_5d": [0.11],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-06-04" / "part-0.parquet", recent)
+    _write_parquet(root / "dt=2026-05-16" / "part-0.parquet", stale)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+    )
+
+    assert len(result) == 2
+    assert set(round(float(v), 2) for v in result["momentum_5d"]) == {0.42, 0.11}
+
+
+def test_read_gold_features_widens_to_full_history_when_window_empty(tmp_path: Path) -> None:
+    """When no partition falls within the lookback window, fall back to a full
+    read so a low-cadence/stalled dataset's most recent (older) row is still
+    returned rather than silently dropped to None."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    stale = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "ts_event": [datetime(2026, 4, 1, 12, 0, tzinfo=UTC)],
+            "ts_available": [datetime(2026, 4, 1, 12, 0, tzinfo=UTC)],
+            "momentum_5d": [0.99],
+        }
+    )
+    root = tmp_path / "gold" / "dataset=momentum_features" / "project=quant" / "version=v1"
+    _write_parquet(root / "dt=2026-04-01" / "part-0.parquet", stale)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert len(result) == 1
+    assert float(result.iloc[0]["momentum_5d"]) == 0.99
+
+
+def test_read_gold_features_returns_empty_for_genuinely_empty_dataset_with_lookback(tmp_path: Path) -> None:
+    """A dataset with no parquet files at all returns empty even with the
+    widen-if-empty fallback (nothing to widen to)."""
+    asof = datetime(2026, 6, 5, 14, 0, tzinfo=UTC)
+    (tmp_path / "gold" / "dataset=momentum_features").mkdir(parents=True)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_gold_features(
+        dataset="momentum_features",
+        asof_time=asof,
+        symbols=["AAPL"],
+        lookback_days=7,
+    )
+
+    assert result.empty
 
 
 def test_read_gold_features_supports_nested_watch_layout(tmp_path: Path) -> None:
@@ -486,3 +639,90 @@ def test_read_parquet_filewise_skips_hidden_sidecar_files(tmp_path: Path) -> Non
 
     assert len(result) == 1
     assert all(not path.name.startswith("._") for path in seen_paths)
+
+
+def test_read_table_disables_arrow_threadpools_on_primary_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression for the 2026-06-02 PyArrow SIGABRT: the primary read must never
+    # spin up Arrow's CPU thread pool (use_threads) or the background I/O prefetch
+    # pool (pre_buffer) from inside the asyncio.to_thread executor.
+    df = pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [100.5]})
+    dataset_path = tmp_path / "gold" / "dataset=meta_label_features" / "dt=2026-02-05"
+    _write_parquet(dataset_path / "part-0.parquet", df)
+
+    reader = HeberReader(data_root=tmp_path)
+    calls: list[dict] = []
+    real_read_table = pq.read_table
+
+    def _spy(source, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return real_read_table(source, **kwargs)
+
+    monkeypatch.setattr("orion.clients.heber_reader.pq.read_table", _spy)
+
+    reader._read_table(path=dataset_path, columns=None, filters=None, partitioning=None)
+
+    assert len(calls) == 1
+    assert calls[0]["use_threads"] is False
+    assert calls[0]["pre_buffer"] is False
+
+
+def test_read_table_disables_arrow_threadpools_on_filter_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The filter-pushdown fallback read must also pin both Arrow thread pools off.
+    df = pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [100.5]})
+    dataset_path = tmp_path / "gold" / "dataset=meta_label_features" / "dt=2026-02-05"
+    _write_parquet(dataset_path / "part-0.parquet", df)
+
+    reader = HeberReader(data_root=tmp_path)
+    calls: list[dict] = []
+    real_read_table = pq.read_table
+
+    def _spy(source, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        if kwargs.get("filters"):
+            # Force the primary (filtered) read to fail with a non-corrupt error
+            # so _read_table retries via the filter-pushdown fallback path.
+            raise RuntimeError("forced filter pushdown failure")
+        return real_read_table(source, **kwargs)
+
+    monkeypatch.setattr("orion.clients.heber_reader.pq.read_table", _spy)
+
+    reader._read_table(path=dataset_path, columns=None, filters=[("close", ">", 0)], partitioning=None)
+
+    assert len(calls) == 2  # primary (filtered, raised) + fallback
+    for call in calls:
+        assert call["use_threads"] is False
+        assert call["pre_buffer"] is False
+
+
+def test_read_parquet_converts_to_pandas_single_threaded(tmp_path: Path) -> None:
+    # to_pandas() defaults to use_threads=True, spawning the same Arrow CPU pool
+    # that aborted on 2026-06-02 — the direct read path must pin it off.
+    reader = HeberReader(data_root=tmp_path)
+    expected = pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [100.5]})
+    fake_table = MagicMock()
+    fake_table.to_pandas.return_value = expected
+    reader._read_table = MagicMock(return_value=fake_table)  # type: ignore[method-assign]
+
+    result = reader._read_parquet(path=tmp_path / "gold" / "dataset=x", columns=None, filters=None)
+
+    fake_table.to_pandas.assert_called_once_with(use_threads=False)
+    assert result.equals(expected)
+
+
+def test_read_parquet_filewise_converts_to_pandas_single_threaded(tmp_path: Path) -> None:
+    # The per-file fallback path converts to pandas too; same single-threaded pin.
+    df = pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [100.5]})
+    dataset_path = tmp_path / "gold" / "dataset=x" / "dt=2026-02-05"
+    _write_parquet(dataset_path / "part-0.parquet", df)
+
+    reader = HeberReader(data_root=tmp_path)
+    fake_table = MagicMock()
+    fake_table.to_pandas.return_value = df
+    reader._read_table = MagicMock(return_value=fake_table)  # type: ignore[method-assign]
+
+    result = reader._read_parquet_filewise(path=dataset_path, columns=None, filters=None)
+
+    fake_table.to_pandas.assert_called_once_with(use_threads=False)
+    assert len(result) == 1

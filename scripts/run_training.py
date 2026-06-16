@@ -3,6 +3,11 @@ Standalone ML training script.
 
 Runs the full pattern mining + exit classifier pipeline locally,
 using SQLite for insight persistence and a local model directory.
+
+Output directory honors ORION_MODEL_DIR — set it to the live
+`models/` directory (e.g. from a cron job) to retrain the bucket
+scorers in place. When unset, defaults to `artifacts/models/`
+under the project root for ad-hoc runs.
 """
 
 import asyncio
@@ -10,11 +15,13 @@ import os
 import sys
 from pathlib import Path
 
-# Configure environment before importing orion modules
-MODEL_DIR = Path(__file__).parent.parent / "artifacts" / "models"
+DEFAULT_MODEL_DIR = Path(__file__).parent.parent / "artifacts" / "models"
+MODEL_DIR = Path(os.environ.get("ORION_MODEL_DIR") or DEFAULT_MODEL_DIR)
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-os.environ.setdefault("ORION_MODEL_DIR", str(MODEL_DIR))
+# Re-export so child orion modules see the same value (system_settings
+# reads ORION_MODEL_DIR at import time).
+os.environ["ORION_MODEL_DIR"] = str(MODEL_DIR)
 os.environ.setdefault("HEBER_DATA_ROOT", "/Volumes/heber/data")
 os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("ORION_ENABLE_LEGACY_LABEL_PIPELINES", "true")

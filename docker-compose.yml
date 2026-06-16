@@ -16,7 +16,15 @@ networks:
 
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    # RC.2 (2026-06-12): swapped from timescale/timescaledb:latest-pg16 to plain
+    # Postgres 16 + pgvector. Orion uses ZERO hypertables / continuous aggregates;
+    # the only extension that matters is pgvector (RAG embeddings). The volume is
+    # reused IN PLACE — at deploy time the timescaledb extension is dropped and the
+    # shared_preload_libraries preload is cleared first, and a pg_dump rollback
+    # artifact is taken before the swap. Service name / container_name / volume /
+    # port / healthcheck are unchanged so every consumer's connection string and
+    # CI image stay identical.
+    image: pgvector/pgvector:pg16
     container_name: orion_timescaledb
     restart: unless-stopped
     environment:
@@ -38,35 +46,14 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  price_target_labeler:
-    <<: *orion-common
-    container_name: orion_price_target
-    profiles: [ "legacy-labels" ]
-    restart: on-failure
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    volumes:
-      - .:/app
-      - ../empire-core:/empire-core:ro
-      - ${HEBER_HOST_DATA:-/Users/jacobmcmillan/.heber-cache/data}:/Volumes/heber/data:ro
-    environment:
-      <<: *orion-env
-      DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
-      ORION_RUN_ID: docker_persistent
-      GATEWAY_URL: http://data-gateway:8080
-      ORION_ENABLE_LEGACY_LABEL_PIPELINES: ${ORION_ENABLE_LEGACY_LABEL_PIPELINES:-false}
-      ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER: ${ORION_ENABLE_LEGACY_PRICE_TARGET_LABELER:-false}
-    command: [ "python", "-m", "orion.main_price_target_labeler" ]
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-
   ingestion:
     <<: *orion-common
     container_name: orion_ingestion
+    # Native launchd runner owns the ingestion lease by default
+    # (com.empire.orion.ingestion). To roll back to the containerised
+    # version, bootout the agent and run:
+    #   docker compose --profile docker up -d ingestion
+    profiles: [ "docker" ]
     restart: unless-stopped
     depends_on:
       timescaledb:
@@ -82,9 +69,29 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_persistent_ingest
+      # Stable lease owner id so a container restart reclaims its own
+      # service lease within the stale window, and DISTINCT from the
+      # native launchd value (`orion_ingestion_native`) so the lease
+      # guard mutually-excludes the two paths. If both are accidentally
+      # started, whichever loses the race raises RuntimeError and exits
+      # non-zero — see orion.core.service_lease.
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_ingestion_compose}
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
     command: [ "python", "-m", "orion.ingestion" ]
+    # Bound memory: turns a runaway pyarrow/Heber scan into a visible
+    # OOMKilled=true exit 137 instead of Docker Desktop VM-level silent
+    # killing of whichever container has highest RSS. Sized for
+    # FeatureEngine hydration peak (~1.3GB) + headroom. Bumped from 2.5G
+    # to 4G after observing 84% RSS at "Polling Loop" entry (2.05G/2.44G)
+    # and a tight restart loop where the next allocation in `_run_cycle`
+    # (Heber flow scan + bar drain) was OOMing the container.
+    # Bumped 4G → 6G on 2026-05-14: with the universe grown from 11 to
+    # 148 tickers and Heber gold partitions 5 days larger, observed
+    # ingestion's _run_cycle peak at 4.18 GiB RSS (over the 4G cap,
+    # confirmed via dmesg CONSTRAINT_MEMCG kill on cgroup 6a9530c9...).
+    mem_limit: 6g
+    memswap_limit: 6g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -112,7 +119,7 @@ services:
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
       ORION_RUN_ID: docker_persistent
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
       # Re-enabled with staggered-init connector startup in
       # main_feature_enrichment.py (t=5/75/145/215s offsets). Without UW
       # connector writes, the ML scorer sees null features and rejects every
@@ -166,6 +173,11 @@ services:
   execution:
     <<: *orion-common
     container_name: orion_execution
+    # Native launchd runner owns the execution lease by default
+    # (com.empire.orion.execution). To roll back to the containerised
+    # version, bootout the agent and run:
+    #   docker compose --profile docker up -d execution
+    profiles: [ "docker" ]
     restart: unless-stopped
     depends_on:
       timescaledb:
@@ -181,11 +193,36 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_persistent_exec
+      # Stable lease owner id so a container restart reclaims its own
+      # service lease within the stale window. Without this, a fresh uuid
+      # per incarnation deadlocks restart-loops at the lease check.
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_execution_compose}
       ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE: "false"
       ORION_RISK_MAX_DAILY_LOSS: ${ORION_RISK_MAX_DAILY_LOSS:-20000}
+      # Forward-testing knobs — disable both circuit breakers and lower the
+      # ML prefilter threshold so we can see end-to-end pipeline behavior.
+      # Override per env at deploy time once we want strict guards back.
+      ORION_CIRCUIT_BREAKER_ENABLED: ${ORION_CIRCUIT_BREAKER_ENABLED:-false}
+      ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED: ${ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED:-false}
+      ORION_ML_PREFILTER_THRESHOLD: ${ORION_ML_PREFILTER_THRESHOLD:-0.05}
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
     command: [ "python", "-m", "orion.main_execution" ]
+    # Sized for FeatureEngine hydration + ML model RSS (~1.6GB observed)
+    # plus headroom for candidate processing batches. Bumped from 3G to 5G
+    # after observing a tight restart loop where execution exited silently
+    # ~6s after "models_loaded" while processing 50 candidates — RSS
+    # consistently reached ~2.0–2.1G during the candidate batch + Heber
+    # gold-feature reads, with no OOMKilled flag set (Docker Desktop
+    # cgroup quirk) and no silent-exit signal from main_execution.py's
+    # guards, consistent with SIGKILL from the cgroup memory controller.
+    # Bumped 5G → 7G on 2026-05-14: same Heber gold growth that broke
+    # data_quality and ingestion now hits execution's working set —
+    # observed cgroup MEMCG kills at 5.20 GiB RSS while processing
+    # only 7 candidates (vs 50+ before). Streaming Heber reads in the
+    # ML feature path is the real fix; this is a band-aid.
+    mem_limit: 7g
+    memswap_limit: 7g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -201,6 +238,11 @@ services:
     <<: *orion-common
     container_name: orion_position_monitor
     restart: unless-stopped
+    # RB.4/RC.1: native via launchd (com.empire.orion.position-monitor) is the
+    # canonical runner. This docker copy is profile-gated so a stray
+    # `docker compose up -d` cannot start a second close-executor against the
+    # shared Alpaca account. Bring it up explicitly with `--profile docker`.
+    profiles: [ "docker" ]
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -213,10 +255,13 @@ services:
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_PAPER: ${ALPACA_PAPER:-true}
       ORION_RUN_ID: docker_position_monitor
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_position_monitor_compose}
       ORION_MODEL_DIR: /app/models
       GATEWAY_URL: http://data-gateway:8080
-      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}
     command: [ "python", "-m", "orion.main_position_monitor", "--interval", "60" ]
+    mem_limit: 1500m
+    memswap_limit: 1500m
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -232,6 +277,12 @@ services:
     <<: *orion-common
     container_name: orion_eod_agent
     restart: unless-stopped
+    # RC.1: the native ingestion trigger (01:05 UTC ≈ 20:05 ET) is the single
+    # canonical EOD path. This standalone docker eod-agent is retired from the
+    # default profile to remove the dual-EOD double-run; the service definition
+    # is kept for manual runs via `--profile docker`. run_review is idempotent
+    # per trading date, so even a manual run cannot double-process the same day.
+    profiles: [ "docker" ]
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -289,6 +340,10 @@ services:
     <<: *orion-common
     container_name: orion_data_quality
     restart: unless-stopped
+    # RB.4: native via launchd (com.empire.orion.data-quality) is canonical.
+    # Profile-gated so a stray `docker compose up -d` cannot run a second
+    # scheduled data-quality loop. Bring up explicitly with `--profile docker`.
+    profiles: [ "docker" ]
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -299,7 +354,19 @@ services:
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
+      ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_data_quality_compose}
     command: [ "python", "-m", "orion.main_data_quality", "--scheduled" ]
+    # Bumped 2500m → 5g on 2026-05-13. With Heber gold partition growth,
+    # `run_quality_checks` peaked above 2.5G and entered a cgroup-OOM
+    # loop (failcnt=23967, restartcount=7424 in 5 days). The constant
+    # page churn pushed the Docker-VM into global-OOM and started
+    # killing ingestion + execution as collateral damage (RCA at
+    # predict/260513-2030-restart-loop-rca/RCA.md). This is a BAND-AID:
+    # the real fix is streaming the Heber reads in `run_quality_checks`
+    # instead of holding all DataFrames in a `results` dict. Until that
+    # ships, this cap leaves enough headroom for current dataset size.
+    mem_limit: 5g
+    memswap_limit: 5g
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -316,11 +383,13 @@ services:
     container_name: orion_meta_weekly
     profiles: [ "scheduled" ]
     restart: unless-stopped
+    # meta-weekly is native-canonical; this compose service is a dormant
+    # fallback. eod-agent moved to the `docker` profile, so a `depends_on:
+    # eod-agent` here makes `--profile scheduled config` invalid (a dependency
+    # that isn't rendered in the same profile). Drop it.
     depends_on:
       timescaledb:
         condition: service_healthy
-      eod-agent:
-        condition: service_started
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
@@ -384,6 +453,8 @@ services:
       ORION_PATTERN_MINER_TRAINING_SOURCE: ${ORION_PATTERN_MINER_TRAINING_SOURCE:-heber_gold}
       ORION_EXIT_CLASSIFIER_TRAINING_SOURCE: ${ORION_EXIT_CLASSIFIER_TRAINING_SOURCE:-heber_gold}
     command: [ "python", "-m", "orion.main_pattern_miner" ]
+    mem_limit: 1500m
+    memswap_limit: 1500m
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
       interval: 30s
@@ -403,8 +474,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      price_target_labeler:
-        condition: service_started
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
@@ -427,8 +496,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      price_target_labeler:
-        condition: service_started
     environment:
       <<: *orion-env
       DB_URL: postgresql+asyncpg://orion:orion_password@timescaledb:5432/orion_db
@@ -478,11 +545,16 @@ services:
     command:
       - -c
       - |
-        apk add --no-cache rsync >/dev/null 2>&1
+        apk add --no-cache rsync coreutils >/dev/null 2>&1
         echo "heber-sync: starting continuous sync (60s interval)"
         while true; do
           TODAY=$$(date -u +%Y-%m-%d)
           YESTERDAY=$$(date -u -d "@$$(( $$(date -u +%s) - 86400 ))" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
+          # Gold cutoff: 30 days back. Orion ML rolling windows are <=30d, so a
+          # tighter window is enough; without it the EOD pollers Heber writes
+          # to gold/dataset=*/project=*/version=*/dt=*/ remain invisible to
+          # Orion's container (which only sees /heber-cache).
+          GOLD_CUTOFF=$$(date -u -d "@$$(( $$(date -u +%s) - 30*86400 ))" +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)
           FEEDS="flow_alerts bars darkpool market_tide greek_exposure iv_rank max_pain"
           SYNCED=0
           for feed in $$FEEDS; do
@@ -503,7 +575,42 @@ services:
               done
             fi
           done
-          echo "$$(date -u +%H:%M:%S) synced $$SYNCED partitions"
+
+          # Gold sync: walk every dataset/project/version, mirror dt= partitions
+          # newer than GOLD_CUTOFF. Use --delete so renamed/removed parquet
+          # files in source (e.g. quarantined legacy schemas) don't linger
+          # in the cache and pollute downstream pyarrow merges.
+          GOLD_SRC="/heber-source/gold"
+          GOLD_DST="/heber-cache/gold"
+          GOLD_SYNCED=0
+          if [ -d "$$GOLD_SRC" ]; then
+            for ds_dir in "$$GOLD_SRC"/dataset=*; do
+              [ -d "$$ds_dir" ] || continue
+              ds=$$(basename "$$ds_dir")
+              for proj_dir in "$$ds_dir"/project=*; do
+                [ -d "$$proj_dir" ] || continue
+                proj=$$(basename "$$proj_dir")
+                for ver_dir in "$$proj_dir"/version=*; do
+                  [ -d "$$ver_dir" ] || continue
+                  ver=$$(basename "$$ver_dir")
+                  for dt_dir in "$$ver_dir"/dt=*; do
+                    [ -d "$$dt_dir" ] || continue
+                    dt_part=$$(basename "$$dt_dir")
+                    dt_value=$${dt_part#dt=}
+                    if [ "$$dt_value" \< "$$GOLD_CUTOFF" ]; then
+                      continue
+                    fi
+                    DEST_DIR="$$GOLD_DST/$$ds/$$proj/$$ver/$$dt_part"
+                    mkdir -p "$$DEST_DIR"
+                    rsync -a --delete "$$dt_dir/" "$$DEST_DIR/" >/dev/null 2>&1
+                    GOLD_SYNCED=$$((GOLD_SYNCED + 1))
+                  done
+                done
+              done
+            done
+          fi
+
+          echo "$$(date -u +%H:%M:%S) synced silver=$$SYNCED gold=$$GOLD_SYNCED partitions"
           sleep 60
         done
     volumes:

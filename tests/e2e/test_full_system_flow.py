@@ -194,7 +194,7 @@ async def test_full_system_flow():
     mock_client.get_clock.return_value = {"is_open": True}
     mock_client.get_option_chain.return_value = {
         "contracts": [
-            {"symbol": "SPY260418C00500000", "mid": 1.0, "ask": 1.05},
+            {"contract_symbol": "SPY260418C00500000", "bid": 1.0, "ask": 1.05},
         ]
     }
     mock_client.create_order.return_value = {"id": "mock_order_123", "status": "accepted"}

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
 
@@ -72,6 +73,34 @@ class MarketSchedule:
         ts = timestamp or datetime.now(UTC)
         return bool(self.calendar.is_open_on_minute(ts))
 
+    def is_market_open_for_options(self, timestamp: datetime | None = None) -> bool:
+        """Alpaca options trading: 9:30am–4:00pm ET Mon–Fri only.
+
+        Unlike equity, Alpaca does NOT allow options orders during
+        pre-market or after-hours sessions — paper OR live. Submitting
+        any options order (market OR limit) outside this window gets
+        rejected with error code ``42210000``.
+
+        Use this gate before attempting any options close to avoid
+        spurious EXIT_ORDER_FAILED events; outside the window the exit
+        should be queued for replay at the next open.
+
+        Equivalent to ``is_market_open`` for the standard XNYS
+        configuration (which only marks the regular session as open),
+        but explicitly enforces the [9:30, 16:00) ET window so a
+        future calendar config that adds pre/post sessions won't
+        accidentally route options orders into a rejection window.
+        """
+        ts = timestamp or datetime.now(UTC)
+        if not self.is_market_open(ts):
+            return False
+        et = ts.astimezone(ZoneInfo("America/New_York"))
+        # Half-open interval matches Alpaca's behavior: a 16:00:00 ET
+        # request is rejected.
+        open_t = et.replace(hour=9, minute=30, second=0, microsecond=0)
+        close_t = et.replace(hour=16, minute=0, second=0, microsecond=0)
+        return open_t <= et < close_t
+
     def get_open_close(self, timestamp: datetime | None = None) -> tuple[datetime, datetime] | tuple[None, None]:
         """
         Returns (market_open, market_close) for the given day.
@@ -128,7 +157,7 @@ class MarketSchedule:
 
         ts = timestamp or datetime.now(UTC)
         # exchange_calendars typing is loose, cast result
-        return self.calendar.next_open(ts).to_pydatetime()  # type: ignore
+        return self.calendar.next_open(ts).to_pydatetime()
 
     def seconds_until_open(self, timestamp: datetime | None = None) -> float:
         """
@@ -157,5 +186,5 @@ class MarketSchedule:
 
         ts = timestamp or datetime.now(UTC)
         if self.is_market_open(ts):
-            return self.calendar.next_close(ts).to_pydatetime()  # type: ignore
+            return self.calendar.next_close(ts).to_pydatetime()
         return None

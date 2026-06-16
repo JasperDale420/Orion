@@ -1,6 +1,4 @@
 import asyncio
-import contextlib
-import signal
 from typing import Any
 
 from dotenv import load_dotenv
@@ -16,18 +14,26 @@ from orion.execution.flow_helpers import (
     fetch_recent_flow_for_ticker,
 )
 from orion.execution.decision_persistence import (
+    auto_skip_stale_candidates,
     fetch_pending_candidates,
+    reconcile_orphaned_decisions,
     save_decision,
     update_decision_status,
 )
 from orion.processing.signal_engine import SignalEngine
+from orion.shared.async_main import run_service
 from orion.shared.db_utils import db_query
+from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
 from orion.jobs.seed_solvers import ensure_active_solvers_ready
-from orion.storage.db import init_db
+from orion.storage.db import init_db, wait_for_db
 
 # Configure Logger
 logger = setup_struct_logger("orion.execution")
+
+# Liveness cadence budget: the ~1s execution loop publishes every iteration; the
+# dead-man watchdog alerts if no successful iteration lands within 300s.
+EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS = 300
 
 # Re-export for backward compatibility (tests import from here)
 from orion.execution.flow_helpers import (  # noqa: E402, F401
@@ -42,22 +48,34 @@ from orion.execution.flow_helpers import (  # noqa: E402, F401
 from orion.clients.heber_reader import get_heber_reader  # noqa: E402, F401
 
 
-async def main() -> None:
-    # Graceful Shutdown Setup
+async def run_execution_service(shutdown_event: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
-    shutdown_event = asyncio.Event()
-
-    def _signal_handler() -> None:
-        logger.info("Shutdown signal received. Stopping execution loop...")
-        shutdown_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler)
 
     logger.info("Starting Orion Execution Service (V1 Deterministic)...")
 
     # Ensure DB and solver inventory exist before the execution loop starts.
+    # Wait out a transient DB outage (bounded) so a brief TimescaleDB blip
+    # doesn't crash-loop the service on the launchd 30s throttle. Pass the
+    # shutdown_event so a SIGTERM/SIGINT during the wait aborts startup promptly
+    # instead of blocking for the full backoff.
+    await wait_for_db(cancel_event=shutdown_event)
+    if shutdown_event.is_set():
+        logger.info("Shutdown requested during DB wait; exiting before startup.")
+        return
     await init_db()
+
+    # Repair decisions orphaned by a crash in the finalize→status-update gap:
+    # an order finalized at the broker (accepted/REJECTED) whose StrategyDecision
+    # is still PENDING. Best-effort — a transient DB error here must not block
+    # startup of the execution loop.
+    try:
+        await reconcile_orphaned_decisions()
+    except Exception as e:
+        logger.warning(
+            "reconcile_orphaned_decisions_failed",
+            extra={"event_type": "ORPHAN_RECONCILE_FAILED", "error": str(e)},
+        )
+
     solver_inventory = await ensure_active_solvers_ready(system_settings.orion_stage)
     logger.info(
         "Solver inventory ready",
@@ -76,6 +94,13 @@ async def main() -> None:
 
     position_manager = PositionManager()
     exit_rules = get_default_exit_rules()
+
+    # Refuse to start if another `execution` instance is already running —
+    # the architecture's in-memory state (pending_orders, processed_fill_ids,
+    # _partial_fill_tracker, _closing_symbols) assumes a single process per
+    # service. A stale lease (>120s without renewal) is treated as a crashed
+    # prior run and overwritten.
+    await execution_engine.acquire_service_lease("execution")
 
     # Initialize history for execution error tracking
     await execution_engine.initialize()
@@ -98,13 +123,32 @@ async def main() -> None:
             if await cb.is_open():
                 state = await cb.get_state()
                 logger.warning(f"CIRCUIT BREAKER OPEN: {state.get('reason')}. Pausing execution.")
+                # Liveness: a deliberate breaker pause is a healthy, functioning
+                # loop — publish success so the dead-man doesn't double-alarm on
+                # top of the breaker's own alerting.
+                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
                 await asyncio.sleep(5.0)
                 continue
 
             # 2. Poll Pending Candidates
+            #    Sweep stale candidates first so the pending pool doesn't
+            #    accumulate forever-pending rows that fetch_pending_candidates
+            #    silently filters out. Best-effort: a transient DB error here
+            #    must not break the loop.
+            try:
+                await auto_skip_stale_candidates()
+            except Exception as e:
+                logger.warning(
+                    "auto_skip_stale_candidates_failed",
+                    extra={"event_type": "AUTO_SKIP_FAILED", "error": str(e)},
+                )
+
             candidates = await fetch_pending_candidates()
 
             if not candidates:
+                # Liveness: an empty candidate pool is the normal quiet state —
+                # the full poll+sweep+fetch cycle succeeded.
+                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
                 # Sleep and continue
                 await asyncio.sleep(1.0)
                 continue
@@ -162,8 +206,20 @@ async def main() -> None:
                 # 6. Update Decision Status
                 await update_decision_status(decision.decision_id, exec_status)
 
+            # Liveness: full candidate-processing cycle completed (adversarial-
+            # review finding: publishing right after poll_fills advanced the
+            # heartbeat even when decisioning/preflight/persistence then failed).
+            await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
+
         except Exception as e:
             logger.error(f"Main Loop Error: {e}")
+            # Error-only liveness: records last_error but does NOT advance
+            # last_success — persistent failures age the row into a dead-man alert.
+            await publish_liveness(
+                "execution",
+                cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS,
+                error=f"main loop error: {e}",
+            )
             await asyncio.sleep(5.0)  # Backoff
 
         # Position Manager: Check exit rules for open positions
@@ -224,9 +280,46 @@ async def main() -> None:
         except TimeoutError:
             pass  # Sleep done, continue loop
 
-    logger.info("Execution Service Stopped.")
+    if shutdown_event.is_set():
+        logger.info("Execution Service Stopped.")
+    else:
+        # Defensive: while-loop should only exit via shutdown_event. If we
+        # land here without that flag set, something silently broke the
+        # loop condition — surface it as CRITICAL so the operator sees a
+        # signal instead of a "clean" exit code masquerading as healthy.
+        logger.critical(
+            "execution_main_loop_exited_without_shutdown_signal",
+            extra={"event_type": "MAIN_LOOP_UNEXPECTED_EXIT"},
+        )
+
+
+async def main() -> None:
+    """In-loop entry point: install signal handlers and run the execution loop.
+
+    The ``__main__`` path uses ``run_service`` for the same plumbing plus
+    process-level crash logging. This coroutine exists for callers that already
+    own an event loop and drive the service directly.
+    """
+    import signal
+
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler() -> None:
+        logger.info("Shutdown signal received. Stopping execution loop...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    await run_execution_service(shutdown_event)
 
 
 if __name__ == "__main__":
-    with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(main())
+    # run_service owns signal handlers (set the shutdown event), silent Ctrl-C
+    # exit, and structured crash logging with a non-zero exit code so docker
+    # restart_policy correctly reports failure (was previously ec=0 in some
+    # restart-loop incidents when the loop returned silently). init_database
+    # is False because run_execution_service runs wait_for_db() + init_db()
+    # itself, gated on the shutdown event.
+    run_service("orion.execution", run_execution_service, init_database=False)

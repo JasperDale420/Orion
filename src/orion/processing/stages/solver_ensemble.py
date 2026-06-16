@@ -107,8 +107,50 @@ class SolverEnsemble:
                 continue
 
             valid_solver_found = True
-            weighted_vote += p_take * weight
-            total_weight += weight
+
+            # ABSTAIN semantics — FOLLOWUPS #1 (observed 2026-05-21):
+            # A solver whose conditions don't apply to the current
+            # candidate (e.g. swing_entry on a sweep-driven flow event)
+            # returns p_take=0.0 + trace.abstained=True from
+            # `solver_executor`. Those abstentions are excluded from
+            # the weighted denominator so they don't drag consensus
+            # below threshold for every flow-driven candidate.
+            #
+            # IMPORTANT — codex review 2026-05-21 #3: this MUST NOT
+            # conflate "solver didn't apply" with "model genuinely
+            # predicts 0.0 (strong NO)". The first version of this fix
+            # used `p_take > 0.0` as the boundary, which silently
+            # excluded real-model strong-NO votes too. We now key off
+            # the explicit `trace.abstained` flag set by
+            # solver_executor, with a fallback to `p_take <= 0.0` only
+            # when the flag is missing (legacy traces / custom solver
+            # pipelines that pre-date the flag).
+            if isinstance(trace, dict) and "abstained" in trace:
+                # Preferred path — solver_executor sets this on rule
+                # mismatch. Becomes the only path once all callers
+                # adopt the flag.
+                abstained = bool(trace["abstained"])
+            elif isinstance(trace, dict) and trace.get("reason") == "Rule Mismatch":
+                # Legacy traces from a pre-flag solver_executor.
+                abstained = True
+            elif (
+                isinstance(trace, dict)
+                and isinstance(trace.get("stage"), str)
+                and trace["stage"].startswith("model_inference")
+            ):
+                # Real model ran — a 0.0 prediction here is a STRONG
+                # NO, not an abstention. Codex review 2026-05-21 #3.
+                abstained = False
+            else:
+                # Last-resort backward compat: no flag, no model trace,
+                # no abstention reason — fall back to the pre-2026-05-21
+                # heuristic. Will become dead code as all solver
+                # pipelines adopt the flag.
+                abstained = p_take <= 0.0
+
+            if not abstained:
+                weighted_vote += p_take * weight
+                total_weight += weight
 
             ensemble_details.append(
                 {
@@ -117,6 +159,7 @@ class SolverEnsemble:
                     "oos_expect_bp": float(ss.oos_expect_bp or 0.0),
                     "weight": weight,
                     "p_take": p_take,
+                    "abstained": abstained,
                     "trace": trace,
                 }
             )
@@ -130,6 +173,29 @@ class SolverEnsemble:
 
         consensus_score = weighted_vote / total_weight if total_weight > 0 else 0.0
         ensemble_threshold = system_settings.ensemble_consensus_threshold
+
+        # Diagnostic logging — emit per-solver scores so we can attribute
+        # ensemble collapses (FOLLOWUPS #1). Volume is bounded by
+        # active_solver_count (5 today), so this stays well under the
+        # log-rate budget.
+        logger.info(
+            "ensemble_solver_votes",
+            extra={
+                "event_type": "ENSEMBLE_SOLVER_VOTES",
+                "ticker": candidate.ticker,
+                "candidate_id": candidate.candidate_id,
+                "per_solver": [
+                    {
+                        "solver_id": d["solver_id"],
+                        "p_take": d["p_take"],
+                        "weight": d["weight"],
+                    }
+                    for d in ensemble_details
+                ],
+                "consensus_score": consensus_score,
+                "ensemble_threshold": ensemble_threshold,
+            },
+        )
 
         if consensus_score < ensemble_threshold:
             return StageResult(
