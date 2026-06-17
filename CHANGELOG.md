@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Dead-man Discord alerts now respect market closure for market-session services**: stale `ingestion`, `execution`, `feature_enrichment`, and `position_monitor` heartbeats are informational outside the NYSE cash session, while scheduled always-on jobs still alert around the clock. This stops closed-market Discord pages for stale market-loop heartbeats without muting real scheduled-job failures.
 
+### Removed
+
+- **Nine unused dependencies dropped**: `boto3`, `s3fs`, `aiobotocore`, `fsspec`, `litellm`, `aiokafka`, `msgpack`, `sseclient-py`, and `pandera` were declared but imported nowhere — Heber reads are local-filesystem (no `s3://` access), the LLM path runs through the AI-Gateway HTTP client (not litellm), ingestion is Gateway-WebSocket (not Kafka), and there is no msgpack/SSE/dataframe-schema usage. Removing them also drops their transitive trees (tiktoken, tokenizers, boto3/s3transfer, typer, typeguard, …), shrinking the install footprint and supply-chain surface. `pytz` is retained because `alpaca-py` imports it at module load without declaring it.
+
 ### Added (Redesign Wave C — 2026-06-12)
 
 - **Single canonical end-of-day path**: the native ingestion EOD trigger (01:05 UTC, after the day's fills and journal write-backs settle) is now the one and only EOD review. The standalone docker `eod-agent` is retired from the default compose profile (still runnable via `--profile docker` for manual runs). `run_review` is idempotent per trading date — a second run for the same date is skipped unless `force=True` — so even a manual run can no longer double-process a session.
