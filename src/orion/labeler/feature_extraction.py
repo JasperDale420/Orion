@@ -23,6 +23,7 @@ import pandas as pd
 from orion.clients.heber_reader import HeberReader
 from orion.labeler.constants import RISK_FREE_RATE
 from orion.labeler.greeks import calculate_black_scholes_delta, calculate_black_scholes_gamma
+from orion.shared.dataframe_utils import first_existing_column as _pick_first_existing_column
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.price_target")
@@ -44,13 +45,6 @@ def _record_price_target_fallback(feature_name: str, error: Exception | None = N
         payload["error"] = str(error)
     payload.update(context)
     logger.warning("Price-target fallback applied", extra={"event_type": "PRICE_TARGET_FALLBACK", **payload})
-
-
-def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
-    for column in columns:
-        if column in df.columns:
-            return column
-    return None
 
 
 def _is_truthy(value: Any) -> bool:

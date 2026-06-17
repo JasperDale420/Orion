@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 import structlog
 
 from orion.config import system_settings
+from orion.shared.dataframe_utils import first_existing_column
 
 logger = structlog.get_logger(__name__)
 
@@ -456,12 +457,7 @@ class HeberReader:
             return []
         return [f"equity:{symbol.upper()}" for symbol in symbols if symbol]
 
-    @staticmethod
-    def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
-        for column in columns:
-            if column in df.columns:
-                return column
-        return None
+    _pick_first_existing_column = staticmethod(first_existing_column)
 
     @staticmethod
     def _resolve_dataset_alias_order(preferred: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
