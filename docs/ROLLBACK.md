@@ -69,25 +69,27 @@ alembic downgrade <revision-id>
 
 **⚠️ Warning**: Some migrations may be irreversible (data deleted, columns dropped). Always review migration scripts before downgrading.
 
-## Feature Flags
+## Reduce Scope Without Full Rollback
 
-For non-critical issues, consider disabling features instead of full rollback:
+For non-critical issues, narrow what the system does instead of a full rollback:
 
 ```bash
-# Disable specific features via environment
-export ORION_FF_ENABLE_LIVE_TRADING=false
-export ORION_FF_ENABLE_AGENT_ANALYSIS=false
+# Revert to paper mode (the safe default): execution stops treating the run as
+# live, so no live orders are submitted (see execution_engine `_is_live`).
+export ORION_STAGE=paper
 
 # Restart services
 docker compose restart
 ```
 
-See `src/orion/core/feature_flags.py` for available flags.
+Risk limits (daily loss, max positions, Greeks, sector concentration) are
+configured via the `ORION_RISK_*` environment variables — see `RiskSettings`
+in `src/orion/config.py`.
 
 ## Rollback Checklist
 
 - [ ] Identify the failure (logs, metrics, alerts)
-- [ ] Determine rollback scope (full vs feature flag)
+- [ ] Determine rollback scope (full vs reduce-scope via `ORION_STAGE=paper`)
 - [ ] Notify stakeholders
 - [ ] Backup current database state
 - [ ] Execute rollback procedure
