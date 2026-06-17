@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 import pandas as pd
 import pytest
 
@@ -86,6 +89,36 @@ async def test_hydrate_dedupes_duplicate_bars_by_latest_available(monkeypatch):
     assert len(df) == 1  # two revisions collapsed to one bar
     assert not df.index.has_duplicates
     assert float(df.iloc[0]["close"]) == 102.0  # latest-available revision won
+
+
+@pytest.mark.asyncio
+async def test_hydrate_single_ticker_yields_while_blocking_reader_runs(monkeypatch):
+    """Hydration reads can be slow, but must not freeze the event loop."""
+    import orion.processing.feature_engine as fe
+
+    class _SlowReader:
+        def read_bars(self, **_kwargs):
+            time.sleep(0.05)
+            return pd.DataFrame()
+
+    monkeypatch.setattr(fe, "get_heber_reader", lambda: _SlowReader())
+
+    engine = FeatureEngine()
+    ticks = 0
+    done = asyncio.Event()
+
+    async def count_event_loop_ticks() -> None:
+        nonlocal ticks
+        while not done.is_set():
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    ticker_task = asyncio.create_task(count_event_loop_ticks())
+    await engine._hydrate_single_ticker("AAPL")
+    done.set()
+    await ticker_task
+
+    assert ticks > 0
 
 
 @pytest.mark.asyncio

@@ -115,6 +115,9 @@ class FeatureEngine:
             logger.error(f"Failed to hydrate FeatureEngine: {e}", exc_info=True)
 
     async def _hydrate_single_ticker(self, ticker: str) -> None:
+        await asyncio.to_thread(self._hydrate_single_ticker_sync, ticker)
+
+    def _hydrate_single_ticker_sync(self, ticker: str) -> None:
         try:
             reader = get_heber_reader()
             asof_time = datetime.now(UTC)

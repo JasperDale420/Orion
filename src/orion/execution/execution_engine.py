@@ -116,6 +116,11 @@ def _is_permanent_cancel_rejection(result: dict[str, Any]) -> bool:
     return any(marker in blob for marker in _CANCEL_PERMANENT_MARKERS)
 
 
+def _is_trading_capability_rejection_text(error: str) -> bool:
+    """True when Gateway says this client key cannot mutate trading state."""
+    return any(marker in error.lower() for marker in _CANCEL_PERMANENT_MARKERS)
+
+
 def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejection", "ambiguous"]:
     """Classify a failed close-order Gateway response for escalation routing.
 
@@ -445,6 +450,7 @@ class ExecutionEngine:
         return acct
 
     _DTBP_BACKOFF_SECONDS = 120.0
+    _TRADING_CAPABILITY_BACKOFF_SECONDS = 3600.0
 
     def _in_dtbp_backoff(self) -> bool:
         """True while inside the cooldown set after a CONFIRMED broker DTBP
@@ -457,6 +463,14 @@ class ExecutionEngine:
     def _note_dtbp_rejection(self) -> None:
         """Arm the DTBP backoff after a broker 40310000 rejection."""
         self._dtbp_backoff_until = time.monotonic() + self._DTBP_BACKOFF_SECONDS
+
+    def _in_trading_capability_backoff(self) -> bool:
+        """True while the Gateway key is known unable to submit/cancel orders."""
+        return time.monotonic() < getattr(self, "_trading_capability_backoff_until", 0.0)
+
+    def _note_trading_capability_rejection(self) -> None:
+        """Arm the Gateway trading-capability backoff after GW-E2009."""
+        self._trading_capability_backoff_until = time.monotonic() + self._TRADING_CAPABILITY_BACKOFF_SECONDS
 
     async def _has_daytrading_buying_power(self, estimated_cost: float) -> bool:
         """True unless we can positively read that the shared account's
@@ -1149,6 +1163,16 @@ class ExecutionEngine:
             decision.reason = "Insufficient day-trading buying power (shared account)"
             return
 
+        if self._in_trading_capability_backoff():
+            logger.error(
+                "gateway_trading_capability_backoff_active",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Gateway key lacks trading capability"
+            return
+
         # Orion only opens options positions from candidates — it buys calls on
         # a LONG bet and buys puts on a SHORT bet. Both are BUYs at the broker.
         # The SHORT direction reflects a bearish view on the underlying, not a
@@ -1215,6 +1239,7 @@ class ExecutionEngine:
                 limit_price=option_price,
             )
         except Exception as e:
+            error_text = str(e)
             await self._remove_pending_order_compat(client_order_id)
             if hasattr(self.risk_manager, "clear_intended_position_greeks"):
                 self.risk_manager.clear_intended_position_greeks(candidate.ticker)
@@ -1313,30 +1338,33 @@ class ExecutionEngine:
                     )
 
         except Exception as e:
+            error_text = str(e)
             await self._remove_pending_order_compat(client_order_id)
             if hasattr(self.risk_manager, "clear_intended_position_greeks"):
                 self.risk_manager.clear_intended_position_greeks(candidate.ticker)
 
             # Confirmed day-trading-buying-power wall → arm the backoff so we
             # stop submitting opening orders for a cooldown instead of flooding.
-            if "40310000" in str(e):
+            if "40310000" in error_text:
                 self._note_dtbp_rejection()
+            if _is_trading_capability_rejection_text(error_text):
+                self._note_trading_capability_rejection()
 
             # Finalize the PENDING_SUBMIT row to REJECTED in place; the row
             # already exists from persist_pending_order above.
             await persist_order_finalize(
                 client_order_id=client_order_id,
                 broker_order=None,
-                error_message=str(e),
+                error_message=error_text,
             )
             logger.error(
                 "options_execution_failed",
-                error=str(e),
+                error=error_text,
                 client_order_id=client_order_id,
                 option_symbol=candidate.option_symbol,
             )
             decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = f"Options Broker Error: {e}"
+            decision.reason = f"Options Broker Error: {error_text}"
             self._record_result(False)
 
     # ── Bracket orders (stop-loss / take-profit) ──────────────────────────
