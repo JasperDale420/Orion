@@ -191,7 +191,7 @@ async def test_permanent_rejection_gives_up_after_one_attempt(monkeypatch) -> No
     assert n1 == 0
     assert client.cancel_order.await_count == 1
     assert ee._cancel_attempts["b-1"].gave_up is True
-    assert len(sent) == 1  # exactly one give-up alert
+    assert len(sent) == 0  # one Gateway permission problem, not one page per stale order
 
     # No matter how much time passes, a gave_up order is never retried again.
     import orion.execution.execution_engine as mod2
@@ -200,7 +200,7 @@ async def test_permanent_rejection_gives_up_after_one_attempt(monkeypatch) -> No
     n2 = await ee._cancel_stale_entry_orders(client)
     assert n2 == 0
     assert client.cancel_order.await_count == 1  # never retried
-    assert len(sent) == 1  # no second alert
+    assert len(sent) == 0  # no alert storm on restart
 
 
 @pytest.mark.unit
@@ -261,10 +261,10 @@ async def test_generic_4xx_is_transient_not_permanent(monkeypatch) -> None:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_giveup_alert_undelivered_still_records(monkeypatch) -> None:
-    """If the Discord page is not delivered (send returns False — no webhook /
+    """If a transient give-up Discord page is not delivered (send returns False — no webhook /
     dedupe / failure), the order must still give up cleanly and not crash; the
     durable ERROR log is the operator's guaranteed signal."""
-    _patch_clock(monkeypatch)
+    clock = _patch_clock(monkeypatch)
     import orion.execution.execution_engine as mod
 
     async def _undelivered_alert(message, *, dedupe_key=None):
@@ -295,15 +295,11 @@ async def test_giveup_alert_undelivered_still_records(monkeypatch) -> None:
         return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "EWY"}]
     )
     client = AsyncMock()
-    client.cancel_order = AsyncMock(
-        return_value={
-            "error": "Client error '403 Forbidden'",
-            "detail": "GW-E2009 Trading capability required",
-            "status_code": 403,
-        }
-    )
+    client.cancel_order = AsyncMock(return_value={"error": "rate limited", "status_code": 429})
 
-    n = await ee._cancel_stale_entry_orders(client)  # must not raise
+    for _ in range(mod.ExecutionEngine._CANCEL_MAX_ATTEMPTS):
+        clock[0] += 10_000.0
+        n = await ee._cancel_stale_entry_orders(client)  # must not raise
     assert n == 0
     assert ee._cancel_attempts["b-1"].gave_up is True
     assert ee._cancel_attempts["b-1"].alerted is True

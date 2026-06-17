@@ -2178,6 +2178,9 @@ class ExecutionEngine:
                     last_code=state.last_code,
                     detail=detail,
                 )
+                if permanent and _is_trading_capability_rejection_text(detail):
+                    logger.warning("stale_cancel_giveup_alert_skipped_gateway_permission", order_id=broker_id)
+                    return
                 try:
                     delivered = await send_discord_alert(
                         f"Stale entry-order cancel GAVE UP ({kind}): {ticker} order {broker_id} "
