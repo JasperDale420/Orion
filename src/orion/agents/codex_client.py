@@ -227,10 +227,15 @@ async def run_codex_completion(
             }
 
             try:
-                resp = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json=pay_json,
+                # wait_for enforces a hard total deadline (httpx's float timeout
+                # is per-operation, unlike aiohttp's ClientTimeout(total=...)).
+                resp = await asyncio.wait_for(
+                    client.post(
+                        f"{base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json=pay_json,
+                        timeout=timeout_seconds,
+                    ),
                     timeout=timeout_seconds,
                 )
                 if resp.status_code != 200:
@@ -278,7 +283,7 @@ async def run_codex_completion(
                 # No tool calls, return final content
                 return message.get("content", "")
 
-            except httpx.TimeoutException as exc:
+            except (TimeoutError, httpx.TimeoutException) as exc:
                 logger.error("LLM request timed out", timeout_seconds=timeout_seconds)
                 raise CodexClientError(f"LLM request timed out after {timeout_seconds}s") from exc
 
