@@ -12,7 +12,7 @@ import re
 import shlex
 from typing import Any
 
-import aiohttp
+import httpx
 
 from orion.config import agent_settings
 from orion.shared.logger import setup_struct_logger
@@ -214,7 +214,7 @@ async def run_codex_completion(
         message_count=len(messages),
     )
 
-    async with aiohttp.ClientSession() as session:
+    async with httpx.AsyncClient() as client:
         # Agent execution loop to process tool calls
         for _ in range(30):  # Max 30 tool iterations
             pay_json = {
@@ -227,58 +227,58 @@ async def run_codex_completion(
             }
 
             try:
-                async with session.post(
+                resp = await client.post(
                     f"{base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json=pay_json,
-                    timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-                ) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        logger.error(
-                            "AI Gateway error",
-                            status=resp.status,
-                            response_body=error_text[:500],
+                    timeout=timeout_seconds,
+                )
+                if resp.status_code != 200:
+                    error_text = resp.text
+                    logger.error(
+                        "AI Gateway error",
+                        status=resp.status_code,
+                        response_body=error_text[:500],
+                    )
+                    raise CodexClientError(f"Gateway API error {resp.status_code}: {error_text}")
+
+                data = resp.json()
+                message = data["choices"][0]["message"]
+
+                # Add assistant response to history
+                messages.append(message)
+
+                # Check if there are tool calls
+                if message.get("tool_calls"):
+                    for tc in message["tool_calls"]:
+                        tool_name = tc["function"]["name"]
+                        tool_args = json.loads(tc["function"]["arguments"])
+
+                        logger.info(
+                            "LLM executing tool",
+                            tool_name=tool_name,
+                            tool_arg_keys=list(tool_args.keys()),
                         )
-                        raise CodexClientError(f"Gateway API error {resp.status}: {error_text}")
 
-                    data = await resp.json()
-                    message = data["choices"][0]["message"]
+                        result_str = await execute_tool(tool_name, tool_args)
 
-                    # Add assistant response to history
-                    messages.append(message)
+                        logger.info(
+                            "Tool completed",
+                            tool_name=tool_name,
+                            result_len=len(result_str),
+                        )
 
-                    # Check if there are tool calls
-                    if message.get("tool_calls"):
-                        for tc in message["tool_calls"]:
-                            tool_name = tc["function"]["name"]
-                            tool_args = json.loads(tc["function"]["arguments"])
+                        messages.append(
+                            {"role": "tool", "tool_call_id": tc["id"], "name": tool_name, "content": result_str}
+                        )
 
-                            logger.info(
-                                "LLM executing tool",
-                                tool_name=tool_name,
-                                tool_arg_keys=list(tool_args.keys()),
-                            )
+                    # Continue loop to send tool results back to LLM
+                    continue
 
-                            result_str = await execute_tool(tool_name, tool_args)
+                # No tool calls, return final content
+                return message.get("content", "")
 
-                            logger.info(
-                                "Tool completed",
-                                tool_name=tool_name,
-                                result_len=len(result_str),
-                            )
-
-                            messages.append(
-                                {"role": "tool", "tool_call_id": tc["id"], "name": tool_name, "content": result_str}
-                            )
-
-                        # Continue loop to send tool results back to LLM
-                        continue
-
-                    # No tool calls, return final content
-                    return message.get("content", "")
-
-            except TimeoutError as exc:
+            except httpx.TimeoutException as exc:
                 logger.error("LLM request timed out", timeout_seconds=timeout_seconds)
                 raise CodexClientError(f"LLM request timed out after {timeout_seconds}s") from exc
 
