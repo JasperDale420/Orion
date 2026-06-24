@@ -19,6 +19,36 @@ class _FakeHttpResponse:
         return dict(self.payload)
 
 
+class _FakeAsyncClient:
+    """Stands in for httpx.AsyncClient: pops queued responses, records URLs."""
+
+    def __init__(self, responses: list[_FakeHttpResponse], urls: list[str] | None = None) -> None:
+        self._responses = responses
+        self._urls = urls
+
+    async def __aenter__(self) -> _FakeAsyncClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def get(self, url: str, timeout: float) -> _FakeHttpResponse:
+        if self._urls is not None:
+            self._urls.append(url)
+        if not self._responses:
+            raise AssertionError("No fake HTTP responses remaining")
+        return self._responses.pop(0)
+
+
+def _patch_http(
+    monkeypatch: pytest.MonkeyPatch,
+    responses: list[_FakeHttpResponse],
+    urls: list[str] | None = None,
+) -> None:
+    client = _FakeAsyncClient(responses, urls)
+    monkeypatch.setattr(probe.httpx, "AsyncClient", lambda *a, **k: client)
+
+
 class _FakeWebSocket:
     def __init__(self, responses: Sequence[dict[str, Any]]) -> None:
         self._responses = list(responses)
@@ -46,16 +76,12 @@ def test_normalize_http_gateway_base_url() -> None:
 
 @pytest.mark.asyncio
 async def test_gateway_contract_probe_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    http_responses = [_FakeHttpResponse(status_code=200, payload={"status": "ok"})]
     health_urls: list[str] = []
-
-    def _fake_get(url: str, timeout: float) -> _FakeHttpResponse:
-        health_urls.append(url)
-        if not http_responses:
-            raise AssertionError("No fake HTTP responses remaining")
-        return http_responses.pop(0)
-
-    monkeypatch.setattr(probe.requests, "get", _fake_get)
+    _patch_http(
+        monkeypatch,
+        [_FakeHttpResponse(status_code=200, payload={"status": "ok"})],
+        health_urls,
+    )
 
     fake_ws = _FakeWebSocket(
         [
@@ -113,17 +139,13 @@ async def test_gateway_contract_probe_happy_path(monkeypatch: pytest.MonkeyPatch
 async def test_gateway_contract_probe_retries_health_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    http_responses = [
-        _FakeHttpResponse(status_code=503, payload={"status": "not_ready"}),
-        _FakeHttpResponse(status_code=200, payload={"status": "ok"}),
-    ]
-
-    def _fake_get(url: str, timeout: float) -> _FakeHttpResponse:
-        if not http_responses:
-            raise AssertionError("No fake HTTP responses remaining")
-        return http_responses.pop(0)
-
-    monkeypatch.setattr(probe.requests, "get", _fake_get)
+    _patch_http(
+        monkeypatch,
+        [
+            _FakeHttpResponse(status_code=503, payload={"status": "not_ready"}),
+            _FakeHttpResponse(status_code=200, payload={"status": "ok"}),
+        ],
+    )
 
     fake_ws = _FakeWebSocket(
         [
@@ -165,14 +187,10 @@ async def test_gateway_contract_probe_retries_health_then_succeeds(
 async def test_gateway_contract_probe_returns_auth_error_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    http_responses = [_FakeHttpResponse(status_code=200, payload={"status": "ok"})]
-
-    def _fake_get(url: str, timeout: float) -> _FakeHttpResponse:
-        if not http_responses:
-            raise AssertionError("No fake HTTP responses remaining")
-        return http_responses.pop(0)
-
-    monkeypatch.setattr(probe.requests, "get", _fake_get)
+    _patch_http(
+        monkeypatch,
+        [_FakeHttpResponse(status_code=200, payload={"status": "ok"})],
+    )
 
     fake_ws = _FakeWebSocket(
         [

@@ -311,6 +311,21 @@ async def _cleanup_smoke_run_rows(
     await session.execute(delete(Solver).where(Solver.solver_id == _smoke_solver_id(run_tag)))
 
 
+async def _purge_orphaned_future_bronze(session) -> int:
+    """Belt-and-suspenders: delete bronze rows left far in the future by a prior
+    smoke run whose per-event cleanup was skipped (hard kill / OOM before the
+    finally). Smoke rows are dated now+30d (``_smoke_test_now``); no legitimate
+    bronze row is ever >1 day ahead, so this is safe. Without it an orphaned
+    future row sets ``bronze_max`` ~25 days ahead and (pre-guard) silently
+    blinded the dead-man bronze freshness check.
+    """
+    from orion.storage.models import BronzeEvent
+
+    cutoff = datetime.now(UTC) + timedelta(days=1)
+    result = await session.execute(delete(BronzeEvent).where(BronzeEvent.received_ts_utc > cutoff))
+    return int(result.rowcount or 0)
+
+
 async def _execute_mock_smoke_order(*, run_tag: str, decision, candidate) -> None:
     from orion.execution.execution_engine import ExecutionEngine
     from orion.execution.risk.manager import RiskManager
@@ -383,6 +398,15 @@ async def run_smoke_test() -> dict[str, bool]:
     db.configure_db(REAL_DB_URL, echo=False)
     try:
         await db.init_db()
+
+        # Self-heal: sweep any future-dated bronze residue a prior killed smoke
+        # run left behind (orphans set bronze_max ~25d ahead and blind the
+        # dead-man bronze freshness check until purged).
+        async with db.async_session_factory() as session:
+            purged = await _purge_orphaned_future_bronze(session)
+            await session.commit()
+        if purged:
+            print(f"  [setup] purged {purged} orphaned future-dated bronze row(s)")
 
         _configure_settings(run_tag)
 

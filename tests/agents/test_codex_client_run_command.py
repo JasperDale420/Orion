@@ -103,3 +103,65 @@ def test_allowlist_contents():
         "jq",
     }
     assert set(ALLOWED_COMMANDS) == expected
+
+
+class _FakeResp:
+    """Mimics an httpx.Response: status_code attr, sync .text/.json()."""
+
+    status_code = 200
+    text = ""
+
+    @staticmethod
+    def json() -> dict:
+        return {"choices": [{"message": {"content": "hello"}}]}
+
+
+class _FakeClient:
+    def __init__(self, resp: _FakeResp) -> None:
+        self._resp = resp
+
+    async def __aenter__(self) -> "_FakeClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def post(self, url: str, **kwargs) -> _FakeResp:
+        return self._resp
+
+
+async def test_run_codex_completion_returns_content(monkeypatch):
+    """A 200 response with no tool calls is parsed via the httpx API and returns content.
+
+    Guards the aiohttp->httpx swap: fails if the code uses resp.status (not
+    status_code), awaits resp.json()/resp.text, or mishandles the client context.
+    """
+    monkeypatch.setattr(codex_client.httpx, "AsyncClient", lambda *a, **k: _FakeClient(_FakeResp()))
+    out = await codex_client.run_codex_completion(prompt="hi")
+    assert out == "hello"
+
+
+class _HangingClient:
+    """A client whose POST never returns within the deadline."""
+
+    async def __aenter__(self) -> "_HangingClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def post(self, url: str, **kwargs) -> _FakeResp:
+        await asyncio.sleep(10)
+        return _FakeResp()
+
+
+async def test_run_codex_completion_enforces_total_timeout(monkeypatch):
+    """A response slower than timeout_seconds raises CodexClientError.
+
+    Guards the total-deadline (asyncio.wait_for): httpx's float timeout is
+    per-operation, so without wait_for a trickling response could exceed the
+    intended budget.
+    """
+    monkeypatch.setattr(codex_client.httpx, "AsyncClient", lambda *a, **k: _HangingClient())
+    with pytest.raises(codex_client.CodexClientError):
+        await codex_client.run_codex_completion(prompt="hi", timeout_seconds=0)

@@ -15,9 +15,16 @@ import pytest
 from orion.execution.execution_engine import classify_close_failure
 
 
-@pytest.mark.parametrize("code", [400, 403, 404, 422, 429, 499])
+@pytest.mark.parametrize("code", [400, 403, 404, 422, 499])
 def test_4xx_is_confirmed_rejection(code):
     assert classify_close_failure({"status_code": code}) == "confirmed_rejection"
+
+
+def test_429_is_ambiguous_not_confirmed_rejection():
+    # A 429 is a transient rate-limit storm, NOT a real broker rejection. The
+    # limit may still rest once the storm clears, so escalating to a native
+    # (un-attributed) flatten would blind the kill switch. Defer instead.
+    assert classify_close_failure({"status_code": 429}) == "ambiguous"
 
 
 @pytest.mark.parametrize("code", [500, 502, 503, 504, 599])

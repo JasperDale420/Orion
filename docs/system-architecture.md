@@ -144,6 +144,23 @@ The solver vote uses **stage-aware** weights — `paper` solvers count, but a
 `limited_live` or `scaled_live` solver dominates a `paper`-only vote (per
 `solver_router.py`).
 
+Additional solver-routing invariants (audit fixes in `core/solver_router.py`):
+
+- **Stage alias normalization:** the string `"live"` is coerced to
+  `"limited_live"` at route time (M7 remediation — prevents solvers promoted
+  with the short alias from being invisibly excluded).
+- **NULL vs 0.0 for `oos_expect_bp`:** `NULL` means the solver is untested
+  (no out-of-sample run yet); `0.0` means it has been tested and broke even.
+  The router treats these differently — NULL solvers are excluded from live
+  weighted votes; 0.0 solvers are included at their stated weight.
+- **Strict baseline fallback validation:** if the configured baseline solver
+  config is broken or missing, `SolverRouter` raises `RuntimeError` at startup
+  rather than silently returning empty decisions. This is a system-safety
+  invariant — the baseline must always be valid.
+- **UNKNOWN regime handling:** if regime detection returns `UNKNOWN`, the
+  router logs a WARNING and skips solver selection entirely (no vote, no
+  EXECUTE decision). This prevents routing trades with no regime context.
+
 ## Execution boundary
 
 Orion **places real options orders**. The boundary lives in
@@ -168,6 +185,27 @@ Orion **places real options orders**. The boundary lives in
 - **Paper-first default:** `ORION_STAGE=paper`, `ALPACA_PAPER=true`. Live mode
   must be explicit. The `run_execution_native.sh` wrapper hardcodes
   `ALPACA_PAPER="${ALPACA_PAPER:-true}"`.
+
+## Execution resilience
+
+### Stale-cancel storm prevention
+
+Cancel rejections use per-order backoff (`_CancelState` in `execution_engine.py`):
+
+- **Permanent reject** (GW-E2009 / "trading capability required") — give up after 1 attempt
+- **Transient reject** (429, 5xx, generic 4xx) — exponential backoff 30→60→120→300s cap + jitter; give up after 6 attempts
+- **Already-terminal reconcile** — if a cancel is rejected because the order is already filled, canceled, or expired, the DB row is updated to terminal state immediately and the reservation is dropped (rather than retrying)
+
+Without this, a rejected cancel re-fires every 5s → 68k+ Gateway 429s/day (2026-06-22 incident).
+
+### Options close path
+
+When closing an options position (RCA 2026-06-08, adversarial review):
+
+1. Cancel own resting orders first (prevents wash self-block from a resting order reserving the position)
+2. Fetch fresh chain quote (not stale tracked mark) for a marketable limit price
+3. Submit attributed LIMIT with `position_intent=REDUCE_ONLY`, TIF=day
+4. Escalate to native close ONLY on confirmed 4xx rejection — NOT on 429/5xx/timeout (native fills skip `FillProcessor` → attribution-blind)
 
 ## Position monitor
 

@@ -12,7 +12,7 @@ with StartCalendarInterval entries a few minutes after the cash open
 (06:40 / 07:00 / 07:30 PDT == 09:40 / 10:00 / 10:30 ET), weekdays only.
 
 Mirrors orion.jobs.launchd_health_probe: pure functions for parsing and
-threshold logic, a thin run loop, and a best-effort stdlib Slack notifier so
+threshold logic, a thin run loop, and a best-effort stdlib Discord notifier so
 the safety net does not itself depend on the system it is watching. The check
 deliberately uses ``docker exec ... psql`` and ``curl`` rather than importing
 Orion's async DB / Gateway clients — if ingestion is wedged, the heavyweight
@@ -308,39 +308,30 @@ def _real_gateway_up() -> bool:
     return code == "200"
 
 
-def _slack_notifier(result: DataflowResult) -> None:
-    """Best-effort Slack webhook POST. No-op if SLACK_WEBHOOK_URL unset.
+def _discord_notifier(result: DataflowResult) -> None:
+    """Best-effort Discord webhook POST. No-op if DISCORD_WEBHOOK_URL unset.
 
+    Posts to DISCORD_WEBHOOK_URL (sourced from .env by the wrapper) — the
+    legacy SLACK_WEBHOOK_URL was set nowhere, so this CRITICAL paged no one.
     Kept dependency-free (stdlib urllib) so the check runs even if Orion
     isn't fully importable — the safety net must not depend on the system
-    it watches.
+    it watches. The check fires only at the market-open calendar times (a few
+    times a day), so no cross-fire dedup is needed.
     """
-    url = os.environ.get("SLACK_WEBHOOK_URL")
+    url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not url:
         return
     import urllib.request
 
-    payload = {
-        "text": f"\U0001f6a8 *[{result.severity.value}]* {result.message}",
-        "attachments": [
-            {
-                "color": "#ff0000",
-                "fields": [
-                    {"title": "Market open", "value": str(result.market_open), "short": True},
-                    {"title": "Gateway up", "value": str(result.gateway_up), "short": True},
-                    {
-                        "title": "Bronze age (s)",
-                        "value": "n/a" if result.bronze_age_seconds is None else f"{result.bronze_age_seconds:.0f}",
-                        "short": True,
-                    },
-                    {"title": "Timestamp", "value": result.ts, "short": True},
-                ],
-            }
-        ],
-    }
+    bronze_age = "n/a" if result.bronze_age_seconds is None else f"{result.bronze_age_seconds:.0f}s"
+    content = (
+        f"\U0001f6a8 **[{result.severity.value}]** {result.message} "
+        f"(market_open={result.market_open}, gateway_up={result.gateway_up}, "
+        f"bronze_age={bronze_age}, ts={result.ts})"
+    )
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps({"content": content}).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
     urllib.request.urlopen(req, timeout=5).read()  # noqa: S310 — fixed https webhook URL
@@ -349,7 +340,7 @@ def _slack_notifier(result: DataflowResult) -> None:
 def run_check(
     bronze_runner: Callable[[], str] = _real_bronze_max_ts,
     gateway_runner: Callable[[], bool] = _real_gateway_up,
-    notifier: Callable[[DataflowResult], None] = _slack_notifier,
+    notifier: Callable[[DataflowResult], None] = _discord_notifier,
     log_path: Path = DEFAULT_LOG_PATH,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
     now_utc: datetime | None = None,
@@ -359,7 +350,7 @@ def run_check(
     Always writes a log row (the diagnostic value is useful even on healthy
     runs at the open), but only invokes the notifier when ``result.alert`` is
     True. The notifier is best-effort — its exceptions are caught and printed
-    to stderr so a transient Slack outage cannot prevent the durable log row
+    to stderr so a transient Discord outage cannot prevent the durable log row
     from landing.
     """
     now = now_utc or datetime.now(UTC)

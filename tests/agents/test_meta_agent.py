@@ -48,7 +48,7 @@ async def test_propose_edits(mock_solver_config):
             "orion.agents.meta_agent.run_codex_completion",
             new_callable=AsyncMock,
         ) as mock_codex,
-        patch("orion.config.agent_settings.model_name", "glm-5.1"),
+        patch("orion.config.agent_settings.model_name", "glm-5.2"),
     ):
         mock_codex.return_value = mock_response
 
@@ -58,7 +58,7 @@ async def test_propose_edits(mock_solver_config):
         # Verify codex was called
         mock_codex.assert_called_once()
         call_kwargs = mock_codex.call_args.kwargs
-        assert call_kwargs["model"] == "glm-5.1"
+        assert call_kwargs["model"] == "glm-5.2"
 
         # Verify output
         assert len(edits) == 1

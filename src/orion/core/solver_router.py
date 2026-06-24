@@ -34,9 +34,6 @@ class SolverRouter:
         "live": "limited_live",  # "live" is an alias for min viable live
     }
 
-    def __init__(self) -> None:
-        pass
-
     @classmethod
     def _normalize_stage(cls, stage: str) -> str:
         """Normalize stage name using defined aliases for consistent comparison."""

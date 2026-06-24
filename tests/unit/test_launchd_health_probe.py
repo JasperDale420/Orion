@@ -382,6 +382,142 @@ class TestProbeSelfExclusion:
         assert rows[0]["exit_code"] is None
 
 
+class TestDiscordNotifier:
+    """The probe pages through the Discord webhook (DISCORD_WEBHOOK_URL) with
+    persistent dedup, so the 60s one-shot can't storm the channel by re-reading
+    the same frozen last-exit code every minute (the failure mode that, applied
+    to the per-order give-up path, tripped Discord's 429 limit on 2026-06-22)."""
+
+    def _alert(
+        self,
+        label: str = "com.empire.orion.execution",
+        exit_code: int | None = -6,
+        severity: Severity = Severity.WARNING,
+        pid: int | None = 96928,
+    ) -> HealthAlert:
+        from orion.jobs.launchd_health_probe import HealthAlert as HA
+
+        return HA(
+            label=label,
+            exit_code=exit_code,
+            pid=pid,
+            severity=severity,
+            message=f"{label} last exit code {exit_code}",
+        )
+
+    def test_noop_without_webhook(self, monkeypatch, tmp_path: Path) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+        posts: list[tuple] = []
+        monkeypatch.setattr(mod, "_post_discord", lambda url, alert: posts.append((url, alert)))
+
+        mod._discord_notifier(self._alert(), state_path=tmp_path / "s.json")
+        assert posts == []  # no webhook configured -> no POST attempted
+
+    def test_posts_to_discord_webhook(self, monkeypatch, tmp_path: Path) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        posts: list[tuple] = []
+        monkeypatch.setattr(mod, "_post_discord", lambda url, alert: posts.append((url, alert)))
+
+        mod._discord_notifier(self._alert(), webhook_url="https://discord.test/wh", state_path=tmp_path / "s.json")
+        assert len(posts) == 1
+        assert posts[0][0] == "https://discord.test/wh"
+        assert posts[0][1].label == "com.empire.orion.execution"
+
+    def test_dedups_repeat_within_window(self, monkeypatch, tmp_path: Path) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        posts: list = []
+        monkeypatch.setattr(mod, "_post_discord", lambda url, alert: posts.append(alert))
+        sp = tmp_path / "s.json"
+        alert = self._alert()
+
+        mod._discord_notifier(alert, webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=1000.0)
+        mod._discord_notifier(alert, webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=1060.0)
+        assert len(posts) == 1  # second suppressed — same label+exit within the window
+
+    def test_repages_after_window(self, monkeypatch, tmp_path: Path) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        posts: list = []
+        monkeypatch.setattr(mod, "_post_discord", lambda url, alert: posts.append(alert))
+        sp = tmp_path / "s.json"
+        alert = self._alert()
+
+        mod._discord_notifier(alert, webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=1000.0)
+        mod._discord_notifier(alert, webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=4602.0)
+        assert len(posts) == 2  # window elapsed -> persistent failure re-paged
+
+    def test_distinct_exit_codes_not_deduped(self, monkeypatch, tmp_path: Path) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        posts: list = []
+        monkeypatch.setattr(mod, "_post_discord", lambda url, alert: posts.append(alert))
+        sp = tmp_path / "s.json"
+
+        mod._discord_notifier(
+            self._alert(exit_code=-6), webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=1000.0
+        )
+        mod._discord_notifier(
+            self._alert(exit_code=-9), webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=1001.0
+        )
+        assert len(posts) == 2  # a NEW failure mode (different exit code) pages immediately
+
+    def test_failed_post_is_not_recorded_and_retries(self, monkeypatch, tmp_path: Path) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        calls: list = []
+
+        def flaky(url, alert):
+            calls.append(alert)
+            if len(calls) == 1:
+                raise RuntimeError("discord unreachable")
+
+        monkeypatch.setattr(mod, "_post_discord", flaky)
+        sp = tmp_path / "s.json"
+        alert = self._alert()
+
+        # First send raises (Discord down); run_probe catches it. It must NOT be
+        # recorded, so the next minute retries instead of suppressing a never-sent page.
+        with pytest.raises(RuntimeError):
+            mod._discord_notifier(
+                alert, webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=1000.0
+            )
+        mod._discord_notifier(alert, webhook_url="https://d.test/wh", state_path=sp, window_seconds=3600, now=1060.0)
+        assert len(calls) == 2
+
+    def test_post_discord_sends_content_payload(self, monkeypatch) -> None:
+        import urllib.request
+
+        import orion.jobs.launchd_health_probe as mod
+
+        captured: dict = {}
+
+        class _Resp:
+            def read(self) -> bytes:
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a) -> bool:
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode())
+            return _Resp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        mod._post_discord("https://discord.test/wh", self._alert(exit_code=-6))
+        assert captured["url"] == "https://discord.test/wh"
+        assert "content" in captured["body"]  # Discord webhook payload shape
+        assert "com.empire.orion.execution" in captured["body"]["content"]
+
+
 @pytest.mark.unit
 class TestMarkerAttachment:
     """Smoke test ensuring the module is unit-test-marker-clean."""

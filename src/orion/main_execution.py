@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from typing import Any
 
 from dotenv import load_dotenv
@@ -34,6 +35,7 @@ logger = setup_struct_logger("orion.execution")
 # Liveness cadence budget: the ~1s execution loop publishes every iteration; the
 # dead-man watchdog alerts if no successful iteration lands within 300s.
 EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS = 300
+_EXECUTION_STARTUP_LIVENESS_INTERVAL_SECONDS = 60.0
 
 # Re-export for backward compatibility (tests import from here)
 from orion.execution.flow_helpers import (  # noqa: E402, F401
@@ -46,6 +48,16 @@ from orion.execution.flow_helpers import (  # noqa: E402, F401
     _prefer_heber_recent_flow_source,
 )
 from orion.clients.heber_reader import get_heber_reader  # noqa: E402, F401
+
+
+async def _publish_execution_liveness_until_cancelled(shutdown_event: asyncio.Event) -> None:
+    """Keep startup visible while heavy engine hydration runs."""
+    while not shutdown_event.is_set():
+        await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=_EXECUTION_STARTUP_LIVENESS_INTERVAL_SECONDS)
+        except TimeoutError:
+            pass
 
 
 async def run_execution_service(shutdown_event: asyncio.Event) -> None:
@@ -103,9 +115,15 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
     await execution_engine.acquire_service_lease("execution")
 
     # Initialize history for execution error tracking
-    await execution_engine.initialize()
-    await signal_engine.initialize()
-    await position_manager.initialize()
+    startup_liveness_task = asyncio.create_task(_publish_execution_liveness_until_cancelled(shutdown_event))
+    try:
+        await execution_engine.initialize()
+        await signal_engine.initialize()
+        await position_manager.initialize()
+    finally:
+        startup_liveness_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await startup_liveness_task
 
     logger.info("Engines Initialized. Entering Service Loop.")
 
@@ -205,6 +223,7 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
 
                 # 6. Update Decision Status
                 await update_decision_status(decision.decision_id, exec_status)
+                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
 
             # Liveness: full candidate-processing cycle completed (adversarial-
             # review finding: publishing right after poll_fills advanced the
