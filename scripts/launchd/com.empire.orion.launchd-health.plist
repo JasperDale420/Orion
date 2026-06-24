@@ -13,8 +13,10 @@ silent failure loud.
 
 The probe shells out to `launchctl list`, filters to com.empire.orion.*,
 classifies each entry, appends a JSON row to logs/launchd_health.log for
-anything not healthy, and POSTs to SLACK_WEBHOOK_URL when that env var
-is set. Exit 127 is escalated to CRITICAL (the failure mode cannot
+anything not healthy, and POSTs to the Discord webhook (DISCORD_WEBHOOK_URL,
+sourced from .env by the wrapper) when that env var is set. The Discord
+notifier dedups per (label, exit_code) so a stuck job pages at most hourly,
+not every minute. Exit 127 is escalated to CRITICAL (the failure mode cannot
 self-heal — a human must edit the plist).
 
 Install (create the log dir FIRST — launchd opens StandardOutPath /
@@ -36,9 +38,8 @@ Logs:
     tail -f logs/launchd_health.stdout.log       # launchd-captured stdout
     tail -f logs/launchd_health.stderr.log       # launchd-captured stderr
 
-To enable Slack notifications, set SLACK_WEBHOOK_URL below (or copy this
-plist to a private location with the secret baked in — do not commit
-the URL).
+Discord notifications work out of the box: the wrapper sources .env, which
+defines DISCORD_WEBHOOK_URL. No secret needs to be set in this committed plist.
 -->
 <plist version="1.0">
 <dict>
@@ -77,14 +78,11 @@ the URL).
              base here makes ad-hoc debugging easier. -->
         <key>PATH</key>
         <string>/Users/jacobmcmillan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-        <!-- Set SLACK_WEBHOOK_URL here (or via `launchctl setenv`) to
-             enable Slack notifications. Absent the env var the probe
-             still appends to logs/launchd_health.log, so the failure
-             is auditable after the fact. -->
-        <!--
-        <key>SLACK_WEBHOOK_URL</key>
-        <string>https://hooks.slack.com/services/...</string>
-        -->
+        <!-- DISCORD_WEBHOOK_URL is NOT set here on purpose: the wrapper
+             sources .env (gitignored), which defines it, so the secret
+             stays out of this committed plist. Absent the env var the probe
+             still appends to logs/launchd_health.log, so the failure is
+             auditable after the fact. -->
     </dict>
 
     <key>StandardOutPath</key>

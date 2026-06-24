@@ -1,6 +1,7 @@
 import asyncio
 import math
 import random
+import re
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -119,6 +120,35 @@ def _is_permanent_cancel_rejection(result: dict[str, Any]) -> bool:
 def _is_trading_capability_rejection_text(error: str) -> bool:
     """True when Gateway says this client key cannot mutate trading state."""
     return any(marker in error.lower() for marker in _CANCEL_PERMANENT_MARKERS)
+
+
+# Alpaca rejects a cancel on a done order with `order is already in "<state>"
+# state` (wrapped as GW-E8001 / code 42210000). poll_fills' 200-row status
+# window can age an Orion order out before it sees the fill, so the sweep keeps
+# cancelling an order the broker already closed — the 2026-06-22 storm where 182
+# already-FILLED orders each gave up and paged a false "reserving DTBP" alert.
+#
+# The reject reaches us as the gateway's RAW response body (`exc.response.text`),
+# where Alpaca's message is double-JSON-escaped, so the quotes around the state
+# arrive as `\"`/`\\\"`, not a bare `"`. `\W+` matches any run of those quote /
+# backslash / space chars between the words so the match is escaping-agnostic.
+_CANCEL_ALREADY_TERMINAL_RE = re.compile(r"already in\W+(filled|canceled|cancelled|expired|rejected)\W+state")
+
+
+def _parse_already_terminal_state(result: dict[str, Any]) -> str | None:
+    """Return the broker's terminal state when a cancel was rejected because the
+    order is ALREADY in it (filled/canceled/expired/rejected), else None.
+
+    This is a state-desync to RECONCILE (flip the row terminal, stop sweeping),
+    not a cancel failure to retry-and-page. ``cancelled`` is normalised to
+    ``canceled`` to match the OrderRecord status vocabulary used elsewhere here.
+    """
+    blob = f"{result.get('detail') or ''} {result.get('error') or ''}".lower()
+    match = _CANCEL_ALREADY_TERMINAL_RE.search(blob)
+    if match is None:
+        return None
+    state = match.group(1)
+    return "canceled" if state == "cancelled" else state
 
 
 def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejection", "ambiguous"]:
@@ -2095,6 +2125,38 @@ class ExecutionEngine:
                 continue
 
             if isinstance(result, dict) and "error" in result:
+                # The broker may reject the cancel because the order is ALREADY
+                # terminal — poll_fills' 200-row status window aged it out before
+                # it saw the fill. Reconcile the row to the broker's real state
+                # and drop the reservation; this is a state-desync, NOT a stuck
+                # order to retry and page (the 2026-06-22 false-alert storm).
+                terminal_state = _parse_already_terminal_state(result)
+                if terminal_state is not None:
+                    self._cancel_attempts.pop(bid, None)
+                    await self._remove_pending_order_compat(coid)
+                    try:
+                        await persist_order_status_update(broker_order_id=bid, status=terminal_state)
+                    except Exception as e:
+                        logger.warning(
+                            "Could not reconcile already-terminal stale entry order in DB",
+                            extra={
+                                "event_type": "STALE_ENTRY_STATUS_UPDATE_FAILED",
+                                "order_id": bid,
+                                "error": str(e),
+                            },
+                        )
+                    logger.info(
+                        f"Stale entry order {bid} on {ticker} already {terminal_state} at broker "
+                        f"— reconciled (poll_fills missed the transition)",
+                        extra={
+                            "event_type": "STALE_ENTRY_RECONCILED",
+                            "ticker": ticker,
+                            "order_id": bid,
+                            "broker_state": terminal_state,
+                        },
+                    )
+                    continue
+
                 permanent = _is_permanent_cancel_rejection(result)
                 logger.warning(
                     f"Cancel rejected for stale entry order {bid} on {ticker}: "

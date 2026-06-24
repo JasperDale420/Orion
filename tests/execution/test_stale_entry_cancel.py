@@ -14,6 +14,7 @@ position can never be cancelled by this path.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -406,6 +407,109 @@ async def test_state_pruned_for_orders_no_longer_stale(monkeypatch) -> None:
     await ee._cancel_stale_entry_orders(client)
     assert "b-1" not in ee._cancel_attempts  # pruned
     assert "b-2" in ee._cancel_attempts
+
+
+# ── broker-state reconcile: cancel rejected because already terminal ──────────
+
+
+def _gateway_already_terminal_reject(state: str) -> dict[str, object]:
+    """The exact dict GatewayTradingClient returns when Alpaca rejects a cancel
+    because the order is already terminal. `_request` sets `detail` to the RAW
+    response body (`exc.response.text`), so Alpaca's message is DOUBLE-JSON-
+    escaped — `\\"filled\\"`, not a clean quote. The parser must match that real
+    production shape, so the tests build it the same way the gateway does."""
+    alpaca_err = json.dumps({"code": 42210000, "message": f'order is already in "{state}" state'})
+    body = json.dumps(
+        {
+            "success": False,
+            "error": {"code": "GW-E8001", "message": f"Alpaca API Error: {alpaca_err}"},
+            "detail": f"Alpaca API Error: {alpaca_err}",
+        }
+    )
+    return {"error": "Client error '422 Unprocessable Entity'", "detail": body, "status_code": 422}
+
+
+@pytest.mark.unit
+def test_parse_already_terminal_state_handles_double_escaped_body() -> None:
+    """The parser must see through the gateway's double-JSON-escaped body (the
+    bug a naive single-quote regex would miss) and ignore non-terminal rejects."""
+    from orion.execution.execution_engine import _parse_already_terminal_state
+
+    assert _parse_already_terminal_state(_gateway_already_terminal_reject("filled")) == "filled"
+    assert _parse_already_terminal_state(_gateway_already_terminal_reject("expired")) == "expired"
+    # Alpaca's British 'cancelled' normalises to the OrderRecord 'canceled'.
+    assert _parse_already_terminal_state(_gateway_already_terminal_reject("cancelled")) == "canceled"
+    # Non-terminal rejects must NOT match — they fall through to retry/backoff.
+    assert _parse_already_terminal_state({"error": "rate limited", "status_code": 429}) is None
+    assert _parse_already_terminal_state({"detail": "order not found", "error": "404"}) is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_already_filled_reject_reconciles_without_alert(monkeypatch) -> None:
+    """A stale cancel rejected because the broker says the order is ALREADY FILLED
+    (poll_fills' 200-row status window aged the order out before it saw the fill)
+    must be reconciled — flip the row terminal, drop the pending reservation — and
+    must NOT back off, retry, or page the false 'reserving DTBP until close' alert.
+    The order is filled, not stuck; this was the 2026-06-22 Discord storm (182
+    already-filled orders each gave up + paged, tripping Discord's 429 limit)."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent: list[str] = []
+
+    async def _fake_alert(message, *, dedupe_key=None):
+        sent.append(dedupe_key or message)
+        return True
+
+    monkeypatch.setattr(mod, "send_discord_alert", _fake_alert, raising=False)
+
+    status_updates: list[tuple[str, str]] = []
+
+    async def _fake_status_update(*, broker_order_id, status, **kw):
+        status_updates.append((broker_order_id, status))
+
+    monkeypatch.setattr(mod, "persist_order_status_update", _fake_status_update, raising=False)
+
+    ee = _engine()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    # Reconciled to the broker's terminal state — not cancelled, not failed:
+    assert ("b-1", "filled") in status_updates  # row flipped out of the open set
+    ee._remove_pending_order_compat.assert_awaited()  # DTBP reservation dropped
+    assert "b-1" not in ee._cancel_attempts  # no backoff/give-up state armed
+    assert sent == []  # NO false 'reserving DTBP' page — this is the storm fix
+    assert n == 0  # a reconcile is not a cancel
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_already_canceled_reject_reconciles_to_canceled(monkeypatch) -> None:
+    """The reconcile generalises to any terminal broker state: a cancel rejected
+    because the order is already 'canceled'/'expired' is a state-desync to
+    reconcile, not a failure to retry-and-page."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    monkeypatch.setattr(mod, "persist_order_status_update", AsyncMock(), raising=False)
+
+    ee = _engine()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-2", "client_order_id": "orion_b", "ticker": "EWY"}]
+    )
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("canceled"))
+
+    await ee._cancel_stale_entry_orders(client)
+
+    mod.persist_order_status_update.assert_awaited_once_with(broker_order_id="b-2", status="canceled")
+    assert "b-2" not in ee._cancel_attempts
 
 
 # ── query logic (real test DB) ───────────────────────────────────────────────
