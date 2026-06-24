@@ -20,6 +20,7 @@ from orion.execution.attribution import (
 )
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import (
+    has_processed_fill_for_order,
     persist_exit_decision,
     persist_exit_order_rejection,
     persist_order_finalize,
@@ -149,6 +150,32 @@ def _parse_already_terminal_state(result: dict[str, Any]) -> str | None:
         return None
     state = match.group(1)
     return "canceled" if state == "cancelled" else state
+
+
+# Gateway 404 code for a cancel/get of an order whose client_order_id lacks the
+# per-client `c-<client>-` ownership prefix the Gateway added on 2026-05-20.
+# Orion orders placed BEFORE that date reached Alpaca as raw `orion_<uuid>`, so
+# the Gateway's ownership guard now fail-closes their cancel with 404 GW-E4404.
+# Such an order can NEVER be cancelled through the Gateway, so the sweep
+# reconciles its orphaned row out instead of looping (the 2026-06-22..24
+# GW-A4001/GW-E4404 retry flood — 1,164 warnings — was this case misclassified
+# as a transient reject and re-attempted across sweeps and restarts).
+_CANCEL_LEGACY_UNOWNED_MARKER = "gw-e4404"
+
+
+def _is_legacy_unowned_cancel_rejection(result: dict[str, Any]) -> bool:
+    """True ONLY when a cancel was rejected 404 GW-E4404 — a legacy pre-2026-05-20
+    order the Gateway can't confirm Orion owns.
+
+    Like ``_parse_already_terminal_state`` this is a state to RECONCILE (the order
+    is unreachable through the Gateway forever), not a failure to retry-and-page.
+    Scoped to the exact Gateway code, NOT a bare 404: another 404 on the cancel
+    path may be legitimately retryable, so only the never-cancellable
+    legacy-unowned case is reconciled out. Only called from the stale-entry
+    cancel sweep, so the match is inherently cancel-path scoped.
+    """
+    blob = f"{result.get('detail') or ''} {result.get('error') or ''} {result.get('code') or ''}".lower()
+    return _CANCEL_LEGACY_UNOWNED_MARKER in blob
 
 
 def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejection", "ambiguous"]:
@@ -2179,6 +2206,45 @@ class ExecutionEngine:
                     )
                     continue
 
+                # A legacy pre-2026-05-20 order (raw `orion_<uuid>`, no Gateway
+                # `c-<client>-` ownership prefix) fail-closes every cancel with
+                # 404 GW-E4404 — the Gateway can't confirm Orion owns it, so it
+                # can NEVER be cancelled through this path. Retrying is pointless
+                # (it produced the 2026-06-22..24 GW-A4001/GW-E4404 flood — 1,164
+                # warnings). Reconcile the orphaned row terminal so the sweep
+                # stops re-selecting it (within this process AND across restarts)
+                # and drop the stale pending reservation. These are DAY orders
+                # long expired at Alpaca; a real fill is still caught
+                # (orion-attributed) by poll_fills / position-sync. get_order is
+                # NOT attempted to recover a fill — it hits the same ownership
+                # guard and 404s — and any order still open at Alpaca is cleared
+                # out-of-band via the dashboard.
+                if _is_legacy_unowned_cancel_rejection(result):
+                    self._cancel_attempts.pop(bid, None)
+                    await self._remove_pending_order_compat(coid)
+                    try:
+                        await persist_order_status_update(broker_order_id=bid, status="canceled")
+                    except Exception as e:
+                        logger.warning(
+                            "Could not reconcile legacy-unowned stale entry order in DB",
+                            extra={
+                                "event_type": "STALE_ENTRY_STATUS_UPDATE_FAILED",
+                                "order_id": bid,
+                                "error": str(e),
+                            },
+                        )
+                    logger.warning(
+                        f"Stale entry order {bid} on {ticker} is a legacy pre-2026-05-20 order "
+                        f"(404 GW-E4404, unowned by the Gateway) — reconciled out of the cancel "
+                        f"sweep; clear it out-of-band at Alpaca if still open",
+                        extra={
+                            "event_type": "STALE_ENTRY_LEGACY_UNOWNED_RECONCILED",
+                            "ticker": ticker,
+                            "order_id": bid,
+                        },
+                    )
+                    continue
+
                 permanent = _is_permanent_cancel_rejection(result)
                 logger.warning(
                     f"Cancel rejected for stale entry order {bid} on {ticker}: "
@@ -2578,6 +2644,12 @@ class ExecutionEngine:
     _CANCEL_MAX_ATTEMPTS: int = 6
     _CANCEL_MAX_PER_CYCLE: int = 20
 
+    # Missed-CLOSE reconcile. Bounds the by-id get_order lookups one cycle may
+    # fan out when broker positions disagree with the fills replay, so a wide
+    # disagreement can't reintroduce the stale-cancel 429 storm. Runs on the
+    # same non-urgent cadence as the position re-grounding above.
+    _CLOSE_RECON_MAX_PER_CYCLE: int = 20
+
     async def poll_fills(self) -> None:
         """Polls Data Gateway for account equity and updates RiskManager.
 
@@ -2716,6 +2788,22 @@ class ExecutionEngine:
             or (now3 - self._last_position_sync_ts).total_seconds() >= self._POSITION_SYNC_MIN_INTERVAL_SECONDS
         ):
             self._last_position_sync_ts = now3
+            # Recover aged-out CLOSING fills BEFORE the resync. Closes never get
+            # an orders row (they persist to exit_decisions), so neither the
+            # stale-entry sweep nor any OrderRecord reconcile can surface one — a
+            # broker-positions-vs-fills reconcile is the only path to a missed
+            # close's cost basis. It must run first: _sync_risk_from_gateway
+            # re-grounds open positions to broker truth (flat for a closed
+            # symbol), and process_fill on a flat in-memory position would mis-
+            # book the close as a phantom short instead of realizing its PnL.
+            # Shares the resync's non-urgent cadence; idempotent + bounded.
+            try:
+                await self._recover_missed_close_fills(client)
+            except Exception as e:
+                logger.warning(
+                    "missed_close_recon_failed",
+                    extra={"event_type": "MISSED_CLOSE_RECON_FAILED", "error": str(e)},
+                )
             try:
                 await self._sync_risk_from_gateway()
             except Exception as e:
@@ -2818,6 +2906,123 @@ class ExecutionEngine:
             },
         )
         return True
+
+    async def _recover_missed_close_fills(self, client: Any) -> int:
+        """Recover aged-out CLOSING fills the 200-row order-poll window missed.
+
+        A successful close never gets an ``orders`` row (it persists to
+        ``exit_decisions``), so the stale-entry sweep — which keys off
+        ``OrderRecord`` — can never surface a missed close. When such a close
+        fill ages out of ``poll_fills``' 200-row ``get_orders`` window before it
+        is processed, no ``FillRecord`` lands and
+        ``_compute_cost_basis_from_fills`` keeps replaying a position the broker
+        has already closed: realized PnL / cost basis stay incomplete.
+
+        Detection: compare the broker's positions (``get_positions``) against the
+        fills-derived positions. An Orion symbol whose fills-replay magnitude
+        EXCEEDS the broker holding has an unprocessed REDUCING (closing) fill.
+        The inverse — broker magnitude > fills — is a missed ENTRY, already
+        handled by the stale-entry sweep, so it is ignored here.
+
+        Recovery: for each disagreeing symbol read the broker's FILL activities
+        (the only surface that still carries an aged-out close's order id —
+        ``get_orders``' window is the very thing that missed it), and for an
+        order we have processed ZERO fills for (the partial double-count guard
+        the entry path gets for free from its pre-fill scoping), feed it through
+        the same idempotent ``_recover_missed_fill`` the entry sweep uses.
+
+        Shared-account safe: detection symbols come from orion-only fills, and
+        ``_recover_missed_fill`` → ``_process_single_fill`` re-checks the
+        ``orion_`` prefix, so another system's order on the same symbol is
+        fetched (one bounded ``get_order``) and then skipped, never counted.
+
+        Bounded against the 429-storm class: one ``get_account_activities`` call
+        only when a disagreement exists, plus at most
+        ``_CLOSE_RECON_MAX_PER_CYCLE`` ``get_order`` lookups per cycle.
+        Idempotent (``ProcessedFill`` marker). NEVER raises. Returns the number
+        of fills recovered.
+        """
+        fills_positions = await self._compute_cost_basis_from_fills()
+        # Only symbols the fills replay still thinks we hold can have a missed
+        # close. (_compute_cost_basis_from_fills is orion-only by construction.)
+        held = {s: float(v.get("qty", 0.0)) for s, v in fills_positions.items() if abs(float(v.get("qty", 0.0))) > 1e-9}
+        if not held:
+            return 0
+
+        try:
+            broker_positions = await client.get_positions()
+        except Exception as e:
+            logger.warning(
+                "close-recon: get_positions failed; skipping cycle",
+                extra={"event_type": "MISSED_CLOSE_RECON_POSITIONS_FAILED", "error": str(e)},
+            )
+            return 0
+
+        broker_qty: dict[str, float] = {}
+        for p in broker_positions or []:
+            sym = p.get("symbol")
+            if sym:
+                broker_qty[sym] = float(p.get("qty", 0) or 0)
+
+        # fills magnitude > broker magnitude ⇒ a reducing fill never landed.
+        # ponytail: a same-cycle close-and-flip (sign reversal) is rare and is
+        # left to the next cycle / reconcile_pnl; this magnitude test targets the
+        # common case (full or partial close that aged out) and stays idempotent.
+        missed = [s for s, q in held.items() if abs(q) - abs(broker_qty.get(s, 0.0)) > 1e-9]
+        if not missed:
+            return 0
+
+        try:
+            activities = await client.get_account_activities("FILL")
+        except Exception as e:
+            logger.warning(
+                "close-recon: get_account_activities failed; skipping cycle",
+                extra={"event_type": "MISSED_CLOSE_RECON_ACTIVITIES_FAILED", "error": str(e)},
+            )
+            return 0
+
+        # Map disagreeing symbol → de-duplicated broker order ids (the FILL
+        # activity carries order_id + symbol but NOT client_order_id, so the
+        # orion check happens later in _process_single_fill via get_order).
+        order_ids_by_symbol: dict[str, list[str]] = {s: [] for s in missed}
+        seen: dict[str, set[str]] = {s: set() for s in missed}
+        for act in activities or []:
+            sym = act.get("symbol")
+            oid = act.get("order_id")
+            if sym in order_ids_by_symbol and oid and oid not in seen[sym]:
+                seen[sym].add(oid)
+                order_ids_by_symbol[sym].append(str(oid))
+
+        recovered = 0
+        attempted = 0
+        for sym in missed:
+            for oid in order_ids_by_symbol[sym]:
+                # An order we've already counted ANY fill for is either the entry
+                # or an already-recovered close — re-feeding it would double-count.
+                # DB read, not a Gateway call, so it does not consume the cap.
+                if await has_processed_fill_for_order(oid):
+                    continue
+                if attempted >= self._CLOSE_RECON_MAX_PER_CYCLE:
+                    logger.warning(
+                        "close-recon: per-cycle get_order cap hit; remaining deferred to next cycle",
+                        extra={"event_type": "MISSED_CLOSE_RECON_CAP_HIT", "cap": self._CLOSE_RECON_MAX_PER_CYCLE},
+                    )
+                    return recovered
+                attempted += 1
+                if await self._recover_missed_fill(client, oid, sym):
+                    recovered += 1
+
+        if recovered:
+            logger.info(
+                f"Recovered {recovered} missed closing fill(s) across {len(missed)} symbol(s) "
+                f"(poll_fills' 200-row window aged them out)",
+                extra={
+                    "event_type": "MISSED_CLOSE_FILLS_RECOVERED",
+                    "recovered": recovered,
+                    "symbols": missed,
+                },
+            )
+        return recovered
 
     # ── Position snapshots (delegates to fill_processor module) ──────────
 
