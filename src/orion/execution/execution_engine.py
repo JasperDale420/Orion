@@ -2132,6 +2132,28 @@ class ExecutionEngine:
                 # order to retry and page (the 2026-06-22 false-alert storm).
                 terminal_state = _parse_already_terminal_state(result)
                 if terminal_state is not None:
+                    # The broker says this order is already terminal — poll_fills'
+                    # 200-row window aged it out before it saw the transition. If it
+                    # FILLED, that fill was never processed: no FillRecord landed,
+                    # so per-symbol cost basis / realized PnL are incomplete
+                    # (_compute_cost_basis_from_fills can't replay an absent row).
+                    # Recover it by fetching the order by id and feeding it through
+                    # the idempotent fill processor.
+                    #
+                    # Best-effort, and intentionally does NOT gate the status flip
+                    # below: the flip is what drops the order out of the stale set
+                    # and stops the 2026-06-22 cancel/alert storm, and the broker
+                    # has ALREADY confirmed the fill — so a get_order failure must
+                    # not strand the order back in the storming set (and unconditional
+                    # flip means each order triggers exactly one get_order, never a
+                    # per-sweep re-fetch). A rare unrecovered fill is logged durably
+                    # and fails safe downstream (reconcile_pnl routes an unbasis-able
+                    # close to BROKER_UNAVAILABLE). The sweep only surfaces orders in
+                    # open (pre-fill) states, never partially_filled, so recovery
+                    # always applies to an order we have counted ZERO fills for —
+                    # which sidesteps the partial-double-count hazard.
+                    if terminal_state == "filled":
+                        await self._recover_missed_fill(client, bid, ticker)
                     self._cancel_attempts.pop(bid, None)
                     await self._remove_pending_order_compat(coid)
                     try:
@@ -2709,6 +2731,93 @@ class ExecutionEngine:
     async def _process_single_fill(self, fill: Any) -> None:
         """Delegates fill processing to FillProcessor."""
         await self._fill_processor.process_single_fill(fill, self.risk_manager, self._remove_pending_order_compat)
+
+    async def _recover_missed_fill(self, client: Any, broker_order_id: str, ticker: Any) -> bool:
+        """Recover a fill that poll_fills' 200-row window aged out before processing.
+
+        When the stale-entry sweep learns from the broker that an order is ALREADY
+        FILLED (its cancel was rejected with "order is already in 'filled' state"),
+        poll_fills never saw the fill, so no ``FillRecord`` was written and
+        ``_compute_cost_basis_from_fills`` (which replays the fills table) cannot
+        reconstruct this order's cost basis. Fetch the specific order by id — a
+        direct lookup that is NOT bounded by the 200-row recent window — and feed
+        it through the idempotent fill processor (``ProcessedFill`` guards against
+        double-processing, including a later poll that re-sees the same order), so
+        the ``FillRecord`` lands and risk state updates exactly as a live poll
+        would have. Returns True iff a fill was processed.
+
+        NEVER raises: a recovery failure must not break the sweep or block the
+        caller's status reconcile (the storm fix). On any failure the per-order
+        cost-basis gap simply persists until a later poll or the PnL
+        reconciliation job surfaces it — better than the silent gap that exists
+        today, where the fill is never recovered at all.
+        """
+        try:
+            order = await client.get_order(broker_order_id)
+        except Exception as e:
+            logger.warning(
+                "Missed-fill recovery: get_order failed; cost basis for this order stays unrecovered",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_FETCH_FAILED",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                    "error": str(e),
+                },
+            )
+            return False
+
+        # get_order returns {"error": ...} (never raises) on 4xx/5xx/timeout. An
+        # unguarded error dict would parse to filled_qty=0 and be silently dropped.
+        if not isinstance(order, dict) or "error" in order:
+            logger.warning(
+                "Missed-fill recovery: gateway returned no usable order; cost basis stays unrecovered",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_NO_ORDER",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                    "detail": (order.get("detail") or order.get("error")) if isinstance(order, dict) else None,
+                },
+            )
+            return False
+
+        if float(order.get("filled_qty") or 0) <= 0:
+            # Race: the cancel-reject said "filled" but this snapshot shows zero.
+            # Skip — process_single_fill would no-op on a zero increment anyway.
+            logger.warning(
+                "Missed-fill recovery: order reports zero filled_qty; skipping (race)",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_ZERO_QTY",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                },
+            )
+            return False
+
+        try:
+            await self._process_single_fill(order)
+        except Exception as e:
+            logger.warning(
+                "Missed-fill recovery: fill processing failed; cost basis stays unrecovered",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_PROCESS_FAILED",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                    "error": str(e),
+                },
+            )
+            return False
+
+        logger.info(
+            f"Recovered missed fill for already-filled stale entry order {broker_order_id} on {ticker} "
+            f"(poll_fills' 200-row window aged it out)",
+            extra={
+                "event_type": "MISSED_FILL_RECOVERED",
+                "order_id": broker_order_id,
+                "ticker": ticker,
+                "filled_qty": float(order.get("filled_qty") or 0),
+            },
+        )
+        return True
 
     # ── Position snapshots (delegates to fill_processor module) ──────────
 

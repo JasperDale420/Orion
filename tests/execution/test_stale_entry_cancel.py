@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -510,6 +510,308 @@ async def test_already_canceled_reject_reconciles_to_canceled(monkeypatch) -> No
 
     mod.persist_order_status_update.assert_awaited_once_with(broker_order_id="b-2", status="canceled")
     assert "b-2" not in ee._cancel_attempts
+
+
+# ── cost-basis recovery: re-process the fill poll_fills' 200-row window missed ──
+
+
+def _filled_order(
+    broker_id: str = "b-1",
+    coid: str = "orion_a",
+    symbol: str = "SPCX",
+    qty: float = 3,
+    price: float = 2.5,
+) -> dict[str, object]:
+    """The broker order dict get_order returns for an already-filled order — the
+    shape FillProcessor.process_single_fill consumes (Alpaca order fields)."""
+    return {
+        "id": broker_id,
+        "client_order_id": coid,
+        "symbol": symbol,
+        "side": "buy",
+        "qty": str(qty),
+        "filled_qty": str(qty),
+        "filled_avg_price": str(price),
+        "status": "filled",
+        "filled_at": "2026-06-22T15:00:53.956207Z",
+    }
+
+
+def _capture_status_updates(monkeypatch, mod) -> list[tuple[str, str]]:
+    updates: list[tuple[str, str]] = []
+
+    async def _fake(*, broker_order_id, status, **kw):
+        updates.append((broker_order_id, status))
+
+    monkeypatch.setattr(mod, "persist_order_status_update", _fake, raising=False)
+    return updates
+
+
+def _silence_alerts(monkeypatch, mod) -> list[str]:
+    sent: list[str] = []
+
+    async def _fake_alert(message, *, dedupe_key=None):
+        sent.append(dedupe_key or message)
+        return True
+
+    monkeypatch.setattr(mod, "send_discord_alert", _fake_alert, raising=False)
+    return sent
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_already_filled_reconcile_recovers_missed_fill(monkeypatch) -> None:
+    """A stale cancel rejected 'already filled' means poll_fills' 200-row window
+    never wrote a FillRecord for it, so _compute_cost_basis_from_fills can't
+    reconstruct its cost basis. The reconcile now fetches the order by id and
+    feeds it through the SAME idempotent processor poll uses — recovering the
+    fill — while STILL flipping the row terminal (storm fix) and not paging."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent = _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    order = _filled_order(broker_id="b-1", coid="orion_a", symbol="SPCX")
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+    client.get_order = AsyncMock(return_value=order)
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    # Recovered via a single by-id fetch through the idempotent fill processor:
+    client.get_order.assert_awaited_once_with("b-1")
+    ee._process_single_fill.assert_awaited_once_with(order)
+    # ...and the storm fix is intact: row flipped terminal, pending dropped, no page.
+    assert ("b-1", "filled") in status_updates
+    ee._remove_pending_order_compat.assert_awaited()
+    assert sent == []
+    assert n == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_recovery_get_order_error_still_reconciles_status(monkeypatch) -> None:
+    """get_order returns {"error":...} (never raises) on 4xx/5xx/timeout. The fill
+    stays unrecovered (logged), but the row is STILL flipped terminal so the
+    cancel/alert storm cannot resume — a fetch failure must not strand the order
+    back in the storming set."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent = _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+    client.get_order = AsyncMock(return_value={"error": "500", "detail": "gateway boom", "status_code": 500})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    ee._process_single_fill.assert_not_awaited()  # nothing usable to process
+    assert ("b-1", "filled") in status_updates  # storm fix preserved
+    assert "b-1" not in ee._cancel_attempts  # not re-armed for retry
+    assert sent == []
+    assert n == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_recovery_get_order_exception_does_not_break_sweep(monkeypatch) -> None:
+    """A raised transport error in get_order must be swallowed (recovery is
+    best-effort) and must not block the status reconcile."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+    client.get_order = AsyncMock(side_effect=RuntimeError("transport down"))
+
+    n = await ee._cancel_stale_entry_orders(client)  # must not raise
+
+    ee._process_single_fill.assert_not_awaited()
+    assert ("b-1", "filled") in status_updates
+    assert n == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_recovery_zero_filled_qty_skips_processing(monkeypatch) -> None:
+    """Race: the cancel-reject said 'filled' but the order snapshot reports zero
+    filled_qty. Skip processing (no phantom zero-qty fill) but still reconcile."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    order = _filled_order(broker_id="b-1")
+    order["filled_qty"] = "0"
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+    client.get_order = AsyncMock(return_value=order)
+
+    await ee._cancel_stale_entry_orders(client)
+
+    ee._process_single_fill.assert_not_awaited()
+    assert ("b-1", "filled") in status_updates
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_non_filled_terminal_reconcile_does_not_fetch_or_recover(monkeypatch) -> None:
+    """Only a 'filled' desync has a fill to recover. A 'canceled'/'expired'/
+    'rejected' reconcile must NOT fetch the order or touch the fill processor."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-2", "client_order_id": "orion_b", "ticker": "EWY"}]
+    )
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("canceled"))
+    client.get_order = AsyncMock()
+
+    await ee._cancel_stale_entry_orders(client)
+
+    client.get_order.assert_not_awaited()  # no fill to recover for a non-filled state
+    ee._process_single_fill.assert_not_awaited()
+    assert ("b-2", "canceled") in status_updates
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch) -> None:
+    """Drive the REAL FillProcessor (not a mocked _process_single_fill) so the
+    recovery's field-flow and the f'{order_id}:{filled_qty}' idempotency marker are
+    regression-guarded: the first recovery applies the FULL filled_qty (the stale
+    set guarantees zero prior fills) and a second recovery of the same order is
+    deduped — proving the double-count safety the storm-fix comment relies on."""
+    from orion.execution.fill_processor import FillProcessor
+    import orion.execution.fill_processor as fp_mod
+
+    processed: set[str] = set()
+
+    async def _is_processed(marker: str) -> bool:
+        return marker in processed
+
+    async def _mark(marker: str, **kw) -> None:
+        processed.add(marker)
+
+    async def _persist(_fill) -> None:
+        return None
+
+    monkeypatch.setattr(fp_mod, "is_fill_processed", _is_processed)
+    monkeypatch.setattr(fp_mod, "mark_fill_processed", _mark)
+    monkeypatch.setattr(fp_mod, "persist_fill_record", _persist)
+
+    outcome = MagicMock()
+    outcome.is_closing = False
+    rm = MagicMock()
+    rm.process_fill = AsyncMock(return_value=outcome)
+    rm.update_sector_exposure = MagicMock()
+
+    ee = _engine()
+    ee.risk_manager = rm
+    ee._fill_processor = FillProcessor()
+
+    order = _filled_order(broker_id="b-1", coid="orion_a", symbol="SPCX", qty=3, price=2.5)
+    client = AsyncMock()
+    client.get_order = AsyncMock(return_value=order)
+
+    assert await ee._recover_missed_fill(client, "b-1", "SPCX") is True
+    rm.process_fill.assert_awaited_once()
+    # incremental_qty == full filled_qty (positional arg 1), parsed from the string field
+    assert rm.process_fill.await_args.args[1] == 3.0
+
+    # A second recovery (or a later poll) of the same order must NOT re-apply it.
+    await ee._recover_missed_fill(client, "b-1", "SPCX")
+    rm.process_fill.assert_awaited_once()  # still once — deduped by the fill marker
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_filled_reconcile_not_refetched_next_sweep(monkeypatch) -> None:
+    """Storm-safety invariant: after a filled reconcile flips the row terminal it
+    leaves the open-status stale set, so a persistent already-filled order costs
+    exactly ONE get_order total — never a per-sweep re-fetch loop."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    ee._process_single_fill = AsyncMock()
+    # Sweep 1: stale + open. Sweep 2: the flip to 'filled' removed it from the set.
+    ee._fetch_stale_entry_orders = AsyncMock(
+        side_effect=[
+            [{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}],
+            [],
+        ]
+    )
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+    client.get_order = AsyncMock(return_value=_filled_order(broker_id="b-1"))
+
+    await ee._cancel_stale_entry_orders(client)
+    await ee._cancel_stale_entry_orders(client)
+
+    assert client.get_order.await_count == 1  # fetched once across both sweeps
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_order_recovery_is_capped_per_sweep(monkeypatch) -> None:
+    """Recovery's get_order is bound by the same per-cycle cap as cancel_order, so a
+    flood of already-filled stale orders cannot fan out unbounded Gateway calls in
+    one sweep (the 429-storm class this branch exists to prevent)."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    ee._process_single_fill = AsyncMock()
+    cap = ee._CANCEL_MAX_PER_CYCLE
+    many = [{"broker_order_id": f"b-{i}", "client_order_id": f"orion_{i}", "ticker": "SPCX"} for i in range(cap + 5)]
+    ee._fetch_stale_entry_orders = AsyncMock(return_value=many)
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+    client.get_order = AsyncMock(side_effect=lambda bid: _filled_order(broker_id=bid))
+
+    await ee._cancel_stale_entry_orders(client)
+
+    assert client.get_order.await_count <= cap
 
 
 # ── query logic (real test DB) ───────────────────────────────────────────────
