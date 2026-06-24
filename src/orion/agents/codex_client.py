@@ -1,7 +1,7 @@
 """
 Codex CLI Client - Async wrapper for headless LLM execution.
 
-Routes through Empire AI Gateway (localhost:8002/v1) with glm-5.1 as the
+Routes through Empire AI Gateway (localhost:8002/v1) with glm-5.2 as the
 default model. Supports tool execution for self-editing capabilities.
 """
 
@@ -200,7 +200,7 @@ async def run_codex_completion(
         model: Model to use (defaults to agent_settings.model_name).
         timeout_seconds: Max time to wait for completion.
     """
-    model = model or getattr(agent_settings, "model_name", "glm-5.1")
+    model = model or getattr(agent_settings, "model_name", "glm-5.2")
     api_key = getattr(agent_settings, "ai_gateway_key", "empire-ai-gateway-key")
     base_url = getattr(agent_settings, "ai_gateway_url", "http://localhost:8002/v1")
 

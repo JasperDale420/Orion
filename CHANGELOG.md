@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **LLM agent model bumped to `glm-5.2`**: the EOD review and meta-search solver-mutation agents now default to `glm-5.2` (was `glm-5.1`), the newer GLM Coding Plan model advertised by the AI-Gateway. Off the trading hot path — affects only the after-hours LLM agent calls.
+
 ### Fixed
 
 - **The launchd-health probe now actually pages — via Discord, with dedup**: the probe that watches for silently-dead Orion launchd jobs (the safety net born from the 2026-05-22 silent `exit 127` incident) was posting to `SLACK_WEBHOOK_URL`, which is set nowhere, so it paged no one — it only wrote `logs/launchd_health.log`. It now posts to the Discord webhook (`DISCORD_WEBHOOK_URL`, already in `.env` and sourced by the wrapper). Because the probe fires every 60s on the same frozen last-exit code, the Discord notifier carries persistent per-`(job, exit_code)` dedup: a stuck job pages immediately, then at most once per hour, so a single bad service can't storm the channel (the same blast-radius failure that tripped Discord's 429 limit on 2026-06-22). Only a successful POST is recorded, so a transient Discord outage retries on the next fire instead of dropping the page; the durable `launchd_health.log` row is still written for every alert regardless.
