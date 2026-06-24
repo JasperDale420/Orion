@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -272,3 +273,70 @@ def test_main_returns_0_when_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(mod, "run_check", lambda **_: healthy)
     assert main([]) == 0
+
+
+# ---- _discord_notifier ------------------------------------------------------
+
+
+def _alerting_result() -> DataflowResult:
+    return DataflowResult(
+        severity=Severity.CRITICAL,
+        alert=True,
+        market_open=True,
+        bronze_fresh=False,
+        bronze_age_seconds=900.0,
+        bronze_max_ts="2026-06-08T13:45:00+00:00",
+        gateway_up=True,
+        message="bronze feed STALLED during market hours",
+    )
+
+
+@pytest.mark.unit
+def test_discord_notifier_noop_when_webhook_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset webhook must NOT attempt a POST (the legacy bug was posting to an
+    unset SLACK_WEBHOOK_URL, which paged no one — now it reads DISCORD_WEBHOOK_URL)."""
+    import urllib.request
+
+    from orion.jobs.market_open_dataflow_check import _discord_notifier
+
+    monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    called = False
+
+    def _fail(*_a, **_k):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fail)
+    _discord_notifier(_alerting_result())
+    assert called is False
+
+
+@pytest.mark.unit
+def test_discord_notifier_posts_discord_content_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When configured, posts the Discord webhook shape ({"content": ...}) — not
+    Slack's {"text"/"attachments"}, which a Discord webhook rejects with 400."""
+    import urllib.request
+
+    from orion.jobs.market_open_dataflow_check import _discord_notifier
+
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.test/webhook")
+    captured: dict[str, Any] = {}
+
+    class _Resp:
+        def read(self) -> bytes:
+            return b""
+
+    def _capture(req, timeout=None):  # noqa: ARG001
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _capture)
+    _discord_notifier(_alerting_result())
+
+    assert captured["url"] == "https://discord.test/webhook"
+    body = captured["body"]
+    assert set(body.keys()) == {"content"}
+    assert "bronze feed STALLED" in body["content"]
+    assert "CRITICAL" in body["content"]
