@@ -87,6 +87,37 @@ async def mark_fill_processed(
         logger.error(f"Failed to mark fill {order_id} as processed: {e}")
 
 
+async def has_processed_fill_for_order(broker_order_id: str) -> bool:
+    """True if ANY fill for this broker order_id has already been processed.
+
+    The idempotency marker is ``f"{order_id}:{filled_qty}"`` (see
+    ``FillProcessor.process_single_fill``), so a partial fill recorded earlier
+    lives under a different marker than the order's final cumulative quantity.
+    The missed-CLOSE recovery uses this to refuse re-feeding an order it has
+    already counted ANY fill for — pushing the full order through the processor
+    after a partial already landed would double-count the close (the
+    entry-recovery path gets this guarantee for free by only ever touching
+    pre-fill orders).
+    """
+    from orion.storage.models_risk import ProcessedFill
+
+    try:
+
+        async def check(session: Any) -> bool:
+            # ponytail: broker order ids are UUIDs (no LIKE metacharacters), so
+            # the unescaped "{id}:%" prefix match is safe.
+            stmt = select(ProcessedFill.fill_id).where(ProcessedFill.fill_id.like(f"{broker_order_id}:%"))
+            result = await session.execute(stmt)
+            return result.first() is not None
+
+        return await db_query(check)
+    except Exception as e:
+        # Fail SAFE toward "already processed": a missed lookup must skip the
+        # recovery, never risk double-counting a close.
+        logger.error(f"Failed to check processed fills for order {broker_order_id}: {e}")
+        return True
+
+
 # Status sentinel for a row written BEFORE the broker round-trip. A startup
 # reconciler queries by this status to find orders that may have landed on the
 # broker without a matching DB finalize (process killed mid-Gateway-call).

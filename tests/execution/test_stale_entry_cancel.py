@@ -512,6 +512,77 @@ async def test_already_canceled_reject_reconciles_to_canceled(monkeypatch) -> No
     assert "b-2" not in ee._cancel_attempts
 
 
+# ── legacy unowned order: cancel fail-closes 404 GW-E4404 (never cancellable) ──
+
+
+def _gateway_legacy_unowned_reject() -> dict[str, object]:
+    """The dict GatewayTradingClient returns when the gateway fail-closes a cancel
+    of a pre-2026-05-20 raw `orion_<uuid>` order. The gateway added a per-client
+    `c-<client>-` ownership prefix on 2026-05-20; legacy orders lack it, so its
+    cancel/get-order guard returns 404 GW-E4404. `_request` sets `detail` to the
+    raw gateway body and `status_code` to 404."""
+    body = json.dumps(
+        {
+            "success": False,
+            "error": {"code": "GW-E4404", "message": "order not found for client orion"},
+        }
+    )
+    return {"error": "Client error '404 Not Found' for url ...", "detail": body, "status_code": 404}
+
+
+@pytest.mark.unit
+def test_is_legacy_unowned_cancel_rejection_matches_gw_e4404_only() -> None:
+    """Only a 404 GW-E4404 (legacy unowned order) matches — a generic 404, a 429,
+    an already-terminal reject, and a trading-capability reject must NOT, so the
+    reconcile is scoped to the exact never-cancellable case (no over-broadening)."""
+    from orion.execution.execution_engine import _is_legacy_unowned_cancel_rejection
+
+    assert _is_legacy_unowned_cancel_rejection(_gateway_legacy_unowned_reject()) is True
+    # A bare 404 with no GW-E4404 code may be legitimately retryable — must NOT match.
+    assert _is_legacy_unowned_cancel_rejection({"detail": "order not found", "error": "404"}) is False
+    assert _is_legacy_unowned_cancel_rejection({"error": "rate limited", "status_code": 429}) is False
+    assert _is_legacy_unowned_cancel_rejection(_gateway_already_terminal_reject("filled")) is False
+    assert _is_legacy_unowned_cancel_rejection({"detail": "GW-E2009 Trading capability required"}) is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_legacy_unowned_404_reconciles_and_stops_retrying(monkeypatch) -> None:
+    """A cancel rejected 404 GW-E4404 means the order is a legacy pre-2026-05-20
+    order the gateway can't confirm Orion owns — it can NEVER be cancelled here.
+    The sweep must reconcile the orphaned row terminal (so it leaves the open set
+    and is never re-selected — within this process AND across restarts), drop the
+    pending reservation, NOT arm backoff, and NOT page the false 'reserving DTBP'
+    alert. This is the GW-A4001/GW-E4404 retry flood (1,164 warnings, 6/24)."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent = _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine()
+    # Sweep 1: stale + open. Sweep 2: the terminal flip removed it from the set.
+    ee._fetch_stale_entry_orders = AsyncMock(
+        side_effect=[
+            [{"broker_order_id": "b-1", "client_order_id": "orion_legacy", "ticker": "MU"}],
+            [],
+        ]
+    )
+    client = AsyncMock()
+    client.cancel_order = AsyncMock(return_value=_gateway_legacy_unowned_reject())
+
+    n1 = await ee._cancel_stale_entry_orders(client)
+    n2 = await ee._cancel_stale_entry_orders(client)
+
+    assert client.cancel_order.await_count == 1  # attempted once, NOT a 6-retry flood
+    client.get_order.assert_not_awaited()  # no fill recovery — get_order also 404s for legacy
+    assert ("b-1", "canceled") in status_updates  # row flipped out of the open set
+    ee._remove_pending_order_compat.assert_awaited()  # stale reservation dropped
+    assert "b-1" not in ee._cancel_attempts  # no backoff/give-up state armed
+    assert sent == []  # NO false 'reserving DTBP' page
+    assert n1 == 0 and n2 == 0  # a reconcile is not a cancel
+
+
 # ── cost-basis recovery: re-process the fill poll_fills' 200-row window missed ──
 
 
