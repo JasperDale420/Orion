@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -23,8 +24,22 @@ os.environ["ALPACA_API_KEY"] = "mock_key"
 os.environ["ALPACA_SECRET_KEY"] = "mock_secret"
 os.environ["ALPACA_PAPER"] = "True"
 os.environ["OPENAI_API_KEY"] = "mock_openai_key"
+# Non-default AI-Gateway key so the prod-credential-hygiene check
+# (warn_on_default_dev_credentials) doesn't fire its `default_dev_credential_in_use`
+# WARNING at import time — that warning logs once per process before
+# PYTEST_CURRENT_TEST is set, escaping the EMPIRE_LOG_DIR isolation above and
+# leaking into the real error log. Tests should never run on the default dev key.
+os.environ["ORION_AI_GATEWAY_KEY"] = "mock_ai_gateway_key"
 os.environ["NUMBA_DISABLE_JIT"] = "1"
 os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
+# Isolate test log output. empire_core.logger writes rotating orion_*.log and
+# orion_errors_*.log files to EMPIRE_LOG_DIR (default ./logs). Without this,
+# every pytest run pours test fixtures into the REAL production error log —
+# fake CRITICALs (e.g. the drawdown-circuit-breaker test's
+# `equity=10100 peak=100000` trip), test tickers (b-1/EWY), greek-exposure
+# errors — polluting logs/orion_errors.log and tripping any log-based
+# monitoring. setdefault so an explicit override (CI capture) still wins.
+os.environ.setdefault("EMPIRE_LOG_DIR", tempfile.mkdtemp(prefix="orion-test-logs-"))
 
 # Ensure `src/` is on sys.path
 REPO_ROOT = Path(__file__).resolve().parents[1]

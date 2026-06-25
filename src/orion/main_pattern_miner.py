@@ -12,7 +12,7 @@ from orion.shared.logger import setup_logging
 from orion.core.market_schedule import MarketSchedule
 from orion.ml.pattern_miner import run_all_pattern_mining
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
+from orion.storage.db import init_db, wait_for_db
 
 logger = setup_struct_logger("orion.main_pattern_miner")
 
@@ -29,6 +29,9 @@ async def run_mining_job() -> None:
     """
     Run the pattern mining job once.
     """
+    # Wait for the DB before init_db so a transient outage doesn't crash the
+    # service into a launchd restart loop (see main_execution.py).
+    await wait_for_db()
     await init_db()
 
     logger.info(
