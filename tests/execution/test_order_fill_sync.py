@@ -50,6 +50,7 @@ async def test_filled_order_triggers_fill_processing(monkeypatch: pytest.MonkeyP
     client = MagicMock()
     client.get_orders = AsyncMock(return_value=[filled_order])
     client.get_account = AsyncMock(return_value={"equity": 100000.0})
+    client.get_clock = AsyncMock(return_value={})  # gateway-available check in poll_fills
     monkeypatch.setattr(engine, "_get_gateway_client", lambda: client)
 
     persist_mock = AsyncMock(return_value=1)
@@ -101,6 +102,7 @@ async def test_order_poll_skips_non_orion_orders(monkeypatch: pytest.MonkeyPatch
     client = MagicMock()
     client.get_orders = AsyncMock(return_value=[orion_order, cerberus_order, threeRoses_order])
     client.get_account = AsyncMock(return_value={"equity": 100000.0})
+    client.get_clock = AsyncMock(return_value={})  # gateway-available check in poll_fills
     monkeypatch.setattr(engine, "_get_gateway_client", lambda: client)
 
     persist_mock = AsyncMock(return_value=1)
@@ -135,6 +137,7 @@ async def test_order_poll_throttle_skips_within_window(
     client = MagicMock()
     client.get_orders = AsyncMock(return_value=[filled_order])
     client.get_account = AsyncMock(return_value={"equity": 100000.0})
+    client.get_clock = AsyncMock(return_value={})  # gateway-available check in poll_fills
     monkeypatch.setattr(engine, "_get_gateway_client", lambda: client)
 
     persist_mock = AsyncMock(return_value=1)

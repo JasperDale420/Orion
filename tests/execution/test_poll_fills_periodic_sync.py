@@ -77,3 +77,33 @@ async def test_poll_fills_resync_failure_does_not_break_polling():
     # Should not raise.
     await ee.poll_fills()
     ee._maybe_snapshot_positions.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_fills_self_heals_after_gateway_flap():
+    """A stale-False _gateway_available must NOT permanently disable polling.
+
+    Regression for 2026-06-26: a 00:29 gateway flap left _gateway_available
+    False; poll_fills read that cached flag and early-returned every iteration,
+    so fills/snapshots/risk-sync/missed-fill-recovery went dark for 19h (the
+    only other re-check, order submission, was risk-rejected at max positions).
+    poll_fills must RE-PROBE and resume once the gateway is back.
+    """
+    ee = _engine()
+    ee._gateway_available = False  # left False by an earlier flap
+    ee._gateway_check_ts = None  # force a fresh probe (bypass 60s cache)
+    ee._gateway_client.get_clock.return_value = {}  # gateway is actually back up
+    await ee.poll_fills()
+    assert ee._gateway_available is True  # flag self-healed
+    ee._maybe_snapshot_positions.assert_awaited()  # proceeded past the guard
+
+
+@pytest.mark.asyncio
+async def test_poll_fills_stays_degraded_while_gateway_truly_down():
+    """The re-probe must still gate: a genuinely down gateway skips polling."""
+    ee = _engine()
+    ee._gateway_available = False
+    ee._gateway_check_ts = None
+    ee._gateway_client.get_clock.return_value = {"error": "unreachable"}
+    await ee.poll_fills()
+    ee._maybe_snapshot_positions.assert_not_awaited()

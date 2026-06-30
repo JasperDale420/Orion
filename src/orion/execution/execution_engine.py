@@ -2661,7 +2661,13 @@ class ExecutionEngine:
         """
         await self.renew_service_lease()
 
-        if not self._gateway_available:
+        # Re-probe (60s-cached) instead of reading the cached flag. A gateway
+        # flap flips _gateway_available False; on an at-max-positions day the
+        # only other caller of _check_gateway_available (order submission) is
+        # risk-rejected before it runs, so a stale-False flag would disable
+        # fill/order polling, snapshots, risk-sync AND missed-fill recovery
+        # until restart — observed 2026-06-26: blind 19h after a 00:29 flap.
+        if not await self._check_gateway_available():
             return
 
         client = self._get_gateway_client()
