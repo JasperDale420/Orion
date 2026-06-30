@@ -693,7 +693,13 @@ class HeberReader:
     def _is_schema_merge_parquet_error(exc: Exception) -> bool:
         message = str(exc).lower()
         return (
-            ("unsupported cast from" in message and "to null" in message and "cast_null" in message)
+            # Cross-file schema-unification cast failure: a column written with
+            # one type in one dt= partition and another in a sibling (e.g.
+            # `expiry` int64 vs date32). Route to the file-wise reader so the
+            # good partitions still load. Was pinned to the int64->null case
+            # ("to null"/"cast_null"), which missed int64->date32 and total-
+            # failed the whole gold read instead of degrading (2026-06-30).
+            "unsupported cast from" in message
             or ("could not merge schemas" in message)
             or ("unable to merge" in message and "incompatible types" in message)
         )
