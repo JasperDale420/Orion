@@ -107,68 +107,7 @@ uv run python scripts/normalize_gold_expiry_to_date32.py \
   --root <HEBER_SOURCE_GOLD_PATH>/dataset=meta_label_features --apply
 ```
 
-```python
-# scripts/normalize_gold_expiry_to_date32.py
-"""One-off: normalize a gold dataset's `expiry` column to Arrow date32.
-
-Mixed int64 (YYYYMMDD) / string / date32 across dt= partitions breaks pyarrow
-reads. This rewrites each non-date32 file's expiry to date32 (date semantics
-preserved), atomically (temp file + os.replace), keeping a .bak. Dry-run unless
---apply. Scoped to one dataset root; never recurses outside it.
-"""
-import argparse, glob, os
-from datetime import date, datetime
-import pyarrow as pa, pyarrow.parquet as pq, pandas as pd
-
-
-def _to_date(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return None
-    if isinstance(v, datetime):
-        return v.date()
-    if isinstance(v, date):
-        return v
-    s = str(int(v)) if isinstance(v, (int, float)) else str(v).strip().replace("-", "")
-    try:
-        return datetime.strptime(s[:8], "%Y%m%d").date()
-    except ValueError:
-        return None
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True, help="dataset=... root to scan")
-    ap.add_argument("--apply", action="store_true", help="write changes (default dry-run)")
-    args = ap.parse_args()
-
-    files = sorted(glob.glob(f"{args.root}/**/dt=*/*.parquet", recursive=True))
-    changed = 0
-    for f in files:
-        t = str(pq.read_schema(f).field("expiry").type)
-        if t == "date32[day]":
-            continue
-        changed += 1
-        print(f"{'APPLY' if args.apply else 'DRY '}  {f}  ({t} -> date32)")
-        if not args.apply:
-            continue
-        df = pd.read_parquet(f)
-        df["expiry"] = df["expiry"].map(_to_date)
-        tmp = f + ".tmp"
-        os.replace(f, f + ".bak")
-        try:
-            df.to_parquet(tmp, index=False, compression="snappy")
-            # force date32 (object column of date -> pyarrow infers date32)
-            assert str(pq.read_schema(tmp).field("expiry").type) == "date32[day]"
-            os.replace(tmp, f)
-        except Exception:
-            os.replace(f + ".bak", f)  # roll back
-            raise
-    print(f"{changed} partitions {'rewritten' if args.apply else 'would change'}")
-
-
-if __name__ == "__main__":
-    main()
-```
+The script is committed at [`scripts/normalize_gold_expiry_to_date32.py`](../../scripts/normalize_gold_expiry_to_date32.py) — read it before running. It scans one `dataset=...` root, and for each non-`date32` `expiry` partition rewrites it to `date32` atomically (temp file + `os.replace`, keeping a `.bak`), preserving date semantics. It writes nothing without `--apply`.
 
 After apply, delete the `.bak` files once you've verified (below).
 
