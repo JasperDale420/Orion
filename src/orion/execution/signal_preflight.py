@@ -78,6 +78,15 @@ async def preflight_live_signal(
             reason="Data Lag",
             extra={"lag_seconds": lag_seconds, "max_data_lag_seconds": lag_budget},
         )
+    # A meaningfully-future candidate timestamp is data corruption (clock
+    # skew, replayed synthetic rows) — negative lag must not read as fresh.
+    # Test stage exempt: the smoke e2e deliberately injects future rows.
+    if lag_seconds < -30 and system_settings.orion_stage != "test":
+        return PreflightResult(
+            ok=False,
+            reason="Data Lag",
+            extra={"lag_seconds": lag_seconds, "future_skew": True},
+        )
 
     cb = CircuitBreaker()
     if await cb.is_open():

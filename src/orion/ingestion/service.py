@@ -562,7 +562,14 @@ class IngestionService:
             # SKIPs. The downstream cutoff is computed against a later `now`, so
             # anything dropped here is strictly staler at decision time too:
             # this never removes an event the execution path would have kept.
-            freshness_cutoff = now - timedelta(seconds=system_settings.max_data_lag_seconds)
+            # The budget is the LOOSEST per-bucket signal-age budget (a 700s-old
+            # print is dead for 0DTE but still viable for the 900s swing
+            # bucket); the rules/preflight enforce the tighter per-bucket cuts.
+            ingest_lag_budget = max(
+                system_settings.max_data_lag_seconds,
+                max(system_settings.bucket_signal_age_budgets.values(), default=0),
+            )
+            freshness_cutoff = now - timedelta(seconds=ingest_lag_budget)
 
             for _, row in df.iterrows():
                 event = self._heber_row_to_event(row, now)
@@ -580,7 +587,7 @@ class IngestionService:
             if stale_dropped:
                 logger.info(
                     f"Dropped {stale_dropped} stale UW flow alerts at ingest "
-                    f"(older than {system_settings.max_data_lag_seconds}s data-lag budget)",
+                    f"(older than {ingest_lag_budget}s data-lag budget)",
                     extra={"stale_dropped": stale_dropped, "fresh_kept": len(events)},
                 )
 

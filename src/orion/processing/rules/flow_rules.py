@@ -23,6 +23,7 @@ Confidence is a flat 1.0: the rules ARE the gate; ranking comes later from
 per-bucket models trained on realized outcomes, not hardcoded numbers.
 """
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -81,12 +82,16 @@ def _coerce_boolish(value: object) -> bool:
 
 
 def _coerce_float(value: Any) -> float | None:
+    """Best-effort float coercion; non-finite values (nan/inf) count as
+    missing — 'inf' premium sails past any floor and 'nan' fails every
+    comparison silently."""
     if value is None:
         return None
     try:
-        return float(value)
+        result = float(value)
     except (TypeError, ValueError):
         return None
+    return result if math.isfinite(result) else None
 
 
 def _signal_age_seconds(signal: SilverSignal, now: datetime) -> float | None:
@@ -173,8 +178,13 @@ class BucketFlowRule(TradingRule):
         if put_call not in ("CALL", "PUT"):
             return None
 
-        dte = feat.get("dte")
-        if dte is None or not (self.dte_min <= int(dte) <= self.dte_max):
+        # dte can arrive as int, float, or string ("5"/"5.0") depending on
+        # the upstream serializer — int("5.0") raises, so coerce via float.
+        dte_f = _coerce_float(feat.get("dte"))
+        if dte_f is None:
+            return None
+        dte = int(dte_f)
+        if not (self.dte_min <= dte <= self.dte_max):
             return None
 
         premium = _coerce_float(feat.get("premium")) or 0.0
@@ -195,10 +205,18 @@ class BucketFlowRule(TradingRule):
         age_seconds = _signal_age_seconds(signal, now)
         if age_seconds is not None and age_seconds > self.max_signal_age_seconds:
             return None
+        # A meaningfully-future timestamp is data corruption (clock skew,
+        # replayed synthetic rows) — reject it, don't treat it as fresh.
+        # Live-market check: the test-stage smoke run injects future rows.
+        if self.enforce_universe_and_window and age_seconds is not None and age_seconds < -30:
+            return None
 
-        # ET entry window on the flow print's wall-clock time.
+        # ET entry window on the flow print's wall-clock time. A signal
+        # without a timestamp can't prove it's inside the window — reject.
         ts = signal.signal_ts_utc
-        if self.enforce_universe_and_window and ts is not None:
+        if self.enforce_universe_and_window:
+            if ts is None:
+                return None
             ts_et = (ts if ts.tzinfo else ts.replace(tzinfo=UTC)).astimezone(_ET)
             start, end = self.entry_window_et
             if not (start <= (ts_et.hour, ts_et.minute) < end):

@@ -29,7 +29,7 @@ def _et_today(hour: int, minute: int) -> datetime:
 def _make_signal(
     ticker: str = "SPY",
     *,
-    dte: int = 0,
+    dte: int | str = 0,
     premium: float = 80_000.0,
     put_call: str = "CALL",
     aggressor: str = "ASK",
@@ -193,3 +193,42 @@ def test_empty_features_ignored(rule_cls):
     signal = _make_signal()
     signal.features = {}
     assert rule_cls().evaluate(signal) is None
+
+
+# --- Malformed-payload hardening (adversarial review) ------------------------
+
+
+def test_string_float_dte_does_not_crash():
+    """dte can arrive as '0.0' depending on the upstream serializer —
+    int('0.0') raises; coercion must handle it."""
+    candidate = ZeroDTEBucketRule().evaluate(_make_signal(dte="0.0"))
+    assert candidate is not None
+    candidate = ShortSwingBucketRule().evaluate(_make_signal(ticker="NVDA", dte="2.0", age_seconds=100.0))
+    assert candidate is not None
+
+
+def test_unparseable_dte_rejected():
+    assert ZeroDTEBucketRule().evaluate(_make_signal(dte="garbage")) is None
+
+
+def test_nan_and_inf_premium_rejected():
+    """'inf' sails past any floor and 'nan' fails every comparison silently —
+    non-finite values must count as missing (premium missing → below floor)."""
+    assert ZeroDTEBucketRule().evaluate(_make_signal(premium=float("inf"))) is None
+    assert ZeroDTEBucketRule().evaluate(_make_signal(premium=float("nan"))) is None
+
+
+def test_future_dated_signal_rejected():
+    """Negative age (future flow_ts) is data corruption, not freshness."""
+    assert ZeroDTEBucketRule().evaluate(_make_signal(age_seconds=-3600.0)) is None
+
+
+def test_small_clock_skew_tolerated():
+    assert ZeroDTEBucketRule().evaluate(_make_signal(age_seconds=-5.0)) is not None
+
+
+def test_missing_signal_ts_rejected_when_enforcing():
+    """A signal without a timestamp can't prove it's inside the entry window."""
+    signal = _make_signal()
+    signal.signal_ts_utc = None
+    assert ZeroDTEBucketRule().evaluate(signal) is None
