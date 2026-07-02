@@ -127,6 +127,12 @@ def test_missing_volume_passes_and_is_flagged():
     assert (candidate.evidence or {}).get("volume_missing") is True
 
 
+def test_zero_volume_rejected_not_treated_as_missing():
+    """volume_contract=0 is a KNOWN illiquid contract — it must fail the
+    floor, not fall through truthiness into the 'missing' pass."""
+    assert ZeroDTEBucketRule().evaluate(_make_signal(volume=0.0)) is None
+
+
 def test_rejects_stale_signal():
     """0DTE age budget is 120s — a 5-minute-old print is dead."""
     assert ZeroDTEBucketRule().evaluate(_make_signal(age_seconds=300.0)) is None

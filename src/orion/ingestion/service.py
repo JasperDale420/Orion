@@ -565,10 +565,7 @@ class IngestionService:
             # The budget is the LOOSEST per-bucket signal-age budget (a 700s-old
             # print is dead for 0DTE but still viable for the 900s swing
             # bucket); the rules/preflight enforce the tighter per-bucket cuts.
-            ingest_lag_budget = max(
-                system_settings.max_data_lag_seconds,
-                max(system_settings.bucket_signal_age_budgets.values(), default=0),
-            )
+            ingest_lag_budget = self._ingest_lag_budget_seconds()
             freshness_cutoff = now - timedelta(seconds=ingest_lag_budget)
 
             for _, row in df.iterrows():
@@ -632,19 +629,33 @@ class IngestionService:
         # Union both paths; dedup downstream collapses the overlap on event_id.
         return push_events + poll_events
 
+    @staticmethod
+    def _ingest_lag_budget_seconds() -> int:
+        """Born-stale drop budget shared by the poll AND push flow paths.
+
+        The LOOSEST per-bucket signal-age budget (a 700s-old print is dead
+        for 0DTE but still viable for the 900s swing bucket); the rules and
+        preflight enforce the tighter per-bucket cuts downstream.
+        """
+        return max(
+            system_settings.max_data_lag_seconds,
+            max(system_settings.bucket_signal_age_budgets.values(), default=0),
+        )
+
     def _drain_push_flow_events(self, trace_id: str) -> list[BronzeEvent]:
         """Drain pushed flow events, applying the same born-stale drop as poll.
 
         A long WS gap followed by a Gateway backlog flush must not dump a stale
         catch-up burst — the freshness cutoff (computed against the same
-        ``now``/``max_data_lag_seconds`` as the poll path) discards anything
-        already past the data-lag budget at ingest.
+        ``now``/budget as the poll path) discards anything already past the
+        data-lag budget at ingest.
         """
         raw = self.gateway_stream.drain_flow_events()
         if not raw:
             return []
         now = datetime.now(UTC)
-        freshness_cutoff = now - timedelta(seconds=system_settings.max_data_lag_seconds)
+        ingest_lag_budget = self._ingest_lag_budget_seconds()
+        freshness_cutoff = now - timedelta(seconds=ingest_lag_budget)
         events: list[BronzeEvent] = []
         stale_dropped = 0
         for event in raw:
@@ -659,7 +670,7 @@ class IngestionService:
         if stale_dropped:
             logger.info(
                 f"Dropped {stale_dropped} stale UW flow push events at ingest "
-                f"(older than {system_settings.max_data_lag_seconds}s data-lag budget)",
+                f"(older than {ingest_lag_budget}s data-lag budget)",
                 extra={"stale_dropped": stale_dropped, "fresh_kept": len(events)},
             )
         return events

@@ -1069,18 +1069,21 @@ class ExecutionEngine:
 
         # Pay-up pricing: a limit resting AT mid fills ~36% of the time and
         # ages into the stale-cancel sweep. Cross a fraction of the half-
-        # spread toward the ask, clamped at ask (never bid above the market;
-        # tick-rounding could otherwise push a cent past it). 0DTE pays more
-        # (momentum decays faster than the queue).
+        # spread toward the ask. 0DTE pays more (momentum decays faster than
+        # the queue). No ask clamp: a BUY limit at/above ask is marketable
+        # and fills at the ask or better (same convention as the close
+        # path's marketable limits), whereas clamping to a real-market ask
+        # that sits off Alpaca's coarser tick grid (e.g. 0.64 on the 0.05
+        # grid) gets the order 422-rejected at the broker.
         payup_frac = 0.40 if bucket == "0DTE" else 0.25
-        option_price = min(option_price + payup_frac * (ask_f - option_price), ask_f)
+        option_price = option_price + payup_frac * (ask_f - option_price)
 
         # Snap the price to Alpaca's options tick increment. Prior to this,
         # mid-quotes like (bid 0.60 + ask 0.61) / 2 = 0.605 and float-
         # precision artefacts (5.789999999999999) were rejected at the
         # broker as `422 Unprocessable Entity`, which surfaced as orders
         # with status='' / broker_order_id IS NULL.
-        option_price = min(round_to_options_tick(option_price), ask_f)
+        option_price = round_to_options_tick(option_price)
         if option_price <= 0:
             logger.error(
                 "options_price_rounded_to_zero",

@@ -211,6 +211,21 @@ def test_zero_dte_flatten_quiet_for_future_expiry_other_bucket():
         assert rule.should_exit(pos) is None
 
 
+def test_zero_dte_flatten_not_a_day_early_for_midnight_utc_expiry():
+    """Expiry is stored midnight UTC and encodes the CALENDAR date: a July-2
+    contract (2026-07-02 00:00 UTC) seen at 15:50 ET on July 1 converts to
+    July 1 20:00 ET — an ET-date comparison would flatten it a day early."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    # Tomorrow's contract, stored as midnight UTC of its calendar date.
+    tomorrow_midnight_utc = (
+        (_at_et(15, 50) + timedelta(days=1)).astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    )
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=tomorrow_midnight_utc)
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+
+
 # --- NoProgressRule ---------------------------------------------------------
 
 

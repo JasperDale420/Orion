@@ -385,27 +385,36 @@ async def seed_default_solvers() -> dict[str, Any]:
 
 
 async def ensure_active_solvers_ready(stage: str | None) -> SolverInventoryStatus:
+    """Make the seeded solver set current at startup.
+
+    SEED_SOLVERS is canonical for the default solver rows: in paper/test
+    stages the upsert runs on EVERY startup — not only when the table is
+    empty — so seed changes (new bucket solvers, retired rules, baseline
+    rule lists) deploy with a service restart instead of requiring an empty
+    table or a manual seeder run. The upsert touches only the seed rows;
+    solvers created by other means are untouched. To change a seeded
+    solver, edit seed_solvers.py — direct DB edits to those rows are
+    overwritten on the next restart.
+
+    Non-auto-seed stages (live) never seed and refuse to start without
+    active solvers.
+    """
     normalized_stage = (stage or "paper").lower()
     await init_db()
 
-    active_count = await _count_active_solvers()
-    if active_count > 0:
+    if normalized_stage not in AUTO_SEED_STAGES:
+        active_count = await _count_active_solvers()
+        if active_count <= 0:
+            msg = f"No active solvers configured for stage={normalized_stage}. Refusing to start."
+            logger.error(msg)
+            raise RuntimeError(msg)
         return SolverInventoryStatus(
             active_solver_count=active_count,
             seeded=False,
             baseline_solver_id=_resolve_baseline_id(),
         )
 
-    if normalized_stage not in AUTO_SEED_STAGES:
-        msg = f"No active solvers configured for stage={normalized_stage}. Refusing to start."
-        logger.error(msg)
-        raise RuntimeError(msg)
-
-    logger.warning(
-        "No active solvers found for paper-compatible stage; seeding defaults",
-        stage=normalized_stage,
-    )
-    await seed_default_solvers()
+    summary = await seed_default_solvers()
     active_count = await _count_active_solvers()
     if active_count <= 0:
         msg = "Default solver seeding completed but no active solvers were available afterward."
@@ -414,7 +423,7 @@ async def ensure_active_solvers_ready(stage: str | None) -> SolverInventoryStatu
 
     return SolverInventoryStatus(
         active_solver_count=active_count,
-        seeded=True,
+        seeded=summary["created"] > 0,
         baseline_solver_id=_resolve_baseline_id(),
     )
 

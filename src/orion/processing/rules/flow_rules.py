@@ -197,7 +197,12 @@ class BucketFlowRule(TradingRule):
             return None
 
         # Contract-volume floor when known; missing passes (flagged).
-        volume = _coerce_float(feat.get("volume_contract") or feat.get("volume"))
+        # Presence-checked, not truthiness: volume 0 is a KNOWN illiquid
+        # contract and must fail the floor, not fall through as "missing".
+        vol_raw = feat.get("volume_contract")
+        if vol_raw is None:
+            vol_raw = feat.get("volume")
+        volume = _coerce_float(vol_raw)
         if volume is not None and volume < self.min_contract_volume:
             return None
 

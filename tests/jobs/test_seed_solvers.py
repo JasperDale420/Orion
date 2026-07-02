@@ -61,6 +61,46 @@ async def test_ensure_active_solvers_ready_seeds_paper_and_sets_baseline(
 
 
 @pytest.mark.asyncio
+async def test_ensure_active_solvers_ready_upserts_on_existing_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upgrade path: seeds must apply even when active solvers already exist —
+    only-seed-when-empty left new bucket solvers unroutable after a deploy."""
+    from orion.jobs.seed_solvers import ensure_active_solvers_ready
+
+    monkeypatch.setattr(system_settings, "baseline_solver_id", None)
+
+    # Pre-existing DB state: one old-style active solver, no bucket solvers.
+    async with async_session_factory() as session:
+        session.add(
+            Solver(
+                solver_id="legacy_solver_v0",
+                family_name="Legacy",
+                name="Legacy",
+                stage="paper",
+                status="active",
+                is_active=True,
+                config={},
+                definition_json={},
+            )
+        )
+        await session.commit()
+
+    status = await ensure_active_solvers_ready(stage="paper")
+
+    async with async_session_factory() as session:
+        zero_dte = await session.get(Solver, "zero_dte_paper_v1")
+        retired = await session.get(Solver, "bullish_sweep_paper_v1")
+        legacy = await session.get(Solver, "legacy_solver_v0")
+
+    assert zero_dte is not None and zero_dte.is_active is True
+    assert retired is not None and retired.is_active is False
+    # Non-seed rows are untouched.
+    assert legacy is not None and legacy.is_active is True
+    assert status.active_solver_count > 0
+
+
+@pytest.mark.asyncio
 async def test_ensure_active_solvers_ready_raises_for_live_without_solvers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

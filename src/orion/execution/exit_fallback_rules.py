@@ -244,7 +244,11 @@ class ZeroDTEFlattenRule:
             if expiry is not None:
                 if expiry.tzinfo is None:
                     expiry = expiry.replace(tzinfo=UTC)
-                is_zero_dte = expiry.astimezone(_ET).date() <= now_et.date()
+                # Expiry is stored midnight UTC and encodes the contract's
+                # CALENDAR date — converting it to ET would shift it to the
+                # prior evening and flatten a tomorrow-expiring position a
+                # day early. Compare the UTC calendar date to today-in-ET.
+                is_zero_dte = expiry.astimezone(UTC).date() <= now_et.date()
         if not is_zero_dte:
             return None
         hour, minute = (int(part) for part in self.flatten_after_et.split(":"))
