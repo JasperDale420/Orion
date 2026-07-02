@@ -985,6 +985,15 @@ class IngestionService:
         except Exception as e:
             logger.error(f"EOD close-of-books failed: {e}")
 
+        # Metrics ride after the books close; their failure must not be
+        # confused with a reconcile failure (and vice versa).
+        try:
+            from orion.jobs.bucket_metrics import run_bucket_metrics
+
+            await run_bucket_metrics()
+        except Exception as e:
+            logger.error(f"EOD bucket metrics failed: {e}")
+
     async def _post_flow_parity_summary(self) -> None:
         """Aggregate the day's flow_push_parity rows and post a Discord summary.
 
