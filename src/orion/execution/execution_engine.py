@@ -3097,11 +3097,16 @@ class ExecutionEngine:
         # get_order returns {"error": ...} (never raises) on 4xx/5xx/timeout. An
         # unguarded error dict would parse to filled_qty=0 and be silently dropped.
         if not isinstance(order, dict) or "error" in order:
-            if isinstance(order, dict) and order.get("status_code") == 404:
-                # GW-E4404: the Gateway doesn't know this order id at all
+            if (
+                isinstance(order, dict)
+                and order.get("status_code") == 404
+                and _CANCEL_LEGACY_UNOWNED_MARKER in f"{order.get('detail') or ''} {order.get('error') or ''}".lower()
+            ):
+                # 404 GW-E4404: the Gateway doesn't know this order id at all
                 # (legacy/unowned). Permanent — give up for the session so the
-                # close-recon stops re-fetching it every cycle. Logged once here;
-                # transient errors (5xx/timeout) below stay retryable.
+                # close-recon stops re-fetching it every cycle. Logged once here.
+                # Scoped to the exact Gateway code like the cancel path: any
+                # other 404, like 5xx/timeout below, stays retryable.
                 if not hasattr(self, "_recon_gone_order_ids"):
                     self._recon_gone_order_ids = set()
                 self._recon_gone_order_ids.add(broker_order_id)

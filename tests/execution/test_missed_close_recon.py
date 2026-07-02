@@ -290,6 +290,28 @@ async def test_gone_order_404_is_fetched_once_per_session(monkeypatch) -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_bare_404_without_gw_e4404_is_not_cached_as_gone(monkeypatch) -> None:
+    """Only the exact GW-E4404 code marks an id permanently gone (mirrors the
+    cancel path's scoping). A 404 without it may be retryable — caching it would
+    strand a recoverable close's cost basis until restart."""
+    _all_unprocessed(monkeypatch)
+
+    ee = _engine_real_recovery()
+    ee._compute_cost_basis_from_fills = AsyncMock(return_value={"SPCX": {"qty": 3.0, "avg_entry": 2.5}})
+    client = AsyncMock()
+    client.get_positions = AsyncMock(return_value=[])
+    client.get_account_activities = AsyncMock(return_value=[_activity("o-close", "SPCX")])
+    client.get_order = AsyncMock(
+        return_value={"error": "Client error '404 Not Found' for url ...", "detail": "not found", "status_code": 404}
+    )
+
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert client.get_order.await_count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_transient_get_order_error_is_retried_next_cycle(monkeypatch) -> None:
     """Only a 404 is permanent. A 5xx/timeout error dict must NOT be cached as
     gone — the fill may still be recoverable once the Gateway heals."""
