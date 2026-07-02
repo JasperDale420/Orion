@@ -38,6 +38,12 @@ class RiskSettings(BaseSettings):
     min_dte: int = 1  # Minimum days to expiration (0-DTE blocked; 1-DTE+ allowed)
     max_option_positions: int = 3  # Max simultaneous option positions
 
+    # Contract liquidity gate (checked at order time from the live chain).
+    # A zero-bid or wide-spread contract can't be exited at anything near its
+    # mark — dust entries strand until expiry. 0 disables either check.
+    min_option_mid: float = 0.20  # Reject contracts with mid below this
+    max_option_spread_pct: float = 0.25  # Reject when (ask-bid)/mid exceeds this
+
     # Portfolio-level Greeks limits (options risk)
     max_portfolio_delta: float = 500.0  # Absolute delta exposure limit
     max_portfolio_gamma: float = 100.0  # Absolute gamma exposure limit

@@ -911,6 +911,7 @@ class ExecutionEngine:
         # accurate order sizing, risk checks, and limit price.
         option_price = None
         contract_greeks: dict[str, float] | None = None
+        bid_f = ask_f = 0.0
         client = self._get_gateway_client()
         chain_result = await client.get_option_chain(candidate.ticker)
 
@@ -931,19 +932,47 @@ class ExecutionEngine:
                         bid_f = ask_f = 0.0
                     if bid_f > 0 and ask_f > 0:
                         option_price = (bid_f + ask_f) / 2
-                    elif ask_f > 0:
-                        option_price = ask_f
-                    elif bid_f > 0:
-                        option_price = bid_f
-                    else:
-                        last = contract.get("last")
-                        try:
-                            last_f = float(last) if last not in (None, "") else 0.0
-                        except (TypeError, ValueError):
-                            last_f = 0.0
-                        if last_f > 0:
-                            option_price = last_f
                     break
+
+        # Liquidity gate: an entry we can't later exit near its mark is a
+        # guaranteed loser. Requires a live two-sided quote, a mid above the
+        # dust floor, and a spread narrow enough that round-trip cost doesn't
+        # eat the profit target. Fail closed — the old fallback pricing
+        # (ask-only / bid-only / last / strike) put orders on zero-bid dust
+        # that then stranded until expiry.
+        if option_price is not None:
+            mid = option_price
+            spread_pct = (ask_f - bid_f) / mid if mid > 0 else float("inf")
+            reject_reason = None
+            if risk_settings.min_option_mid > 0 and mid < risk_settings.min_option_mid:
+                reject_reason = f"Illiquid: mid {mid:.2f} < min {risk_settings.min_option_mid:.2f}"
+            elif risk_settings.max_option_spread_pct > 0 and spread_pct > risk_settings.max_option_spread_pct:
+                reject_reason = f"Illiquid: spread {spread_pct:.0%} > max {risk_settings.max_option_spread_pct:.0%}"
+            if reject_reason:
+                logger.warning(
+                    "options_blocked_illiquid",
+                    option_symbol=candidate.option_symbol,
+                    ticker=candidate.ticker,
+                    bid=bid_f,
+                    ask=ask_f,
+                    reason=reject_reason,
+                )
+                decision.executed_successfully = DecisionStatus.SKIPPED
+                decision.reason = reject_reason
+                return
+        elif bid_f <= 0 and ask_f > 0:
+            # One-sided quote (ask, no bid): nothing to sell into later.
+            logger.warning(
+                "options_blocked_illiquid",
+                option_symbol=candidate.option_symbol,
+                ticker=candidate.ticker,
+                bid=bid_f,
+                ask=ask_f,
+                reason="Illiquid: zero bid",
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = "Illiquid: zero bid"
+            return
 
         # NOTE: `candidate.premium` is the UW-flow event's aggregate premium
         # (sum of all contracts in the sweep) — NOT a per-contract price. Using

@@ -97,6 +97,10 @@ export ORION_RISK_MAX_POSITIONS="${ORION_RISK_MAX_POSITIONS:-10}"
 # premium/order %) computes off this, not the pooled account equity. Config
 # default is also 100k; set explicitly here for operator visibility/tuning.
 export ORION_RISK_ALLOCATED_EQUITY="${ORION_RISK_ALLOCATED_EQUITY:-100000}"
+# Router-empty must never SKIP a candidate: the baseline solver is the
+# structural fallback when no dedicated solver matches (25.5% of all skips
+# on 2026-06-29/30 were "Router empty and no baseline solver applied").
+export ORION_BASELINE_SOLVER_ID="${ORION_BASELINE_SOLVER_ID:-diversified_baseline_v1}"
 
 # Forward-testing knobs — match the docker-compose execution stanza so
 # behaviour is identical to what was running in Docker.

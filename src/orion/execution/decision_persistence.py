@@ -194,13 +194,24 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -
         logger.error(f"Failed to persist signals_live/trade journal: {e}")
 
 
-async def update_decision_status(decision_id: str, status: str) -> None:
+async def update_decision_status(decision_id: str, status: str, reason: str | None = None) -> None:
+    """Persist the decision's terminal status — and the reason it got there.
+
+    The decision row is saved BEFORE execution runs, so any failure reason the
+    execution engine sets in memory ("Option Price Fetch Failed", "Size 0
+    Contracts", "Illiquid: ...") was lost unless re-persisted here — on
+    2026-07-01, 200 of 245 EXECUTE decisions died inside order construction
+    with no queryable trace.
+    """
+
     async def update_status(session: Any) -> None:
         stmt = select(StrategyDecision).where(StrategyDecision.decision_id == decision_id)
         result = await session.execute(stmt)
         record = result.scalars().first()
         if record:
             record.executed_successfully = status
+            if reason:
+                record.reason = reason
 
     await db_write(update_status)
 
