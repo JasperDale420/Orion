@@ -57,7 +57,12 @@ class RiskSettings(BaseSettings):
     # A zero-bid or wide-spread contract can't be exited at anything near its
     # mark — dust entries strand until expiry. 0 disables either check.
     min_option_mid: float = 0.20  # Reject contracts with mid below this
-    max_option_spread_pct: float = 0.25  # Reject when (ask-bid)/mid exceeds this
+    max_option_spread_pct: float = 0.25  # Fallback spread cap for unknown buckets
+    # Per-bucket spread caps: profit targets must be multiples of round-trip
+    # spread cost, so faster buckets need tighter spreads.
+    option_bucket_spread_caps: dict[str, float] = Field(
+        default_factory=lambda: {"0DTE": 0.10, "SHORT_SWING": 0.15, "SWING": 0.15, "POSITION": 0.15}
+    )
 
     # Portfolio-level Greeks limits (options risk)
     max_portfolio_delta: float = 500.0  # Absolute delta exposure limit
@@ -242,6 +247,100 @@ class SystemSettings(BaseSettings):
     # cycle times we see in practice (rollups can run 30-60s on busy days).
     ingestion_heartbeat_max_age: int = 600
     max_data_lag_seconds: int = 600  # Pre-market/post-market data can lag 300s+
+    # Per-bucket signal-age budgets (seconds) — override the flat
+    # max_data_lag_seconds at preflight. A 2-minute-old 0DTE momentum signal
+    # is dead; a 15-minute-old multi-day swing thesis is fine. JSON env, e.g.
+    # ORION_BUCKET_SIGNAL_AGE_BUDGETS='{"0DTE": 90}'.
+    bucket_signal_age_budgets: dict[str, int] = Field(
+        default_factory=lambda: {"0DTE": 120, "SHORT_SWING": 300, "SWING": 900, "POSITION": 900},
+        validation_alias="ORION_BUCKET_SIGNAL_AGE_BUDGETS",
+    )
+    # Liquid-underlying allowlist for the bucket entry rules — the cheapest
+    # option-liquidity proxy (no chain data needed at signal time). Index ETFs
+    # + megacaps/high-option-volume names. JSON-array env override.
+    liquid_universe: list[str] = Field(
+        default_factory=lambda: [
+            # Index / sector ETFs
+            "SPY",
+            "QQQ",
+            "IWM",
+            "DIA",
+            "TLT",
+            "GLD",
+            "SLV",
+            "XLF",
+            "XLE",
+            "SMH",
+            # Megacap tech
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "GOOG",
+            "META",
+            "TSLA",
+            "AVGO",
+            "AMD",
+            "INTC",
+            "MU",
+            "QCOM",
+            "TSM",
+            "ORCL",
+            "CRM",
+            "ADBE",
+            "NFLX",
+            "NOW",
+            # High-option-volume names
+            "PLTR",
+            "COIN",
+            "MSTR",
+            "HOOD",
+            "SOFI",
+            "UBER",
+            "ABNB",
+            "SHOP",
+            "SNOW",
+            "CRWD",
+            "PANW",
+            "SQ",
+            "PYPL",
+            "DELL",
+            "SMCI",
+            "ARM",
+            "MRVL",
+            "IREN",
+            # Financials / industrials / energy
+            "BAC",
+            "JPM",
+            "GS",
+            "MS",
+            "C",
+            "WFC",
+            "XOM",
+            "CVX",
+            "OXY",
+            "BA",
+            "CAT",
+            "GE",
+            "F",
+            "GM",
+            # Consumer / healthcare
+            "LLY",
+            "UNH",
+            "PFE",
+            "MRNA",
+            "WMT",
+            "COST",
+            "TGT",
+            "HD",
+            "DIS",
+            "SBUX",
+            "NKE",
+            "MCD",
+        ],
+        validation_alias="ORION_LIQUID_UNIVERSE",
+    )
     # First flow poll on startup looks back this many minutes from `now` to
     # seed `_last_flow_poll_ts` (was a hardcoded 15-minute literal).
     initial_flow_lookback_minutes: int = Field(

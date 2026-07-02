@@ -53,7 +53,9 @@ async def test_ensure_active_solvers_ready_seeds_paper_and_sets_baseline(
     status = await ensure_active_solvers_ready(stage="paper")
 
     assert status.seeded is True
-    assert status.active_solver_count == len(SEED_SOLVERS)
+    # Retired solvers (absorbed rules) are seeded inactive.
+    active_seeds = [s for s in SEED_SOLVERS if s["is_active"]]
+    assert status.active_solver_count == len(active_seeds)
     assert status.baseline_solver_id == DEFAULT_BASELINE_SOLVER_ID
     assert system_settings.baseline_solver_id == DEFAULT_BASELINE_SOLVER_ID
 

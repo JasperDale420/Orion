@@ -192,8 +192,9 @@ def _make_events(run_tag: str, now: datetime, ticker: str):
         ingest={},
     )
 
-    # Crafted to trigger BullishSweepRule:
-    #   put_call=C, sweep=True, aggressor=ASK, premium>=10k, DTE in [7,30]
+    # Crafted to trigger SwingBucketRule (rule_swing_v2):
+    #   put_call=C, sweep=True, aggressor=ASK, premium>=100k, DTE in [4,14].
+    #   The allowlist/entry-window checks are bypassed in the test stage.
     expiry = now.date() + timedelta(days=10)
     flow_event = BronzeEvent(
         event_id=f"{run_tag}_flow_1",
@@ -222,7 +223,7 @@ def _make_events(run_tag: str, now: datetime, ticker: str):
             "trade_type": "SWEEP",
             "open_interest": 5000,
             "volume": 800,
-            "premium": 50000.0,
+            "premium": 150000.0,
             "multi_leg": False,
             "id": f"{run_tag}_flow_1",
         },

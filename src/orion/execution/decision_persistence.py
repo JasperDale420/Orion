@@ -194,14 +194,21 @@ async def save_decision(decision: StrategyDecision, candidate: CandidateTrade) -
         logger.error(f"Failed to persist signals_live/trade journal: {e}")
 
 
-async def update_decision_status(decision_id: str, status: str, reason: str | None = None) -> None:
+async def update_decision_status(
+    decision_id: str,
+    status: str,
+    reason: str | None = None,
+    decision_trace_json: dict[str, Any] | None = None,
+) -> None:
     """Persist the decision's terminal status — and the reason it got there.
 
     The decision row is saved BEFORE execution runs, so any failure reason the
     execution engine sets in memory ("Option Price Fetch Failed", "Size 0
     Contracts", "Illiquid: ...") was lost unless re-persisted here — on
     2026-07-01, 200 of 245 EXECUTE decisions died inside order construction
-    with no queryable trace.
+    with no queryable trace. The trace is re-persisted for the same reason:
+    the engine appends the decision-time quote (entry_quote) that realized-
+    slippage measurement and counterfactual labeling need.
     """
 
     async def update_status(session: Any) -> None:
@@ -212,6 +219,8 @@ async def update_decision_status(decision_id: str, status: str, reason: str | No
             record.executed_successfully = status
             if reason:
                 record.reason = reason
+            if decision_trace_json:
+                record.decision_trace_json = decision_trace_json
 
     await db_write(update_status)
 

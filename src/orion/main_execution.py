@@ -221,10 +221,16 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
                         logger.error(f"Execution Exception: {exe}")
                         exec_status = DecisionStatus.FALSE
 
-                # 6. Update Decision Status (re-persist the reason too — the
-                # execution engine mutates decision.reason in memory on
-                # order-construction failures, after save_decision already ran)
-                await update_decision_status(decision.decision_id, exec_status, reason=decision.reason)
+                # 6. Update Decision Status (re-persist the reason and trace
+                # too — the execution engine mutates decision.reason on
+                # order-construction failures and appends entry_quote to the
+                # trace, both after save_decision already ran)
+                await update_decision_status(
+                    decision.decision_id,
+                    exec_status,
+                    reason=decision.reason,
+                    decision_trace_json=decision.decision_trace_json,
+                )
                 await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
 
             # Liveness: full candidate-processing cycle completed (adversarial-

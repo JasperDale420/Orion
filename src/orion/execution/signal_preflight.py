@@ -61,12 +61,22 @@ async def preflight_live_signal(
     cand_ts = _ensure_utc(candidate.timestamp_utc)
     assert now is not None and cand_ts is not None  # both inputs are non-None here
 
+    # Per-bucket age budget: a 2-minute-old 0DTE momentum signal is dead,
+    # while a multi-day swing thesis survives a 15-minute-old print. Falls
+    # back to the flat max_data_lag_seconds when the bucket is unknown.
+    lag_budget = float(system_settings.max_data_lag_seconds)
+    if candidate.expiration_date is not None:
+        from orion.execution.exit_fallback_rules import bucket_for_dte
+
+        dte = (candidate.expiration_date.date() - now.date()).days
+        lag_budget = float(system_settings.bucket_signal_age_budgets.get(bucket_for_dte(dte), lag_budget))
+
     lag_seconds = (now - cand_ts).total_seconds()
-    if lag_seconds > float(system_settings.max_data_lag_seconds):
+    if lag_seconds > lag_budget:
         return PreflightResult(
             ok=False,
             reason="Data Lag",
-            extra={"lag_seconds": lag_seconds, "max_data_lag_seconds": float(system_settings.max_data_lag_seconds)},
+            extra={"lag_seconds": lag_seconds, "max_data_lag_seconds": lag_budget},
         )
 
     cb = CircuitBreaker()
