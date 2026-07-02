@@ -672,7 +672,10 @@ class PositionMonitor:
         (see FOLLOWUPS.md #0).
         """
         from orion.config import system_settings
-        from orion.execution.exit_fallback_rules import evaluate_fallback_rules
+        from orion.execution.exit_fallback_rules import (
+            evaluate_fallback_rules,
+            resolve_exit_params,
+        )
 
         exit_signals: list[tuple[TrackedPosition, ExitPrediction]] = []
 
@@ -685,9 +688,7 @@ class PositionMonitor:
             try:
                 fallback = evaluate_fallback_rules(
                     pos,
-                    profit_target_pct=system_settings.exit_fallback_profit_target_pct,
-                    min_dte=system_settings.exit_fallback_min_dte,
-                    max_drawdown_pct=system_settings.exit_fallback_max_drawdown_from_peak_pct,
+                    params=resolve_exit_params(pos.bucket, system_settings.exit_bucket_overrides),
                 )
             except Exception as exc:
                 logger.error(
@@ -1167,7 +1168,12 @@ async def run_position_monitor_loop(
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)
 
-        await asyncio.sleep(check_interval_seconds)
+        # 0DTE positions decay fast enough that a 60s cadence gives away
+        # real money between checks — tighten to 30s while any are open.
+        interval = check_interval_seconds
+        if any(p.bucket == "0DTE" for p in monitor.tracked_positions.values()):
+            interval = min(check_interval_seconds, 30)
+        await asyncio.sleep(interval)
 
 
 # Singleton

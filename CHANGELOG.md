@@ -6,8 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Stop-loss, time stops, and a disaster valve — positions can finally exit at a loss**: the deterministic exit rules had no plain stop-loss and no time stop, so a position that simply went down was never exited (the profit target needed +100%, the DTE rule fired only at T-1, and the drawdown rule armed only after the position had been profitable) — the root cause of 38 open positions bleeding to zero with **zero closed round-trips ever**. Exit thresholds are now per-bucket (`0DTE` / `SHORT_SWING` / `SWING` / `POSITION`, defaults in `execution/exit_fallback_rules.py:DEFAULT_BUCKET_PARAMS`, overridable via `ORION_EXIT_BUCKET_OVERRIDES` JSON): profit targets +40–75%, stop-losses −30–45%, max-hold time stops, a 0DTE no-progress exit (90 min stuck near breakeven) and 15:45 ET hard flatten, a trailing drawdown stop that arms once the trade has actually worked, and an unconditional −60% disaster valve. These barriers double as the triple-barrier label definition, so every closed trade labels itself for the measurement loop. The position monitor tightens its check cadence to 30s while any 0DTE position is open. (Replaces the three global `ORION_EXIT_FALLBACK_*` env vars.)
+- **Expired-worthless positions are now realized in the trade journal**: an option that expires produces no closing fill, so the fill-driven P&L path never ran and the journal row stayed open forever — one reason realized P&L was empty everywhere. A sweep (`realize_expired_journal_rows`) now books entries whose option expired more than a day ago at a full loss of the entry premium, tagged `expired_worthless`.
+
 ### Changed
 
+- **The degraded ML exit classifiers no longer shadow the sane heuristic exits**: the per-bucket `*_exit.pkl` models (observed returning a constant 0.17 confidence since 2026-05-19, trained nightly from frozen months-old labels) were archived to `models/archive/degraded-exit-classifiers-260701/`, so `BucketExitClassifier.predict` falls through to its per-bucket heuristic thresholds. The `pattern-miner` container that retrained them nightly was stopped (it is dead machinery slated for removal — its models never gated a live decision).
 - **LLM agent model bumped to `glm-5.2`**: the EOD review and meta-search solver-mutation agents now default to `glm-5.2` (was `glm-5.1`), the newer GLM Coding Plan model advertised by the AI-Gateway. Off the trading hot path — affects only the after-hours LLM agent calls.
 
 ### Fixed
