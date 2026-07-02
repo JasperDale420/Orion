@@ -18,8 +18,10 @@ from orion.execution.attribution import (
     mint_orion_order_id,
     orion_order_id_sql_pattern,
 )
+from orion.execution.exit_fallback_rules import bucket_for_dte
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import (
+    count_open_journal_positions,
     has_processed_fill_for_order,
     persist_exit_decision,
     persist_exit_order_rejection,
@@ -36,6 +38,39 @@ from orion.storage.db import async_session_factory
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 logger = setup_struct_logger(__name__)
+
+# Index ETFs get one extra per-underlying position slot (deep, liquid chains).
+_INDEX_UNDERLYINGS = frozenset({"SPY", "QQQ", "IWM"})
+
+# Skip single-name entries whose holding window straddles an earnings print
+# (long options through earnings = systematic IV-crush bleed). Windows track
+# each bucket's max-hold horizon; 0DTE closes same-day so it's exempt.
+_EARNINGS_EXCLUSION_DAYS = {"SHORT_SWING": 3, "SWING": 8, "POSITION": 8}
+
+# Daily per-ticker cache for the Gateway earnings lookup: only execute-stage
+# candidates hit it (tens/day), and earnings dates don't move intraday.
+_earnings_cache: dict[tuple[str, str], int | None] = {}
+
+
+async def _days_to_earnings_cached(ticker: str) -> int | None:
+    """Days until the ticker's next earnings (None = unknown / none upcoming)."""
+    key = (ticker, datetime.now(UTC).date().isoformat())
+    if key in _earnings_cache:
+        return _earnings_cache[key]
+    days: int | None = None
+    try:
+        from orion.jobs.sync_earnings import get_earnings_for_ticker
+
+        info = await get_earnings_for_ticker(ticker, datetime.now(UTC).date())
+        raw = info.get("days_to_earnings")
+        days = int(raw) if raw is not None else None
+    except Exception as exc:
+        logger.debug(f"Earnings lookup failed for {ticker}: {exc}")
+    if len(_earnings_cache) > 4096:  # ponytail: crude daily-turnover bound
+        _earnings_cache.clear()
+    _earnings_cache[key] = days
+    return days
+
 
 # `ORDER_ID_PREFIX` is re-exported from orion.execution.attribution so
 # existing imports (`from orion.execution.execution_engine import ORDER_ID_PREFIX`)
@@ -924,16 +959,49 @@ class ExecutionEngine:
         if not await self._pre_flight_checks(decision, candidate):
             return
 
-        dte: int | None = None
-        if candidate.expiration_date:
-            now = datetime.now(UTC)
-            dte = (candidate.expiration_date - now).days
-            if dte < risk_settings.min_dte:
-                logger.warning(
-                    "options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker
+        if not candidate.expiration_date:
+            # Without an expiry the DTE gate, bucket caps, and the position
+            # monitor's bucket exits (0DTE hard flatten) can't classify the
+            # position — fail closed rather than trade an unclassifiable leg.
+            logger.error(
+                "options_blocked_no_expiration_date",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Missing Expiration Date"
+            return
+
+        # Calendar-day DTE: expiration_date is stored as midnight UTC, so
+        # timestamp subtraction yields -1 for a genuine same-day 0DTE all
+        # session long (blocking 0DTE even with min_dte=0) and truncates
+        # 1-DTE to 0. Date arithmetic is exact: 0 = expires today,
+        # negative = already expired (always blocked).
+        dte: int = (candidate.expiration_date.date() - datetime.now(UTC).date()).days
+        if dte < risk_settings.min_dte:
+            logger.warning("options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker)
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = f"DTE Too Low ({dte} days)"
+            return
+
+        bucket = bucket_for_dte(dte)
+
+        # Earnings exclusion: long options through an earnings print is a
+        # systematic IV-crush bleed for multi-day holds on single names.
+        # Index ETFs and 0DTE (closed same day) are exempt. Fail-open on a
+        # Gateway error — this is an edge optimization, not a safety guard.
+        earnings_window = _EARNINGS_EXCLUSION_DAYS.get(bucket, 0)
+        if earnings_window and candidate.ticker not in _INDEX_UNDERLYINGS:
+            days_to_earnings = await _days_to_earnings_cached(candidate.ticker)
+            if days_to_earnings is not None and 0 <= days_to_earnings <= earnings_window:
+                logger.info(
+                    "options_blocked_earnings_window",
+                    ticker=candidate.ticker,
+                    days_to_earnings=days_to_earnings,
+                    bucket=bucket,
                 )
-                decision.executed_successfully = DecisionStatus.FALSE
-                decision.reason = f"DTE Too Low ({dte} days)"
+                decision.executed_successfully = DecisionStatus.SKIPPED
+                decision.reason = f"Earnings in {days_to_earnings}d (window {earnings_window}d)"
                 return
 
         # Always fetch live option chain for current pricing — candidate.premium
@@ -941,6 +1009,7 @@ class ExecutionEngine:
         # accurate order sizing, risk checks, and limit price.
         option_price = None
         contract_greeks: dict[str, float] | None = None
+        bid_f = ask_f = 0.0
         client = self._get_gateway_client()
         chain_result = await client.get_option_chain(candidate.ticker)
 
@@ -961,19 +1030,51 @@ class ExecutionEngine:
                         bid_f = ask_f = 0.0
                     if bid_f > 0 and ask_f > 0:
                         option_price = (bid_f + ask_f) / 2
-                    elif ask_f > 0:
-                        option_price = ask_f
-                    elif bid_f > 0:
-                        option_price = bid_f
-                    else:
-                        last = contract.get("last")
-                        try:
-                            last_f = float(last) if last not in (None, "") else 0.0
-                        except (TypeError, ValueError):
-                            last_f = 0.0
-                        if last_f > 0:
-                            option_price = last_f
                     break
+
+        # Liquidity gate: an entry we can't later exit near its mark is a
+        # guaranteed loser. Requires a live two-sided quote, a mid above the
+        # dust floor, and a spread narrow enough that round-trip cost doesn't
+        # eat the profit target. Fail closed — the old fallback pricing
+        # (ask-only / bid-only / last / strike) put orders on zero-bid dust
+        # that then stranded until expiry.
+        if option_price is not None:
+            mid = option_price
+            spread_pct = (ask_f - bid_f) / mid if mid > 0 else float("inf")
+            spread_cap = risk_settings.option_bucket_spread_caps.get(bucket, risk_settings.max_option_spread_pct)
+            reject_reason = None
+            if risk_settings.min_option_mid > 0 and mid < risk_settings.min_option_mid:
+                reject_reason = f"Illiquid: mid {mid:.2f} < min {risk_settings.min_option_mid:.2f}"
+            elif spread_cap > 0 and spread_pct > spread_cap:
+                reject_reason = f"Illiquid: spread {spread_pct:.0%} > max {spread_cap:.0%}"
+            if reject_reason:
+                logger.warning(
+                    "options_blocked_illiquid",
+                    option_symbol=candidate.option_symbol,
+                    ticker=candidate.ticker,
+                    bid=bid_f,
+                    ask=ask_f,
+                    reason=reject_reason,
+                )
+                decision.executed_successfully = DecisionStatus.SKIPPED
+                decision.reason = reject_reason
+                return
+        elif (bid_f > 0) != (ask_f > 0):
+            # One-sided quote: no bid means nothing to sell into later; no ask
+            # means the "quote" isn't a market. Reject explicitly (a generic
+            # price-fetch error would hide the liquidity cause).
+            reject_reason = "Illiquid: zero bid" if bid_f <= 0 else "Illiquid: zero ask"
+            logger.warning(
+                "options_blocked_illiquid",
+                option_symbol=candidate.option_symbol,
+                ticker=candidate.ticker,
+                bid=bid_f,
+                ask=ask_f,
+                reason=reject_reason,
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = reject_reason
+            return
 
         # NOTE: `candidate.premium` is the UW-flow event's aggregate premium
         # (sum of all contracts in the sweep) — NOT a per-contract price. Using
@@ -984,6 +1085,28 @@ class ExecutionEngine:
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Option Price Fetch Failed"
             return
+
+        # Capture the decision-time quote for the measurement loop: realized
+        # slippage and counterfactual labels both need the entry-time market.
+        decision.decision_trace_json = decision.decision_trace_json or {}
+        decision.decision_trace_json["entry_quote"] = {
+            "bid": bid_f,
+            "ask": ask_f,
+            "mid": option_price,
+            "spread_pct": round((ask_f - bid_f) / option_price, 4) if option_price > 0 else None,
+            "ts_utc": datetime.now(UTC).isoformat(),
+        }
+
+        # Pay-up pricing: a limit resting AT mid fills ~36% of the time and
+        # ages into the stale-cancel sweep. Cross a fraction of the half-
+        # spread toward the ask. 0DTE pays more (momentum decays faster than
+        # the queue). No ask clamp: a BUY limit at/above ask is marketable
+        # and fills at the ask or better (same convention as the close
+        # path's marketable limits), whereas clamping to a real-market ask
+        # that sits off Alpaca's coarser tick grid (e.g. 0.64 on the 0.05
+        # grid) gets the order 422-rejected at the broker.
+        payup_frac = 0.40 if bucket == "0DTE" else 0.25
+        option_price = option_price + payup_frac * (ask_f - option_price)
 
         # Snap the price to Alpaca's options tick increment. Prior to this,
         # mid-quotes like (bid 0.60 + ask 0.61) / 2 = 0.605 and float-
@@ -1001,20 +1124,65 @@ class ExecutionEngine:
             decision.reason = "Option Price Rounded To Zero"
             return
 
-        # Solver-driven sizing: use risk_per_trade_bps × regime_size_multiplier
-        # when available, with max_option_premium_pct as safety ceiling.
+        # Record the actual limit alongside the raw quote so the measurement
+        # loop can separate market spread from our own pay-up.
+        decision.decision_trace_json["entry_quote"]["limit_price"] = option_price
+        decision.decision_trace_json["entry_quote"]["payup_frac"] = payup_frac
+
+        # Per-bucket / per-underlying entry caps: keep every bucket building a
+        # sample instead of the highest-volume rule hogging all the slots.
+        # ponytail: N candidates in one batch can all pass before any fills
+        # land; the risk manager's pending-aware global cap bounds the burst.
+        bucket_cap = risk_settings.option_bucket_caps.get(bucket, 0)
+        counts = await count_open_journal_positions()
+        if counts is None:
+            # Fail closed: unknown counts must not read as "no positions".
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = "Position-cap check unavailable"
+            return
+        open_by_bucket, open_by_ticker = counts
+        underlying_cap = (
+            risk_settings.max_positions_per_underlying
+            if candidate.ticker not in _INDEX_UNDERLYINGS
+            else risk_settings.max_positions_per_index_underlying
+        )
+        cap_reason = None
+        if bucket_cap > 0 and open_by_bucket.get(bucket, 0) >= bucket_cap:
+            cap_reason = f"Bucket cap reached: {bucket} {open_by_bucket.get(bucket, 0)}/{bucket_cap}"
+        elif underlying_cap > 0 and open_by_ticker.get(candidate.ticker, 0) >= underlying_cap:
+            cap_reason = (
+                f"Underlying cap reached: {candidate.ticker} {open_by_ticker.get(candidate.ticker, 0)}/{underlying_cap}"
+            )
+        if cap_reason:
+            logger.info(
+                "options_blocked_position_cap",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                reason=cap_reason,
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = cap_reason
+            return
+
+        # Sizing: fixed premium debit per trade (uniform trade weights for the
+        # measurement loop) with solver risk_per_trade_bps as the fallback and
+        # max_option_premium_pct as the safety ceiling either way.
         ep = decision.execution_params or {}
         risk_bps = float(ep.get("risk_per_trade_bps", 0))
         regime_mult = float(ep.get("regime_size_multiplier", 1.0))
         max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
 
-        if risk_bps > 0:
+        if risk_settings.fixed_premium_per_trade > 0:
+            risk_dollars = min(risk_settings.fixed_premium_per_trade, max_premium)
+        elif risk_bps > 0:
             risk_dollars = (self.risk_manager.current_equity * risk_bps / 10000.0) * regime_mult
             risk_dollars = min(risk_dollars, max_premium)
         else:
             risk_dollars = max_premium
 
         num_contracts = max(0, int(risk_dollars / (option_price * 100)))
+        if risk_settings.max_contracts_per_trade > 0:
+            num_contracts = min(num_contracts, risk_settings.max_contracts_per_trade)
 
         if num_contracts <= 0:
             logger.warning(
@@ -2680,12 +2848,15 @@ class ExecutionEngine:
     # over a long-running process — a periodic ground-truth resync corrects it.
     _POSITION_SYNC_MIN_INTERVAL_SECONDS: float = 120.0
 
-    # An Orion entry is a mid-priced DAY limit. One that has filled NOTHING this
-    # long after submission is working an increasingly stale signal and only
-    # reserves shared day-trading buying power until it EXPIRES at the close
-    # (2026-06-09: EWY/XHB entries sat unfilled all session, then expired).
-    # poll_fills cancels it once past this TTL.
-    _STALE_ENTRY_ORDER_TTL_SECONDS: float = 180.0
+    # An Orion entry is a pay-up-priced DAY limit. One that has filled NOTHING
+    # this long after submission is working an increasingly stale signal and
+    # only reserves shared day-trading buying power until it EXPIRES at the
+    # close (2026-06-09: EWY/XHB entries sat unfilled all session, then
+    # expired). poll_fills cancels it once past this TTL. 90s: with pay-up
+    # pricing an entry that hasn't filled in 90s isn't going to; the momentum
+    # thesis has a shorter half-life than the queue.
+    # ponytail: single TTL for all buckets; per-bucket (45s 0DTE) if data shows drift.
+    _STALE_ENTRY_ORDER_TTL_SECONDS: float = 90.0
 
     # Stale-entry-cancel storm controls. A rejected cancel used to be re-issued
     # every _ORDER_POLL_MIN_INTERVAL_SECONDS (5s) forever — 68k+ self-inflicted
@@ -2760,7 +2931,10 @@ class ExecutionEngine:
             or (now2 - self._last_order_poll_ts).total_seconds() >= self._ORDER_POLL_MIN_INTERVAL_SECONDS
         ):
             try:
-                orders = await client.get_orders(status="all", limit=200)
+                # 500-row window: at 200, Orion's fills aged out behind sibling
+                # systems' order volume on the shared account (recurring
+                # missed-fill incident class; matches the cancel sweep's window).
+                orders = await client.get_orders(status="all", limit=500)
             except Exception as e:
                 logger.warning(
                     "Order poll via Gateway failed",

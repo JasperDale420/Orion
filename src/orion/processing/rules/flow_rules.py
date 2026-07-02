@@ -1,6 +1,45 @@
+"""Bucket entry rules — one rule per horizon bucket, 2026-07 overhaul.
+
+The previous five rules were narrow pattern filters with exact premium bands
+(e.g. 0DTE required $100–150k), one-direction-only restrictions, and
+hour-of-day bonuses citing win rates that were never persisted anywhere. They
+produced candidates with fictional confidences and starved two of the three
+buckets of samples.
+
+v2 collapses them into three bucket rules with a shared core:
+
+- buyer-initiated conviction only: sweep + ASK/ABOVE_ASK aggressor
+- trade WITH the flow, both sides: call sweep → buy calls, put sweep → buy puts
+- premium FLOORS, no ceilings (bands were point-estimates from unrecorded
+  backtests; premium is logged as a feature for the measurement loop instead)
+- liquid-underlying allowlist (cheapest possible option-liquidity proxy)
+- contract-volume floor and a delta band (0.25–0.60) when the fields are
+  present — missing fields pass through and are flagged in evidence
+- per-bucket signal-age budgets (a 2-minute-old 0DTE signal is dead; a
+  15-minute-old multi-day swing thesis is fine)
+- ET entry windows (no first-5-minutes chaos; 0DTE stops entering at 15:00)
+
+Confidence is a flat 1.0: the rules ARE the gate; ranking comes later from
+per-bucket models trained on realized outcomes, not hardcoded numbers.
+"""
+
+import math
+from datetime import UTC, datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
 from orion.processing.rules.base import TradingRule
 from orion.storage.models_gold import CandidateTrade, TradeDirection
 from orion.storage.models_silver import SilverSignal
+
+_ET = ZoneInfo("America/New_York")
+
+# 0DTE trades only deep, liquid index-ETF chains; single-name 0DTE is a
+# spread lottery.
+ZERO_DTE_UNDERLYINGS = frozenset({"SPY", "QQQ", "IWM"})
+
+_AGGRESSOR_BUY = ("ASK", "ABOVE_ASK")
+_DELTA_BAND = (0.25, 0.60)  # excludes deep-OTM lottery contracts when delta is known
 
 
 def _normalize_put_call_token(value: object) -> str | None:
@@ -42,85 +81,171 @@ def _coerce_boolish(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-class BullishSweepRule(TradingRule):
-    """
-    PRD 9.1 Step 1: Bullish Sweep + Confirming Dark
-    - large call sweep (premium >= X)
-    - aggressor=ASK (or price >= mid)
-    - DTE 7-30d
-    - delta in [0.3, 0.6] (if available)
-    - concurrent dark pool prints (simplified for v1: just check flow)
-    """
+def _coerce_float(value: Any) -> float | None:
+    """Best-effort float coercion; non-finite values (nan/inf) count as
+    missing — 'inf' premium sails past any floor and 'nan' fails every
+    comparison silently."""
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
-    def __init__(self, min_premium: float = 10000.0):
-        super().__init__(rule_id="rule_bullish_sweep_v1")
+
+def _signal_age_seconds(signal: SilverSignal, now: datetime) -> float | None:
+    """Age of the underlying flow print. Prefers the flow's own timestamp
+    (features.flow_ts_utc) over the silver row's — batch ingestion can stamp
+    the row minutes after the print."""
+    feat = signal.features or {}
+    ts_raw = feat.get("flow_ts_utc")
+    ts: datetime | None = None
+    if isinstance(ts_raw, str):
+        try:
+            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        except ValueError:
+            ts = None
+    elif isinstance(ts_raw, datetime):
+        ts = ts_raw
+    if ts is None:
+        ts = signal.signal_ts_utc
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (now - ts).total_seconds()
+
+
+class BucketFlowRule(TradingRule):
+    """Shared bucket-entry core; subclasses only set the bucket envelope."""
+
+    def __init__(
+        self,
+        rule_id: str,
+        *,
+        dte_min: int,
+        dte_max: int,
+        min_premium: float,
+        max_signal_age_seconds: float,
+        entry_window_et: tuple[tuple[int, int], tuple[int, int]],
+        min_contract_volume: float,
+        allowlist: frozenset[str] | None,
+        enforce_universe_and_window: bool = True,
+    ):
+        super().__init__(rule_id=rule_id)
+        self.dte_min = dte_min
+        self.dte_max = dte_max
         self.min_premium = min_premium
+        self.max_signal_age_seconds = max_signal_age_seconds
+        self.entry_window_et = entry_window_et
+        self.min_contract_volume = min_contract_volume
+        # None → resolve the configured liquid universe lazily (env-overridable).
+        self._allowlist = allowlist
+        # The smoke e2e injects synthetic tickers at arbitrary wall-clock
+        # times; RuleEngine disables these two live-market checks in the
+        # test stage only. Signal quality checks are never bypassed.
+        self.enforce_universe_and_window = enforce_universe_and_window
+
+    @property
+    def allowlist(self) -> frozenset[str]:
+        if self._allowlist is not None:
+            return self._allowlist
+        from orion.config import system_settings
+
+        return frozenset(t.upper() for t in system_settings.liquid_universe)
 
     def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
         if signal.signal_type != "UW_FLOW":
             return None
-
-        # Logic: Check if signal is a Flow event with specific characteristics
-        # Signal 'features' dict holds normalized fields from Silver
-
         feat = signal.features
         if not feat:
             return None
 
-        # 1. Filter for UW Flows only (v1 simplification)
-        # Assuming our Feature Engine passes raw flow params in 'features' for now
-        # or we look at specific columns if it's a vector.
-        # For this slice, we assume 'features' contains the raw-ish columns
-        # or we'd need to fetch the underlying event.
-        # Let's assume FeatureEngine passes 'meta' or fields directly.
-
-        # Check basic criteria
-        # "sweep" flag usually passed
-        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
-        if not is_sweep:
+        if self.enforce_universe_and_window and (signal.ticker or "").upper() not in self.allowlist:
             return None
 
-        # Call vs Put
+        if not _coerce_boolish(feat.get("is_sweep", False)):
+            return None
+
+        aggressor = feat.get("aggressor_ind") or feat.get("aggressor") or ""
+        if aggressor not in _AGGRESSOR_BUY:
+            return None
+
+        # Both directions, with the flow: we always BUY the option the sweep
+        # bought. LONG = long premium; the contract type carries the view.
         put_call = _normalize_put_call_token(feat.get("put_call"))
-        if put_call != "CALL":
+        if put_call not in ("CALL", "PUT"):
             return None
 
-        # Premium Size
-        premium = feat.get("premium", 0)
+        # dte can arrive as int, float, or string ("5"/"5.0") depending on
+        # the upstream serializer — int("5.0") raises, so coerce via float.
+        dte_f = _coerce_float(feat.get("dte"))
+        if dte_f is None:
+            return None
+        dte = int(dte_f)
+        if not (self.dte_min <= dte <= self.dte_max):
+            return None
+
+        premium = _coerce_float(feat.get("premium")) or 0.0
         if premium < self.min_premium:
             return None
 
-        # Aggressor
-        aggressor = feat.get("aggressor_ind") or feat.get("aggressor") or ""
-        if aggressor not in ["ASK", "ABOVE_ASK"]:
-            # relaxed check: or price >= mid logic if available
+        # Delta band when known; missing delta passes (flagged in evidence).
+        delta = _coerce_float(feat.get("delta"))
+        if delta is not None and not (_DELTA_BAND[0] <= abs(delta) <= _DELTA_BAND[1]):
             return None
 
-        # DTE
-        dte = feat.get("dte", 0)
-        if not (7 <= dte <= 30):
+        # Contract-volume floor when known; missing passes (flagged).
+        # Presence-checked, not truthiness: volume 0 is a KNOWN illiquid
+        # contract and must fail the floor, not fall through as "missing".
+        vol_raw = feat.get("volume_contract")
+        if vol_raw is None:
+            vol_raw = feat.get("volume")
+        volume = _coerce_float(vol_raw)
+        if volume is not None and volume < self.min_contract_volume:
             return None
 
-        # Delta (optional)
-        delta = feat.get("delta")
-        if delta is not None:
-            if not (0.3 <= abs(delta) <= 0.6):
+        now = datetime.now(UTC)
+        age_seconds = _signal_age_seconds(signal, now)
+        if age_seconds is not None and age_seconds > self.max_signal_age_seconds:
+            return None
+        # A meaningfully-future timestamp is data corruption (clock skew,
+        # replayed synthetic rows) — reject it, don't treat it as fresh.
+        # Live-market check: the test-stage smoke run injects future rows.
+        if self.enforce_universe_and_window and age_seconds is not None and age_seconds < -30:
+            return None
+
+        # ET entry window on the flow print's wall-clock time. A signal
+        # without a timestamp can't prove it's inside the window — reject.
+        ts = signal.signal_ts_utc
+        if self.enforce_universe_and_window:
+            if ts is None:
+                return None
+            ts_et = (ts if ts.tzinfo else ts.replace(tzinfo=UTC)).astimezone(_ET)
+            start, end = self.entry_window_et
+            if not (start <= (ts_et.hour, ts_et.minute) < end):
                 return None
 
         candidate = self._create_candidate(
             signal=signal,
             direction=TradeDirection.LONG.value,
-            confidence=0.7,
+            confidence=1.0,
             evidence_extras={
                 "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
                 "source_event_id": feat.get("source_event_id"),
                 "premium": premium,
                 "premium_usd": premium,
-                "dte": dte,
+                "dte": int(dte),
                 "is_sweep": True,
                 "aggressor": aggressor,
-                "put_call": "C",
-                "reason": "Bullish Sweep confirmed",
+                "put_call": "C" if put_call == "CALL" else "P",
+                "delta": delta,
+                "delta_missing": delta is None,
+                "volume_contract": volume,
+                "volume_missing": volume is None,
+                "signal_age_seconds": age_seconds,
+                "reason": f"{self.rule_id}: {put_call} sweep ${premium / 1000:.0f}K DTE={int(dte)}",
             },
         )
         candidate.source = "UW"
@@ -128,348 +253,54 @@ class BullishSweepRule(TradingRule):
         return candidate
 
 
-class BearishPutPressureRule(TradingRule):
-    """
-    PRD 9.1: Bearish Put Pressure
-    - put premium burst
-    - aggressor=ASK on puts
-    - short DTE (e.g. < 14d)
-    """
+class ZeroDTEBucketRule(BucketFlowRule):
+    """0DTE index sweeps: SPY/QQQ/IWM only, fresh signals, no late entries."""
 
-    def __init__(self, min_premium: float = 10000.0):
-        super().__init__(rule_id="rule_bearish_put_pressure_v1")
-        self.min_premium = min_premium
-
-    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
-        if signal.signal_type != "UW_FLOW":
-            return None
-
-        feat = signal.features
-        if not feat:
-            return None
-
-        # Call vs Put
-        put_call = _normalize_put_call_token(feat.get("put_call"))
-        if put_call != "PUT":
-            return None
-
-        # Premium
-        premium = feat.get("premium", 0)
-        if premium < self.min_premium:
-            return None
-
-        # Aggressor (buying puts = bearish)
-        aggressor = feat.get("aggressor_ind") or feat.get("aggressor") or ""
-        if aggressor not in ["ASK", "ABOVE_ASK"]:
-            return None
-
-        # DTE: Short term
-        dte = feat.get("dte", 999)
-        if dte > 14:
-            return None
-
-        candidate = self._create_candidate(
-            signal=signal,
-            direction=TradeDirection.SHORT.value,
-            confidence=0.65,
-            evidence_extras={
-                "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
-                "source_event_id": feat.get("source_event_id"),
-                "premium": premium,
-                "premium_usd": premium,
-                "dte": dte,
-                "is_sweep": feat.get("is_sweep", False),
-                "aggressor": aggressor,
-                "put_call": "P",
-            },
+    def __init__(self, min_premium: float = 50_000.0, enforce_universe_and_window: bool = True):
+        super().__init__(
+            "rule_0dte_sweep_v2",
+            dte_min=0,
+            dte_max=0,
+            min_premium=min_premium,
+            max_signal_age_seconds=120,
+            entry_window_et=((9, 35), (15, 0)),  # existing wind-down also blocks the last hour
+            min_contract_volume=500,
+            allowlist=ZERO_DTE_UNDERLYINGS,
+            enforce_universe_and_window=enforce_universe_and_window,
         )
-        candidate.source = "UW"
-        candidate.execution_params = {"limit_price": _resolve_limit_price(feat)}
-        return candidate
 
 
-class ZeroDTESweepRule(TradingRule):
-    """
-    0DTE Entry Signal based on price target analysis.
+class ShortSwingBucketRule(BucketFlowRule):
+    """1–3 DTE sweeps on the liquid universe."""
 
-    Optimal criteria from backtest:
-    - Time: 14:00-15:00 UTC (market open) - 80% avg max return
-    - Direction: Puts preferred (0% stop rate, +75% avg max return)
-    - Premium: $100-150K (50% hit targets, 17% stopped)
-    - Must be a sweep
-    - DTE = 0
-
-    Exit targets:
-    - Profit target: 50% (avg +80% return when hit)
-    - Stop loss: 20%
-    """
-
-    def __init__(
-        self,
-        min_premium: float = 100000.0,
-        max_premium: float = 150000.0,
-        market_open_hour_utc: int = 14,
-        prefer_puts: bool = True,
-    ):
-        super().__init__(rule_id="rule_0dte_sweep_v1")
-        self.min_premium = min_premium
-        self.max_premium = max_premium
-        self.market_open_hour_utc = market_open_hour_utc
-        self.prefer_puts = prefer_puts
-
-    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
-        if signal.signal_type != "UW_FLOW":
-            return None
-
-        feat = signal.features
-        if not feat:
-            return None
-
-        # Must be a sweep
-        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
-        if not is_sweep:
-            return None
-
-        # DTE must be 0
-        dte = feat.get("dte", 999)
-        if dte != 0:
-            return None
-
-        # Premium in sweet spot ($100-150K)
-        premium = feat.get("premium", 0)
-        if premium < self.min_premium or premium > self.max_premium:
-            return None
-
-        # Aggressor = ASK (buying)
-        aggressor = feat.get("aggressor_ind") or feat.get("aggressor") or ""
-        if aggressor not in ["ASK", "ABOVE_ASK"]:
-            return None
-
-        # Time filter: market open hour (14:00 UTC = 9:00 ET)
-        signal_hour = None
-        if signal.signal_ts_utc:
-            signal_hour = signal.signal_ts_utc.hour
-        if signal_hour is not None and signal_hour != self.market_open_hour_utc:
-            # Still allow, but lower confidence for non-optimal times
-            pass
-
-        # Direction preference
-        put_call = _normalize_put_call_token(feat.get("put_call"))
-        is_put = put_call == "PUT"
-
-        # Calculate confidence based on criteria matching
-        confidence = 0.7
-        if signal_hour == self.market_open_hour_utc:
-            confidence += 0.1  # Market open bonus
-        if is_put:
-            confidence += 0.1  # Puts have 0% stop rate historically
-
-        # Trade direction: LONG puts = bearish underlying, LONG calls = bullish
-        direction = TradeDirection.LONG.value
-
-        candidate = self._create_candidate(
-            signal=signal,
-            direction=direction,
-            confidence=confidence,
-            evidence_extras={
-                "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
-                "source_event_id": feat.get("source_event_id"),
-                "premium": premium,
-                "premium_usd": premium,
-                "dte": dte,
-                "is_sweep": True,
-                "aggressor": aggressor,
-                "put_call": put_call or feat.get("put_call"),
-                "hour_utc": signal_hour,
-                "reason": f"0DTE {put_call or feat.get('put_call', '')} sweep at market open",
-            },
+    def __init__(self, min_premium: float = 50_000.0, enforce_universe_and_window: bool = True):
+        super().__init__(
+            "rule_short_swing_v2",
+            dte_min=1,
+            dte_max=3,
+            min_premium=min_premium,
+            max_signal_age_seconds=300,
+            entry_window_et=((9, 35), (15, 30)),
+            min_contract_volume=200,
+            allowlist=None,  # configured liquid universe
+            enforce_universe_and_window=enforce_universe_and_window,
         )
-        candidate.source = "UW"
-        candidate.execution_params = {
-            "limit_price": _resolve_limit_price(feat),
-            "profit_target_pct": 50.0,  # Based on analysis: +80% avg when hit
-            "stop_loss_pct": 20.0,  # Based on analysis
-        }
-        return candidate
 
 
-class SwingEntryRule(TradingRule):
-    """
-    SWING Entry Signal (4-14 DTE) based on price target analysis.
+class SwingBucketRule(BucketFlowRule):
+    """4–14 DTE sweeps: higher conviction bar (longer-dated flow has more
+    hedging noise), generous age budget (a multi-day thesis survives a
+    15-minute-old signal)."""
 
-    Structural criteria (ticker-agnostic):
-    - Direction: Puts only (25% win rate vs 10% for calls)
-    - Premium: $50-75K (24% win rate, smaller = less crowding)
-    - Time: 14:00 or 17:00 UTC (31% win rate)
-    - DTE: 4-14 days (SWING bucket)
-    - Must be a sweep with ASK aggressor
-
-    Exit strategy: Use flow-based exits (sentiment reversal)
-    to avoid stops rather than hard profit targets.
-    """
-
-    def __init__(
-        self,
-        min_premium: float = 50000.0,
-        max_premium: float = 75000.0,
-        optimal_hours_utc: tuple = (14, 17),
-    ):
-        super().__init__(rule_id="rule_swing_entry_v1")
-        self.min_premium = min_premium
-        self.max_premium = max_premium
-        self.optimal_hours_utc = optimal_hours_utc
-
-    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
-        if signal.signal_type != "UW_FLOW":
-            return None
-
-        feat = signal.features
-        if not feat:
-            return None
-
-        # Must be a sweep
-        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
-        if not is_sweep:
-            return None
-
-        # DTE must be 4-14 (SWING bucket)
-        dte = feat.get("dte", 999)
-        if dte < 4 or dte > 14:
-            return None
-
-        # PUTS ONLY - 2.5x better win rate than calls
-        put_call = _normalize_put_call_token(feat.get("put_call"))
-        if put_call != "PUT":
-            return None
-
-        # Premium in sweet spot ($50-75K)
-        premium = feat.get("premium", 0)
-        if premium < self.min_premium or premium > self.max_premium:
-            return None
-
-        # Aggressor = ASK (buying puts)
-        aggressor = feat.get("aggressor_ind") or feat.get("aggressor") or ""
-        if aggressor not in ["ASK", "ABOVE_ASK"]:
-            return None
-
-        # Calculate confidence based on hour
-        signal_hour = signal.signal_ts_utc.hour if signal.signal_ts_utc else None
-
-        confidence = 0.65
-        if signal_hour in self.optimal_hours_utc:
-            confidence += 0.15  # Optimal hour bonus (31% win rate)
-
-        # DTE 5-6 bonus (41% win rate)
-        if 5 <= dte <= 6:
-            confidence += 0.1
-
-        candidate = self._create_candidate(
-            signal=signal,
-            direction=TradeDirection.LONG.value,
-            confidence=confidence,
-            evidence_extras={
-                "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
-                "source_event_id": feat.get("source_event_id"),
-                "premium": premium,
-                "premium_usd": premium,
-                "dte": dte,
-                "is_sweep": True,
-                "aggressor": aggressor,
-                "put_call": put_call or feat.get("put_call"),
-                "hour_utc": signal_hour,
-                "reason": f"SWING put sweep ${premium / 1000:.0f}K DTE={dte}",
-            },
+    def __init__(self, min_premium: float = 100_000.0, enforce_universe_and_window: bool = True):
+        super().__init__(
+            "rule_swing_v2",
+            dte_min=4,
+            dte_max=14,
+            min_premium=min_premium,
+            max_signal_age_seconds=900,
+            entry_window_et=((9, 30), (16, 0)),
+            min_contract_volume=200,
+            allowlist=None,  # configured liquid universe
+            enforce_universe_and_window=enforce_universe_and_window,
         )
-        candidate.source = "UW"
-        candidate.execution_params = {
-            "limit_price": _resolve_limit_price(feat),
-            "exit_strategy": "FLOW_BASED",  # Use sentiment reversal
-            "profit_target_pct": 50.0,  # Backup if flow doesn't trigger
-            "stop_loss_pct": 20.0,
-        }
-        return candidate
-
-
-class ShortSwingEntryRule(TradingRule):
-    """
-    SHORT_SWING Entry Signal (1-3 DTE) based on price target analysis.
-
-    Structural criteria (ticker-agnostic):
-    - Direction: CALLS preferred (14% win rate vs 8% for puts)
-    - Premium: $75-100K (43% win rate)
-    - Time: 14:00 UTC (market open)
-    - DTE: 1-3 days (SHORT_SWING bucket)
-    - Must be a sweep with ASK aggressor
-
-    Warning: High stop rate (58%). Use flow-based exits.
-    """
-
-    def __init__(
-        self,
-        min_premium: float = 75000.0,
-        max_premium: float = 100000.0,
-        optimal_hours_utc: tuple = (14,),
-    ):
-        super().__init__(rule_id="rule_short_swing_entry_v1")
-        self.min_premium = min_premium
-        self.max_premium = max_premium
-        self.optimal_hours_utc = optimal_hours_utc
-
-    def evaluate(self, signal: SilverSignal) -> CandidateTrade | None:
-        if signal.signal_type != "UW_FLOW":
-            return None
-
-        feat = signal.features
-        if not feat:
-            return None
-
-        is_sweep = _coerce_boolish(feat.get("is_sweep", False))
-        if not is_sweep:
-            return None
-
-        dte = feat.get("dte", 999)
-        if dte < 1 or dte > 3:
-            return None
-
-        put_call = _normalize_put_call_token(feat.get("put_call"))
-        if put_call != "CALL":
-            return None
-
-        premium = feat.get("premium", 0)
-        if premium < self.min_premium or premium > self.max_premium:
-            return None
-
-        aggressor = feat.get("aggressor_ind") or feat.get("aggressor") or ""
-        if aggressor not in ["ASK", "ABOVE_ASK"]:
-            return None
-
-        signal_hour = signal.signal_ts_utc.hour if signal.signal_ts_utc else None
-        confidence = 0.60
-        if signal_hour in self.optimal_hours_utc:
-            confidence += 0.1
-
-        candidate = self._create_candidate(
-            signal=signal,
-            direction=TradeDirection.LONG.value,
-            confidence=confidence,
-            evidence_extras={
-                "event_ids": [feat.get("event_id")] if feat.get("event_id") else [],
-                "source_event_id": feat.get("source_event_id"),
-                "premium": premium,
-                "premium_usd": premium,
-                "dte": dte,
-                "is_sweep": True,
-                "aggressor": aggressor,
-                "put_call": put_call or feat.get("put_call"),
-                "hour_utc": signal_hour,
-                "reason": f"SHORT_SWING call sweep ${premium / 1000:.0f}K DTE={dte}",
-            },
-        )
-        candidate.source = "UW"
-        candidate.execution_params = {
-            "limit_price": _resolve_limit_price(feat),
-            "exit_strategy": "FLOW_BASED",
-            "profit_target_pct": 50.0,
-            "stop_loss_pct": 20.0,
-        }
-        return candidate
