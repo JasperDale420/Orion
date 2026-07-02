@@ -273,6 +273,44 @@ async def test_options_close_stops_when_position_vanished_on_reject(monkeypatch:
 
 
 @pytest.mark.asyncio
+async def test_options_close_escalates_when_recheck_errors_transiently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A TRANSIENT position re-check error after the limit reject (500/429/auth —
+    NOT a 404) must NOT be read as 'position gone'. GatewayTradingClient renders
+    every HTTP error as {"error": ...}, so a bare error check would silently mark
+    a still-open option closed (Codex review P1). Such a recheck must fall
+    through to the native flatten, never be recorded as a completed close."""
+    _patch_persist(monkeypatch)
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    client = _make_client(
+        broker_qty="10",
+        avg_entry="1.0",
+        limit_result={
+            "error": "Client error '422'",
+            "detail": '{"code":42210000,"message":"position intent mismatch, inferred: sell_to_open"}',
+            "status_code": 422,
+        },
+        native_result={"id": "native-ok", "status": "accepted"},
+    )
+    # Present at pre-check; a TRANSIENT 500 (not a 404) at the post-reject recheck.
+    client.get_position = AsyncMock(
+        side_effect=[
+            {"qty": "10", "avg_entry_price": "1.0"},
+            {"error": "Server error '500'", "detail": "gateway down", "status_code": 500},
+        ]
+    )
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="PLTR260703C00030000", qty=10.0, exit_signal=_exit_signal(), direction="LONG", current_price=2.50
+    )
+
+    assert closed is True  # native flatten succeeded
+    # Escalated to the native flatten — NOT silently recorded as closed.
+    client.close_position.assert_called_once_with("PLTR260703C00030000", qty=10.0)
+
+
+@pytest.mark.asyncio
 async def test_options_limit_rejected_escalates_to_native(monkeypatch: pytest.MonkeyPatch) -> None:
     """When the attributed limit is rejected (e.g. a residual wash), escalate to
     the native flatten to avoid stranding the position."""
