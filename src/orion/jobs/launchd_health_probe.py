@@ -55,27 +55,19 @@ SELF_LABEL = DEFAULT_PREFIX + "launchd-health"
 # missing row means the daemon was booted out or never loaded — a silent
 # failure `classify_entry` cannot see (there is no row to classify).
 #
-# meta-search and meta-weekly qualify: their `--scheduled` modes are
-# internal poll loops that never exit (they self-fire at 18:00 ET weekdays /
-# Friday 17:30 ET respectively and otherwise sleep), so the plists run them
-# as RunAtLoad+KeepAlive daemons exactly like execution/ingestion. A missing
-# row means the always-on scheduler loop is not running and the scheduled
-# fire will silently never happen — precisely the steady-state-required case
-# this set guards. (Contrast the StartCalendarInterval one-shots below.)
-#
 # Deliberately NOT required: the probe itself (it cannot report its own
 # absence — see SELF_LABEL) and `com.empire.orion.orphan-close`. orphan-close
 # is a one-shot emergency tool whose plist explicitly instructs operators to
 # `launchctl bootout` / `rm` it after use, so its absence is the normal
 # steady state, not a fault — requiring it would fire a permanent false
-# CRITICAL every minute once it is correctly removed. Pass `required_labels=`
-# to run_probe / detect_missing_jobs to override for a different deployment.
+# CRITICAL every minute once it is correctly removed. meta-search/meta-weekly
+# were removed 2026-07 with the LLM solver-evolution machinery — requiring
+# their labels after the plists are gone would page a permanent CRITICAL.
+# Pass `required_labels=` to run_probe / detect_missing_jobs to override.
 REQUIRED_LABELS = frozenset(
     {
         DEFAULT_PREFIX + "execution",
         DEFAULT_PREFIX + "ingestion",
-        DEFAULT_PREFIX + "meta-search",
-        DEFAULT_PREFIX + "meta-weekly",
         DEFAULT_PREFIX + "position-monitor",
         DEFAULT_PREFIX + "data-quality",
     }

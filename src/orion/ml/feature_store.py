@@ -24,7 +24,7 @@ import pandas as pd
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
 from orion.ml.derived_features import compute_derived_features
-from orion.ml.pattern_miner import (
+from orion.ml.feature_config import (
     ALERT_FLOW_CONTEXT_FEATURES,
     ALERT_SECTOR_FLOW_FEATURES,
     CATEGORICAL_COLUMNS,

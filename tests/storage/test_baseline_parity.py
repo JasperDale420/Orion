@@ -83,7 +83,6 @@ def test_baseline_creates_every_metadata_table() -> None:
         models_gold,
         models_liveness,
         models_ml,
-        models_rag,
         models_risk,
         models_signals,
         models_silver,
@@ -108,8 +107,14 @@ def test_baseline_creates_every_metadata_table() -> None:
         "rule_pnl_attribution",
     }
 
+    # Models deleted from the codebase whose tables intentionally REMAIN in
+    # existing databases (data preserved, no longer managed by the ORM).
+    # vector_documents: RAG stack removed 2026-07 with the LLM solver-evolution
+    # machinery; the table holds historical embeddings and is left in place.
+    REMOVED_MODEL_TABLES = {"vector_documents"}
+
     missing_from_baseline = metadata_tables - baseline_tables - POST_BASELINE_TABLES
-    extra_in_baseline = baseline_tables - metadata_tables
+    extra_in_baseline = baseline_tables - metadata_tables - REMOVED_MODEL_TABLES
 
     assert not missing_from_baseline, (
         "Models exist that the alembic baseline does not create — regenerate the "
