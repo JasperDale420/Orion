@@ -105,6 +105,48 @@ async def test_metrics_aggregate_by_bucket_and_rule():
 
 
 @pytest.mark.asyncio
+async def test_window_keys_on_close_time_not_entry_time():
+    """A multi-day hold entered BEFORE the window but closed inside it must
+    be counted (window on realization time, not entry fill time)."""
+    await init_db()
+    entered = datetime.now(UTC) - timedelta(days=12)
+    async with async_session_factory() as session:
+        candidate_id = f"cand_{uuid.uuid4().hex[:10]}"
+        session.add(
+            CandidateTrade(
+                candidate_id=candidate_id,
+                ticker="AAPL",
+                timestamp_utc=entered,
+                rule_id="rule_swing_v2",
+                direction="LONG",
+                expiration_date=entered + timedelta(days=14),
+                evidence={},
+            )
+        )
+        session.add(
+            TradeJournalEntry(
+                decision_id=f"dec_{uuid.uuid4().hex[:10]}",
+                signal_id="sig",
+                candidate_id=candidate_id,
+                ticker="AAPL",
+                direction="LONG",
+                client_order_id=f"orion_{uuid.uuid4().hex[:8]}",
+                broker_order_id=f"broker_{uuid.uuid4().hex[:8]}",
+                filled_qty=1.0,
+                filled_avg_price=2.0,
+                filled_at_utc=entered,  # 12 days ago — outside a 7-day window
+                exit_filled_at_utc=datetime.now(UTC) - timedelta(days=1),  # closed yesterday
+                realized_pnl=42.0,
+            )
+        )
+        await session.commit()
+
+    metrics = await compute_bucket_metrics(days=7)
+    assert metrics["closed_trades"] == 1
+    assert metrics["by_bucket"]["SWING"]["total_pnl"] == pytest.approx(42.0)
+
+
+@pytest.mark.asyncio
 async def test_expired_worthless_counts_with_its_own_exit_reason():
     await init_db()
     async with async_session_factory() as session:

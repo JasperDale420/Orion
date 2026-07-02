@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from orion.execution.exit_fallback_rules import bucket_for_dte
 from orion.shared.db_utils import db_query
@@ -123,9 +123,14 @@ async def compute_bucket_metrics(days: int = 30) -> dict[str, Any]:
                 .where(
                     TradeJournalEntry.realized_pnl.is_not(None),
                     TradeJournalEntry.filled_at_utc.is_not(None),
-                    TradeJournalEntry.filled_at_utc >= cutoff,
+                    # Window on REALIZATION time (close fill / expiry sweep),
+                    # not entry time — a multi-day hold entered before the
+                    # window but closed inside it belongs to this window.
+                    # Fallback to the entry fill for legacy rows without an
+                    # exit stamp (same convention as reconcile_pnl).
+                    func.coalesce(TradeJournalEntry.exit_filled_at_utc, TradeJournalEntry.filled_at_utc) >= cutoff,
                 )
-                .order_by(TradeJournalEntry.exit_filled_at_utc.desc())
+                .order_by(func.coalesce(TradeJournalEntry.exit_filled_at_utc, TradeJournalEntry.filled_at_utc).desc())
             )
         ).all()
         exits = (
