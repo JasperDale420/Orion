@@ -899,17 +899,30 @@ class ExecutionEngine:
         if not await self._pre_flight_checks(decision, candidate):
             return
 
-        dte: int | None = None
-        if candidate.expiration_date:
-            now = datetime.now(UTC)
-            dte = (candidate.expiration_date - now).days
-            if dte < risk_settings.min_dte:
-                logger.warning(
-                    "options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker
-                )
-                decision.executed_successfully = DecisionStatus.FALSE
-                decision.reason = f"DTE Too Low ({dte} days)"
-                return
+        if not candidate.expiration_date:
+            # Without an expiry the DTE gate, bucket caps, and the position
+            # monitor's bucket exits (0DTE hard flatten) can't classify the
+            # position — fail closed rather than trade an unclassifiable leg.
+            logger.error(
+                "options_blocked_no_expiration_date",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Missing Expiration Date"
+            return
+
+        # Calendar-day DTE: expiration_date is stored as midnight UTC, so
+        # timestamp subtraction yields -1 for a genuine same-day 0DTE all
+        # session long (blocking 0DTE even with min_dte=0) and truncates
+        # 1-DTE to 0. Date arithmetic is exact: 0 = expires today,
+        # negative = already expired (always blocked).
+        dte: int = (candidate.expiration_date.date() - datetime.now(UTC).date()).days
+        if dte < risk_settings.min_dte:
+            logger.warning("options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker)
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = f"DTE Too Low ({dte} days)"
+            return
 
         # Always fetch live option chain for current pricing — candidate.premium
         # is signal-time data and may be stale. Live mid/ask is needed for
@@ -965,18 +978,21 @@ class ExecutionEngine:
                 decision.executed_successfully = DecisionStatus.SKIPPED
                 decision.reason = reject_reason
                 return
-        elif bid_f <= 0 and ask_f > 0:
-            # One-sided quote (ask, no bid): nothing to sell into later.
+        elif (bid_f > 0) != (ask_f > 0):
+            # One-sided quote: no bid means nothing to sell into later; no ask
+            # means the "quote" isn't a market. Reject explicitly (a generic
+            # price-fetch error would hide the liquidity cause).
+            reject_reason = "Illiquid: zero bid" if bid_f <= 0 else "Illiquid: zero ask"
             logger.warning(
                 "options_blocked_illiquid",
                 option_symbol=candidate.option_symbol,
                 ticker=candidate.ticker,
                 bid=bid_f,
                 ask=ask_f,
-                reason="Illiquid: zero bid",
+                reason=reject_reason,
             )
             decision.executed_successfully = DecisionStatus.SKIPPED
-            decision.reason = "Illiquid: zero bid"
+            decision.reason = reject_reason
             return
 
         # NOTE: `candidate.premium` is the UW-flow event's aggregate premium
@@ -1007,9 +1023,17 @@ class ExecutionEngine:
 
         # Per-bucket / per-underlying entry caps: keep every bucket building a
         # sample instead of the highest-volume rule hogging all the slots.
+        # ponytail: N candidates in one batch can all pass before any fills
+        # land; the risk manager's pending-aware global cap bounds the burst.
         bucket = bucket_for_dte(dte)
         bucket_cap = risk_settings.option_bucket_caps.get(bucket, 0)
-        open_by_bucket, open_by_ticker = await count_open_journal_positions()
+        counts = await count_open_journal_positions()
+        if counts is None:
+            # Fail closed: unknown counts must not read as "no positions".
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = "Position-cap check unavailable"
+            return
+        open_by_bucket, open_by_ticker = counts
         underlying_cap = (
             risk_settings.max_positions_per_underlying
             if candidate.ticker not in _INDEX_UNDERLYINGS

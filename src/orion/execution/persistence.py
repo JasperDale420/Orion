@@ -549,13 +549,16 @@ async def persist_realized_pnl_to_journal(
         )
 
 
-async def count_open_journal_positions() -> tuple[dict[str, int], dict[str, int]]:
+async def count_open_journal_positions() -> tuple[dict[str, int], dict[str, int]] | None:
     """Open (entered, not yet closed) journal positions, by bucket and by ticker.
 
     Used by the per-bucket / per-underlying entry caps. Counts only filled
     entries, so an order in the fill-latency window is briefly uncounted —
     acceptable, because the risk manager's global max_option_positions check
     (which includes pending orders) remains the hard backstop.
+
+    Returns None when the count is unavailable (DB failure) — callers must
+    FAIL CLOSED (skip the entry) rather than treat unknown as zero.
     """
     from orion.execution.exit_fallback_rules import bucket_for_dte
     from orion.storage.models_trade_journal import TradeJournalEntry
@@ -576,23 +579,22 @@ async def count_open_journal_positions() -> tuple[dict[str, int], dict[str, int]
         )
         return list((await session.execute(stmt)).all())
 
-    by_bucket: dict[str, int] = {}
-    by_ticker: dict[str, int] = {}
     try:
         rows = await db_query(read)
     except Exception as e:
         logger.error(
-            "Open-position count failed; caps will not bind this cycle",
+            "Open-position count failed; entry caps cannot be verified",
             extra={"event_type": "OPEN_POSITION_COUNT_ERROR", "error": str(e)},
         )
-        return by_bucket, by_ticker
+        return None
 
+    by_bucket: dict[str, int] = {}
+    by_ticker: dict[str, int] = {}
     for ticker, filled_at, expiration in rows:
         dte = None
         if expiration is not None and filled_at is not None:
-            exp = expiration if expiration.tzinfo else expiration.replace(tzinfo=UTC)
-            fill = filled_at if filled_at.tzinfo else filled_at.replace(tzinfo=UTC)
-            dte = (exp - fill).days
+            # Calendar-day DTE at entry — same convention as the entry gate.
+            dte = (expiration.date() - filled_at.date()).days
         bucket = bucket_for_dte(dte)
         by_bucket[bucket] = by_bucket.get(bucket, 0) + 1
         by_ticker[ticker] = by_ticker.get(ticker, 0) + 1

@@ -41,6 +41,34 @@ from orion.execution.persistence import (  # noqa: E402
 )
 
 
+def _dte_from_occ_symbol(symbol: str) -> int | None:
+    """Calendar DTE (from today, UTC) parsed from an OCC symbol's expiry."""
+    from orion.shared.utils import parse_occ_symbol
+
+    expiry_str = parse_occ_symbol(symbol).get("expiry")
+    if not isinstance(expiry_str, str):
+        return None
+    try:
+        expiry = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (expiry - datetime.now(UTC).date()).days
+
+
+def _bucket_from_occ_symbol(symbol: str) -> str | None:
+    """Bucket derived from the OCC symbol's embedded expiry (current DTE).
+
+    Current DTE biases an aged position toward the TIGHTER bucket, which
+    fails safe: exits fire earlier and the 0DTE hard flatten still arms.
+    """
+    dte = _dte_from_occ_symbol(symbol)
+    if dte is None:
+        return None
+    from orion.execution.exit_fallback_rules import bucket_for_dte
+
+    return bucket_for_dte(dte)
+
+
 async def _fetch_orion_attributed_tickers() -> set[str]:
     """Return the set of distinct broker symbols Orion has actually filled.
 
@@ -507,13 +535,18 @@ class PositionMonitor:
 
             row = await db_query(run_query)
         except Exception as e:
+            # Transient DB failure — do NOT cache the fallback (a cached
+            # wrong bucket would permanently disable bucket-specific exits
+            # like the 0DTE hard flatten); retry on the next sync cycle.
             logger.warning(f"Failed to fetch entry context for {symbol}: {e}")
+            return {"bucket": _bucket_from_occ_symbol(symbol) or "SWING"}
 
         if not row:
             # No matching Orion decision — either a non-Orion position on the
-            # shared account, or a legacy position pre-attribution. Cache the
-            # default so we don't re-hit the DB every 60s for the same symbol.
-            default = {"bucket": "SWING"}
+            # shared account, or a legacy position pre-attribution. Derive the
+            # bucket from the OCC symbol's embedded expiry when possible, and
+            # cache so we don't re-hit the DB every 60s for the same symbol.
+            default = {"bucket": _bucket_from_occ_symbol(symbol) or "SWING"}
             self._entry_context_cache[symbol] = default
             return default
 
@@ -538,8 +571,10 @@ class PositionMonitor:
         decision_ts_for_dte = _coerce_dt(row.get("decision_ts"))
         if expiration_date is not None and decision_ts_for_dte is not None:
             try:
-                delta = expiration_date - decision_ts_for_dte
-                dte = max(int(delta.days), 0)
+                # Calendar-day DTE: expiration_date is stored as midnight UTC,
+                # so timestamp subtraction truncates a 1-DTE entered intraday
+                # to 0 days (mislabelling it 0DTE). Date arithmetic is exact.
+                dte = max((expiration_date.date() - decision_ts_for_dte.date()).days, 0)
             except Exception:
                 dte = None
 
@@ -556,6 +591,17 @@ class PositionMonitor:
                 dte = None
 
         if dte is None:
+            # Last resort: the OCC symbol embeds the expiry — current DTE
+            # biases toward the TIGHTER bucket for an aged position, which
+            # fails safe (earlier exits, and the 0DTE flatten still arms).
+            dte = _dte_from_occ_symbol(symbol)
+
+        if dte is None:
+            logger.warning(
+                f"DTE unknown for {symbol}; defaulting bucket to SWING — "
+                f"bucket-specific exits (0DTE flatten) may not arm",
+                extra={"event": "dte_fallback_used", "symbol": symbol},
+            )
             dte = 7
 
         from orion.execution.exit_fallback_rules import bucket_for_dte

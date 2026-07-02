@@ -198,7 +198,7 @@ services:
       # per incarnation deadlocks restart-loops at the lease check.
       ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_execution_compose}
       ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE: "false"
-      ORION_RISK_MAX_DAILY_LOSS: ${ORION_RISK_MAX_DAILY_LOSS:-20000}
+      ORION_RISK_MAX_DAILY_LOSS: ${ORION_RISK_MAX_DAILY_LOSS:-2000}
       # Forward-testing knobs — disable both circuit breakers and lower the
       # ML prefilter threshold so we can see end-to-end pipeline behavior.
       # Override per env at deploy time once we want strict guards back.

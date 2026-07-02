@@ -288,10 +288,15 @@ async def test_sync_positions_propagates_entry_context_to_tracked_position() -> 
 @pytest.mark.asyncio
 async def test_fetch_entry_context_returns_default_for_unknown_symbol() -> None:
     """Positions opened by other systems on the shared Alpaca account have no
-    matching Orion decision row — fetch should fall back to the SWING default
-    and cache it so subsequent calls don't re-hit the DB."""
+    matching Orion decision row — fetch should fall back to a default derived
+    from the OCC symbol's expiry (so bucket exits still arm correctly) and
+    cache it so subsequent calls don't re-hit the DB."""
+    from datetime import UTC, datetime, timedelta
+
     monitor = PositionMonitor()
-    unknown = "TSLA260117C00300000"
+    # Expiry far in the future → current DTE > 14 → POSITION bucket.
+    far_expiry = (datetime.now(UTC) + timedelta(days=200)).strftime("%y%m%d")
+    unknown = f"TSLA{far_expiry}C00300000"
 
     with patch(
         "orion.ml.flow_enricher.enrich_flow_for_scoring",
@@ -302,6 +307,20 @@ async def test_fetch_entry_context_returns_default_for_unknown_symbol() -> None:
 
     # Default fallback — no enricher call should happen because there's no
     # decision row to anchor the enrichment.
-    assert ctx_1 == {"bucket": "SWING"}
+    assert ctx_1 == {"bucket": "POSITION"}
     assert ctx_2 is ctx_1
     assert mock_enrich.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_entry_context_swing_default_for_non_occ_symbol() -> None:
+    """A non-OCC (equity) symbol has no embedded expiry — falls back to SWING."""
+    monitor = PositionMonitor()
+
+    with patch(
+        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        new=AsyncMock(return_value={}),
+    ):
+        ctx = await monitor._fetch_entry_context("TSLA")
+
+    assert ctx == {"bucket": "SWING"}

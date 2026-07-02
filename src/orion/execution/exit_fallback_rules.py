@@ -61,7 +61,10 @@ class BucketExitParams:
     disaster_pct: float = 0.60  # unconditional exit at -X (0 disables)
     no_progress_minutes: float = 0.0  # dead-trade exit after N minutes (0 disables)
     no_progress_band_pct: float = 0.15  # ...when |return| is inside this band
-    flatten_after_et: str | None = None  # "HH:MM" ET hard flatten (0DTE)
+    # "HH:MM" ET hard flatten for positions expiring TODAY (bucket 0DTE, or
+    # any bucket whose expiry_date says today — defends against bucket
+    # mislabels). Set on every bucket; None disables.
+    flatten_after_et: str | None = "15:45"
 
 
 # Starter barriers from the 2026-07 recovery plan. Wide enough that
@@ -231,10 +234,20 @@ class ZeroDTEFlattenRule:
     def should_exit(self, position: Any) -> ExitSignal | None:
         if not self.flatten_after_et:
             return None
-        if getattr(position, "bucket", None) != "0DTE":
+        now_et = datetime.now(_ET)
+        # Defense in depth: the bucket label can be wrong (missing entry
+        # context, DB hiccup at reload) — a position whose contract actually
+        # expires today must still flatten, so check expiry_date directly too.
+        is_zero_dte = getattr(position, "bucket", None) == "0DTE"
+        if not is_zero_dte:
+            expiry = getattr(position, "expiry_date", None)
+            if expiry is not None:
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=UTC)
+                is_zero_dte = expiry.astimezone(_ET).date() <= now_et.date()
+        if not is_zero_dte:
             return None
         hour, minute = (int(part) for part in self.flatten_after_et.split(":"))
-        now_et = datetime.now(_ET)
         if (now_et.hour, now_et.minute) < (hour, minute):
             return None
         return ExitSignal(

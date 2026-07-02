@@ -191,6 +191,26 @@ def test_zero_dte_flatten_disabled_when_unset():
     assert rule.should_exit(pos) is None
 
 
+def test_zero_dte_flatten_fires_for_mislabeled_bucket_expiring_today():
+    """Defense in depth: a position mislabeled SWING (missing entry context)
+    whose contract actually expires today must still hard-flatten."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    pos = _make_position(bucket="SWING", expiry_date=_at_et(16, 0))
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.rule_id == "zero_dte_flatten_v1"
+
+
+def test_zero_dte_flatten_quiet_for_future_expiry_other_bucket():
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    pos = _make_position(bucket="SWING", expiry_date=_at_et(16, 0) + timedelta(days=7))
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+
+
 # --- NoProgressRule ---------------------------------------------------------
 
 
