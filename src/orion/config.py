@@ -473,35 +473,16 @@ class SystemSettings(BaseSettings):
     circuit_breaker_min_samples: int = Field(default=5, validation_alias="ORION_CIRCUIT_BREAKER_MIN_SAMPLES")
 
     # Client URLs
-    trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")
-    trading_rag_api_key: str | None = Field(default=None, validation_alias="TRADING_RAG_API_KEY")
     orion_api_url: str = Field(default="http://localhost:8000", validation_alias="ORION_API_URL")
 
     # System Monitor
     monitor_lag_threshold: int = Field(default=300, validation_alias="MONITOR_LAG_THRESHOLD")
     monitor_dlq_lookback: int = Field(default=5, validation_alias="MONITOR_DLQ_LOOKBACK")
 
-    # RAG / Embeddings
-    ollama_embedding_model: str = Field(default="nomic-embed-text", validation_alias="OLLAMA_EMBEDDING_MODEL")
-    ollama_base_url: str = Field(default="http://host.docker.internal:11434", validation_alias="OLLAMA_BASE_URL")
-
     model_config = SettingsConfigDict(env_prefix="ORION_")
 
 
-class MetaSearchSettings(BaseSettings):
-    scoring_weights: dict[str, float] = {"sharpe": 0.4, "profit_factor": 0.3, "info_ratio": 0.2, "stability": 0.1}
-    model_config = SettingsConfigDict(env_prefix="ORION_META_")
-
-
-class AgentSettings(BaseSettings):
-    model_name: str = "glm-5.2"
-    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
-    ai_gateway_url: str = Field(default="http://localhost:8002/v1", validation_alias="ORION_AI_GATEWAY_URL")
-    ai_gateway_key: str = Field(default="empire-ai-gateway-key", validation_alias="ORION_AI_GATEWAY_KEY")
-    model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")
-
-
-def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSettings") -> list[str]:
+def warn_on_default_dev_credentials(system: "SystemSettings") -> list[str]:
     """Log a WARNING when known default dev credentials are still active.
 
     Returns the list of field names found using a default dev credential so
@@ -512,8 +493,6 @@ def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSetti
     flagged: list[str] = []
     if system.data_gateway_api_key == "gw_orion_trading_key_55555":  # pragma: allowlist secret
         flagged.append("data_gateway_api_key")
-    if agent.ai_gateway_key == "empire-ai-gateway-key":  # pragma: allowlist secret
-        flagged.append("ai_gateway_key")
 
     if flagged:
         log = setup_struct_logger("orion.config")
@@ -525,11 +504,9 @@ def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSetti
 # Singleton Instances
 risk_settings = RiskSettings()
 system_settings = SystemSettings()
-meta_settings = MetaSearchSettings()
-agent_settings = AgentSettings()
 heuristic_weights = HeuristicWeights()
 
-warn_on_default_dev_credentials(system_settings, agent_settings)
+warn_on_default_dev_credentials(system_settings)
 
 # Exports for compatibility
 STATIC_WATCHLIST = system_settings.static_watchlist

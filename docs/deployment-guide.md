@@ -380,7 +380,6 @@ For end-to-end pipeline freshness use `tests/e2e/test_live_data_flow.py` (see
 | `backfill_features.py`, `backfill_fills_from_alpaca.py` | Historical backfills |
 | `backtest_exit_rules.py`, `backtest_param_sweep.py` | Local backtests |
 | `bootstrap_solver.py`, `seed_solvers.py` | Seed the solvers table |
-| `retrain_0dte.py`, `run_nightly_retrain.sh`, `run_training.py`, `run_exit_training.py` | Model training |
 | `canary_watch.sh`, `watchdog.sh` | Operational guards |
 | `db_backup.sh` | DB snapshot |
 | `diagnose_data.py`, `diagnose_data_gaps.py`, `verify_activity.py`, `verify_ingestion_sleep.py` | Data-quality probes |

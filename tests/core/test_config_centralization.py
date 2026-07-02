@@ -19,15 +19,6 @@ def test_system_settings_env_mapping():
         assert s.artifacts_dir == "/tmp/artifacts"
 
 
-def test_agent_settings_env_mapping():
-    """Verify OPENAI_API_KEY maps to agent_settings.openai_api_key."""
-    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-123"}):
-        from orion.config import AgentSettings
-
-        s = AgentSettings()
-        assert s.openai_api_key == "sk-test-123"
-
-
 def test_system_settings_api_key_env_mapping():
     """Verify ORION_API_KEY maps to system_settings.api_key."""
     fake_orion_api_key = "sk-orion-123"  # pragma: allowlist secret
@@ -111,40 +102,3 @@ def test_system_settings_no_longer_exposes_decommissioned_flow_labeler_gate() ->
 
         s = SystemSettings()
         assert not hasattr(s, "legacy_flow_labeler_enabled")
-
-
-@pytest.mark.asyncio
-async def test_eod_review_uses_config():
-    """Verify EODReviewAgent uses configured paths."""
-
-    # Mock settings import
-    mock_settings = MagicMock()
-    mock_settings.artifacts_dir = "/tmp/mock_artifacts"
-    mock_settings.openai_api_key = "sk-mock"
-    mock_settings.model_name = "gpt-mock"
-
-    with patch.dict(
-        "sys.modules", {"orion.config": MagicMock(system_settings=mock_settings, agent_settings=mock_settings)}
-    ):
-        from orion.agents.eod_review_agent import EODReviewAgent
-
-        # Mock run_codex_completion
-        with patch("orion.agents.eod_review_agent.run_codex_completion", new_callable=AsyncMock) as mock_codex:
-            mock_codex.return_value = '{"analysis": "foo"}'
-
-            agent = EODReviewAgent()
-
-            # Use AsyncMock for async methods
-            agent._gather_data = AsyncMock(return_value=({}, ""))
-            agent._fetch_rag_context = AsyncMock(return_value="")
-            # _generate_analysis returns dict
-            agent._generate_analysis = AsyncMock(return_value={"analysis": "foo"})
-            agent.proposal_builder = MagicMock()
-
-            # We mock os.makedirs and open to check paths
-            with patch("os.makedirs") as mock_makedirs, patch("builtins.open", new_callable=MagicMock):
-                await agent.run_review(target_date=None)
-
-                # Verify makedirs called with correct path
-                expected_dir = "/tmp/mock_artifacts/reports"
-                mock_makedirs.assert_called_with(expected_dir, exist_ok=True)

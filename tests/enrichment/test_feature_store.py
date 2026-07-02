@@ -279,7 +279,7 @@ class TestGetScoringFeatures:
     @pytest.mark.asyncio
     async def test_all_feature_keys_present(self):
         """Result must include every FEATURE_COLUMNS + CATEGORICAL_COLUMNS key."""
-        from orion.ml.pattern_miner import CATEGORICAL_COLUMNS, FEATURE_COLUMNS
+        from orion.ml.feature_config import CATEGORICAL_COLUMNS, FEATURE_COLUMNS
 
         reader = self._mock_reader(alert_df=_make_alert_df())
 
@@ -389,7 +389,7 @@ class TestGetScoringFeatures:
 class TestColumnMapping:
     def test_gold_to_feature_covers_training_features(self):
         """The mapping should cover the core meta_label features used in training."""
-        from orion.ml.pattern_miner import FEATURE_COLUMNS
+        from orion.ml.feature_config import FEATURE_COLUMNS
 
         alert_level_features = [
             "days_to_expiry",
