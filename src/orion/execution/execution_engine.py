@@ -407,6 +407,14 @@ class ExecutionEngine:
         # keyed by broker_order_id. Pruned each sweep to orders still stale.
         self._cancel_attempts: dict[str, _CancelState] = {}
 
+        # Broker order ids whose recovery fetch 404'd at the Gateway (the
+        # legacy/unowned class — the id exists only on the activities surface).
+        # No ProcessedFill marker can ever land for them, so the recon's marker
+        # dedupe never engages; without this give-up the same ids are re-fetched
+        # (and re-ERROR) every close-recon cycle forever.
+        # ponytail: in-memory; a restart re-learns each id with one 404.
+        self._recon_gone_order_ids: set[str] = set()
+
         # TTL cache for _check_system_health (avoids N identical DB queries per cycle)
         self._health_cache: tuple[bool, float] | None = None
         self._health_cache_ttl: float = 10.0
@@ -3089,6 +3097,23 @@ class ExecutionEngine:
         # get_order returns {"error": ...} (never raises) on 4xx/5xx/timeout. An
         # unguarded error dict would parse to filled_qty=0 and be silently dropped.
         if not isinstance(order, dict) or "error" in order:
+            if isinstance(order, dict) and order.get("status_code") == 404:
+                # GW-E4404: the Gateway doesn't know this order id at all
+                # (legacy/unowned). Permanent — give up for the session so the
+                # close-recon stops re-fetching it every cycle. Logged once here;
+                # transient errors (5xx/timeout) below stay retryable.
+                if not hasattr(self, "_recon_gone_order_ids"):
+                    self._recon_gone_order_ids = set()
+                self._recon_gone_order_ids.add(broker_order_id)
+                logger.warning(
+                    "Missed-fill recovery: order not found at gateway (404); giving up for this session",
+                    extra={
+                        "event_type": "MISSED_FILL_RECOVERY_ORDER_GONE",
+                        "order_id": broker_order_id,
+                        "ticker": ticker,
+                    },
+                )
+                return False
             logger.warning(
                 "Missed-fill recovery: gateway returned no usable order; cost basis stays unrecovered",
                 extra={
@@ -3225,10 +3250,19 @@ class ExecutionEngine:
                 seen[sym].add(oid)
                 order_ids_by_symbol[sym].append(str(oid))
 
+        # __new__-constructed instances (some tests) skip __init__; seed lazily.
+        if not hasattr(self, "_recon_gone_order_ids"):
+            self._recon_gone_order_ids = set()
+
         recovered = 0
         attempted = 0
         for sym in missed:
             for oid in order_ids_by_symbol[sym]:
+                # The Gateway 404'd this id earlier in the session (legacy/
+                # unowned — no marker can ever land for it, so the guard below
+                # never engages). Skip without consuming the cap.
+                if oid in self._recon_gone_order_ids:
+                    continue
                 # An order we've already counted ANY fill for is either the entry
                 # or an already-recovered close — re-feeding it would double-count.
                 # DB read, not a Gateway call, so it does not consume the cap.
