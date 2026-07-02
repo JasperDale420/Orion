@@ -36,7 +36,22 @@ class RiskSettings(BaseSettings):
     # Options-specific settings
     max_option_premium_pct: float = 0.02  # Max 2% of equity per option trade
     min_dte: int = 1  # Minimum days to expiration (0-DTE blocked; 1-DTE+ allowed)
-    max_option_positions: int = 3  # Max simultaneous option positions
+    max_option_positions: int = 15  # Max simultaneous option positions (hard backstop over bucket caps)
+
+    # Sample-size sizing: a fixed premium debit per trade gives every closed
+    # trade uniform weight, so per-bucket expectancy is a clean per-trade
+    # average. 0 disables (falls back to solver risk_per_trade_bps sizing).
+    fixed_premium_per_trade: float = 500.0
+    max_contracts_per_trade: int = 5
+    # Per-bucket concurrent position caps — without these, the highest-volume
+    # rule would hog every slot and the other buckets would never build a
+    # sample. Counted from open trade-journal rows; max_option_positions
+    # (broker-synced, includes pending) remains the hard backstop.
+    option_bucket_caps: dict[str, int] = Field(
+        default_factory=lambda: {"0DTE": 4, "SHORT_SWING": 6, "SWING": 8, "POSITION": 2}
+    )
+    max_positions_per_underlying: int = 2
+    max_positions_per_index_underlying: int = 3  # SPY/QQQ/IWM get one extra slot
 
     # Contract liquidity gate (checked at order time from the live chain).
     # A zero-bid or wide-spread contract can't be exited at anything near its

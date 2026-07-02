@@ -107,6 +107,23 @@ DEFAULT_BUCKET_PARAMS: dict[str, BucketExitParams] = {
 }
 
 
+def bucket_for_dte(dte: int | None) -> str:
+    """Classify a position's bucket from its DTE at entry.
+
+    Unknown DTE gets SWING (the conservative middle) — same convention as
+    resolve_exit_params.
+    """
+    if dte is None:
+        return "SWING"
+    if dte < 1:
+        return "0DTE"
+    if dte <= 3:
+        return "SHORT_SWING"
+    if dte <= 14:
+        return "SWING"
+    return "POSITION"
+
+
 def resolve_exit_params(
     bucket: str,
     overrides: dict[str, dict[str, Any]] | None = None,

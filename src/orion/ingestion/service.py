@@ -938,7 +938,7 @@ class IngestionService:
                 # UTC-today — otherwise the EOD run executes as the next calendar
                 # day and reconcile_pnl filters fills to an empty wrong day.
                 trading_date = last_closed_trading_date(now_utc)
-                logger.info(f"Triggering EOD Review Agent for trading date {trading_date}...")
+                logger.info(f"Triggering EOD P&L close-of-books for trading date {trading_date}...")
                 # Save task to prevent garbage collection
                 self._eod_task = asyncio.create_task(self._run_eod_task(trading_date))
                 self.eod_trigger_last_run = today_str
@@ -948,13 +948,24 @@ class IngestionService:
 
     @staticmethod
     async def _run_eod_task(trading_date: date | None = None) -> None:
-        try:
-            from orion.agents.eod_review_agent import EODReviewAgent
+        """Nightly close-of-books: realize expired positions, then reconcile P&L.
 
-            agent = EODReviewAgent()
-            await agent.run_review(target_date=trading_date)
+        Replaced the LLM EOD review agent — its mutation proposals were
+        auto-blocked by the promoter and never influenced a live decision,
+        while the P&L attribution tables it was supposed to feed stayed empty.
+        """
+        try:
+            from orion.execution.persistence import realize_expired_journal_rows
+            from orion.jobs.reconcile_pnl import run_reconciliation
+
+            await realize_expired_journal_rows()
+            result = await run_reconciliation(trading_date)
+            logger.info(
+                f"EOD reconcile complete for {result.trade_date}: status={result.status}",
+                extra={"event": "eod_reconcile_done", "status": str(result.status)},
+            )
         except Exception as e:
-            logger.error(f"EOD Agent Failed: {e}")
+            logger.error(f"EOD close-of-books failed: {e}")
 
     async def _post_flow_parity_summary(self) -> None:
         """Aggregate the day's flow_push_parity rows and post a Discord summary.

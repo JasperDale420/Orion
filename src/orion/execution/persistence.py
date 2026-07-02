@@ -549,6 +549,56 @@ async def persist_realized_pnl_to_journal(
         )
 
 
+async def count_open_journal_positions() -> tuple[dict[str, int], dict[str, int]]:
+    """Open (entered, not yet closed) journal positions, by bucket and by ticker.
+
+    Used by the per-bucket / per-underlying entry caps. Counts only filled
+    entries, so an order in the fill-latency window is briefly uncounted —
+    acceptable, because the risk manager's global max_option_positions check
+    (which includes pending orders) remains the hard backstop.
+    """
+    from orion.execution.exit_fallback_rules import bucket_for_dte
+    from orion.storage.models_trade_journal import TradeJournalEntry
+
+    async def read(session: Any) -> list[Any]:
+        stmt = (
+            select(
+                TradeJournalEntry.ticker,
+                TradeJournalEntry.filled_at_utc,
+                CandidateTrade.expiration_date,
+            )
+            .join(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
+            .where(
+                TradeJournalEntry.broker_order_id.is_not(None),
+                TradeJournalEntry.filled_at_utc.is_not(None),
+                TradeJournalEntry.realized_pnl.is_(None),
+            )
+        )
+        return list((await session.execute(stmt)).all())
+
+    by_bucket: dict[str, int] = {}
+    by_ticker: dict[str, int] = {}
+    try:
+        rows = await db_query(read)
+    except Exception as e:
+        logger.error(
+            "Open-position count failed; caps will not bind this cycle",
+            extra={"event_type": "OPEN_POSITION_COUNT_ERROR", "error": str(e)},
+        )
+        return by_bucket, by_ticker
+
+    for ticker, filled_at, expiration in rows:
+        dte = None
+        if expiration is not None and filled_at is not None:
+            exp = expiration if expiration.tzinfo else expiration.replace(tzinfo=UTC)
+            fill = filled_at if filled_at.tzinfo else filled_at.replace(tzinfo=UTC)
+            dte = (exp - fill).days
+        bucket = bucket_for_dte(dte)
+        by_bucket[bucket] = by_bucket.get(bucket, 0) + 1
+        by_ticker[ticker] = by_ticker.get(ticker, 0) + 1
+    return by_bucket, by_ticker
+
+
 async def realize_expired_journal_rows() -> int:
     """Realize P&L for journal entries whose option expired without a closing fill.
 

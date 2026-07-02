@@ -36,6 +36,16 @@ def mock_env():
         yield
 
 
+@pytest.fixture(autouse=True)
+def bps_sizing(monkeypatch):
+    """These tests' breach math assumes solver-bps sizing (5 contracts) —
+    disable the fixed-premium sizing default so the projections stay exact."""
+    from orion.config import risk_settings
+
+    monkeypatch.setattr(risk_settings, "fixed_premium_per_trade", 0.0)
+    monkeypatch.setattr(risk_settings, "max_contracts_per_trade", 0)
+
+
 def _chain_contract(symbol, *, bid=1.90, ask=2.10, delta=None, gamma=None, theta=None, vega=None):
     """Build a chain contract dict. Greeks omitted (None) → 'unavailable'."""
     contract = {"contract_symbol": symbol, "bid": bid, "ask": ask}

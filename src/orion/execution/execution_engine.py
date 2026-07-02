@@ -18,8 +18,10 @@ from orion.execution.attribution import (
     mint_orion_order_id,
     orion_order_id_sql_pattern,
 )
+from orion.execution.exit_fallback_rules import bucket_for_dte
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import (
+    count_open_journal_positions,
     has_processed_fill_for_order,
     persist_exit_decision,
     persist_exit_order_rejection,
@@ -36,6 +38,9 @@ from orion.storage.db import async_session_factory
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 logger = setup_struct_logger(__name__)
+
+# Index ETFs get one extra per-underlying position slot (deep, liquid chains).
+_INDEX_UNDERLYINGS = frozenset({"SPY", "QQQ", "IWM"})
 
 # `ORDER_ID_PREFIX` is re-exported from orion.execution.attribution so
 # existing imports (`from orion.execution.execution_engine import ORDER_ID_PREFIX`)
@@ -1000,20 +1005,53 @@ class ExecutionEngine:
             decision.reason = "Option Price Rounded To Zero"
             return
 
-        # Solver-driven sizing: use risk_per_trade_bps × regime_size_multiplier
-        # when available, with max_option_premium_pct as safety ceiling.
+        # Per-bucket / per-underlying entry caps: keep every bucket building a
+        # sample instead of the highest-volume rule hogging all the slots.
+        bucket = bucket_for_dte(dte)
+        bucket_cap = risk_settings.option_bucket_caps.get(bucket, 0)
+        open_by_bucket, open_by_ticker = await count_open_journal_positions()
+        underlying_cap = (
+            risk_settings.max_positions_per_underlying
+            if candidate.ticker not in _INDEX_UNDERLYINGS
+            else risk_settings.max_positions_per_index_underlying
+        )
+        cap_reason = None
+        if bucket_cap > 0 and open_by_bucket.get(bucket, 0) >= bucket_cap:
+            cap_reason = f"Bucket cap reached: {bucket} {open_by_bucket.get(bucket, 0)}/{bucket_cap}"
+        elif underlying_cap > 0 and open_by_ticker.get(candidate.ticker, 0) >= underlying_cap:
+            cap_reason = (
+                f"Underlying cap reached: {candidate.ticker} {open_by_ticker.get(candidate.ticker, 0)}/{underlying_cap}"
+            )
+        if cap_reason:
+            logger.info(
+                "options_blocked_position_cap",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                reason=cap_reason,
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = cap_reason
+            return
+
+        # Sizing: fixed premium debit per trade (uniform trade weights for the
+        # measurement loop) with solver risk_per_trade_bps as the fallback and
+        # max_option_premium_pct as the safety ceiling either way.
         ep = decision.execution_params or {}
         risk_bps = float(ep.get("risk_per_trade_bps", 0))
         regime_mult = float(ep.get("regime_size_multiplier", 1.0))
         max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
 
-        if risk_bps > 0:
+        if risk_settings.fixed_premium_per_trade > 0:
+            risk_dollars = min(risk_settings.fixed_premium_per_trade, max_premium)
+        elif risk_bps > 0:
             risk_dollars = (self.risk_manager.current_equity * risk_bps / 10000.0) * regime_mult
             risk_dollars = min(risk_dollars, max_premium)
         else:
             risk_dollars = max_premium
 
         num_contracts = max(0, int(risk_dollars / (option_price * 100)))
+        if risk_settings.max_contracts_per_trade > 0:
+            num_contracts = min(num_contracts, risk_settings.max_contracts_per_trade)
 
         if num_contracts <= 0:
             logger.warning(
@@ -2737,7 +2775,10 @@ class ExecutionEngine:
             or (now2 - self._last_order_poll_ts).total_seconds() >= self._ORDER_POLL_MIN_INTERVAL_SECONDS
         ):
             try:
-                orders = await client.get_orders(status="all", limit=200)
+                # 500-row window: at 200, Orion's fills aged out behind sibling
+                # systems' order volume on the shared account (recurring
+                # missed-fill incident class; matches the cancel sweep's window).
+                orders = await client.get_orders(status="all", limit=500)
             except Exception as e:
                 logger.warning(
                     "Order poll via Gateway failed",

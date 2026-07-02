@@ -558,15 +558,9 @@ class PositionMonitor:
         if dte is None:
             dte = 7
 
-        # Classify bucket based on DTE
-        if dte == 0:
-            bucket = "0DTE"
-        elif dte <= 3:
-            bucket = "SHORT_SWING"
-        elif dte <= 14:
-            bucket = "SWING"
-        else:
-            bucket = "POSITION"
+        from orion.execution.exit_fallback_rules import bucket_for_dte
+
+        bucket = bucket_for_dte(dte)
 
         # The decision row has the real entry timestamp; use it instead of
         # now() so ML exit features (time_held_hours) are correct after a
