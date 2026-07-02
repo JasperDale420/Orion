@@ -1884,6 +1884,26 @@ class ExecutionEngine:
                 )
                 self._record_result(False)
                 return False
+
+            # Before escalating, re-verify the LIVE position. The broker can
+            # vanish it between our pre-check and this rejection: 2026-07-01 saw
+            # 44 sell_to_close 422s ("position intent mismatch, inferred:
+            # sell_to_open") each paired with a position-not-found 404, retried
+            # 4× per contract. A 422 that infers the OPENING side, or a 404,
+            # means the position we're reducing is already gone (closed/expired)
+            # — the close succeeded. Escalating to the native flatten would
+            # re-submit a closing order into the same wall and keep looping;
+            # treat it as done instead.
+            live_qty = await self._live_position_qty(ticker)
+            if live_qty is not None and abs(live_qty) < 1e-9:
+                logger.info(
+                    f"Close for {ticker}: broker reports no position after limit rejection "
+                    f"(already closed/expired) — not escalating",
+                    extra={"event_type": "EXIT_SKIPPED_NO_POSITION", "ticker": ticker},
+                )
+                self._record_result(True)
+                return True
+
             logger.warning(
                 f"Limit close rejected for {ticker} ({status_code}), escalating to native flatten: {detail[:200]}",
                 extra={"event_type": "EXIT_LIMIT_REJECTED_ESCALATE", "ticker": ticker, "error": detail[:200]},

@@ -234,6 +234,45 @@ async def test_options_42210000_escalates_to_native_no_plain_retry(monkeypatch: 
 
 
 @pytest.mark.asyncio
+async def test_options_close_stops_when_position_vanished_on_reject(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-07-01 loop: a sell_to_close limit is rejected 422 'position intent
+    mismatch, inferred: sell_to_open' AND the position has vanished (Alpaca 404,
+    already closed/expired). Re-verify shows the broker holds no position, so the
+    close already succeeded — record success and STOP. Must NOT escalate to the
+    native flatten: DELETE /positions re-submits a closing order into the same
+    wall, which looped the reject 4× per contract."""
+    _patch_persist(monkeypatch)
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    client = _make_client(
+        broker_qty="10",
+        avg_entry="1.0",
+        limit_result={
+            "error": "Client error '422'",
+            "detail": '{"code":42210000,"message":"position intent mismatch, inferred: sell_to_open, specified: sell_to_close"}',
+            "status_code": 422,
+        },
+        native_result={"id": "should-not-be-used"},
+    )
+    # Present at the pre-check, GONE (404) at the post-reject re-verify.
+    client.get_position = AsyncMock(
+        side_effect=[
+            {"qty": "10", "avg_entry_price": "1.0"},
+            {"error": "Client error '404'", "detail": "position not found", "status_code": 404},
+        ]
+    )
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="COIN260703C00300000", qty=10.0, exit_signal=_exit_signal(), direction="LONG", current_price=2.50
+    )
+
+    assert closed is True  # already closed → done, stop retrying
+    client.create_order.assert_called_once()  # exactly one limit attempt
+    client.close_position.assert_not_called()  # NO native flatten (it would loop)
+
+
+@pytest.mark.asyncio
 async def test_options_limit_rejected_escalates_to_native(monkeypatch: pytest.MonkeyPatch) -> None:
     """When the attributed limit is rejected (e.g. a residual wash), escalate to
     the native flatten to avoid stranding the position."""
