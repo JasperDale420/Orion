@@ -269,6 +269,36 @@ def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejecti
     return "ambiguous"
 
 
+def _position_recheck_reports_gone(pos: dict[str, Any]) -> bool:
+    """True only when a position re-check DEFINITIVELY shows the position is gone:
+    a broker 404 / position-not-found, or an explicit zero qty.
+
+    A transient lookup error (500 / 429 / auth) is NOT 'gone' and must NOT be
+    read as a completed close — ``GatewayTradingClient._request`` renders EVERY
+    ``HTTPStatusError`` as ``{"error": ..., "status_code": ...}``, so a bare
+    ``"error" in pos`` check (as ``_live_position_qty`` uses, returning 0.0)
+    would treat a transient failure as flat and could abandon a still-open
+    option (Codex review). Gate strictly to the 404/position-not-found signal.
+    """
+    if not isinstance(pos, dict):
+        return False
+    if "error" in pos:
+        blob = f"{pos.get('detail') or ''} {pos.get('error') or ''} {pos.get('code') or ''}".lower()
+        return (
+            pos.get("status_code") == 404
+            or "position_not_found" in blob
+            or "position not found" in blob
+            or "40410000" in blob
+        )
+    raw = pos.get("qty")
+    if raw is None:
+        return False
+    try:
+        return abs(float(raw)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
 def round_to_options_tick(price: float) -> float:
     """Round a price to Alpaca's options tick increment.
 
@@ -2052,6 +2082,28 @@ class ExecutionEngine:
                 )
                 self._record_result(False)
                 return False
+
+            # Before escalating, re-verify the LIVE position. The broker can
+            # vanish it between our pre-check and this rejection: 2026-07-01 saw
+            # 44 sell_to_close 422s ("position intent mismatch, inferred:
+            # sell_to_open") each paired with a position-not-found 404, retried
+            # 4× per contract. A DEFINITIVE position-gone recheck (404 /
+            # position-not-found, or an explicit zero qty) means the close
+            # already succeeded/expired — escalating to the native flatten would
+            # re-submit a closing order into the same wall and keep looping, so
+            # treat it as done. A transient recheck error (500/429/auth) is NOT
+            # 'gone' and must fall through to the native flatten (reduce-only,
+            # 404-safe) rather than be recorded as a completed close.
+            recheck = await client.get_position(ticker)
+            if _position_recheck_reports_gone(recheck):
+                logger.info(
+                    f"Close for {ticker}: broker reports no position after limit rejection "
+                    f"(already closed/expired) — not escalating",
+                    extra={"event_type": "EXIT_SKIPPED_NO_POSITION", "ticker": ticker},
+                )
+                self._record_result(True)
+                return True
+
             logger.warning(
                 f"Limit close rejected for {ticker} ({status_code}), escalating to native flatten: {detail[:200]}",
                 extra={"event_type": "EXIT_LIMIT_REJECTED_ESCALATE", "ticker": ticker, "error": detail[:200]},
