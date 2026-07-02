@@ -246,6 +246,12 @@ def _configure_settings(run_tag: str):
 
     risk_settings.max_order_size_usd = 1e9
     risk_settings.max_ticker_exposure_usd = 1e9
+    # Bucket/underlying entry caps count OPEN journal rows — on a shared/live
+    # DB the smoke's synthetic candidate would collide with real open
+    # positions ("Bucket cap reached"). Disable them like the other limits.
+    risk_settings.option_bucket_caps = {}
+    risk_settings.max_positions_per_underlying = 0
+    risk_settings.max_positions_per_index_underlying = 0
     risk_settings.max_positions = 100
     risk_settings.max_daily_loss = 1e9
 
@@ -580,7 +586,11 @@ async def run_smoke_test() -> dict[str, bool]:
         try:
             from orion.processing.rule_engine import RuleEngine
 
-            re = RuleEngine()
+            # The smoke runs in paper stage with a synthetic ticker and
+            # future timestamps — explicitly bypass the live-market gates
+            # (allowlist / entry window / clock skew). Signal-quality gates
+            # (sweep, aggressor, premium floor, volume) still apply.
+            re = RuleEngine(enforce_universe_and_window=False)
             candidates = re.process_signals(uw_signals)
             assert len(candidates) > 0, "No candidates produced by rule engine"
 

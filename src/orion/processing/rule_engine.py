@@ -13,7 +13,12 @@ class RuleEngine:
     Orchestrates the execution of trading rules.
     """
 
-    def __init__(self, config: dict[Any, Any] | None = None):
+    def __init__(
+        self,
+        config: dict[Any, Any] | None = None,
+        *,
+        enforce_universe_and_window: bool | None = None,
+    ):
         from orion.processing.rules.flow_rules import (
             ShortSwingBucketRule,
             SwingBucketRule,
@@ -30,12 +35,17 @@ class RuleEngine:
         short_swing_cfg = get_rule_cfg("rule_short_swing_v2")
         swing_cfg = get_rule_cfg("rule_swing_v2")
 
-        # The smoke e2e injects synthetic tickers at arbitrary wall-clock
-        # times — bypass the allowlist/entry-window (live-market concerns)
-        # in the test stage only; signal-quality checks always apply.
-        from orion.config import system_settings
+        # Test harnesses inject synthetic tickers at arbitrary wall-clock
+        # times — they pass enforce_universe_and_window=False explicitly to
+        # bypass the allowlist/entry-window/clock-skew gates (live-market
+        # concerns). Signal-quality checks always apply. Default (None)
+        # derives from the stage so the plain-pytest path needs no wiring.
+        if enforce_universe_and_window is None:
+            from orion.config import system_settings
 
-        enforce = system_settings.orion_stage != "test"
+            enforce = system_settings.orion_stage != "test"
+        else:
+            enforce = enforce_universe_and_window
 
         # One rule per horizon bucket (2026-07 overhaul): premium floors,
         # both directions with the flow, liquid-universe allowlist, per-bucket
