@@ -37,7 +37,7 @@ jobs:
           --health-retries 10
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Validate docker-compose profiles
       # Cheap, no docker daemon needed — `docker compose config` is pure YAML
@@ -52,7 +52,7 @@ jobs:
         docker compose --profile legacy-labels config -q
 
     - name: Set up uv
-      uses: astral-sh/setup-uv@v6
+      uses: astral-sh/setup-uv@v7
       with:
         python-version: ${{ matrix.python-version }}
         enable-cache: true
@@ -93,7 +93,7 @@ jobs:
       # on JasperDale420/Data-Gateway) as repo secret
       # DATA_GATEWAY_CHECKOUT_TOKEN. Without it, the checkout 404s and the
       # job fails with a clear message.
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: JasperDale420/Data-Gateway
         path: data-gateway
