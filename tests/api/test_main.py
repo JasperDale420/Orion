@@ -210,22 +210,6 @@ class TestPromotionsEndpoints:
         assert response.status_code == 404
 
 
-class TestSearchEndpoint:
-    """Tests for /search endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_search_requires_query(
-        self,
-        override_deps: AsyncMock,
-        mock_audit_logging: None,
-    ) -> None:
-        """Search should return 422 when query parameter is missing."""
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/search")
-
-        assert response.status_code == 422
-
-
 class TestRollupsEndpoints:
     """Tests for /rollups endpoints."""
 

@@ -36,7 +36,33 @@ class RiskSettings(BaseSettings):
     # Options-specific settings
     max_option_premium_pct: float = 0.02  # Max 2% of equity per option trade
     min_dte: int = 1  # Minimum days to expiration (0-DTE blocked; 1-DTE+ allowed)
-    max_option_positions: int = 3  # Max simultaneous option positions
+    max_option_positions: int = 15  # Max simultaneous option positions (hard backstop over bucket caps)
+
+    # Sample-size sizing: a fixed premium debit per trade gives every closed
+    # trade uniform weight, so per-bucket expectancy is a clean per-trade
+    # average. 0 disables (falls back to solver risk_per_trade_bps sizing).
+    fixed_premium_per_trade: float = 500.0
+    max_contracts_per_trade: int = 5
+    # Per-bucket concurrent position caps — without these, the highest-volume
+    # rule would hog every slot and the other buckets would never build a
+    # sample. Counted from open trade-journal rows; max_option_positions
+    # (broker-synced, includes pending) remains the hard backstop.
+    option_bucket_caps: dict[str, int] = Field(
+        default_factory=lambda: {"0DTE": 4, "SHORT_SWING": 6, "SWING": 8, "POSITION": 2}
+    )
+    max_positions_per_underlying: int = 2
+    max_positions_per_index_underlying: int = 3  # SPY/QQQ/IWM get one extra slot
+
+    # Contract liquidity gate (checked at order time from the live chain).
+    # A zero-bid or wide-spread contract can't be exited at anything near its
+    # mark — dust entries strand until expiry. 0 disables either check.
+    min_option_mid: float = 0.20  # Reject contracts with mid below this
+    max_option_spread_pct: float = 0.25  # Fallback spread cap for unknown buckets
+    # Per-bucket spread caps: profit targets must be multiples of round-trip
+    # spread cost, so faster buckets need tighter spreads.
+    option_bucket_spread_caps: dict[str, float] = Field(
+        default_factory=lambda: {"0DTE": 0.10, "SHORT_SWING": 0.15, "SWING": 0.15, "POSITION": 0.15}
+    )
 
     # Portfolio-level Greeks limits (options risk)
     max_portfolio_delta: float = 500.0  # Absolute delta exposure limit
@@ -221,6 +247,100 @@ class SystemSettings(BaseSettings):
     # cycle times we see in practice (rollups can run 30-60s on busy days).
     ingestion_heartbeat_max_age: int = 600
     max_data_lag_seconds: int = 600  # Pre-market/post-market data can lag 300s+
+    # Per-bucket signal-age budgets (seconds) — override the flat
+    # max_data_lag_seconds at preflight. A 2-minute-old 0DTE momentum signal
+    # is dead; a 15-minute-old multi-day swing thesis is fine. JSON env, e.g.
+    # ORION_BUCKET_SIGNAL_AGE_BUDGETS='{"0DTE": 90}'.
+    bucket_signal_age_budgets: dict[str, int] = Field(
+        default_factory=lambda: {"0DTE": 120, "SHORT_SWING": 300, "SWING": 900, "POSITION": 900},
+        validation_alias="ORION_BUCKET_SIGNAL_AGE_BUDGETS",
+    )
+    # Liquid-underlying allowlist for the bucket entry rules — the cheapest
+    # option-liquidity proxy (no chain data needed at signal time). Index ETFs
+    # + megacaps/high-option-volume names. JSON-array env override.
+    liquid_universe: list[str] = Field(
+        default_factory=lambda: [
+            # Index / sector ETFs
+            "SPY",
+            "QQQ",
+            "IWM",
+            "DIA",
+            "TLT",
+            "GLD",
+            "SLV",
+            "XLF",
+            "XLE",
+            "SMH",
+            # Megacap tech
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "GOOG",
+            "META",
+            "TSLA",
+            "AVGO",
+            "AMD",
+            "INTC",
+            "MU",
+            "QCOM",
+            "TSM",
+            "ORCL",
+            "CRM",
+            "ADBE",
+            "NFLX",
+            "NOW",
+            # High-option-volume names
+            "PLTR",
+            "COIN",
+            "MSTR",
+            "HOOD",
+            "SOFI",
+            "UBER",
+            "ABNB",
+            "SHOP",
+            "SNOW",
+            "CRWD",
+            "PANW",
+            "SQ",
+            "PYPL",
+            "DELL",
+            "SMCI",
+            "ARM",
+            "MRVL",
+            "IREN",
+            # Financials / industrials / energy
+            "BAC",
+            "JPM",
+            "GS",
+            "MS",
+            "C",
+            "WFC",
+            "XOM",
+            "CVX",
+            "OXY",
+            "BA",
+            "CAT",
+            "GE",
+            "F",
+            "GM",
+            # Consumer / healthcare
+            "LLY",
+            "UNH",
+            "PFE",
+            "MRNA",
+            "WMT",
+            "COST",
+            "TGT",
+            "HD",
+            "DIS",
+            "SBUX",
+            "NKE",
+            "MCD",
+        ],
+        validation_alias="ORION_LIQUID_UNIVERSE",
+    )
     # First flow poll on startup looks back this many minutes from `now` to
     # seed `_last_flow_poll_ts` (was a hardcoded 15-minute literal).
     initial_flow_lookback_minutes: int = Field(
@@ -293,30 +413,14 @@ class SystemSettings(BaseSettings):
         "'warn' = load stale models with warning, "
         "'bypass' = skip ML scoring entirely and pass candidates through",
     )
-    # --- Exit fallback rules (deterministic, independent of exit classifier) ---
-    # Profit-target exit: close when position return crosses this threshold.
-    # 1.00 = +100% on the option premium. Conservative because options can
-    # continue running; 1.50 (i.e. +150%) is also reasonable. Set to 0 to disable.
-    exit_fallback_profit_target_pct: float = Field(
-        default=1.00,
-        ge=0.0,
-        validation_alias="ORION_EXIT_FALLBACK_PROFIT_TARGET_PCT",
-    )
-    # Time-to-expiry exit: close when DTE drops below this. Prevents pin risk
-    # and theta wipeout on the last day. 1 = exit at T-1. Set to 0 to disable.
-    exit_fallback_min_dte: int = Field(
-        default=1,
-        ge=0,
-        validation_alias="ORION_EXIT_FALLBACK_MIN_DTE",
-    )
-    # Drawdown exit: close when position has retraced this far from its peak.
-    # 0.50 = if max_return_so_far was +200% and current is +100%, that's a 50%
-    # retracement → exit. Protects unrealized gains. Set to 0 to disable.
-    exit_fallback_max_drawdown_from_peak_pct: float = Field(
-        default=0.50,
-        ge=0.0,
-        le=1.0,
-        validation_alias="ORION_EXIT_FALLBACK_MAX_DRAWDOWN_FROM_PEAK_PCT",
+    # --- Exit rules (deterministic, per-bucket — the primary exit policy) ---
+    # Defaults live in execution/exit_fallback_rules.py:DEFAULT_BUCKET_PARAMS
+    # (profit target / stop loss / time stops / drawdown per bucket). This JSON
+    # env var overrides individual fields per bucket, e.g.
+    # ORION_EXIT_BUCKET_OVERRIDES='{"0DTE": {"profit_target_pct": 0.5}}'
+    exit_bucket_overrides: dict[str, dict[str, float | int | str]] = Field(
+        default_factory=dict,
+        validation_alias="ORION_EXIT_BUCKET_OVERRIDES",
     )
     proposals_dir: str = Field(default="proposals", validation_alias="ORION_PROPOSALS_DIR")
 
@@ -369,35 +473,16 @@ class SystemSettings(BaseSettings):
     circuit_breaker_min_samples: int = Field(default=5, validation_alias="ORION_CIRCUIT_BREAKER_MIN_SAMPLES")
 
     # Client URLs
-    trading_rag_url: str = Field(default="http://localhost:8005", validation_alias="TRADING_RAG_URL")
-    trading_rag_api_key: str | None = Field(default=None, validation_alias="TRADING_RAG_API_KEY")
     orion_api_url: str = Field(default="http://localhost:8000", validation_alias="ORION_API_URL")
 
     # System Monitor
     monitor_lag_threshold: int = Field(default=300, validation_alias="MONITOR_LAG_THRESHOLD")
     monitor_dlq_lookback: int = Field(default=5, validation_alias="MONITOR_DLQ_LOOKBACK")
 
-    # RAG / Embeddings
-    ollama_embedding_model: str = Field(default="nomic-embed-text", validation_alias="OLLAMA_EMBEDDING_MODEL")
-    ollama_base_url: str = Field(default="http://host.docker.internal:11434", validation_alias="OLLAMA_BASE_URL")
-
     model_config = SettingsConfigDict(env_prefix="ORION_")
 
 
-class MetaSearchSettings(BaseSettings):
-    scoring_weights: dict[str, float] = {"sharpe": 0.4, "profit_factor": 0.3, "info_ratio": 0.2, "stability": 0.1}
-    model_config = SettingsConfigDict(env_prefix="ORION_META_")
-
-
-class AgentSettings(BaseSettings):
-    model_name: str = "glm-5.1"
-    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
-    ai_gateway_url: str = Field(default="http://localhost:8002/v1", validation_alias="ORION_AI_GATEWAY_URL")
-    ai_gateway_key: str = Field(default="empire-ai-gateway-key", validation_alias="ORION_AI_GATEWAY_KEY")
-    model_config = SettingsConfigDict(env_prefix="ORION_AGENT_")
-
-
-def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSettings") -> list[str]:
+def warn_on_default_dev_credentials(system: "SystemSettings") -> list[str]:
     """Log a WARNING when known default dev credentials are still active.
 
     Returns the list of field names found using a default dev credential so
@@ -408,8 +493,6 @@ def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSetti
     flagged: list[str] = []
     if system.data_gateway_api_key == "gw_orion_trading_key_55555":  # pragma: allowlist secret
         flagged.append("data_gateway_api_key")
-    if agent.ai_gateway_key == "empire-ai-gateway-key":  # pragma: allowlist secret
-        flagged.append("ai_gateway_key")
 
     if flagged:
         log = setup_struct_logger("orion.config")
@@ -421,11 +504,9 @@ def warn_on_default_dev_credentials(system: "SystemSettings", agent: "AgentSetti
 # Singleton Instances
 risk_settings = RiskSettings()
 system_settings = SystemSettings()
-meta_settings = MetaSearchSettings()
-agent_settings = AgentSettings()
 heuristic_weights = HeuristicWeights()
 
-warn_on_default_dev_credentials(system_settings, agent_settings)
+warn_on_default_dev_credentials(system_settings)
 
 # Exports for compatibility
 STATIC_WATCHLIST = system_settings.static_watchlist

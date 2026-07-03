@@ -2,18 +2,23 @@
 
 Runs as a standalone launchd one-shot every 5 minutes. Two independent checks:
 
-1. **Service liveness (always-on).** Reads every ``service_liveness`` row and
-   alerts when ``now - last_success_ts_utc`` exceeds that service's own declared
-   ``cadence_budget_seconds``. Services register themselves on their first
-   publish, so a service the watchdog has never seen is silently skipped — never
-   alerted on absence it cannot attribute.
+1. **Service liveness.** Reads every ``service_liveness`` row and alerts when
+   ``now - last_success_ts_utc`` exceeds that service's own declared
+   ``cadence_budget_seconds``. Market-session services such as ingestion and
+   execution are informational outside the NYSE cash session; scheduled
+   always-on jobs still alert around the clock. Services register themselves on
+   their first publish, so a service the watchdog has never seen is silently
+   skipped — never alerted on absence it cannot attribute.
 
 2. **Pipeline-depth stage freshness (market-hours-gated, REAL data).** During
    the regular cash session it asserts per-stage freshness on the actual
-   pipeline tables — ``max(bronze_events.received_ts_utc)``,
-   ``max(silver_signals.created_at_utc)``, ``max(gold_feature_events.created_at_utc)``,
-   and today's ``candidate_trades`` count — each against a per-stage staleness
-   budget. This detects every stall class in the incident history (redis flap,
+   pipeline tables — ``max(bronze_events.received_ts_utc)`` and
+   ``max(silver_signals.created_at_utc)`` — each against a per-stage staleness
+   budget. ``gold_feature_events`` freshness and today's ``candidate_trades``
+   count are logged for visibility but never paged: the live ingestion/execution
+   path does not write ``gold_feature_events`` (only backtests / nightly
+   meta-search / DLQ recovery do), so it is legitimately empty intraday and was
+   a standing false positive. This detects every stall class in the incident history (redis flap,
    gold-poller OOM, born-stale, WS death) with ZERO contamination risk: no
    synthetic events are ever injected (the adversarial-review-banned design).
    Outside market hours the stage checks are informational only — no alerts —
@@ -34,7 +39,7 @@ import os
 from pathlib import Path
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 import exchange_calendars as xcals
@@ -57,7 +62,21 @@ BRONZE_BUDGET_SECONDS = 300
 SILVER_BUDGET_SECONDS = 600
 FEATURES_BUDGET_SECONDS = 1200
 
+# A stage's newest row should never be in the future. A small forward tolerance
+# absorbs benign clock skew between the writer host and the watchdog; anything
+# beyond it is a clock/data-quality bug that silently blinds the freshness check
+# (a negative age can never exceed the budget), so we alert on it explicitly.
+FUTURE_SKEW_SECONDS = 120
+
 _NYSE_CALENDAR = "XNYS"
+MARKET_HOURS_SERVICE_NAMES = frozenset(
+    {
+        "execution",
+        "feature_enrichment",
+        "ingestion",
+        "position_monitor",
+    }
+)
 
 
 def is_nyse_session_open(now_utc: datetime, *, calendar_name: str = _NYSE_CALENDAR) -> bool:
@@ -90,29 +109,37 @@ class LivenessAlert:
     age_seconds: float | None  # None = never seen / no rows
     budget_seconds: int
     message: str
+    # Distinguishes alert variants for the same stage/service so a distinct
+    # failure mode (e.g. future-dated rows vs ordinary staleness) gets its own
+    # cross-process suppression key instead of masking the other for 15 min.
+    dedupe_suffix: str = ""
 
     @property
     def dedupe_key(self) -> str:
-        return f"deadman_{self.name}"
+        return f"deadman_{self.name}{self.dedupe_suffix}"
 
 
 def evaluate_service_liveness(
     rows: list[ServiceLiveness],
     now_utc: datetime,
+    *,
+    market_open: bool = True,
 ) -> list[LivenessAlert]:
     """Pure decision function for the service-liveness check.
 
     Alerts for each registered service whose newest successful cycle is older
     than its own declared budget. A service with no row is not represented here
     at all (the watchdog never invents absence for a service it has never seen).
+    Market-session services are informational outside the cash session because
+    those loops can legitimately stop publishing when there is no market data to
+    process.
     """
     alerts: list[LivenessAlert] = []
     for row in rows:
-        last = row.last_success_ts_utc
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=UTC)
-        age = (now_utc - last).total_seconds()
+        age = _service_age_seconds(row, now_utc)
         if age > row.cadence_budget_seconds:
+            if not market_open and row.service in MARKET_HOURS_SERVICE_NAMES:
+                continue
             alerts.append(
                 LivenessAlert(
                     kind="service",
@@ -129,6 +156,21 @@ def evaluate_service_liveness(
                 )
             )
     return alerts
+
+
+def _service_age_seconds(row: ServiceLiveness, now_utc: datetime) -> float:
+    last = row.last_success_ts_utc
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    return (now_utc - last).total_seconds()
+
+
+def _suppressed_market_service_names(rows: list[ServiceLiveness], now_utc: datetime) -> list[str]:
+    return [
+        row.service
+        for row in rows
+        if row.service in MARKET_HOURS_SERVICE_NAMES and _service_age_seconds(row, now_utc) > row.cadence_budget_seconds
+    ]
 
 
 def evaluate_stage_freshness(
@@ -153,6 +195,21 @@ def evaluate_stage_freshness(
     if max_ts.tzinfo is None:
         max_ts = max_ts.replace(tzinfo=UTC)
     age = (now_utc - max_ts).total_seconds()
+    if max_ts > now_utc + timedelta(seconds=FUTURE_SKEW_SECONDS):
+        return LivenessAlert(
+            kind="stage",
+            name=stage_name,
+            age_seconds=age,
+            budget_seconds=budget_seconds,
+            dedupe_suffix="_future_ts",
+            message=(
+                f"pipeline stage '{stage_name}' has FUTURE-DATED rows — newest row is "
+                f"{-age:.0f}s in the future (tolerance {FUTURE_SKEW_SECONDS}s); "
+                "this indicates a clock or data-quality bug. The freshness check is "
+                "UNRELIABLE for this stage because a negative age can never exceed the "
+                "staleness budget — the stale-data alarm is effectively disabled until fixed"
+            ),
+        )
     if age > budget_seconds:
         return LivenessAlert(
             kind="stage",
@@ -206,8 +263,8 @@ async def run_watchdog(
 
     ``sessionmaker`` is injectable for tests; production builds a standalone
     engine. Alerts go to Discord with a per-name dedupe key (15-min window) and
-    an ERROR log. The market-hours gate suppresses stage alerts off-session;
-    service-liveness alerts always fire (a daemon down at 02:00 is still down).
+    an ERROR log. The market-hours gate suppresses stage alerts and market-bound
+    service alerts off-session; scheduled always-on service alerts still fire.
     """
     now = now_utc or datetime.now(UTC)
     own_engine: AsyncEngine | None = None
@@ -218,14 +275,23 @@ async def run_watchdog(
     try:
         alerts: list[LivenessAlert] = []
 
-        # 1. Service liveness — always evaluated.
+        market_open = is_nyse_session_open(now)
+
+        # 1. Service liveness.
         rows = await _read_liveness_rows(sessionmaker)
-        alerts.extend(evaluate_service_liveness(rows, now))
+        alerts.extend(evaluate_service_liveness(rows, now, market_open=market_open))
+        if not market_open:
+            suppressed_services = _suppressed_market_service_names(rows, now)
+            if suppressed_services:
+                logger.info(
+                    "deadman_market_service_check_informational",
+                    market_open=False,
+                    suppressed_services=suppressed_services,
+                )
 
         # 2. Pipeline-depth stage freshness — REAL data, market-hours gated.
         # Calendar-aware: outside a live NYSE session (nights, weekends,
         # holidays, early closes) the stage checks are suppressed entirely.
-        market_open = is_nyse_session_open(now)
         bronze_max = await _read_stage_max_ts(sessionmaker, BronzeEvent.received_ts_utc)
         silver_max = await _read_stage_max_ts(sessionmaker, SilverSignal.created_at_utc)
         features_max = await _read_stage_max_ts(sessionmaker, GoldFeatureEvent.created_at_utc)
@@ -234,9 +300,22 @@ async def run_watchdog(
         stage_findings = [
             evaluate_stage_freshness("bronze", bronze_max, BRONZE_BUDGET_SECONDS, now),
             evaluate_stage_freshness("silver", silver_max, SILVER_BUDGET_SECONDS, now),
-            evaluate_stage_freshness("features", features_max, FEATURES_BUDGET_SECONDS, now),
         ]
         stage_alerts = [a for a in stage_findings if a is not None]
+
+        # gold_feature_events is written only by backtests / nightly meta-search /
+        # DLQ recovery — never by the live ingestion/execution path — so it is
+        # legitimately empty during the cash session. Evaluate its freshness for
+        # visibility but never page on it (it was a standing false positive that
+        # paged "features has NO rows" every cycle intraday).
+        features_finding = evaluate_stage_freshness("features", features_max, FEATURES_BUDGET_SECONDS, now)
+        if features_finding is not None:
+            logger.info(
+                "deadman_features_stage_informational",
+                features_max=str(features_max),
+                age_seconds=features_finding.age_seconds,
+                message=features_finding.message,
+            )
 
         if market_open:
             alerts.extend(stage_alerts)

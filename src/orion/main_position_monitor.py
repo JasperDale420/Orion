@@ -19,7 +19,7 @@ from orion.execution.position_monitor import (
 )
 from orion.shared.async_main import run_entrypoint
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
+from orion.storage.db import init_db, wait_for_db
 
 logger = setup_struct_logger("orion.main_position_monitor")
 
@@ -174,6 +174,13 @@ async def main() -> None:
     # loudly on a competing fresh lease.
     lease_run_id: str | None = None
     if not args.dry_run:
+        # Wait for the DB before init_db so a transient outage (TimescaleDB
+        # restarting / briefly down) is waited out instead of crashing at
+        # startup — launchd would otherwise restart the process on a tight loop,
+        # flooding SERVICE_PROCESS_CRASHED CRITICALs (72 such crashes during the
+        # 2026-06-24 DB outage). Mirrors main_execution.py, which already does
+        # this and rode out the same outage without crashing.
+        await wait_for_db()
         await init_db()
         lease_run_id = await acquire_service_lease(_LEASE_SERVICE_ID)
 

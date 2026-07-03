@@ -13,7 +13,7 @@ from orion.ml.feature_store import (
     _GOLD_TO_FEATURE,
     _MARKET_LEVEL_DATASETS,
 )
-from orion.ml.pattern_miner import (
+from orion.ml.feature_config import (
     ALERT_FLOW_CONTEXT_FEATURES,
     ALERT_SECTOR_FLOW_FEATURES,
     ALL_EQUITY_FEATURE_COLUMNS,

@@ -41,6 +41,34 @@ from orion.execution.persistence import (  # noqa: E402
 )
 
 
+def _dte_from_occ_symbol(symbol: str) -> int | None:
+    """Calendar DTE (from today, UTC) parsed from an OCC symbol's expiry."""
+    from orion.shared.utils import parse_occ_symbol
+
+    expiry_str = parse_occ_symbol(symbol).get("expiry")
+    if not isinstance(expiry_str, str):
+        return None
+    try:
+        expiry = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (expiry - datetime.now(UTC).date()).days
+
+
+def _bucket_from_occ_symbol(symbol: str) -> str | None:
+    """Bucket derived from the OCC symbol's embedded expiry (current DTE).
+
+    Current DTE biases an aged position toward the TIGHTER bucket, which
+    fails safe: exits fire earlier and the 0DTE hard flatten still arms.
+    """
+    dte = _dte_from_occ_symbol(symbol)
+    if dte is None:
+        return None
+    from orion.execution.exit_fallback_rules import bucket_for_dte
+
+    return bucket_for_dte(dte)
+
+
 async def _fetch_orion_attributed_tickers() -> set[str]:
     """Return the set of distinct broker symbols Orion has actually filled.
 
@@ -507,13 +535,18 @@ class PositionMonitor:
 
             row = await db_query(run_query)
         except Exception as e:
+            # Transient DB failure — do NOT cache the fallback (a cached
+            # wrong bucket would permanently disable bucket-specific exits
+            # like the 0DTE hard flatten); retry on the next sync cycle.
             logger.warning(f"Failed to fetch entry context for {symbol}: {e}")
+            return {"bucket": _bucket_from_occ_symbol(symbol) or "SWING"}
 
         if not row:
             # No matching Orion decision — either a non-Orion position on the
-            # shared account, or a legacy position pre-attribution. Cache the
-            # default so we don't re-hit the DB every 60s for the same symbol.
-            default = {"bucket": "SWING"}
+            # shared account, or a legacy position pre-attribution. Derive the
+            # bucket from the OCC symbol's embedded expiry when possible, and
+            # cache so we don't re-hit the DB every 60s for the same symbol.
+            default = {"bucket": _bucket_from_occ_symbol(symbol) or "SWING"}
             self._entry_context_cache[symbol] = default
             return default
 
@@ -538,8 +571,10 @@ class PositionMonitor:
         decision_ts_for_dte = _coerce_dt(row.get("decision_ts"))
         if expiration_date is not None and decision_ts_for_dte is not None:
             try:
-                delta = expiration_date - decision_ts_for_dte
-                dte = max(int(delta.days), 0)
+                # Calendar-day DTE: expiration_date is stored as midnight UTC,
+                # so timestamp subtraction truncates a 1-DTE entered intraday
+                # to 0 days (mislabelling it 0DTE). Date arithmetic is exact.
+                dte = max((expiration_date.date() - decision_ts_for_dte.date()).days, 0)
             except Exception:
                 dte = None
 
@@ -556,17 +591,22 @@ class PositionMonitor:
                 dte = None
 
         if dte is None:
+            # Last resort: the OCC symbol embeds the expiry — current DTE
+            # biases toward the TIGHTER bucket for an aged position, which
+            # fails safe (earlier exits, and the 0DTE flatten still arms).
+            dte = _dte_from_occ_symbol(symbol)
+
+        if dte is None:
+            logger.warning(
+                f"DTE unknown for {symbol}; defaulting bucket to SWING — "
+                f"bucket-specific exits (0DTE flatten) may not arm",
+                extra={"event": "dte_fallback_used", "symbol": symbol},
+            )
             dte = 7
 
-        # Classify bucket based on DTE
-        if dte == 0:
-            bucket = "0DTE"
-        elif dte <= 3:
-            bucket = "SHORT_SWING"
-        elif dte <= 14:
-            bucket = "SWING"
-        else:
-            bucket = "POSITION"
+        from orion.execution.exit_fallback_rules import bucket_for_dte
+
+        bucket = bucket_for_dte(dte)
 
         # The decision row has the real entry timestamp; use it instead of
         # now() so ML exit features (time_held_hours) are correct after a
@@ -672,7 +712,10 @@ class PositionMonitor:
         (see FOLLOWUPS.md #0).
         """
         from orion.config import system_settings
-        from orion.execution.exit_fallback_rules import evaluate_fallback_rules
+        from orion.execution.exit_fallback_rules import (
+            evaluate_fallback_rules,
+            resolve_exit_params,
+        )
 
         exit_signals: list[tuple[TrackedPosition, ExitPrediction]] = []
 
@@ -685,9 +728,7 @@ class PositionMonitor:
             try:
                 fallback = evaluate_fallback_rules(
                     pos,
-                    profit_target_pct=system_settings.exit_fallback_profit_target_pct,
-                    min_dte=system_settings.exit_fallback_min_dte,
-                    max_drawdown_pct=system_settings.exit_fallback_max_drawdown_from_peak_pct,
+                    params=resolve_exit_params(pos.bucket, system_settings.exit_bucket_overrides),
                 )
             except Exception as exc:
                 logger.error(
@@ -1167,7 +1208,12 @@ async def run_position_monitor_loop(
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)
 
-        await asyncio.sleep(check_interval_seconds)
+        # 0DTE positions decay fast enough that a 60s cadence gives away
+        # real money between checks — tighten to 30s while any are open.
+        interval = check_interval_seconds
+        if any(p.bucket == "0DTE" for p in monitor.tracked_positions.values()):
+            interval = min(check_interval_seconds, 30)
+        await asyncio.sleep(interval)
 
 
 # Singleton

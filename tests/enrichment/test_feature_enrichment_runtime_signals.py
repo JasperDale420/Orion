@@ -11,6 +11,13 @@ from orion import main_feature_enrichment as feature_enrichment
 from orion.enrichment import heber_context
 
 
+async def _noop_wait_for_db(*_args: object, **_kwargs: object) -> None:
+    """Stub for the startup DB-readiness wait the service loop now performs
+    before init_db — irrelevant to these loop-behaviour tests, and would trip
+    its shutdown-abort on the pre-set shutdown_event."""
+    return None
+
+
 @pytest.mark.asyncio
 async def test_get_active_tickers_with_source_falls_back_to_heber_when_bronze_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -248,6 +255,10 @@ async def test_run_feature_loop_skips_gateway_contract_when_gateway_fetch_disabl
         raise AssertionError("gateway contract should not be required when gateway fetch is disabled")
 
     monkeypatch.setattr(feature_enrichment, "init_db", _noop_init_db)
+    # run_feature_loop now calls wait_for_db(cancel_event=shutdown_event) before
+    # init_db; this test pre-sets shutdown_event to make the loop exit after one
+    # pass, which would otherwise trip wait_for_db's "shutdown requested" abort.
+    monkeypatch.setattr(feature_enrichment, "wait_for_db", _noop_wait_for_db)
     monkeypatch.setattr(feature_enrichment, "_gateway_runtime_contract", _should_not_call_gateway_contract)
 
     shutdown_event = asyncio.Event()
@@ -269,6 +280,7 @@ async def test_run_feature_loop_requires_gateway_contract_when_gateway_fetch_ena
         raise ValueError("gateway credentials missing")
 
     monkeypatch.setattr(feature_enrichment, "init_db", _noop_init_db)
+    monkeypatch.setattr(feature_enrichment, "wait_for_db", _noop_wait_for_db)
     monkeypatch.setattr(feature_enrichment, "_gateway_runtime_contract", _missing_gateway_contract)
 
     shutdown_event = asyncio.Event()

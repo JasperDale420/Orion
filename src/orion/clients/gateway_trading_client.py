@@ -18,6 +18,48 @@ logger = structlog.get_logger("orion.clients.gateway_trading")
 
 _RESPONSE_DATA_KEY = "data"
 
+# Data-Gateway per-client order ownership isolation (gateway PR
+# fix/per-client-order-isolation-v2) transparently wraps every effective
+# ``client_order_id`` sent to the shared Alpaca account with a
+# ``c-{gateway_client_id}-`` prefix, and returns broker orders carrying that
+# wrapped value. Orion authenticates as gateway client ``orion``, so its
+# minted ``orion_<uuid>`` ids come back as ``c-orion-orion_<uuid>``.
+#
+# Orion's attribution layer (orion.execution.attribution) keys off the bare
+# ``orion_`` prefix and OrderRecord rows store the minted (un-wrapped) id, so
+# we strip the gateway wrapper at this boundary. Everything downstream
+# (fill_processor, position_monitor, reconcile_pnl, the orphan/backfill
+# scripts) then keeps operating in Orion's own ``orion_`` namespace.
+# Values without the wrapper (legacy pre-prefix orders) pass through unchanged.
+_GATEWAY_OWNERSHIP_PREFIX = "c-orion-"
+
+
+def _strip_ownership_prefix(client_order_id: Any) -> Any:
+    """Strip the gateway ``c-orion-`` ownership wrapper from a client_order_id.
+
+    Returns the value unchanged if it is missing the wrapper or not a string.
+    """
+    if isinstance(client_order_id, str) and client_order_id.startswith(_GATEWAY_OWNERSHIP_PREFIX):
+        return client_order_id[len(_GATEWAY_OWNERSHIP_PREFIX) :]
+    return client_order_id
+
+
+def _normalize_order_attribution(order: Any) -> Any:
+    """Normalize the ``client_order_id`` on a broker order (and nested legs).
+
+    Mutates and returns the order dict so all downstream attribution sees the
+    bare ``orion_`` id rather than the gateway-wrapped ``c-orion-orion_`` form.
+    """
+    if not isinstance(order, dict):
+        return order
+    if "client_order_id" in order:
+        order["client_order_id"] = _strip_ownership_prefix(order["client_order_id"])
+    legs = order.get("legs")
+    if isinstance(legs, list):
+        for leg in legs:
+            _normalize_order_attribution(leg)
+    return order
+
 
 class GatewayTradingClientError(RuntimeError):
     """Raised when the Gateway returns an error payload or invalid shape."""
@@ -219,7 +261,7 @@ class GatewayTradingClient:
             params=params,
         )
         if isinstance(result, list):
-            return result
+            return [_normalize_order_attribution(o) for o in result]
         if isinstance(result, dict) and "error" in result:
             logger.error(
                 "gateway_trading_orders_request_failed",
@@ -274,7 +316,8 @@ class GatewayTradingClient:
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         """Get a specific order by ID."""
-        return await self._request("GET", f"/api/v1/alpaca/orders/{order_id}")
+        result = await self._request("GET", f"/api/v1/alpaca/orders/{order_id}")
+        return _normalize_order_attribution(result)
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
         """Cancel an order."""

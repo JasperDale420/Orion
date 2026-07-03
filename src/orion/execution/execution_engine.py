@@ -1,7 +1,10 @@
 import asyncio
 import math
+import random
+import re
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -15,8 +18,11 @@ from orion.execution.attribution import (
     mint_orion_order_id,
     orion_order_id_sql_pattern,
 )
+from orion.execution.exit_fallback_rules import bucket_for_dte
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import (
+    count_open_journal_positions,
+    has_processed_fill_for_order,
     persist_exit_decision,
     persist_exit_order_rejection,
     persist_order_finalize,
@@ -24,6 +30,7 @@ from orion.execution.persistence import (
     persist_pending_order,
 )
 from orion.execution.rate_limiter import get_order_rate_limiter
+from orion.shared.alerts import send_discord_alert
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.shared.utils import ensure_utc
@@ -31,6 +38,39 @@ from orion.storage.db import async_session_factory
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 logger = setup_struct_logger(__name__)
+
+# Index ETFs get one extra per-underlying position slot (deep, liquid chains).
+_INDEX_UNDERLYINGS = frozenset({"SPY", "QQQ", "IWM"})
+
+# Skip single-name entries whose holding window straddles an earnings print
+# (long options through earnings = systematic IV-crush bleed). Windows track
+# each bucket's max-hold horizon; 0DTE closes same-day so it's exempt.
+_EARNINGS_EXCLUSION_DAYS = {"SHORT_SWING": 3, "SWING": 8, "POSITION": 8}
+
+# Daily per-ticker cache for the Gateway earnings lookup: only execute-stage
+# candidates hit it (tens/day), and earnings dates don't move intraday.
+_earnings_cache: dict[tuple[str, str], int | None] = {}
+
+
+async def _days_to_earnings_cached(ticker: str) -> int | None:
+    """Days until the ticker's next earnings (None = unknown / none upcoming)."""
+    key = (ticker, datetime.now(UTC).date().isoformat())
+    if key in _earnings_cache:
+        return _earnings_cache[key]
+    days: int | None = None
+    try:
+        from orion.jobs.sync_earnings import get_earnings_for_ticker
+
+        info = await get_earnings_for_ticker(ticker, datetime.now(UTC).date())
+        raw = info.get("days_to_earnings")
+        days = int(raw) if raw is not None else None
+    except Exception as exc:
+        logger.debug(f"Earnings lookup failed for {ticker}: {exc}")
+    if len(_earnings_cache) > 4096:  # ponytail: crude daily-turnover bound
+        _earnings_cache.clear()
+    _earnings_cache[key] = days
+    return days
+
 
 # `ORDER_ID_PREFIX` is re-exported from orion.execution.attribution so
 # existing imports (`from orion.execution.execution_engine import ORDER_ID_PREFIX`)
@@ -63,15 +103,130 @@ class _SkipLeg(Exception):
     """Internal sentinel: a bracket leg was intentionally not placed."""
 
 
+@dataclass
+class _CancelState:
+    """Per-order backoff state for the stale-entry-cancel sweep.
+
+    Stops the self-inflicted 429 storm: a rejected cancel used to be re-issued
+    every 5s forever. We now back off (transient) or give up (permanent) per
+    order, keyed by broker_order_id on the engine instance.
+    """
+
+    attempts: int = 0
+    next_eligible: float = 0.0  # time.monotonic() value before which we skip
+    last_code: int | None = None
+    gave_up: bool = False
+    alerted: bool = False
+
+
+# Permanent (non-retryable) Gateway/Alpaca markers for a rejected cancel. If any
+# appears in the error/detail/code body, the order can never be cancelled via
+# this path, so we give up immediately rather than backing off forever.
+_CANCEL_PERMANENT_MARKERS: tuple[str, ...] = (
+    "gw-e2009",
+    "trading capability required",
+)
+
+
+def _cancel_backoff_jitter() -> float:
+    """Random 0–1s jitter added to each backoff window so many stale orders that
+    failed in the same sweep don't all retry on the same later tick (a fresh
+    thundering herd). Isolated as a function so tests can monkeypatch it to 0."""
+    return random.uniform(0.0, 1.0)
+
+
+def _is_permanent_cancel_rejection(result: dict[str, Any]) -> bool:
+    """True ONLY when a rejected cancel can never succeed — a known permanent
+    Gateway/Alpaca marker (GW-E2009 / "trading capability required") in the
+    error / detail / code body.
+
+    Everything else — a 429, a 5xx, a generic 4xx, a timeout, an unknown shape —
+    is treated as TRANSIENT: it still gives up after ``_CANCEL_MAX_ATTEMPTS``
+    backed-off attempts, but is never stranded after a SINGLE attempt. Defaulting
+    unknown rejections to transient is the safe bias: wrongly retrying a truly
+    permanent reject wastes a few bounded calls, whereas wrongly declaring a
+    transient reject permanent strands the order's day-trading buying power for
+    the whole session after one attempt (a generic 408/409 can be retryable).
+    Permanence is asserted only from explicit, known broker codes.
+    """
+    blob = f"{result.get('detail') or ''} {result.get('error') or ''} {result.get('code') or ''}".lower()
+    return any(marker in blob for marker in _CANCEL_PERMANENT_MARKERS)
+
+
+def _is_trading_capability_rejection_text(error: str) -> bool:
+    """True when Gateway says this client key cannot mutate trading state."""
+    return any(marker in error.lower() for marker in _CANCEL_PERMANENT_MARKERS)
+
+
+# Alpaca rejects a cancel on a done order with `order is already in "<state>"
+# state` (wrapped as GW-E8001 / code 42210000). poll_fills' 200-row status
+# window can age an Orion order out before it sees the fill, so the sweep keeps
+# cancelling an order the broker already closed — the 2026-06-22 storm where 182
+# already-FILLED orders each gave up and paged a false "reserving DTBP" alert.
+#
+# The reject reaches us as the gateway's RAW response body (`exc.response.text`),
+# where Alpaca's message is double-JSON-escaped, so the quotes around the state
+# arrive as `\"`/`\\\"`, not a bare `"`. `\W+` matches any run of those quote /
+# backslash / space chars between the words so the match is escaping-agnostic.
+_CANCEL_ALREADY_TERMINAL_RE = re.compile(r"already in\W+(filled|canceled|cancelled|expired|rejected)\W+state")
+
+
+def _parse_already_terminal_state(result: dict[str, Any]) -> str | None:
+    """Return the broker's terminal state when a cancel was rejected because the
+    order is ALREADY in it (filled/canceled/expired/rejected), else None.
+
+    This is a state-desync to RECONCILE (flip the row terminal, stop sweeping),
+    not a cancel failure to retry-and-page. ``cancelled`` is normalised to
+    ``canceled`` to match the OrderRecord status vocabulary used elsewhere here.
+    """
+    blob = f"{result.get('detail') or ''} {result.get('error') or ''}".lower()
+    match = _CANCEL_ALREADY_TERMINAL_RE.search(blob)
+    if match is None:
+        return None
+    state = match.group(1)
+    return "canceled" if state == "cancelled" else state
+
+
+# Gateway 404 code for a cancel/get of an order whose client_order_id lacks the
+# per-client `c-<client>-` ownership prefix the Gateway added on 2026-05-20.
+# Orion orders placed BEFORE that date reached Alpaca as raw `orion_<uuid>`, so
+# the Gateway's ownership guard now fail-closes their cancel with 404 GW-E4404.
+# Such an order can NEVER be cancelled through the Gateway, so the sweep
+# reconciles its orphaned row out instead of looping (the 2026-06-22..24
+# GW-A4001/GW-E4404 retry flood — 1,164 warnings — was this case misclassified
+# as a transient reject and re-attempted across sweeps and restarts).
+_CANCEL_LEGACY_UNOWNED_MARKER = "gw-e4404"
+
+
+def _is_legacy_unowned_cancel_rejection(result: dict[str, Any]) -> bool:
+    """True ONLY when a cancel was rejected 404 GW-E4404 — a legacy pre-2026-05-20
+    order the Gateway can't confirm Orion owns.
+
+    Like ``_parse_already_terminal_state`` this is a state to RECONCILE (the order
+    is unreachable through the Gateway forever), not a failure to retry-and-page.
+    Scoped to the exact Gateway code, NOT a bare 404: another 404 on the cancel
+    path may be legitimately retryable, so only the never-cancellable
+    legacy-unowned case is reconciled out. Only called from the stale-entry
+    cancel sweep, so the match is inherently cancel-path scoped.
+    """
+    blob = f"{result.get('detail') or ''} {result.get('error') or ''} {result.get('code') or ''}".lower()
+    return _CANCEL_LEGACY_UNOWNED_MARKER in blob
+
+
 def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejection", "ambiguous"]:
     """Classify a failed close-order Gateway response for escalation routing.
 
-    Only a CONFIRMED broker rejection (HTTP 4xx) means the limit definitively
-    did not rest, so escalating to a native flatten is safe. Anything else —
-    a 5xx, a sub-400 code, a missing/None status_code, or a non-int shape — is
-    AMBIGUOUS: the limit may have been accepted and be resting, so we must
-    defer (never escalate), or a double-close could re-open a naked-short hole
-    (the reverted-a388337 class of bug).
+    Only a CONFIRMED broker rejection (HTTP 4xx, EXCLUDING 429) means the limit
+    definitively did not rest, so escalating to a native flatten is safe.
+    Anything else — a 429, a 5xx, a sub-400 code, a missing/None status_code, or
+    a non-int shape — is AMBIGUOUS: the limit may have been accepted and be
+    resting, so we must defer (never escalate), or a double-close could re-open
+    a naked-short hole (the reverted-a388337 class of bug).
+
+    A 429 is a TRANSIENT rate-limit (the self-inflicted storm), not a real
+    rejection: the limit may rest fine once the storm clears. Escalating a 429
+    to a NATIVE flatten would blind the daily-loss/drawdown kill switch (native
+    closes aren't Orion-attributed), so 429 must defer-and-retry, never escalate.
 
     ``bool`` is an ``int`` subclass in Python, but a boolean status_code is a
     shape error, not a real HTTP status — treated as ambiguous and logged.
@@ -89,6 +244,9 @@ def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejecti
         return "ambiguous"
 
     if isinstance(status_code, int):
+        # 429 (rate limit) is transient — defer, never escalate to native.
+        if status_code == 429:
+            return "ambiguous"
         if 400 <= status_code < 500:
             return "confirmed_rejection"
         # 5xx, or any sub-400 code — server-side / transport-ambiguous.
@@ -109,6 +267,36 @@ def classify_close_failure(result: dict[str, Any]) -> Literal["confirmed_rejecti
         status_code=str(status_code)[:80],
     )
     return "ambiguous"
+
+
+def _position_recheck_reports_gone(pos: dict[str, Any]) -> bool:
+    """True only when a position re-check DEFINITIVELY shows the position is gone:
+    a broker 404 / position-not-found, or an explicit zero qty.
+
+    A transient lookup error (500 / 429 / auth) is NOT 'gone' and must NOT be
+    read as a completed close — ``GatewayTradingClient._request`` renders EVERY
+    ``HTTPStatusError`` as ``{"error": ..., "status_code": ...}``, so a bare
+    ``"error" in pos`` check (as ``_live_position_qty`` uses, returning 0.0)
+    would treat a transient failure as flat and could abandon a still-open
+    option (Codex review). Gate strictly to the 404/position-not-found signal.
+    """
+    if not isinstance(pos, dict):
+        return False
+    if "error" in pos:
+        blob = f"{pos.get('detail') or ''} {pos.get('error') or ''} {pos.get('code') or ''}".lower()
+        return (
+            pos.get("status_code") == 404
+            or "position_not_found" in blob
+            or "position not found" in blob
+            or "40410000" in blob
+        )
+    raw = pos.get("qty")
+    if raw is None:
+        return False
+    try:
+        return abs(float(raw)) < 1e-9
+    except (TypeError, ValueError):
+        return False
 
 
 def round_to_options_tick(price: float) -> float:
@@ -214,6 +402,18 @@ class ExecutionEngine:
         self._last_fill_poll_ts: datetime | None = None
         self._last_order_poll_ts: datetime | None = None
         self._last_position_sync_ts: datetime | None = None
+
+        # Per-order backoff/give-up state for the stale-entry-cancel sweep,
+        # keyed by broker_order_id. Pruned each sweep to orders still stale.
+        self._cancel_attempts: dict[str, _CancelState] = {}
+
+        # Broker order ids whose recovery fetch 404'd at the Gateway (the
+        # legacy/unowned class — the id exists only on the activities surface).
+        # No ProcessedFill marker can ever land for them, so the recon's marker
+        # dedupe never engages; without this give-up the same ids are re-fetched
+        # (and re-ERROR) every close-recon cycle forever.
+        # ponytail: in-memory; a restart re-learns each id with one 404.
+        self._recon_gone_order_ids: set[str] = set()
 
         # TTL cache for _check_system_health (avoids N identical DB queries per cycle)
         self._health_cache: tuple[bool, float] | None = None
@@ -380,6 +580,7 @@ class ExecutionEngine:
         return acct
 
     _DTBP_BACKOFF_SECONDS = 120.0
+    _TRADING_CAPABILITY_BACKOFF_SECONDS = 3600.0
 
     def _in_dtbp_backoff(self) -> bool:
         """True while inside the cooldown set after a CONFIRMED broker DTBP
@@ -392,6 +593,14 @@ class ExecutionEngine:
     def _note_dtbp_rejection(self) -> None:
         """Arm the DTBP backoff after a broker 40310000 rejection."""
         self._dtbp_backoff_until = time.monotonic() + self._DTBP_BACKOFF_SECONDS
+
+    def _in_trading_capability_backoff(self) -> bool:
+        """True while the Gateway key is known unable to submit/cancel orders."""
+        return time.monotonic() < getattr(self, "_trading_capability_backoff_until", 0.0)
+
+    def _note_trading_capability_rejection(self) -> None:
+        """Arm the Gateway trading-capability backoff after GW-E2009."""
+        self._trading_capability_backoff_until = time.monotonic() + self._TRADING_CAPABILITY_BACKOFF_SECONDS
 
     async def _has_daytrading_buying_power(self, estimated_cost: float) -> bool:
         """True unless we can positively read that the shared account's
@@ -758,16 +967,49 @@ class ExecutionEngine:
         if not await self._pre_flight_checks(decision, candidate):
             return
 
-        dte: int | None = None
-        if candidate.expiration_date:
-            now = datetime.now(UTC)
-            dte = (candidate.expiration_date - now).days
-            if dte < risk_settings.min_dte:
-                logger.warning(
-                    "options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker
+        if not candidate.expiration_date:
+            # Without an expiry the DTE gate, bucket caps, and the position
+            # monitor's bucket exits (0DTE hard flatten) can't classify the
+            # position — fail closed rather than trade an unclassifiable leg.
+            logger.error(
+                "options_blocked_no_expiration_date",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Missing Expiration Date"
+            return
+
+        # Calendar-day DTE: expiration_date is stored as midnight UTC, so
+        # timestamp subtraction yields -1 for a genuine same-day 0DTE all
+        # session long (blocking 0DTE even with min_dte=0) and truncates
+        # 1-DTE to 0. Date arithmetic is exact: 0 = expires today,
+        # negative = already expired (always blocked).
+        dte: int = (candidate.expiration_date.date() - datetime.now(UTC).date()).days
+        if dte < risk_settings.min_dte:
+            logger.warning("options_blocked_dte_low", dte=dte, min_dte=risk_settings.min_dte, ticker=candidate.ticker)
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = f"DTE Too Low ({dte} days)"
+            return
+
+        bucket = bucket_for_dte(dte)
+
+        # Earnings exclusion: long options through an earnings print is a
+        # systematic IV-crush bleed for multi-day holds on single names.
+        # Index ETFs and 0DTE (closed same day) are exempt. Fail-open on a
+        # Gateway error — this is an edge optimization, not a safety guard.
+        earnings_window = _EARNINGS_EXCLUSION_DAYS.get(bucket, 0)
+        if earnings_window and candidate.ticker not in _INDEX_UNDERLYINGS:
+            days_to_earnings = await _days_to_earnings_cached(candidate.ticker)
+            if days_to_earnings is not None and 0 <= days_to_earnings <= earnings_window:
+                logger.info(
+                    "options_blocked_earnings_window",
+                    ticker=candidate.ticker,
+                    days_to_earnings=days_to_earnings,
+                    bucket=bucket,
                 )
-                decision.executed_successfully = DecisionStatus.FALSE
-                decision.reason = f"DTE Too Low ({dte} days)"
+                decision.executed_successfully = DecisionStatus.SKIPPED
+                decision.reason = f"Earnings in {days_to_earnings}d (window {earnings_window}d)"
                 return
 
         # Always fetch live option chain for current pricing — candidate.premium
@@ -775,6 +1017,7 @@ class ExecutionEngine:
         # accurate order sizing, risk checks, and limit price.
         option_price = None
         contract_greeks: dict[str, float] | None = None
+        bid_f = ask_f = 0.0
         client = self._get_gateway_client()
         chain_result = await client.get_option_chain(candidate.ticker)
 
@@ -795,19 +1038,51 @@ class ExecutionEngine:
                         bid_f = ask_f = 0.0
                     if bid_f > 0 and ask_f > 0:
                         option_price = (bid_f + ask_f) / 2
-                    elif ask_f > 0:
-                        option_price = ask_f
-                    elif bid_f > 0:
-                        option_price = bid_f
-                    else:
-                        last = contract.get("last")
-                        try:
-                            last_f = float(last) if last not in (None, "") else 0.0
-                        except (TypeError, ValueError):
-                            last_f = 0.0
-                        if last_f > 0:
-                            option_price = last_f
                     break
+
+        # Liquidity gate: an entry we can't later exit near its mark is a
+        # guaranteed loser. Requires a live two-sided quote, a mid above the
+        # dust floor, and a spread narrow enough that round-trip cost doesn't
+        # eat the profit target. Fail closed — the old fallback pricing
+        # (ask-only / bid-only / last / strike) put orders on zero-bid dust
+        # that then stranded until expiry.
+        if option_price is not None:
+            mid = option_price
+            spread_pct = (ask_f - bid_f) / mid if mid > 0 else float("inf")
+            spread_cap = risk_settings.option_bucket_spread_caps.get(bucket, risk_settings.max_option_spread_pct)
+            reject_reason = None
+            if risk_settings.min_option_mid > 0 and mid < risk_settings.min_option_mid:
+                reject_reason = f"Illiquid: mid {mid:.2f} < min {risk_settings.min_option_mid:.2f}"
+            elif spread_cap > 0 and spread_pct > spread_cap:
+                reject_reason = f"Illiquid: spread {spread_pct:.0%} > max {spread_cap:.0%}"
+            if reject_reason:
+                logger.warning(
+                    "options_blocked_illiquid",
+                    option_symbol=candidate.option_symbol,
+                    ticker=candidate.ticker,
+                    bid=bid_f,
+                    ask=ask_f,
+                    reason=reject_reason,
+                )
+                decision.executed_successfully = DecisionStatus.SKIPPED
+                decision.reason = reject_reason
+                return
+        elif (bid_f > 0) != (ask_f > 0):
+            # One-sided quote: no bid means nothing to sell into later; no ask
+            # means the "quote" isn't a market. Reject explicitly (a generic
+            # price-fetch error would hide the liquidity cause).
+            reject_reason = "Illiquid: zero bid" if bid_f <= 0 else "Illiquid: zero ask"
+            logger.warning(
+                "options_blocked_illiquid",
+                option_symbol=candidate.option_symbol,
+                ticker=candidate.ticker,
+                bid=bid_f,
+                ask=ask_f,
+                reason=reject_reason,
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = reject_reason
+            return
 
         # NOTE: `candidate.premium` is the UW-flow event's aggregate premium
         # (sum of all contracts in the sweep) — NOT a per-contract price. Using
@@ -818,6 +1093,28 @@ class ExecutionEngine:
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Option Price Fetch Failed"
             return
+
+        # Capture the decision-time quote for the measurement loop: realized
+        # slippage and counterfactual labels both need the entry-time market.
+        decision.decision_trace_json = decision.decision_trace_json or {}
+        decision.decision_trace_json["entry_quote"] = {
+            "bid": bid_f,
+            "ask": ask_f,
+            "mid": option_price,
+            "spread_pct": round((ask_f - bid_f) / option_price, 4) if option_price > 0 else None,
+            "ts_utc": datetime.now(UTC).isoformat(),
+        }
+
+        # Pay-up pricing: a limit resting AT mid fills ~36% of the time and
+        # ages into the stale-cancel sweep. Cross a fraction of the half-
+        # spread toward the ask. 0DTE pays more (momentum decays faster than
+        # the queue). No ask clamp: a BUY limit at/above ask is marketable
+        # and fills at the ask or better (same convention as the close
+        # path's marketable limits), whereas clamping to a real-market ask
+        # that sits off Alpaca's coarser tick grid (e.g. 0.64 on the 0.05
+        # grid) gets the order 422-rejected at the broker.
+        payup_frac = 0.40 if bucket == "0DTE" else 0.25
+        option_price = option_price + payup_frac * (ask_f - option_price)
 
         # Snap the price to Alpaca's options tick increment. Prior to this,
         # mid-quotes like (bid 0.60 + ask 0.61) / 2 = 0.605 and float-
@@ -835,20 +1132,65 @@ class ExecutionEngine:
             decision.reason = "Option Price Rounded To Zero"
             return
 
-        # Solver-driven sizing: use risk_per_trade_bps × regime_size_multiplier
-        # when available, with max_option_premium_pct as safety ceiling.
+        # Record the actual limit alongside the raw quote so the measurement
+        # loop can separate market spread from our own pay-up.
+        decision.decision_trace_json["entry_quote"]["limit_price"] = option_price
+        decision.decision_trace_json["entry_quote"]["payup_frac"] = payup_frac
+
+        # Per-bucket / per-underlying entry caps: keep every bucket building a
+        # sample instead of the highest-volume rule hogging all the slots.
+        # ponytail: N candidates in one batch can all pass before any fills
+        # land; the risk manager's pending-aware global cap bounds the burst.
+        bucket_cap = risk_settings.option_bucket_caps.get(bucket, 0)
+        counts = await count_open_journal_positions()
+        if counts is None:
+            # Fail closed: unknown counts must not read as "no positions".
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = "Position-cap check unavailable"
+            return
+        open_by_bucket, open_by_ticker = counts
+        underlying_cap = (
+            risk_settings.max_positions_per_underlying
+            if candidate.ticker not in _INDEX_UNDERLYINGS
+            else risk_settings.max_positions_per_index_underlying
+        )
+        cap_reason = None
+        if bucket_cap > 0 and open_by_bucket.get(bucket, 0) >= bucket_cap:
+            cap_reason = f"Bucket cap reached: {bucket} {open_by_bucket.get(bucket, 0)}/{bucket_cap}"
+        elif underlying_cap > 0 and open_by_ticker.get(candidate.ticker, 0) >= underlying_cap:
+            cap_reason = (
+                f"Underlying cap reached: {candidate.ticker} {open_by_ticker.get(candidate.ticker, 0)}/{underlying_cap}"
+            )
+        if cap_reason:
+            logger.info(
+                "options_blocked_position_cap",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                reason=cap_reason,
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = cap_reason
+            return
+
+        # Sizing: fixed premium debit per trade (uniform trade weights for the
+        # measurement loop) with solver risk_per_trade_bps as the fallback and
+        # max_option_premium_pct as the safety ceiling either way.
         ep = decision.execution_params or {}
         risk_bps = float(ep.get("risk_per_trade_bps", 0))
         regime_mult = float(ep.get("regime_size_multiplier", 1.0))
         max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
 
-        if risk_bps > 0:
+        if risk_settings.fixed_premium_per_trade > 0:
+            risk_dollars = min(risk_settings.fixed_premium_per_trade, max_premium)
+        elif risk_bps > 0:
             risk_dollars = (self.risk_manager.current_equity * risk_bps / 10000.0) * regime_mult
             risk_dollars = min(risk_dollars, max_premium)
         else:
             risk_dollars = max_premium
 
         num_contracts = max(0, int(risk_dollars / (option_price * 100)))
+        if risk_settings.max_contracts_per_trade > 0:
+            num_contracts = min(num_contracts, risk_settings.max_contracts_per_trade)
 
         if num_contracts <= 0:
             logger.warning(
@@ -1084,6 +1426,16 @@ class ExecutionEngine:
             decision.reason = "Insufficient day-trading buying power (shared account)"
             return
 
+        if self._in_trading_capability_backoff():
+            logger.error(
+                "gateway_trading_capability_backoff_active",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Gateway key lacks trading capability"
+            return
+
         # Orion only opens options positions from candidates — it buys calls on
         # a LONG bet and buys puts on a SHORT bet. Both are BUYs at the broker.
         # The SHORT direction reflects a bearish view on the underlying, not a
@@ -1150,6 +1502,7 @@ class ExecutionEngine:
                 limit_price=option_price,
             )
         except Exception as e:
+            error_text = str(e)
             await self._remove_pending_order_compat(client_order_id)
             if hasattr(self.risk_manager, "clear_intended_position_greeks"):
                 self.risk_manager.clear_intended_position_greeks(candidate.ticker)
@@ -1248,30 +1601,33 @@ class ExecutionEngine:
                     )
 
         except Exception as e:
+            error_text = str(e)
             await self._remove_pending_order_compat(client_order_id)
             if hasattr(self.risk_manager, "clear_intended_position_greeks"):
                 self.risk_manager.clear_intended_position_greeks(candidate.ticker)
 
             # Confirmed day-trading-buying-power wall → arm the backoff so we
             # stop submitting opening orders for a cooldown instead of flooding.
-            if "40310000" in str(e):
+            if "40310000" in error_text:
                 self._note_dtbp_rejection()
+            if _is_trading_capability_rejection_text(error_text):
+                self._note_trading_capability_rejection()
 
             # Finalize the PENDING_SUBMIT row to REJECTED in place; the row
             # already exists from persist_pending_order above.
             await persist_order_finalize(
                 client_order_id=client_order_id,
                 broker_order=None,
-                error_message=str(e),
+                error_message=error_text,
             )
             logger.error(
                 "options_execution_failed",
-                error=str(e),
+                error=error_text,
                 client_order_id=client_order_id,
                 option_symbol=candidate.option_symbol,
             )
             decision.executed_successfully = DecisionStatus.FALSE
-            decision.reason = f"Options Broker Error: {e}"
+            decision.reason = f"Options Broker Error: {error_text}"
             self._record_result(False)
 
     # ── Bracket orders (stop-loss / take-profit) ──────────────────────────
@@ -1734,6 +2090,28 @@ class ExecutionEngine:
                 )
                 self._record_result(False)
                 return False
+
+            # Before escalating, re-verify the LIVE position. The broker can
+            # vanish it between our pre-check and this rejection: 2026-07-01 saw
+            # 44 sell_to_close 422s ("position intent mismatch, inferred:
+            # sell_to_open") each paired with a position-not-found 404, retried
+            # 4× per contract. A DEFINITIVE position-gone recheck (404 /
+            # position-not-found, or an explicit zero qty) means the close
+            # already succeeded/expired — escalating to the native flatten would
+            # re-submit a closing order into the same wall and keep looping, so
+            # treat it as done. A transient recheck error (500/429/auth) is NOT
+            # 'gone' and must fall through to the native flatten (reduce-only,
+            # 404-safe) rather than be recorded as a completed close.
+            recheck = await client.get_position(ticker)
+            if _position_recheck_reports_gone(recheck):
+                logger.info(
+                    f"Close for {ticker}: broker reports no position after limit rejection "
+                    f"(already closed/expired) — not escalating",
+                    extra={"event_type": "EXIT_SKIPPED_NO_POSITION", "ticker": ticker},
+                )
+                self._record_result(True)
+                return True
+
             logger.warning(
                 f"Limit close rejected for {ticker} ({status_code}), escalating to native flatten: {detail[:200]}",
                 extra={"event_type": "EXIT_LIMIT_REJECTED_ESCALATE", "ticker": ticker, "error": detail[:200]},
@@ -1936,11 +2314,23 @@ class ExecutionEngine:
 
         Frees the day-trading buying power they reserve on the shared account
         and prevents a late fill on an hours-old signal. Best-effort: the
-        Gateway surfaces failures as ``{"error": ...}`` (not exceptions), so a
-        rejected cancel is logged and skipped rather than counted. On a clean
-        cancel the order is dropped from risk pending exposure so it isn't
-        double-counted until the hourly prune. Returns the number cancelled.
+        Gateway surfaces failures as ``{"error": ...}`` (not exceptions). On a
+        clean cancel the order is dropped from risk pending exposure so it isn't
+        double-counted until the hourly prune, and its backoff state is cleared.
+
+        A rejected cancel no longer re-fires every 5s forever (the self-inflicted
+        429 storm): a PERMANENT reject (only a known broker marker — GW-E2009 /
+        "trading capability required") gives up after a single attempt with a
+        durable error log + one alert and is never retried; every other reject
+        (429 / 5xx / timeout / a generic 4xx) is TRANSIENT — it arms exponential
+        backoff with jitter, is skipped until it elapses, and gives up only after
+        ``_CANCEL_MAX_ATTEMPTS``. At most ``_CANCEL_MAX_PER_CYCLE`` cancels are
+        attempted per sweep. Returns the number cancelled.
         """
+        # __new__-constructed instances (some tests) skip __init__; seed lazily.
+        if not hasattr(self, "_cancel_attempts"):
+            self._cancel_attempts = {}
+
         try:
             stale = await self._fetch_stale_entry_orders()
         except Exception as e:
@@ -1950,52 +2340,245 @@ class ExecutionEngine:
             )
             return 0
 
+        # Prune state for orders no longer stale (filled / canceled / terminal),
+        # so the dict can't grow unbounded over a long-running process.
+        still_stale_ids = {str(r["broker_order_id"]) for r in stale if r.get("broker_order_id")}
+        for known_id in list(self._cancel_attempts):
+            if known_id not in still_stale_ids:
+                del self._cancel_attempts[known_id]
+
+        now = time.monotonic()
         cancelled = 0
+        attempted = 0
         for row in stale:
             broker_id = row.get("broker_order_id")
             coid = row.get("client_order_id")
             ticker = row.get("ticker")
             if not broker_id:
                 continue
+            bid = str(broker_id)
+
+            state = self._cancel_attempts.get(bid)
+            # Skip orders that have given up or are still inside their backoff.
+            if state is not None and (state.gave_up or now < state.next_eligible):
+                continue
+
+            # Per-sweep cap: bound Gateway load even when many orders are stale.
+            if attempted >= self._CANCEL_MAX_PER_CYCLE:
+                break
+            attempted += 1
+
             try:
-                result = await client.cancel_order(str(broker_id))
+                result = await client.cancel_order(bid)
             except Exception as e:
+                # A raised transport error is transient — back off like a 5xx.
                 logger.warning(
-                    f"Failed to cancel stale entry order {broker_id} on {ticker}: {e}",
-                    extra={"event_type": "STALE_ENTRY_CANCEL_FAILED", "ticker": ticker, "order_id": str(broker_id)},
+                    f"Failed to cancel stale entry order {bid} on {ticker}: {e}",
+                    extra={"event_type": "STALE_ENTRY_CANCEL_FAILED", "ticker": ticker, "order_id": bid},
                 )
+                await self._record_cancel_failure(bid, ticker, {"error": str(e)}, permanent=False)
                 continue
+
             if isinstance(result, dict) and "error" in result:
+                # The broker may reject the cancel because the order is ALREADY
+                # terminal — poll_fills' 200-row status window aged it out before
+                # it saw the fill. Reconcile the row to the broker's real state
+                # and drop the reservation; this is a state-desync, NOT a stuck
+                # order to retry and page (the 2026-06-22 false-alert storm).
+                terminal_state = _parse_already_terminal_state(result)
+                if terminal_state is not None:
+                    # The broker says this order is already terminal — poll_fills'
+                    # 200-row window aged it out before it saw the transition. If it
+                    # FILLED, that fill was never processed: no FillRecord landed,
+                    # so per-symbol cost basis / realized PnL are incomplete
+                    # (_compute_cost_basis_from_fills can't replay an absent row).
+                    # Recover it by fetching the order by id and feeding it through
+                    # the idempotent fill processor.
+                    #
+                    # Best-effort, and intentionally does NOT gate the status flip
+                    # below: the flip is what drops the order out of the stale set
+                    # and stops the 2026-06-22 cancel/alert storm, and the broker
+                    # has ALREADY confirmed the fill — so a get_order failure must
+                    # not strand the order back in the storming set (and unconditional
+                    # flip means each order triggers exactly one get_order, never a
+                    # per-sweep re-fetch). A rare unrecovered fill is logged durably
+                    # and fails safe downstream (reconcile_pnl routes an unbasis-able
+                    # close to BROKER_UNAVAILABLE). The sweep only surfaces orders in
+                    # open (pre-fill) states, never partially_filled, so recovery
+                    # always applies to an order we have counted ZERO fills for —
+                    # which sidesteps the partial-double-count hazard.
+                    if terminal_state == "filled":
+                        await self._recover_missed_fill(client, bid, ticker)
+                    self._cancel_attempts.pop(bid, None)
+                    await self._remove_pending_order_compat(coid)
+                    try:
+                        await persist_order_status_update(broker_order_id=bid, status=terminal_state)
+                    except Exception as e:
+                        logger.warning(
+                            "Could not reconcile already-terminal stale entry order in DB",
+                            extra={
+                                "event_type": "STALE_ENTRY_STATUS_UPDATE_FAILED",
+                                "order_id": bid,
+                                "error": str(e),
+                            },
+                        )
+                    logger.info(
+                        f"Stale entry order {bid} on {ticker} already {terminal_state} at broker "
+                        f"— reconciled (poll_fills missed the transition)",
+                        extra={
+                            "event_type": "STALE_ENTRY_RECONCILED",
+                            "ticker": ticker,
+                            "order_id": bid,
+                            "broker_state": terminal_state,
+                        },
+                    )
+                    continue
+
+                # A legacy pre-2026-05-20 order (raw `orion_<uuid>`, no Gateway
+                # `c-<client>-` ownership prefix) fail-closes every cancel with
+                # 404 GW-E4404 — the Gateway can't confirm Orion owns it, so it
+                # can NEVER be cancelled through this path. Retrying is pointless
+                # (it produced the 2026-06-22..24 GW-A4001/GW-E4404 flood — 1,164
+                # warnings). Reconcile the orphaned row terminal so the sweep
+                # stops re-selecting it (within this process AND across restarts)
+                # and drop the stale pending reservation. These are DAY orders
+                # long expired at Alpaca; a real fill is still caught
+                # (orion-attributed) by poll_fills / position-sync. get_order is
+                # NOT attempted to recover a fill — it hits the same ownership
+                # guard and 404s — and any order still open at Alpaca is cleared
+                # out-of-band via the dashboard.
+                if _is_legacy_unowned_cancel_rejection(result):
+                    self._cancel_attempts.pop(bid, None)
+                    await self._remove_pending_order_compat(coid)
+                    try:
+                        await persist_order_status_update(broker_order_id=bid, status="canceled")
+                    except Exception as e:
+                        logger.warning(
+                            "Could not reconcile legacy-unowned stale entry order in DB",
+                            extra={
+                                "event_type": "STALE_ENTRY_STATUS_UPDATE_FAILED",
+                                "order_id": bid,
+                                "error": str(e),
+                            },
+                        )
+                    logger.warning(
+                        f"Stale entry order {bid} on {ticker} is a legacy pre-2026-05-20 order "
+                        f"(404 GW-E4404, unowned by the Gateway) — reconciled out of the cancel "
+                        f"sweep; clear it out-of-band at Alpaca if still open",
+                        extra={
+                            "event_type": "STALE_ENTRY_LEGACY_UNOWNED_RECONCILED",
+                            "ticker": ticker,
+                            "order_id": bid,
+                        },
+                    )
+                    continue
+
+                permanent = _is_permanent_cancel_rejection(result)
                 logger.warning(
-                    f"Cancel rejected for stale entry order {broker_id} on {ticker}: "
+                    f"Cancel rejected for stale entry order {bid} on {ticker}: "
                     f"{result.get('detail') or result.get('error')}",
-                    extra={"event_type": "STALE_ENTRY_CANCEL_REJECTED", "ticker": ticker, "order_id": str(broker_id)},
+                    extra={
+                        "event_type": "STALE_ENTRY_CANCEL_REJECTED",
+                        "ticker": ticker,
+                        "order_id": bid,
+                        "permanent": permanent,
+                    },
                 )
+                await self._record_cancel_failure(bid, ticker, result, permanent=permanent)
                 continue
+
+            # Success: clear backoff state and drop the pending reservation.
+            self._cancel_attempts.pop(bid, None)
             await self._remove_pending_order_compat(coid)
             # Optimistically flip the DB row out of the open-status set so this
-            # sweep doesn't re-issue a (rejected) cancel for it every cycle when
-            # the row falls outside the next status-poll's 200-row window — the
-            # exact high-order-volume day this fix targets. The next poll
-            # reconciles to the broker's real terminal status.
+            # sweep doesn't re-issue a cancel for it every cycle when the row
+            # falls outside the next status-poll's 200-row window — the exact
+            # high-order-volume day this fix targets. The next poll reconciles
+            # to the broker's real terminal status.
             try:
-                await persist_order_status_update(broker_order_id=str(broker_id), status="canceled")
+                await persist_order_status_update(broker_order_id=bid, status="canceled")
             except Exception as e:
                 logger.warning(
                     "Could not mark cancelled stale entry order in DB",
                     extra={
                         "event_type": "STALE_ENTRY_STATUS_UPDATE_FAILED",
-                        "order_id": str(broker_id),
+                        "order_id": bid,
                         "error": str(e),
                     },
                 )
             cancelled += 1
             logger.info(
-                f"Cancelled stale entry order {broker_id} on {ticker} "
+                f"Cancelled stale entry order {bid} on {ticker} "
                 f"(unfilled > {self._STALE_ENTRY_ORDER_TTL_SECONDS:.0f}s)",
-                extra={"event_type": "STALE_ENTRY_CANCELLED", "ticker": ticker, "order_id": str(broker_id)},
+                extra={"event_type": "STALE_ENTRY_CANCELLED", "ticker": ticker, "order_id": bid},
             )
         return cancelled
+
+    async def _record_cancel_failure(
+        self, broker_id: str, ticker: Any, result: dict[str, Any], *, permanent: bool
+    ) -> None:
+        """Update per-order backoff/give-up state after a rejected cancel.
+
+        Permanent rejections give up after one attempt; transient ones back off
+        exponentially with jitter and give up after ``_CANCEL_MAX_ATTEMPTS``.
+        A give-up is always recorded with a durable ERROR log (the operator's
+        guaranteed signal that an order is stuck reserving DTBP) and then a
+        best-effort, deduped Discord alert.
+        """
+        state = self._cancel_attempts.get(broker_id)
+        if state is None:
+            state = _CancelState()
+            self._cancel_attempts[broker_id] = state
+
+        state.attempts += 1
+        status_code = result.get("status_code")
+        state.last_code = status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else None
+
+        give_up = permanent or state.attempts >= self._CANCEL_MAX_ATTEMPTS
+        if give_up:
+            state.gave_up = True
+            if not state.alerted:
+                state.alerted = True
+                detail = str(result.get("detail") or result.get("error") or "")[:200]
+                kind = "permanent" if permanent else f"transient ({state.attempts} attempts)"
+                # Durable record FIRST: send_discord_alert never raises and returns
+                # False (no webhook / dedupe / delivery failure) without surfacing,
+                # so the give-up must land in the error log regardless of whether
+                # the page is delivered — the order keeps reserving DTBP until it
+                # expires at the close and the operator has to be able to see it.
+                logger.error(
+                    "stale_cancel_gave_up",
+                    event_type="STALE_ENTRY_CANCEL_GAVE_UP",
+                    order_id=broker_id,
+                    ticker=str(ticker),
+                    permanent=permanent,
+                    attempts=state.attempts,
+                    last_code=state.last_code,
+                    detail=detail,
+                )
+                if permanent and _is_trading_capability_rejection_text(detail):
+                    logger.warning("stale_cancel_giveup_alert_skipped_gateway_permission", order_id=broker_id)
+                    return
+                try:
+                    delivered = await send_discord_alert(
+                        f"Stale entry-order cancel GAVE UP ({kind}): {ticker} order {broker_id} "
+                        f"will keep reserving DTBP until it expires at the close. "
+                        f"Last error: {detail}",
+                        dedupe_key=f"stale_cancel_giveup_{broker_id}",
+                    )
+                except Exception as e:
+                    logger.error("stale_cancel_giveup_alert_failed", order_id=broker_id, error=str(e))
+                    delivered = False
+                if not delivered:
+                    logger.warning("stale_cancel_giveup_alert_undelivered", order_id=broker_id)
+            return
+
+        # Transient: arm exponential backoff with jitter, capped.
+        backoff = min(
+            self._CANCEL_BACKOFF_BASE_SECONDS * (2 ** (state.attempts - 1)),
+            self._CANCEL_BACKOFF_CAP_SECONDS,
+        )
+        state.next_eligible = time.monotonic() + backoff + _cancel_backoff_jitter()
 
     async def _fresh_close_limit(self, client: Any, ticker: str, held_short: bool) -> float | None:
         """Marketable options close limit from a FRESH chain quote, or ``None``
@@ -2273,12 +2856,30 @@ class ExecutionEngine:
     # over a long-running process — a periodic ground-truth resync corrects it.
     _POSITION_SYNC_MIN_INTERVAL_SECONDS: float = 120.0
 
-    # An Orion entry is a mid-priced DAY limit. One that has filled NOTHING this
-    # long after submission is working an increasingly stale signal and only
-    # reserves shared day-trading buying power until it EXPIRES at the close
-    # (2026-06-09: EWY/XHB entries sat unfilled all session, then expired).
-    # poll_fills cancels it once past this TTL.
-    _STALE_ENTRY_ORDER_TTL_SECONDS: float = 180.0
+    # An Orion entry is a pay-up-priced DAY limit. One that has filled NOTHING
+    # this long after submission is working an increasingly stale signal and
+    # only reserves shared day-trading buying power until it EXPIRES at the
+    # close (2026-06-09: EWY/XHB entries sat unfilled all session, then
+    # expired). poll_fills cancels it once past this TTL. 90s: with pay-up
+    # pricing an entry that hasn't filled in 90s isn't going to; the momentum
+    # thesis has a shorter half-life than the queue.
+    # ponytail: single TTL for all buckets; per-bucket (45s 0DTE) if data shows drift.
+    _STALE_ENTRY_ORDER_TTL_SECONDS: float = 90.0
+
+    # Stale-entry-cancel storm controls. A rejected cancel used to be re-issued
+    # every _ORDER_POLL_MIN_INTERVAL_SECONDS (5s) forever — 68k+ self-inflicted
+    # Gateway 429s/day. Now each order backs off exponentially with jitter on a
+    # transient reject, or gives up immediately on a permanent one.
+    _CANCEL_BACKOFF_BASE_SECONDS: float = 30.0
+    _CANCEL_BACKOFF_CAP_SECONDS: float = 300.0
+    _CANCEL_MAX_ATTEMPTS: int = 6
+    _CANCEL_MAX_PER_CYCLE: int = 20
+
+    # Missed-CLOSE reconcile. Bounds the by-id get_order lookups one cycle may
+    # fan out when broker positions disagree with the fills replay, so a wide
+    # disagreement can't reintroduce the stale-cancel 429 storm. Runs on the
+    # same non-urgent cadence as the position re-grounding above.
+    _CLOSE_RECON_MAX_PER_CYCLE: int = 20
 
     async def poll_fills(self) -> None:
         """Polls Data Gateway for account equity and updates RiskManager.
@@ -2291,7 +2892,13 @@ class ExecutionEngine:
         """
         await self.renew_service_lease()
 
-        if not self._gateway_available:
+        # Re-probe (60s-cached) instead of reading the cached flag. A gateway
+        # flap flips _gateway_available False; on an at-max-positions day the
+        # only other caller of _check_gateway_available (order submission) is
+        # risk-rejected before it runs, so a stale-False flag would disable
+        # fill/order polling, snapshots, risk-sync AND missed-fill recovery
+        # until restart — observed 2026-06-26: blind 19h after a 00:29 flap.
+        if not await self._check_gateway_available():
             return
 
         client = self._get_gateway_client()
@@ -2332,7 +2939,10 @@ class ExecutionEngine:
             or (now2 - self._last_order_poll_ts).total_seconds() >= self._ORDER_POLL_MIN_INTERVAL_SECONDS
         ):
             try:
-                orders = await client.get_orders(status="all", limit=200)
+                # 500-row window: at 200, Orion's fills aged out behind sibling
+                # systems' order volume on the shared account (recurring
+                # missed-fill incident class; matches the cancel sweep's window).
+                orders = await client.get_orders(status="all", limit=500)
             except Exception as e:
                 logger.warning(
                     "Order poll via Gateway failed",
@@ -2418,6 +3028,22 @@ class ExecutionEngine:
             or (now3 - self._last_position_sync_ts).total_seconds() >= self._POSITION_SYNC_MIN_INTERVAL_SECONDS
         ):
             self._last_position_sync_ts = now3
+            # Recover aged-out CLOSING fills BEFORE the resync. Closes never get
+            # an orders row (they persist to exit_decisions), so neither the
+            # stale-entry sweep nor any OrderRecord reconcile can surface one — a
+            # broker-positions-vs-fills reconcile is the only path to a missed
+            # close's cost basis. It must run first: _sync_risk_from_gateway
+            # re-grounds open positions to broker truth (flat for a closed
+            # symbol), and process_fill on a flat in-memory position would mis-
+            # book the close as a phantom short instead of realizing its PnL.
+            # Shares the resync's non-urgent cadence; idempotent + bounded.
+            try:
+                await self._recover_missed_close_fills(client)
+            except Exception as e:
+                logger.warning(
+                    "missed_close_recon_failed",
+                    extra={"event_type": "MISSED_CLOSE_RECON_FAILED", "error": str(e)},
+                )
             try:
                 await self._sync_risk_from_gateway()
             except Exception as e:
@@ -2433,6 +3059,241 @@ class ExecutionEngine:
     async def _process_single_fill(self, fill: Any) -> None:
         """Delegates fill processing to FillProcessor."""
         await self._fill_processor.process_single_fill(fill, self.risk_manager, self._remove_pending_order_compat)
+
+    async def _recover_missed_fill(self, client: Any, broker_order_id: str, ticker: Any) -> bool:
+        """Recover a fill that poll_fills' 200-row window aged out before processing.
+
+        When the stale-entry sweep learns from the broker that an order is ALREADY
+        FILLED (its cancel was rejected with "order is already in 'filled' state"),
+        poll_fills never saw the fill, so no ``FillRecord`` was written and
+        ``_compute_cost_basis_from_fills`` (which replays the fills table) cannot
+        reconstruct this order's cost basis. Fetch the specific order by id — a
+        direct lookup that is NOT bounded by the 200-row recent window — and feed
+        it through the idempotent fill processor (``ProcessedFill`` guards against
+        double-processing, including a later poll that re-sees the same order), so
+        the ``FillRecord`` lands and risk state updates exactly as a live poll
+        would have. Returns True iff a fill was processed.
+
+        NEVER raises: a recovery failure must not break the sweep or block the
+        caller's status reconcile (the storm fix). On any failure the per-order
+        cost-basis gap simply persists until a later poll or the PnL
+        reconciliation job surfaces it — better than the silent gap that exists
+        today, where the fill is never recovered at all.
+        """
+        try:
+            order = await client.get_order(broker_order_id)
+        except Exception as e:
+            logger.warning(
+                "Missed-fill recovery: get_order failed; cost basis for this order stays unrecovered",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_FETCH_FAILED",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                    "error": str(e),
+                },
+            )
+            return False
+
+        # get_order returns {"error": ...} (never raises) on 4xx/5xx/timeout. An
+        # unguarded error dict would parse to filled_qty=0 and be silently dropped.
+        if not isinstance(order, dict) or "error" in order:
+            if (
+                isinstance(order, dict)
+                and order.get("status_code") == 404
+                and _CANCEL_LEGACY_UNOWNED_MARKER in f"{order.get('detail') or ''} {order.get('error') or ''}".lower()
+            ):
+                # 404 GW-E4404: the Gateway doesn't know this order id at all
+                # (legacy/unowned). Permanent — give up for the session so the
+                # close-recon stops re-fetching it every cycle. Logged once here.
+                # Scoped to the exact Gateway code like the cancel path: any
+                # other 404, like 5xx/timeout below, stays retryable.
+                if not hasattr(self, "_recon_gone_order_ids"):
+                    self._recon_gone_order_ids = set()
+                self._recon_gone_order_ids.add(broker_order_id)
+                logger.warning(
+                    "Missed-fill recovery: order not found at gateway (404); giving up for this session",
+                    extra={
+                        "event_type": "MISSED_FILL_RECOVERY_ORDER_GONE",
+                        "order_id": broker_order_id,
+                        "ticker": ticker,
+                    },
+                )
+                return False
+            logger.warning(
+                "Missed-fill recovery: gateway returned no usable order; cost basis stays unrecovered",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_NO_ORDER",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                    "detail": (order.get("detail") or order.get("error")) if isinstance(order, dict) else None,
+                },
+            )
+            return False
+
+        if float(order.get("filled_qty") or 0) <= 0:
+            # Race: the cancel-reject said "filled" but this snapshot shows zero.
+            # Skip — process_single_fill would no-op on a zero increment anyway.
+            logger.warning(
+                "Missed-fill recovery: order reports zero filled_qty; skipping (race)",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_ZERO_QTY",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                },
+            )
+            return False
+
+        try:
+            await self._process_single_fill(order)
+        except Exception as e:
+            logger.warning(
+                "Missed-fill recovery: fill processing failed; cost basis stays unrecovered",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_PROCESS_FAILED",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
+                    "error": str(e),
+                },
+            )
+            return False
+
+        logger.info(
+            f"Recovered missed fill for already-filled stale entry order {broker_order_id} on {ticker} "
+            f"(poll_fills' 200-row window aged it out)",
+            extra={
+                "event_type": "MISSED_FILL_RECOVERED",
+                "order_id": broker_order_id,
+                "ticker": ticker,
+                "filled_qty": float(order.get("filled_qty") or 0),
+            },
+        )
+        return True
+
+    async def _recover_missed_close_fills(self, client: Any) -> int:
+        """Recover aged-out CLOSING fills the 200-row order-poll window missed.
+
+        A successful close never gets an ``orders`` row (it persists to
+        ``exit_decisions``), so the stale-entry sweep — which keys off
+        ``OrderRecord`` — can never surface a missed close. When such a close
+        fill ages out of ``poll_fills``' 200-row ``get_orders`` window before it
+        is processed, no ``FillRecord`` lands and
+        ``_compute_cost_basis_from_fills`` keeps replaying a position the broker
+        has already closed: realized PnL / cost basis stay incomplete.
+
+        Detection: compare the broker's positions (``get_positions``) against the
+        fills-derived positions. An Orion symbol whose fills-replay magnitude
+        EXCEEDS the broker holding has an unprocessed REDUCING (closing) fill.
+        The inverse — broker magnitude > fills — is a missed ENTRY, already
+        handled by the stale-entry sweep, so it is ignored here.
+
+        Recovery: for each disagreeing symbol read the broker's FILL activities
+        (the only surface that still carries an aged-out close's order id —
+        ``get_orders``' window is the very thing that missed it), and for an
+        order we have processed ZERO fills for (the partial double-count guard
+        the entry path gets for free from its pre-fill scoping), feed it through
+        the same idempotent ``_recover_missed_fill`` the entry sweep uses.
+
+        Shared-account safe: detection symbols come from orion-only fills, and
+        ``_recover_missed_fill`` → ``_process_single_fill`` re-checks the
+        ``orion_`` prefix, so another system's order on the same symbol is
+        fetched (one bounded ``get_order``) and then skipped, never counted.
+
+        Bounded against the 429-storm class: one ``get_account_activities`` call
+        only when a disagreement exists, plus at most
+        ``_CLOSE_RECON_MAX_PER_CYCLE`` ``get_order`` lookups per cycle.
+        Idempotent (``ProcessedFill`` marker). NEVER raises. Returns the number
+        of fills recovered.
+        """
+        fills_positions = await self._compute_cost_basis_from_fills()
+        # Only symbols the fills replay still thinks we hold can have a missed
+        # close. (_compute_cost_basis_from_fills is orion-only by construction.)
+        held = {s: float(v.get("qty", 0.0)) for s, v in fills_positions.items() if abs(float(v.get("qty", 0.0))) > 1e-9}
+        if not held:
+            return 0
+
+        try:
+            broker_positions = await client.get_positions()
+        except Exception as e:
+            logger.warning(
+                "close-recon: get_positions failed; skipping cycle",
+                extra={"event_type": "MISSED_CLOSE_RECON_POSITIONS_FAILED", "error": str(e)},
+            )
+            return 0
+
+        broker_qty: dict[str, float] = {}
+        for p in broker_positions or []:
+            sym = p.get("symbol")
+            if sym:
+                broker_qty[sym] = float(p.get("qty", 0) or 0)
+
+        # fills magnitude > broker magnitude ⇒ a reducing fill never landed.
+        # ponytail: a same-cycle close-and-flip (sign reversal) is rare and is
+        # left to the next cycle / reconcile_pnl; this magnitude test targets the
+        # common case (full or partial close that aged out) and stays idempotent.
+        missed = [s for s, q in held.items() if abs(q) - abs(broker_qty.get(s, 0.0)) > 1e-9]
+        if not missed:
+            return 0
+
+        try:
+            activities = await client.get_account_activities("FILL")
+        except Exception as e:
+            logger.warning(
+                "close-recon: get_account_activities failed; skipping cycle",
+                extra={"event_type": "MISSED_CLOSE_RECON_ACTIVITIES_FAILED", "error": str(e)},
+            )
+            return 0
+
+        # Map disagreeing symbol → de-duplicated broker order ids (the FILL
+        # activity carries order_id + symbol but NOT client_order_id, so the
+        # orion check happens later in _process_single_fill via get_order).
+        order_ids_by_symbol: dict[str, list[str]] = {s: [] for s in missed}
+        seen: dict[str, set[str]] = {s: set() for s in missed}
+        for act in activities or []:
+            sym = act.get("symbol")
+            oid = act.get("order_id")
+            if sym in order_ids_by_symbol and oid and oid not in seen[sym]:
+                seen[sym].add(oid)
+                order_ids_by_symbol[sym].append(str(oid))
+
+        # __new__-constructed instances (some tests) skip __init__; seed lazily.
+        if not hasattr(self, "_recon_gone_order_ids"):
+            self._recon_gone_order_ids = set()
+
+        recovered = 0
+        attempted = 0
+        for sym in missed:
+            for oid in order_ids_by_symbol[sym]:
+                # The Gateway 404'd this id earlier in the session (legacy/
+                # unowned — no marker can ever land for it, so the guard below
+                # never engages). Skip without consuming the cap.
+                if oid in self._recon_gone_order_ids:
+                    continue
+                # An order we've already counted ANY fill for is either the entry
+                # or an already-recovered close — re-feeding it would double-count.
+                # DB read, not a Gateway call, so it does not consume the cap.
+                if await has_processed_fill_for_order(oid):
+                    continue
+                if attempted >= self._CLOSE_RECON_MAX_PER_CYCLE:
+                    logger.warning(
+                        "close-recon: per-cycle get_order cap hit; remaining deferred to next cycle",
+                        extra={"event_type": "MISSED_CLOSE_RECON_CAP_HIT", "cap": self._CLOSE_RECON_MAX_PER_CYCLE},
+                    )
+                    return recovered
+                attempted += 1
+                if await self._recover_missed_fill(client, oid, sym):
+                    recovered += 1
+
+        if recovered:
+            logger.info(
+                f"Recovered {recovered} missed closing fill(s) across {len(missed)} symbol(s) "
+                f"(poll_fills' 200-row window aged them out)",
+                extra={
+                    "event_type": "MISSED_CLOSE_FILLS_RECOVERED",
+                    "recovered": recovered,
+                    "symbols": missed,
+                },
+            )
+        return recovered
 
     # ── Position snapshots (delegates to fill_processor module) ──────────
 

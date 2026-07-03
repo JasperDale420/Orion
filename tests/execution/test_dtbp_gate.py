@@ -10,9 +10,11 @@ missing field or transient blip never blocks trading.
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 
+from orion.core.enums import DecisionStatus
 from orion.execution.execution_engine import ExecutionEngine
 
 
@@ -79,6 +81,45 @@ def test_dtbp_backoff_arms_and_expires(monkeypatch) -> None:
 
     clock["t"] += 2
     assert engine._in_dtbp_backoff() is False  # cooldown elapsed
+
+
+def test_trading_capability_backoff_arms_and_expires(monkeypatch) -> None:
+    """GW-E2009 means the Gateway key cannot trade, so later opens should back
+    off instead of repeating guaranteed-failing POST /orders calls."""
+    import orion.execution.execution_engine as ee_mod
+
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ee_mod.time, "monotonic", lambda: clock["t"])
+
+    assert engine._in_trading_capability_backoff() is False
+    engine._note_trading_capability_rejection()
+    assert engine._in_trading_capability_backoff() is True
+
+    clock["t"] += engine._TRADING_CAPABILITY_BACKOFF_SECONDS - 1
+    assert engine._in_trading_capability_backoff() is True
+
+    clock["t"] += 2
+    assert engine._in_trading_capability_backoff() is False
+
+
+@pytest.mark.asyncio
+async def test_submit_skips_gateway_when_trading_capability_backoff_active() -> None:
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    engine._note_trading_capability_rejection()
+    engine._has_daytrading_buying_power = AsyncMock(return_value=True)
+
+    client = AsyncMock()
+    engine._get_gateway_client = lambda: client
+
+    decision = SimpleNamespace(execution_params=None, executed_successfully=None, reason=None)
+    candidate = SimpleNamespace(ticker="AAPL", option_symbol="AAPL260626C00150000")
+
+    await engine._submit_options_order(decision, candidate, num_contracts=1, option_price=1.25)
+
+    client.create_order.assert_not_called()
+    assert decision.executed_successfully == DecisionStatus.FALSE
+    assert "trading capability" in decision.reason
 
 
 @pytest.mark.asyncio

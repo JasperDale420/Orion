@@ -20,6 +20,7 @@ import pandas as pd
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.shared.dataframe_utils import first_existing_column as _pick_first_existing_column
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import init_db
 
@@ -629,13 +630,6 @@ _SOURCE_TICKER_COLUMNS = ["ticker", "symbol", "underlying", "instrument_key"]
 
 def _prefer_heber_source_from_env() -> bool:
     return system_settings.validate_features_prefer_heber
-
-
-def _pick_first_existing_column(df: pd.DataFrame, columns: list[str]) -> str | None:
-    for column in columns:
-        if column in df.columns:
-            return column
-    return None
 
 
 def _label_date_bounds(
