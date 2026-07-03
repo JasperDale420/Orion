@@ -91,12 +91,25 @@ export ORION_RUN_ID="${ORION_RUN_ID:-native_execution}"
 # accidental co-execution.
 export ORION_LEASE_OWNER_ID="${ORION_LEASE_OWNER_ID:-orion_execution_native}"
 export ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE="${ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE:-false}"
-export ORION_RISK_MAX_DAILY_LOSS="${ORION_RISK_MAX_DAILY_LOSS:-20000}"
-export ORION_RISK_MAX_POSITIONS="${ORION_RISK_MAX_POSITIONS:-10}"
+# -$2,000/day (2% of the 100k slice) halts NEW entries; exits keep running.
+# The old 20k value could never trip on $500 fixed-premium trades.
+export ORION_RISK_MAX_DAILY_LOSS="${ORION_RISK_MAX_DAILY_LOSS:-2000}"
+export ORION_RISK_MAX_POSITIONS="${ORION_RISK_MAX_POSITIONS:-20}"
+# Sample-size caps (2026-07 recovery plan): 15 option positions total,
+# per-bucket 4/6/8 via ORION_RISK_OPTION_BUCKET_CAPS in config defaults,
+# $500 fixed premium per trade. 0DTE entries enabled (wind-down + bucket
+# exits protect the last hour).
+export ORION_RISK_MAX_OPTION_POSITIONS="${ORION_RISK_MAX_OPTION_POSITIONS:-15}"
+export ORION_RISK_FIXED_PREMIUM_PER_TRADE="${ORION_RISK_FIXED_PREMIUM_PER_TRADE:-500}"
+export ORION_RISK_MIN_DTE="${ORION_RISK_MIN_DTE:-0}"
 # Orion's allocated slice of the shared ~$1M paper account. Sizing (max
 # premium/order %) computes off this, not the pooled account equity. Config
 # default is also 100k; set explicitly here for operator visibility/tuning.
 export ORION_RISK_ALLOCATED_EQUITY="${ORION_RISK_ALLOCATED_EQUITY:-100000}"
+# Router-empty must never SKIP a candidate: the baseline solver is the
+# structural fallback when no dedicated solver matches (25.5% of all skips
+# on 2026-06-29/30 were "Router empty and no baseline solver applied").
+export ORION_BASELINE_SOLVER_ID="${ORION_BASELINE_SOLVER_ID:-diversified_baseline_v1}"
 
 # Forward-testing knobs — match the docker-compose execution stanza so
 # behaviour is identical to what was running in Docker.

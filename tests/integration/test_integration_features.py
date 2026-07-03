@@ -9,7 +9,7 @@ import pytest
 
 from orion.ml.derived_features import DERIVED_FEATURE_NAMES, compute_derived_features
 from orion.ml.feature_store import _GOLD_TO_FEATURE, _ALERT_LEVEL_DATASETS
-from orion.ml.pattern_miner import (
+from orion.ml.feature_config import (
     ALERT_FLOW_CONTEXT_FEATURES,
     ALL_EQUITY_FEATURE_COLUMNS,
     EQUITY_FLOW_NORM_FEATURES,

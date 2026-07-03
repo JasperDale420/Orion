@@ -151,7 +151,6 @@ module = [
     # R6 phase 2 (RC.3): remaining legacy modules converted to typed-declarative.
     "orion.storage.models_ml",
     "orion.storage.models_silver",
-    "orion.storage.models_rag",
     # Already-converted-but-unpromoted modules that pass strict cleanly.
     "orion.storage.models",
     "orion.storage.models_attribution",
