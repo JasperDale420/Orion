@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -58,6 +58,9 @@ async def test_execution_loop_flow():
         evidence={"test": True},
         option_symbol="SPY260418C00500000",
         premium=1.0,
+        # Required since the fail-closed gate: an option candidate without an
+        # expiration_date is rejected at order time ("Missing Expiration Date").
+        expiration_date=datetime.now(UTC) + timedelta(days=30),
     )
 
     # SYSTEM STATUS

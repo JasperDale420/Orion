@@ -174,7 +174,6 @@ def test_run_entrypoint_propagates_keyboard_interrupt_when_disabled():
         "orion.main_position_monitor",
         "orion.main_feature_enrichment",
         "orion.main_data_quality",
-        "orion.main_pattern_miner",
         "orion.ingestion.__main__",
     ],
 )

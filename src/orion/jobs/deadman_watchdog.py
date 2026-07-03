@@ -12,10 +12,13 @@ Runs as a standalone launchd one-shot every 5 minutes. Two independent checks:
 
 2. **Pipeline-depth stage freshness (market-hours-gated, REAL data).** During
    the regular cash session it asserts per-stage freshness on the actual
-   pipeline tables — ``max(bronze_events.received_ts_utc)``,
-   ``max(silver_signals.created_at_utc)``, ``max(gold_feature_events.created_at_utc)``,
-   and today's ``candidate_trades`` count — each against a per-stage staleness
-   budget. This detects every stall class in the incident history (redis flap,
+   pipeline tables — ``max(bronze_events.received_ts_utc)`` and
+   ``max(silver_signals.created_at_utc)`` — each against a per-stage staleness
+   budget. ``gold_feature_events`` freshness and today's ``candidate_trades``
+   count are logged for visibility but never paged: the live ingestion/execution
+   path does not write ``gold_feature_events`` (only backtests / nightly
+   meta-search / DLQ recovery do), so it is legitimately empty intraday and was
+   a standing false positive. This detects every stall class in the incident history (redis flap,
    gold-poller OOM, born-stale, WS death) with ZERO contamination risk: no
    synthetic events are ever injected (the adversarial-review-banned design).
    Outside market hours the stage checks are informational only — no alerts —
@@ -297,9 +300,22 @@ async def run_watchdog(
         stage_findings = [
             evaluate_stage_freshness("bronze", bronze_max, BRONZE_BUDGET_SECONDS, now),
             evaluate_stage_freshness("silver", silver_max, SILVER_BUDGET_SECONDS, now),
-            evaluate_stage_freshness("features", features_max, FEATURES_BUDGET_SECONDS, now),
         ]
         stage_alerts = [a for a in stage_findings if a is not None]
+
+        # gold_feature_events is written only by backtests / nightly meta-search /
+        # DLQ recovery — never by the live ingestion/execution path — so it is
+        # legitimately empty during the cash session. Evaluate its freshness for
+        # visibility but never page on it (it was a standing false positive that
+        # paged "features has NO rows" every cycle intraday).
+        features_finding = evaluate_stage_freshness("features", features_max, FEATURES_BUDGET_SECONDS, now)
+        if features_finding is not None:
+            logger.info(
+                "deadman_features_stage_informational",
+                features_max=str(features_max),
+                age_seconds=features_finding.age_seconds,
+                message=features_finding.message,
+            )
 
         if market_open:
             alerts.extend(stage_alerts)

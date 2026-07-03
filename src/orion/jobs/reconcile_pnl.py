@@ -102,7 +102,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from orion.execution.attribution import (
     is_occ_option_symbol,
@@ -363,6 +363,15 @@ async def _load_journal_closed_trades(d: date) -> list[dict[str, Any]]:
             .where(
                 TradeJournalEntry.client_order_id.like("orion_%"),
                 TradeJournalEntry.realized_pnl.isnot(None),
+                # Expired-worthless realizations have no broker fill (an
+                # option removed at expiry produces no fill activity), so
+                # including them would force a false journal-vs-broker
+                # MISMATCH on the expiry day. Their losses are audited
+                # directly from the journal (notes='expired_worthless').
+                or_(
+                    TradeJournalEntry.notes.is_(None),
+                    TradeJournalEntry.notes != "expired_worthless",
+                ),
             )
         )
         rows = (await session.execute(stmt)).all()

@@ -32,7 +32,7 @@ from orion.enrichment.heber_context import (
 from orion.shared.async_main import run_service
 from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
+from orion.storage.db import init_db, wait_for_db
 
 logger = setup_struct_logger("orion.feature_enrichment")
 
@@ -270,6 +270,9 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
     loop_sleep_seconds = _loop_sleep_seconds()
     loop_error_warn_streak = _loop_error_warn_streak_threshold()
     non_heber_warn_streak = _non_heber_warn_streak_threshold()
+    # Wait for the DB before init_db so a transient outage doesn't crash the
+    # service into a launchd restart loop (see main_execution.py).
+    await wait_for_db(cancel_event=shutdown_event)
     await init_db()
 
     greek_connector: UWGreekExposureConnector | None = None
