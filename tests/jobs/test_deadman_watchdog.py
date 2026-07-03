@@ -252,6 +252,24 @@ async def test_run_watchdog_never_registered_service_is_silent():
     sent.assert_not_awaited()
 
 
+async def test_features_stage_is_informational_not_paged_when_empty():
+    """gold_feature_events is not written by the live ingestion/execution path,
+    so it is legitimately empty intraday — the watchdog logs 'features'
+    freshness but must never page it (was a standing false positive). The real
+    live stages still page when empty, proving the change is scoped to features."""
+    now = MARKET_HOURS_UTC
+    await _add_bronze(received_age_seconds=10, now=now)  # bronze fresh
+    # Neither silver nor gold_feature_events seeded (both empty).
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=now)
+
+    names = [a.name for a in alerts]
+    assert "features" not in names  # the fix: an empty features stage never pages
+    assert "silver" in names  # a real live stage still pages when empty (non-regression)
+
+
 async def test_run_watchdog_stale_market_service_alerts_during_market_hours_and_dispatches():
     # Publish a row, then age it past its budget.
     await publish_liveness("ingestion", cadence_budget_seconds=300)

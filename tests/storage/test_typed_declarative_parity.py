@@ -29,7 +29,6 @@ from orion.storage import (
     models_execution,
     models_gold,
     models_ml,
-    models_rag,
     models_risk,
     models_silver,
 )
@@ -60,7 +59,6 @@ CONVERTED_MODELS = [
     models_ml.MLFeatureImportanceHistory,
     models_ml.MLPrediction,
     models_silver.SilverSignal,
-    models_rag.VectorDocument,
 ]
 
 

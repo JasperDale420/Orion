@@ -16,7 +16,7 @@ from orion.shared.async_main import run_service
 from orion.shared.logger import setup_logging
 from orion.jobs.data_quality_checker import run_quality_checks
 from orion.shared.logger import setup_struct_logger
-from orion.storage.db import init_db
+from orion.storage.db import init_db, wait_for_db
 
 logger = setup_struct_logger("orion.data_quality")
 
@@ -96,6 +96,10 @@ async def _renew_lease_forever(run_id: str, shutdown_event: asyncio.Event) -> No
 
 async def run_scheduled(shutdown_event: asyncio.Event) -> None:
     """Run data quality checks hourly during market hours."""
+    # Wait for the DB before init_db so a transient outage doesn't crash the
+    # service into a launchd restart loop (see main_execution.py). cancel_event
+    # lets a SIGTERM during the wait abort startup promptly.
+    await wait_for_db(cancel_event=shutdown_event)
     await init_db()
 
     # Single-instance lease for the daemon only (Wave C RB.4). data_quality

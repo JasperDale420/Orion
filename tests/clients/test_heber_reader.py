@@ -574,6 +574,17 @@ def test_is_schema_merge_error_detects_incompatible_types_variant() -> None:
     assert HeberReader._is_schema_merge_parquet_error(exc) is True
 
 
+def test_is_schema_merge_error_detects_int64_to_date32_cast() -> None:
+    # 2026-06-30 incident: meta_label_features `expiry` written int64 in one
+    # dt= partition (date32 elsewhere). pyarrow raised ArrowNotImplementedError
+    # with this message; the old matcher required "to null"/"cast_null" so it
+    # missed it, total-failing the whole gold read instead of degrading to the
+    # file-wise reader.
+    exc = RuntimeError("Unsupported cast from int64 to date32 using function cast_date32")
+
+    assert HeberReader._is_schema_merge_parquet_error(exc) is True
+
+
 def test_read_parquet_falls_back_to_filewise_on_incompatible_types_error(tmp_path: Path) -> None:
     reader = HeberReader(data_root=tmp_path)
     expected = pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [150.0]})

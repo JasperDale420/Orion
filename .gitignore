@@ -85,7 +85,12 @@ models/archive/
 models/*.pkl
 models/**/*.pkl
 
-# Agent session output dirs (predict/, debug/, fix/)
+# Agent session output dirs (predict/, debug/, fix/, learn/)
 predict/
 debug/
 fix/
+learn/
+
+# Local DB dumps / operational baselines (e.g. pre-migration pg_dump snapshots).
+# Multi-hundred-MB binaries that must never enter git history.
+backups/
