@@ -144,7 +144,6 @@ async def init_db() -> None:
         models_gold,
         models_liveness,
         models_ml,
-        models_rag,
         models_risk,
         models_signals,
         models_silver,

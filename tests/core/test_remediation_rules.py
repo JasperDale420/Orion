@@ -17,19 +17,19 @@ async def test_rule_overrides():
     defaults = SolverConfig(version_id="default")
     engine_def = RuleEngine(config=defaults.model_dump(mode="json"))
 
-    # Check BullishSweepRule (first rule)
-    bull_rule_def = engine_def.rules[0]
-    assert bull_rule_def.min_premium == 10000.0, "Default min_premium should be 10k"
+    # Check ZeroDTEBucketRule (first rule)
+    zero_dte_def = engine_def.rules[0]
+    assert zero_dte_def.min_premium == 50_000.0, "Default 0DTE premium floor should be 50k"
 
     # 2. Overridden Config
-    overrides = {"rule_bullish_sweep_v1": {"min_premium": 99999.0}}
+    overrides = {"rule_0dte_sweep_v2": {"min_premium": 99999.0}}
     config_override = SolverConfig(version_id="override", rule_overrides=overrides)
 
     engine_ovr = RuleEngine(config=config_override.model_dump(mode="json"))
-    bull_rule_ovr = engine_ovr.rules[0]
+    zero_dte_ovr = engine_ovr.rules[0]
 
     # Check if override applied
-    assert bull_rule_ovr.min_premium == 99999.0, "Override should set min_premium to 99999"
+    assert zero_dte_ovr.min_premium == 99999.0, "Override should set min_premium to 99999"
 
 
 @pytest.mark.asyncio

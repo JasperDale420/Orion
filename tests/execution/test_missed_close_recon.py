@@ -246,6 +246,125 @@ async def test_already_processed_orders_do_not_consume_the_cap(monkeypatch) -> N
     assert ee._recover_missed_fill.await_count == 2
 
 
+# ── gone orders: 404 give-up (the 2026-07-02 GW-E4404 re-fetch storm) ────────
+
+
+def _gone_404() -> dict[str, object]:
+    """get_order's error dict for a Gateway GW-E4404 'Order not found'."""
+    return {
+        "error": "Client error '404 Not Found' for url ...",
+        "detail": '{"success":false,"error":{"code":"GW-E4404","message":"Order not found."}}',
+        "status_code": 404,
+    }
+
+
+def _engine_real_recovery() -> ExecutionEngine:
+    """Engine with the REAL _recover_missed_fill (the give-up lives there)."""
+    return ExecutionEngine.__new__(ExecutionEngine)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_gone_order_404_is_fetched_once_per_session(monkeypatch) -> None:
+    """A get_order 404 (legacy/unowned id that exists only on the activities
+    surface) can never produce a ProcessedFill marker, so the marker dedupe
+    never engages — without a give-up the recon re-fetches (and re-ERRORs) the
+    same id every ~2min cycle forever. It must be fetched exactly once."""
+    _all_unprocessed(monkeypatch)
+
+    ee = _engine_real_recovery()
+    ee._compute_cost_basis_from_fills = AsyncMock(return_value={"SPCX": {"qty": 3.0, "avg_entry": 2.5}})
+    client = AsyncMock()
+    client.get_positions = AsyncMock(return_value=[])
+    client.get_account_activities = AsyncMock(return_value=[_activity("gone-1", "SPCX")])
+    client.get_order = AsyncMock(return_value=_gone_404())
+
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert client.get_order.await_count == 1
+
+    # Subsequent cycles: same activities, but the gone id is never re-fetched.
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert client.get_order.await_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_bare_404_without_gw_e4404_is_not_cached_as_gone(monkeypatch) -> None:
+    """Only the exact GW-E4404 code marks an id permanently gone (mirrors the
+    cancel path's scoping). A 404 without it may be retryable — caching it would
+    strand a recoverable close's cost basis until restart."""
+    _all_unprocessed(monkeypatch)
+
+    ee = _engine_real_recovery()
+    ee._compute_cost_basis_from_fills = AsyncMock(return_value={"SPCX": {"qty": 3.0, "avg_entry": 2.5}})
+    client = AsyncMock()
+    client.get_positions = AsyncMock(return_value=[])
+    client.get_account_activities = AsyncMock(return_value=[_activity("o-close", "SPCX")])
+    client.get_order = AsyncMock(
+        return_value={"error": "Client error '404 Not Found' for url ...", "detail": "not found", "status_code": 404}
+    )
+
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert client.get_order.await_count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_transient_get_order_error_is_retried_next_cycle(monkeypatch) -> None:
+    """Only a 404 is permanent. A 5xx/timeout error dict must NOT be cached as
+    gone — the fill may still be recoverable once the Gateway heals."""
+    _all_unprocessed(monkeypatch)
+
+    ee = _engine_real_recovery()
+    ee._compute_cost_basis_from_fills = AsyncMock(return_value={"SPCX": {"qty": 3.0, "avg_entry": 2.5}})
+    client = AsyncMock()
+    client.get_positions = AsyncMock(return_value=[])
+    client.get_account_activities = AsyncMock(return_value=[_activity("o-close", "SPCX")])
+    client.get_order = AsyncMock(return_value={"error": "500", "detail": "gateway boom", "status_code": 500})
+
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert await ee._recover_missed_close_fills(client) == 0
+    assert client.get_order.await_count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_gone_orders_do_not_consume_the_per_cycle_cap(monkeypatch) -> None:
+    """Once known-gone, an id is skipped before the cap check — a pile of legacy
+    404 ids must not starve real recoveries out of the per-cycle budget."""
+    _all_unprocessed(monkeypatch)
+
+    ee = _engine_real_recovery()
+    cap = ee._CLOSE_RECON_MAX_PER_CYCLE
+    gone_ids = {f"gone-{i}" for i in range(cap)}
+    ee._recon_gone_order_ids = set(gone_ids)
+    ee._compute_cost_basis_from_fills = AsyncMock(return_value={"SPCX": {"qty": 99.0, "avg_entry": 2.5}})
+
+    recoverable = {
+        "id": "o-close",
+        "client_order_id": "orion_close_a",
+        "symbol": "SPCX",
+        "side": "sell",
+        "qty": "3",
+        "filled_qty": "3",
+        "filled_avg_price": "4.0",
+        "status": "filled",
+        "filled_at": "2026-06-22T20:00:00Z",
+    }
+    client = AsyncMock()
+    client.get_positions = AsyncMock(return_value=[])
+    client.get_account_activities = AsyncMock(
+        return_value=[_activity(g, "SPCX") for g in sorted(gone_ids)] + [_activity("o-close", "SPCX")]
+    )
+    client.get_order = AsyncMock(return_value=recoverable)
+    ee._process_single_fill = AsyncMock()
+
+    assert await ee._recover_missed_close_fills(client) == 1
+    client.get_order.assert_awaited_once_with("o-close")
+
+
 # ── never raises ─────────────────────────────────────────────────────────────
 
 

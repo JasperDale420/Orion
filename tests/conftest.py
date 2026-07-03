@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -107,14 +108,25 @@ async def setup_test_db(monkeypatch):
 
     yield
 
-    # Teardown
-    # In :memory:, proceed to drop everything to keep state clean between tests if the engine is shared
-    # Since we are using a global loop scope for now but potentially function scope DB,
-    # dropping tables is safer than relying on memory wipe if the engine persists.
-    if db.engine:
+    # Teardown — drop tables ONLY while still bound to the in-memory test DB. An
+    # e2e test (db.configure_db(REAL_DB_URL)) that fails to restore the in-memory
+    # binding before this autouse teardown runs would otherwise have drop_all WIPE
+    # that database — the 2026-06-30 production solver-table wipe (solvers dropped;
+    # bronze/silver refilled from live ingestion, solvers did not until restart).
+    from _db_safety import is_in_memory_test_engine
+
+    if is_in_memory_test_engine(db.engine):
         async with db.engine.begin() as conn:
             await conn.run_sync(db.Base.metadata.drop_all)
         await db.engine.dispose()
+    elif db.engine is not None:
+        warnings.warn(
+            f"conftest teardown refused to drop_all on a non-in-memory DB "
+            f"({db.engine.url!r}): an e2e test left db.engine pointed at a real "
+            "database without restoring the in-memory binding. Skipping table "
+            "cleanup to avoid wiping it (see the 2026-06-30 solver-table wipe).",
+            stacklevel=2,
+        )
 
     # Restore (mostly to be polite, though strictly not needed in a test process)
     if old_engine:

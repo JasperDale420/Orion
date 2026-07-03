@@ -1,7 +1,7 @@
 """Database persistence for execution records (orders, fills, trade journal)."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
@@ -547,6 +547,127 @@ async def persist_realized_pnl_to_journal(
             "Failed to write realized PnL to trade journal",
             extra={"event_type": "REALIZED_PNL_JOURNAL_WRITE_ERROR", "ticker": ticker, "error": str(e)},
         )
+
+
+async def count_open_journal_positions() -> tuple[dict[str, int], dict[str, int]] | None:
+    """Open (entered, not yet closed) journal positions, by bucket and by ticker.
+
+    Used by the per-bucket / per-underlying entry caps. Counts only filled
+    entries, so an order in the fill-latency window is briefly uncounted —
+    acceptable, because the risk manager's global max_option_positions check
+    (which includes pending orders) remains the hard backstop.
+
+    Returns None when the count is unavailable (DB failure) — callers must
+    FAIL CLOSED (skip the entry) rather than treat unknown as zero.
+    """
+    from orion.execution.exit_fallback_rules import bucket_for_dte
+    from orion.storage.models_trade_journal import TradeJournalEntry
+
+    async def read(session: Any) -> list[Any]:
+        stmt = (
+            select(
+                TradeJournalEntry.ticker,
+                TradeJournalEntry.filled_at_utc,
+                CandidateTrade.expiration_date,
+            )
+            .join(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
+            .where(
+                TradeJournalEntry.broker_order_id.is_not(None),
+                TradeJournalEntry.filled_at_utc.is_not(None),
+                TradeJournalEntry.realized_pnl.is_(None),
+            )
+        )
+        return list((await session.execute(stmt)).all())
+
+    try:
+        rows = await db_query(read)
+    except Exception as e:
+        logger.error(
+            "Open-position count failed; entry caps cannot be verified",
+            extra={"event_type": "OPEN_POSITION_COUNT_ERROR", "error": str(e)},
+        )
+        return None
+
+    by_bucket: dict[str, int] = {}
+    by_ticker: dict[str, int] = {}
+    for ticker, filled_at, expiration in rows:
+        dte = None
+        if expiration is not None and filled_at is not None:
+            # Calendar-day DTE at entry — same convention as the entry gate.
+            dte = (expiration.date() - filled_at.date()).days
+        bucket = bucket_for_dte(dte)
+        by_bucket[bucket] = by_bucket.get(bucket, 0) + 1
+        by_ticker[ticker] = by_ticker.get(ticker, 0) + 1
+    return by_bucket, by_ticker
+
+
+async def realize_expired_journal_rows() -> int:
+    """Realize P&L for journal entries whose option expired without a closing fill.
+
+    An expired position produces no fill, so `persist_realized_pnl_to_journal`
+    never runs and the row stays open forever — the one gap in the fill-driven
+    P&L path. Expiry is taken from the linked candidate's `expiration_date`;
+    rows are realized at a total loss of the entry premium one day after
+    expiry (grace for settlement/backfilled closing fills to land first).
+
+    Assumes expired-worthless: the DTE exit rules close positions at T-1/T-2,
+    so anything that actually reaches expiry is the zero-bid dust that
+    couldn't be sold. (ITM auto-exercise would make -premium wrong, but an
+    ITM position is exited by profit/DTE rules long before expiry.)
+
+    Returns the number of rows realized.
+    """
+    from orion.storage.models_trade_journal import TradeJournalEntry
+
+    cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    async def write(session: Any) -> int:
+        stmt = (
+            select(TradeJournalEntry, CandidateTrade.expiration_date)
+            .join(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
+            .where(
+                TradeJournalEntry.broker_order_id.is_not(None),
+                TradeJournalEntry.filled_at_utc.is_not(None),
+                TradeJournalEntry.realized_pnl.is_(None),
+                CandidateTrade.expiration_date.is_not(None),
+                CandidateTrade.expiration_date < cutoff - timedelta(days=1),
+            )
+        )
+        rows = (await session.execute(stmt)).all()
+        realized = 0
+        for entry, expiration_date in rows:
+            if not entry.filled_qty or not entry.filled_avg_price:
+                continue  # no entry fill data — can't compute the loss
+            entry.realized_pnl = -abs(float(entry.filled_qty) * float(entry.filled_avg_price) * 100.0)
+            entry.exit_filled_at_utc = expiration_date
+            entry.notes = "expired_worthless"
+            realized += 1
+            logger.info(
+                "Realized expired-worthless journal entry",
+                extra={
+                    "event_type": "JOURNAL_EXPIRED_WORTHLESS",
+                    "ticker": entry.ticker,
+                    "decision_id": entry.decision_id,
+                    "realized_pnl": entry.realized_pnl,
+                    "expired": str(expiration_date),
+                },
+            )
+        return realized
+
+    try:
+        count = await db_write(write)
+        if count:
+            logger.info(
+                f"Expiry sweep realized {count} expired-worthless journal entries",
+                extra={"event_type": "JOURNAL_EXPIRY_SWEEP_DONE", "count": count},
+            )
+        return int(count or 0)
+    except Exception as e:
+        logger.error(
+            "Expiry sweep failed",
+            extra={"event_type": "JOURNAL_EXPIRY_SWEEP_ERROR", "error": str(e)},
+        )
+        return 0
 
 
 async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: str, order: Any) -> None:
