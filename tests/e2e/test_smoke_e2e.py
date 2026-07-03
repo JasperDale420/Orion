@@ -192,8 +192,9 @@ def _make_events(run_tag: str, now: datetime, ticker: str):
         ingest={},
     )
 
-    # Crafted to trigger BullishSweepRule:
-    #   put_call=C, sweep=True, aggressor=ASK, premium>=10k, DTE in [7,30]
+    # Crafted to trigger SwingBucketRule (rule_swing_v2):
+    #   put_call=C, sweep=True, aggressor=ASK, premium>=100k, DTE in [4,14].
+    #   The allowlist/entry-window checks are bypassed in the test stage.
     expiry = now.date() + timedelta(days=10)
     flow_event = BronzeEvent(
         event_id=f"{run_tag}_flow_1",
@@ -222,7 +223,7 @@ def _make_events(run_tag: str, now: datetime, ticker: str):
             "trade_type": "SWEEP",
             "open_interest": 5000,
             "volume": 800,
-            "premium": 50000.0,
+            "premium": 150000.0,
             "multi_leg": False,
             "id": f"{run_tag}_flow_1",
         },
@@ -245,6 +246,12 @@ def _configure_settings(run_tag: str):
 
     risk_settings.max_order_size_usd = 1e9
     risk_settings.max_ticker_exposure_usd = 1e9
+    # Bucket/underlying entry caps count OPEN journal rows — on a shared/live
+    # DB the smoke's synthetic candidate would collide with real open
+    # positions ("Bucket cap reached"). Disable them like the other limits.
+    risk_settings.option_bucket_caps = {}
+    risk_settings.max_positions_per_underlying = 0
+    risk_settings.max_positions_per_index_underlying = 0
     risk_settings.max_positions = 100
     risk_settings.max_daily_loss = 1e9
 
@@ -579,7 +586,11 @@ async def run_smoke_test() -> dict[str, bool]:
         try:
             from orion.processing.rule_engine import RuleEngine
 
-            re = RuleEngine()
+            # The smoke runs in paper stage with a synthetic ticker and
+            # future timestamps — explicitly bypass the live-market gates
+            # (allowlist / entry window / clock skew). Signal-quality gates
+            # (sweep, aggressor, premium floor, volume) still apply.
+            re = RuleEngine(enforce_universe_and_window=False)
             candidates = re.process_signals(uw_signals)
             assert len(candidates) > 0, "No candidates produced by rule engine"
 

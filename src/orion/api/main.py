@@ -19,7 +19,6 @@ from orion.config import system_settings
 from orion.core.circuit_breaker import CircuitBreaker
 from orion.core.errors import OrionError
 from orion.core.pnl_tracker import get_pnl_tracker
-from orion.rag.vector_store import VectorStore
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.db_utils import db_write
 from orion.shared.utils import parse_timestamptz
@@ -313,77 +312,6 @@ async def reject_promotion_recommendation(
 
     await db.commit()
     return rec
-
-
-@app.get("/search")
-async def search(
-    q: str = Query(..., min_length=1),
-    k: int = Query(10, ge=1, le=50),
-    ticker: str | None = Query(None),
-    tickers: str | None = Query(None, description="Comma-separated tickers (overrides ticker)"),
-    doc_type: str | None = Query(None),
-    rule_id: str | None = Query(None),
-    model_version: str | None = Query(None),
-    session: str | None = Query(None),
-    start: str | None = Query(None, description="ISO-8601 start (inclusive)"),
-    end: str | None = Query(None, description="ISO-8601 end (exclusive)"),
-    min_premium_usd: float | None = Query(
-        None, ge=0, description="Filter docs with metadata.premium_usd >= this (where supported)"
-    ),
-    max_premium_usd: float | None = Query(
-        None, ge=0, description="Filter docs with metadata.premium_usd <= this (where supported)"
-    ),
-    _: None = Depends(require_api_key),
-) -> list[dict[str, Any]]:
-    trace_id = str(uuid.uuid4())
-    logger.info("RAG search request", extra={"event_type": "RAG_SEARCH", "trace_id": trace_id, "ticker": ticker})
-
-    try:
-        store = VectorStore()
-        ticker_list = None
-        if tickers:
-            ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
-        docs = await store.search(
-            q,
-            k=k,
-            ticker=ticker,
-            tickers=ticker_list,
-            doc_type=doc_type,
-            rule_id=rule_id,
-            model_version=model_version,
-            market_session=session,
-            start=start,
-            end=end,
-            min_premium_usd=min_premium_usd,
-            max_premium_usd=max_premium_usd,
-        )
-        rows: list[dict[str, Any]] = []
-        for d in docs:
-            meta = getattr(d, "metadata_json", None) or {}
-            source_type = getattr(d, "source_type", None)
-            source_id = getattr(d, "source_id", None)
-            rows.append(
-                {
-                    "doc_id": getattr(d, "doc_id", None),
-                    "source_type": source_type,
-                    "source_id": source_id,
-                    "content": getattr(d, "content", None),
-                    "metadata": meta,
-                    "pointers": {
-                        "source_type": source_type,
-                        "source_id": source_id,
-                        **(meta.get("pointers") or {}),
-                    },
-                }
-            )
-        return rows
-    except Exception as e:
-        logger.error(
-            "RAG search failed",
-            extra={"event_type": "RAG_SEARCH_ERROR", "trace_id": trace_id, "error": str(e)},
-            exc_info=True,
-        )
-        raise HTTPException(status_code=503, detail="Search unavailable") from e
 
 
 def _dt_iso(dt: datetime | None) -> str | None:

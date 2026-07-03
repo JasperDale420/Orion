@@ -27,6 +27,16 @@ def mock_env():
         yield
 
 
+@pytest.fixture(autouse=True)
+def bps_sizing(monkeypatch):
+    """These tests pin the solver-bps sizing path — disable the fixed-premium
+    default (individual tests re-enable it to pin the fixed-premium policy)."""
+    from orion.config import risk_settings
+
+    monkeypatch.setattr(risk_settings, "fixed_premium_per_trade", 0.0)
+    monkeypatch.setattr(risk_settings, "max_contracts_per_trade", 0)
+
+
 def _make_gateway_client_mock():
     mock = AsyncMock()
     mock.get_clock.return_value = {"is_open": True}
@@ -170,3 +180,46 @@ async def test_fallback_to_flat_sizing_without_risk_bps(mock_env):
     # The flat-sized fallback order still completed end-to-end.
     assert decision.executed_successfully == "TRUE"
     assert engine.order_history[-1][1] is True
+
+
+@pytest.mark.asyncio
+async def test_fixed_premium_sizing_overrides_solver_bps(mock_env, monkeypatch):
+    """With fixed_premium_per_trade set (the default), sizing ignores solver
+    bps: every trade risks the same fixed debit for uniform sample weights."""
+    from orion.config import risk_settings
+
+    monkeypatch.setattr(risk_settings, "fixed_premium_per_trade", 500.0)
+    engine, mock_client = _make_engine(equity=100_000.0)
+
+    # $500 fixed / ($2.00 * 100) = 2 contracts, regardless of risk_bps=100.
+    candidate, decision = _make_candidate_and_decision(
+        execution_params={"risk_per_trade_bps": 100, "regime_size_multiplier": 1.0}
+    )
+
+    await engine.execute_order(decision, candidate)
+
+    mock_client.create_order.assert_called_once()
+    assert int(mock_client.create_order.call_args[1]["qty"]) == 2
+    assert decision.executed_successfully == "TRUE"
+
+
+@pytest.mark.asyncio
+async def test_max_contracts_per_trade_caps_cheap_contracts(mock_env, monkeypatch):
+    """A cheap contract can't balloon into a huge lot: contracts cap applies."""
+    from orion.config import risk_settings
+
+    monkeypatch.setattr(risk_settings, "fixed_premium_per_trade", 500.0)
+    monkeypatch.setattr(risk_settings, "max_contracts_per_trade", 5)
+    engine, mock_client = _make_engine(equity=100_000.0)
+    # $0.25 mid → $500 / $25 = 20 contracts uncapped → capped at 5.
+    engine._gateway_client.get_option_chain.return_value = {
+        "contracts": [{"contract_symbol": "AAPL260418C00150000", "bid": 0.24, "ask": 0.26}]
+    }
+
+    candidate, decision = _make_candidate_and_decision(execution_params={})
+
+    await engine.execute_order(decision, candidate)
+
+    mock_client.create_order.assert_called_once()
+    assert int(mock_client.create_order.call_args[1]["qty"]) == 5
+    assert decision.executed_successfully == "TRUE"

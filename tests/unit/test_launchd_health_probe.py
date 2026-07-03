@@ -296,8 +296,6 @@ class TestDetectMissingJobs:
             "com.empire.orion.data-quality",
             "com.empire.orion.execution",
             "com.empire.orion.ingestion",
-            "com.empire.orion.meta-search",
-            "com.empire.orion.meta-weekly",
             "com.empire.orion.position-monitor",
         ]
 

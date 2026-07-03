@@ -40,7 +40,6 @@ from orion.storage import (  # noqa: E402, F401
     models_gold,
     models_liveness,
     models_ml,
-    models_rag,
     models_risk,
     models_signals,
     models_silver,
