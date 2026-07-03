@@ -123,3 +123,24 @@ async def test_unverifiable_position_is_skipped(monkeypatch):
     # State effect: an unverifiable position is skipped, not counted as a
     # broker round-trip — breaker history stays empty.
     assert list(ee.order_history) == []
+
+
+@pytest.mark.asyncio
+async def test_429_limit_reject_does_not_escalate_to_native(monkeypatch):
+    """A 429 (rate-limit storm) on the close LIMIT must NOT escalate to a native
+    flatten — native closes aren't orion-attributed, so escalating would blind
+    the daily-loss/drawdown kill switch. Defer (return False) and retry instead."""
+    ee, client = _engine({"symbol": OCC, "qty": "10", "avg_entry_price": "1.0"}, monkeypatch)
+
+    # Make the limit submission return a 429. Stub the pre-conditions so we reach
+    # the submit/escalation decision without exercising quote/resting-cancel I/O.
+    ee._cancel_resting_orion_orders = AsyncMock(return_value=True)
+    ee._fresh_close_limit = AsyncMock(return_value=4.5)
+    ee._submit_close_limit = AsyncMock(return_value=({"error": "rate limited", "status_code": 429}, "orion_cid"))
+    ee._native_close_escalation = AsyncMock(return_value=True)
+
+    ok = await ee.close_position(ticker=OCC, qty=10, exit_signal=_exit_signal(), current_price=5.0)
+
+    assert ok is False  # deferred, not escalated
+    ee._native_close_escalation.assert_not_called()
+    client.close_position.assert_not_called()

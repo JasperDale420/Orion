@@ -192,8 +192,9 @@ def _make_events(run_tag: str, now: datetime, ticker: str):
         ingest={},
     )
 
-    # Crafted to trigger BullishSweepRule:
-    #   put_call=C, sweep=True, aggressor=ASK, premium>=10k, DTE in [7,30]
+    # Crafted to trigger SwingBucketRule (rule_swing_v2):
+    #   put_call=C, sweep=True, aggressor=ASK, premium>=100k, DTE in [4,14].
+    #   The allowlist/entry-window checks are bypassed in the test stage.
     expiry = now.date() + timedelta(days=10)
     flow_event = BronzeEvent(
         event_id=f"{run_tag}_flow_1",
@@ -222,7 +223,7 @@ def _make_events(run_tag: str, now: datetime, ticker: str):
             "trade_type": "SWEEP",
             "open_interest": 5000,
             "volume": 800,
-            "premium": 50000.0,
+            "premium": 150000.0,
             "multi_leg": False,
             "id": f"{run_tag}_flow_1",
         },
@@ -245,6 +246,12 @@ def _configure_settings(run_tag: str):
 
     risk_settings.max_order_size_usd = 1e9
     risk_settings.max_ticker_exposure_usd = 1e9
+    # Bucket/underlying entry caps count OPEN journal rows — on a shared/live
+    # DB the smoke's synthetic candidate would collide with real open
+    # positions ("Bucket cap reached"). Disable them like the other limits.
+    risk_settings.option_bucket_caps = {}
+    risk_settings.max_positions_per_underlying = 0
+    risk_settings.max_positions_per_index_underlying = 0
     risk_settings.max_positions = 100
     risk_settings.max_daily_loss = 1e9
 
@@ -309,6 +316,21 @@ async def _cleanup_smoke_run_rows(
         await session.execute(delete(SolverMetrics).where(SolverMetrics.id.in_(solver_metric_ids)))
 
     await session.execute(delete(Solver).where(Solver.solver_id == _smoke_solver_id(run_tag)))
+
+
+async def _purge_orphaned_future_bronze(session) -> int:
+    """Belt-and-suspenders: delete bronze rows left far in the future by a prior
+    smoke run whose per-event cleanup was skipped (hard kill / OOM before the
+    finally). Smoke rows are dated now+30d (``_smoke_test_now``); no legitimate
+    bronze row is ever >1 day ahead, so this is safe. Without it an orphaned
+    future row sets ``bronze_max`` ~25 days ahead and (pre-guard) silently
+    blinded the dead-man bronze freshness check.
+    """
+    from orion.storage.models import BronzeEvent
+
+    cutoff = datetime.now(UTC) + timedelta(days=1)
+    result = await session.execute(delete(BronzeEvent).where(BronzeEvent.received_ts_utc > cutoff))
+    return int(result.rowcount or 0)
 
 
 async def _execute_mock_smoke_order(*, run_tag: str, decision, candidate) -> None:
@@ -383,6 +405,15 @@ async def run_smoke_test() -> dict[str, bool]:
     db.configure_db(REAL_DB_URL, echo=False)
     try:
         await db.init_db()
+
+        # Self-heal: sweep any future-dated bronze residue a prior killed smoke
+        # run left behind (orphans set bronze_max ~25d ahead and blind the
+        # dead-man bronze freshness check until purged).
+        async with db.async_session_factory() as session:
+            purged = await _purge_orphaned_future_bronze(session)
+            await session.commit()
+        if purged:
+            print(f"  [setup] purged {purged} orphaned future-dated bronze row(s)")
 
         _configure_settings(run_tag)
 
@@ -555,7 +586,11 @@ async def run_smoke_test() -> dict[str, bool]:
         try:
             from orion.processing.rule_engine import RuleEngine
 
-            re = RuleEngine()
+            # The smoke runs in paper stage with a synthetic ticker and
+            # future timestamps — explicitly bypass the live-market gates
+            # (allowlist / entry window / clock skew). Signal-quality gates
+            # (sweep, aggressor, premium floor, volume) still apply.
+            re = RuleEngine(enforce_universe_and_window=False)
             candidates = re.process_signals(uw_signals)
             assert len(candidates) > 0, "No candidates produced by rule engine"
 

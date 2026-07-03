@@ -39,6 +39,7 @@ def _solver_definition(
     max_dd_pct: float,
     stability_score: float,
     oos_expect_bp: float,
+    active: bool = True,
 ) -> dict[str, Any]:
     config = {
         "version_id": solver_id,
@@ -73,8 +74,8 @@ def _solver_definition(
         "family_name": family_name,
         "name": name,
         "stage": "paper",
-        "status": "active",
-        "is_active": True,
+        "status": "active" if active else "inactive",
+        "is_active": active,
         "created_by": "seed_script",
         "notes": notes,
         "config": config,
@@ -94,7 +95,8 @@ SEED_SOLVERS: list[dict[str, Any]] = [
         solver_id="bullish_sweep_paper_v1",
         family_name="BullishSweep",
         name="Bullish Sweep Paper V1",
-        notes="Conservative bullish sweep solver for paper trading",
+        notes="Retired 2026-07: rule absorbed into the short-swing/swing bucket rules",
+        active=False,
         rules=["rule_bullish_sweep_v1"],
         feature_set_id="v2_intraday",
         risk_per_trade_bps=50,
@@ -116,7 +118,8 @@ SEED_SOLVERS: list[dict[str, Any]] = [
         solver_id="bearish_put_paper_v1",
         family_name="BearishPutPressure",
         name="Bearish Put Pressure Paper V1",
-        notes="Conservative bearish put pressure solver for paper trading",
+        notes="Retired 2026-07: the no-sweep $10k-floor noise firehose (67% of all candidates); absorbed into bucket rules",
+        active=False,
         rules=["rule_bearish_put_pressure_v1"],
         feature_set_id="v2_intraday",
         risk_per_trade_bps=50,
@@ -161,7 +164,7 @@ SEED_SOLVERS: list[dict[str, Any]] = [
         family_name="SwingEntry",
         name="Swing Entry Paper V1",
         notes="Multi-day swing entry using daily context features",
-        rules=["rule_swing_entry_v1"],
+        rules=["rule_swing_v2"],
         feature_set_id="v2_swing",
         risk_per_trade_bps=75,
         max_open_positions=3,
@@ -179,11 +182,67 @@ SEED_SOLVERS: list[dict[str, Any]] = [
         oos_expect_bp=15.0,
     ),
     _solver_definition(
+        solver_id="zero_dte_paper_v1",
+        family_name="ZeroDTESweep",
+        name="Zero DTE Sweep Paper V1",
+        notes="0DTE index sweep solver; seed metrics until realized trades replace them",
+        rules=["rule_0dte_sweep_v2"],
+        feature_set_id="v2_intraday",
+        risk_per_trade_bps=40,
+        max_open_positions=2,
+        max_ticker_exposure_pct=5.0,
+        session_filter=["RTH"],
+        fixed_tp_pct=0.02,
+        fixed_sl_pct=0.01,
+        time_exit_bars=30,
+        volatility_penalty_threshold=0.02,
+        info_ratio=1.2,
+        sharpe_ratio=1.4,
+        profit_factor=1.25,
+        max_dd_pct=5.0,
+        stability_score=0.7,
+        oos_expect_bp=8.0,
+    ),
+    _solver_definition(
+        solver_id="short_swing_paper_v1",
+        family_name="ShortSwingEntry",
+        name="Short Swing Entry Paper V1",
+        notes="1-3 DTE short-swing solver; seed metrics until realized trades replace them",
+        rules=["rule_short_swing_v2"],
+        feature_set_id="v2_intraday",
+        risk_per_trade_bps=50,
+        max_open_positions=3,
+        max_ticker_exposure_pct=5.0,
+        session_filter=["RTH"],
+        fixed_tp_pct=0.03,
+        fixed_sl_pct=0.015,
+        time_exit_bars=130,
+        volatility_penalty_threshold=0.02,
+        info_ratio=1.3,
+        sharpe_ratio=1.5,
+        profit_factor=1.3,
+        max_dd_pct=6.0,
+        stability_score=0.7,
+        oos_expect_bp=10.0,
+    ),
+    _solver_definition(
         solver_id=DEFAULT_BASELINE_SOLVER_ID,
         family_name="DiversifiedBaseline",
         name="Diversified Baseline V1",
-        notes="Baseline solver covering the main rules for paper fallback routing",
-        rules=["rule_bullish_sweep_v1", "rule_bearish_put_pressure_v1", "rsi_oversold_v1", "rule_swing_entry_v1"],
+        notes="Baseline solver covering every implemented rule for paper fallback routing",
+        rules=[
+            # Active bucket rules (2026-07 overhaul)
+            "rule_0dte_sweep_v2",
+            "rule_short_swing_v2",
+            "rule_swing_v2",
+            # Retired v1 IDs kept so in-flight candidates still route
+            "rule_bullish_sweep_v1",
+            "rule_bearish_put_pressure_v1",
+            "rsi_oversold_v1",
+            "rule_swing_entry_v1",
+            "rule_0dte_sweep_v1",
+            "rule_short_swing_entry_v1",
+        ],
         feature_set_id="v1_legacy",
         risk_per_trade_bps=50,
         max_open_positions=5,
@@ -326,27 +385,36 @@ async def seed_default_solvers() -> dict[str, Any]:
 
 
 async def ensure_active_solvers_ready(stage: str | None) -> SolverInventoryStatus:
+    """Make the seeded solver set current at startup.
+
+    SEED_SOLVERS is canonical for the default solver rows: in paper/test
+    stages the upsert runs on EVERY startup — not only when the table is
+    empty — so seed changes (new bucket solvers, retired rules, baseline
+    rule lists) deploy with a service restart instead of requiring an empty
+    table or a manual seeder run. The upsert touches only the seed rows;
+    solvers created by other means are untouched. To change a seeded
+    solver, edit seed_solvers.py — direct DB edits to those rows are
+    overwritten on the next restart.
+
+    Non-auto-seed stages (live) never seed and refuse to start without
+    active solvers.
+    """
     normalized_stage = (stage or "paper").lower()
     await init_db()
 
-    active_count = await _count_active_solvers()
-    if active_count > 0:
+    if normalized_stage not in AUTO_SEED_STAGES:
+        active_count = await _count_active_solvers()
+        if active_count <= 0:
+            msg = f"No active solvers configured for stage={normalized_stage}. Refusing to start."
+            logger.error(msg)
+            raise RuntimeError(msg)
         return SolverInventoryStatus(
             active_solver_count=active_count,
             seeded=False,
             baseline_solver_id=_resolve_baseline_id(),
         )
 
-    if normalized_stage not in AUTO_SEED_STAGES:
-        msg = f"No active solvers configured for stage={normalized_stage}. Refusing to start."
-        logger.error(msg)
-        raise RuntimeError(msg)
-
-    logger.warning(
-        "No active solvers found for paper-compatible stage; seeding defaults",
-        stage=normalized_stage,
-    )
-    await seed_default_solvers()
+    summary = await seed_default_solvers()
     active_count = await _count_active_solvers()
     if active_count <= 0:
         msg = "Default solver seeding completed but no active solvers were available afterward."
@@ -355,7 +423,7 @@ async def ensure_active_solvers_ready(stage: str | None) -> SolverInventoryStatu
 
     return SolverInventoryStatus(
         active_solver_count=active_count,
-        seeded=True,
+        seeded=summary["created"] > 0,
         baseline_solver_id=_resolve_baseline_id(),
     )
 

@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from orion.jobs import deadman_watchdog as dw
 from orion.jobs.deadman_watchdog import (
     BRONZE_BUDGET_SECONDS,
+    FUTURE_SKEW_SECONDS,
     evaluate_service_liveness,
     evaluate_stage_freshness,
     is_nyse_session_open,
@@ -52,14 +53,15 @@ AFTER_HOURS_UTC = datetime(2026, 6, 11, 2, 0, tzinfo=UTC)  # 22:00 ET prev day �
 # ---- pure decision functions -------------------------------------------------
 
 
-def _row(service: str, age_seconds: float, budget: int) -> ServiceLiveness:
+def _row(service: str, age_seconds: float, budget: int, *, now: datetime | None = None) -> ServiceLiveness:
+    row_now = now or datetime.now(UTC)
     return ServiceLiveness(
         service=service,
-        last_success_ts_utc=datetime.now(UTC) - timedelta(seconds=age_seconds),
+        last_success_ts_utc=row_now - timedelta(seconds=age_seconds),
         cycle_count=5,
         last_error=None,
         cadence_budget_seconds=budget,
-        updated_at=datetime.now(UTC),
+        updated_at=row_now,
     )
 
 
@@ -88,6 +90,20 @@ def test_each_service_judged_against_its_own_budget():
     assert [a.name for a in alerts] == ["execution"]
 
 
+def test_market_bound_service_is_informational_when_market_closed():
+    rows = [_row("ingestion", age_seconds=900, budget=300, now=AFTER_HOURS_UTC)]
+
+    assert evaluate_service_liveness(rows, AFTER_HOURS_UTC, market_open=False) == []
+
+
+def test_always_on_service_still_alerts_when_market_closed():
+    rows = [_row("meta_weekly", age_seconds=900, budget=300, now=AFTER_HOURS_UTC)]
+
+    alerts = evaluate_service_liveness(rows, AFTER_HOURS_UTC, market_open=False)
+
+    assert [a.name for a in alerts] == ["meta_weekly"]
+
+
 def test_stage_fresh_no_alert():
     now = datetime.now(UTC)
     max_ts = now - timedelta(seconds=60)
@@ -108,6 +124,49 @@ def test_stage_no_rows_alerts():
     alert = evaluate_stage_freshness("silver", None, 600, now)
     assert alert is not None
     assert "NO rows" in alert.message
+
+
+def test_stage_future_timestamp_alerts():
+    """A max_ts well beyond now+skew is a clock/data-quality bug: a negative age
+    can never exceed the budget, so without this guard the stage would NEVER
+    alert. The watchdog must surface the future-dated rows instead of going
+    blind (the 2026-07-11 bronze_max smoke-test residue)."""
+    now = datetime.now(UTC)
+    max_ts = now + timedelta(seconds=FUTURE_SKEW_SECONDS + 3600)
+    alert = evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now)
+    assert alert is not None
+    assert alert.name == "bronze"
+    assert "FUTURE" in alert.message
+    assert alert.age_seconds is not None
+    assert alert.age_seconds < 0
+    # A future-dated alert must NOT share the suppression key of an ordinary
+    # stale alert for the same stage, or one would mask the other for 15 min.
+    assert alert.dedupe_key == "deadman_bronze_future_ts"
+
+
+def test_stage_minor_future_skew_does_not_alert():
+    """A timestamp slightly in the future but within FUTURE_SKEW tolerance is
+    benign clock skew, not a data-quality bug — no alert."""
+    now = datetime.now(UTC)
+    max_ts = now + timedelta(seconds=FUTURE_SKEW_SECONDS - 10)
+    assert evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now) is None
+
+
+def test_stage_exact_future_skew_boundary_does_not_alert():
+    """Exactly now+skew is tolerated (strict > comparison): boundary is benign."""
+    now = datetime.now(UTC)
+    max_ts = now + timedelta(seconds=FUTURE_SKEW_SECONDS)
+    assert evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now) is None
+
+
+def test_stage_ordinary_stale_keeps_plain_dedupe_key():
+    """An ordinary stale alert keeps the unsuffixed key so the future-ts variant
+    stays distinct from it."""
+    now = datetime.now(UTC)
+    max_ts = now - timedelta(seconds=BRONZE_BUDGET_SECONDS + 60)
+    alert = evaluate_stage_freshness("bronze", max_ts, BRONZE_BUDGET_SECONDS, now)
+    assert alert is not None
+    assert alert.dedupe_key == "deadman_bronze"
 
 
 # ---- calendar-aware session gate --------------------------------------------
@@ -193,10 +252,46 @@ async def test_run_watchdog_never_registered_service_is_silent():
     sent.assert_not_awaited()
 
 
-async def test_run_watchdog_stale_service_alerts_and_dispatches():
+async def test_features_stage_is_informational_not_paged_when_empty():
+    """gold_feature_events is not written by the live ingestion/execution path,
+    so it is legitimately empty intraday — the watchdog logs 'features'
+    freshness but must never page it (was a standing false positive). The real
+    live stages still page when empty, proving the change is scoped to features."""
+    now = MARKET_HOURS_UTC
+    await _add_bronze(received_age_seconds=10, now=now)  # bronze fresh
+    # Neither silver nor gold_feature_events seeded (both empty).
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=now)
+
+    names = [a.name for a in alerts]
+    assert "features" not in names  # the fix: an empty features stage never pages
+    assert "silver" in names  # a real live stage still pages when empty (non-regression)
+
+
+async def test_run_watchdog_stale_market_service_alerts_during_market_hours_and_dispatches():
     # Publish a row, then age it past its budget.
     await publish_liveness("ingestion", cadence_budget_seconds=300)
     # Age the row relative to the evaluation clock we pass to run_watchdog.
+    async with _test_sessionmaker()() as session:
+        row = await session.get(ServiceLiveness, "ingestion")
+        row.last_success_ts_utc = MARKET_HOURS_UTC - timedelta(seconds=1000)
+        await session.commit()
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=MARKET_HOURS_UTC)
+
+    names = [a.name for a in alerts]
+    assert "ingestion" in names
+    sent.assert_awaited()
+    # Dispatched with the per-service dedupe key.
+    assert any(kwargs["dedupe_key"] == "deadman_ingestion" for _, kwargs in sent.call_args_list)
+
+
+async def test_run_watchdog_stale_market_service_is_quiet_after_hours():
+    await publish_liveness("ingestion", cadence_budget_seconds=300)
     async with _test_sessionmaker()() as session:
         row = await session.get(ServiceLiveness, "ingestion")
         row.last_success_ts_utc = AFTER_HOURS_UTC - timedelta(seconds=1000)
@@ -206,12 +301,23 @@ async def test_run_watchdog_stale_service_alerts_and_dispatches():
     with patch.object(dw, "send_discord_alert", sent):
         alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
 
-    names = [a.name for a in alerts]
-    assert "ingestion" in names
+    assert [a for a in alerts if a.kind == "service"] == []
+    sent.assert_not_awaited()
+
+
+async def test_run_watchdog_stale_always_on_service_alerts_after_hours():
+    await publish_liveness("meta_weekly", cadence_budget_seconds=300)
+    async with _test_sessionmaker()() as session:
+        row = await session.get(ServiceLiveness, "meta_weekly")
+        row.last_success_ts_utc = AFTER_HOURS_UTC - timedelta(seconds=1000)
+        await session.commit()
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert [a.name for a in alerts if a.kind == "service"] == ["meta_weekly"]
     sent.assert_awaited()
-    # Dispatched with the per-service dedupe key.
-    _, kwargs = sent.call_args
-    assert kwargs["dedupe_key"] == "deadman_ingestion"
 
 
 async def test_run_watchdog_stage_alerts_only_during_market_hours():

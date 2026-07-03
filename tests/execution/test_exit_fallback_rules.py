@@ -1,12 +1,21 @@
 """Tests for deterministic exit fallback rules."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from orion.execution.exit_fallback_rules import (
+    DEFAULT_BUCKET_PARAMS,
+    BucketExitParams,
+    DisasterValveRule,
     DrawdownFromPeakRule,
+    MaxHoldRule,
+    NoProgressRule,
     ProfitTargetRule,
+    StopLossRule,
     TimeToExpiryRule,
+    ZeroDTEFlattenRule,
     evaluate_fallback_rules,
+    resolve_exit_params,
 )
 
 
@@ -18,6 +27,7 @@ def _make_position(
     entry_time: datetime | None = None,
     dte_at_entry: int = 7,
     expiry_date: datetime | None = None,
+    bucket: str = "SWING",
 ):
     """Test fixture mimicking TrackedPosition fields the rules read."""
     from types import SimpleNamespace
@@ -32,6 +42,7 @@ def _make_position(
         dte_at_entry=dte_at_entry,
         option_symbol=symbol,
         expiry_date=expiry_date,
+        bucket=bucket,
     )
 
 
@@ -56,6 +67,48 @@ def test_profit_target_does_not_trigger_below_threshold():
 def test_profit_target_disabled_when_target_zero():
     rule = ProfitTargetRule(target_pct=0)
     pos = _make_position(return_pct=5.0)
+    assert rule.should_exit(pos) is None
+
+
+# --- StopLossRule -----------------------------------------------------------
+
+
+def test_stop_loss_triggers_below_threshold():
+    rule = StopLossRule(stop_loss_pct=0.35)
+    pos = _make_position(return_pct=-0.40)
+    sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.urgency == "IMMEDIATE"
+    assert sig.rule_id == "stop_loss_v1"
+
+
+def test_stop_loss_does_not_trigger_above_threshold():
+    rule = StopLossRule(stop_loss_pct=0.35)
+    pos = _make_position(return_pct=-0.20)
+    assert rule.should_exit(pos) is None
+
+
+def test_stop_loss_disabled_when_zero():
+    rule = StopLossRule(stop_loss_pct=0)
+    pos = _make_position(return_pct=-0.99)
+    assert rule.should_exit(pos) is None
+
+
+# --- DisasterValveRule ------------------------------------------------------
+
+
+def test_disaster_valve_triggers_on_catastrophic_loss():
+    rule = DisasterValveRule(disaster_pct=0.60)
+    pos = _make_position(return_pct=-0.75)
+    sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.urgency == "IMMEDIATE"
+    assert sig.rule_id == "disaster_valve_v1"
+
+
+def test_disaster_valve_does_not_trigger_above_threshold():
+    rule = DisasterValveRule(disaster_pct=0.60)
+    pos = _make_position(return_pct=-0.50)
     assert rule.should_exit(pos) is None
 
 
@@ -94,6 +147,157 @@ def test_time_to_expiry_handles_missing_expiry_gracefully():
     assert rule.should_exit(pos) is None  # can't evaluate, don't fire
 
 
+# --- ZeroDTEFlattenRule -----------------------------------------------------
+
+
+def _at_et(hour: int, minute: int) -> datetime:
+    """A fixed 'now' at the given ET wall-clock time (as UTC for datetime.now)."""
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    return datetime(2026, 7, 1, hour, minute, tzinfo=et).astimezone(UTC)
+
+
+def test_zero_dte_flatten_fires_after_cutoff():
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    pos = _make_position(bucket="0DTE")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.urgency == "IMMEDIATE"
+    assert sig.rule_id == "zero_dte_flatten_v1"
+
+
+def test_zero_dte_flatten_quiet_before_cutoff():
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    pos = _make_position(bucket="0DTE")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(14, 0).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+
+
+def test_zero_dte_flatten_ignores_other_buckets():
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    pos = _make_position(bucket="SWING")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+
+
+def test_zero_dte_flatten_disabled_when_unset():
+    rule = ZeroDTEFlattenRule(flatten_after_et=None)
+    pos = _make_position(bucket="0DTE")
+    assert rule.should_exit(pos) is None
+
+
+def test_zero_dte_flatten_fires_for_mislabeled_bucket_expiring_today():
+    """Defense in depth: a position mislabeled SWING (missing entry context)
+    whose contract actually expires today must still hard-flatten."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    pos = _make_position(bucket="SWING", expiry_date=_at_et(16, 0))
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.rule_id == "zero_dte_flatten_v1"
+
+
+def test_zero_dte_flatten_quiet_for_future_expiry_other_bucket():
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    pos = _make_position(bucket="SWING", expiry_date=_at_et(16, 0) + timedelta(days=7))
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+
+
+def test_zero_dte_flatten_not_a_day_early_for_midnight_utc_expiry():
+    """Expiry is stored midnight UTC and encodes the CALENDAR date: a July-2
+    contract (2026-07-02 00:00 UTC) seen at 15:50 ET on July 1 converts to
+    July 1 20:00 ET — an ET-date comparison would flatten it a day early."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45")
+    # Tomorrow's contract, stored as midnight UTC of its calendar date.
+    tomorrow_midnight_utc = (
+        (_at_et(15, 50) + timedelta(days=1)).astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    )
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=tomorrow_midnight_utc)
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+
+
+# --- NoProgressRule ---------------------------------------------------------
+
+
+def test_no_progress_fires_on_stuck_position():
+    rule = NoProgressRule(no_progress_minutes=90, band_pct=0.15)
+    pos = _make_position(
+        return_pct=0.05,
+        entry_time=datetime.now(UTC) - timedelta(minutes=120),
+    )
+    sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.rule_id == "no_progress_v1"
+
+
+def test_no_progress_quiet_when_position_moved():
+    rule = NoProgressRule(no_progress_minutes=90, band_pct=0.15)
+    pos = _make_position(
+        return_pct=0.25,  # outside the ±15% band — thesis is working
+        entry_time=datetime.now(UTC) - timedelta(minutes=120),
+    )
+    assert rule.should_exit(pos) is None
+
+
+def test_no_progress_quiet_before_window():
+    rule = NoProgressRule(no_progress_minutes=90, band_pct=0.15)
+    pos = _make_position(
+        return_pct=0.0,
+        entry_time=datetime.now(UTC) - timedelta(minutes=30),
+    )
+    assert rule.should_exit(pos) is None
+
+
+def test_no_progress_disabled_when_zero():
+    rule = NoProgressRule(no_progress_minutes=0, band_pct=0.15)
+    pos = _make_position(
+        return_pct=0.0,
+        entry_time=datetime.now(UTC) - timedelta(days=3),
+    )
+    assert rule.should_exit(pos) is None
+
+
+# --- MaxHoldRule ------------------------------------------------------------
+
+
+def test_max_hold_fires_past_window():
+    rule = MaxHoldRule(max_hold_hours=54)
+    pos = _make_position(entry_time=datetime.now(UTC) - timedelta(hours=60))
+    sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.rule_id == "max_hold_v1"
+    assert sig.urgency == "SOON"
+
+
+def test_max_hold_quiet_inside_window():
+    rule = MaxHoldRule(max_hold_hours=54)
+    pos = _make_position(entry_time=datetime.now(UTC) - timedelta(hours=10))
+    assert rule.should_exit(pos) is None
+
+
+def test_max_hold_disabled_when_zero():
+    rule = MaxHoldRule(max_hold_hours=0)
+    pos = _make_position(entry_time=datetime.now(UTC) - timedelta(days=30))
+    assert rule.should_exit(pos) is None
+
+
+def test_max_hold_handles_naive_entry_time():
+    rule = MaxHoldRule(max_hold_hours=54)
+    naive = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=60)
+    pos = _make_position(entry_time=naive)
+    assert rule.should_exit(pos) is not None
+
+
 # --- DrawdownFromPeakRule ---------------------------------------------------
 
 
@@ -126,7 +330,53 @@ def test_drawdown_from_peak_disabled_when_threshold_zero():
     assert rule.should_exit(pos) is None
 
 
+def test_drawdown_not_armed_until_min_peak():
+    rule = DrawdownFromPeakRule(max_drawdown_pct=0.40, min_peak_pct=0.25)
+    # Peak only +10% — trailing stop not armed even though retracement is 100%.
+    pos = _make_position(return_pct=0.0, max_return_pct=0.10)
+    assert rule.should_exit(pos) is None
+
+
+def test_drawdown_armed_once_min_peak_reached():
+    rule = DrawdownFromPeakRule(max_drawdown_pct=0.40, min_peak_pct=0.25)
+    # Peak +30% (armed), current +5% → retracement 0.83 ≥ 0.40.
+    pos = _make_position(return_pct=0.05, max_return_pct=0.30)
+    assert rule.should_exit(pos) is not None
+
+
+# --- resolve_exit_params ----------------------------------------------------
+
+
+def test_resolve_exit_params_defaults():
+    params = resolve_exit_params("SHORT_SWING")
+    assert params == DEFAULT_BUCKET_PARAMS["SHORT_SWING"]
+
+
+def test_resolve_exit_params_unknown_bucket_gets_swing():
+    assert resolve_exit_params("???") == DEFAULT_BUCKET_PARAMS["SWING"]
+
+
+def test_resolve_exit_params_applies_overrides():
+    params = resolve_exit_params("0DTE", {"0DTE": {"profit_target_pct": 0.55}})
+    assert params.profit_target_pct == 0.55
+    # untouched fields keep bucket defaults
+    assert params.stop_loss_pct == DEFAULT_BUCKET_PARAMS["0DTE"].stop_loss_pct
+
+
+def test_resolve_exit_params_ignores_other_bucket_overrides():
+    params = resolve_exit_params("SWING", {"0DTE": {"profit_target_pct": 0.55}})
+    assert params == DEFAULT_BUCKET_PARAMS["SWING"]
+
+
 # --- Composition -----------------------------------------------------------
+
+_TEST_PARAMS = BucketExitParams(
+    profit_target_pct=1.00,
+    stop_loss_pct=0.35,
+    min_dte=1,
+    max_hold_hours=54,
+    max_drawdown_pct=0.50,
+)
 
 
 def test_evaluate_fallback_rules_returns_first_match():
@@ -135,13 +385,9 @@ def test_evaluate_fallback_rules_returns_first_match():
         return_pct=1.50,
         max_return_pct=1.50,
         expiry_date=datetime.now(UTC) + timedelta(hours=12),
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
     )
-    sig = evaluate_fallback_rules(
-        pos,
-        profit_target_pct=1.00,
-        min_dte=1,
-        max_drawdown_pct=0.50,
-    )
+    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
     assert sig is not None
     assert sig.rule_id == "profit_target_v1"
 
@@ -151,14 +397,32 @@ def test_evaluate_fallback_rules_returns_none_when_no_match():
         return_pct=0.20,
         max_return_pct=0.30,
         expiry_date=datetime.now(UTC) + timedelta(days=10),
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
     )
-    sig = evaluate_fallback_rules(
-        pos,
-        profit_target_pct=1.00,
-        min_dte=1,
-        max_drawdown_pct=0.50,
-    )
+    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
     assert sig is None
+
+
+def test_stop_loss_beats_max_hold_when_both_fire():
+    """Stop-loss outranks time stops — the risk limit is the reason to exit."""
+    pos = _make_position(
+        return_pct=-0.40,
+        expiry_date=datetime.now(UTC) + timedelta(days=10),
+        entry_time=datetime.now(UTC) - timedelta(hours=100),
+    )
+    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
+    assert sig is not None
+    assert sig.rule_id == "stop_loss_v1"
+
+
+def test_disaster_valve_beats_stop_loss():
+    pos = _make_position(
+        return_pct=-0.80,
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
+    )
+    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
+    assert sig is not None
+    assert sig.rule_id == "disaster_valve_v1"
 
 
 def test_dte_beats_drawdown_when_both_fire():
@@ -167,13 +431,9 @@ def test_dte_beats_drawdown_when_both_fire():
         return_pct=0.50,  # +50%, not enough for profit target
         max_return_pct=2.00,  # +200% peak → retracement = 0.75
         expiry_date=datetime.now(UTC) + timedelta(hours=12),  # ~0 DTE
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
     )
-    sig = evaluate_fallback_rules(
-        pos,
-        profit_target_pct=1.00,
-        min_dte=1,
-        max_drawdown_pct=0.50,
-    )
+    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
     assert sig is not None
     assert sig.rule_id == "time_to_expiry_v1"
 
@@ -184,12 +444,37 @@ def test_only_drawdown_fires():
         return_pct=0.50,  # +50%, below 100% target
         max_return_pct=2.00,  # +200% peak → retracement = 0.75
         expiry_date=datetime.now(UTC) + timedelta(days=10),  # plenty of time
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
     )
-    sig = evaluate_fallback_rules(
-        pos,
-        profit_target_pct=1.00,
-        min_dte=1,
-        max_drawdown_pct=0.50,
-    )
+    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
     assert sig is not None
     assert sig.rule_id == "drawdown_from_peak_v1"
+
+
+def test_max_hold_fires_via_composition():
+    pos = _make_position(
+        return_pct=0.10,
+        expiry_date=datetime.now(UTC) + timedelta(days=10),
+        entry_time=datetime.now(UTC) - timedelta(hours=100),
+    )
+    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
+    assert sig is not None
+    assert sig.rule_id == "max_hold_v1"
+
+
+def test_default_swing_loser_now_exits():
+    """The regression that mattered: a plain -45% SWING loser must exit.
+
+    Under the old rules (profit +100% / DTE<=1 / drawdown-only-if-peaked)
+    this position was never exited and bled to zero via theta.
+    """
+    pos = _make_position(
+        return_pct=-0.45,
+        max_return_pct=0.0,
+        expiry_date=datetime.now(UTC) + timedelta(days=8),
+        entry_time=datetime.now(UTC) - timedelta(hours=6),
+        bucket="SWING",
+    )
+    sig = evaluate_fallback_rules(pos, params=resolve_exit_params("SWING"))
+    assert sig is not None
+    assert sig.rule_id == "stop_loss_v1"

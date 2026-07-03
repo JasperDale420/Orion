@@ -2,7 +2,32 @@
 
 ## Overview
 
-This document describes the recommended alert configurations for monitoring Orion services.
+Orion uses Discord for all operational alerts. Prometheus metrics are exposed for optional scraping.
+
+## Notification Channels
+
+Orion uses Discord for all operational alerts, configured via `DISCORD_WEBHOOK_URL` env var.
+
+### Discord alert types
+
+| Alert | Source | Cadence |
+|---|---|---|
+| Stale-cancel give-up | `execution_engine.py` `_cancel_stale_entry_orders` | Per-event (deduped by order_id) |
+| System health CRITICAL/DEGRADED | `execution_engine.py` `_check_system_health` | Per-occurrence |
+| Unprotected/partially-protected position | `execution_engine.py` bracket-placement failure | Per-position cycle |
+| Launchd exit 127 | `jobs/launchd_health_probe.py` | Per (label, exit_code), 1h dedup window |
+| Launchd missing required job | `jobs/launchd_health_probe.py` | Per missing label, 1h dedup window |
+| Circuit breaker OPEN | `core/circuit_breaker.py` | Per-open event |
+| Already-terminal reconcile | `execution_engine.py` (stale-cancel) | Per-event |
+
+All Discord alerts are best-effort — webhook failures are logged but non-fatal.
+
+Required labels monitored by the launchd health probe: `execution`, `ingestion`, `meta-search`, `meta-weekly`, `position-monitor`, `data-quality`.
+
+### Alert severity levels
+
+- **CRITICAL** — Trading halted or attribution-blind position: circuit breaker open, stale-cancel give-up on active position
+- **WARNING** — Degraded operation: missing launchd daemon, health DEGRADED, unprotected bracket
 
 ## Prometheus Alert Rules
 
@@ -53,19 +78,7 @@ groups:
           description: "{{ $value }} events waiting in dead letter queue"
 ```
 
-## Log-Based Alerts
-
-### CloudWatch Log Metric Filters
-
-```json
-{
-  "filterPattern": "{ $.level = \"ERROR\" }",
-  "metricName": "OrionErrors",
-  "metricNamespace": "Orion/Logs"
-}
-```
-
-### Alert Conditions
+## Log-Based Alert Conditions
 
 | Condition | Threshold | Action |
 |-----------|-----------|--------|
@@ -73,15 +86,9 @@ groups:
 | CRITICAL logs | Any | Immediate response |
 | Circuit breaker OPEN | Any | Check reason, resolve |
 | API 5xx rate | > 1% | Investigate |
-
-## Notification Channels
-
-Configure in your alerting system:
-
-1. **Slack**: `#orion-alerts` channel
-2. **PagerDuty**: For critical alerts during trading hours
-3. **Email**: For warning-level alerts
+| `stale_cancel_gave_up` events | Any | Check execution log; per-order backoff self-heals within 5 min |
+| `launchd exit 127` in health log | Any | Fix plist ProgramArguments (`~/.local/bin/uv`) |
 
 ## Response Procedures
 
-See [Runbooks](runbooks/) for detailed response procedures.
+See [RUNBOOK.md](RUNBOOK.md) for detailed response procedures.

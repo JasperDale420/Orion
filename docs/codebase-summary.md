@@ -30,13 +30,13 @@ in Docker by the `ingestion` service.
 | `api/` | FastAPI admin API — solvers, metrics, experiments, flows, rollups, dashboard, RAG search. See [`api-reference.md`](api-reference.md). Auth via `x-api-key` (`ORION_API_KEY`). |
 | `agents/` | LLM agents: EOD review, MetaSearch (solver DNA evolution), weekly aggregator. |
 | `analysis/` | Multi-axis regime detection (vol/vix/trend/risk/session), cross-validation, evaluation metrics. |
-| `clients/` | `HeberReader` (parquet, predicate-pushdown), `GatewayTradingClient` (Alpaca proxy), TradingRAG client, MCP server. |
+| `clients/` | `HeberReader` (parquet, predicate-pushdown, negative-cache for empty Gold datasets (300s TTL), single-threaded reads for SIGABRT safety), `GatewayTradingClient` (Alpaca proxy), TradingRAG client, MCP server. |
 | `connectors/` | `GatewayStreamClient` (WebSocket bars/quotes), UW connectors: greek exposure, IV rank, market tide, max pain, VIX proxy. |
 | `core/` | Circuit breaker, feature flags, solver DSL/router/validation, universe manager, health monitor, PnL tracker, service-lease guard, market schedule, drift trigger, promotion rules. |
 | `enrichment/` | Helpers for feature-enrichment job. |
 | `execution/` | Execution engine, risk subpackage, position manager/monitor, rate limiter, correlation adjuster, signal preflight, fill processor, attribution. **Safety-critical.** |
 | `ingestion/` | Real-time WS ingestion service (Gateway WS → Bronze → Silver → candidates). |
-| `jobs/` | Scheduled jobs: nightly backfill, quality guardrails, DLQ consumer, data-quality checker, Gateway contract probe, meta loop, daily dashboard reset. |
+| `jobs/` | Scheduled jobs: nightly backfill, quality guardrails, DLQ consumer, data-quality checker, Gateway contract probe, meta loop, daily dashboard reset, launchd health probe (exit-127 monitoring), feature validation (130+ ML feature spot-check and audit). |
 | `labeler/` | Triple-barrier labeling: checkpoint, greeks, schema guard. |
 | `ml/` | LightGBM scorer, exit classifier, drift monitor, feature store, pattern miner, model registry, darkpool features. |
 | `processing/` | FeatureEngine, SignalEngine, RuleEngine, backtest engine, normalizer, rollup builder, deduper. |
@@ -54,7 +54,9 @@ When onboarding, read these in order to understand the loop:
    see [`configuration-guide.md`](configuration-guide.md).
 2. **`ingestion/service.py`** — Long-running ingestion loop. Acquires
    `service_lease_ingestion`, drains Gateway WS, writes Bronze, normalizes,
-   dedupes, writes Silver.
+   dedupes, writes Silver. After processing, `FeatureEngine` hydrates from
+   Heber on cold-start (5-day bars), maintains an LRU store capped at 500
+   tickers, and computes RSI(14) and SMA(20) via pandas_ta.
 3. **`processing/rule_engine.py`** — Maps SilverSignals to `CandidateTrade`s via
    named rules (`BullishSweep`, `BearishPutPressure`, `ZeroDTESweep`,
    `SwingEntry`, `ShortSwingEntry`).
@@ -84,6 +86,7 @@ When onboarding, read these in order to understand the loop:
 - **DB:** `storage/db.py` exposes `async_session()` and `configure_db()`. Async
   engine uses `pool_pre_ping=True`, `pool_recycle=1800`,
   `expire_on_commit=False`. pgvector enabled at init.
+- **Launchd health:** `jobs/launchd_health_probe.py` monitors all Orion launchd agents at a 5-min cadence. Detects exit 127 (wrong `uv` path / bad ProgramArguments) and missing required labels (execution, ingestion, meta-search, meta-weekly, position-monitor, data-quality). Alerts via Discord with 1-hour dedup window per (label, exit_code) pair. Run by: `com.empire.orion.launchd-health`.
 - **Service lease:** `core/service_lease.py` is Orion's single-instance guard.
   Each long-running entrypoint (`ingestion`, `main_execution`,
   `main_position_monitor`) claims a row in `SystemStatus` keyed by

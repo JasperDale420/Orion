@@ -119,6 +119,15 @@ future-you):
 These stay in place until `broker_mode` is actually flipped to `direct`; this
 section is the map for removing them then.
 
+## UW flow delivery
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ORION_FLOW_SOURCE` | `poll` | UW flow delivery path: `poll` = Heber Silver (today's data), `shadow` = Gateway WS + Heber parity logging, `push` = push-primary + poll fallback |
+| `ORION_INITIAL_FLOW_LOOKBACK_MINUTES` | `60` | How far back to seed flow on startup |
+| `ORION_FLOW_POLL_OVERLAP_SECONDS` | `30` | Overlap window to avoid gaps between polls |
+| `ORION_GOLD_FEATURE_LOOKBACK_DAYS` | `7` | Bounds ML Gold feature reads to last N days' partitions (prevents born-stale candidates from overnight catch-up bursts) |
+
 ## Risk envelope (`ORION_RISK_*`)
 
 | Variable | Wrapper default | Purpose |
@@ -138,9 +147,27 @@ Per-regime risk multipliers live in `config/regime_risk.yaml` (not env-vars).
 | Variable | Wrapper default | Purpose |
 |---|---|---|
 | `ORION_ML_PREFILTER_THRESHOLD` | `0.05` | LightGBM score gate before solver vote |
+| `ORION_ML_STALE_MODEL_POLICY` | `skip` | What to do if ML scorer is stale: `skip` = block on stale model, `warn` = log but proceed, `bypass` = skip ML entirely |
+| `ORION_HEURISTIC_CAP_LIVE` | `0.9` | Maximum heuristic pre-filter score in live mode |
 | `ORION_CIRCUIT_BREAKER_ENABLED` | `false` | Per-strategy breaker |
 | `ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED` | `false` | Global kill on consecutive failures |
 | `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE` | `false` | Forces fresh-rollup gate on live signals |
+
+## Exit fallback rules
+
+Deterministic exits independent of the ML exit classifier (triggers when classifier is unavailable):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ORION_EXIT_FALLBACK_PROFIT_TARGET_PCT` | `1.00` | Exit when position gains ≥100% (doubles in value) |
+| `ORION_EXIT_FALLBACK_MIN_DTE` | `1` | Exit when option DTE < this value |
+| `ORION_EXIT_FALLBACK_MAX_DRAWDOWN_FROM_PEAK_PCT` | `0.50` | Exit when position drawdown from peak exceeds 50% |
+
+## Heuristic weights
+
+Scoring weights for the flow heuristic pre-filter (used when LightGBM is unavailable or bypassed). All have `ORION_HEURISTIC_` prefix. Defaults are tuned — change only with solver-evaluation evidence.
+
+See `config.py` → `HeuristicWeights` for the full field list.
 
 ## Runtime identifiers
 
@@ -197,6 +224,8 @@ without solver-evaluation evidence.
 | `[Errno -3] Temporary failure in name resolution` | Container reverted to `host.docker.internal:8080` | Use the external `data-gateway_default` network — see `docker-compose.yml` |
 | `503` from `/search` or `/flows` | pgvector / embeddings / Heber down | Check `mcp-server`, `indexer`, `heber-sync` containers |
 | ML scorer using stale features | Heber Gold sync stuck | `docker logs orion_heber_sync`; inspect `~/.heber-cache/data/gold/` |
+| Born-stale candidates (>600s age at entry) | `ORION_GOLD_FEATURE_LOOKBACK_DAYS` too large or Heber Gold sync stale | Check `~/.heber-cache/data/gold/` freshness; default 7 days is optimal |
+| ML scorer blocked on stale model | `ORION_ML_STALE_MODEL_POLICY=skip` (default) | Set `warn` to log-but-proceed, or `bypass` to skip ML entirely |
 | API returns config-error for auth routes | `ORION_API_KEY` unset | Set it in `.env`, restart |
 
 ## Related

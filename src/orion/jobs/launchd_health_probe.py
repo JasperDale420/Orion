@@ -8,9 +8,12 @@ logs/launchd_health.log for anything not healthy, and dispatches a
 notification.
 
 Wired in via scripts/launchd/com.empire.orion.launchd-health.plist with
-StartInterval=60 — i.e. once a minute. The notifier defaults to POSTing
-to SLACK_WEBHOOK_URL when that env var is set; absent the env var the
-probe still writes to the log so the failure is auditable after the fact.
+StartInterval=60 — i.e. once a minute. The notifier defaults to POSTing to
+the Discord webhook (DISCORD_WEBHOOK_URL, sourced from .env by the wrapper)
+when that env var is set; absent the env var the probe still writes to the
+log so the failure is auditable after the fact. Because the probe fires every
+minute on the SAME frozen last-exit code, the Discord notifier dedups per
+(label, exit_code): a stuck job pages at most once per hour, not every minute.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -27,6 +31,16 @@ from typing import Callable
 
 DEFAULT_PREFIX = "com.empire.orion."
 DEFAULT_LOG_PATH = Path("logs/launchd_health.log")
+
+# Persistent dedup for the Discord notifier. The probe is a 60s one-shot that
+# re-reads the SAME frozen last-exit code every fire, so without cross-fire
+# dedup a single stuck service would page the channel every minute. State lives
+# next to the log; the durable launchd_health.log row is still written for every
+# alert, so suppressing a repeat page never loses the audit trail.
+DEFAULT_DEDUP_STATE_PATH = Path("logs/launchd_health_alert_state.json")
+# A persistent failure re-pages at most once per window; the first occurrence of
+# any (label, exit_code) pages immediately (no prior state).
+_DEDUP_WINDOW_SECONDS = 60 * 60
 
 # The probe's own launchd label. It is excluded from evaluation: `main()`
 # returns 1/2 whenever it reports another job's failure, so launchd records
@@ -41,27 +55,19 @@ SELF_LABEL = DEFAULT_PREFIX + "launchd-health"
 # missing row means the daemon was booted out or never loaded — a silent
 # failure `classify_entry` cannot see (there is no row to classify).
 #
-# meta-search and meta-weekly qualify: their `--scheduled` modes are
-# internal poll loops that never exit (they self-fire at 18:00 ET weekdays /
-# Friday 17:30 ET respectively and otherwise sleep), so the plists run them
-# as RunAtLoad+KeepAlive daemons exactly like execution/ingestion. A missing
-# row means the always-on scheduler loop is not running and the scheduled
-# fire will silently never happen — precisely the steady-state-required case
-# this set guards. (Contrast the StartCalendarInterval one-shots below.)
-#
 # Deliberately NOT required: the probe itself (it cannot report its own
 # absence — see SELF_LABEL) and `com.empire.orion.orphan-close`. orphan-close
 # is a one-shot emergency tool whose plist explicitly instructs operators to
 # `launchctl bootout` / `rm` it after use, so its absence is the normal
 # steady state, not a fault — requiring it would fire a permanent false
-# CRITICAL every minute once it is correctly removed. Pass `required_labels=`
-# to run_probe / detect_missing_jobs to override for a different deployment.
+# CRITICAL every minute once it is correctly removed. meta-search/meta-weekly
+# were removed 2026-07 with the LLM solver-evolution machinery — requiring
+# their labels after the plists are gone would page a permanent CRITICAL.
+# Pass `required_labels=` to run_probe / detect_missing_jobs to override.
 REQUIRED_LABELS = frozenset(
     {
         DEFAULT_PREFIX + "execution",
         DEFAULT_PREFIX + "ingestion",
-        DEFAULT_PREFIX + "meta-search",
-        DEFAULT_PREFIX + "meta-weekly",
         DEFAULT_PREFIX + "position-monitor",
         DEFAULT_PREFIX + "data-quality",
     }
@@ -213,48 +219,85 @@ def _real_launchctl_list() -> str:
     return subprocess.check_output(["launchctl", "list"], text=True)
 
 
-def _slack_notifier(alert: HealthAlert) -> None:
-    """Best-effort Slack webhook POST. No-op if SLACK_WEBHOOK_URL unset.
+def _dedup_key(alert: HealthAlert) -> str:
+    """Suppression key. Keyed on (label, exit_code) so a NEW failure mode (a
+    different exit code) on the same job pages immediately rather than being
+    masked by an in-window page for the old code."""
+    return f"{alert.label}:{alert.exit_code}"
 
-    Kept dependency-free (stdlib urllib) so the probe runs even if Orion
-    isn't fully importable at the moment — the launchd safety net should
-    not itself depend on the system it's watching.
-    """
-    url = os.environ.get("SLACK_WEBHOOK_URL")
-    if not url:
-        return
+
+def _load_alert_state(path: Path) -> dict[str, float]:
+    """Load the {dedup_key: last_sent_epoch} map; empty on missing/corrupt."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): float(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def _save_alert_state(path: Path, state: dict[str, float], now: float) -> None:
+    """Persist the dedup map, dropping entries older than 2× the window so a
+    long-recovered job's key can't linger and suppress a fresh re-failure."""
+    pruned = {k: v for k, v in state.items() if now - v < 2 * _DEDUP_WINDOW_SECONDS}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(pruned, sort_keys=True), encoding="utf-8")
+
+
+def _post_discord(url: str, alert: HealthAlert) -> None:
+    """POST the alert to a Discord webhook ({"content": ...} payload shape).
+
+    Dependency-free (stdlib urllib) so the launchd safety net never depends on
+    the system it watches. Raises on a failed POST so the caller does NOT record
+    it as sent (the page is retried next fire instead of being lost)."""
     import urllib.request
 
     emoji = "🚨" if alert.severity is Severity.CRITICAL else "⚠️"
-    payload = {
-        "text": f"{emoji} *[{alert.severity.value}]* {alert.message}",
-        "attachments": [
-            {
-                "color": "#ff0000" if alert.severity is Severity.CRITICAL else "#ffaa00",
-                "fields": [
-                    {"title": "Label", "value": alert.label, "short": True},
-                    {
-                        "title": "Exit code",
-                        "value": "-" if alert.exit_code is None else str(alert.exit_code),
-                        "short": True,
-                    },
-                    {"title": "PID", "value": "-" if alert.pid is None else str(alert.pid), "short": True},
-                    {"title": "Timestamp", "value": alert.ts, "short": True},
-                ],
-            }
-        ],
-    }
+    exit_str = "-" if alert.exit_code is None else str(alert.exit_code)
+    pid_str = "-" if alert.pid is None else str(alert.pid)
+    content = f"{emoji} **[{alert.severity.value}]** `{alert.label}` — {alert.message} (exit={exit_str}, pid={pid_str})"
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps({"content": content}).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
     urllib.request.urlopen(req, timeout=5).read()
 
 
+def _discord_notifier(
+    alert: HealthAlert,
+    *,
+    webhook_url: str | None = None,
+    state_path: Path = DEFAULT_DEDUP_STATE_PATH,
+    window_seconds: float = _DEDUP_WINDOW_SECONDS,
+    now: float | None = None,
+) -> None:
+    """Best-effort Discord webhook page with persistent cross-fire dedup.
+
+    No-op if no webhook is configured (DISCORD_WEBHOOK_URL unset). A given
+    (label, exit_code) pages at most once per ``window_seconds``; the first
+    occurrence pages immediately. Only a successful POST is recorded, so a
+    transient Discord outage retries on the next fire rather than silently
+    suppressing a never-delivered page.
+    """
+    url = webhook_url if webhook_url is not None else os.environ.get("DISCORD_WEBHOOK_URL")
+    if not url:
+        return
+
+    now = time.time() if now is None else now
+    key = _dedup_key(alert)
+    state = _load_alert_state(state_path)
+    last = state.get(key)
+    if last is not None and (now - last) < window_seconds:
+        return  # already paged within the window — the log row is still written
+
+    _post_discord(url, alert)  # raises on failure -> not recorded -> retried
+    state[key] = now
+    _save_alert_state(state_path, state, now)
+
+
 def run_probe(
     launchctl_runner: Callable[[], str] = _real_launchctl_list,
-    notifier: Callable[[HealthAlert], None] = _slack_notifier,
+    notifier: Callable[[HealthAlert], None] = _discord_notifier,
     log_path: Path = DEFAULT_LOG_PATH,
     required_labels: frozenset[str] = REQUIRED_LABELS,
     self_label: str = SELF_LABEL,
@@ -263,7 +306,7 @@ def run_probe(
 
     Returns the list of alerts (empty when all jobs are healthy). The
     notifier is best-effort — its exceptions are caught and printed to
-    stderr so a transient Slack outage cannot prevent the durable log
+    stderr so a transient Discord outage cannot prevent the durable log
     row from landing.
 
     Two failure modes beyond a non-zero exit code are covered: the probe

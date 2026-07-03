@@ -1,5 +1,7 @@
 import os
 import sys
+import tempfile
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -23,8 +25,22 @@ os.environ["ALPACA_API_KEY"] = "mock_key"
 os.environ["ALPACA_SECRET_KEY"] = "mock_secret"
 os.environ["ALPACA_PAPER"] = "True"
 os.environ["OPENAI_API_KEY"] = "mock_openai_key"
+# Non-default AI-Gateway key so the prod-credential-hygiene check
+# (warn_on_default_dev_credentials) doesn't fire its `default_dev_credential_in_use`
+# WARNING at import time — that warning logs once per process before
+# PYTEST_CURRENT_TEST is set, escaping the EMPIRE_LOG_DIR isolation above and
+# leaking into the real error log. Tests should never run on the default dev key.
+os.environ["ORION_AI_GATEWAY_KEY"] = "mock_ai_gateway_key"
 os.environ["NUMBA_DISABLE_JIT"] = "1"
 os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
+# Isolate test log output. empire_core.logger writes rotating orion_*.log and
+# orion_errors_*.log files to EMPIRE_LOG_DIR (default ./logs). Without this,
+# every pytest run pours test fixtures into the REAL production error log —
+# fake CRITICALs (e.g. the drawdown-circuit-breaker test's
+# `equity=10100 peak=100000` trip), test tickers (b-1/EWY), greek-exposure
+# errors — polluting logs/orion_errors.log and tripping any log-based
+# monitoring. setdefault so an explicit override (CI capture) still wins.
+os.environ.setdefault("EMPIRE_LOG_DIR", tempfile.mkdtemp(prefix="orion-test-logs-"))
 
 # Ensure `src/` is on sys.path
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -92,14 +108,25 @@ async def setup_test_db(monkeypatch):
 
     yield
 
-    # Teardown
-    # In :memory:, proceed to drop everything to keep state clean between tests if the engine is shared
-    # Since we are using a global loop scope for now but potentially function scope DB,
-    # dropping tables is safer than relying on memory wipe if the engine persists.
-    if db.engine:
+    # Teardown — drop tables ONLY while still bound to the in-memory test DB. An
+    # e2e test (db.configure_db(REAL_DB_URL)) that fails to restore the in-memory
+    # binding before this autouse teardown runs would otherwise have drop_all WIPE
+    # that database — the 2026-06-30 production solver-table wipe (solvers dropped;
+    # bronze/silver refilled from live ingestion, solvers did not until restart).
+    from _db_safety import is_in_memory_test_engine
+
+    if is_in_memory_test_engine(db.engine):
         async with db.engine.begin() as conn:
             await conn.run_sync(db.Base.metadata.drop_all)
         await db.engine.dispose()
+    elif db.engine is not None:
+        warnings.warn(
+            f"conftest teardown refused to drop_all on a non-in-memory DB "
+            f"({db.engine.url!r}): an e2e test left db.engine pointed at a real "
+            "database without restoring the in-memory binding. Skipping table "
+            "cleanup to avoid wiping it (see the 2026-06-30 solver-table wipe).",
+            stacklevel=2,
+        )
 
     # Restore (mostly to be polite, though strictly not needed in a test process)
     if old_engine:

@@ -188,7 +188,9 @@ plus the launchd-captured `*.stdout.log` / `*.stderr.log`.
 1. Shells out to `launchctl list`, filters to `com.empire.orion.*`.
 2. Classifies each entry (healthy / non-zero exit / not loaded / suspicious).
 3. Appends a JSON row to `logs/launchd_health.log` for anything not healthy.
-4. POSTs to `SLACK_WEBHOOK_URL` if that env var is set on the plist.
+4. POSTs to the Discord webhook (`DISCORD_WEBHOOK_URL`, sourced from `.env` by
+   the wrapper), deduped per `(job, exit_code)` so a stuck job pages at most
+   hourly rather than every minute.
 
 Exit-127 is escalated to CRITICAL because it cannot self-heal — a human must
 edit the plist (typically a hardcoded binary path that doesn't exist on the
@@ -378,7 +380,6 @@ For end-to-end pipeline freshness use `tests/e2e/test_live_data_flow.py` (see
 | `backfill_features.py`, `backfill_fills_from_alpaca.py` | Historical backfills |
 | `backtest_exit_rules.py`, `backtest_param_sweep.py` | Local backtests |
 | `bootstrap_solver.py`, `seed_solvers.py` | Seed the solvers table |
-| `retrain_0dte.py`, `run_nightly_retrain.sh`, `run_training.py`, `run_exit_training.py` | Model training |
 | `canary_watch.sh`, `watchdog.sh` | Operational guards |
 | `db_backup.sh` | DB snapshot |
 | `diagnose_data.py`, `diagnose_data_gaps.py`, `verify_activity.py`, `verify_ingestion_sleep.py` | Data-quality probes |

@@ -127,6 +127,9 @@ class TestDataQualityLeaseModes:
         import asyncio
 
         with (
+            # run_scheduled now waits for the DB before init_db; the pre-set
+            # shutdown event below would otherwise trip its shutdown-abort.
+            patch.object(main_data_quality, "wait_for_db", AsyncMock()),
             patch.object(main_data_quality, "acquire_service_lease", AsyncMock(return_value="run-2")) as acquire_mock,
             patch.object(main_data_quality, "run_quality_checks", AsyncMock(return_value={})),
             patch.object(main_data_quality, "_is_market_hours", MagicMock(return_value=False)),
@@ -148,7 +151,10 @@ class TestDataQualityLeaseModes:
         import asyncio
 
         await _plant_foreign_lease("data_quality")
-        with patch.object(main_data_quality, "run_quality_checks", AsyncMock(return_value={})):
+        with (
+            patch.object(main_data_quality, "wait_for_db", AsyncMock()),
+            patch.object(main_data_quality, "run_quality_checks", AsyncMock(return_value={})),
+        ):
             shutdown = asyncio.Event()
             shutdown.set()
             with pytest.raises(RuntimeError, match="holds a fresh lease"):

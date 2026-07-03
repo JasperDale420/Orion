@@ -1,3 +1,7 @@
+# Vendored CI copy of empire-core (ci/) mirrors the sibling monorepo package
+# and follows its own style — exclude it from all hooks to keep CI green.
+exclude: '^ci/'
+
 repos:
   # ---------------------------------------------------------------------------
   # Ruff: Fast Python linter + formatter

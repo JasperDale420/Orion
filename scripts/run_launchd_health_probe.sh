@@ -24,9 +24,9 @@ UV_BIN="${HOME}/.local/bin/uv"
 export PATH="/bin:/usr/bin:/opt/homebrew/bin:/usr/local/bin:${HOME}/.local/bin:${PATH}"
 
 # Source the gitignored .env FIRST (same discipline as run_ingestion_native.sh)
-# so the probe's notifier picks up SLACK_WEBHOOK_URL / DISCORD_WEBHOOK_URL and
-# the gateway key. The probe only parses `launchctl list`, so it needs no DB or
-# gateway URLs of its own; sourcing .env is purely for the alert webhook.
+# so the probe's notifier picks up DISCORD_WEBHOOK_URL. The probe only parses
+# `launchctl list`, so it needs no DB or gateway URLs of its own; sourcing .env
+# is purely for the Discord alert webhook.
 if [ -f "${PROJECT_ROOT}/.env" ]; then
   set -a
   # shellcheck disable=SC1091
