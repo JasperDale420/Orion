@@ -54,7 +54,7 @@ dev = [
     "black>=26.1.0",
     "mypy>=1.7.1",
     "aiosqlite>=0.22.0",
-    "bandit>=1.7.5",
+    "bandit>=1.9.4",
     "detect-secrets>=1.4.0",
     "pre-commit>=4.6.0",
 ]
