@@ -84,7 +84,7 @@ def test_each_service_judged_against_its_own_budget():
     now = datetime.now(UTC)
     rows = [
         _row("execution", age_seconds=400, budget=300),  # stale
-        _row("meta_weekly", age_seconds=400, budget=86400 * 8),  # fresh (huge budget)
+        _row("reconcile_pnl", age_seconds=400, budget=86400 * 8),  # fresh (huge budget)
     ]
     alerts = evaluate_service_liveness(rows, now)
     assert [a.name for a in alerts] == ["execution"]
@@ -96,12 +96,23 @@ def test_market_bound_service_is_informational_when_market_closed():
     assert evaluate_service_liveness(rows, AFTER_HOURS_UTC, market_open=False) == []
 
 
-def test_always_on_service_still_alerts_when_market_closed():
-    rows = [_row("meta_weekly", age_seconds=900, budget=300, now=AFTER_HOURS_UTC)]
+def test_scheduled_service_still_alerts_when_market_closed():
+    rows = [_row("reconcile_pnl", age_seconds=900, budget=300, now=AFTER_HOURS_UTC)]
 
     alerts = evaluate_service_liveness(rows, AFTER_HOURS_UTC, market_open=False)
 
-    assert [a.name for a in alerts] == ["meta_weekly"]
+    assert [a.name for a in alerts] == ["reconcile_pnl"]
+
+
+def test_retired_meta_services_are_ignored():
+    rows = [
+        _row("meta_search", age_seconds=900, budget=300),
+        _row("meta_weekly", age_seconds=900, budget=300),
+        _row("meta_labeler", age_seconds=900, budget=300),
+        _row("price_target_labeler", age_seconds=900, budget=300),
+    ]
+
+    assert evaluate_service_liveness(rows, datetime.now(UTC)) == []
 
 
 def test_stage_fresh_no_alert():
@@ -305,10 +316,10 @@ async def test_run_watchdog_stale_market_service_is_quiet_after_hours():
     sent.assert_not_awaited()
 
 
-async def test_run_watchdog_stale_always_on_service_alerts_after_hours():
-    await publish_liveness("meta_weekly", cadence_budget_seconds=300)
+async def test_run_watchdog_stale_scheduled_service_alerts_after_hours():
+    await publish_liveness("reconcile_pnl", cadence_budget_seconds=300)
     async with _test_sessionmaker()() as session:
-        row = await session.get(ServiceLiveness, "meta_weekly")
+        row = await session.get(ServiceLiveness, "reconcile_pnl")
         row.last_success_ts_utc = AFTER_HOURS_UTC - timedelta(seconds=1000)
         await session.commit()
 
@@ -316,7 +327,7 @@ async def test_run_watchdog_stale_always_on_service_alerts_after_hours():
     with patch.object(dw, "send_discord_alert", sent):
         alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
 
-    assert [a.name for a in alerts if a.kind == "service"] == ["meta_weekly"]
+    assert [a.name for a in alerts if a.kind == "service"] == ["reconcile_pnl"]
     sent.assert_awaited()
 
 

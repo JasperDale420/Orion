@@ -2,7 +2,7 @@
 # Wrapper for the dead-man watchdog — invoked every 5 minutes by
 # ~/Library/LaunchAgents/com.empire.orion.deadman.plist.
 #
-# Same discipline as run_market_open_dataflow_check.sh / run_meta_search.sh:
+# Same discipline as run_market_open_dataflow_check.sh / run_launchd_health_probe.sh:
 #   - Uses the canonical uv path (~/.local/bin/uv). NEVER /opt/homebrew/bin/uv:
 #     that path is absent on this host and made every fire exit 127 silently
 #     (the 2026-05-22 orphan-close incident).

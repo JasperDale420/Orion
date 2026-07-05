@@ -49,6 +49,10 @@ _DEDUP_WINDOW_SECONDS = 60 * 60
 # alerting on its own exit code even after the real failing job is fixed —
 # a self-sustaining feedback loop.
 SELF_LABEL = DEFAULT_PREFIX + "launchd-health"
+ALERT_EXIT_OK_BY_LABEL = {
+    DEFAULT_PREFIX + "deadman": frozenset({2}),
+    DEFAULT_PREFIX + "market-open-dataflow-check": frozenset({2}),
+}
 
 # Always-on Orion launchd jobs that must be present as a row in
 # `launchctl list` at all times. All are RunAtLoad+KeepAlive daemons, so a
@@ -148,15 +152,19 @@ def classify_entry(entry: LaunchctlEntry) -> HealthAlert:
     """Map a single launchctl entry to a HealthAlert (severity OK if
     nothing is wrong).
 
-    Rule: alert iff exit_code != 0. PID `-` with exit 0 is the idle
-    one-shot pattern (e.g. a StartCalendarInterval job between fires)
-    and is explicitly NOT an alert — that distinction was the whole
-    reason the rule was specified this way.
+    Rule: alert iff exit_code != 0 and no PID is present. A running PID means
+    the job is currently alive; launchd's status column is only the previous
+    exit code. Some one-shot alert jobs also use exit 2 to mean "alert already
+    handled by that job", so the health probe must not double-page it.
     """
-    if entry.exit_code == 0:
+    if (
+        entry.exit_code == 0
+        or entry.pid is not None
+        or entry.exit_code in ALERT_EXIT_OK_BY_LABEL.get(entry.label, frozenset())
+    ):
         return HealthAlert(
             label=entry.label,
-            exit_code=0,
+            exit_code=entry.exit_code,
             pid=entry.pid,
             severity=Severity.OK,
             message="healthy",

@@ -12,8 +12,8 @@ unless noted. For the runtime data flow that ties these together, see
 | `main_feature_enrichment.py` | Silver → Gold features | docker compose `feature_enrichment` |
 | `main_position_monitor.py` | Continuous exit-rule evaluation on open positions | docker compose `position-monitor` |
 | `main_eod.py` | LLM-driven end-of-day review | docker compose `eod-agent` |
-| `main_meta.py` | Solver evolution (LLM mutation + backtest) | `tools` profile only |
-| `main_meta_weekly.py` | Weekly meta-aggregator | `scheduled` profile |
+| `main_meta.py` | Solver evolution — retired with the LLM solver-evolution cleanup | removed |
+| `main_meta_weekly.py` | Weekly meta-aggregator — retired with the LLM solver-evolution cleanup | removed |
 | `main_data_quality.py` | Standalone data-quality probe | ad-hoc |
 | `main_option_quote_tracker.py` | Snapshot option quotes for labeling | `legacy-labels` profile |
 | `main_pattern_miner.py` | Mine darkpool / flow patterns | `legacy-labels` profile |
@@ -86,7 +86,7 @@ When onboarding, read these in order to understand the loop:
 - **DB:** `storage/db.py` exposes `async_session()` and `configure_db()`. Async
   engine uses `pool_pre_ping=True`, `pool_recycle=1800`,
   `expire_on_commit=False`. pgvector enabled at init.
-- **Launchd health:** `jobs/launchd_health_probe.py` monitors all Orion launchd agents at a 5-min cadence. Detects exit 127 (wrong `uv` path / bad ProgramArguments) and missing required labels (execution, ingestion, meta-search, meta-weekly, position-monitor, data-quality). Alerts via Discord with 1-hour dedup window per (label, exit_code) pair. Run by: `com.empire.orion.launchd-health`.
+- **Launchd health:** `jobs/launchd_health_probe.py` monitors Orion launchd agents at a 60s cadence. It alerts when required labels are missing (`execution`, `ingestion`, `position-monitor`, `data-quality`) or when a stopped job has a non-zero exit code. Rows with a live PID are treated as running, and one-shot alert jobs that exit 2 are not double-paged. Alerts via Discord with a 1-hour dedup window per `(label, exit_code)` pair. Run by: `com.empire.orion.launchd-health`.
 - **Service lease:** `core/service_lease.py` is Orion's single-instance guard.
   Each long-running entrypoint (`ingestion`, `main_execution`,
   `main_position_monitor`) claims a row in `SystemStatus` keyed by

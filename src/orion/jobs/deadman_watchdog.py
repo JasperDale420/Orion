@@ -77,6 +77,15 @@ MARKET_HOURS_SERVICE_NAMES = frozenset(
         "position_monitor",
     }
 )
+RETIRED_SERVICE_NAMES = frozenset(
+    {
+        "eod_agent",
+        "meta_labeler",
+        "meta_search",
+        "meta_weekly",
+        "price_target_labeler",
+    }
+)
 
 
 def is_nyse_session_open(now_utc: datetime, *, calendar_name: str = _NYSE_CALENDAR) -> bool:
@@ -136,6 +145,8 @@ def evaluate_service_liveness(
     """
     alerts: list[LivenessAlert] = []
     for row in rows:
+        if row.service in RETIRED_SERVICE_NAMES:
+            continue
         age = _service_age_seconds(row, now_utc)
         if age > row.cadence_budget_seconds:
             if not market_open and row.service in MARKET_HOURS_SERVICE_NAMES:

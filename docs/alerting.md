@@ -15,14 +15,14 @@ Orion uses Discord for all operational alerts, configured via `DISCORD_WEBHOOK_U
 | Stale-cancel give-up | `execution_engine.py` `_cancel_stale_entry_orders` | Per-event (deduped by order_id) |
 | System health CRITICAL/DEGRADED | `execution_engine.py` `_check_system_health` | Per-occurrence |
 | Unprotected/partially-protected position | `execution_engine.py` bracket-placement failure | Per-position cycle |
-| Launchd exit 127 | `jobs/launchd_health_probe.py` | Per (label, exit_code), 1h dedup window |
+| Launchd stopped-job nonzero exit | `jobs/launchd_health_probe.py` | Per (label, exit_code), 1h dedup window |
 | Launchd missing required job | `jobs/launchd_health_probe.py` | Per missing label, 1h dedup window |
 | Circuit breaker OPEN | `core/circuit_breaker.py` | Per-open event |
 | Already-terminal reconcile | `execution_engine.py` (stale-cancel) | Per-event |
 
 All Discord alerts are best-effort — webhook failures are logged but non-fatal.
 
-Required labels monitored by the launchd health probe: `execution`, `ingestion`, `meta-search`, `meta-weekly`, `position-monitor`, `data-quality`.
+Required labels monitored by the launchd health probe: `execution`, `ingestion`, `position-monitor`, `data-quality`.
 
 ### Alert severity levels
 

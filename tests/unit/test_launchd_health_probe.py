@@ -28,8 +28,7 @@ from orion.jobs.launchd_health_probe import (
 )
 
 
-# `launchctl list` output with all always-on daemons (execution, ingestion,
-# meta-search, meta-weekly, position-monitor, data-quality) present and healthy,
+# `launchctl list` output with all required daemons present and healthy,
 # plus caller-supplied rows for any extras. Keeps the missing-job detector quiet
 # so run_probe tests can isolate the fault they actually exercise.
 def _required_with(*job_lines: str) -> str:
@@ -37,8 +36,6 @@ def _required_with(*job_lines: str) -> str:
         "PID\tStatus\tLabel",
         "50960\t0\tcom.empire.orion.execution",
         "12345\t0\tcom.empire.orion.ingestion",
-        "23456\t0\tcom.empire.orion.meta-search",
-        "34567\t0\tcom.empire.orion.meta-weekly",
         "45678\t0\tcom.empire.orion.position-monitor",
         "56789\t0\tcom.empire.orion.data-quality",
         *job_lines,
@@ -129,12 +126,15 @@ class TestClassifyEntry:
         entry = LaunchctlEntry(pid=None, exit_code=1, label="com.empire.orion.execution")
         assert classify_entry(entry).severity is Severity.WARNING
 
-    def test_running_with_nonzero_last_exit_is_warning(self) -> None:
-        # KeepAlive jobs may show a non-zero last-exit even while currently
-        # running (PID present) — we still want visibility because it means
-        # the job is flapping.
+    def test_running_with_nonzero_last_exit_is_ok(self) -> None:
+        # launchctl's status column is last exit code, not current health.
+        # If a PID is present, the daemon is running now.
         entry = LaunchctlEntry(pid=50960, exit_code=129, label="com.empire.orion.execution")
-        assert classify_entry(entry).severity is Severity.WARNING
+        assert classify_entry(entry).severity is Severity.OK
+
+    def test_alerting_one_shot_exit_2_is_ok(self) -> None:
+        entry = LaunchctlEntry(pid=None, exit_code=2, label="com.empire.orion.deadman")
+        assert classify_entry(entry).severity is Severity.OK
 
 
 class TestEvaluateOrionJobs:
@@ -170,7 +170,7 @@ class TestEvaluateOrionJobs:
     def test_multiple_alerts_returned_in_input_order(self) -> None:
         entries = [
             LaunchctlEntry(pid=None, exit_code=127, label="com.empire.orion.orphan-close"),
-            LaunchctlEntry(pid=50960, exit_code=1, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=None, exit_code=1, label="com.empire.orion.execution"),
         ]
         alerts = evaluate_orion_jobs(entries)
         assert [a.label for a in alerts] == [
@@ -260,8 +260,6 @@ class TestDetectMissingJobs:
         entries = [
             LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
             LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
-            LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
-            LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
             LaunchctlEntry(pid=5, exit_code=0, label="com.empire.orion.position-monitor"),
             LaunchctlEntry(pid=6, exit_code=0, label="com.empire.orion.data-quality"),
             LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
@@ -273,8 +271,6 @@ class TestDetectMissingJobs:
         # see this; only the expected-set comparison catches it.
         entries = [
             LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
-            LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
-            LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
             LaunchctlEntry(pid=5, exit_code=0, label="com.empire.orion.position-monitor"),
             LaunchctlEntry(pid=6, exit_code=0, label="com.empire.orion.data-quality"),
             LaunchctlEntry(pid=None, exit_code=0, label="com.empire.orion.orphan-close"),
@@ -305,8 +301,6 @@ class TestDetectMissingJobs:
         entries = [
             LaunchctlEntry(pid=1, exit_code=0, label="com.empire.orion.execution"),
             LaunchctlEntry(pid=2, exit_code=0, label="com.empire.orion.ingestion"),
-            LaunchctlEntry(pid=3, exit_code=0, label="com.empire.orion.meta-search"),
-            LaunchctlEntry(pid=4, exit_code=0, label="com.empire.orion.meta-weekly"),
             LaunchctlEntry(pid=5, exit_code=0, label="com.empire.orion.position-monitor"),
             LaunchctlEntry(pid=6, exit_code=0, label="com.empire.orion.data-quality"),
         ]
@@ -364,8 +358,6 @@ class TestProbeSelfExclusion:
             launchctl_runner=lambda: (
                 "PID\tStatus\tLabel\n"
                 "50960\t0\tcom.empire.orion.execution\n"
-                "23456\t0\tcom.empire.orion.meta-search\n"
-                "34567\t0\tcom.empire.orion.meta-weekly\n"
                 "45678\t0\tcom.empire.orion.position-monitor\n"
                 "56789\t0\tcom.empire.orion.data-quality\n"
             ),
