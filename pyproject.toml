@@ -37,7 +37,7 @@ dependencies = [
     # declare it — keep this pin even though orion's own code uses zoneinfo.
     "pytz>=2025.2",
     "aiofiles>=24.1.0",
-    "prometheus-client>=0.24.1",
+    "prometheus-client>=0.25.0",
     "lightgbm>=4.6.0",
     "scikit-learn>=1.6.0",
 ]
