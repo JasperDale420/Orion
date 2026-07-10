@@ -93,6 +93,14 @@ jobs:
       # on JasperDale420/Data-Gateway) as repo secret
       # DATA_GATEWAY_CHECKOUT_TOKEN. Without it, the checkout 404s and the
       # job fails with a clear message.
+      #
+      # Skipped on Dependabot PRs: those runs are denied access to Actions
+      # secrets by GitHub, so DATA_GATEWAY_CHECKOUT_TOKEN is empty and the
+      # private checkout can only 404. The contract test soft-skips there
+      # (see ORION_CONTRACT_TESTS_REQUIRE_GATEWAY below); the fail-loud guard
+      # still applies on push-to-master and human PRs, which is where merges
+      # to master are actually validated.
+      if: github.actor != 'dependabot[bot]'
       uses: actions/checkout@v7
       with:
         repository: JasperDale420/Data-Gateway
@@ -115,7 +123,10 @@ jobs:
         # Convert "Gateway repo missing" from a soft skip into a hard
         # failure — the contract test exists specifically to catch
         # cross-repo signature drift, and silent-skip in CI defeats that.
-        ORION_CONTRACT_TESTS_REQUIRE_GATEWAY: "1"
+        # Relaxed to a soft skip only on Dependabot PRs, where the private
+        # Data-Gateway checkout above is skipped (no secret access) and the
+        # test genuinely cannot run. Stays hard-fail everywhere else.
+        ORION_CONTRACT_TESTS_REQUIRE_GATEWAY: ${{ github.actor == 'dependabot[bot]' && '0' || '1' }}
       run: |
         uv run pytest -v --cov=src --cov-report=xml --junitxml=test-results.xml --ignore=tests/e2e
 
