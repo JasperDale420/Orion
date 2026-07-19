@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Heber cache sync no longer no-ops silently on a broken mount** (`scripts/sync-heber-cache.sh`): a missing feed directory now logs a warning, and a run that syncs nothing exits non-zero instead of leaving Orion on a stale cache with no error (observed during the 2026-07-11 volume drop).
+
 ### Added
 
 - **Nightly per-bucket performance metrics** (`orion.jobs.bucket_metrics`, runs after the EOD close-of-books): win rate, expectancy, profit factor, average hold, and the exit-reason mix (a bucket exiting mostly on time-stops has no directional edge regardless of P&L) computed from CLOSED trades only, per bucket and per rule, logged + posted to Discord. Advisory verdicts follow the sample-size discipline — under 30 trades "collecting", sizing-up flagged at n≥100 with positive expectancy and PF≥1.15, halting flagged when the trailing-50 profit factor drops under 0.6. Verdicts alert; they never act.
