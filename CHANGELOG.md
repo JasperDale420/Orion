@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Synced `CLAUDE.md` and `AGENTS.md` into one shared instruction set.
+
 ### Fixed
 
 - **Heber cache sync no longer no-ops silently on a broken mount** (`scripts/sync-heber-cache.sh`): a missing feed directory now logs a warning, and a run that syncs nothing exits non-zero instead of leaving Orion on a stale cache with no error (observed during the 2026-07-11 volume drop).
