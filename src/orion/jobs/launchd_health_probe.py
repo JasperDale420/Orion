@@ -248,7 +248,12 @@ def _post_discord(url: str, alert: HealthAlert) -> None:
 
     Dependency-free (stdlib urllib) so the launchd safety net never depends on
     the system it watches. Raises on a failed POST so the caller does NOT record
-    it as sent (the page is retried next fire instead of being lost)."""
+    it as sent (the page is retried next fire instead of being lost).
+
+    A non-default User-Agent is required: Discord's Cloudflare edge answers 403
+    Forbidden to urllib's default ``Python-urllib/x.y`` UA, so without this every
+    page silently fails even though the webhook URL is valid (the same URL posts
+    fine from repos that use httpx/requests, which send their own UA)."""
     import urllib.request
 
     emoji = "🚨" if alert.severity is Severity.CRITICAL else "⚠️"
@@ -258,7 +263,10 @@ def _post_discord(url: str, alert: HealthAlert) -> None:
     req = urllib.request.Request(
         url,
         data=json.dumps({"content": content}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Orion-launchd-health-probe/1.0",
+        },
     )
     urllib.request.urlopen(req, timeout=5).read()
 

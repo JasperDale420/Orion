@@ -506,6 +506,7 @@ class TestDiscordNotifier:
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url
             captured["body"] = json.loads(req.data.decode())
+            captured["ua"] = req.get_header("User-agent")
             return _Resp()
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -514,6 +515,8 @@ class TestDiscordNotifier:
         assert captured["url"] == "https://discord.test/wh"
         assert "content" in captured["body"]  # Discord webhook payload shape
         assert "com.empire.orion.execution" in captured["body"]["content"]
+        # Discord's Cloudflare 403s the default Python-urllib UA — a real UA is required.
+        assert captured["ua"] and "urllib" not in captured["ua"].lower()
 
 
 @pytest.mark.unit
