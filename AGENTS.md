@@ -328,6 +328,16 @@ Any data analysis presented as a conclusion — backtest results, strategy perfo
 
 Report the adversarial review's findings alongside the analysis itself, not as a separate follow-up step.
 
+## Adversarial Review of Code Changes & Plans
+
+Extend the Data Analysis Review discipline to code and plans, using the **same reviewer options defined in that block** (an Opus subagent, or Codex `/codex:adversarial-review`). Don't restate model ids here — that block is the single source of truth, so they update in one place. Run the reviewer synchronously and read its result (this overrides any "spawn then stop" default for review subagents).
+
+**Required for:** any change touching logic, control flow, schemas, or cross-repo contracts, plus any edit larger than a trivial one; and any multi-step plan, before executing it. Safety-critical paths (order submission, risk management, position sizing, paper/live toggles, credential handling) always require it — prefer the cross-model Codex reviewer there for genuine independence.
+
+**Exempt / don't loop:** comment-, doc-, or formatting-only edits, renames, and single-line non-logic changes. Never review the reviewer's own output, or a fix that only addresses prior review findings. Review each task once, at its highest-leverage point (the plan for multi-step work, the diff otherwise) — not both.
+
+**Then act on it:** give the reviewer the requirement and the artifact, not your case for why it's right; rank findings by severity; and **resolve or explicitly justify every material finding before the change is "done"** — never commit a safety-critical change with unresolved findings. Report what was found and how you handled it alongside the change.
+
 ## Additional repository guidance
 
 The guidance below was retained from the prior `AGENTS.md`. If it conflicts with the primary guidance above, follow the primary guidance.
