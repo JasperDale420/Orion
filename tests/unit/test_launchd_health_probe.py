@@ -515,7 +515,9 @@ class TestDiscordNotifier:
         assert captured["url"] == "https://discord.test/wh"
         assert "content" in captured["body"]  # Discord webhook payload shape
         assert "com.empire.orion.execution" in captured["body"]["content"]
-        # Discord's Cloudflare 403s the default Python-urllib UA — a real UA is required.
+        # Pins that a non-default User-Agent is set explicitly (Discord's Cloudflare
+        # edge 403s urllib's default Python-urllib UA). urlopen is mocked here, so
+        # this asserts the header is set — not the live edge behavior.
         assert captured["ua"] and "urllib" not in captured["ua"].lower()
 
 

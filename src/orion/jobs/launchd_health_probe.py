@@ -361,8 +361,12 @@ def test_fire(webhook_url: str | None = None) -> int:
         print("test-fire: DISCORD_WEBHOOK_URL is not set — nothing to test", file=sys.stderr)
         return 1
 
+    # Deliberately NOT SELF_LABEL: this posts to the shared on-call channel, and
+    # labelling it as the probe's own job would read as "the health probe is
+    # degraded" to anyone who didn't run the command. A synthetic label makes it
+    # unmistakably a manual connectivity check.
     alert = HealthAlert(
-        label=SELF_LABEL,
+        label="com.empire.orion.test-fire",
         exit_code=0,
         pid=None,
         severity=Severity.WARNING,
