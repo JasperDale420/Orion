@@ -248,7 +248,12 @@ def _post_discord(url: str, alert: HealthAlert) -> None:
 
     Dependency-free (stdlib urllib) so the launchd safety net never depends on
     the system it watches. Raises on a failed POST so the caller does NOT record
-    it as sent (the page is retried next fire instead of being lost)."""
+    it as sent (the page is retried next fire instead of being lost).
+
+    A non-default User-Agent is required: Discord's Cloudflare edge answers 403
+    Forbidden to urllib's default ``Python-urllib/x.y`` UA, so without this every
+    page silently fails even though the webhook URL is valid (the same URL posts
+    fine from repos that use httpx/requests, which send their own UA)."""
     import urllib.request
 
     emoji = "🚨" if alert.severity is Severity.CRITICAL else "⚠️"
@@ -258,7 +263,10 @@ def _post_discord(url: str, alert: HealthAlert) -> None:
     req = urllib.request.Request(
         url,
         data=json.dumps({"content": content}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Orion-launchd-health-probe/1.0",
+        },
     )
     urllib.request.urlopen(req, timeout=5).read()
 
@@ -338,8 +346,52 @@ def run_probe(
     return alerts
 
 
-def main() -> int:
-    """Entry point for `python -m orion.jobs.launchd_health_probe`."""
+def test_fire(webhook_url: str | None = None) -> int:
+    """Send a synthetic alert to the configured webhook to verify the notifier
+    end-to-end WITHOUT waiting for a real job failure.
+
+    Calls ``_post_discord`` directly (bypassing the cross-fire dedup) so it
+    always delivers, and returns non-zero if the webhook is unset or the POST
+    fails. This is the on-demand check that would have caught the revoked
+    webhook whose 403 otherwise only shows up the next time a job actually
+    dies — the exact moment a page must not be silently dropped.
+    """
+    url = webhook_url if webhook_url is not None else os.environ.get("DISCORD_WEBHOOK_URL")
+    if not url:
+        print("test-fire: DISCORD_WEBHOOK_URL is not set — nothing to test", file=sys.stderr)
+        return 1
+
+    # Deliberately NOT SELF_LABEL: this posts to the shared on-call channel, and
+    # labelling it as the probe's own job would read as "the health probe is
+    # degraded" to anyone who didn't run the command. A synthetic label makes it
+    # unmistakably a manual connectivity check.
+    alert = HealthAlert(
+        label="com.empire.orion.test-fire",
+        exit_code=0,
+        pid=None,
+        severity=Severity.WARNING,
+        message="test-fire — notifier connectivity check, NOT a real job failure",
+    )
+    try:
+        _post_discord(url, alert)
+    except Exception as exc:  # noqa: BLE001 — surface the exact failure to the operator
+        print(f"test-fire: POST failed: {exc}", file=sys.stderr)
+        return 1
+
+    print("test-fire: delivered — check the Discord channel for the test alert")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for `python -m orion.jobs.launchd_health_probe`.
+
+    Pass ``--test-fire`` to POST a synthetic alert to DISCORD_WEBHOOK_URL and
+    exit, instead of running the launchctl scan.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    if "--test-fire" in args:
+        return test_fire()
+
     alerts = run_probe()
     if any(a.severity is Severity.CRITICAL for a in alerts):
         return 2

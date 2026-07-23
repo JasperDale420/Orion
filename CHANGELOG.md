@@ -8,10 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`--test-fire` for the launchd health probe**: `python -m orion.jobs.launchd_health_probe --test-fire` POSTs a synthetic "test-fire" alert to the configured `DISCORD_WEBHOOK_URL` (bypassing dedup) and exits non-zero if the webhook is unset or the POST fails. Lets an operator verify the notifier end-to-end on demand instead of finding out it's broken only when a real job dies. The probe's monitoring behavior is unchanged.
 - **Nightly per-bucket performance metrics** (`orion.jobs.bucket_metrics`, runs after the EOD close-of-books): win rate, expectancy, profit factor, average hold, and the exit-reason mix (a bucket exiting mostly on time-stops has no directional edge regardless of P&L) computed from CLOSED trades only, per bucket and per rule, logged + posted to Discord. Advisory verdicts follow the sample-size discipline — under 30 trades "collecting", sizing-up flagged at n≥100 with positive expectancy and PF≥1.15, halting flagged when the trailing-50 profit factor drops under 0.6. Verdicts alert; they never act.
 
 ### Fixed
 
+- **launchd health-probe alerts silently 403'd on every send**: the probe's `_post_discord` used stdlib `urllib` with its default `Python-urllib/x.y` User-Agent, which Discord's Cloudflare edge rejects with HTTP 403 Forbidden — so no page ever reached Discord even though the webhook URL was valid and working for other repos (which post via httpx/requests). Fixed by sending an explicit `User-Agent` header. The webhook URL never needed rotating.
 - **Dependabot PR CI no longer fails on the private Data-Gateway checkout**: the cross-repo contract-test step 404'd on every Dependabot PR because GitHub withholds Actions secrets from Dependabot runs, leaving `DATA_GATEWAY_CHECKOUT_TOKEN` empty so the private checkout could only fail — before any tests ran. That checkout and the contract test's hard-fail requirement are now skipped on Dependabot PRs (where the test cannot run regardless), letting the rest of the suite execute and report a real pass/fail. The fail-loud guard is unchanged for pushes to master and human PRs, which have secret access and are where merges to master are validated.
 
 ### Removed
