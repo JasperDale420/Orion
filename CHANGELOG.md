@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`--test-fire` for the launchd health probe**: `python -m orion.jobs.launchd_health_probe --test-fire` POSTs a synthetic "test-fire" alert to the configured `DISCORD_WEBHOOK_URL` (bypassing dedup) and exits non-zero if the webhook is unset or the POST fails. This turns a revoked/expired webhook — which otherwise only surfaces as a silent 403 the next time a real job dies — into an on-demand check an operator can run right after rotating the webhook. The probe's monitoring behavior is unchanged.
 - **Nightly per-bucket performance metrics** (`orion.jobs.bucket_metrics`, runs after the EOD close-of-books): win rate, expectancy, profit factor, average hold, and the exit-reason mix (a bucket exiting mostly on time-stops has no directional edge regardless of P&L) computed from CLOSED trades only, per bucket and per rule, logged + posted to Discord. Advisory verdicts follow the sample-size discipline — under 30 trades "collecting", sizing-up flagged at n≥100 with positive expectancy and PF≥1.15, halting flagged when the trailing-50 profit factor drops under 0.6. Verdicts alert; they never act.
 
 ### Fixed

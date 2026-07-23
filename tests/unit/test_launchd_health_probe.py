@@ -517,6 +517,53 @@ class TestDiscordNotifier:
 
 
 @pytest.mark.unit
+class TestTestFire:
+    """--test-fire posts a synthetic alert to the real webhook so an operator
+    can verify the notifier without waiting for a job to actually die."""
+
+    def test_posts_when_webhook_set(self, monkeypatch) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        posts: list[tuple] = []
+        monkeypatch.setattr(mod, "_post_discord", lambda url, alert: posts.append((url, alert)))
+
+        rc = mod.test_fire(webhook_url="https://discord.test/wh")
+        assert rc == 0
+        assert len(posts) == 1
+        assert posts[0][0] == "https://discord.test/wh"
+
+    def test_returns_nonzero_without_webhook(self, monkeypatch) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+        posts: list = []
+        monkeypatch.setattr(mod, "_post_discord", lambda url, alert: posts.append(alert))
+
+        assert mod.test_fire() == 1
+        assert posts == []  # nothing to POST -> caller learns the webhook is unconfigured
+
+    def test_returns_nonzero_on_post_failure(self, monkeypatch) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        def boom(url, alert):
+            raise RuntimeError("HTTP Error 403: Forbidden")
+
+        monkeypatch.setattr(mod, "_post_discord", boom)
+        assert mod.test_fire(webhook_url="https://discord.test/wh") == 1
+
+    def test_main_dispatches_test_fire(self, monkeypatch) -> None:
+        import orion.jobs.launchd_health_probe as mod
+
+        called: list = []
+        monkeypatch.setattr(mod, "test_fire", lambda: called.append(True) or 0)
+        # run_probe must NOT run when --test-fire is passed
+        monkeypatch.setattr(mod, "run_probe", lambda: (_ for _ in ()).throw(AssertionError("scan ran")))
+
+        assert mod.main(["--test-fire"]) == 0
+        assert called == [True]
+
+
+@pytest.mark.unit
 class TestMarkerAttachment:
     """Smoke test ensuring the module is unit-test-marker-clean."""
 
