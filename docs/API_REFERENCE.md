@@ -1,5 +1,10 @@
 # API Reference
 
+> **See [`api-reference.md`](api-reference.md)** for the current reference —
+> this file is an older spec kept as-is for history. Notably, it still lists a
+> `GET /search` endpoint that has since been removed (see `CHANGELOG.md`,
+> "Delete the LLM solver-evolution machinery").
+
 ## Authentication
 
 Most endpoints require header:

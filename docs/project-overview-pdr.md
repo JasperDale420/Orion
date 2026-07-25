@@ -25,8 +25,12 @@ auditable trading decisions. The system must:
    under a tight risk envelope (daily loss limit, Greeks limits, position caps,
    correlation-adjusted sizing).
 4. **Monitor** open positions continuously and exit per per-strategy rules.
-5. **Learn** — the MetaSearchAgent proposes new solver variants nightly; humans
-   approve `paper → limited_live → scaled_live` promotions through the admin API.
+5. **Learn** — a nightly mechanical job (`jobs/bucket_metrics.py`) computes realized
+   per-bucket/per-rule performance and posts advisory sizing-up/halting verdicts to
+   Discord (verdicts alert, they never act); humans approve
+   `paper → limited_live → scaled_live` promotions through the admin API. (The
+   earlier LLM-driven `MetaSearchAgent` that auto-generated solver variants was
+   deleted — see `CHANGELOG.md`, "Delete the LLM solver-evolution machinery".)
 
 ## Sub-system Scope
 
@@ -38,8 +42,8 @@ auditable trading decisions. The system must:
 | Signal scoring | `orion.processing.signal_engine` | Regime filter + ML scorer + solver vote |
 | Order placement | `orion.execution.execution_engine` | Options-only; routes via Gateway |
 | Position monitoring | `orion.main_position_monitor` | Continuous exit-rule evaluation |
-| EOD review | `orion.main_eod` | LLM-powered daily report |
-| Solver evolution | `orion.agents` + `orion.main_meta` | LLM-guided DNA mutation + backtest |
+| EOD close-of-books | fired nightly by `orion.ingestion` | Realizes expired positions + P&L reconciliation (replaced the old LLM `EODReviewAgent`) |
+| Bucket performance review | `orion.jobs.bucket_metrics` | Nightly mechanical per-bucket/rule metrics, advisory-only (replaced `orion.agents` + `orion.main_meta`, both removed) |
 | Admin API | `orion.api.main` | FastAPI on port 8000 — see [`api-reference.md`](api-reference.md) |
 | Triple-barrier labels | `orion.labeler` | For ML training |
 
@@ -86,10 +90,12 @@ Each transitions through:
 research → shadow → paper → limited_live → scaled_live
 ```
 
-- `MetaSearchAgent` proposes new variants (LLM-guided mutation).
-- Variants backtest in shadow, then promote into `paper` automatically.
-- `paper → limited_live → scaled_live` requires human approval through
-  `POST /promotions/{id}/approve` (see [`api-reference.md`](api-reference.md)).
+- New solver variants are currently authored by hand and seeded (`scripts/seed_solvers.py`);
+  the `MetaSearchAgent` that used to auto-propose variants via LLM-guided mutation was
+  deleted (see `CHANGELOG.md`).
+- `research → shadow → paper` and `paper → limited_live → scaled_live` all require human
+  approval through `POST /promotions/{id}/approve` (see [`api-reference.md`](api-reference.md));
+  nothing promotes a solver automatically.
 
 ## Where to go next
 

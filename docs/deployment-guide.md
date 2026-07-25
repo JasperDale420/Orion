@@ -16,11 +16,13 @@ instance.
 | `data-quality` | **native** (launchd) | RB.4 — `--scheduled` market-hours loop |
 | `timescaledb` | docker (default profile) | Postgres 16 + pgvector |
 | `feature_enrichment` | docker (default profile) | |
-| `pattern-miner` | docker (default profile) | |
-| `indexer` | docker (default profile) | RAG indexer |
 | `heber-sync` | docker (default profile) | host-cache rsync sidecar |
-| `eod-agent` | **profile-gated** (`docker`) | retired from default; manual runs only |
 | `ingestion`/`execution`/`position-monitor`/`data-quality` docker copies | **profile-gated** (`docker`) | escalation/fallback only |
+
+`pattern-miner`, `indexer`, `mcp-server`, and `eod-agent` no longer exist as
+docker-compose services — they were removed along with the LLM
+solver-evolution machinery (see `CHANGELOG.md`). `docker-compose.yml` now
+defines exactly seven services and one profile (`docker`).
 
 Native and docker copies of the same role are mutually exclusive: Orion's
 service-lease table enforces it, and the lease owner-IDs differ (`*_native` vs
@@ -214,25 +216,15 @@ scripts/run_deadman_watchdog.sh
 docker compose up timescaledb -d
 
 # Default profile — stateless support services only:
-# timescaledb, feature_enrichment, pattern-miner, indexer, mcp-server, heber-sync.
+# timescaledb, feature_enrichment, heber-sync.
 # The trading roles (ingestion, execution, position-monitor, data-quality) run
 # NATIVE via launchd and are NOT here.
 docker compose up -d
 
-# Profile-gated docker copies of the native roles + the retired eod-agent.
+# Profile-gated docker copies of the native roles.
 # Use only for escalation/fallback when the native runner is down; the service
 # leases prevent co-execution with the native instance.
 docker compose --profile docker up -d
-
-# Include legacy labeling profile (nightly-backfill, quality-guardrails,
-# option_quote_tracker)
-docker compose --profile legacy-labels up -d
-
-# Include non-trading tools profile
-docker compose --profile tools up -d
-
-# Scheduled support jobs
-docker compose --profile scheduled up -d
 
 # Logs
 docker compose logs -f execution

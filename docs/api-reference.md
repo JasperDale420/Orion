@@ -50,7 +50,7 @@ Grouped by tag. Source line numbers are stable references into `api/main.py`.
 | Method | Path | Query params |
 |---|---|---|
 | GET | `/metrics` | `solver_id` (str), `dataset_tag` (str), `limit` (int) |
-| GET | `/experiments` | List meta-search experiments |
+| GET | `/experiments` | List `MetaExperiment` rows (legacy — nothing currently writes new ones; see `CHANGELOG.md`) |
 
 ### Promotions (solver lifecycle)
 
@@ -64,11 +64,14 @@ Approving moves a solver to the next lifecycle stage
 (`paper → limited_live → scaled_live`). See
 [`project-overview-pdr.md`](project-overview-pdr.md#solver-lifecycle).
 
-### Search & data lookups
+### Data lookups
+
+`/search` (RAG hybrid search) was removed along with the RAG stack
+(`src/orion/rag/`, `storage/models_rag.py`) — see `CHANGELOG.md` ("Delete the
+LLM solver-evolution machinery"). It no longer exists.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/search` | RAG hybrid search with metadata filters. **503** when pgvector or embeddings are unavailable. |
 | GET | `/events/{event_id}` | Fetch Bronze `EventEnvelope` by id |
 | GET | `/candidates/{candidate_id}` | Fetch `CandidateTrade` row |
 | GET | `/rollups` | Query rollups by ticker / period |
@@ -103,9 +106,8 @@ positions per its rules.
 - Most read endpoints return Pydantic models from `api/schemas.py`
   (`SolverResponse`, `SolverMetricsResponse`, `ExperimentResponse`,
   `PromotionRecommendationResponse`, …).
-- `/search` and `/flows` may return `503` with the standard error envelope
-  when their backing data sources are degraded — clients should treat 503 as
-  retryable.
+- `/flows` may return `503` with the standard error envelope when its backing
+  data source is degraded — clients should treat 503 as retryable.
 
 ## Rate limiting
 

@@ -28,12 +28,12 @@ uv run pytest tests/e2e/test_live_data_flow.py -v -s      # live data flow healt
 uv run python tests/e2e/test_live_data_flow.py             # standalone diagnostic
 ```
 
-Docker (TimescaleDB + all services):
+Docker (TimescaleDB + support services):
 ```bash
 docker compose up timescaledb -d                          # DB only
-docker compose up -d                                      # core services
-docker compose --profile legacy-labels up -d              # include legacy labeling
-docker compose --profile tools up -d                      # include meta-search
+docker compose up -d                                      # default profile: timescaledb, feature_enrichment, heber-sync
+docker compose --profile docker up -d                      # also run ingestion/execution/position-monitor/data-quality in Docker
+                                                            # (native launchd is canonical for these — never run both copies of a role)
 ```
 
 Alembic migrations:
@@ -48,22 +48,23 @@ uv run alembic revision --autogenerate -m "description"
 
 | Package | Purpose |
 |---------|---------|
-| `api/` | FastAPI admin API (solvers, metrics, experiments, flows, rollups, dashboard, RAG search) |
-| `agents/` | LLM-powered agents: EOD review, meta-search (solver evolution), weekly aggregator |
+| `api/` | FastAPI admin API (solvers, metrics, experiments, flows, rollups, dashboard, admin/circuit-breaker) |
 | `analysis/` | Regime detection (multi-axis: vol, vix, trend, risk, session), cross-validation, metrics |
-| `clients/` | Heber reader (parquet), Gateway trading client (Alpaca proxy), MCP server, TradingRAG |
+| `clients/` | Heber reader (parquet), Gateway trading client (Alpaca proxy) |
 | `connectors/` | Gateway WebSocket stream client, UW data connectors (greek exposure, IV rank, market tide, max pain, VIX proxy) |
-| `core/` | Circuit breaker, feature flags, solver DSL/router/validation, universe manager, health monitor, PnL tracker |
-| `execution/` | Execution engine, risk manager, position manager/monitor, rate limiter, correlation adjuster, signal preflight |
+| `core/` | Circuit breaker, feature registry, solver DSL/router/validation, universe manager, health monitor, PnL tracker |
+| `enrichment/` | Heber-context enrichment helper used by feature enrichment |
+| `execution/` | Execution engine, risk manager (`execution/risk/`), position manager/monitor, rate limiter, correlation adjuster, signal preflight |
 | `ingestion/` | Real-time ingestion service (Gateway WS -> Bronze -> Silver -> candidates) |
-| `jobs/` | Scheduled jobs: nightly backfill, quality guardrails, DLQ consumer, data quality checker, gateway contract probe, meta loop |
+| `jobs/` | Scheduled jobs: nightly backfill, quality guardrails, DLQ consumer, data quality checker, gateway contract probe, bucket metrics, deadman watchdog |
 | `labeler/` | Triple-barrier labeling (checkpoints, greeks, schema guard) |
-| `ml/` | LightGBM scorer, exit classifier, drift monitor, feature store, pattern miner, model registry, darkpool features |
+| `ml/` | LightGBM scorer, exit classifier, feature store, model registry, darkpool features |
 | `processing/` | Feature engine, signal engine, rule engine, backtest engine, normalizer, rollup builder, deduper |
-| `rag/` | Embeddings, vector store (pgvector), indexer for trade knowledge |
+| `scripts/` | Ad-hoc audit/debug scripts (`audit_gold.py`, `audit_silver.py`, `check_pgvector.py`, `query_events.py`) |
 | `shared/` | Logger, metrics (Prometheus), DB utils, decorators, DLQ utils |
 | `storage/` | SQLAlchemy models, DB engine/session, lakehouse writer, watermarks |
-| `unusualwhales/` | Vendored UnusualWhales API client |
+
+`agents/` (meta-search/EOD-review/weekly-aggregator agents) and `rag/` (embeddings + pgvector search) no longer exist under `src/orion/` — the LLM solver-evolution machinery they held was deleted; see `CHANGELOG.md` ("Delete the LLM solver-evolution machinery"). The vendored `unusualwhales/` client is also gone (no `CHANGELOG.md` entry found for it, so its removal isn't dated here).
 
 ### Data Pipeline
 
@@ -88,41 +89,36 @@ Orders + PositionMonitor
 
 ### Solver System (PRDv2)
 
-Solvers are parameterized strategy configurations ("DNA") stored in the `solvers` table. Lifecycle stages: `research → shadow → paper → limited_live → scaled_live`. The MetaSearchAgent generates solver variants via LLM-guided mutation, backtests them, and proposes promotions.
+Solvers are parameterized strategy configurations ("DNA") stored in the `solvers` table. Lifecycle stages: `research → shadow → paper → limited_live → scaled_live`, moved via the `/promotions/{id}/approve|reject` API (manual review, not automatic).
 
-Key models: `SolverConfig` (Pydantic DSL with risk, features, exit logic), `SolverMetrics`, `MetaExperiment`, `SolverEdits`, `PromotionRecommendation`.
+The LLM-driven solver generator (MetaSearchAgent: mutation, backtesting, auto-proposed promotions) was deleted — see `CHANGELOG.md` ("Delete the LLM solver-evolution machinery"). Its replacement is mechanical: `jobs/bucket_metrics.py` computes nightly per-bucket/per-rule realized performance (win rate, expectancy, profit factor, exit-reason mix) and posts advisory sizing-up/halting verdicts to Discord — the verdicts alert, they never act automatically.
+
+Key models still in use: `SolverConfig` (Pydantic DSL with risk, features, exit logic), `SolverMetrics`, `PromotionRecommendation`. `MetaExperiment` and `SolverEdits` remain as DB models but nothing currently writes to them — the jobs that populated them (`solver_promoter.py`, `gatekeeper.py`, `run_meta_loop.py`) were removed with the meta-search machinery.
 
 ### Docker Compose Services
 
-launchd is canonical for the trading/scheduling roles; the docker copies below
-are profile-gated. The compose default profile carries only stateless support
-services.
+launchd is canonical for the ingestion/execution roles; the `docker`-profile
+copies below are the rollback path (never run both for the same role — the
+service-lease guard rejects whichever starts second). `docker-compose.yml`
+now defines exactly seven services — the old `legacy-labels`/`tools`/`scheduled`
+profiles and the meta-search/labeling/indexer/MCP services they gated were
+removed along with the LLM solver-evolution machinery (see `CHANGELOG.md`).
 
 | Service | Module | Profile |
 |---------|--------|---------|
-| `timescaledb` | pgvector/pgvector:pg16 | default |
+| `timescaledb` | `pgvector/pgvector:pg16` image | default |
 | `feature_enrichment` | `orion.main_feature_enrichment` | default |
-| `indexer` | `orion.rag.indexer` | default |
-| `mcp-server` | Shared-MCP-Server | default |
-| `ingestion` | `orion.ingestion` | docker (native canonical) |
-| `execution` | `orion.main_execution` | docker (native canonical) |
-| `position-monitor` | `orion.main_position_monitor` | docker (native canonical) |
-| `data-quality` | `orion.main_data_quality` | docker (native canonical) |
-| `eod-agent` | `orion.main_eod` | docker (retired; native ingestion trigger is canonical) |
-| `price_target_labeler` | `orion.main_price_target_labeler` | legacy-labels |
-| `pattern-miner` | `orion.main_pattern_miner` | legacy-labels |
-| `nightly-backfill` | `orion.jobs.nightly_backfill` | legacy-labels |
-| `quality-guardrails` | `orion.jobs.quality_guardrails` | legacy-labels |
-| `option_quote_tracker` | `orion.main_option_quote_tracker` | legacy-labels |
-| `meta-search` | `orion.main_meta` | tools |
-| `meta-weekly` | `orion.main_meta_weekly` | scheduled |
-| `dashboard-reset` | `orion.jobs.daily_dashboard_reset` | scheduled |
+| `heber-sync` | alpine rsync sidecar (Heber cache) | default |
+| `ingestion` | `orion.ingestion` | docker (native launchd canonical) |
+| `execution` | `orion.main_execution` | docker (native launchd canonical) |
+| `position-monitor` | `orion.main_position_monitor --interval 60` | docker (native launchd canonical) |
+| `data-quality` | `orion.main_data_quality --scheduled` | docker (native launchd canonical) |
 
 ## TimescaleDB
 
 Default connection: `postgresql+asyncpg://orion@localhost:5432/orion_db` (Docker maps port 5440:5432).
 
-Async engine via SQLAlchemy `create_async_engine` with `pool_pre_ping=True`, `pool_recycle=1800`. Session factory: `async_sessionmaker(expire_on_commit=False)`. pgvector extension enabled on init for RAG embeddings.
+Async engine via SQLAlchemy `create_async_engine` with `pool_pre_ping=True`, `pool_recycle=1800`. Session factory: `async_sessionmaker(expire_on_commit=False)`. The DB image is `pgvector/pgvector:pg16` for historical reasons (it backed the now-deleted RAG embeddings); no current model uses the `Vector` column type (`scripts/check_pgvector.py` is the only remaining reference).
 
 ### Key Tables
 
@@ -138,15 +134,14 @@ Async engine via SQLAlchemy `create_async_engine` with `pool_pre_ping=True`, `po
 | `candidate_labels` / `labels_event` / `labels_window` | Triple-barrier labels |
 | `solvers` | Strategy DNA (config, stage, performance snapshot) |
 | `solver_metrics` / `solver_runs` | Evaluation results |
-| `meta_experiments` / `solver_edits` | Meta-search experiment tracking |
-| `promotion_recommendations` | Stage promotion workflow |
+| `meta_experiments` / `solver_edits` | Meta-search experiment tracking (models still exist; nothing writes to them since the meta-search machinery was deleted) |
+| `promotion_recommendations` | Stage promotion workflow (now populated/approved manually, not by an LLM agent) |
 | `positions` / `fills` / `orders` | Execution state |
 | `risk_snapshots` | Risk manager state persistence |
 | `signal_live` | Live signal tracking |
 | `trade_journal_entries` | Trade journal |
 | `dead_letter_queue` | Failed event processing |
 | `audit_log` | API request audit trail |
-| `rag_documents` | Indexed RAG documents with pgvector embeddings |
 | `system_status` / `ingest_watermarks` / `job_cursor_state` / `runtime_config` | System state |
 
 ## Data-Gateway Dependency
@@ -183,12 +178,13 @@ or hasn't caught up.
 
 ## Configuration
 
-All config via Pydantic Settings in `src/orion/config.py`. Four settings classes:
+All config via Pydantic Settings in `src/orion/config.py`. Three settings classes:
 
-- **`SystemSettings`** (`ORION_*` prefix) — DB URL, Gateway URL, Heber paths, universe, ML, RAG, metrics
-- **`RiskSettings`** (`ORION_RISK_*` prefix) — Daily loss limits, position limits, Greeks limits, sector concentration, 0DTE winddown, correlation sizing
-- **`MetaSearchSettings`** (`ORION_META_*` prefix) — Scoring weights for solver evaluation
-- **`AgentSettings`** (`ORION_AGENT_*` prefix) — LLM model, AI-Gateway URL/key
+- **`SystemSettings`** (`ORION_*` prefix) — DB URL, Gateway URL, Heber paths, universe, ML model dir/staleness policy, circuit breaker, broker-routing scaffolding, metrics
+- **`RiskSettings`** (`ORION_RISK_*` prefix) — Daily loss limits, position limits, Greeks limits, sector concentration, 0DTE winddown, correlation sizing, fixed-premium sizing, per-bucket/per-underlying caps, option liquidity gates
+- **`HeuristicWeights`** (`ORION_HEURISTIC_*` prefix) — Score increments for the heuristic scorer fallback (premium tiers, sweep/ask-side bonuses, vol/OI, low-premium penalty)
+
+(`MetaSearchSettings` and `AgentSettings` — LLM model / AI-Gateway config — were deleted with the meta-search/agent machinery; see `CHANGELOG.md`.)
 
 Key env vars (beyond `ORION_*` prefix):
 - `DB_URL` / `ORION_DB_URL` — Database connection string
@@ -241,7 +237,7 @@ When modifying order submission or risk sync, preserve the `ORDER_ID_PREFIX` fil
 
 ## Safety-Critical Code
 
-- **RiskManager** (`execution/risk_manager.py`) — Daily loss limits, max positions, Greeks limits, sector concentration, 0DTE winddown, correlation-adjusted sizing
+- **RiskManager** (`execution/risk/manager.py`) — Daily loss limits, max positions, Greeks limits, sector concentration, 0DTE winddown, correlation-adjusted sizing
 - **ExecutionEngine** (`execution/execution_engine.py`) — Options-only (rejects candidates without `option_symbol`), routes through Data-Gateway
 - Paper mode default (`ORION_STAGE=paper`, `ALPACA_PAPER=True`)
 - Regime filter blocks trading in SHOCK/extreme VIX conditions
@@ -356,29 +352,29 @@ Orion follows a vertical-slice backend design under `src/orion/`:
 - `execution/`: preflight checks, risk checks, and order submission paths
 - `storage/`: SQLAlchemy models for Bronze/Silver/Gold and related state tables
 
-Key runtime services are launched by `main_*` entry points (for example: ingest, execution, eod, rollups, pattern miner).
+Key runtime services are launched by `main_*` entry points: `main_execution.py`, `main_feature_enrichment.py`, `main_position_monitor.py`, `main_data_quality.py` (ingestion runs via `python -m orion.ingestion`, not a `main_*` file).
 
 ## Development Commands
 
 ```bash
 # Install dependencies
-poetry install
+uv sync
 
 # Run tests / lint / type checks
-pytest -q
+uv run pytest -q
 ruff check .
 mypy .
 
-# Run full local stack
-docker compose up -d --build
+# Run support services in Docker (see "## Commands" above for the full picture)
+docker compose up -d
 
 # Run a specific service locally
-python -m orion.ingestion
-python -m orion.main_execution
+uv run python -m orion.ingestion
+uv run python -m orion.main_execution
 
 # Database migrations
-alembic upgrade head
-alembic downgrade -1
+uv run alembic upgrade head
+uv run alembic downgrade -1
 ```
 
 ## Key Patterns
@@ -391,7 +387,7 @@ alembic downgrade -1
 
 ## Important Files
 
-- `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py` — environment-driven system/risk/agent settings
+- `/Users/jacobmcmillan/Empire/Orion/src/orion/config.py` — environment-driven system/risk/heuristic-weight settings
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/api/main.py` — FastAPI endpoints
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/ingestion/__main__.py` — ingestion entry point
 - `/Users/jacobmcmillan/Empire/Orion/src/orion/main_execution.py` — execution entry point
@@ -400,7 +396,7 @@ alembic downgrade -1
 ## Testing
 
 - Test framework: `pytest`
-- Preferred command: `pytest -q`
+- Preferred command: `uv run pytest -q`
 - Keep tests deterministic (no live network in unit tests).
 - For behavior changes, write/adjust tests before implementation and keep them as regression coverage.
 

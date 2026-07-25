@@ -32,14 +32,15 @@ tests/
 ├── unit/                # fast, isolated, no I/O, no network
 ├── integration/         # real (in-memory) DB, component wiring
 ├── e2e/                 # full pipeline against real TimescaleDB
-├── agents/              # LLM agent tests (mostly mocked)
+├── agents/              # solver validation/ensemble/router/promotion-gate tests
+│                        # (the old LLM-agents package this dir was named for is gone)
 ├── api/                 # FastAPI route tests
 ├── clients/             # Heber / Gateway client tests
 ├── connectors/          # WS + UW connector tests
 ├── core/                # circuit breaker, solver DSL, service-lease, etc.
 ├── execution/           # safety-critical — risk, preflight, fill processor
 ├── ingestion/           # ingestion service tests
-├── enrichment/, ml/, processing/, jobs/, labeler/, rag/, shared/, storage/
+├── enrichment/, ml/, processing/, jobs/, labeler/, shared/, storage/
 └── contracts/           # cross-system contract tests
 ```
 
@@ -95,8 +96,9 @@ async def test_execution_submits(mock_gateway, candidate, db_session):
 
 - Mock **at the boundary** — patch `GatewayTradingClient`, `HeberReader`,
   `AlpacaClient`, never the underlying `httpx.Client`.
-- HTTP mocking: use `respx` or `aioresponses` when you need real-shaped
-  requests, not for trivial single-call tests (a plain `AsyncMock` is fine).
+- HTTP mocking: `unittest.mock` (`patch`/`MagicMock`/`AsyncMock`) is what the
+  suite actually uses — neither `respx` nor `aioresponses` is a declared
+  dependency.
 
 ## E2E tests (real TimescaleDB)
 
@@ -153,11 +155,16 @@ not duplicate.
 
 ## CI
 
-`.github/workflows/` runs:
+`.github/workflows/ci.yml` runs:
 
-- `pre-commit` (ruff, black, mypy, detect-secrets, bandit).
-- Full `pytest`.
-- SonarQube quality gate (`sonar-project.properties`).
+- `uv run pre-commit run --all-files` — ruff + ruff-format, detect-secrets,
+  and standard file-hygiene hooks. (`mypy` and `bandit` are both commented
+  out in `.pre-commit-config.yaml`; they don't run here.)
+- `uv run mypy src/orion` — separate CI step.
+- `uv run pytest --ignore=tests/e2e` against in-memory SQLite, then a
+  dedicated E2E smoke step against a real Postgres/pgvector service
+  container with `alembic upgrade head` applied first.
+- SonarQube quality gate (skipped if `SONAR_TOKEN` isn't set).
 
 Match local commands to CI before pushing: `uv run pytest && ruff check . && mypy .`.
 

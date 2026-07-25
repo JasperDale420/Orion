@@ -19,7 +19,7 @@ parquet from a host-side Heber cache.
 | [`docs/system-architecture.md`](docs/system-architecture.md) | Data flow, Mermaid diagram, execution boundary |
 | [`docs/code-standards.md`](docs/code-standards.md) | Conventions, safety-critical rules, position attribution |
 | [`docs/testing-guide.md`](docs/testing-guide.md) | Markers, E2E tests, mocking patterns |
-| [`docs/configuration-guide.md`](docs/configuration-guide.md) | Env-var matrix across the four Settings classes |
+| [`docs/configuration-guide.md`](docs/configuration-guide.md) | Env-var matrix across the three Settings classes |
 | [`docs/deployment-guide.md`](docs/deployment-guide.md) | launchd, Docker Compose, orphan-close history |
 | [`docs/api-reference.md`](docs/api-reference.md) | FastAPI admin/dashboard endpoints |
 | [`PRD.md`](PRD.md) | Full product requirements |

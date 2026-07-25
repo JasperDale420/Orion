@@ -1,14 +1,18 @@
 # Orion — Configuration Guide
 
 All runtime configuration is **Pydantic Settings** in `src/orion/config.py`.
-Four classes, each with its own env-var prefix.
+Three classes, each with its own env-var prefix.
 
 | Class | Prefix | Concern |
 |---|---|---|
-| `SystemSettings` | `ORION_` | DB, Gateway, Heber, universe, ML, RAG, metrics |
-| `RiskSettings` | `ORION_RISK_` | Daily loss, position caps, Greeks, sector concentration, 0DTE |
-| `MetaSearchSettings` | `ORION_META_` | Solver evaluation weights |
-| `AgentSettings` | `ORION_AGENT_` | LLM model, AI-Gateway URL/key |
+| `SystemSettings` | `ORION_` | DB, Gateway, Heber, universe, ML model dir/staleness, circuit breaker, metrics |
+| `RiskSettings` | `ORION_RISK_` | Daily loss, position caps, Greeks, sector concentration, 0DTE, sizing, liquidity gates |
+| `HeuristicWeights` | `ORION_HEURISTIC_` | Score increments for the heuristic scorer fallback |
+
+`MetaSearchSettings` (`ORION_META_`) and `AgentSettings` (`ORION_AGENT_`) were
+deleted along with the LLM solver-evolution machinery — see `CHANGELOG.md`
+("Delete the LLM solver-evolution machinery"). The `ORION_META_*` and
+`ORION_AGENT_*` env vars below no longer do anything if set.
 
 `.env.example` at the repo root lists every supported variable with safe
 defaults — copy it to `.env` and edit.
@@ -198,23 +202,23 @@ Daily-rotating files under the log dir:
 
 Retention: 14 days by default.
 
-## Agent / LLM (`ORION_AGENT_*`)
+## Agent / LLM (`ORION_AGENT_*`) — removed
 
-| Variable | Purpose |
-|---|---|
-| `ORION_AGENT_MODEL` | LLM model id used by EOD review + MetaSearch |
-| `ORION_AGENT_AI_GATEWAY_URL` | AI-Gateway endpoint (the Go service) |
-| `ORION_AGENT_AI_GATEWAY_KEY` | AI-Gateway auth |
+`AgentSettings` (which read `ORION_AGENT_MODEL`, `ORION_AGENT_AI_GATEWAY_URL`,
+`ORION_AGENT_AI_GATEWAY_KEY`) no longer exists in `config.py` — it was deleted
+with the EOD-review/MetaSearch LLM agents. Setting these env vars has no
+effect. **Never change model IDs without explicit user permission** remains
+the rule repo-wide (from the monorepo `CLAUDE.md`) for any config that does
+still select a model.
 
-**Never change model IDs without explicit user permission** — this rule comes
-from the monorepo `CLAUDE.md` and applies repo-wide.
+## Meta-search (`ORION_META_*`) — removed
 
-## Meta-search (`ORION_META_*`)
-
-Scoring weights used by `MetaSearchAgent` when ranking solver variants:
-information ratio, max drawdown penalty, fill-rate weight, etc. See
-`config.py` for the full list — defaults are tuned and should not be moved
-without solver-evaluation evidence.
+`MetaSearchSettings` no longer exists in `config.py` — it was deleted with
+`MetaSearchAgent` and the rest of the LLM solver-evolution machinery (see
+`CHANGELOG.md`). Setting `ORION_META_*` env vars has no effect. Solver
+performance review is now the mechanical, advisory-only
+`jobs/bucket_metrics.py` nightly job (win rate, expectancy, profit factor,
+exit-reason mix per bucket/rule, posted to Discord).
 
 ## Resolving common config issues
 
@@ -222,7 +226,7 @@ without solver-evaluation evidence.
 |---|---|---|
 | `RuntimeError: another lease owner holds service_lease_*` | Docker + native running same role | Stop one; verify with `docker compose ps` and `launchctl print gui/$(id -u)/com.empire.orion.<role>` |
 | `[Errno -3] Temporary failure in name resolution` | Container reverted to `host.docker.internal:8080` | Use the external `data-gateway_default` network — see `docker-compose.yml` |
-| `503` from `/search` or `/flows` | pgvector / embeddings / Heber down | Check `mcp-server`, `indexer`, `heber-sync` containers |
+| `503` from `/flows` | Heber flow read failing | Check `heber-sync` container / `~/.heber-cache/data` |
 | ML scorer using stale features | Heber Gold sync stuck | `docker logs orion_heber_sync`; inspect `~/.heber-cache/data/gold/` |
 | Born-stale candidates (>600s age at entry) | `ORION_GOLD_FEATURE_LOOKBACK_DAYS` too large or Heber Gold sync stale | Check `~/.heber-cache/data/gold/` freshness; default 7 days is optimal |
 | ML scorer blocked on stale model | `ORION_ML_STALE_MODEL_POLICY=skip` (default) | Set `warn` to log-but-proceed, or `bypass` to skip ML entirely |

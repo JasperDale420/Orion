@@ -3,6 +3,22 @@
 **Status:** Draft v2 (adds signal generation, robust validation, live trading, and an LLM improvement loop)
 **Primary mode (v1):** UW polling + Alpaca market data (extended hours). Upgrade path to UW websocket streaming.
 
+> **This PRD's "RAG search", "LLM review agent", and "Meta-Search Orchestrator"
+> sections describe the original design — that machinery (the RAG stack,
+> EOD-review LLM agent, MetaSearchAgent, and the automated
+> generate/backtest/promote loop, ~15.7k LOC) was subsequently deleted; see
+> `CHANGELOG.md` ("Delete the LLM solver-evolution machinery"). None of it ever
+> influenced a live trading decision. The measurement loop that replaces it is
+> mechanical: nightly per-bucket P&L reconciliation
+> (`realize_expired_journal_rows` + `reconcile_pnl`) feeds
+> `jobs/bucket_metrics.py`, which posts advisory-only sizing-up/halting
+> verdicts to Discord — nothing here promotes a solver automatically; that
+> still requires a human hitting `POST /promotions/{id}/approve`. The rest of
+> this document (ingestion, signal engine, execution, risk) still describes
+> current behavior; treat the LLM-agent sections as historical context, not a
+> statement of what runs today. See `docs/project-overview-pdr.md` and
+> `docs/system-architecture.md` for the current picture.
+
 ---
 
 ## 1) Objective

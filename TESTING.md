@@ -6,15 +6,15 @@ This repository uses `pytest` for testing, with a focus on **Vertical Slice** ar
 
 ```bash
 # Install dependencies
-poetry install
+uv sync
 
 # Run the full suite
-poetry run make test
+uv run pytest
 
 # Run specific layers
-poetry run make test-unit         # Fast, isolated component tests
-poetry run make test-integration  # SLOW. Tests DB, Queue, and Contracts.
-poetry run make test-eod          # End-to-End user journeys.
+uv run pytest tests/unit          # Fast, isolated component tests
+uv run pytest tests/integration   # SLOW. Tests DB, Queue, and Contracts.
+uv run pytest tests/e2e           # End-to-end tests (needs real TimescaleDB on port 5440 — see docs/testing-guide.md)
 ```
 
 ## 🏗️ Test Architecture
@@ -33,7 +33,7 @@ poetry run make test-eod          # End-to-End user journeys.
 - **Rules**:
     - **YES** Database interaction (uses test DB).
     - **YES** Queue interaction (uses test topics or mocked producer with validation).
-    - **MOCK** Third-party APIs (Alpaca, UW) using `aioresponses` or `respx`.
+    - **MOCK** Third-party APIs (Alpaca, UW) using `unittest.mock`.
 
 ### 3. End-to-End Tests (`tests/e2e/`)
 - **Goal**: Verify system boot and critical paths.
@@ -44,7 +44,6 @@ poetry run make test-eod          # End-to-End user journeys.
 - **Pytest**: Core runner.
 - **Pytest-Cov**: Coverage reporting.
 - **Pytest-Asyncio**: For async/await support.
-- **AioResponses**: For mocking HTTP clients.
 
 ### Mocking Strategy
 We use `unittest.mock` and `pytest fixtures`.
@@ -68,7 +67,8 @@ def test_signal_generation(mock_alpaca):
 ```
 
 ## 🔍 CI / CD
-Tests run automatically on GitHub Actions for every PR.
-- **Hygiene**: `pre-commit` (ruff, black, mypy).
-- **Tests**: Full `pytest` suite.
-- **Sonar**: Quality gate analysis.
+Tests run automatically on GitHub Actions for every PR (`.github/workflows/ci.yml`).
+- **Hygiene**: `pre-commit run --all-files` (ruff + ruff-format, detect-secrets, trailing-whitespace/EOF/YAML/merge-conflict checks).
+- **Type check**: `mypy src/orion` (separate CI step, not part of pre-commit).
+- **Tests**: `pytest` against in-memory SQLite (`--ignore=tests/e2e`), then a dedicated E2E smoke step against a real Postgres/pgvector service container with `alembic upgrade head` applied first.
+- **Sonar**: SonarQube quality-gate analysis (skipped if `SONAR_TOKEN` isn't set).

@@ -3,7 +3,7 @@
 ## Getting Started
 
 1. Create a branch from `master`.
-2. Install dependencies: `poetry install`.
+2. Install dependencies: `uv sync`.
 3. Configure local env from `.env.example`.
 4. Run tests before opening a PR.
 
@@ -30,9 +30,9 @@
 Minimum before merge:
 
 ```bash
-poetry run pytest -q
-poetry run ruff check .
-poetry run mypy .
+uv run pytest -q
+ruff check .
+mypy .
 ```
 
 ## Commit Messages

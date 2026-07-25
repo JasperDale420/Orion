@@ -62,18 +62,18 @@ flowchart LR
     DEC --> PRE --> RISK --> EE --> GTC --> GW
     GTC --> ORD
 
-    subgraph monitor[Position monitor + EOD]
+    subgraph monitor[Position monitor + nightly close]
         PM["PositionMonitor<br/>(exit rules)"]
         EXITS["exit_decisions"]
-        EOD["EOD agent<br/>(LLM review)"]
-        META["MetaSearchAgent<br/>(solver evolution)"]
+        EODJOB["EOD close-of-books<br/>(realize_expired_journal_rows +<br/>reconcile_pnl)"]
+        BUCKET["bucket_metrics<br/>(nightly advisory perf review)"]
     end
 
     ORD --> PM --> EXITS
-    EXITS --> EOD
-    DEC --> EOD
-    EOD --> META
-    META --> SOL
+    EXITS --> EODJOB
+    DEC --> EODJOB
+    EODJOB --> BUCKET
+    BUCKET -.->|advisory Discord post, no auto-action| SOL
 
     subgraph storage[Postgres 16 + pgvector]
         TS[("orion_db")]
@@ -228,9 +228,12 @@ Postgres 16 + pgvector  ──  authoritative state
     ├── Bronze / Silver / Gold tables (plain Postgres tables)
     ├── Execution state (orders, fills, positions, risk_snapshots)
     ├── Solver lifecycle (solvers, solver_metrics, meta_experiments, …)
-    ├── Operational (system_status, ingest_watermarks, dead_letter_queue,
-    │                audit_log, signal_live, trade_journal_entries)
-    └── RAG (rag_documents — pgvector embeddings)
+    └── Operational (system_status, ingest_watermarks, dead_letter_queue,
+                     audit_log, signal_live, trade_journal_entries)
+
+(The `pgvector` extension is still on the image for historical reasons — the
+RAG stack that used it was deleted; no current model uses the `Vector` column
+type.)
 
 Heber parquet cache (~/.heber-cache/data)  ──  historical / training data
     ├── Silver: flow_alerts, bars, darkpool, market_tide, greek_exposure,
@@ -252,16 +255,23 @@ second-to-start always loses.
 
 | Role | Native (launchd) | Docker Compose |
 |---|---|---|
-| Ingestion | `com.empire.orion.ingestion` | `ingestion` |
-| Execution | `com.empire.orion.execution` | `execution` |
-| Feature enrichment | — | `feature_enrichment` |
-| Position monitor | — | `position-monitor` |
-| EOD agent | — | `eod-agent` |
-| RAG indexer | — | `indexer` |
+| Ingestion | `com.empire.orion.ingestion` | `ingestion` (profile `docker`) |
+| Execution | `com.empire.orion.execution` | `execution` (profile `docker`) |
+| Feature enrichment | — | `feature_enrichment` (default) |
+| Position monitor | `com.empire.orion.position-monitor.plist` present in `scripts/launchd/` | `position-monitor` (profile `docker`) |
+| Data quality | `com.empire.orion.data-quality.plist` present in `scripts/launchd/` | `data-quality` (profile `docker`) |
+| Heber cache sync | — | `heber-sync` (default) |
 | TimescaleDB | — | `timescaledb` (always) |
-| MCP server | — | `mcp-server` |
 | Launchd health probe | `com.empire.orion.launchd-health` | — |
 | One-shot orphan close (disabled) | `com.empire.orion.orphan-close.plist.DISABLED-260526` | — |
+
+`eod-agent`, RAG `indexer`, and `mcp-server` no longer exist as docker-compose
+services — removed with the LLM solver-evolution machinery (see
+`CHANGELOG.md`). Whether `position-monitor`/`data-quality` are actually run
+native day-to-day (vs. just having a plist available) isn't verifiable from
+the docs alone — `docs/RUNBOOK.md`'s topology table describes them as
+Docker-only; check `launchctl list | grep com.empire.orion` on the host to
+see what's actually loaded.
 
 The native plists exist to bypass the Docker Desktop 16 GiB VM ceiling that
 caused execution OOMs on Heber Gold growth (see
