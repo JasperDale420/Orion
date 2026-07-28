@@ -12,7 +12,7 @@ dependencies = [
     "empire-core",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
-    "sqlalchemy>=2.0.46",
+    "sqlalchemy>=2.0.51",
     "asyncpg>=0.31.0",
     "greenlet>=3.0.1",
     "python-dotenv>=1.0.0",
