@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Synced `CLAUDE.md` and `AGENTS.md` into one shared instruction set.
 
+### Fixed
+
+- **Health-probe Discord alerts now actually deliver**: the launchd health probe sent its webhook with urllib's default `Python-urllib/3.x` user agent, which Discord's Cloudflare edge rejects with a 403 — so CRITICAL pages were silently dropped. The probe now identifies itself as `Orion-launchd-health-probe/1.0`.
+
 ### Changed
 
 - **Documentation refreshed to the Empire standard and re-verified against the current code**: `CLAUDE.md`/`AGENTS.md`, `docs/codebase-summary.md`, `docs/project-overview-pdr.md`, `docs/system-architecture.md`, `docs/configuration-guide.md`, `docs/deployment-guide.md`, `docs/api-reference.md`, `docs/API_REFERENCE.md`, `docs/code-standards.md`, `README.md`, `CONTRIBUTING.md`, and `TESTING.md` had drifted from the code since the LLM solver-evolution deletion (`agents/`, `rag/`, `MetaSearchSettings`/`AgentSettings`, the `/search` endpoint, the `legacy-labels`/`tools`/`scheduled` docker-compose profiles, and several removed `main_*.py`/docker services were all still documented as present) and from an earlier Poetry→uv migration (`CONTRIBUTING.md`/`TESTING.md` still told contributors to run `poetry install`). Corrected the package layout, docker-compose service table, Pydantic Settings class list (three, not four — `HeuristicWeights` replaced `MetaSearchSettings`/`AgentSettings`), the `RiskManager` file path (`execution/risk/manager.py`, not `execution/risk_manager.py`), and added a historical-context banner to `PRD.md`'s meta-search sections rather than rewriting them. No code changed.

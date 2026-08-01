@@ -266,7 +266,11 @@ def _post_discord(url: str, alert: HealthAlert) -> None:
     req = urllib.request.Request(
         url,
         data=json.dumps({"content": content}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            # Discord's Cloudflare edge 403s urllib's default Python-urllib UA.
+            "User-Agent": "Orion-launchd-health-probe/1.0",
+        },
     )
     urllib.request.urlopen(req, timeout=5).read()
 
