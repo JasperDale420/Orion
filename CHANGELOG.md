@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Synced `CLAUDE.md` and `AGENTS.md` into one shared instruction set.
 
+### Removed
+
+- **`openai` dependency dropped**: nothing imports it — it was a leftover from the deleted LLM solver-evolution machinery. Its orphaned transitive deps (distro, jiter, sniffio, tqdm) left the lockfile with it.
+
 ### Changed
 
 - **Ticker-info lookups no longer pretend to call Unusual Whales**: the vendored `orion.unusualwhales` client package was deleted long ago, so `get_ticker_info` always returned an all-None entry after a silent ImportError. The dead import machinery is now excised; the function keeps the identical return contract (all-None sector/earnings fields) and logs an explicit warning ("ticker-info features unavailable: vendored client removed") the first time each ticker is requested. Regression tests pin the contract for both consumers (flow enricher, ML backfill).
