@@ -73,6 +73,10 @@ jobs:
         git clone --depth 1 \
           "https://x-access-token:${EMPIRE_CORE_TOKEN}@github.com/JasperDale420/empire-core.git" \
           "${GITHUB_WORKSPACE}/../empire-core"
+        # The clone persists the token in .git/config, where any code the job
+        # later runs (including same-repo PR code) could read it. The install
+        # only needs the working tree, so drop the git metadata immediately.
+        rm -rf "${GITHUB_WORKSPACE}/../empire-core/.git"
 
     - name: Install dependencies
       run: |

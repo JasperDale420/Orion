@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- CI no longer leaves the empire-core checkout token readable by job code: the clone step now deletes the cloned repo's .git metadata (which persisted the authenticated remote URL) immediately after cloning.
+
+
 - Synced `CLAUDE.md` and `AGENTS.md` into one shared instruction set.
 
 ### Removed
