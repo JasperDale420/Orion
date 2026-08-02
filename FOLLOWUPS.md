@@ -5,7 +5,14 @@ debugging + native-migration work. Sorted roughly by impact.
 
 ---
 
-## P0 (URGENT) — exits are broken, $62k of unrealized profit at risk
+## P0 — exit classifier constant-output (RESOLVED)
+
+Fixed: the degraded per-bucket `*_exit.pkl` models were archived to
+`models/archive/degraded-exit-classifiers-260701/`, so
+`BucketExitClassifier.predict` falls through to its per-bucket heuristic
+exit thresholds. See the `CHANGELOG.md` entry "The degraded ML exit
+classifiers no longer shadow the sane heuristic exits". Item #0 below is
+kept as the historical record of the investigation.
 
 ### 0. Exit classifier is effectively constant-output
 **Symptom.** `BucketExitClassifier.predict(...)` returns

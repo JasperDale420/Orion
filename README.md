@@ -132,7 +132,6 @@ Minimum `.env` (see [`.env.example`](.env.example) for full list and
 
 - **Data-Gateway** — REST/WS proxy for UW + Alpaca and the order router
 - **Heber** — lakehouse Orion reads parquet from (`~/.heber-cache/data`)
-- **AI-Gateway** — LLM proxy used by EOD review and MetaSearchAgent
 - **EmpireUI** — dashboard that consumes Orion's admin API
 - **Athena** — post-trade analyst (consumes Orion's trade journal)
 
