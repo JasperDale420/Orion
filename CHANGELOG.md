@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Synced `CLAUDE.md` and `AGENTS.md` into one shared instruction set.
 
+### Changed
+
+- **Ticker-info lookups no longer pretend to call Unusual Whales**: the vendored `orion.unusualwhales` client package was deleted long ago, so `get_ticker_info` always returned an all-None entry after a silent ImportError. The dead import machinery is now excised; the function keeps the identical return contract (all-None sector/earnings fields) and logs an explicit warning ("ticker-info features unavailable: vendored client removed") the first time each ticker is requested. Regression tests pin the contract for both consumers (flow enricher, ML backfill).
+
 ### Fixed
 
 - **Health-probe Discord alerts now actually deliver**: the launchd health probe sent its webhook with urllib's default `Python-urllib/3.x` user agent, which Discord's Cloudflare edge rejects with a 403 — so CRITICAL pages were silently dropped. The probe now identifies itself as `Orion-launchd-health-probe/1.0`.

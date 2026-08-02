@@ -12,7 +12,6 @@ async/sync dual-path pattern is preserved exactly as in the original module.
 """
 
 import asyncio
-import os
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -32,7 +31,6 @@ _heber_reader = HeberReader()
 _PRICE_TARGET_FALLBACK_COUNTS: dict[str, int] = defaultdict(int)
 
 _ticker_info_cache: dict[str, dict[str, Any]] = {}
-_uw_client: Any = None
 
 
 def _record_price_target_fallback(feature_name: str, error: Exception | None = None, **context: Any) -> None:
@@ -1849,114 +1847,25 @@ def _get_sector_correlation_features_from_heber(ticker: str, entry_ts: datetime)
     return None
 
 
-def _get_uw_client() -> Any:
-    """Get or create UW client. Returns None if SDK is unavailable."""
-    global _uw_client
-    if _uw_client is None:
-        try:
-            from orion.unusualwhales.client import UnusualWhalesClient
-        except ImportError:
-            logger.info("unusualwhales SDK not installed, ticker info lookups disabled")
-            return None
-        api_key = os.getenv("UW_API_KEY")
-        base_url = os.getenv("UW_BASE_URL", "https://api.unusualwhales.com")
-        if not api_key:
-            logger.warning("UW_API_KEY not set, ticker info lookups will fail")
-            return None
-        _uw_client = UnusualWhalesClient(base_url=base_url, token=api_key)
-    return _uw_client
-
-
 async def get_ticker_info(ticker: str) -> dict[str, Any]:
-    """Fetch ticker info from UW API with caching.
+    """Return the ticker-info entry for `ticker`.
 
-    Uses both /api/stock/{ticker}/info and /api/earnings/{ticker} endpoints
-    to maximize data coverage.
+    The vendored Unusual Whales client that backed this lookup no longer
+    exists, so every entry is all-None. The return contract (sector,
+    next_earnings_date, announce_time, last_earnings_date keys) is preserved
+    for the consumers in `orion.ml.flow_enricher` and
+    `orion.jobs.backfill_ml_features`.
     """
-    # Return cached if available
     if ticker in _ticker_info_cache:
         return _ticker_info_cache[ticker]
 
-    # Initialize empty cache entry
+    logger.warning("ticker-info features unavailable: vendored client removed", ticker=ticker)
     cache_entry: dict[str, Any] = {
         "sector": None,
         "next_earnings_date": None,
         "announce_time": None,
         "last_earnings_date": None,
     }
-
-    client = _get_uw_client()
-    if client is None:
-        _ticker_info_cache[ticker] = cache_entry
-        return cache_entry
-
-    try:
-        from orion.unusualwhales.api.stock import get_info
-        from orion.unusualwhales.models.ticker_info_results import TickerInfoResults
-        from orion.unusualwhales.types import UNSET
-    except ImportError:
-        logger.debug("unusualwhales SDK unavailable, skipping UW ticker info")
-        _ticker_info_cache[ticker] = cache_entry
-        return cache_entry
-
-    # Try /api/stock/{ticker}/info first
-    try:
-        response = await asyncio.to_thread(
-            get_info.sync,
-            ticker=ticker,
-            client=client,
-        )
-
-        if isinstance(response, TickerInfoResults) and response.data:
-            info = response.data
-
-            cache_entry["sector"] = (
-                info.sector.value if info.sector and not isinstance(info.sector, type(UNSET)) else None
-            )
-            cache_entry["next_earnings_date"] = (
-                info.next_earnings_date
-                if info.next_earnings_date and not isinstance(info.next_earnings_date, type(UNSET))
-                else None
-            )
-            cache_entry["announce_time"] = (
-                info.announce_time.value
-                if info.announce_time and not isinstance(info.announce_time, type(UNSET))
-                else None
-            )
-
-    except Exception as e:
-        logger.debug(f"Failed to fetch ticker info for {ticker}: {e}")
-
-    # If sector still None, try /api/earnings/{ticker} for sector from past earnings
-    if cache_entry["sector"] is None:
-        try:
-            from orion.unusualwhales.api.earnings import get_ticker_earnings
-            from orion.unusualwhales.models.earnings_results import EarningsResults
-
-            earnings_response = await asyncio.to_thread(
-                get_ticker_earnings.sync,
-                ticker=ticker,
-                client=client,
-            )
-
-            if isinstance(earnings_response, EarningsResults) and earnings_response.data:
-                # Get most recent earnings
-                sorted_earnings = sorted(
-                    [e for e in earnings_response.data if e.report_date], key=lambda x: x.report_date, reverse=True
-                )
-
-                if sorted_earnings:
-                    latest = sorted_earnings[0]
-                    # Get sector from earnings data (it's a string in the response)
-                    if latest.sector and not isinstance(latest.sector, type(UNSET)):
-                        cache_entry["sector"] = str(latest.sector)
-                    # Store last earnings date for is_post_earnings calculation
-                    if latest.report_date and not isinstance(latest.report_date, type(UNSET)):
-                        cache_entry["last_earnings_date"] = latest.report_date
-
-        except Exception as e:
-            logger.debug(f"Failed to fetch earnings for {ticker}: {e}")
-
     _ticker_info_cache[ticker] = cache_entry
     return cache_entry
 
