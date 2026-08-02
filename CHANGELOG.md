@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`openai` dependency dropped**: nothing imports it — it was a leftover from the deleted LLM solver-evolution machinery. Its orphaned transitive deps (distro, jiter, sniffio, tqdm) left the lockfile with it.
 - **Three dead modules deleted** (zero references anywhere in code, configs, docker-compose, Makefile, CI, or launchd plists): `connectors/mcp_client.py` (SSE client for the removed MCP server), `shared/telemetry.py` (OpenTelemetry init that no service ever called), `jobs/daily_dashboard_reset.py` (job for the removed dashboard-reset docker service).
 - **Stale `poetry.lock` deleted**: uv is the package manager (`uv.lock` is authoritative); the Poetry lockfile survived the Poetry-to-uv migration and referenced nothing current.
+- **`tests/api/test_requests_validation.py` deleted**: it tested alpaca-py's own ACH bank-relationship validation — broker functionality Orion never uses — and 4 of its 5 tests were permanently skipped.
 
 ### Changed
 
