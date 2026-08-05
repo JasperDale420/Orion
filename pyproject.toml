@@ -35,7 +35,7 @@ dependencies = [
     "alpaca-py>=0.43.5",
     # alpaca-py imports pytz at module load (alpaca.data.requests) but does not
     # declare it — keep this pin even though orion's own code uses zoneinfo.
-    "pytz>=2025.2",
+    "pytz>=2026.3.post1",
     "aiofiles>=25.1.0",
     "prometheus-client>=0.25.0",
     "lightgbm>=4.7.0",
