@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "empire-core",
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.14.2",
+    "pydantic-settings>=2.15.0",
     "sqlalchemy>=2.0.51",
     "asyncpg>=0.31.0",
     "greenlet>=3.0.1",
