@@ -32,6 +32,13 @@ class RiskState(Base):
 
     open_positions_count: Mapped[int | None] = mapped_column(Integer, default=0)
 
+    # Accounting convention the money columns above were written under. NULL
+    # means the row predates the option contract-multiplier fix, so its loss and
+    # equity figures are at 1/100th scale and must not arm the kill switch.
+    # RiskManager writes the current version on every save and refuses order
+    # admission for a row that does not carry it.
+    accounting_version: Mapped[int | None] = mapped_column(Integer, default=None)
+
 
 class ProcessedFill(Base):
     """

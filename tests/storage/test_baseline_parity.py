@@ -136,6 +136,9 @@ def test_baseline_creates_every_metadata_table() -> None:
             "exit_filled_at_utc",
             "exit_broker_order_id",
         },
+        # b5_risk_accounting_version.py — provenance for the risk_state money
+        # columns (NULL = written before the option contract-multiplier fix).
+        "risk_state": {"accounting_version"},
     }
 
     # Column-level parity (adversarial-review finding: table-name-only parity

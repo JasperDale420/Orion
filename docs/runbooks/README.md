@@ -10,4 +10,5 @@ Operational runbooks for Orion trading system.
 | [Circuit Breaker](circuit_breaker.md) | Opening/closing the circuit breaker |
 | [Database Operations](database_ops.md) | Common database tasks |
 | [Schema Rollout](schema_rollout.md) | Exit-classifier schema refresh rollout guidance |
+| [Risk Baseline](risk_baseline.md) | Clearing the fail-closed risk-baseline gate so orders can admit |
 | [Troubleshooting](troubleshooting.md) | Common issues and fixes |
