@@ -663,11 +663,15 @@ async def realize_expired_journal_rows() -> int:
             )
         return int(count or 0)
     except Exception as e:
+        # Raise rather than return 0: a swallowed failure is indistinguishable
+        # from "nothing to sweep", and the EOD caller would record the session
+        # as closed and never retry — leaving expired rows to jam the entry caps
+        # (the exact 2026-07-31 failure this sweep exists to prevent).
         logger.error(
             "Expiry sweep failed",
             extra={"event_type": "JOURNAL_EXPIRY_SWEEP_ERROR", "error": str(e)},
         )
-        return 0
+        raise
 
 
 async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: str, order: Any) -> None:

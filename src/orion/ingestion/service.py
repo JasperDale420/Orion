@@ -5,7 +5,7 @@ import signal
 import traceback
 import hashlib
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -15,8 +15,12 @@ from orion.config import system_settings
 from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
-from orion.core.service_lease import acquire_service_lease, renew_service_lease
-from orion.core.timekeeping import derive_trading_date_and_session, last_closed_trading_date
+from orion.core.service_lease import SERVICE_LEASE_STALE_SECONDS, acquire_service_lease, renew_service_lease
+from orion.core.timekeeping import (
+    closed_sessions_between,
+    derive_trading_date_and_session,
+    last_closed_trading_date,
+)
 from orion.core.universe_manager import UniverseManager
 from orion.processing.deduper import DeduplicationEngine
 from orion.processing.feature_engine import FeatureEngine
@@ -47,6 +51,49 @@ logger = setup_struct_logger("orion.ingest")
 # surface it before it becomes a silent stall.
 CYCLE_LATENCY_WARN_SECONDS = 15.0
 
+# Durable marker for the last SUCCESSFULLY completed close-of-books, keyed by
+# trading date. Durable rather than in-memory so a restart during the next
+# session neither redoes a finished session nor skips an unfinished one.
+EOD_CURSOR_KEY = "eod_close_of_books"
+
+# How long after the closing bell to wait before reconciling. Late fills and
+# broker settlement land after 16:00 ET; reconciling into that window would
+# measure an incomplete session.
+EOD_SETTLEMENT_GRACE_SECONDS = 900.0
+
+# Floor between retries of a FAILED close-of-books. Without it the 60s overnight
+# sleep chunks would retry ~600 times a night, each hitting the DB and Discord.
+EOD_RETRY_INTERVAL_SECONDS = 300.0
+
+# Upper bound on a single session's close-of-books, derived from the service
+# lease so the two can never drift apart. The lease is renewed immediately
+# before each target, so a target bounded below SERVICE_LEASE_STALE_SECONDS can
+# never outlive the single-instance lease it started under — otherwise a second
+# ingestion process could claim the lease mid-reconcile and race this one's
+# cursor and P&L writes. It also keeps the DB health row (which ExecutionEngine
+# reads to decide ingestion is alive) refreshed well inside its max age.
+# A timeout is treated as a retryable failure, never as a completed session.
+EOD_MAX_RUNTIME_SECONDS = SERVICE_LEASE_STALE_SECONDS * 0.75
+
+# Slack between a target's bounded runtime and the opening bell, covering task
+# scheduling, cancellation and event-loop delay. Without it a target with
+# runtime+epsilon of runway could still be reconciling when the market opens.
+EOD_BELL_MARGIN_SECONDS = 60.0
+
+# KNOWN LIMITATIONS of the bounded-timeout approach (accepted 2026-08-13):
+#  1. `_maybe_renew_lease` swallows DB errors and reports no success, so the
+#     "target cannot outlive its lease" property assumes the renewal landed. If
+#     renewal silently fails against an already-aged lease, a second instance
+#     could claim it mid-target.
+#  2. 90s is not measured against production data volume. `run_reconciliation`
+#     replays the whole orion fills history for the target day with no
+#     cardinality bound, so at some future scale every attempt could time out
+#     and the session would never close — the condition this fix repairs.
+#     A timeout logs EOD_TIMEOUT loudly and retries, so the failure is visible
+#     rather than silent, but watch that event.
+# Both dissolve if the close-of-books is moved to a supervised background task
+# and the sleep loop keeps heartbeating independently, removing the timeout.
+
 # Liveness cadence budget: the 60s poll loop should publish well within this
 # window; the dead-man watchdog alerts if no successful cycle lands in 300s.
 LIVENESS_CADENCE_BUDGET_SECONDS = 300
@@ -76,15 +123,18 @@ class IngestionService:
         xcals.get_calendar("XNYS")
 
         # State
-        self.eod_trigger_last_run: str | None = None
+        # In-process fast paths over the durable EOD cursor: `_eod_done_for`
+        # avoids a DB read every sleep chunk once the session is closed out,
+        # `_eod_last_attempt_utc` bounds retries after a failure. The durable
+        # cursor remains the source of truth across restarts.
+        self._eod_done_for: date | None = None
+        self._eod_last_attempt_utc: datetime | None = None
         self._last_flow_poll_ts: datetime = datetime.now(UTC) - timedelta(
             minutes=system_settings.initial_flow_lookback_minutes
         )
         # Startup hydrate just ran in initialize(); defer the first periodic
         # re-hydration by one interval rather than re-querying immediately.
         self._last_universe_rehydrate_ts: datetime = datetime.now(UTC)
-        self._eod_task: asyncio.Task[None] | None = None
-        self._parity_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
 
         # Lag-tolerant shadow-parity reconciliation state (finding O3).
@@ -321,9 +371,6 @@ class IngestionService:
                 await self._persist_events(all_events)
                 await self._process_features_and_rules(all_events)
 
-        # Process EOD Trigger
-        self._check_eod_trigger()
-
         logger.info(
             "Ingestion heartbeat",
             extra={
@@ -477,6 +524,13 @@ class IngestionService:
         if schedule.is_market_open():
             return
 
+        # Close-of-books runs HERE, on the market-closed path, because this
+        # method blocks the whole cycle until the next open. Anything placed
+        # after it in `_run_cycle` is unreachable while the market is shut,
+        # which is exactly how the old `hour == 1 UTC` trigger became dead code
+        # and let expired journal rows jam the entry caps (2026-07-31).
+        await self._maybe_run_eod()
+
         # Market is closed, calculate sleep
         sleep_seconds = schedule.seconds_until_open()
 
@@ -499,6 +553,10 @@ class IngestionService:
                 # 60s sleep chunk keeps the DB row well within
                 # ingestion_heartbeat_max_age.
                 await self._update_health_status()
+                # Re-checked each chunk so the settlement grace period elapsing
+                # mid-sleep still triggers, and so a failed run retries within
+                # the same night (bounded by EOD_RETRY_INTERVAL_SECONDS).
+                await self._maybe_run_eod()
 
     def _active_event_source_profile(self) -> dict[str, str | bool | list[str]]:
         # flow_source reflects the active ORION_FLOW_SOURCE mode:
@@ -946,53 +1004,208 @@ class IngestionService:
                 payload={"event_ids": event_ids, "event_count": len(events)},
             )
 
-    def _check_eod_trigger(self) -> None:
+    async def _eod_completed_session(self) -> date | None:
+        """The last trading date whose close-of-books completed successfully."""
+        from orion.storage.watermarks import get_cursor_state
+
+        try:
+            async with async_session_factory() as session:
+                cursor = await get_cursor_state(session, EOD_CURSOR_KEY)
+        except Exception as e:
+            # Unknown completion state must not read as "already done" — that
+            # would skip the session. Returning None retries instead.
+            logger.error(f"EOD cursor read failed, treating session as incomplete: {e}")
+            return None
+        if cursor is None or cursor.last_seen_id is None:
+            return None
+        try:
+            return date.fromisoformat(cursor.last_seen_id)
+        except ValueError:
+            logger.error(f"EOD cursor holds an unparseable date: {cursor.last_seen_id!r}")
+            return None
+
+    async def _mark_eod_complete(self, trading_date: date, completed_at: datetime) -> None:
+        from orion.storage.watermarks import upsert_cursor_state
+
+        async def _write(session: Any) -> None:
+            await upsert_cursor_state(
+                session,
+                EOD_CURSOR_KEY,
+                last_seen_ts_utc=completed_at,
+                last_seen_id=trading_date.isoformat(),
+            )
+
+        await db_write(_write)
+
+    async def _maybe_run_eod(self) -> None:
+        """Run close-of-books for the just-closed session, at most once, on success.
+
+        Called from the market-closed path (see `_check_overnight_sleep`). The
+        completion marker is durable and advanced ONLY after the run succeeds,
+        so a failure — or a restart mid-run — retries rather than silently
+        skipping a session's P&L.
+        """
+        from orion.core.market_schedule import MarketSchedule
+
+        schedule = MarketSchedule()
+        if schedule.is_market_open():
+            return
+
         now_utc = datetime.now(UTC)
-        if now_utc.hour == 1 and now_utc.minute >= 5:
-            today_str = now_utc.date().isoformat()
-            if self.eod_trigger_last_run != today_str:
-                # The trigger fires ~01:05 UTC, which is the prior evening in ET
-                # (post-close). Reconcile the just-closed NYSE session, NOT
-                # UTC-today — otherwise the EOD run executes as the next calendar
-                # day and reconcile_pnl filters fills to an empty wrong day.
-                trading_date = last_closed_trading_date(now_utc)
-                logger.info(f"Triggering EOD P&L close-of-books for trading date {trading_date}...")
-                # Save task to prevent garbage collection
-                self._eod_task = asyncio.create_task(self._run_eod_task(trading_date))
-                self.eod_trigger_last_run = today_str
-                # Shadow-mode daily parity summary rides the EOD trigger.
-                if system_settings.flow_source == "shadow":
-                    self._parity_task = asyncio.create_task(self._post_flow_parity_summary())
+        trading_date = last_closed_trading_date(now_utc)
+
+        # Settle-then-reconcile: require the grace window past THAT session's
+        # close, not "today's" close — otherwise a pre-market cycle (when the
+        # upcoming close is still in the future) would never reconcile the
+        # previous session.
+        _, session_close = schedule.get_open_close(datetime.combine(trading_date, time(12, 0), tzinfo=UTC))
+        if session_close is not None and now_utc < session_close + timedelta(seconds=EOD_SETTLEMENT_GRACE_SECONDS):
+            return
+
+        if self._eod_done_for == trading_date:
+            return
+        if (
+            self._eod_last_attempt_utc is not None
+            and (now_utc - self._eod_last_attempt_utc).total_seconds() < EOD_RETRY_INTERVAL_SECONDS
+        ):
+            return
+
+        completed = await self._eod_completed_session()
+        if completed == trading_date:
+            self._eod_done_for = trading_date
+            return
+
+        # Close the books for every session missed since the cursor, oldest
+        # first, so an outage spanning several nights does not skip the sessions
+        # in between. With no cursor (first run) only the latest session is
+        # closed — backfilling an unbounded history would reconcile days whose
+        # fills were never recorded.
+        if completed is None:
+            targets = [trading_date]
+            logger.info(
+                f"No EOD cursor yet; bootstrapping at {trading_date} without backfilling earlier sessions",
+                extra={"event_type": "EOD_CURSOR_BOOTSTRAP", "trading_date": str(trading_date)},
+            )
+        else:
+            targets = closed_sessions_between(completed, trading_date)
+
+        self._eod_last_attempt_utc = now_utc
+        for target in targets:
+            # Replaying several missed sessions must not silently extend the
+            # liveness gap: the per-target timeout bounds ONE session, so health
+            # and the single-instance lease are refreshed between each. Without
+            # this, N slow targets stack N x EOD_MAX_RUNTIME_SECONDS — long
+            # enough for ExecutionEngine to read ingestion as dead and for a
+            # second instance to take the lease.
+            await self._update_health_status()
+            await self._maybe_renew_lease()
+
+            # Never run close-of-books into a live session. Checking
+            # is_market_open alone is not enough: a target started just before
+            # the bell could still be reconciling after it, so require enough
+            # runway for the target's whole bounded runtime. Deferred targets
+            # keep their place — the cursor is untouched — and resume after the
+            # next close.
+            runway = schedule.seconds_until_open()
+            required_runway = EOD_MAX_RUNTIME_SECONDS + EOD_BELL_MARGIN_SECONDS
+            if schedule.is_market_open() or (runway is not None and runway <= required_runway):
+                logger.info(
+                    f"Insufficient runway before market open; deferring EOD for {target} and later sessions",
+                    extra={
+                        "event_type": "EOD_DEFERRED_MARKET_OPEN",
+                        "trading_date": str(target),
+                        "seconds_until_open": runway,
+                    },
+                )
+                return
+
+            logger.info(f"Triggering EOD P&L close-of-books for trading date {target}...")
+            try:
+                # Bounded so a slow reconcile cannot stall the sleep loop's
+                # health refresh past `ingestion_heartbeat_max_age`, which would
+                # make ExecutionEngine treat ingestion as dead and block orders.
+                # Worst case here is EOD_MAX_RUNTIME_SECONDS + one sleep chunk.
+                ok = await asyncio.wait_for(self._run_eod_task(target), timeout=EOD_MAX_RUNTIME_SECONDS)
+            except TimeoutError:
+                logger.error(
+                    f"EOD close-of-books for {target} exceeded {EOD_MAX_RUNTIME_SECONDS}s; will retry",
+                    extra={"event_type": "EOD_TIMEOUT", "trading_date": str(target)},
+                )
+                ok = False
+
+            if not ok:
+                # Stop at the first failure: advancing past an unclosed session
+                # would strand it permanently.
+                logger.error(
+                    f"EOD close-of-books did not complete for {target}; will retry",
+                    extra={"event_type": "EOD_INCOMPLETE", "trading_date": str(target)},
+                )
+                return
+
+            await self._mark_eod_complete(target, datetime.now(UTC))
+            self._eod_done_for = target
+            # Refresh again after the work, so the gap to the next liveness
+            # signal is bounded by the sleep chunk rather than the reconcile.
+            await self._update_health_status()
+            await self._maybe_renew_lease()
+
+        # Shadow-mode daily parity summary rides the completed close-of-books.
+        if system_settings.flow_source == "shadow":
+            try:
+                await self._post_flow_parity_summary()
+            except Exception as e:
+                logger.error(f"Flow parity summary failed: {e}")
 
     @staticmethod
-    async def _run_eod_task(trading_date: date | None = None) -> None:
+    async def _run_eod_task(trading_date: date | None = None) -> bool:
         """Nightly close-of-books: realize expired positions, then reconcile P&L.
 
         Replaced the LLM EOD review agent — its mutation proposals were
         auto-blocked by the promoter and never influenced a live decision,
         while the P&L attribution tables it was supposed to feed stayed empty.
+
+        Returns True when the books actually closed. The caller only records the
+        session as complete on True, so a failure is retried rather than lost.
         """
         try:
             from orion.execution.persistence import realize_expired_journal_rows
-            from orion.jobs.reconcile_pnl import run_reconciliation
+            from orion.jobs.reconcile_pnl import STATUS_BROKER_UNAVAILABLE, run_reconciliation
 
             await realize_expired_journal_rows()
             result = await run_reconciliation(trading_date)
-            logger.info(
-                f"EOD reconcile complete for {result.trade_date}: status={result.status}",
-                extra={"event": "eod_reconcile_done", "status": str(result.status)},
-            )
         except Exception as e:
-            logger.error(f"EOD close-of-books failed: {e}")
+            logger.error(f"EOD close-of-books failed: {e}", exc_info=True)
+            return False
+
+        # A status check, not just "nothing raised". BROKER_UNAVAILABLE means the
+        # broker side was untrusted (fills read failed, or a close with no
+        # recorded entry basis), so the books did NOT close for this session and
+        # it must stay retryable. MATCH / MISMATCH / NO_DATA are all terminal:
+        # the session was measured, drift included.
+        if str(result.status) == STATUS_BROKER_UNAVAILABLE:
+            logger.error(
+                f"EOD reconcile for {result.trade_date} returned {result.status}; session stays open for retry",
+                extra={"event_type": "EOD_RECONCILE_UNTRUSTED", "status": str(result.status)},
+            )
+            return False
+
+        logger.info(
+            f"EOD reconcile complete for {result.trade_date}: status={result.status}",
+            extra={"event": "eod_reconcile_done", "status": str(result.status)},
+        )
 
         # Metrics ride after the books close; their failure must not be
-        # confused with a reconcile failure (and vice versa).
+        # confused with a reconcile failure (and vice versa). They are advisory,
+        # so a failure here does NOT re-open the session for retry — the books
+        # are closed either way.
         try:
             from orion.jobs.bucket_metrics import run_bucket_metrics
 
             await run_bucket_metrics()
         except Exception as e:
             logger.error(f"EOD bucket metrics failed: {e}")
+
+        return True
 
     async def _post_flow_parity_summary(self) -> None:
         """Aggregate the day's flow_push_parity rows and post a Discord summary.
