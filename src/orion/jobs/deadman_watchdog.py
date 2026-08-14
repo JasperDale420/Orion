@@ -1,6 +1,13 @@
 """Dead-man watchdog — the unified liveness/ABSENCE guard (redesign R3 / RA.1).
 
-Runs as a standalone launchd one-shot every 5 minutes. Two independent checks:
+Runs as a standalone launchd one-shot every 5 minutes. Three independent checks:
+
+0. **Global circuit breaker.** Alerts whenever the kill switch is OPEN, with the
+   cause and how long it has been open. The breaker latches — only an operator
+   closes it — so one tripped overnight blocks the entire next session while
+   every other check here stays green (2026-08-13: 21h open, a full trading day
+   of order flow blocked, noticed by accident). Deliberately NOT market-hours
+   gated, and checked first so its page cannot be lost to a failure below.
 
 1. **Service liveness.** Reads every ``service_liveness`` row and alerts when
    ``now - last_success_ts_utc`` exceeds that service's own declared
@@ -49,7 +56,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from orion.config import system_settings
 from orion.shared.alerts import send_discord_alert
 from orion.shared.logger import setup_struct_logger
-from orion.storage.models import BronzeEvent
+from orion.core.circuit_breaker import CircuitBreaker
+from orion.storage.models import BronzeEvent, SystemStatus
 from orion.storage.models_gold import CandidateTrade, GoldFeatureEvent
 from orion.storage.models_liveness import ServiceLiveness
 from orion.storage.models_silver import SilverSignal
@@ -225,6 +233,43 @@ def evaluate_stage_freshness(
     return None
 
 
+def evaluate_circuit_breaker(row: SystemStatus | None, now_utc: datetime) -> LivenessAlert | None:
+    """Pure decision function for the global circuit breaker.
+
+    The breaker latches — nothing closes it but an operator — so an OPEN row
+    means order flow is halted until someone acts. Reports the cause and how
+    long it has been open; a missing row means it has never tripped.
+    """
+    if row is None or row.status != "OPEN":
+        return None
+
+    last_updated = row.last_updated_utc
+    age: float | None = None
+    if last_updated is not None:
+        if last_updated.tzinfo is None:
+            last_updated = last_updated.replace(tzinfo=UTC)
+        age = (now_utc - last_updated).total_seconds()
+
+    age_text = f"{age / 3600:.1f}h" if age is not None else "an unknown duration"
+    # Suppression is scoped to THIS trip, not to the breaker in general: an
+    # operator who resets it and watches it re-open two minutes later must be
+    # paged for the new trip rather than muted by the old one's 15-min window.
+    incident = str(int(last_updated.timestamp())) if last_updated is not None else "unknown"
+    return LivenessAlert(
+        kind="breaker",
+        name="circuit_breaker",
+        age_seconds=age,
+        budget_seconds=0,
+        dedupe_suffix=f"_{incident}",
+        message=(
+            f"GLOBAL CIRCUIT BREAKER is OPEN — trading is halted and will stay halted "
+            f"until an operator closes it (open for {age_text}). Cause: {row.details}. "
+            "Reset with `uv run python scripts/reset_circuit_breaker.py` after confirming "
+            "the underlying condition has cleared"
+        ),
+    )
+
+
 def _make_engine() -> AsyncEngine:
     """Lightweight standalone engine for the watchdog process.
 
@@ -244,6 +289,12 @@ async def _read_stage_max_ts(sessionmaker: async_sessionmaker, column) -> dateti
     async with sessionmaker() as session:
         result = await session.execute(select(func.max(column)))
         return result.scalar_one_or_none()
+
+
+async def _read_circuit_breaker(sessionmaker: async_sessionmaker) -> SystemStatus | None:
+    async with sessionmaker() as session:
+        result = await session.execute(select(SystemStatus).where(SystemStatus.key == CircuitBreaker.KEY))
+        return result.scalars().first()
 
 
 async def _read_candidates_today(sessionmaker: async_sessionmaker, now_utc: datetime) -> int:
@@ -274,69 +325,120 @@ async def run_watchdog(
 
     try:
         alerts: list[LivenessAlert] = []
+        rows: list[ServiceLiveness] = []
+        market_open = False
 
-        market_open = is_nyse_session_open(now)
+        # 1. Global circuit breaker — checked FIRST and never market-hours
+        # gated. The breaker latches, so one opened overnight silently blocks
+        # the whole next session (2026-08-13, 21h and a full trading day of
+        # order flow). The operator needs to know before the bell, and this
+        # page must not be lost to a failure in any of the checks below.
+        # Its own read is guarded too: unwinding here would emit neither a
+        # breaker page nor a degradation page, leaving the watchdog merely quiet.
+        try:
+            breaker_alert = evaluate_circuit_breaker(await _read_circuit_breaker(sessionmaker), now)
+            if breaker_alert is not None:
+                alerts.append(breaker_alert)
+        except Exception as exc:  # noqa: BLE001 — must still reach the dispatch below
+            logger.error("deadman_breaker_read_failed", error=str(exc), exc_info=True)
+            # Its own dedupe domain: an unrelated stage failure paging first must
+            # not mute the one alert that says the kill-switch state is unreadable.
+            alerts.append(
+                LivenessAlert(
+                    kind="watchdog",
+                    name="watchdog",
+                    age_seconds=None,
+                    budget_seconds=0,
+                    dedupe_suffix="_breaker_state",
+                    message=(
+                        f"dead-man watchdog is DEGRADED: circuit-breaker state is UNKNOWN ({exc}) — "
+                        "trading may be halted right now with nothing reporting it"
+                    ),
+                )
+            )
 
-        # 1. Service liveness.
-        rows = await _read_liveness_rows(sessionmaker)
-        alerts.extend(evaluate_service_liveness(rows, now, market_open=market_open))
-        if not market_open:
-            suppressed_services = _suppressed_market_service_names(rows, now)
-            if suppressed_services:
+        # 2. Everything else, isolated. These reads are ancillary: a schema skew
+        # or a broken stage table used to abort the whole pass before the
+        # dispatch loop below, so a latched kill switch detected in step 1 would
+        # never have been sent. A failure here degrades the watchdog rather than
+        # silencing it, and says so out loud instead of reporting healthy.
+        try:
+            market_open = is_nyse_session_open(now)
+            # Service liveness.
+            rows = await _read_liveness_rows(sessionmaker)
+            alerts.extend(evaluate_service_liveness(rows, now, market_open=market_open))
+            if not market_open:
+                suppressed_services = _suppressed_market_service_names(rows, now)
+                if suppressed_services:
+                    logger.info(
+                        "deadman_market_service_check_informational",
+                        market_open=False,
+                        suppressed_services=suppressed_services,
+                    )
+
+            # Pipeline-depth stage freshness — REAL data, market-hours gated.
+            # Calendar-aware: outside a live NYSE session (nights, weekends,
+            # holidays, early closes) the stage checks are suppressed entirely.
+            bronze_max = await _read_stage_max_ts(sessionmaker, BronzeEvent.received_ts_utc)
+            silver_max = await _read_stage_max_ts(sessionmaker, SilverSignal.created_at_utc)
+            features_max = await _read_stage_max_ts(sessionmaker, GoldFeatureEvent.created_at_utc)
+            candidates_today = await _read_candidates_today(sessionmaker, now)
+
+            stage_findings = [
+                evaluate_stage_freshness("bronze", bronze_max, BRONZE_BUDGET_SECONDS, now),
+                evaluate_stage_freshness("silver", silver_max, SILVER_BUDGET_SECONDS, now),
+            ]
+            stage_alerts = [a for a in stage_findings if a is not None]
+
+            # gold_feature_events is written only by backtests / nightly meta-search /
+            # DLQ recovery — never by the live ingestion/execution path — so it is
+            # legitimately empty during the cash session. Evaluate its freshness for
+            # visibility but never page on it (it was a standing false positive that
+            # paged "features has NO rows" every cycle intraday).
+            features_finding = evaluate_stage_freshness("features", features_max, FEATURES_BUDGET_SECONDS, now)
+            if features_finding is not None:
                 logger.info(
-                    "deadman_market_service_check_informational",
-                    market_open=False,
-                    suppressed_services=suppressed_services,
+                    "deadman_features_stage_informational",
+                    features_max=str(features_max),
+                    age_seconds=features_finding.age_seconds,
+                    message=features_finding.message,
                 )
 
-        # 2. Pipeline-depth stage freshness — REAL data, market-hours gated.
-        # Calendar-aware: outside a live NYSE session (nights, weekends,
-        # holidays, early closes) the stage checks are suppressed entirely.
-        bronze_max = await _read_stage_max_ts(sessionmaker, BronzeEvent.received_ts_utc)
-        silver_max = await _read_stage_max_ts(sessionmaker, SilverSignal.created_at_utc)
-        features_max = await _read_stage_max_ts(sessionmaker, GoldFeatureEvent.created_at_utc)
-        candidates_today = await _read_candidates_today(sessionmaker, now)
+            if market_open:
+                alerts.extend(stage_alerts)
+            else:
+                # Outside the cash session the stage checks are informational only.
+                logger.info(
+                    "deadman_stage_check_informational",
+                    market_open=False,
+                    bronze_max=str(bronze_max),
+                    silver_max=str(silver_max),
+                    features_max=str(features_max),
+                    candidates_today=candidates_today,
+                    stage_findings=[a.name for a in stage_alerts],
+                )
 
-        stage_findings = [
-            evaluate_stage_freshness("bronze", bronze_max, BRONZE_BUDGET_SECONDS, now),
-            evaluate_stage_freshness("silver", silver_max, SILVER_BUDGET_SECONDS, now),
-        ]
-        stage_alerts = [a for a in stage_findings if a is not None]
-
-        # gold_feature_events is written only by backtests / nightly meta-search /
-        # DLQ recovery — never by the live ingestion/execution path — so it is
-        # legitimately empty during the cash session. Evaluate its freshness for
-        # visibility but never page on it (it was a standing false positive that
-        # paged "features has NO rows" every cycle intraday).
-        features_finding = evaluate_stage_freshness("features", features_max, FEATURES_BUDGET_SECONDS, now)
-        if features_finding is not None:
+            # candidates-today is informational only (count, never an alert).
             logger.info(
-                "deadman_features_stage_informational",
-                features_max=str(features_max),
-                age_seconds=features_finding.age_seconds,
-                message=features_finding.message,
-            )
-
-        if market_open:
-            alerts.extend(stage_alerts)
-        else:
-            # Outside the cash session the stage checks are informational only.
-            logger.info(
-                "deadman_stage_check_informational",
-                market_open=False,
-                bronze_max=str(bronze_max),
-                silver_max=str(silver_max),
-                features_max=str(features_max),
+                "deadman_candidates_today",
+                market_open=market_open,
                 candidates_today=candidates_today,
-                stage_findings=[a.name for a in stage_alerts],
             )
-
-        # candidates-today is informational only (count, never an alert).
-        logger.info(
-            "deadman_candidates_today",
-            market_open=market_open,
-            candidates_today=candidates_today,
-        )
+        except Exception as exc:  # noqa: BLE001 — must not abort the dispatch below
+            logger.error("deadman_secondary_checks_failed", error=str(exc), exc_info=True)
+            alerts.append(
+                LivenessAlert(
+                    kind="watchdog",
+                    name="watchdog",
+                    age_seconds=None,
+                    budget_seconds=0,
+                    dedupe_suffix="_checks",
+                    message=(
+                        f"dead-man watchdog is DEGRADED: liveness/freshness checks failed ({exc}) — "
+                        "a wedged pipeline may now go unreported"
+                    ),
+                )
+            )
 
         alert_state = _load_alert_state()
         now_epoch = datetime.now(UTC).timestamp()
@@ -355,6 +457,10 @@ async def run_watchdog(
                 continue
             if await send_discord_alert(alert.message, dedupe_key=alert.dedupe_key):
                 alert_state[alert.dedupe_key] = now_epoch
+        # Breaker keys are per-incident, so without pruning the state file would
+        # grow a key per trip forever. An entry older than the suppression window
+        # can no longer suppress anything, so dropping it is lossless.
+        alert_state = {k: t for k, t in alert_state.items() if now_epoch - t < _ALERT_SUPPRESSION_SECONDS}
         _save_alert_state(alert_state)
 
         if not alerts:

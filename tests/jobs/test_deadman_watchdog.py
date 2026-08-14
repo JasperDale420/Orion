@@ -372,3 +372,189 @@ async def test_run_watchdog_fresh_stack_during_market_hours_no_alert():
     assert "ingestion" not in names
     assert "bronze" not in names
     assert "silver" not in names
+
+
+# ---- global circuit breaker (latched-kill-switch visibility) ----------------
+# The breaker latches with no auto-reset, and on 2026-08-13 it sat OPEN for 21h
+# while ingestion stayed alive and bronze/silver stayed fresh — so every existing
+# check here was green and nothing paged. It cost a full trading day (31
+# full-consensus EXECUTE decisions blocked, zero orders) before being noticed by
+# accident. A latched kill switch must be loud.
+
+
+async def _set_breaker(status: str, details: str, updated_at: datetime) -> None:
+    from orion.storage.models import SystemStatus
+
+    async with _test_sessionmaker()() as session:
+        await session.merge(
+            SystemStatus(
+                key="GLOBAL_CIRCUIT_BREAKER",
+                status=status,
+                details=details,
+                last_updated_utc=updated_at,
+            )
+        )
+        await session.commit()
+
+
+def test_evaluate_circuit_breaker_closed_is_silent():
+    from orion.storage.models import SystemStatus
+
+    row = SystemStatus(key="GLOBAL_CIRCUIT_BREAKER", status="CLOSED", details="Reset by system/operator")
+    assert dw.evaluate_circuit_breaker(row, MARKET_HOURS_UTC) is None
+
+
+def test_evaluate_circuit_breaker_absent_row_is_silent():
+    """No record means the breaker has never tripped — nominal, never invent an
+    alert for a row that does not exist."""
+    assert dw.evaluate_circuit_breaker(None, MARKET_HOURS_UTC) is None
+
+
+def test_evaluate_circuit_breaker_open_reports_cause_and_age():
+    """The alert must carry WHY it opened and HOW LONG it has been open — the
+    two facts that would have made the 21-hour latch obvious."""
+    from orion.storage.models import SystemStatus
+
+    row = SystemStatus(
+        key="GLOBAL_CIRCUIT_BREAKER",
+        status="OPEN",
+        details="CRITICAL: Heartbeat missing for 425.76s > 60.0s",
+        last_updated_utc=MARKET_HOURS_UTC - timedelta(hours=21),
+    )
+    alert = dw.evaluate_circuit_breaker(row, MARKET_HOURS_UTC)
+    assert alert is not None
+    assert alert.kind == "breaker"
+    assert alert.age_seconds == pytest.approx(21 * 3600)
+    assert "Heartbeat missing" in alert.message
+    assert "trading is halted" in alert.message.lower()
+
+
+async def test_run_watchdog_alerts_when_breaker_open_after_hours():
+    """NOT market-hours gated. A breaker latched overnight is precisely the case
+    that went unnoticed, and the operator needs to know before the bell."""
+    await _set_breaker("OPEN", "CRITICAL: Heartbeat missing for 425.76s > 60.0s", AFTER_HOURS_UTC)
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert [a.name for a in alerts if a.kind == "breaker"] == ["circuit_breaker"]
+    assert any(kwargs["dedupe_key"].startswith("deadman_circuit_breaker") for _, kwargs in sent.call_args_list)
+
+
+async def test_run_watchdog_silent_when_breaker_closed():
+    await _set_breaker("CLOSED", "Reset by system/operator", AFTER_HOURS_UTC)
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert [a for a in alerts if a.kind == "breaker"] == []
+
+
+async def test_breaker_alert_is_suppressed_on_the_next_five_minute_fire():
+    """The watchdog is a 5-minute launchd one-shot, so in-memory dedupe resets
+    every run. The cross-process state file must hold the 15-minute window —
+    otherwise a latched breaker pages every 5 minutes and gets muted by the
+    operator, which is how it goes unnoticed again."""
+    await _set_breaker("OPEN", "CRITICAL: Heartbeat missing for 425.76s > 60.0s", AFTER_HOURS_UTC)
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+        first_dispatches = sent.await_count
+        # Second fire, 5 minutes later: still detected, but not re-dispatched.
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC + timedelta(minutes=5))
+
+    assert [a.name for a in alerts if a.kind == "breaker"] == ["circuit_breaker"]
+    assert sent.await_count == first_dispatches
+
+
+async def test_breaker_alert_is_dispatched_even_when_a_later_read_fails():
+    """The kill-switch page must be the one thing that always gets out.
+
+    The breaker is detected early but dispatched at the end of the pass, after
+    four ancillary stage/candidate queries. If one of those raises (schema skew,
+    a slow or broken stage table) the whole pass aborted before dispatch and the
+    latched breaker stayed silent — the exact failure mode this alert exists to
+    prevent."""
+    await _set_breaker("OPEN", "CRITICAL: Heartbeat missing for 425.76s > 60.0s", AFTER_HOURS_UTC)
+
+    sent = AsyncMock(return_value=True)
+    exploding_read = AsyncMock(side_effect=RuntimeError("stage query exploded"))
+    with patch.object(dw, "send_discord_alert", sent), patch.object(dw, "_read_stage_max_ts", exploding_read):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert [a.name for a in alerts if a.kind == "breaker"] == ["circuit_breaker"]
+    assert any(kwargs["dedupe_key"].startswith("deadman_circuit_breaker") for _, kwargs in sent.call_args_list)
+
+
+async def test_watchdog_reports_its_own_degradation_when_checks_fail():
+    """A watchdog that swallows a read failure and reports 'healthy' is worse
+    than one that crashes. If the ancillary checks cannot complete, say so."""
+    exploding_read = AsyncMock(side_effect=RuntimeError("stage query exploded"))
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent), patch.object(dw, "_read_stage_max_ts", exploding_read):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert [a.name for a in alerts if a.kind == "watchdog"] == ["watchdog"]
+    assert any("DEGRADED" in a.message for a in alerts if a.kind == "watchdog")
+
+
+async def test_degraded_alert_dispatched_when_the_breaker_read_itself_fails():
+    """If the breaker state cannot be read, the operator must be told the kill
+    switch state is UNKNOWN. Unwinding the pass here would produce no breaker
+    page AND no degradation page — the watchdog would just look quiet."""
+    boom = AsyncMock(side_effect=RuntimeError("system_status read exploded"))
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent), patch.object(dw, "_read_circuit_breaker", boom):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert [a.name for a in alerts if a.kind == "watchdog"] == ["watchdog"]
+    assert any("UNKNOWN" in a.message for a in alerts if a.kind == "watchdog")
+    sent.assert_awaited()
+
+
+async def test_a_reopened_breaker_is_not_suppressed_by_the_previous_incident():
+    """Suppression must key off the incident, not the name. An operator who
+    resets the breaker and sees it trip again 2 minutes later must be paged for
+    the NEW trip, not muted by the 15-minute window from the old one."""
+    await _set_breaker("OPEN", "first incident", AFTER_HOURS_UTC)
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+        after_first = sent.await_count
+
+        # Operator resets; it re-opens 2 minutes later for a different reason.
+        reopened_at = AFTER_HOURS_UTC + timedelta(minutes=2)
+        await _set_breaker("OPEN", "second incident", reopened_at)
+        await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=reopened_at)
+
+    assert sent.await_count == after_first + 1
+
+
+async def test_breaker_unknown_page_is_not_suppressed_by_an_unrelated_degradation():
+    """The two degradation causes must not share a suppression key.
+
+    A stage-read failure and 'breaker state is UNKNOWN' are different incidents
+    with different urgency; if a stage failure pages first, the kill-switch-state
+    page must still get out inside the same 15-minute window."""
+    import json
+    import os
+    import pathlib
+    from datetime import datetime as _datetime
+
+    # A stage-check degradation already paged a minute ago, under the old shared key.
+    pathlib.Path(os.environ["ORION_DEADMAN_STATE"]).write_text(
+        json.dumps({"deadman_watchdog": _datetime.now(UTC).timestamp() - 60})
+    )
+
+    boom = AsyncMock(side_effect=RuntimeError("system_status read exploded"))
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent), patch.object(dw, "_read_circuit_breaker", boom):
+        await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=AFTER_HOURS_UTC)
+
+    assert any("UNKNOWN" in args[0] for args, _ in sent.call_args_list), (
+        "breaker-state-UNKNOWN page was suppressed by an unrelated watchdog degradation"
+    )

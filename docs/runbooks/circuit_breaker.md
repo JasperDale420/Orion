@@ -2,72 +2,88 @@
 
 ## Overview
 
-The circuit breaker is a global kill switch backed by the `SystemStatus` table. When OPEN, all connectors skip polling to prevent further damage during incidents.
+The circuit breaker is a global kill switch backed by the `system_status` table,
+under the key `GLOBAL_CIRCUIT_BREAKER`. When OPEN, `ExecutionEngine` blocks every
+order (`EXECUTION BLOCKED: Circuit breaker is OPEN`) and connectors skip polling.
+
+**It latches.** Nothing closes it automatically — once open it stays open until an
+operator resets it, across restarts. That is deliberate: the conditions that trip
+it are ones a human should look at. It also means a breaker left open silently
+disables trading for as long as nobody notices.
+
+Schema: `key`, `status`, `details`, `last_updated_utc`.
 
 ## Check Circuit Breaker Status
 
 ```sql
-SELECT * FROM system_status ORDER BY updated_at DESC LIMIT 1;
+SELECT key, status, details, last_updated_utc FROM system_status WHERE key = 'GLOBAL_CIRCUIT_BREAKER';
 ```
 
-Expected output when CLOSED (normal):
+Expected when CLOSED (normal):
+
 ```
+key: GLOBAL_CIRCUIT_BREAKER
 status: CLOSED
-reason: NULL
-updated_at: <timestamp>
+details: Reset by system/operator
+last_updated_utc: <timestamp>
 ```
 
-## Open Circuit Breaker (Emergency Stop)
+No row at all also means nominal — the breaker has never tripped.
 
-**Use this when you need to immediately halt all trading/polling activity.**
+Note the DB is the docker TimescaleDB on port **5440**, not the homebrew Postgres
+on 5432. Set it explicitly from a plain shell:
 
-### Via Database
-
-```sql
-INSERT INTO system_status (status, reason, updated_at)
-VALUES ('OPEN', 'Manual halt - <your reason>', NOW())
-ON CONFLICT (status) DO UPDATE SET
-  status = 'OPEN',
-  reason = 'Manual halt - <your reason>',
-  updated_at = NOW();
-```
-
-### Via Python
-
-```python
-from orion.core.circuit_breaker import CircuitBreaker
-
-breaker = CircuitBreaker()
-await breaker.open("Manual halt - investigating issue X")
+```bash
+DB_URL=postgresql://orion@localhost:5440/orion_db uv run python scripts/reset_circuit_breaker.py --dry-run
 ```
 
 ## Close Circuit Breaker (Resume Operations)
 
-### Via Database
+Only after confirming the condition that tripped it has cleared.
 
-```sql
-UPDATE system_status
-SET status = 'CLOSED', reason = NULL, updated_at = NOW()
-WHERE status = 'OPEN';
+### Via script (preferred)
+
+```bash
+DB_URL=postgresql://orion@localhost:5440/orion_db uv run python scripts/reset_circuit_breaker.py
 ```
+
+Pass `--dry-run` first to print the current state and cause without changing it.
 
 ### Via Python
 
 ```python
 from orion.core.circuit_breaker import CircuitBreaker
 
-breaker = CircuitBreaker()
-await breaker.close()
+await CircuitBreaker().close()
 ```
 
-## Verify Connectors Respecting Breaker
+### Via admin API
 
-When circuit breaker is OPEN, you should see logs like:
 ```
-Circuit breaker OPEN, skipping UW flow poll
-Circuit breaker OPEN, skipping UW alerts fetch
-Circuit breaker OPEN, skipping UW darkpool fetch
+POST /admin/circuit-breaker/reset?reason=<why>
 ```
+
+## Open Circuit Breaker (Emergency Stop)
+
+```python
+from orion.core.circuit_breaker import CircuitBreaker
+
+await CircuitBreaker().open("Manual halt - investigating issue X")
+```
+
+Or `POST /admin/circuit-breaker/open?reason=<why>`.
+
+Note: `open()` keeps the FIRST reason. If the breaker is already OPEN, a second
+open is a no-op and `details` still shows the original cause — so `details` is not
+a reliable record of every condition that has since tripped.
+
+## Alerting
+
+The dead-man watchdog (`orion.jobs.deadman_watchdog`, launchd one-shot every
+5 minutes) alerts to Discord whenever the breaker is OPEN, with the cause and how
+long it has been open. This is **not** market-hours gated — a breaker latched
+overnight blocks the whole next session, so it pages before the bell. Dedupe key
+`deadman_circuit_breaker`, 15-minute suppression window.
 
 ## When to Open Circuit Breaker
 
@@ -76,3 +92,35 @@ Circuit breaker OPEN, skipping UW darkpool fetch
 - Suspected data corruption
 - During maintenance windows
 - After detecting anomalous trading behavior
+
+## Known false-positive class (fixed 2026-08-14)
+
+`HealthMonitor` stamps its heartbeat at construction, but `IngestionService.initialize()`
+then spends several minutes hydrating the universe and feature-engine history. The
+first `check_health()` — reached on the market-closed path via
+`_check_overnight_sleep -> _maybe_run_eod` before `_run_cycle` bumps the heartbeat —
+measured that startup window as a liveness gap and tripped the breaker on every
+restart (`Heartbeat missing for 425.76s > 60.0s`, 2026-08-13, 21h latched, a full
+session of blocked orders). `run()` now starts the heartbeat clock on loop entry.
+
+If you see a `Heartbeat missing` cause on a breaker that opened within ~10 minutes
+of a restart, check that this fix is deployed before assuming a real stall.
+
+## Known gap: a wedged ingestion loop does not trip the breaker
+
+The `Heartbeat missing` guard cannot catch the case it sounds like it catches.
+`IngestionService.run()` refreshes the heartbeat immediately before checking it,
+so a cycle that runs long is made fresh before evaluation, and a cycle that hangs
+reaches neither. This predates the 2026-08-14 fix and is unchanged by it.
+
+What actually stops trading when ingestion wedges:
+
+- `ExecutionEngine._check_system_health` blocks new entries once the
+  `global_health` row is older than `ingestion_heartbeat_max_age` (600s).
+- The dead-man watchdog alerts once ingestion misses its liveness cadence
+  budget (300s).
+
+Neither latches the breaker, so both recover on their own. Closing this gap —
+having a genuine stall latch the kill switch — would be a deliberate design
+change and needs its own review; a latching halt on a merely slow cycle is the
+same class of self-inflicted outage this runbook section documents.
